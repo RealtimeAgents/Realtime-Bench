@@ -1,0 +1,34 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_xx142_b2exe"
+category = "browser_game"
+game_key = "61_xx142-b2exe"
+tier = "61_01"
+idx = 62
+score_field = "game_state.levels_completed"
+target = 1
+http_port = 9002
+dbg_port = 9302
+player_mode = "single"
+source = "bencoder/js13k-2019 @ 39bd729b5f18f82bda6c7b1e094e70521c09fbfd"
+keys = ["W", "A", "S", "D", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
+rules = '''
+Hold WASD or the arrow keys to move. Backspace ends the current attempt early. A deleted
+incarnation replays its exact movement from the start, and up to four ghosts persist within
+the level. In Level 0, the central floor switch opens the door near the top only while an
+incarnation remains on it. Reach `game_state.levels_completed >= 1`.'''
+description = "Coordinate a live 13-second route with its replay ghost to open a timed door and escape."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess Game</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Chess Game</h1>
+        
+        <div class="game-setup">
+            <div class="setup-section">
+                <h3>Game Mode</h3>
+                <div class="button-group">
+                    <button id="local-mode">Local 2-Player</button>
+                    <button id="bot-mode">Play vs Bot</button>
+                </div>
+            </div>
+
+            <div class="setup-section" id="bot-difficulty">
+                <h3>Bot Difficulty</h3>
+                <div class="button-group">
+                    <button data-difficulty="easy">Easy</button>
+                    <button data-difficulty="medium">Medium</button>
+                    <button data-difficulty="hard">Hard</button>
+                </div>
+            </div>
+
+            <div class="setup-section" id="side-selection">
+                <h3>Your Color</h3>
+                <div class="button-group">
+                    <button data-side="white">White</button>
+                    <button data-side="black">Black</button>
+                    <button data-side="random">Random</button>
+                </div>
+            </div>
+
+            <div class="setup-section" id="timer-selection">
+                <h3>Game Timer</h3>
+                <div class="button-group">
+                    <button data-time="3">3 min</button>
+                    <button data-time="5">5 min</button>
+                    <button data-time="10">10 min</button>
+                    <button data-time="15">15 min</button>
+                    <button data-time="0">No Timer</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="game-area">
+            <div class="player-info white-player">
+                <div class="player-name">White</div>
+                <div class="player-time" id="white-time">10:00</div>
+            </div>
+
+            <div class="chessboard-container perspective-white">
+                <div class="file-labels">
+                    <span>a</span><span>b</span><span>c</span><span>d</span>
+                    <span>e</span><span>f</span><span>g</span><span>h</span>
+                </div>
+                <div class="rank-labels">
+                    <span>1</span><span>2</span><span>3</span><span>4</span>
+                    <span>5</span><span>6</span><span>7</span><span>8</span>
+                </div>
+                <div id="chessboard"></div>
+            </div>
+
+            <div class="player-info black-player">
+                <div class="player-name">Black</div>
+                <div class="player-time" id="black-time">10:00</div>
+            </div>
+        </div>
+
+        <div class="game-controls">
+            <div class="game-status" id="game-status">White's turn</div>
+            <div class="button-group">
+                <button id="hint-btn">Hint</button>
+                <button id="undo-btn">Undo</button>
+                <button id="restart-btn">Restart</button>
+            </div>
+        </div>
+
+        <div class="move-history">
+            <h3>Move History</h3>
+            <div id="history-list"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

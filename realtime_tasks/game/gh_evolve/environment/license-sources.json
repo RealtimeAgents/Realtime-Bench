@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-10-11",
+  "scope": "Supplemental notices restored during public-20 review. Source/grant inference limitations are documented in RIGHTS.md.",
+  "files": [
+    {
+      "file": "ADAPTER-LICENSE.txt",
+      "sha256": "225a7cf6d96fc1af3956c6a75c26d584e506cba3f84ce8d07c14205b3f960428",
+      "sources": [
+        "git:12748d06:LICENSE"
+      ],
+      "method": "restored project grant scoped to original benchmark contributions"
+    },
+    {
+      "file": "source-audit.json",
+      "sha256": "57dcb91d46dd2cb2eaa19aedb650bf14e0e52e0e9b5c04619ddd741bfb4362ad",
+      "sources": [
+        "pinned GitHub tree recorded inside source-audit.json"
+      ],
+      "method": "recorded local SHA-256 and upstream Git blob verification; not a license grant"
+    },
+    {
+      "file": "licenses/LZString-1.4.4-WTFPL.txt",
+      "sha256": "7b5fd8be090649911addbff3356495446d0c9a5649ef0dee95d755720983565d",
+      "sources": [
+        "https://registry.npmjs.org/lz-string/-/lz-string-1.4.4.tgz#package/LICENSE.txt"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/CryptoJS-4.0.0-MIT.txt",
+      "sha256": "f729d14b7e1bf8adca0dcc38b93b929d14d53fcd5db56c3d1c9b2daa7aa69396",
+      "sources": [
+        "https://unpkg.com/crypto-js@4.0.0/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/HTML5Sortable-0.9.15-MIT.txt",
+      "sha256": "59117c538087ee275ecb1383dd80cee4347b9f0d6bd5f5b7fe9ae9e42b7239e0",
+      "sources": [
+        "https://unpkg.com/html5sortable@0.9.15/LICENSE.md"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Bulma-0.9.4-MIT.txt",
+      "sha256": "10ecf152e6235bd8d3fdeb88918272b9b6bab957750069db9af3012cc3383f7e",
+      "sources": [
+        "https://raw.githubusercontent.com/jgthms/bulma/0.9.4/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Kurkle-Color-0.2.1-MIT.txt",
+      "sha256": "2859c50313bad2ba77b081410c477beaf92b60ca13a77a248d89859a6dd6ac81",
+      "sources": [
+        "https://raw.githubusercontent.com/kurkle/color/v0.2.1/LICENSE.md"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Snabbdom-MIT.txt",
+      "sha256": "40b17e30359787ee415582223f3d10440f8bab87c5967e03406ea59120c59311",
+      "sources": [
+        "https://raw.githubusercontent.com/snabbdom/snabbdom/v0.7.4/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Less-3.9.0-Apache-2.0.txt",
+      "sha256": "39445b459f86621683f9731fb6a7d070819dc379840e8ef52f62bb1c68942291",
+      "sources": [
+        "https://raw.githubusercontent.com/less/less.js/v3.9.0/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Promise-MIT.txt",
+      "sha256": "5e733eb92ed0c571da3f27c5da203e0a9f975b4f96e7692c9fa3660ca54820ec",
+      "sources": [
+        "https://unpkg.com/promise@7.3.1/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Asap-MIT.txt",
+      "sha256": "e80373b1ed0f33cecc47173b4b0c6afe0d0318b32dbd84116a1a957e3f7f43a8",
+      "sources": [
+        "https://unpkg.com/asap@2.0.6/LICENSE.md"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/Sass-MIT.txt",
+      "sha256": "c53d95ae61a03752d3e617048fa3d80a4100118b96d00280146cbdddfba37ec2",
+      "sources": [
+        "https://raw.githubusercontent.com/sass/ruby-sass/3.7.4/MIT-LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/TypeScript-helpers-0BSD.txt",
+      "sha256": "022c47ed04290328515983e93dfa9b780baaf0bb5828baf8aaed4aee8a7f0617",
+      "sources": [
+        "https://unpkg.com/vue@2.7.14/dist/vue.js"
+      ],
+      "method": "verbatim embedded Microsoft permissive helper grant; copyright retained even though minification drops it"
+    },
+    {
+      "file": "licenses/Weather-Icons-MIT.txt",
+      "sha256": "4aa449b7b1f408a9b10c03cfe832cd0055b28d46e1cb865b5dbaa22770f5ffef",
+      "sources": [
+        "https://github.com/erikflowers/weather-icons",
+        "upstream/lib/weather-icons.min.css"
+      ],
+      "method": "explicit upstream MIT grant and attribution plus standard MIT terms"
+    },
+    {
+      "file": "licenses/Weather-Icons-OFL.txt",
+      "sha256": "1ca9b053ef4cada1801fe251b08f056d50f250f3c9a2329cedc442127dcf78ab",
+      "sources": [
+        "upstream/font/weathericons-regular-webfont.ttf",
+        "https://github.com/erikflowers/weather-icons"
+      ],
+      "method": "embedded font attribution/grant and full standard OFL terms"
+    },
+    {
+      "file": "licenses/Browserify-prelude-MIT.txt",
+      "sha256": "435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b",
+      "sources": [
+        "https://registry.npmjs.org/browser-pack/-/browser-pack-6.0.1.tgz"
+      ],
+      "method": "notice for Browserify prelude included in Less; not a historical lock reconstruction"
+    },
+    {
+      "file": "licenses/LZString-NOTICE.txt",
+      "sha256": "ab8ccf841c5711d14edb16ef4c0cdc4dd16151a07c84c2fe681a8de9b8dd7452",
+      "sources": [
+        "https://registry.npmjs.org/lz-string/-/lz-string-1.4.4.tgz#package/libs/lz-string.js"
+      ],
+      "method": "original Pieroxy attribution/license header; minified runtime is exact release match"
+    },
+    {
+      "file": "licenses/Clone-MIT.txt",
+      "sha256": "3fb0857ef0133928cf72c88dfc464e931486e88778961eedec25585e2321507f",
+      "sources": [
+        "https://raw.githubusercontent.com/pvorb/node-clone/v2.1.2/LICENSE"
+      ],
+      "method": "verbatim upstream MIT notice for clone module inside Less browser bundle"
+    },
+    {
+      "file": "licenses/Material-Icons-Apache-2.0.txt",
+      "sha256": "38a63884998825a2af2051eb313b55b73ac4ebf836f68acaf951cea965cf088c",
+      "sources": [
+        "https://github.com/google/material-design-icons/blob/master/LICENSE",
+        "https://github.com/google/material-design-icons/blob/master/src/places/fitness_center/materialicons/24px.svg"
+      ],
+      "method": "Apache-2.0 text for the 'heavy' svgIcons path, identical to Material Icons fitness_center (2026-10-10 review)"
+    }
+  ]
+}

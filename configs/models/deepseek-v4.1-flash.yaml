@@ -1,0 +1,6 @@
+endpoint:
+  api: openrouter
+  model: deepseek/deepseek-v4.1-flash
+  api_key_env: OPENROUTER_API_KEY
+  upstream_provider: together
+reasoning_effort: low

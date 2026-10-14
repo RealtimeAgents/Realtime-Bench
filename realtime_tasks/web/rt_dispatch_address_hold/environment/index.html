@@ -1,0 +1,71 @@
+<!doctype html>
+<html data-mobile-task="rt_dispatch_address_hold" lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Order #1048 · Juniper Supply</title>
+  <link rel="stylesheet" href="/assets/rt_dispatch_address_hold/style.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}">
+<link rel="stylesheet" href="/assets/rt_dispatch_address_hold/mobile.css">
+<script src="{{ url_for('static', filename='mobile.js') }}" defer></script>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">j</span>Juniper Supply</div><div class="staff"><span>Alex Morgan</span><span class="avatar" aria-hidden="true">AM</span></div></header>
+<div class="shell">
+  <nav aria-label="Store navigation">
+    <div class="nav-item"><span class="icon" aria-hidden="true">⌂</span>Home</div>
+    <div class="nav-item current" aria-current="page"><span class="icon" aria-hidden="true">▤</span>Orders</div>
+    <div class="sub">Drafts</div><div class="sub">Shipping labels</div>
+    <div class="nav-item"><span class="icon" aria-hidden="true">◇</span>Products</div>
+    <div class="nav-item"><span class="icon" aria-hidden="true">♧</span>Customers</div>
+    <div class="nav-item"><span class="icon" aria-hidden="true">▥</span>Finance</div>
+    <div class="nav-label">Sales channels</div><div class="nav-item"><span class="icon" aria-hidden="true">⊞</span>Online Store</div>
+  </nav>
+  <main>
+    <div class="breadcrumb">Orders<span>/</span>#1048</div>
+    <div class="order-heading">
+      <div><div class="heading"><h1>#1048</h1><span class="badge paid">Paid</span><span class="badge" id="order-status">Unfulfilled</span></div><div class="muted order-date">September 17, 2026 at 12:00 PM</div>
+        <div class="collections" aria-label="Warehouse collections"><span>Warehouse clock <strong id="clock-now">12:00:00</strong></span><span><span id="collection-label">Next collection 12:01:00 in</span> <strong class="count" id="collection-countdown">60</strong><span id="collection-unit"> s</span></span><span id="last-collection-note">Last collection <strong id="last-collection">12:03:15</strong>; nothing leaves after it.</span></div></div>
+      <div class="order-source"><span aria-hidden="true">⊞</span>Online Store</div>
+    </div>
+    <div class="announce"><div class="announce-alert" id="announce-alert" role="status" hidden><strong id="announce-title"></strong><span class="excerpt" id="announce-text"></span><a href="#order-timeline" id="announce-link">See timeline</a></div></div>
+    <div class="order-layout">
+      <div>
+        <section class="fulfillment" aria-label="Fulfillment">
+          <div class="document-head"><div class="document-title"><span class="parcel-icon" aria-hidden="true">◇</span><h2><span id="fulfillment-status">Unfulfilled</span><span class="item-count">(2)</span></h2></div><div class="menu-wrap"><button class="icon-button" id="fulfillment-menu-button" aria-label="Fulfillment actions" aria-expanded="false">•••</button><div class="menu" id="fulfillment-menu" hidden><button id="open-hold">Mark as on hold</button></div></div></div>
+          <div class="shipment-meta"><span>Juniper warehouse</span><span class="separator">/</span><span>Standard shipping</span></div>
+          <div class="request" id="request-line" aria-live="polite"></div>
+          <div class="request-warning" id="request-warning" role="alert" hidden></div>
+          <div class="hold-note" id="hold-details" hidden><span id="hold-reason-text"></span><small>Manual hold</small></div>
+          <table class="items" aria-label="Ordered items"><thead><tr><th>Item</th><th>Price</th><th>Qty</th><th>Total</th></tr></thead><tbody><tr><td><div class="item-detail"><div class="product-image" aria-hidden="true"><div class="cushion"></div></div><div><div class="item-name">Linen cushion cover</div><div class="item-variant">Natural / 45 cm</div><div class="sku">SKU JN-LC45</div></div></div></td><td>$32.00</td><td><span class="quantity">2</span></td><td class="line-total">$64.00</td></tr></tbody></table>
+          <div class="shipment-footer"><span class="package-note" id="package-note">2 items · Standard shipping</span><div id="tracking" class="tracking" hidden></div><div id="release-actions" hidden><button id="release-hold">Release hold</button></div></div>
+        </section>
+        <section class="payment" aria-label="Payment">
+          <div><div class="payment-heading"><span class="payment-icon" aria-hidden="true">✓</span>Payment received</div><div class="muted">Visa ···· 4242</div><small>$68.00 USD</small></div>
+          <dl class="totals"><div><dt>Subtotal · 2 items</dt><dd>$64.00</dd></div><div><dt>Shipping</dt><dd>$4.00</dd></div><div class="total"><dt>Total</dt><dd>$68.00</dd></div></dl>
+        </section>
+        <section aria-label="Order timeline" id="order-timeline">
+          <div class="timeline-heading"><h2>Timeline<span class="unread" id="timeline-unread" hidden>1 new</span></h2><small><span aria-hidden="true">♙</span>Only you and your staff</small></div>
+          <form id="comment-form" class="comment-compose"><span class="avatar" aria-hidden="true">AM</span><div class="comment-box"><textarea id="comment-text" aria-label="Add an internal comment" placeholder="Leave a comment…" maxlength="2000" rows="2"></textarea><div class="compose-footer"><span>Internal comment</span><button id="post-comment" type="submit">Post</button></div></div></form>
+          <ul class="timeline" id="timeline"></ul>
+        </section>
+      </div>
+      <aside class="customer-record" aria-label="Customer record">
+        <div class="aside-head"><h2>Customer</h2><div class="menu-wrap"><button class="icon-button" id="customer-menu-button" aria-label="Customer actions" aria-expanded="false">•••</button><div class="menu" id="customer-menu" hidden><button id="open-address">Edit shipping address</button></div></div></div>
+        <div class="customer-identity"><span class="avatar" aria-hidden="true">MC</span><div>Mara Chen<div class="muted">3 orders</div></div></div>
+        <div class="record-section"><h3>Contact information</h3><div class="contact">mara@example.test</div></div>
+        <div class="record-section"><h3>Shipping address</h3><div class="address" id="shipping-address"></div></div>
+        <div class="record-section"><h3>Billing address</h3><div class="muted">Same as original shipping address</div></div>
+        <div class="record-section"><h3>Notes</h3><div class="muted">No customer note</div></div>
+        <div class="feedback" id="feedback" role="status"></div>
+      </aside>
+    </div>
+  </main>
+</div>
+<dialog class="modal" id="hold-dialog" aria-labelledby="hold-title"><form id="hold-form"><div class="modal-title"><h2 id="hold-title">Mark as on hold</h2><button type="button" data-close="hold-dialog" aria-label="Close hold dialog">×</button></div><div class="modal-body"><label><input type="checkbox" id="hold-items" checked>2 × Linen cushion cover</label><fieldset class="reasons"><legend>Hold reason</legend><label class="option"><input type="radio" name="hold-reason" value="Address issue">Address issue</label><label class="option"><input type="radio" name="hold-reason" value="Awaiting payment">Awaiting payment</label><label class="option"><input type="radio" name="hold-reason" value="Inventory out of stock">Inventory out of stock</label><label class="option"><input type="radio" name="hold-reason" value="Other">Other</label></fieldset></div><div class="modal-footer"><button type="button" data-close="hold-dialog">Cancel</button><button class="primary" type="submit">Mark as on hold</button></div></form></dialog>
+<dialog class="modal" id="address-dialog" aria-labelledby="address-title"><form id="address-form"><div class="modal-title"><h2 id="address-title">Edit shipping address</h2><button type="button" data-close="address-dialog" aria-label="Close address dialog">×</button></div><div class="modal-body"><div class="muted" style="margin-bottom:15px">Mara Chen · United States</div><label>Address<input id="street" name="street" autocomplete="off" required></label><label>Apartment, suite, etc.<input id="unit" name="unit" autocomplete="off" required></label><div class="two"><label>City<input id="city" name="city" required></label><label>ZIP code<input id="postal" name="postal" required></label></div></div><div class="modal-footer"><button type="button" data-close="address-dialog">Cancel</button><button class="primary" type="submit">Save</button></div></form></dialog>
+<script src="/static/realtime-runtime.js"></script>
+
+<script>window.__taskBootstrap={"v0":{{ scenario|tojson }},"v1":{{ episode|tojson }}};</script>
+<script src="/assets/rt_dispatch_address_hold/app.js"></script>
+</body>
+</html>

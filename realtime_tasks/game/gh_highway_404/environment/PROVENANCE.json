@@ -1,0 +1,267 @@
+{
+  "repo": "herebefrogs/highway-404",
+  "commit": "9bbf0de17a49dc424f53b1f076573b6a789baa9d",
+  "local_root": "upstream",
+  "files": [
+    {
+      "path": ".github/workflows/main.yml",
+      "sha256": "f950e8f25dc02ee4efffb2fecd79c7108f4465d9e054ec9435b3c7a328cbb3e5",
+      "upstream_blob": "85ba3a046c965acf8ecceb109858b24a08385c78",
+      "match": true,
+      "upstream_path": ".github/workflows/main.yml",
+      "status": "unchanged"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "0a6b329167ef475068ec9036b5e6fdc632ad95b4c744f0beb2e820859de50b80",
+      "upstream_blob": "cfaac35dd473b74b1650a61bd66615d27aacfd02",
+      "match": true,
+      "upstream_path": ".gitignore",
+      "status": "unchanged"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "611bdf9062c31e6e2d278955d73b6011526eed16097d9810b16329cc3f44d955",
+      "upstream_blob": "a5dcdef5ce71e274dd293afde7f80a1a71dc941d",
+      "match": true,
+      "upstream_path": "LICENSE",
+      "status": "unchanged"
+    },
+    {
+      "path": "README.md",
+      "sha256": "54f9de728856694a929d2998dba5a1c22caf49050e57e54b966002ff02e0f08b",
+      "upstream_blob": "743f58a09153806d665217df2fc53c765625285b",
+      "match": true,
+      "upstream_path": "README.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "TODO",
+      "sha256": "59b5102ea105973c54c9db9eb59fde455092fcb449dfb6d4e14b9b5e1417b20f",
+      "upstream_blob": "5366ec71d1e845eec522de08a621f480a0a2028d",
+      "match": true,
+      "upstream_path": "TODO",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/charset.ase",
+      "sha256": "f9c8fea9ce7e39ff151326c64d6c46171d14f12e05314caaa422188945e945be",
+      "upstream_blob": "06ddd97cb522dce13e6ebe6557dcf3371e02d759",
+      "match": true,
+      "upstream_path": "assets/charset.ase",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/tileset.ase",
+      "sha256": "93e8d8c14e67438553015e24133bd7f1eac5bb16ee078016e2bd0c821bb84aa5",
+      "upstream_blob": "003e1163d449e8aba9bdf251ab3d6f52c832eddc",
+      "match": true,
+      "upstream_path": "assets/tileset.ase",
+      "status": "unchanged"
+    },
+    {
+      "path": "description.txt",
+      "sha256": "c521d35df2ae4f93c814b7be8efae629d2f72603e48deac3e2793a833424eb0b",
+      "upstream_blob": "02d1aed2664358cb3baec670f7d06ef9481b7479",
+      "match": true,
+      "upstream_path": "description.txt",
+      "status": "unchanged"
+    },
+    {
+      "path": "dist/game.js",
+      "sha256": "b136ca5bd563ad4069d665672f4d896416442b235736657e3762c373a7e9cf59",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/index.html",
+      "sha256": "75200ea89eee41aef02875b36a9d067984364ca5ed1ab8257bea5f94efa44098",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "highway-404.submit-build.zip",
+      "sha256": "17fae18c8d2134afd28016232fa61f4193601cb6817c89056286c830aefdb699",
+      "upstream_blob": "0d77283f8168416de0880e21f20d81eaa3eea076",
+      "match": true,
+      "upstream_path": "highway-404.submit-build.zip",
+      "status": "unchanged"
+    },
+    {
+      "path": "js13k-160x160.png",
+      "sha256": "7613114e6b66f3dd29c30f533788bea5f26142f40ffaa257ba9ec2bd44f4bbcb",
+      "upstream_blob": "ee87d1c7cb57a52f48e864f136dbf58db47cccfc",
+      "match": true,
+      "upstream_path": "js13k-160x160.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "js13k-400x250.png",
+      "sha256": "7fc687a35025abf03fc0c2c5ec6c93168b88ed3476a632c59c38d0b2192cd016",
+      "upstream_blob": "694d300d4b2f90d5a92d6f8890ed3f6dd62e1cc2",
+      "match": true,
+      "upstream_path": "js13k-400x250.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "3cb53e56171f225b24938802eecd8a7d6516f181fba506c14594cde926297a0d",
+      "upstream_blob": "7856eec235d2121c4ca18812cbf0222b4a3aa6e3",
+      "match": true,
+      "upstream_path": "package-lock.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "package.json",
+      "sha256": "d70adda56edd7fce0bde0dc8f53588d62832a8fc6c9938569539f4ff04c4d711",
+      "upstream_blob": "ecabd0b2d8ce9b77f8f2b09bf29922d82b6eebd2",
+      "match": true,
+      "upstream_path": "package.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "scripts/htmlmin.json",
+      "sha256": "3d3d6c70f5f3d05312400964385e089365dbb5bbfcfa100d0b4f418bd3627a9b",
+      "upstream_blob": "6753f852423830aec5b85daa57a8212f12ce637a",
+      "match": true,
+      "upstream_path": "scripts/htmlmin.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "scripts/rollup-plugin-dataurl.js",
+      "sha256": "dcaeb930ca0bf5a67213f9a9271967afc89e6820416ca4586dfaa1c0f2d9caf3",
+      "upstream_blob": "e2a671d736942054a266b7654b25937f3d5f672a",
+      "match": true,
+      "upstream_path": "scripts/rollup-plugin-dataurl.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "scripts/rollup.config.js",
+      "sha256": "edaf44f8d1b2ea2428fcd3aee27f433f26d62c5ee5c6e5c0aa02fed0762f11b1",
+      "upstream_blob": "d22ee08870deef572991c42cfe1d67c1990fb670",
+      "match": true,
+      "upstream_path": "scripts/rollup.config.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "scripts/tinify-pngs.js",
+      "sha256": "6283c5c336d5f1c4b08ed07543bee8399654039760081b84a2d50b9437ac02c5",
+      "upstream_blob": "70b1507f63396d05004d25118ad54c882d3f4648",
+      "match": true,
+      "upstream_path": "scripts/tinify-pngs.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "scripts/zipSize.js",
+      "sha256": "dfa3711fe457b16ef39bf9f4d9b185ad4357afd3c30803405a622a1120f4fbaa",
+      "upstream_blob": "807eac6979a9229014d55da83eb10b7af05e8f11",
+      "match": true,
+      "upstream_path": "scripts/zipSize.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/img/charset.glitchhunter.png",
+      "sha256": "2c73eedca943729ae6c5f1b56cb41e3d0085e8b705bd791ecbc2129980c0f228",
+      "upstream_blob": "4d1ea82b5cf5a7b4e3000dd42ce390efa378ca79",
+      "match": true,
+      "upstream_path": "src/img/charset.glitchhunter.png",
+      "status": "removed",
+      "note": "Unused at runtime (text.js loads src/img/charset.png); removed for public release."
+    },
+    {
+      "path": "src/img/charset.png",
+      "sha256": "44d2cce0c264f0959eba74c543d7bae7ce84fa1bbe3e7349ba3dc45a75a8e0ef",
+      "upstream_blob": "d04189edbca327b170e3cefc95c4db49f0f25dcf",
+      "match": true,
+      "upstream_path": "src/img/charset.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/img/tileset.png",
+      "sha256": "c94b8a96b9b6fe0a31305c5e9d851f37a3559ab64622062bf9907a17aa14ab82",
+      "upstream_blob": "5c22079cd33f255a4bde2935f3155ac5ed0bc3dc",
+      "match": true,
+      "upstream_path": "src/img/tileset.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/index.html",
+      "sha256": "ca257f6af979593459476ca3c1d96d168f25e72afd1c50853d3b8abd527432e7",
+      "upstream_blob": "a71bfcce28111c1c038f5255e95b4257c56f76b4",
+      "match": true,
+      "upstream_path": "src/index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/game.js",
+      "sha256": "c342230b48709d40a754c5dd11412e1b9371847aa90072aa6774cfa56f0f16ba",
+      "upstream_blob": "e6afb8c4094389464e5f24a467a511e747ee66c8",
+      "match": false,
+      "upstream_path": "src/js/game.js",
+      "status": "modified"
+    },
+    {
+      "path": "src/js/mobile.js",
+      "sha256": "432243db9f51a8371fac99301419c786295c068445e2d66d8c030c6895a02c73",
+      "upstream_blob": "e06cadc7a084da7fcbf1cccd77764cefe75d787e",
+      "match": true,
+      "upstream_path": "src/js/mobile.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/monetization.js",
+      "sha256": "947499fa3498b5dd482a9d0cc69f82e12b306517e0f4d69721c5650c7960a1c0",
+      "upstream_blob": "c364d983f17c721fa9aa6926a9e1e1adbfc64b5d",
+      "match": true,
+      "upstream_path": "src/js/monetization.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/sound.js",
+      "sha256": "af47e0e6220c71549720cc4ffd37fbd0d8c7fa1e8a617d526d95c54ed36cc8d1",
+      "upstream_blob": "5714c273dc601d40bf2f228f5edf07efd129eb94",
+      "match": true,
+      "upstream_path": "src/js/sound.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/speech.js",
+      "sha256": "753d95a66de236d7430cffd1bdb39aeddc8b0b33c8d7998d21f3610c0635ffb2",
+      "upstream_blob": "3b7019a518a05b1a6bfbfb18a78e335b53eb5b94",
+      "match": true,
+      "upstream_path": "src/js/speech.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/storage.js",
+      "sha256": "4612605b2ed73ec48085a3484993e63bcdaf684fcc4159fb91ac2dea03fc68df",
+      "upstream_blob": "ad40eec607e137755aa40ed750dbf74b1393f0be",
+      "match": true,
+      "upstream_path": "src/js/storage.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/text.js",
+      "sha256": "fe6f384431450a3244022d74d3a91aa6c767ec5611040051f640c905a2004f18",
+      "upstream_blob": "7a430630a9fa8a9924970b68414a92a8a17897f8",
+      "match": true,
+      "upstream_path": "src/js/text.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/js/utils.js",
+      "sha256": "8a32e3c6765ee29d897ba4ec5d66e708c5aae3c64cb2f371e37567c9526c3e8c",
+      "upstream_blob": "4987d2dd831d4540cdd462648675f79702b48455",
+      "match": true,
+      "upstream_path": "src/js/utils.js",
+      "status": "unchanged"
+    }
+  ],
+  "schema": "realtime-bench-provenance-v1",
+  "upstream_url": "https://github.com/herebefrogs/highway-404/tree/9bbf0de17a49dc424f53b1f076573b6a789baa9d",
+  "reviewed": "2026-10-11"
+}

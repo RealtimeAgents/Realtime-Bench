@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-10-11",
+  "scope": "Complete notices for the game bundles; dependency membership checked by a locked build. PixiJS, Three.js and Rolldown chunks matched the distributed bytes before comment-only notice insertion. The main game chunk is not claimed byte-reproducible.",
+  "files": [
+    {
+      "file": "licenses/eventemitter3-5.0.4-MIT.txt",
+      "sha256": "3aecc12b1cb28832b5f65ab64291de96568c3f236a74d646281b4491f7bcadbf",
+      "component": "eventemitter3",
+      "version": "5.0.4",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/eventemitter3/-/eventemitter3-5.0.4.tgz#package/LICENSE"
+      ],
+      "npm_integrity": "sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==",
+      "method": "verbatim license from integrity-verified npm release tarball"
+    },
+    {
+      "file": "licenses/ismobilejs-1.1.1-MIT.txt",
+      "sha256": "57c43c929cbc20653cb0e62620a413a8bc456888c1874ebc25d08e0122cd953e",
+      "component": "ismobilejs",
+      "version": "1.1.1",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/ismobilejs/-/ismobilejs-1.1.1.tgz#package/LICENSE"
+      ],
+      "npm_integrity": "sha512-VaFW53yt8QO61k2WJui0dHf4SlL8lxBofUuUmwBo0ljPk0Drz2TiuDW4jo3wDcv41qy/SxrJ+VAzJ/qYqsmzRw==",
+      "method": "verbatim license from integrity-verified npm release tarball"
+    },
+    {
+      "file": "licenses/earcut-3.2.3-ISC.txt",
+      "sha256": "0b348fff56384b43dbb37593906904e56d0f9deb51eae590d4dc6d427fbf1808",
+      "component": "earcut",
+      "version": "3.2.3",
+      "license": "ISC",
+      "sources": [
+        "https://registry.npmjs.org/earcut/-/earcut-3.2.3.tgz#package/LICENSE"
+      ],
+      "npm_integrity": "sha512-vnS4AVwp1KHAF13i1vp1/2D5evWy3k5u/iW/B81QVsUZtV8cv2tU0b2VNFlqvh4kYwrFMDdjPCfAmfyJW9y14Q==",
+      "method": "verbatim license from integrity-verified npm release tarball"
+    },
+    {
+      "file": "licenses/parse-svg-path-0.2.0-MIT.txt",
+      "sha256": "2d5ffdfe09268750ba687a149db8392038772e7f156db3a98b615a7de0cab76e",
+      "component": "parse-svg-path",
+      "version": "0.2.0",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/parse-svg-path/-/parse-svg-path-0.2.0.tgz#package/LICENSE"
+      ],
+      "npm_integrity": "sha512-Tf7FFIrguPKQwzD4pWnYkR2VOv3raoHeKED80Bm+BYHI3KxC8KsgsGC5+fSMzAGDA6UEk4bHvmi+RsjmL3khpg==",
+      "method": "verbatim license from integrity-verified npm release tarball"
+    },
+    {
+      "file": "licenses/tiny-lru-11.4.7-BSD-3-Clause.txt",
+      "sha256": "8106f20bacca3558946439afb5e4854333f0a9944eee1c60488aa7ac7fc8f52b",
+      "component": "tiny-lru",
+      "version": "11.4.7",
+      "license": "BSD-3-Clause",
+      "sources": [
+        "https://registry.npmjs.org/tiny-lru/-/tiny-lru-11.4.7.tgz#package/LICENSE"
+      ],
+      "npm_integrity": "sha512-w/Te7uMUVeH0CR8vZIjr+XiN41V+30lkDdK+NRIDCUYKKuL9VcmaUEmaPISuwGhLlrTGh5yu18lENtR9axSxYw==",
+      "method": "verbatim license from integrity-verified npm release tarball"
+    },
+    {
+      "file": "licenses/vite-8.1.5-runtime-MIT.txt",
+      "sha256": "e373c2e74cd342b9e74d0b8813a8fddf3c9788515669a79c2ac238195673d38b",
+      "component": "vite",
+      "version": "8.1.5",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/vite/-/vite-8.1.5.tgz#package/LICENSE.md"
+      ],
+      "npm_integrity": "sha512-7ULLwsCdYx/nRyrpiEwvqb5TFHrMVZyBt+rg/OAXT7rgj/z+DtTDyKFeLAdDkubDVDKD8jOsndmy7m55XcfUsw==",
+      "method": "verbatim Vite core license section; emitted preload helpers only"
+    },
+    {
+      "file": "licenses/rolldown-1.1.5-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "component": "rolldown",
+      "version": "1.1.5",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/rolldown/-/rolldown-1.1.5.tgz#package/LICENSE"
+      ],
+      "npm_integrity": "sha512-t9z29cJjXf/vxQ8dyhCSpt6H6aSwHTk8cT5I3iy6SMXuFpk5mB6PL6XfC8PCwrPTx93udwKUm9HRteAlTGBLiA==",
+      "method": "verbatim license from integrity-verified npm release tarball"
+    },
+    {
+      "file": "licenses/pixi-colord-2.9.6-MIT.txt",
+      "sha256": "7613d4594ee8b6163926af3435dae61c9e3d5a27cd137bd76a543ba40002d8fc",
+      "component": "@pixi/colord",
+      "version": "2.9.6",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/@pixi/colord/2.9.6",
+        "https://raw.githubusercontent.com/omgovich/colord/5344fbf77b736f81cd33c21050021bc09bc9dd1d/LICENSE.md"
+      ],
+      "method": "verbatim upstream notice at the release commit; colord commit identified by npm gitHead"
+    },
+    {
+      "file": "licenses/rolldown-1.1.5-third-party-MIT.txt",
+      "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c",
+      "component": "Rolldown third-party notices (Rollup/esbuild)",
+      "version": "1.1.5",
+      "license": "MIT",
+      "sources": [
+        "https://raw.githubusercontent.com/rolldown/rolldown/f09947ab017d6df74299f691853dcfc4f4f0f86e/THIRD-PARTY-LICENSE"
+      ],
+      "method": "verbatim upstream third-party notices at the v1.1.5 commit"
+    },
+    {
+      "file": "licenses/three.js-0.185.1-MIT.txt",
+      "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+      "component": "three",
+      "version": "0.185.1",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/three/-/three-0.185.1.tgz#package/LICENSE"
+      ],
+      "method": "existing complete notice compared with locked npm release"
+    },
+    {
+      "file": "licenses/pixi.js-8.19.0-MIT.txt",
+      "sha256": "5ce7447bc57f7349ffc48338782fbcabe613696e00712b20d66bc58e780f9473",
+      "component": "pixi.js",
+      "version": "8.19.0",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/pixi.js/-/pixi.js-8.19.0.tgz#package/LICENSE"
+      ],
+      "method": "existing complete notice compared with locked npm release"
+    },
+    {
+      "file": "licenses/stats.js-0.17.0-MIT.txt",
+      "sha256": "9d23ed2d037cc4b97860dc61dc3787ca2c1faac8b11402064a6fa90e91360adc",
+      "component": "stats.js",
+      "version": "0.17.0",
+      "license": "MIT",
+      "sources": [
+        "https://registry.npmjs.org/stats.js/-/stats.js-0.17.0.tgz#package/LICENSE"
+      ],
+      "method": "existing complete notice compared with locked npm release"
+    }
+  ],
+  "bundled_components": {
+    "pixi": [
+      "pixi.js",
+      "eventemitter3",
+      "@pixi/colord",
+      "ismobilejs",
+      "earcut",
+      "parse-svg-path",
+      "tiny-lru",
+      "vite"
+    ],
+    "three": [
+      "three"
+    ],
+    "rolldown-runtime": [
+      "rolldown"
+    ],
+    "index": [
+      "stats.js",
+      "vite",
+      "Apache-2.0 game"
+    ]
+  }
+}

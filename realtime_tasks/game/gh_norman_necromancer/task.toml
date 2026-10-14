@@ -1,0 +1,41 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_norman_necromancer"
+category = "browser_game"
+game_key = "60_norman-necromancer"
+tier = "60_01"
+idx = 61
+score_field = "game_state.souls_collected"
+target = 200
+http_port = 9001
+dbg_port = 9301
+player_mode = "single"
+source = "danprince/norman-the-necromancer @ 5db8ca88c8038b3d0888addaa521a16db3c259a8"
+keys = ["Space", "ArrowUp", "ArrowDown", "Enter"]
+rules = '''
+Click anywhere in the room to cast a green skull toward that point; the small reticle beside
+Norman shows the aim. Skulls fall under gravity and vanish when they touch the floor, so a level
+shot only reaches villagers within about a fifth of the room -- aim higher to lob at distant
+ones. Norman holds 3 casts and regains one per second. A villager killed by a skull, by a
+skeleton, or by walking into Norman is worth 5 souls (more while every recent cast has hit),
+but each villager that reaches Norman costs him a heart out of 5, tougher enemies cost more, and
+when the hearts run out the game ends. Space resurrects every corpse on the floor into a
+skeleton that marches right and kills one villager; the ability recharges over 10 seconds (bar at
+the bottom). Between levels a Rituals shop opens: ArrowUp/ArrowDown choose, Enter buys (spending
+lowers the soul counter) and Continue starts the next level. Reach
+`game_state.souls_collected >= 200`.'''
+description = "Aim gravity-arced spells and time resurrection across bunched enemy waves to bring the soul counter to 200."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

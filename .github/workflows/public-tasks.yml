@@ -1,0 +1,41 @@
+name: Public tasks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  check-tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install --quiet pyyaml
+      - name: Reject private suites and tasks outside the public suite
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tomllib
+
+          import yaml
+
+          files = subprocess.check_output(["git", "ls-files", "-z"]).decode("utf-8").split("\0")
+          manifests = {f for f in files if f.startswith("realtime_tasks/sets/")}
+          errors = [f"{f}: only public.yaml belongs here" for f in sorted(manifests - {"realtime_tasks/sets/public.yaml"})]
+
+          public = yaml.safe_load(open("realtime_tasks/sets/public.yaml"))
+          listed = {(c["execution_kind"], t) for c in public["categories"] for t in c["task_ids"]}
+          packages = {tuple(f.split("/")[1:3]) for f in files if f.count("/") >= 3 and f.endswith("/task.toml") and f.startswith(("realtime_tasks/game/", "realtime_tasks/web/"))}
+          errors += [f"realtime_tasks/{k}/{t}: not in public.yaml" for k, t in sorted(packages - listed)]
+          errors += [f"realtime_tasks/{k}/{t}: listed in public.yaml but missing" for k, t in sorted(listed - packages)]
+
+          for kind, task in sorted(packages & listed):
+              metadata = tomllib.load(open(f"realtime_tasks/{kind}/{task}/task.toml", "rb")).get("metadata", {})
+              for field in ("task_id", "instruction", "evaluation", "description"):
+                  if not metadata.get(field):
+                      errors.append(f"realtime_tasks/{kind}/{task}/task.toml: [metadata] needs {field}")
+
+          print("\n".join(errors), file=sys.stderr)
+          sys.exit(bool(errors))
+          PY

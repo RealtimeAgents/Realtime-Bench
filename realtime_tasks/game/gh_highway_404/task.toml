@@ -1,0 +1,34 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_highway_404"
+category = "browser_game"
+game_key = "68_highway-404"
+tier = "68_01"
+idx = 69
+score_field = "game_state.mission_goal"
+target = 1
+http_port = 9009
+dbg_port = 9309
+player_mode = "single"
+source = "herebefrogs/highway-404 @ 9bbf0de17a49dc424f53b1f076573b6a789baa9d"
+keys = ["W", "A", "S", "D", "P", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
+rules = '''
+Hold WASD or the arrow keys to move across the highway; P pauses. The road scrolls
+continuously. Read each approaching lane pattern, change lanes early enough to avoid
+missing pavement. Detour for a visible teapot only when its lane remains reachable, then
+stay alive until the native timer reaches 30 seconds.'''
+description = "Collect a teapot and survive 30 native seconds on a collapsing seven-lane highway."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

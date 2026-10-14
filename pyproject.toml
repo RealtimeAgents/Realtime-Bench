@@ -1,0 +1,50 @@
+[project]
+name = "streaming-agent-eval"
+version = "0.1.0"
+description = "Streaming-to-Action Agent Framework for evaluating multimodal models on interactive tasks"
+requires-python = ">=3.12"
+dependencies = [
+    "harbor==0.23.0",
+    # Validated together: raw provider usage auditing and native Realtime serialization.
+    "openai[realtime]==2.54.0",
+    "litellm==1.104.1",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "pillow>=10.0",
+    "requests>=2.31",
+    "websockets>=11.0",
+    "uptime-kuma-api",
+    "Flask==3.1.1",
+    "google-genai>=2.22.0",
+]
+
+[project.scripts]
+rtbench = "realtime_framework.evaluation.harbor_cli:main"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["realtime_framework*", "realtime_tasks*"]
+
+# Released harness identity; refresh hash from `uv run rtbench suites` when releasing.
+# A checkout whose framework sources or runtime dependencies differ reports "<version>+dev".
+[tool.rtbench.harness]
+version = "1.0"
+hash = "6c7cb36e3502da31448766437e6ae74a5ef1749afe85bd050034111aeefc10d6"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.setuptools.package-data]
+"realtime_tasks" = ["**/*"]
+"realtime_framework.sandbox" = ["images/**/*", "guest_server/requirements.txt"]
+"realtime_framework.evaluation" = ["viewer/*.js"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc", "**/*.pyo"]

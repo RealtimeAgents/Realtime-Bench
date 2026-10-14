@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_shipment_regroup_handoff"
+scenario = "rt_shipment_regroup_handoff"
+category = "realtime"
+description = "Undo an erroneous combined label, restore separate order groups and regroup a late auto-attached add-on by requested shipping service before the carrier handoff."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

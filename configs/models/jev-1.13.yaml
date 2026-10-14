@@ -1,0 +1,5 @@
+endpoint:
+  api: jev_decisions
+  model: typesafe/jev-1.13
+  api_key_env: OPENROUTER_API_KEY
+reasoning_effort: fixed

@@ -1,0 +1,1104 @@
+from __future__ import annotations
+
+# LiteLLM
+"""One driver for every HTTP model API, configured by a per-API wire policy.
+
+LiteLLM supplies the provider transports. Each policy preserves the benchmark's request shaping
+and accounting rules for one registered API: pinned OpenRouter routes, explicit cache
+breakpoints, provider quirks, and provider-reported usage only. The pinned SDK can synthesize
+usage at stream completion; the driver observes raw provider payloads before LiteLLM transforms
+them, and only those counters reach the token clock.
+"""
+
+import asyncio as asyncio
+import base64 as base64
+import copy as copy
+import json as json
+import os as os
+import re as re
+import threading as threading
+import time as time
+import uuid as uuid
+from collections.abc import Iterator as Iterator
+from dataclasses import dataclass as dataclass
+from dataclasses import field as field
+from dataclasses import replace as replace
+from importlib.metadata import version as version
+from urllib.parse import urlsplit as urlsplit
+
+from realtime_framework.entity.events import GenerationBoundary
+from realtime_framework.entity.events import ProviderHistoryState
+from realtime_framework.entity.events import TextDelta
+from realtime_framework.entity.events import UsageSnapshot
+from realtime_framework.entity.model import FATAL
+from realtime_framework.entity.model import TRANSIENT
+from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import classify_http_failure
+from realtime_framework.entity.model import exception_chain
+from realtime_framework.entity.model import retry_after_seconds
+from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import GenerationHandle
+from realtime_framework.entity.model import GenerationRequest
+from realtime_framework.entity.model import HistorySyncRequest
+from realtime_framework.entity.model import HistorySyncResult
+from realtime_framework.entity.model import InterruptResult
+from realtime_framework.entity.model import ProviderObservation
+from realtime_framework.entity.model import RealtimeCapabilities
+from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.providers.context import context_status
+from realtime_framework.providers.context import estimated_request_tokens
+from realtime_framework.providers.context import validate_context_reserve
+
+LITELLM_VERSION = "1.104.1"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+ANTHROPIC_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+_REQUEST_GATE = threading.Lock()
+_LAST_REQUEST_AT = [0.0]
+_END = object()
+
+
+# Helpers
+def pace_request() -> None:
+    """Apply the optional process-wide minimum interval between provider requests."""
+    interval = float(os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0"))
+    if interval <= 0:
+        return
+    with _REQUEST_GATE:
+        wait = _LAST_REQUEST_AT[0] + interval - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_REQUEST_AT[0] = time.time()
+
+
+def _next_or_end(iterator: Iterator):
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _END
+
+
+async def iterate_blocking(iterator: Iterator):
+    """Expose a blocking SDK iterator without blocking the runtime event loop."""
+    while True:
+        value = await asyncio.to_thread(_next_or_end, iterator)
+        if value is _END:
+            return
+        yield value
+
+
+def object_dict(value) -> dict | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    try:
+        return dict(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_endpoint(url: str | None) -> str:
+    parsed = urlsplit(url or "")
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Set a valid http(s) API base URL, including its API prefix (usually /v1)")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError(
+            "The base URL must not contain credentials, query parameters, or fragments"
+        )
+    return str(url).rstrip("/")
+
+
+# Usage
+def kimi_usage(usage: dict, base_url: str) -> dict:
+    """Expose Kimi's default 5m cache and undivided input to cost accounting."""
+    if base_url.rstrip("/") != DEFAULT_MOONSHOT_BASE_URL:
+        return usage
+    usage = copy.deepcopy(usage)
+    details = usage.get("prompt_tokens_details") or {}
+    if not isinstance(details, dict):
+        return usage
+    prompt_tokens = usage.get("prompt_tokens")
+    if isinstance(prompt_tokens, int):
+        # Kimi reports a single input total for text and image tokens, priced identically.
+        details.setdefault("text_tokens", prompt_tokens)
+    cached = details.get("cached_tokens")
+    if isinstance(cached, int):
+        details.setdefault("cached_tokens_details", {"text_tokens": cached})
+    cache_write = details.get("cache_write_tokens")
+    if isinstance(cache_write, int):
+        details.setdefault(
+            "cache_write_tokens_details",
+            {
+                "ephemeral_5m_tokens": cache_write,
+                "ephemeral_1h_tokens": 0,
+            },
+        )
+    usage["prompt_tokens_details"] = details
+    output_details = usage.get("completion_tokens_details") or {}
+    if isinstance(output_details, dict):
+        # K3 Chat Completions returns text, with no audio output modality.
+        output_details.setdefault("audio_tokens", 0)
+        usage["completion_tokens_details"] = output_details
+    return usage
+
+
+def _usage_field(usage, name: str) -> int | None:
+    if usage is None:
+        return None
+    value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _usage_detail_field(usage, container: str, name: str) -> int | None:
+    if usage is None:
+        return None
+    details = usage.get(container) if isinstance(usage, dict) else getattr(usage, container, None)
+    return _usage_field(details, name) if details is not None else None
+
+
+def _first_reported(*values: int | None, default: int = 0) -> int:
+    for value in values:
+        if value is not None:
+            return value
+    return default
+
+
+def anthropic_usage(start_usage, delta_usage, *, stop_reason: str | None = None) -> dict:
+    """Merge ``message_start`` and terminal ``message_delta`` usage into the harness usage dict.
+
+    Anthropic reports ``input_tokens`` excluding cache reads and writes; the harness (like OpenAI
+    usage) expects the complete prompt count with the cached share nested under
+    ``input_token_details.cached_tokens``. Anthropic bills text and image input at the same rate
+    and never splits them, so the undivided count is reported as ``text_tokens`` to let the
+    catalog rate card reconcile exactly. ``output_tokens`` already includes thinking; when the API
+    reports ``output_tokens_details.thinking_tokens`` it is exposed as the reasoning split, otherwise
+    the split stays unknown rather than being invented.
+    """
+    uncached_input = _first_reported(
+        _usage_field(start_usage, "input_tokens"),
+        _usage_field(delta_usage, "input_tokens"),
+    )
+    cache_read = _first_reported(
+        _usage_field(delta_usage, "cache_read_input_tokens"),
+        _usage_field(start_usage, "cache_read_input_tokens"),
+    )
+    cache_write = _first_reported(
+        _usage_field(delta_usage, "cache_creation_input_tokens"),
+        _usage_field(start_usage, "cache_creation_input_tokens"),
+    )
+    cache_write_5m_reported = _first_reported(
+        _usage_detail_field(delta_usage, "cache_creation", "ephemeral_5m_input_tokens"),
+        _usage_detail_field(start_usage, "cache_creation", "ephemeral_5m_input_tokens"),
+        default=None,
+    )
+    cache_write_1h_reported = _first_reported(
+        _usage_detail_field(delta_usage, "cache_creation", "ephemeral_1h_input_tokens"),
+        _usage_detail_field(start_usage, "cache_creation", "ephemeral_1h_input_tokens"),
+        default=None,
+    )
+    if cache_write_5m_reported is None and cache_write_1h_reported is None:
+        # The driver sets an explicit ephemeral breakpoint without a ttl, whose documented
+        # default is 5 minutes. Older responses may omit the newer ttl breakdown.
+        cache_write_5m = cache_write
+        cache_write_1h = 0
+        cache_write_details_source = "derived:request_cache_control_default_5m"
+    else:
+        cache_write_5m = cache_write_5m_reported or 0
+        cache_write_1h = cache_write_1h_reported or 0
+        if cache_write_5m + cache_write_1h != cache_write:
+            raise RuntimeError(
+                "Anthropic cache-creation ttl details do not reconcile with the total"
+            )
+        cache_write_details_source = "provider_usage.cache_creation"
+    output_tokens = _first_reported(
+        _usage_field(delta_usage, "output_tokens"),
+        _usage_field(start_usage, "output_tokens"),
+    )
+    thinking_tokens = _first_reported(
+        _usage_detail_field(delta_usage, "output_tokens_details", "thinking_tokens"),
+        _usage_detail_field(start_usage, "output_tokens_details", "thinking_tokens"),
+        default=None,
+    )
+    # No audio modality exists on this transport; stating it lets billing derive the text output
+    # count. The thinking split is reported only when the provider reported it.
+    output_details = {"audio_tokens": 0}
+    if thinking_tokens is not None:
+        output_details["reasoning_tokens"] = thinking_tokens
+        output_details["thinking_tokens"] = thinking_tokens
+    input_tokens = uncached_input + cache_read + cache_write
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "uncached_input_tokens": uncached_input,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_write,
+        "input_token_details": {
+            "cached_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "cache_write_tokens_details": {
+                "ephemeral_5m_tokens": cache_write_5m,
+                "ephemeral_1h_tokens": cache_write_1h,
+            },
+            "cache_write_tokens_details_source": cache_write_details_source,
+            "text_tokens": input_tokens,
+            "cached_tokens_details": {"text_tokens": cache_read},
+        },
+        "output_token_details": output_details,
+        "stop_reason": stop_reason,
+        "output_accounting": "anthropic_messages_output_tokens_include_thinking_v2",
+        "raw_native_usage": {
+            "message_start": copy.deepcopy(start_usage),
+            "message_delta": copy.deepcopy(delta_usage),
+        },
+    }
+
+
+def anthropic_thinking(reasoning_effort: str | None) -> dict:
+    """Map the catalog's model-native ``reasoning_effort`` onto Messages API parameters.
+
+    ``none`` explicitly disables thinking and sends no effort. Every other accepted value keeps
+    adaptive thinking and sets ``output_config.effort``. Omitting the effort keeps the provider's
+    default adaptive thinking. ``display`` only controls whether a thinking summary is returned for
+    the audit trail; billing and the token clock are unaffected.
+    """
+    adaptive = {"type": "adaptive", "display": "summarized"}
+    if reasoning_effort is None:
+        return {"thinking": adaptive}
+    if reasoning_effort == "none":
+        return {"thinking": {"type": "disabled"}}
+    if reasoning_effort in ANTHROPIC_EFFORT_LEVELS:
+        return {"thinking": adaptive, "output_config": {"effort": reasoning_effort}}
+    raise ValueError(
+        f"Anthropic reasoning_effort must be one of {('none', *ANTHROPIC_EFFORT_LEVELS)}, "
+        f"got {reasoning_effort!r}"
+    )
+
+
+def _strip_image_detail(messages: list[dict]) -> None:
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    part["image_url"].pop("detail", None)
+
+
+def _mark_cache_breakpoint(messages: list[dict]) -> None:
+    """Cache through the newest message; only unchanged earlier history is a reusable prefix."""
+    for message in reversed(messages):
+        content = message.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            message["content"] = content
+        if isinstance(content, list) and content:
+            content[-1]["cache_control"] = {"type": "ephemeral"}
+            break
+
+
+# Policies
+_STREAMING_CHAT = RealtimeCapabilities(
+    protocol_family="openai_chat",
+    persistent_session=False,
+    terminal_output_usage=True,
+)
+
+
+@dataclass(frozen=True)
+class WirePolicy:
+    """Everything that differs between the HTTP APIs served by LiteLLMDriver."""
+
+    capabilities: RealtimeCapabilities
+    gateway: str
+    # LiteLLM provider prefix for model_name; None means model_name is already provider/model.
+    sdk_provider: str | None
+    default_key_env: str | None
+    default_base_url: str | None = None
+    base_url_env: str | None = None
+    # "httpx": LiteLLM's own handler; "openai": an AsyncOpenAI client; None: SDK default.
+    client: str | None = "httpx"
+    # None follows ModelConfig.chat_stream / chat_include_usage.
+    stream: bool | None = True
+    include_usage: bool | None = True
+    # "model_prefix": Anthropic/Gemini models behind OpenRouter; "always": every request.
+    cache_breakpoint: str | None = None
+    strip_image_detail: bool = False
+    pin_openrouter_route: bool = False
+    # Each request sends the decision cap, else the declared native limit, else omits the
+    # parameter (provider default). APIs that require the parameter reject an undeclared limit.
+    output_limit_param: str = "max_tokens"
+    output_limit_required: bool = False
+    anthropic_thinking: bool = False
+    usage: str = "raw"  # "raw" | "kimi" | "anthropic"
+    preserve_reasoning_history: bool = False
+    surface_tool_calls: bool = False
+    assistant_turn_ref: bool = False
+    context_status: bool = False
+    require_api_key: bool = True
+
+
+POLICIES = {
+    "openrouter": WirePolicy(
+        capabilities=_STREAMING_CHAT,
+        gateway="openrouter",
+        sdk_provider="openrouter",
+        default_key_env="OPENROUTER_API_KEY",
+        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
+        base_url_env="OPENROUTER_BASE_URL",
+        cache_breakpoint="model_prefix",
+        pin_openrouter_route=True,
+    ),
+    "moonshot": WirePolicy(
+        capabilities=replace(
+            _STREAMING_CHAT,
+            protocol_family="moonshot_chat",
+        ),
+        gateway="kimi_compatible",
+        sdk_provider="moonshot",
+        default_key_env="MOONSHOT_API_KEY",
+        default_base_url=DEFAULT_MOONSHOT_BASE_URL,
+        base_url_env="MOONSHOT_BASE_URL",
+        client="openai",
+        strip_image_detail=True,
+        output_limit_param="max_completion_tokens",
+        usage="kimi",
+        preserve_reasoning_history=True,
+    ),
+    "anthropic_messages": WirePolicy(
+        capabilities=replace(_STREAMING_CHAT, protocol_family="anthropic_messages"),
+        gateway="anthropic",
+        sdk_provider="anthropic",
+        default_key_env="ANTHROPIC_API_KEY",
+        default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
+        include_usage=False,
+        cache_breakpoint="always",
+        output_limit_required=True,
+        anthropic_thinking=True,
+        usage="anthropic",
+    ),
+    "chat_completions": WirePolicy(
+        capabilities=replace(
+            _STREAMING_CHAT,
+            protocol_family="compatible_chat",
+            terminal_output_usage=False,
+        ),
+        gateway="openai_compatible",
+        sdk_provider="openai",
+        default_key_env="OPENAI_API_KEY",
+        client="openai",
+        stream=None,
+        include_usage=None,
+        strip_image_detail=True,
+        surface_tool_calls=True,
+        context_status=True,
+        require_api_key=False,
+    ),
+    "litellm": WirePolicy(
+        capabilities=replace(
+            _STREAMING_CHAT,
+            protocol_family="compatible_chat",
+            terminal_output_usage=False,
+        ),
+        gateway="litellm",
+        sdk_provider=None,
+        default_key_env=None,
+        client=None,
+        stream=False,
+        preserve_reasoning_history=True,
+        surface_tool_calls=True,
+        assistant_turn_ref=True,
+        require_api_key=False,
+    ),
+}
+
+
+class _AuditedSDKStream:
+    """Observe OpenAI-compatible SDK chunks before LiteLLM's usage reconstruction."""
+
+    def __init__(self, stream, observe):
+        self.stream = stream
+        self.iterator = stream.__aiter__()
+        self.observe = observe
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        chunk = await anext(self.iterator)
+        self.observe(chunk.model_dump(exclude_unset=True))
+        return chunk
+
+    async def aclose(self):
+        await self.stream.close()
+
+
+# Driver
+class LiteLLMDriver:
+    """Stateless HTTP driver: canonical history is rendered into every request.
+
+    Consequently there is no provider-side conversation to repair after a wall-clock early return.
+    The API key (ModelConfig.adapter_type) selects the wire policy.
+    """
+
+    def __init__(self, config):
+        if config.adapter_type not in POLICIES:
+            raise ValueError(f"LiteLLMDriver has no wire policy for {config.adapter_type!r}")
+        self.config = config
+        self.policy = policy = POLICIES[config.adapter_type]
+        self.capabilities = policy.capabilities
+        self.gateway = policy.gateway
+        self.preserve_reasoning_history = policy.preserve_reasoning_history
+        if policy.output_limit_required and config.native_output_limit is None:
+            raise ValueError(
+                f"The {config.adapter_type} API requires {policy.output_limit_param}; declare "
+                "endpoint.native_output_limit in the model YAML"
+            )
+        if not policy.context_status:
+            # The runtime records physical context checks only for drivers that perform them.
+            self.request_context_status = None
+        if policy.gateway == "openai_compatible":
+            if (
+                config.context_window_tokens is not None
+                and config.context_reserve_tokens >= config.context_window_tokens
+            ):
+                raise ValueError("Context capacity must exceed generation reserve")
+            self.base_url = validate_endpoint(config.api_base_url)
+        else:
+            self.base_url = (
+                config.api_base_url
+                or (os.environ.get(policy.base_url_env) if policy.base_url_env else None)
+                or policy.default_base_url
+            )
+        self._sdk = self._load_sdk()
+        self.api_key = self._resolve_key()
+        self._http = None
+        self._responses: dict[int, object] = {}
+        self._lock = threading.Lock()
+        self._session_id = "rtb-" + uuid.uuid4().hex
+
+    @staticmethod
+    def _load_sdk():
+        # Import lazily; constructing a native realtime driver does not load LiteLLM.
+        import litellm as litellm
+
+        if version("litellm") != LITELLM_VERSION:
+            raise RuntimeError(
+                f"Use litellm=={LITELLM_VERSION}; raw usage auditing is version-validated"
+            )
+        return litellm
+
+    def _resolve_key(self) -> str | None:
+        variable = self.config.api_key_env or self.policy.default_key_env
+        key = self.config.api_key or (os.environ.get(variable) if variable else None)
+        if key:
+            return key
+        if self.policy.require_api_key:
+            raise RuntimeError(f"The {self.config.adapter_type} API needs {variable}")
+        if self.config.api_key_env and self.policy.gateway == "litellm":
+            raise ValueError(f"Credential variable {self.config.api_key_env!r} is empty or unset")
+        return "not-required" if self.policy.client == "openai" else None
+
+    # ---- lifecycle -------------------------------------------------------------------------
+
+    async def connect(self, request: ConnectRequest) -> None:
+        return None
+
+    async def send_observation(self, observation: ProviderObservation) -> dict:
+        # The complete canonical prompt is sent by start_generation; this hook intentionally has no
+        # transport side effect for stateless APIs.
+        return {"observation_id": observation.observation_id}
+
+    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+        return HistorySyncResult(
+            SyncDisposition.EXACT,
+            ProviderHistoryState.EXACT,
+            detail="stateless request history is canonical",
+            provider_metadata={"history_request_recomposed": True},
+        )
+
+    # ---- request shaping -------------------------------------------------------------------
+
+    def transport_output_token_cap(self, provider_cap: int | None) -> int | None:
+        """Return the completion limit each request sends; None omits it (provider default).
+
+        Omitting the limit is unsafe on some hosts: Kimi-compatible gateways have defaulted to 128
+        tokens (all spent on reasoning) or to the whole context window (rejected as overflow). A
+        declared native limit is therefore always sent explicitly.
+        """
+        if provider_cap is not None:
+            return int(provider_cap)
+        return self.config.native_output_limit
+
+    def _stream_enabled(self) -> bool:
+        stream = self.policy.stream
+        return self.config.chat_stream if stream is None else stream
+
+    def _request_kwargs(self, request: GenerationRequest) -> dict:
+        policy = self.policy
+        messages = copy.deepcopy(list(request.messages))
+        if policy.strip_image_detail:
+            _strip_image_detail(messages)
+        if policy.cache_breakpoint == "always" or (
+            policy.cache_breakpoint == "model_prefix"
+            and self.config.model_name.startswith(("anthropic/", "google/"))
+        ):
+            # Anthropic and Gemini use explicit breakpoints; OpenAI uses implicit caching.
+            _mark_cache_breakpoint(messages)
+        stream = self._stream_enabled()
+        kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
+        include_usage = policy.include_usage
+        if include_usage is None:
+            include_usage = self.config.chat_include_usage
+        if stream and include_usage:
+            kwargs["stream_options"] = {"include_usage": True}
+        # The recorded transport cap is the value sent; the request never substitutes another.
+        limit = request.transport_output_token_cap
+        if limit is not None:
+            kwargs[policy.output_limit_param] = int(limit)
+        effort = self.config.reasoning_effort
+        extra_body = {"session_id": self._session_id} if policy.pin_openrouter_route else {}
+        upstream = self.config.upstream_provider
+        if policy.pin_openrouter_route and upstream:
+            extra_body["provider"] = {
+                "order": [upstream],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
+        if policy.anthropic_thinking:
+            kwargs.update(anthropic_thinking(effort))
+        elif effort is not None:
+            if policy.pin_openrouter_route and upstream:
+                extra_body["reasoning"] = {"effort": effort, "exclude": False}
+            else:
+                kwargs["reasoning_effort"] = effort
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        if request.timeout_s is not None:
+            kwargs["timeout"] = request.timeout_s
+        return kwargs
+
+    def _client(self):
+        if self._http is not None or self.policy.client is None:
+            return self._http
+        if self.policy.client == "openai":
+            from openai import AsyncOpenAI as AsyncOpenAI
+
+            # The harness owns retries (entity.model.TRANSPORT_RETRY) so every attempt is recorded.
+            self._http = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
+        else:
+            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as AsyncHTTPHandler
+
+            self._http = AsyncHTTPHandler()
+        return self._http
+
+    def _transport_kwargs(self) -> dict:
+        policy = self.policy
+        model = self.config.model_name
+        kwargs = {
+            "model": f"{policy.sdk_provider}/{model}" if policy.sdk_provider else model,
+            # The harness owns retries; never silently retry or fall back to another backend.
+            "num_retries": 0,
+            "max_retries": 0,
+            "drop_params": False,
+            "caching": False,
+        }
+        if self.api_key is not None:
+            kwargs["api_key"] = self.api_key
+        if self.base_url:
+            kwargs["api_base"] = str(self.base_url)
+        client = self._client()
+        if client is not None:
+            kwargs["client"] = client
+        if policy.pin_openrouter_route:
+            kwargs["extra_headers"] = {
+                "X-OpenRouter-Metadata": "enabled",
+                "HTTP-Referer": os.environ.get(
+                    "OPENROUTER_REFERER", "https://github.com/streaming-to-action"
+                ),
+                "X-Title": os.environ.get("OPENROUTER_TITLE", "Streaming-to-Action"),
+            }
+        return kwargs
+
+    def _backend_route(self) -> dict:
+        route = {
+            "gateway": self.gateway,
+            "base_url": self.base_url,
+            "transport": "litellm",
+            "transport_version": LITELLM_VERSION,
+            "requested_model": self.config.model_name,
+        }
+        if self.policy.pin_openrouter_route or self.gateway == "kimi_compatible":
+            pinned = self.policy.pin_openrouter_route
+            route.update(
+                configured_upstream_provider=self.config.upstream_provider,
+                allow_fallbacks=False if pinned else None,
+                require_parameters=True if pinned else None,
+                response_metadata=None,
+            )
+        if self.policy.usage == "anthropic":
+            route.update(response_model=None, response_id=None)
+        return route
+
+    # ---- generation ------------------------------------------------------------------------
+
+    async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
+        if not self._stream_enabled():
+            return await self._start_complete_response(request)
+        await asyncio.to_thread(pace_request)
+        kwargs = self._request_kwargs(request)
+        kwargs.update(self._transport_kwargs())
+        response = await self._sdk.acompletion(**kwargs)
+        audit = {
+            "usage": None,
+            "usage_revision": 0,
+            "route": None,
+            "anthropic_start": None,
+            "anthropic_delta": None,
+            "stop_reason": None,
+            "message": None,
+        }
+        try:
+            # Fail closed if LiteLLM no longer exposes the provider payload before parsing it.
+            raw_stream = response.completion_stream
+            parse = getattr(raw_stream, "chunk_parser", None)
+            if callable(parse):
+
+                def parse_with_audit(chunk):
+                    self._observe_raw(audit, chunk)
+                    return parse(chunk)
+
+                raw_stream.chunk_parser = parse_with_audit
+            else:
+                from openai import AsyncStream as AsyncStream
+
+                if not isinstance(raw_stream, AsyncStream):
+                    raise RuntimeError("LiteLLM stream has no auditable provider SSE parser")
+                response.completion_stream = _AuditedSDKStream(
+                    raw_stream, lambda chunk: self._observe_raw(audit, chunk)
+                )
+        except BaseException:
+            await response.aclose()
+            raise
+        with self._lock:
+            self._responses[id(response)] = response
+        return GenerationHandle(
+            request.generation_id,
+            opaque=response,
+            metadata={
+                "response": response,
+                "raw_audit": audit,
+                "backend_route": self._backend_route(),
+            },
+        )
+
+    def _observe_raw(self, audit: dict, chunk: dict) -> None:
+        if self.policy.usage == "anthropic":
+            kind = chunk.get("type")
+            if kind == "message_start":
+                message = chunk.get("message") or {}
+                audit["anthropic_start"] = copy.deepcopy(message.get("usage"))
+                audit["message"] = {"model": message.get("model"), "id": message.get("id")}
+            elif kind == "message_delta":
+                audit["anthropic_delta"] = copy.deepcopy(chunk.get("usage"))
+                audit["stop_reason"] = (chunk.get("delta") or {}).get("stop_reason")
+            return
+        raw_usage = chunk.get("usage")
+        if raw_usage is None:
+            choices = chunk.get("choices") or []
+            raw_usage = choices[0].get("usage") if choices else None
+        if isinstance(raw_usage, dict):
+            audit["usage"] = copy.deepcopy(raw_usage)
+            audit["usage_revision"] += 1
+        route = chunk.get("openrouter_metadata")
+        if route is not None:
+            audit["route"] = copy.deepcopy(route)
+
+    @staticmethod
+    def _provider_slug(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+
+    @staticmethod
+    def _route_metadata(value) -> dict | None:
+        value = object_dict(value)
+        if value is None:
+            return None
+        endpoints = value.get("endpoints") or {}
+        available = endpoints.get("available") or []
+        selected = [endpoint for endpoint in available if endpoint.get("selected")]
+        endpoint = selected[0] if len(selected) == 1 else None
+        return {
+            "requested_model": value.get("requested"),
+            "strategy": value.get("strategy"),
+            "attempt": value.get("attempt"),
+            "selected_provider": endpoint.get("provider") if endpoint else None,
+            "selected_model": endpoint.get("model") if endpoint else None,
+            "selected_endpoint_count": len(selected),
+        }
+
+    def _check_route(self, generation, audit) -> None:
+        route = self._route_metadata(audit["route"])
+        if route is None:
+            return
+        generation.metadata["backend_route"]["response_metadata"] = route
+        selected = route.get("selected_provider")
+        expected = self.config.upstream_provider
+        if selected is not None and expected is not None and self._provider_slug(selected) != expected:
+            raise RuntimeError(f"OpenRouter selected {selected!r}; expected pinned {expected!r}")
+
+    async def events(self, generation: GenerationHandle):
+        if generation.metadata.get("complete_response"):
+            async for event in self._complete_response_events(generation):
+                yield event
+            return
+        sequence = 0
+        response = generation.metadata["response"]
+        audit = generation.metadata["raw_audit"]
+        anthropic = self.policy.usage == "anthropic"
+        emitted_usage_revision = 0
+        calls: dict = {}
+        try:
+            events = response.__aiter__()
+            # The runtime can interrupt while consuming a yielded delta. Check before
+            # requesting another SDK event: interrupt() has already closed its socket.
+            while not generation.metadata.get("interrupted", False):
+                try:
+                    event = await anext(events)
+                except StopAsyncIteration:
+                    break
+                raw_type = type(event).__name__
+                if self.policy.pin_openrouter_route:
+                    self._check_route(generation, audit)
+                # Never expose LiteLLM's reconstructed/estimated usage as provider usage.
+                if not anthropic and audit["usage_revision"] != emitted_usage_revision:
+                    emitted_usage_revision = audit["usage_revision"]
+                    sequence += 1
+                    yield UsageSnapshot(
+                        generation.generation_id,
+                        sequence,
+                        raw_type,
+                        self._normalize_usage(audit["usage"]),
+                    )
+                    if generation.metadata.get("interrupted", False):
+                        break
+                choices = getattr(event, "choices", None) or []
+                if not choices:
+                    continue
+                delta = choices[0].delta
+                if self.policy.surface_tool_calls:
+                    for call in getattr(delta, "tool_calls", None) or []:
+                        saved = calls.setdefault(call.index, {"name": "", "arguments": ""})
+                        function = getattr(call, "function", None)
+                        if function:
+                            saved["name"] += function.name or ""
+                            saved["arguments"] += function.arguments or ""
+                reasoning = self._delta_reasoning(delta)
+                if reasoning:
+                    sequence += 1
+                    yield TextDelta(
+                        generation.generation_id, sequence, raw_type, reasoning, "reasoning"
+                    )
+                    if generation.metadata.get("interrupted", False):
+                        break
+                text = getattr(delta, "content", None) or ""
+                if text:
+                    sequence += 1
+                    yield TextDelta(generation.generation_id, sequence, raw_type, text, "visible")
+            interrupted = bool(generation.metadata.get("interrupted", False))
+            if (
+                not anthropic
+                and not interrupted
+                and audit["usage_revision"] != emitted_usage_revision
+            ):
+                sequence += 1
+                yield UsageSnapshot(
+                    generation.generation_id,
+                    sequence,
+                    "usage",
+                    self._normalize_usage(audit["usage"]),
+                )
+            if calls and not interrupted:
+                # No tools were supplied: preserve unexpected tool output for protocol validation.
+                sequence += 1
+                yield TextDelta(
+                    generation.generation_id,
+                    sequence,
+                    "tool_calls",
+                    "\n" + json.dumps({"tool_calls": [{"function": v} for v in calls.values()]}),
+                    "visible",
+                )
+            metadata = {"backend_route": generation.metadata.get("backend_route")}
+            if anthropic:
+                route = generation.metadata["backend_route"]
+                route["response_model"] = (audit["message"] or {}).get("model")
+                route["response_id"] = (audit["message"] or {}).get("id")
+                metadata = {"stop_reason": audit["stop_reason"], "backend_route": dict(route)}
+                if audit["anthropic_delta"] is not None:
+                    # Only the terminal message_delta carries authoritative output usage. An
+                    # interrupted stream has no complete count and reports none.
+                    sequence += 1
+                    yield UsageSnapshot(
+                        generation.generation_id,
+                        sequence,
+                        "message_delta",
+                        anthropic_usage(
+                            audit["anthropic_start"],
+                            audit["anthropic_delta"],
+                            stop_reason=audit["stop_reason"],
+                        ),
+                    )
+            sequence += 1
+            yield GenerationBoundary(
+                generation.generation_id,
+                sequence,
+                "chat.completion.done",
+                "interrupted" if interrupted else "turn_complete",
+                ProviderHistoryState.EXACT,
+                metadata,
+            )
+        finally:
+            try:
+                await asyncio.wait_for(response.aclose(), timeout=1.0)
+            finally:
+                with self._lock:
+                    self._responses.pop(id(response), None)
+
+    @staticmethod
+    def _delta_reasoning(delta) -> str:
+        reasoning = next(
+            (
+                value
+                for name in ("reasoning", "reasoning_content")
+                if isinstance((value := getattr(delta, name, None)), str) and value
+            ),
+            "",
+        )
+        if reasoning:
+            return reasoning
+        values = []
+        for detail in getattr(delta, "reasoning_details", None) or []:
+            detail = object_dict(detail) or {}
+            value = detail.get("text") or detail.get("summary")
+            if value:
+                values.append(value)
+        return "".join(values)
+
+    def _normalize_usage(self, usage: dict) -> dict:
+        if self.policy.usage == "kimi":
+            return kimi_usage(usage, str(self.base_url))
+        return usage
+
+    # ---- complete responses ----------------------------------------------------------------
+
+    async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
+        if self.policy.gateway == "litellm" and request.clock_mode != "wall":
+            raise ValueError("Direct LiteLLM models require wall-clock evaluation in default mode")
+        await asyncio.to_thread(pace_request)
+        raw = {}
+
+        def observe(details):
+            if details.get("log_event_type") != "post_api_call":
+                return
+            value = details.get("original_response")
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (ValueError, TypeError):
+                    return
+            if isinstance(value, dict) and ("usage" in value or "usageMetadata" in value):
+                # Do not retain callback credentials, request headers, or prompt logging fields.
+                raw.update(copy.deepcopy(value))
+
+        kwargs = self._request_kwargs(request)
+        kwargs.update(self._transport_kwargs())
+        kwargs["logger_fn"] = observe
+        response = await self._sdk.acompletion(**kwargs)
+        if not response.choices:
+            raise RuntimeError("LiteLLM returned no response choices")
+        message = response.choices[0].message.model_dump(exclude_none=True)
+        metadata = {
+            "complete_response": True,
+            "usage": self._reported_usage(raw, response),
+            "message": message,
+            "backend_route": self._backend_route(),
+        }
+        if self.policy.assistant_turn_ref:
+            metadata["completed_turn_refs"] = {"assistant_message": message}
+        return GenerationHandle(request.generation_id, opaque=response, metadata=metadata)
+
+    @staticmethod
+    def _reported_usage(raw, response):
+        """Accept normalized counters only when backed by a raw provider output count."""
+        raw_usage = raw.get("usage") or raw.get("usageMetadata") or {}
+        output = next(
+            (
+                raw_usage[k]
+                for k in ("completion_tokens", "output_tokens")
+                if type(raw_usage.get(k)) is int
+            ),
+            None,
+        )
+        if output is None and type(raw_usage.get("candidatesTokenCount")) is int:
+            output = raw_usage["candidatesTokenCount"] + (raw_usage.get("thoughtsTokenCount") or 0)
+        normalized = getattr(response, "usage", None)
+        if normalized is None or output is None:
+            return None
+        usage = normalized.model_dump(exclude_none=True)
+        if usage.get("completion_tokens") != output:
+            raise RuntimeError("LiteLLM output usage disagrees with the provider response")
+        usage.pop("cost", None)
+        if type(raw_usage.get("cost")) in (int, float):
+            usage["cost"] = raw_usage["cost"]
+        return usage
+
+    async def _complete_response_events(self, generation):
+        sequence = 0
+        if generation.metadata.get("interrupted"):
+            yield GenerationBoundary(
+                generation.generation_id,
+                1,
+                "litellm.completion",
+                "interrupted",
+                ProviderHistoryState.EXACT,
+            )
+            return
+        usage = generation.metadata["usage"]
+        if usage is not None:
+            sequence += 1
+            yield UsageSnapshot(
+                generation.generation_id, sequence, "litellm.completion", usage
+            )
+        message = generation.metadata["message"]
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            content = "\n".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if message.get("tool_calls") or message.get("function_call"):
+            # No tools were supplied: preserve unexpected tool output for protocol validation.
+            content += "\n" + json.dumps(
+                {k: message[k] for k in ("tool_calls", "function_call") if message.get(k)}
+            )
+        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        for channel, value in (("reasoning", reasoning), ("visible", content)):
+            if isinstance(value, str) and value:
+                sequence += 1
+                yield TextDelta(
+                    generation.generation_id, sequence, "litellm.completion", value, channel
+                )
+        yield GenerationBoundary(
+            generation.generation_id,
+            sequence + 1,
+            "litellm.completion",
+            "turn_complete",
+            ProviderHistoryState.EXACT,
+            {"backend_route": generation.metadata["backend_route"]},
+        )
+
+    # ---- interruption and cleanup ----------------------------------------------------------
+
+    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+        generation.metadata["interrupted"] = True
+        response = generation.metadata.get("response")
+        if response is not None:
+            await response.aclose()
+            with self._lock:
+                self._responses.pop(id(response), None)
+        return InterruptResult(ProviderHistoryState.EXACT)
+
+    async def close(self) -> None:
+        with self._lock:
+            responses = list(self._responses.values())
+            self._responses.clear()
+        for response in responses:
+            try:
+                await response.aclose()
+            except Exception:  # noqa: BLE001, S110 - best-effort stream cleanup
+                pass
+        if self._http is not None:
+            http, self._http = self._http, None
+            await http.close()
+        # LiteLLM's process-wide logging worker binds to the loop that last used it. Each runtime
+        # owns a private loop that closes with the session; stop the worker if it is ours.
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        if getattr(GLOBAL_LOGGING_WORKER, "_bound_loop", None) is asyncio.get_running_loop():
+            try:
+                await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(), timeout=1.0)
+            except Exception:  # noqa: BLE001, S110 - logging cleanup must not mask shutdown
+                pass
+
+    # Provider error types that are transient regardless of the HTTP status they arrive with. A
+    # streamed request can fail after the 200 response header with an SSE ``error`` event.
+    _TRANSIENT_ERROR_TYPES = ("overloaded_error", "api_error", "timeout_error")
+
+    def classify_transport_error(self, exc: BaseException) -> TransportFailure:
+        """Classify a failed request for the harness's shared retry policy."""
+        import httpx as httpx
+
+        litellm = self._sdk
+        for current in exception_chain(exc):
+            status = getattr(current, "status_code", None)
+            if isinstance(status, int) and status >= 400:
+                headers = getattr(getattr(current, "response", None), "headers", None)
+                return classify_http_failure(status, str(current), retry_after_seconds(headers))
+        for current in exception_chain(exc):
+            if isinstance(current, litellm.RateLimitError):
+                return classify_http_failure(429, str(current))
+            if isinstance(
+                current, (litellm.APIConnectionError, litellm.Timeout, httpx.TransportError)
+            ):
+                return TransportFailure(TRANSIENT)
+        detail = str(exc)
+        if "rate_limit_error" in detail:
+            return classify_http_failure(429, detail)
+        if any(kind in detail for kind in self._TRANSIENT_ERROR_TYPES):
+            return TransportFailure(TRANSIENT)
+        return TransportFailure(FATAL)
+
+    # ---- physical context (OpenAI-compatible deployments) --------------------------------
+
+    async def request_context_status(self, request):
+        """Count the actual pending request, including the newest image and action ledger."""
+        limit = self.config.context_window_tokens
+        if limit is None:
+            return {"pressure": False, "counter": "unconfigured"}
+        validate_context_reserve(self.config)
+        messages = self._request_kwargs(request)["messages"]
+        if self.config.context_counter == "vllm":
+            import httpx as httpx
+
+            endpoint = self.base_url.removesuffix("/v1") + "/tokenize"
+            response = await asyncio.to_thread(
+                httpx.post,
+                endpoint,
+                json={
+                    "model": self.config.model_name,
+                    "messages": messages,
+                    "add_generation_prompt": True,
+                },
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=request.timeout_s or 30,
+            )
+            response.raise_for_status()
+            result = response.json()
+            count = result.get("count")
+            actual_limit = result.get("max_model_len")
+            if type(count) is not int or count < 0:
+                raise RuntimeError("Token counter did not return a valid multimodal input count")
+            if actual_limit != limit:
+                raise RuntimeError(
+                    f"Serving capacity changed: configured {limit}, reported {actual_limit}; start a new run with matching settings"
+                )
+            source = "vllm_multimodal_tokenize"
+        else:
+            count = estimated_request_tokens(messages, self.config.context_image_tokens)
+            source = "estimated_utf8_bytes_plus_image_allowance"
+        return context_status(self.config, count, source)

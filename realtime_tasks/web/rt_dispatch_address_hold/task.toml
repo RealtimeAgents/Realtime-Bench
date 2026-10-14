@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_dispatch_address_hold"
+scenario = "rt_dispatch_address_hold"
+category = "realtime"
+description = "Shopify-derived order detail simulation with a manual fulfillment hold, independently arriving internal address updates, a shipping-address editor, a warehouse fulfillment request that a hold withdraws and a release resends, and warehouse collections. Requires blocking the initial collection, applying the confirmed address, releasing, then withdrawing and resending the request with Lea's later apartment correction before the last collection."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

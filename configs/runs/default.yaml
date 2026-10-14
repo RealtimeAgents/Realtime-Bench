@@ -1,0 +1,16 @@
+# Default evaluation plan; see docs/running.md.
+# Select models from configs/models/ and tasks through the suite manifest.
+# See paused-clock.yaml and token-clock.yaml for comparison protocols.
+
+suite: public
+
+models:
+  - my-model
+
+runtime:
+  seed: 42
+  mode: default
+  clock_mode: wall
+  fps: 1
+  duration_minutes: 5
+  protocol: wall-clock

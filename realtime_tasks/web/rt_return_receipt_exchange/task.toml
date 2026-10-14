@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_return_receipt_exchange"
+category = "realtime"
+scenario = "rt_return_receipt_exchange"
+description = "ParcelTurn split return receipt, per-unit rejection, inventory location and paid exchange release; researched from ReturnZap Web RMA processing."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

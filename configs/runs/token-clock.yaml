@@ -1,0 +1,10 @@
+suite: public
+models:
+- claude-opus-5
+runtime:
+  seed: 42
+  mode: default
+  clock_mode: token
+  fps: 1
+  duration_minutes: 5
+  tokens_per_frame: 64

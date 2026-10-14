@@ -1,0 +1,34 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_synthblast"
+category = "browser_game"
+game_key = "44_synthblast"
+tier = "44_01"
+idx = 45
+score_field = "game_state.level"
+target = 3
+http_port = 8985
+dbg_port = 9285
+player_mode = "single"
+source = "brianrisk/SYNTHBLAST-threejs-game @ 8fd77ccc4e03bc9c6033e0738472351b0ab8f2a6"
+keys = ["W", "A", "S", "D", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "Enter"]
+rules = '''
+Enter starts. Hold W/S or Arrow Up/Down to drive and hold A/D or Arrow Left/Right
+to steer; release a key to stop that motion. Space fires. Each level ends only after
+every yellow objective pad is activated. When the next LEVEL banner appears, wait for
+the one-second transition and press any gameplay key to launch into the next arena.'''
+description = "Activate all yellow objective pads in two fixed arenas and reach SYNTH*BLAST Level 3 within the independent 180-second task countdown."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

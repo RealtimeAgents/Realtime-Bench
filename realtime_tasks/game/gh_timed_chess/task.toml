@@ -1,0 +1,48 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_timed_chess"
+category = "browser_game"
+game_key = "01_timed-chess"
+tier = "01_01"
+idx = 0
+score_field = "game_state.captures"
+target = 4
+http_port = 8940
+dbg_port = 9240
+player_mode = "single"
+source = "sagarbudhwani/classic-chess-js @ 28f90f911db2d3638ff064795d67a87f1142b98b"
+keys = []
+rules = '''
+Click a White piece, then click its legal destination. The highlighted squares show that
+piece's currently legal moves. Black replies automatically after every White move.
+
+The game begins from a fixed White opening followed by the AI's live reply. Your deadline is
+the visible White clock. Settings, hint, undo, and restart are locked for this benchmark, so time
+and earlier moves cannot be recovered. Checkmate, stalemate, or either clock reaching zero ends
+the run. Success is recorded as soon as White has captured four Black pieces.'''
+description = "Play pinned open-source timed chess against an AI and capture at least four Black pieces before the irreversible two-minute White clock expires. Success is measured when `game_state.captures` reaches 4."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+
+[metadata.interactables]
+schema_version = 1
+task_id = "gh_timed_chess"
+
+[[metadata.interactables.elements]]
+selector = ".square"
+id_template = "chess-square-{data-row}-{data-col}"
+label_template = "Chess square row {data-row} column {data-col}"
+role = "gridcell"
+actions = ["click"]

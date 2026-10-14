@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-10-08",
+  "scope": "Supplemental notices restored during public-20 review. Source/grant inference limitations are documented in RIGHTS.md.",
+  "files": [
+    {
+      "file": "ADAPTER-LICENSE.txt",
+      "sha256": "225a7cf6d96fc1af3956c6a75c26d584e506cba3f84ce8d07c14205b3f960428",
+      "sources": [
+        "git:12748d06:LICENSE"
+      ],
+      "method": "restored project grant scoped to original benchmark contributions"
+    },
+    {
+      "file": "source-audit.json",
+      "sha256": "882d2d44b2b7cd8f38695be5f71490f096694f977158c8aa25ceacbce7d651dd",
+      "sources": [
+        "pinned GitHub tree recorded inside source-audit.json"
+      ],
+      "method": "recorded local SHA-256 and upstream Git blob verification; not a license grant"
+    },
+    {
+      "file": "licenses/jsfxr-Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "sources": [
+        "https://raw.githubusercontent.com/mneubrand/jsfxr/b2bfe50fddc7e281e1c1944870071b2ccd2c0440/LICENSE.txt"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "third-party-source/jsfxr.js",
+      "sha256": "18ca13666626e05ea55c9e22bf06288e2cd7b0eec9a5e029ff573fa77f534e65",
+      "sources": [
+        "https://raw.githubusercontent.com/mneubrand/jsfxr/b2bfe50fddc7e281e1c1944870071b2ccd2c0440/jsfxr.js"
+      ],
+      "method": "verbatim authoring source at game submodule commit, retaining Thomas Vian Apache notices"
+    },
+    {
+      "file": "licenses/gl-matrix-MIT.txt",
+      "sha256": "61ed58d1088e313710c4192cf02f97bda3cc0bb4b3b4d3f66e54ad1b666a3a52",
+      "sources": [
+        "https://registry.npmjs.org/gl-matrix/-/gl-matrix-2.7.1.tgz#package/LICENSE.md"
+      ],
+      "method": "upstream MIT notice for adapted matrix routines; not an asserted exact original import version"
+    }
+  ]
+}

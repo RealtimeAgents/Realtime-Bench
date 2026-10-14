@@ -1,0 +1,6 @@
+# Modified by Streaming-to-Action contributors: ignore local build dependencies.
+.DS_Store
+.idea/
+assets/fonts
+node_modules/
+lib

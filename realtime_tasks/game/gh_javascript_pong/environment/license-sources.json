@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-10-08",
+  "scope": "Supplemental notices restored during public-20 review. Source/grant inference limitations are documented in RIGHTS.md.",
+  "files": [
+    {
+      "file": "ADAPTER-LICENSE.txt",
+      "sha256": "225a7cf6d96fc1af3956c6a75c26d584e506cba3f84ce8d07c14205b3f960428",
+      "sources": [
+        "git:12748d06:LICENSE"
+      ],
+      "method": "restored project grant scoped to original benchmark contributions"
+    },
+    {
+      "file": "source-audit.json",
+      "sha256": "33ff5bb2ff1a2218b9e5c3203614ced2664638cd31ec85eac2d03a82c0e869b1",
+      "sources": [
+        "pinned GitHub tree recorded inside source-audit.json"
+      ],
+      "method": "recorded local SHA-256 and upstream Git blob verification; not a license grant"
+    }
+  ]
+}

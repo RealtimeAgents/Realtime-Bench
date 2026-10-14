@@ -1,0 +1,32 @@
+name: Portable paths
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  check-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject case-insensitive file and directory collisions
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).decode("utf-8").split("\0")
+          spellings = {}
+          collisions = set()
+          for path in filter(None, paths):
+              parts = path.split("/")
+              for length in range(1, len(parts) + 1):
+                  prefix = "/".join(parts[:length])
+                  previous = spellings.setdefault(prefix.casefold(), prefix)
+                  if previous != prefix:
+                      collisions.add(tuple(sorted((previous, prefix))))
+          for first, second in sorted(collisions):
+              print(f"Case-insensitive path collision: {first!r} and {second!r}", file=sys.stderr)
+          sys.exit(bool(collisions))
+          PY

@@ -1,0 +1,13 @@
+/* Phone layout for this task; loaded after the shared mobile.css. */
+@media (max-width: 900px) {
+  [data-mobile-task="rt_document_revision_routing"] .canvas { flex-direction: column; padding: 12px; }
+  [data-mobile-task="rt_document_revision_routing"] :is(.paper-wrap, .margin, .sent-card) { width: 100%; min-width: 0; }
+  [data-mobile-task="rt_document_revision_routing"] .paper { padding: 20px; }
+  [data-mobile-task="rt_document_revision_routing"] .menu-bar { padding-left: 12px; top: 0; height: auto; flex-wrap: wrap; }
+  [data-mobile-task="rt_document_revision_routing"] .timing { margin-right: 0; }
+  [data-mobile-task="rt_document_revision_routing"] .signatures { flex-direction: column; }
+}
+@media (max-width: 900px) {
+  [data-mobile-task="rt_document_revision_routing"] .recipient { flex-wrap: wrap; }
+  [data-mobile-task="rt_document_revision_routing"] .recipient .person { flex-basis: 160px; }
+}

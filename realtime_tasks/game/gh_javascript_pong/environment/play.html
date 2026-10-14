@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <base href="upstream/">
+  <title>JavaScript Pong</title>
+  <link rel="stylesheet" href="pong.css">
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+    #sidebar { display: none; }
+    #game { display: block; width: 100vw; height: 100vh; margin: 0; }
+  </style>
+</head>
+<body>
+  <canvas id="game">Your browser must support HTML5 canvas.</canvas>
+  <script src="game.js"></script>
+  <script src="pong.js"></script>
+  <script>
+    Game.ready(function () {
+      // Benchmark configuration passed through the upstream cfg hook (game.js:194 extends
+      // Pong.Defaults with these values). Upstream defaults: ballSpeed 4 (court crossed in 4 s),
+      // ballAccel 8 px/s^2 (pong.js:14-15). See PROVENANCE.md.
+      window.pong = Game.start("game", Pong, {
+        sound: false,
+        stats: false,
+        footprints: false,
+        predictions: false,
+        ballSpeed: 8,
+        ballAccel: 0
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,899 @@
+{
+  "schema": "realtime-bench-provenance-v1",
+  "reviewed": "2026-10-11",
+  "repo": "brianrisk/SYNTHBLAST-threejs-game",
+  "commit": "8fd77ccc4e03bc9c6033e0738472351b0ab8f2a6",
+  "local_root": "upstream",
+  "files": [
+    {
+      "path": ".gitignore",
+      "sha256": "80ce8315254ce668062547ed9104d37f0e06b9d44f8833810b19465a69799a26",
+      "upstream_blob": "498f4a7f1ad3190b063031df289b61ed125c6e80",
+      "match": false,
+      "upstream_path": ".gitignore",
+      "status": "modified"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "6227cc82da338c80f7c0303b9d5e8a45f7fe06d73e4771ae4e1592835e755192",
+      "upstream_blob": "6610281be4c198dc6b49bf7e408b3e8ee6ad5580",
+      "match": true,
+      "upstream_path": "LICENSE",
+      "status": "unchanged"
+    },
+    {
+      "path": "README.md",
+      "sha256": "7d5ac0f127696735154ec4ac4ab12498f95e553b7de32e1cf9d76ef81ede0305",
+      "upstream_blob": "ace6b0abda3fdb00d65b90a3df1fc386be4d56b9",
+      "match": true,
+      "upstream_path": "README.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/ammo_empty.bfxrsound",
+      "sha256": "c9dcd11c276b6f2d99863938ef4480c56ab7d416480c11e503b92840ce39db66",
+      "upstream_blob": "eaa17c2b3683834c52dc003b4f54a33795e2e6d0",
+      "match": true,
+      "upstream_path": "assets/audio/ammo_empty.bfxrsound",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/ammo_empty.wav",
+      "sha256": "0398947d22b53c5b4d7a0b16819ed7c0b272de7c162c70d1a9f309139b0c409c",
+      "upstream_blob": "fa8d101f9c00a76862f9031676ef2c0c7bb2e0e4",
+      "match": true,
+      "upstream_path": "assets/audio/ammo_empty.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/energy.wav",
+      "sha256": "85bb6192d18c0937ad1acab19cd06dbff01ee5e308538f60c6d17fe34549186d",
+      "upstream_blob": "2ce07a647edf7eb50d2af01576c363aa76176c6d",
+      "match": true,
+      "upstream_path": "assets/audio/energy.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/energy2.bfxrsound",
+      "sha256": "1d80ff26b9bbda6290639b317f6d02bcf7092cc7ce49cfd79c2a1972659b4511",
+      "upstream_blob": "0c3ab358623aee4b969feca3b5300ed0f49d3535",
+      "match": true,
+      "upstream_path": "assets/audio/energy2.bfxrsound",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/energy2.wav",
+      "sha256": "d3e2ff52227a8167955566b3b320a2aa80969f9c35334449094e0a019ef5fa94",
+      "upstream_blob": "af1ac581d64bcb4cc16c8a968774e07093756ff2",
+      "match": true,
+      "upstream_path": "assets/audio/energy2.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/energy3.bfxrsound",
+      "sha256": "7476449c13864279c7497c47f9de8e9a944b28206b503714c1e02cfb76a17716",
+      "upstream_blob": "49924287374a97b9ef5c4637e6e8241918ec8631",
+      "match": true,
+      "upstream_path": "assets/audio/energy3.bfxrsound",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/energy3.wav",
+      "sha256": "f2d3d5c84ed28a6c9b28f181ba77375db5be316ef2b5b636bf87f534d06af17e",
+      "upstream_blob": "ee27be18d69a64d0d14855abbd1eaaf3ba65f0e3",
+      "match": true,
+      "upstream_path": "assets/audio/energy3.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/explosion.wav",
+      "sha256": "7b98e2e868a0c0b63e9813789889ff4f348c9f7911ea05d1871d3cc2aaf3977b",
+      "upstream_blob": "8ef2fb8284032e80cf7541754f1a8fe14f3a0aef",
+      "match": true,
+      "upstream_path": "assets/audio/explosion.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/explosion2.wav",
+      "sha256": "0b80ebec30d503f6fd82aaea4c26ed151c6b4194cfba2b3cf808301744f49ac2",
+      "upstream_blob": "982a30e68d6d07e97d198898a71ac15b755d2044",
+      "match": true,
+      "upstream_path": "assets/audio/explosion2.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/explosion3.wav",
+      "sha256": "da2da3606230a7763d0ea75353b432550bbc6fa526161e97cb9357a5a4526629",
+      "upstream_blob": "afd1e88a9f5ca23f5ac403115efa85184bdb06a8",
+      "match": true,
+      "upstream_path": "assets/audio/explosion3.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/flip.wav",
+      "sha256": "307154260e7d2ee14c22f0dec23791def145e3630a8a7bf480863f1946ba1ffd",
+      "upstream_blob": "a1597498979f49ef1a6c44a7bcdd184cc7ec2268",
+      "match": true,
+      "upstream_path": "assets/audio/flip.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/hit.wav",
+      "sha256": "27f00007c36abfe764265019e8a148c976e8e92a442811c019e78f85fd9fdca1",
+      "upstream_blob": "d7b7bdee42d43a5fdd5db29a56bb20118422106a",
+      "match": true,
+      "upstream_path": "assets/audio/hit.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/impact.wav",
+      "sha256": "576ce11f16e85b60008d58df315add1774d7bcf623ed2b0355c91f322c4ad91c",
+      "upstream_blob": "d6a63f645ed33da687d460a674b8286e08a527bb",
+      "match": true,
+      "upstream_path": "assets/audio/impact.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/launch.wav",
+      "sha256": "0013a6aab2d054146f11fb94a8855c8856ff04681c7f9a513a0ec17ffd38b957",
+      "upstream_blob": "abcbf2995368af1a7cbbb923258fee7aa39860f4",
+      "match": true,
+      "upstream_path": "assets/audio/launch.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/massive2.wav",
+      "sha256": "68675e4d83cd5e6bd9f38f3115723abf8a861fdcfb6a4737c89dad14e8372071",
+      "upstream_blob": "fd54e93b7d905aea8ff3acf5d0914982b8740e8e",
+      "match": true,
+      "upstream_path": "assets/audio/massive2.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/max_fav.wav",
+      "sha256": "1253540727fb2ed72c7232334b4c5652a5699266c47e257a39a4634fbf6fe323",
+      "upstream_blob": "8c8d33b023662e25e332498d1fc1da79545df6d2",
+      "match": true,
+      "upstream_path": "assets/audio/max_fav.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/pew.wav",
+      "sha256": "20e040fdbb89c5c01c1eded77048536d93b86c396259b8a4b991649062be2e89",
+      "upstream_blob": "da3d417f387b291696effddd8ef0aaee1147409c",
+      "match": true,
+      "upstream_path": "assets/audio/pew.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/pip.wav",
+      "sha256": "f11a98e7947192d6b5eead79b441c732025e7312241a6178f4e2725ff641f5cf",
+      "upstream_blob": "1d05cfe993946bd528ef4592181c92e08fabbbc9",
+      "match": true,
+      "upstream_path": "assets/audio/pip.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/pip2.wav",
+      "sha256": "28ae68f3ef4e757bc2033bf8e26fe750592aaa3c3816610c9d69253528744a45",
+      "upstream_blob": "1683c3a5aa5fb99ad2e11e65aed3642da6140ca5",
+      "match": true,
+      "upstream_path": "assets/audio/pip2.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/point.wav",
+      "sha256": "9770ac7fd5c893580bf8c27d95aec8fd914e023626ac0c983ebae3ef81728d2c",
+      "upstream_blob": "60f84c6fa285309176cbcdcb5c1c620f78b22d29",
+      "match": true,
+      "upstream_path": "assets/audio/point.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/powerup.wav",
+      "sha256": "ab44f7c4600a701791022d80d18cd771f04e37d9f046d0e4000616a36ff3f0f9",
+      "upstream_blob": "8a93f9017ddd33a21b849ac8bf2959672b738e3e",
+      "match": true,
+      "upstream_path": "assets/audio/powerup.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/shield.wav",
+      "sha256": "ea36f9f058e7741b1b5978b8f56b45c0538461492473e68d568c8fad713217d0",
+      "upstream_blob": "a3711efe2b839099fbba89bba07d9ddacd988bcc",
+      "match": true,
+      "upstream_path": "assets/audio/shield.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/transport.wav",
+      "sha256": "79a19b89c07c2897aa52012cf5c0dac9dced86fca73ce7d13b9e55a6b126c980",
+      "upstream_blob": "d68d4fea30c0b544ac5510f5bc67ca2acccadefa",
+      "match": true,
+      "upstream_path": "assets/audio/transport.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/audio/transport2.wav",
+      "sha256": "18f73af6a9ead3cba7eee500111e8e845f94a832a6496eead2089d4d7c76f25d",
+      "upstream_blob": "e65020056ca3cec62a32d4a67b3be7cdbb6caf57",
+      "match": true,
+      "upstream_path": "assets/audio/transport2.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/IMG_F124F58AB27C-1-cropped.jpeg",
+      "sha256": "14369073229814bea021cda6d574f8c7b1f5010f7a237188ea18f531dc9e701b",
+      "upstream_blob": "0f5f3619a3bab2788ba27584744ec7cd51826611",
+      "match": true,
+      "upstream_path": "assets/img/IMG_F124F58AB27C-1-cropped.jpeg",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/IMG_F124F58AB27C-1.jpg",
+      "sha256": "363097e4afc6d672e6c5d5e78b47e088dd7a79785f53f715ea49054e52c8212e",
+      "upstream_blob": "3fb6c9c557314f18297f5432d75c53581d2311d1",
+      "match": true,
+      "upstream_path": "assets/img/IMG_F124F58AB27C-1.jpg",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/apple-touch-icon.png",
+      "sha256": "bd6d96b29c788a900515c49ccbf8902d35b46efb7fb91d1fe9b89967b0e3f8b3",
+      "upstream_blob": "d51af4ec66deb45a9b4211e37fdbdc89eccc1321",
+      "match": true,
+      "upstream_path": "assets/img/apple-touch-icon.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/floor-tile.png",
+      "sha256": "8e8eb12c3196ea6a77fd651068201cace55bb3273ffd1ac546e84aba68f16b45",
+      "upstream_blob": "afdfbf70e16035bb8a11bdc89ee61437557e16eb",
+      "match": true,
+      "upstream_path": "assets/img/floor-tile.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/night.gif",
+      "sha256": "1f1c72966db881ee54fe69712f4ed5969411727a30272129119800202f0c584b",
+      "upstream_blob": "b2ffee4d8e1ee6e886bdc56487063e5215b5c2a1",
+      "match": true,
+      "upstream_path": "assets/img/night.gif",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/sunset.gif",
+      "sha256": "c0348f286cef8532deea8cca2af90160091bf16ea5bbbda2f857021625fb4983",
+      "upstream_blob": "2043e9245144968bba580416e3ba6c3ffbdfddf8",
+      "match": true,
+      "upstream_path": "assets/img/sunset.gif",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/sunset.psd",
+      "sha256": "d20bc121b1139e977eec34845d58044475a001cfb008392f6cc720b24ea6018f",
+      "upstream_blob": "46c802516b4731a0ef40b94689289e786ed89085",
+      "match": true,
+      "upstream_path": "assets/img/sunset.psd",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/synthblast.png",
+      "sha256": "5fbcab320e070dd2deb22c289fd2ce2540ec26cedbc6e2cf1affa5ba40c1c86b",
+      "upstream_blob": "e36b411794d5d1f31338f67becb84e71654ab401",
+      "match": true,
+      "upstream_path": "assets/img/synthblast.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/title-screenshot-2.jpg",
+      "sha256": "a703413222e5f7a465f2ed09ee6452d78d9a8e6417595d4a2cf597a4a2ea9450",
+      "upstream_blob": "f86e2797da85efda8750cf3fe8542fda43784f82",
+      "match": true,
+      "upstream_path": "assets/img/title-screenshot-2.jpg",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/img/title-screenshot.jpg",
+      "sha256": "c57657b38784c1e2f0d0caef86e0c3cd83ce0294fc4b0fa6e4129655df211f2e",
+      "upstream_blob": "eee5ed51583d6863fed75083e6bf3508081f23b9",
+      "match": true,
+      "upstream_path": "assets/img/title-screenshot.jpg",
+      "status": "unchanged"
+    },
+    {
+      "path": "dist/assets/apple-touch-icon-D4Gsbwlw.png",
+      "sha256": "bd6d96b29c788a900515c49ccbf8902d35b46efb7fb91d1fe9b89967b0e3f8b3",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/ammo_empty.bfxrsound",
+      "sha256": "c9dcd11c276b6f2d99863938ef4480c56ab7d416480c11e503b92840ce39db66",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/ammo_empty.wav",
+      "sha256": "0398947d22b53c5b4d7a0b16819ed7c0b272de7c162c70d1a9f309139b0c409c",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/energy.wav",
+      "sha256": "85bb6192d18c0937ad1acab19cd06dbff01ee5e308538f60c6d17fe34549186d",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/energy2.bfxrsound",
+      "sha256": "1d80ff26b9bbda6290639b317f6d02bcf7092cc7ce49cfd79c2a1972659b4511",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/energy2.wav",
+      "sha256": "d3e2ff52227a8167955566b3b320a2aa80969f9c35334449094e0a019ef5fa94",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/energy3.bfxrsound",
+      "sha256": "7476449c13864279c7497c47f9de8e9a944b28206b503714c1e02cfb76a17716",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/energy3.wav",
+      "sha256": "f2d3d5c84ed28a6c9b28f181ba77375db5be316ef2b5b636bf87f534d06af17e",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/explosion.wav",
+      "sha256": "7b98e2e868a0c0b63e9813789889ff4f348c9f7911ea05d1871d3cc2aaf3977b",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/explosion2.wav",
+      "sha256": "0b80ebec30d503f6fd82aaea4c26ed151c6b4194cfba2b3cf808301744f49ac2",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/explosion3.wav",
+      "sha256": "da2da3606230a7763d0ea75353b432550bbc6fa526161e97cb9357a5a4526629",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/flip.wav",
+      "sha256": "307154260e7d2ee14c22f0dec23791def145e3630a8a7bf480863f1946ba1ffd",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/hit.wav",
+      "sha256": "27f00007c36abfe764265019e8a148c976e8e92a442811c019e78f85fd9fdca1",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/impact.wav",
+      "sha256": "576ce11f16e85b60008d58df315add1774d7bcf623ed2b0355c91f322c4ad91c",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/launch.wav",
+      "sha256": "0013a6aab2d054146f11fb94a8855c8856ff04681c7f9a513a0ec17ffd38b957",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/massive2.wav",
+      "sha256": "68675e4d83cd5e6bd9f38f3115723abf8a861fdcfb6a4737c89dad14e8372071",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/max_fav.wav",
+      "sha256": "1253540727fb2ed72c7232334b4c5652a5699266c47e257a39a4634fbf6fe323",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/pew.wav",
+      "sha256": "20e040fdbb89c5c01c1eded77048536d93b86c396259b8a4b991649062be2e89",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/pip.wav",
+      "sha256": "f11a98e7947192d6b5eead79b441c732025e7312241a6178f4e2725ff641f5cf",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/pip2.wav",
+      "sha256": "28ae68f3ef4e757bc2033bf8e26fe750592aaa3c3816610c9d69253528744a45",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/point.wav",
+      "sha256": "9770ac7fd5c893580bf8c27d95aec8fd914e023626ac0c983ebae3ef81728d2c",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/powerup.wav",
+      "sha256": "ab44f7c4600a701791022d80d18cd771f04e37d9f046d0e4000616a36ff3f0f9",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/shield.wav",
+      "sha256": "ea36f9f058e7741b1b5978b8f56b45c0538461492473e68d568c8fad713217d0",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/transport.wav",
+      "sha256": "79a19b89c07c2897aa52012cf5c0dac9dced86fca73ce7d13b9e55a6b126c980",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/audio/transport2.wav",
+      "sha256": "18f73af6a9ead3cba7eee500111e8e845f94a832a6496eead2089d4d7c76f25d",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/IMG_F124F58AB27C-1-cropped.jpeg",
+      "sha256": "14369073229814bea021cda6d574f8c7b1f5010f7a237188ea18f531dc9e701b",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/IMG_F124F58AB27C-1.jpg",
+      "sha256": "363097e4afc6d672e6c5d5e78b47e088dd7a79785f53f715ea49054e52c8212e",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/apple-touch-icon.png",
+      "sha256": "bd6d96b29c788a900515c49ccbf8902d35b46efb7fb91d1fe9b89967b0e3f8b3",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/floor-tile.png",
+      "sha256": "8e8eb12c3196ea6a77fd651068201cace55bb3273ffd1ac546e84aba68f16b45",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/night.gif",
+      "sha256": "1f1c72966db881ee54fe69712f4ed5969411727a30272129119800202f0c584b",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/sunset.gif",
+      "sha256": "c0348f286cef8532deea8cca2af90160091bf16ea5bbbda2f857021625fb4983",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/sunset.psd",
+      "sha256": "d20bc121b1139e977eec34845d58044475a001cfb008392f6cc720b24ea6018f",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/synthblast.png",
+      "sha256": "5fbcab320e070dd2deb22c289fd2ce2540ec26cedbc6e2cf1affa5ba40c1c86b",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/title-screenshot-2.jpg",
+      "sha256": "a703413222e5f7a465f2ed09ee6452d78d9a8e6417595d4a2cf597a4a2ea9450",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/img/title-screenshot.jpg",
+      "sha256": "c57657b38784c1e2f0d0caef86e0c3cd83ce0294fc4b0fa6e4129655df211f2e",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/index-kYjAmX9A.js",
+      "sha256": "3bf9e09698944a1fad591c015f078a862905333fa7facaf5ed3b4633f347e784",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/pixi-PNvnU-Ha.js",
+      "sha256": "b13efc5d11017c3fa898d3c6a8b95c7a1e92921188ea85a64bde1a9cd2d5a125",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/rolldown-runtime-QTnfLwEv.js",
+      "sha256": "8b0a96fff140c7d7ac57c365486446924146d446a71e025a5a981baf7278f805",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/assets/three-B1WcByZZ.js",
+      "sha256": "81e8ea8e980e887f3ce849e2cd32c7c70fafe84312ada75344c2fd92775bd83c",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "dist/index.html",
+      "sha256": "c3dde8e59c2713d51d19d9dfa77b337404a30db1b9932eac11222e0a505721e6",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "ideas.md",
+      "sha256": "d5560d773b526014205d86889e3526a1a76e62bb8e7e448fad9b753ebe56b059",
+      "upstream_blob": "31b4eed33932fcf659048c6e769ea8d13fdea257",
+      "match": true,
+      "upstream_path": "ideas.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "index.html",
+      "sha256": "d092669d3cc37a4d1b86855715900e58b862e92fe5302e138e6a3389b603a554",
+      "upstream_blob": "2c29abd634b5c3997b511c70d5c19cad9cb2fb1b",
+      "match": false,
+      "upstream_path": "index.html",
+      "status": "modified"
+    },
+    {
+      "path": "js/CustomGlitchPass.js",
+      "sha256": "ad9ccdc420d448a5e91037c864fb3188381fcf1224a384fd4b5c4c31b88e7065",
+      "upstream_blob": "495f4d53a4a39d03d327a983c4437ae31757d9f4",
+      "match": true,
+      "upstream_path": "js/CustomGlitchPass.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/Utils.js",
+      "sha256": "b8d2ef73bfd6fe3b430bca33874a2952e0fe1494407b3f0b5face33f97d4454e",
+      "upstream_blob": "a166e8768f82b1e092cf659f14ad5c9d50a13c02",
+      "match": true,
+      "upstream_path": "js/Utils.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/App.js",
+      "sha256": "82fcc35412cc39b9847efc0f602450a2c9f5947d1f827461c75133e48463f56c",
+      "upstream_blob": "6f4ea886b92352fd97941305909c3369f1050e09",
+      "match": true,
+      "upstream_path": "js/classes/App.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Building.js",
+      "sha256": "55aec91da196ceb846c99c655df0ac1c4360ef07be59f42fc61df6f097c37fe3",
+      "upstream_blob": "dd949be23597e1157788733eaf75be81586f97e0",
+      "match": true,
+      "upstream_path": "js/classes/Building.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Bullet.js",
+      "sha256": "8d4766c3ee2c84861faab816715341697564e4924c8b930c7164613026caecd4",
+      "upstream_blob": "62f666b667487c94de79f89024c82431c90f2dad",
+      "match": true,
+      "upstream_path": "js/classes/Bullet.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Coin.js",
+      "sha256": "8ef3081ba0a0e827ba17ecbcdc9443e5d7404ceff48c9a1eca00d104fa178be4",
+      "upstream_blob": "d7de4710d0c98d83f89280403c76f2f51fd2142c",
+      "match": true,
+      "upstream_path": "js/classes/Coin.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Comet.js",
+      "sha256": "f7032ac39948d111ea42dee59bc358ff9bac34728b23b6e91cbe1154bbf1d2ad",
+      "upstream_blob": "bba7892c09aba8af4175c7ae79f4ffec423732bd",
+      "match": true,
+      "upstream_path": "js/classes/Comet.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Drone.js",
+      "sha256": "3c78de1c794f236870d815258a1010ff5e015781ab0c0a35bf154889f8c3a8fb",
+      "upstream_blob": "112d8fe6d8c142d3da84f95024846482168de8cf",
+      "match": true,
+      "upstream_path": "js/classes/Drone.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Enemy.js",
+      "sha256": "9398560e3698eb9a1aba177cbfc2d6f851e5fbea8df66e6f65106394575986eb",
+      "upstream_blob": "bee4af921805128560fd0fabd9bbfe04f2fa47ab",
+      "match": true,
+      "upstream_path": "js/classes/Enemy.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Game.js",
+      "sha256": "a3423df3f1684f8801b016f6f111316aab551c098f2139335efde16d9497e2db",
+      "upstream_blob": "94701a1331575fb962aca302fcf8597d28cf22aa",
+      "match": false,
+      "upstream_path": "js/classes/Game.js",
+      "status": "modified"
+    },
+    {
+      "path": "js/classes/Gun.js",
+      "sha256": "9addee08ddb8e3914e0908d277c769aef8d20a96e2f6b01cb132a4b4b72d4e57",
+      "upstream_blob": "c970ebbc0de96ef47d82b61ea6f466317836b3c4",
+      "match": true,
+      "upstream_path": "js/classes/Gun.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Hero.js",
+      "sha256": "733af7710456e4112cd6f98fa6f1d72b2b7f6a222bcf55b138422b998cff2812",
+      "upstream_blob": "f8a2d92176e90febbf3399f8f559636575be4a0a",
+      "match": true,
+      "upstream_path": "js/classes/Hero.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Level.js",
+      "sha256": "ca11de7b995a896c10f90b112afd136446e2d64b87439d3d1cae2bf04972e78b",
+      "upstream_blob": "92ea3294ebe815cfc4955a8095da1bfdbb2f8a6f",
+      "match": true,
+      "upstream_path": "js/classes/Level.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/Particle.js",
+      "sha256": "3a01af92b1b80b354bc7c344df3fdd5112a9603657334c13423b5496bb920edc",
+      "upstream_blob": "e8a3e61806e57d1ea7f5c7042d483b543771ee8f",
+      "match": true,
+      "upstream_path": "js/classes/Particle.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/powerups/Pad.js",
+      "sha256": "cb02a8ebfc5a0d2618d770930b8502b6d89c3f9ec374df632bfd809ba0b13ddb",
+      "upstream_blob": "037e822682ba31a035d2a6742fdc0486f569be5e",
+      "match": true,
+      "upstream_path": "js/classes/powerups/Pad.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/powerups/Shield.js",
+      "sha256": "12ce9c1d1d26f2b82b8e3fa1cc30bf74a127e1e97985bbb99b82bb737a2188f9",
+      "upstream_blob": "1be7a3ec89994552db2f0a3dd79bc5e637b17d85",
+      "match": true,
+      "upstream_path": "js/classes/powerups/Shield.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/Button.js",
+      "sha256": "6a3e90455497eb302cadcd47a23897a706c326b98800360c1a2d6a4456943ddd",
+      "upstream_blob": "8110f060bb649c8d38747bf46545058f6935164b",
+      "match": true,
+      "upstream_path": "js/classes/ui/Button.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/IncrementProgress.js",
+      "sha256": "a4ffe47b0bc38e37da3f957e4c9aafc8cee974495ceb84c796c47767653b86af",
+      "upstream_blob": "6be7f14623d72cfb7fee070ffc499d1ffb893f9d",
+      "match": true,
+      "upstream_path": "js/classes/ui/IncrementProgress.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/LabeledProgressBar.js",
+      "sha256": "b054024767a5917b7dac0e46e963c14a27fa3a5cf87c31c8e56ded94b39e5820",
+      "upstream_blob": "0ccef25c7e830defcfb1dd81b04cc47da76a2720",
+      "match": true,
+      "upstream_path": "js/classes/ui/LabeledProgressBar.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/LevelScreen.js",
+      "sha256": "c255084a54dac3c11e7ba889e548e6abbb1f0dcc4c700510260e800be10a12d3",
+      "upstream_blob": "1ff81f4d295ae075787f1fd4911c97d85ba4af43",
+      "match": true,
+      "upstream_path": "js/classes/ui/LevelScreen.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/MenuScreen.js",
+      "sha256": "122dd4adeb3fd55711aa6c2fe14da6d31d2d118d1446fb42b04cad87a90fab51",
+      "upstream_blob": "334ec2d879a8fd58e1b2918deccf5f311f8390e1",
+      "match": true,
+      "upstream_path": "js/classes/ui/MenuScreen.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/ProgressBar.js",
+      "sha256": "3caa1701386c54b489a4f740237f173e9c0132ba3a4d7e52bf6fb19198867f2b",
+      "upstream_blob": "bc50dd15d60fa94990eea5d2b7daeb41862a2907",
+      "match": true,
+      "upstream_path": "js/classes/ui/ProgressBar.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/classes/ui/Screen.js",
+      "sha256": "8028edd28d1f5db48bc9ad797738e1549e621a7f068a2215f7b4235bfe964c76",
+      "upstream_blob": "1c7c51164aefdd9a55a92d8865387460c3c6d7af",
+      "match": true,
+      "upstream_path": "js/classes/ui/Screen.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "js/models/Drone.json",
+      "sha256": "84ec012b85553b04cd904967ada83dcb33cb54061a436161aa18899a3f36a4d4",
+      "upstream_blob": "ce204431cd9272c50882cc9cd82543615314dcaa",
+      "match": true,
+      "upstream_path": "js/models/Drone.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "9007112b387dcaa186ea2c5b39f63cdb8e8b38fe907667b248c30d4430ab0918",
+      "upstream_blob": "4aae1003470c375a5bfa74c8cb5c517534a54f46",
+      "match": true,
+      "upstream_path": "package-lock.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "package.json",
+      "sha256": "67baaa28fbd546a19a78392966443520811b9095b79028888d53ad4933ba414d",
+      "upstream_blob": "df66e9e36ba2dd401873c97ba1c41020b08f6e80",
+      "match": true,
+      "upstream_path": "package.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "vite.config.js",
+      "sha256": "054c58f4f8358e22d796bf5dcd409c5fb7d6478442715fa4ef9d372cef257438",
+      "upstream_blob": "024e1459828c5cee8576ca9e0ea658ec2a17c203",
+      "match": true,
+      "upstream_path": "vite.config.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/fonts/atc_krueger_bold.ttf",
+      "upstream_blob": "61fc19afbc7911475bd50cab8e92a2e972f2f931",
+      "upstream_path": "assets/fonts/atc_krueger_bold.ttf",
+      "status": "removed",
+      "note": "Excluded from the public distribution; no separate font/music redistribution grant recorded."
+    },
+    {
+      "path": "assets/fonts/atc_krueger_regular.ttf",
+      "upstream_blob": "e173314b8bad7140063da85cee478edc6ce5b32a",
+      "upstream_path": "assets/fonts/atc_krueger_regular.ttf",
+      "status": "removed",
+      "note": "Excluded from the public distribution; no separate font/music redistribution grant recorded."
+    },
+    {
+      "path": "assets/fonts/petyka_retro_computer.ttf",
+      "upstream_blob": "47aa48d65fa508353f69811a818e255f68473562",
+      "upstream_path": "assets/fonts/petyka_retro_computer.ttf",
+      "status": "removed",
+      "note": "Excluded from the public distribution; no separate font/music redistribution grant recorded."
+    },
+    {
+      "path": "assets/fonts/pokemon.ttf",
+      "upstream_blob": "f2cb4ef31156f130cc29e40fdf916eae5261c5a7",
+      "upstream_path": "assets/fonts/pokemon.ttf",
+      "status": "removed",
+      "note": "Excluded from the public distribution; no separate font/music redistribution grant recorded."
+    },
+    {
+      "path": "music/motel_bedroom.mp3",
+      "upstream_blob": "7198320159c97a58b65b1e09d0bc55973c32d432",
+      "upstream_path": "music/motel_bedroom.mp3",
+      "status": "removed",
+      "note": "Excluded from the public distribution; no separate font/music redistribution grant recorded."
+    },
+    {
+      "path": "music/taketheworld-outro.mp3",
+      "upstream_blob": "9939303026e4a36f1f3164a2aa60a49e2437ad04",
+      "upstream_path": "music/taketheworld-outro.mp3",
+      "status": "removed",
+      "note": "Excluded from the public distribution; no separate font/music redistribution grant recorded."
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+suite_id: public
+version: "1.0"
+suite_hash: 049963a48a5b17b68e6cd998cda352f9eee23f2287a17e3ce5f6e73ffa538505
+expected_total: 20
+expected_counts:
+  game: 8
+  web: 12
+categories:
+- public_category: game
+  execution_kind: game
+  task_ids:
+  - gh_timed_chess
+  - gomoku
+  - gh_javascript_pong
+  - gh_synthblast
+  - gh_norman_necromancer
+  - gh_xx142_b2exe
+  - gh_evolve
+  - gh_highway_404
+- public_category: web
+  execution_kind: web
+  task_ids:
+  - rt_accessible_trip_dispatch
+  - rt_floorplan_party_handoff
+  - rt_waitlist_fit
+  - rt_pickup_driver_handoff
+  - rt_document_revision_routing
+  - rt_return_receipt_exchange
+  - rt_identity_recovery_handoff
+  - rt_bundle_catalog_rebind
+  - rt_cruise_batch_closeout
+  - rt_shipment_regroup_handoff
+  - rt_dispatch_address_hold
+  - rt_room_move_maintenance

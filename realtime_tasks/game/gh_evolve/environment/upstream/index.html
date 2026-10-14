@@ -1,0 +1,56 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+    <title>Evolve</title>
+    <meta http-equiv="Content-type" content="text/html;charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="evolved-light.ico" type="images/x-icon" media="(prefers-color-scheme:dark)">
+    <link rel="icon" href="evolved.ico" type="images/x-icon" media="(prefers-color-scheme:light)">
+    <link rel="icon" href="evolved.ico" type="images/x-icon" media="(prefers-color-scheme:no-preference)">
+    <link rel="stylesheet" href="lib/buefy.min.0.9.22.css">
+    <link rel="stylesheet" type="text/css" href="lib/weather-icons.min.css">
+    <link rel="stylesheet" type="text/css" href="evolve/evolve.css">
+    <script src="vendor/jquery-3.6.3.min.js"></script>
+    <script src="vendor/vue-2.7.14.min.js"></script>
+    <script src="vendor/buefy-0.9.22.min.js"></script>
+    <script src="vendor/popper-2.9.2.min.js"></script>
+    <script src="vendor/sortable-1.10.2.min.js"></script>
+    <script src="vendor/chart-3.8.2.min.js"></script>
+    <script src="lib/lz-string.min.js"></script>
+    <script src="evolve/main.js" type="module"></script>
+</head>
+<body>
+    <style>
+        .loading {
+            text-align: center;
+            margin-top: 10rem;
+        }
+        .lds-dual-ring {
+            display: inline-block;
+            width: 64px;
+            height: 64px;
+        }
+        .lds-dual-ring:after {
+            content: " ";
+            display: block;
+            width: 5rem;
+            height: 5rem;
+            margin: 1px;
+            border-radius: 50%;
+            border: 5px solid #fff;
+            border-color: #fff transparent #fff transparent;
+            animation: lds-dual-ring 1.2s linear infinite;
+            }
+            @keyframes lds-dual-ring {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+    <div class="loading"><div class="lds-dual-ring"></div></div>
+
+</body>
+</html>

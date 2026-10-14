@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script src="mobile/entry.js" data-game="50_gomoku"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gomoku</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #161b22; }
+    body { position: relative; display: flex; flex-direction: column; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; color: #e8edf3; }
+    #clockbar {
+      flex: 0 0 64px; box-sizing: border-box; height: 64px;
+      display: flex; align-items: center; gap: 28px; padding: 0 28px;
+      background: linear-gradient(180deg, #1f2630, #2b3441);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      font-size: 14px; user-select: none;
+    }
+    #clockbar .brand { font-weight: 800; font-size: 18px; letter-spacing: 1px;
+      background: linear-gradient(90deg, #ffb454, #ff7a45); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    #clockbar .turn { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); font-weight: 600; min-width: 150px; }
+    #clockbar .turn::before { content: ""; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.5);
+      background: radial-gradient(circle at 35% 30%, #6a6a6a, #111 70%); }
+    #clockbar .turn[data-kind="white"]::before { background: radial-gradient(circle at 35% 30%, #fff, #cfcfcf 75%); }
+    #clockbar .turn[data-kind="over"] { background: rgba(255,180,84,.18); border-color: rgba(255,180,84,.5); }
+    #clockbar .turn[data-kind="over"]::before, #clockbar .turn[data-kind="idle"]::before { display: none; }
+    #clockbar .clock { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+    #clockbar .clock .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    #clockbar .clock .label { font-size: 15px; text-transform: uppercase; letter-spacing: 1px; color: #c7d0da; font-weight: 600; }
+    #clockbar .clock .value { font-size: 38px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: #ffb454; }
+    #clockbar .clock .track { height: 5px; border-radius: 999px; background: rgba(255,255,255,.1); overflow: hidden; }
+    #clockbar .clock .fill { height: 100%; width: 100%; border-radius: 999px; background: linear-gradient(90deg, #ffb454, #ff7a45); }
+    #clockbar .clock.wide { min-width: 220px; }
+    #clockbar.move-low #clock-move { color: #ff6b6b; }
+    #clockbar.move-low #clock-move-bar { background: #ff6b6b; }
+    #clockbar.expired #clock-move { color: #ff6b6b; }
+    #clockbar.expired #clock-move-bar { width: 0; }
+    #clockbar.expired .turn { background: rgba(255,107,107,.18); border-color: rgba(255,107,107,.6); color: #ff8a8a; }
+    #timeup {
+      position: absolute; left: 0; right: 0; top: 64px; bottom: 0; display: none;
+      align-items: center; justify-content: center; flex-direction: column; gap: 10px;
+      background: rgba(10,12,16,.72); color: #ff6b6b; text-align: center; z-index: 10;
+    }
+    #timeup .big { font-size: 64px; font-weight: 800; letter-spacing: 2px; }
+    #timeup .sub { font-size: 22px; color: #ffb4b4; }
+    #timeup.show { display: flex; }
+    #clockbar .last { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); color: #e8edf3; font-weight: 600; }
+    #clockbar .last .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #9aa6b2; }
+    #game-frame { flex: 1 1 auto; min-height: 0; width: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <div id="clockbar">
+    <span class="brand">Gomoku</span>
+    <span class="turn" id="clock-turn" data-kind="idle">Loading…</span>
+    <div class="clock">
+      <div class="row"><span class="label">Move clock</span><span class="value" id="clock-move">0:10</span></div>
+      <div class="track"><div class="fill" id="clock-move-bar"></div></div>
+    </div>
+    <span class="last"><span class="label">Last move</span><span id="clock-last">—</span></span>
+  </div>
+  <iframe id="game-frame" title="Gomoku" tabindex="0"></iframe>
+  <div id="timeup" aria-live="assertive">
+    <div class="big">TIME'S UP</div>
+    <div class="sub">Black lost on time</div>
+  </div>
+  <script src="game_api.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+/* Phone layout for this task; loaded after the shared mobile.css. */
+@media (max-width: 900px) {
+  [data-mobile-task="rt_pickup_driver_handoff"] .workspace { height: auto; min-height: 0; flex-direction: column; }
+  [data-mobile-task="rt_pickup_driver_handoff"] .map { height: 280px; min-height: 280px; flex: none; }
+  [data-mobile-task="rt_pickup_driver_handoff"] .card { position: relative; inset: auto; width: 100%; max-height: none; }
+  [data-mobile-task="rt_pickup_driver_handoff"] .requestpanel { position: relative; inset: auto; width: 100%; padding: 12px; }
+  [data-mobile-task="rt_pickup_driver_handoff"] .twocol { flex-wrap: wrap; }
+}
