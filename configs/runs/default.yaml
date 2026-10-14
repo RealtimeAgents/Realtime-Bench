@@ -1,4 +1,4 @@
-# Default evaluation plan; see docs/running.md.
+# Default evaluation plan; see docs/evaluation.md.
 # Select models from configs/models/ and tasks through the suite manifest.
 # See paused-clock.yaml and token-clock.yaml for comparison protocols.
 

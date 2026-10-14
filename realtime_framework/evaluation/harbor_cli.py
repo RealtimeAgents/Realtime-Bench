@@ -247,6 +247,12 @@ def run_arguments(arguments: list[str]) -> list[str]:
     All other options are passed to Harbor unchanged.
     """
     arguments = list(arguments)
+    hub = sorted({a.split("=", 1)[0] for a in arguments} & HUB_OPTIONS)
+    if hub:
+        raise SystemExit(
+            f"{', '.join(hub)}: Realtime-Bench results are not uploaded to Harbor Hub; "
+            "submit them with `uv run rtbench upload` (docs/submit.md)"
+        )
     configs = _take(arguments, "-c", "--config")
     models = _take(arguments, "-m", "--model")
     agents = _take(arguments, "-a", "--agent")
@@ -317,9 +323,17 @@ def run_arguments(arguments: list[str]) -> list[str]:
     return ["-c", output.name, *arguments]
 
 
+# Harbor Hub options of `harbor run`; results go to the benchmark's own server instead.
+HUB_OPTIONS = {"--upload", "--launch", "--public", "--private", "--share-org", "--share-user", "--org"}
+
+
 def _register_commands(app):
     import typer
 
+    # Harbor's `upload` sends a job to Harbor Hub; `rtbench upload` submits to Realtime-Bench.
+    hub_upload = [command for command in app.registered_commands if command.name == "upload"]
+    for command in hub_upload:
+        app.registered_commands.remove(command)
     for name in ("report", "setup", "suites"):
         if any(command.name == name for command in app.registered_commands):
             raise RuntimeError(
@@ -348,7 +362,22 @@ def _register_commands(app):
             arguments.append("--official")
         raise typer.Exit(harbor_report_main(arguments))
 
-    return app.registered_commands[registered:]
+    @app.command(name="upload", help="Check three public runs and submit them to the leaderboard.")
+    def upload_command(
+        jobs: list[Path] = typer.Argument(..., help="The three job directories, one per run."),
+        url: str = typer.Option(None, "--url", help="Submission server (default: RTBENCH_SUBMIT_URL)."),
+        keep_archive: bool = typer.Option(False, "--keep-archive", help="Keep the uploaded archive."),
+    ):
+        from realtime_framework.evaluation.submission import SubmissionError, main as submit
+
+        try:
+            result = submit(jobs, url=url, keep_archive=keep_archive)
+        except SubmissionError as exc:
+            typer.echo(f"Not submitted: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        typer.echo(f"Submitted {result['id']}. Email jingyu@utexas.edu with this ID.")
+
+    return app.registered_commands[registered:], hub_upload
 
 
 def _rtbench_console_hints():
@@ -364,9 +393,7 @@ def _rtbench_console_hints():
 
         def rewritten(*objects, _print=print_, **kwargs):
             objects = tuple(
-                item.replace("`harbor view ", "`uv run rtbench view ").replace(
-                    "`harbor upload ", "`uv run rtbench upload "
-                )
+                item.replace("`harbor view ", "`uv run rtbench view ")
                 if isinstance(item, str)
                 else item
                 for item in objects
@@ -389,7 +416,7 @@ def main():
         # Builds are idempotent and fingerprinted, so every run starts from current images.
         if "--print-config" not in sys.argv:
             setup()
-    registrations = _register_commands(app)
+    registrations, hub_upload = _register_commands(app)
     original = viewer.create_app
 
     def create_app(folder, *, mode="jobs", static_dir=None):
@@ -414,3 +441,4 @@ def main():
             console.print = print_
         for registration in registrations:
             app.registered_commands.remove(registration)
+        app.registered_commands.extend(hub_upload)

@@ -1,8 +1,8 @@
 # Public tasks
 
 [public.yaml](../realtime_tasks/sets/public.yaml) defines the suite's membership and order;
-`uv run rtbench run` selects it by default. The held-out set is maintained privately
-([maintainers](maintainers.md#private-tasks)).
+`uv run rtbench run` selects it by default. The 30 private tasks are run by us; see
+[submit](submit.md#run-the-private-tasks).
 
 ## Web
 

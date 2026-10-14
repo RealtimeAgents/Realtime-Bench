@@ -9,17 +9,13 @@ your environment and drop the `uv run` prefix.
 uv run rtbench run -m "provider/model-id"
 ```
 
-`-m` takes a LiteLLM `provider/model-id` or a [model preset](models.md) name such as
+`-m` takes a LiteLLM `provider/model-id` or a [model preset](model_configuration.md) name such as
 `gpt-realtime-2`; repeat it to evaluate several models in one job. Put the provider's key in
 `.env` (for example `OPENROUTER_API_KEY`).
 
-`rtbench` is Harbor's CLI plus this benchmark's `setup`, `report`, `suites` (versions and suite
-hashes), and viewer. `rtbench run` builds or reuses the task images, selects tasks from a suite in
-`realtime_tasks/sets/`, and writes results to `temp/harbor-jobs`. Each task directory is a
-Harbor task (`task.toml`, `instruction.md`, `environment/`, `tests/`).
-
-`rtbench` turns off Harbor's usage telemetry, which would send each job's agent and model names
-to Harbor's PostHog project; set `HARBOR_TELEMETRY=1` in the shell (not `.env`) to send it.
+`rtbench` is Harbor's CLI plus this benchmark's `setup`, `report`, `suites`, `upload`
+([submit](submit.md)) and viewer; results go to `temp/harbor-jobs`. It turns off Harbor's usage telemetry (set `HARBOR_TELEMETRY=1` in the
+shell to send it).
 
 | Option | Use |
 | --- | --- |
@@ -28,7 +24,7 @@ to Harbor's PostHog project; set `HARBOR_TELEMETRY=1` in the shell (not `.env`) 
 | `-c JOB.yaml` | Harbor job configuration; see [job files](#job-files). |
 | `--ak duration_minutes=5` | Scored time limit per task in minutes (default: 5). |
 | `--ak fps=1` / `--ak seed=42` | Observation rate and [task seed](#task-seed) (defaults shown). |
-| `--ak clock=wall` | `wall` (default) or `token`; see [comparison clocks](#comparison-clocks). |
+| `--ak clock=wall` | `wall` (default) or `token`; see [clocks](#clocks). |
 | `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else its API's default, `low` for most APIs; provider default for `-m provider/model-id` and `chat_completions` presets). |
 | `--ak api_base=https://HOST/v1` | Custom endpoint, e.g. with `-m openai/MODEL` for an OpenAI-compatible service. |
 | `--ak api_key_env=MY_KEY` | Read the credential from another variable (`provider/model-id` only; set a preset's in its YAML). |
@@ -49,12 +45,8 @@ uv run rtbench run -m "provider/model-id" -i gh_javascript_pong -i rt_accessible
 Both trials should finish without setup, provider, or verifier errors. A reward of 0 is a
 valid unsuccessful run.
 
-`duration_minutes` is the scored time limit, excluding setup and finalization, and is recorded
-and checked in the report. Harbor's separate agent timeout is 900 seconds per task. For longer
-runs, increase it with `--agent-timeout-multiplier` to cover the scored duration plus setup
-and finalization. On the token and pause clocks the scored duration is game time, so `rtbench`
-sets the agent timeout to 900 seconds plus 36 real seconds per scored second unless the job
-file sets `override_timeout_sec`.
+Harbor's agent timeout is 900 seconds per task; for `duration_minutes` above 5, raise it with
+`--agent-timeout-multiplier`.
 
 ## Job files
 
@@ -77,10 +69,8 @@ agents:
 uv run rtbench run -c configs/jobs/smoke.yaml -m "provider/model-id"
 ```
 
-`rtbench` adds whatever the file omits (agent, environment, results directory). `-m` applies to
-every agent in the file; `--suite` or `-i` replace its datasets. A trial records and verifies its
-task against the agent's `suite`, and the report scores the job against that suite's full task
-list.
+`rtbench` adds whatever the file omits (agent, environment, results directory); `-m`, `--suite`
+and `-i` override the file.
 
 ## View results
 
@@ -89,8 +79,10 @@ uv run rtbench view ./temp/harbor-jobs --port 18081
 ```
 
 Open a job, then a trial. **Trajectory** shows screenshots, actions, and feedback;
-**Recording** plays the scored interval with action overlays. Reward is 1 for success and 0
-for a valid failure; failed evaluations appear under **Errors**. If the port is taken, pass a
+**Recording** plays the scored interval with action overlays. Each trial ends as `pass` (reward
+1), `fail` (the task ended unsolved), `timeout` (the scored time ran out) or `error` (provider or
+infrastructure failure, listed under **Errors**). All but `pass` score 0, and the success rate is
+passes over all tasks. If the port is taken, pass a
 range such as `--port 18081-18089`.
 
 ## Parallel runs
@@ -99,28 +91,24 @@ Each job reserves a lane. Give concurrent jobs distinct lanes (`--ek lane=1`, `-
 lanes have separate browsers, displays, and ports, but share provider quotas and host
 resources. Lanes isolate state, not untrusted code.
 
-## Comparison clocks
+## Clocks
 
-The pause and token clocks ([protocol](protocol.md#clocks)) are agent options:
+| Clock | Time advances by | Select with |
+| --- | --- | --- |
+| Wall (default) | Real time: observation, network, inference and action latency all count | `--ak clock=wall` |
+| Token | Provider-reported output tokens ÷ `tokens_per_frame` | `--ak clock=token --ak tokens_per_frame=64` |
+| Pause | One frame per action; the action applies at the observed tick | `--ak clock=token --ak tokens_per_frame=unlimited` |
 
-```bash
-uv run rtbench run -m claude-opus-5 -i gh_javascript_pong --ak clock=token --ak tokens_per_frame=64
-```
-
-Set `--ak tokens_per_frame=unlimited` for the pause clock. The plans in `configs/runs/` also run
-directly; `-m` replaces their models:
+The wall clock is the benchmark setting; token and pause are comparison settings and need
+complete provider usage (`litellm` and `chat_completions` presets support the wall clock only).
+Results under different clocks, time limits or FPS are not comparable. The plans in
+`configs/runs/` run them directly; `-m` replaces their models:
 
 ```bash
 uv run rtbench run -c configs/runs/token-clock.yaml   # paused-clock.yaml for the pause clock
 ```
 
-Both record `clock_mode: token`; the pause clock is the one with `tokens_per_frame: null` in
-`run_summary.json`.
-
 ## Task seed
 
-`--ak seed=123` selects the task's random seed, an unsigned 32-bit integer (default 42). It
-controls task initialization, not provider sampling, and fixes the random stream, not timing:
-under the wall clock, frame timing and model latency can still make two runs diverge. The seed
-is part of the runtime hash, so the report rejects jobs that mix seeds. How tasks consume it is
-described in [maintainers](maintainers.md#task-seeding).
+`--ak seed=123` selects the task's random seed (unsigned 32-bit, default 42). It fixes task
+content, not timing or provider sampling, and is part of the runtime hash.

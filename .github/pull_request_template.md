@@ -2,15 +2,20 @@
 
 <!-- What changes and why. -->
 
-## Comparability
-
-- [ ] No change to task content, scoring, timing or harness behavior, **or** `uv run rtbench suites`
-      output is attached and the version is bumped.
-
 ## Validation
 
-<!-- Commands run and their results (e.g. `rtbench run -i ...`, page preview). -->
+<!-- Commands run and their results. -->
 
-## New or changed task
+## Checklist
 
-<!-- Delete this section otherwise. Copy the checklist from docs/adding-tasks.md#checklist. -->
+- [ ] No change to task content, scoring, timing or harness behavior, **or** `uv run rtbench suites`
+      output is attached.
+
+New or changed task (delete otherwise):
+
+- [ ] `instruction.md` and `tests/evaluation.py` agree: everything scored is stated.
+- [ ] Doing nothing fails; a different seed changes the content.
+- [ ] Success cannot be reached through browser chrome, URL changes or hidden state.
+- [ ] Preview checked (reset, clock transitions, terminal conditions); one strong-model run
+      explained above.
+- [ ] Games: upstream unmodified, `PROVENANCE.md` and `RIGHTS.md` complete.

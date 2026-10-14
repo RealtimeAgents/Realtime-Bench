@@ -1,6 +1,6 @@
 suite_id: public
 version: "1.0"
-suite_hash: 049963a48a5b17b68e6cd998cda352f9eee23f2287a17e3ce5f6e73ffa538505
+suite_hash: c04b72f3eed3f58abab8f10f31df1e6df064dd77ae92d7658bde9df6e1b6e467
 expected_total: 20
 expected_counts:
   game: 8

@@ -4,9 +4,9 @@ A benchmark for AI agents acting in real-time Web and Game environments. The wor
 keeps changing while the agent reasons, so success depends on both the action and
 when it arrives.
 
-Realtime-Bench 1.0 publishes [20 tasks](docs/tasks.md) (12 Web, 8 Game) and keeps a held-out
-set private for official evaluation. Every task runs under the [default protocol](docs/protocol.md):
-wall clock, 1 FPS, five minutes.
+Realtime-Bench 1.0 publishes [20 tasks](docs/public_tasks.md) (12 Web, 8 Game) and keeps a held-out
+set private for official evaluation. Every task runs on the [wall clock](docs/evaluation.md#clocks)
+at 1 FPS for five minutes.
 
 ## Quickstart
 
@@ -31,12 +31,9 @@ uv run rtbench view ./temp/harbor-jobs --port 18081
 
 | Page | For |
 | --- | --- |
-| [Running](docs/running.md) | Run options, job files, viewing results, parallel lanes |
-| [Models](docs/models.md) | Model presets and adding a model API |
-| [Protocol](docs/protocol.md) | Clocks, actions, outcomes, and what to report |
-| [Public tasks](docs/tasks.md) | The 20 public tasks |
-| [Adding tasks](docs/adding-tasks.md) | Writing a task package, step by step |
-| [Experimental models](docs/experimental-models.md) | Choice models (GPT-6 Luna Decisions, JEV) |
-| [Maintainers](docs/maintainers.md) | Releases, pinned images, seeding internals |
+| [Evaluation](docs/evaluation.md) | Run options, clocks, job files, viewing results |
+| [Model configuration](docs/model_configuration.md) | Configuring a new model |
+| [Public tasks](docs/public_tasks.md) | The 20 public tasks |
+| [Submit](docs/submit.md) | Submitting to the leaderboard and evaluating on the private tasks |
 
-Contributions: see [CONTRIBUTING](CONTRIBUTING.md).
+To contribute a task, see [CONTRIBUTING](CONTRIBUTING.md).
