@@ -13,9 +13,11 @@
 
 New or changed task (delete otherwise):
 
+- [ ] Meets RT-Perceive, RT-Deliberate and RT-Act ([task guidelines](../CONTRIBUTING.md#requirements)),
+      and reflects a real need rather than a contrived setup.
 - [ ] `instruction.md` and `tests/evaluation.py` agree: everything scored is stated.
 - [ ] Doing nothing fails; a different seed changes the content.
 - [ ] Success cannot be reached through browser chrome, URL changes or hidden state.
 - [ ] Preview checked (reset, clock transitions, terminal conditions); one strong-model run
       explained above.
-- [ ] Games: upstream unmodified, `PROVENANCE.md` and `RIGHTS.md` complete.
+- [ ] Games: upstream URL, revision, local changes and license recorded.

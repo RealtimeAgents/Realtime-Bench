@@ -28,18 +28,24 @@ submitting a task. Model API and framework contributions are covered at the
 A Realtime-Bench task is a Web app or browser game whose world keeps changing while the agent
 reasons. Success depends on both the action and when it arrives.
 
-### Difficulty
+### Requirements
 
-- The challenge should come from deciding what to do and when in a changing world: live updates,
-  competing events, deadlines, irreversible steps.
-- Do not make a task hard through reaction speed alone. At one observation per second, a task
-  that a simple scripted policy loses only on timing measures latency, not reasoning.
-- Do not make a task hard through hidden rules, ambiguity or unnecessary UI friction.
+Every task must meet all three:
+
+1. **RT-Perceive:** Relevant visible state changes after the initial observation; stale
+   positions, board state, threats, resources, or opportunities can cause a mistake.
+2. **RT-Deliberate:** the task must test the model's reasoning, not reaction speed alone, and
+   whether it can control how long it reasons to fit the time available: thinking too long lets
+   the world move on, thinking too little leads to poor decisions.
+3. **RT-Act:** action usefulness changes with its execution time. Waiting, moving,
+   defending, attacking, switching, or committing has different consequences as play evolves.
 
 ### Quality
 
 A good task has:
 
+- a scenario that reflects a real need, the way people actually use such an app or play such a
+  game, rather than a contrived setup built only to be hard;
 - an `instruction.md` that states everything that is scored and nothing that is not;
 - a success criterion that passes if and only if the instruction was followed;
 - content that depends on the task seed, so it cannot be memorized, and is reproducible for a
@@ -48,8 +54,8 @@ A good task has:
 
 ### Games
 
-Games must come from sources whose license allows redistribution. Vendor the upstream source
-unmodified and record its origin and license (see [environment](#4-environment)).
+Games must come from sources whose license allows redistribution. Record the upstream URL,
+revision, local changes and license in the task package.
 
 ## Propose your task
 
@@ -73,20 +79,21 @@ Requires Linux, [uv](https://docs.astral.sh/uv/) and Apptainer with fakeroot.
 
 ## Create your task
 
-### 1. Create a branch and copy a similar task
+### 1. Create a branch and a task directory
 
 ```bash
 git checkout -b <task-id>
 cp -r realtime_tasks/web/<similar-task> realtime_tasks/web/<task-id>   # or realtime_tasks/game/
 ```
 
-A task is a [Harbor task](https://github.com/harbor-framework/harbor) directory:
+Starting from a similar task is the quickest way to get a working skeleton. A task is a
+[Harbor task](https://github.com/harbor-framework/harbor) directory:
 
 ```text
 realtime_tasks/<web|game>/<task-id>/
 ├── instruction.md       # the model's goal
 ├── task.toml            # Harbor sections + [metadata]
-├── environment/         # Web app or vendored game
+├── environment/         # your Web app or game
 └── tests/
     ├── evaluation.py    # success criterion
     └── test.sh          # Harbor verifier entry point (keep as copied)
@@ -95,9 +102,8 @@ realtime_tasks/<web|game>/<task-id>/
 ### 2. task.toml
 
 Keep the copied `[agent]`, `[verifier]` and `[environment]` sections. In `[metadata]`, set
-`task_id` to the directory name and write a one-paragraph `description` for reviewers. Games
-also declare their `rules`, `keys`, `score_field` and `target`, which the model sees; ask us for a
-free `idx`. The loader reports any missing or invalid field.
+`task_id` to the directory name and write a one-paragraph `description` for reviewers. The loader
+reports any missing or invalid field.
 
 ### 3. instruction.md
 
@@ -106,28 +112,14 @@ include all the information the model needs and nothing more.
 
 ### 4. Environment
 
-- **Web**, by `backend`:
-  - `product`: business transitions in `environment/engine.py`.
-  - `configured`: parameters in `environment/scenario.json`, optionally `world.py` and `hooks.py`.
-  - `bespoke`: an `Engine` class in `environment/engine.py`.
+Build `environment/` however suits your task. Keep task-specific code inside the task directory
+rather than in shared sources, and draw every content-affecting random value from the task seed.
 
-  Keep task-specific code in the task; do not edit the shared `realtime_tasks/web/` sources for one
-  task.
-- **Game**: put the upstream source unmodified under `environment/upstream/` and benchmark changes
-  in sibling files. Record the upstream URL, immutable revision, local changes, license text and
-  asset origins in `environment/PROVENANCE.md` and `RIGHTS.md`.
-
-### 5. Randomness
-
-Draw every content-affecting random value from the task seed. Web engines receive it in
-`reset(seed=...)`; use a local `random.Random`, never the global `random` module. Games are
-seeded by the runtime (`Math.random` and `crypto`); see `realtime_tasks/game/assets/benchmark_seed.js`.
-
-### 6. tests/evaluation.py
+### 5. tests/evaluation.py
 
 The success criterion, evaluated on the task state frozen at the deadline.
 
-### 7. List the task
+### 6. List the task
 
 Add it to `realtime_tasks/sets/public.yaml`, updating the counts, and to [docs/public_tasks.md](docs/public_tasks.md).
 
