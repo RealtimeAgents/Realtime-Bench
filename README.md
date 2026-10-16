@@ -1,6 +1,8 @@
 # Realtime-Bench
 
-A benchmark for AI agents acting in real-time Web and Game environments. The world
+[![Project Page](https://img.shields.io/badge/Project_Page-000000?style=for-the-badge&logo=googlechrome&logoColor=white)](https://realtimeagents.org/) [![Paper](https://img.shields.io/badge/arXiv-2610.22155-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2610.22155)
+
+A benchmark for AI agents acting in real-time web and game environments. The world
 keeps changing while the agent reasons, so success depends on both the action and
 when it arrives.
 
@@ -37,3 +39,18 @@ uv run rtbench view ./temp/harbor-jobs --port 18081
 | [Submit](docs/submit.md) | Submitting to the leaderboard and evaluating on the private tasks |
 
 To contribute a task, see [CONTRIBUTING](CONTRIBUTING.md).
+
+## Citation
+
+
+```bibtex
+@misc{tang2026realtimebenchfrontiermodelssolve,
+      title={Realtime-Bench: Can Frontier Models Solve Real-time Interactive Problems?},
+      author={Jingyu Tang and Xu Yang and Zhehao Zhang and Zheng Wang and Qi Cheng and Haozhe Zhao and Manling Li and Wenxuan Li and Xide Xia and Jiaxin Pei},
+      year={2026},
+      eprint={2610.22155},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2610.22155},
+}
+```
