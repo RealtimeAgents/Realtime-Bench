@@ -10,7 +10,9 @@ from decimal import Decimal, InvalidOperation
 
 from realtime_framework.harnesses.jev.composition import text_inventory
 
-CANDIDATE_POLICY = "jev_web_controls_native_select_compose_v8"
+CANDIDATE_POLICY = "jev_web_controls_native_select_compose_v9"
+# Whole page-text rows and "label: value" tails longer than this are prose, not field values.
+_MAX_PAGE_LITERAL = 80
 
 _DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _MONTHS = {name.lower(): month for month in range(1, 13)
@@ -22,7 +24,9 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _URL = re.compile(r"https?://[^\s<>\"']+")
 _CODE = re.compile(r"\b[A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)+\b")
 _NUMBER = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?%?(?![\w.])")
-_QUOTED = re.compile(r'''"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|“[^”\n]+”|‘[^’\n]+’|`[^`\n]+`''')
+# Single quotes must open and close at word boundaries so apostrophes ("Ortiz's") never pair.
+_QUOTED = re.compile(r'''"(?:\\.|[^"\\\n])*"|(?<!\w)'(?:\\.|[^'\\\n])*'(?!\w)|“[^”\n]+”|'''
+                     r'''(?<!\w)‘[^’\n]+’(?!\w)|`[^`\n]+`''')
 
 
 def text_options(instruction: str, marks: dict, ax_tree: str, field: dict,
@@ -97,7 +101,7 @@ def text_options(instruction: str, marks: dict, ax_tree: str, field: dict,
     for option in constraints.get("options", []):
         add(str(option.get("value", "")), "field:datalist")
     for text, source, whole in sources:
-        if whole:
+        if whole and len(text.strip()) <= _MAX_PAGE_LITERAL:
             add(text, source)
         # Extract complete structured values before considering numeric subspans. Do not
         # produce bogus year/day fragments from dates or parts of IDs and email addresses.
@@ -127,7 +131,9 @@ def text_options(instruction: str, marks: dict, ax_tree: str, field: dict,
         for line in text.splitlines():
             # Preserve full visible field/value text such as "Name: Jane Doe" or addresses.
             if ": " in line:
-                add(line.split(": ", 1)[1], source)
+                value = line.split(": ", 1)[1]
+                if len(value.strip()) <= _MAX_PAGE_LITERAL:
+                    add(value, source)
         for match in _NUMBER.finditer(text):
             if not any(start < match.end() and match.start() < end for start, end in covered):
                 add(match.group().replace(",", ""), source)
@@ -294,7 +300,7 @@ def observation_candidates(instruction: str, marks: dict, active_window: dict):
                 for direction, amount in (("up", 600), ("down", -600)):
                     add(f"scroll_{direction}_{mark}",
                         f"Scroll {direction} in {mark}: {label}",
-                        {"action": "scroll", "target": mark, "dy": amount})
+                        {"action": "scroll", "target": mark, "dx": 0, "dy": amount})
             if "drag" in actions:
                 for direction, end in (("left", "250,500"), ("right", "750,500"),
                                        ("up", "500,250"), ("down", "500,750")):

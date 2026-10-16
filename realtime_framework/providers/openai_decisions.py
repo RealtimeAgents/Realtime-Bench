@@ -197,7 +197,8 @@ class OpenAIDecisionsClient:
             ):
                 raise ChoiceContextLimitError(f"Decisions request exceeds its context limit: {detail}")
             # OpenRouter reports an upstream refusal as a gateway error; it is not transient.
-            if "refused to answer" in detail.lower():
+            # Observed body: HTTP 502, error.message 'OpenAI refused to answer question "<key>"'.
+            if response.status_code == 502 and "refused to answer question" in detail.lower():
                 raise DecisionsRefusalError(f"Decisions HTTP {response.status_code}: {detail}")
             raise DecisionsHTTPError(response, detail)
         body = response.json()

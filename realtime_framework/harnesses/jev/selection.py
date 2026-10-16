@@ -58,6 +58,8 @@ class ChoiceDecision:
             raise ValueError("JEV requires at least one candidate action")
         instructions = GAME_INSTRUCTIONS if self.observation.get("game_choices") else GUI_INSTRUCTIONS
         choice = await self._choose(candidates, instructions, phase="gui_action")
+        # The deciding action-choice call; composition calls that follow stay in jev_calls.
+        decisive = self.calls[-1]
         action = candidates[choice]["action"]
         composition = None
         pointer_composition = None
@@ -68,12 +70,11 @@ class ChoiceDecision:
             action, pointer_composition = await self._compose_pointer(action)
         elif action["action"] == "compose_hold":
             action, key_composition = await self._compose_hold(action)
-        last = self.calls[-1]
         return {
             "action": action,
             "usage": self.usage,
-            "jev_response": last["response"],
-            "jev_question": last["question"],
+            "jev_response": decisive["response"],
+            "jev_question": decisive["question"],
             "jev_calls": self.calls,
             "candidate_count": len(candidates),
             "candidate_criteria_bytes": sum(
