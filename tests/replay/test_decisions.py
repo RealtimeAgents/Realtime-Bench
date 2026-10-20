@@ -3,11 +3,10 @@
 Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it each run is
 compared with tests/replay/baselines/.
 
-Both APIs run through JevHarness (harnesses/registry.py:13-16) on the wall clock only
-(providers/registry.py:164-177, 411-416; harnesses/jev/harness.py:52-53, 71-73;
-harnesses/jev/driver.py:62-63). Each decision is a sequence of Choice questions, one HTTP request
-per attempt, and every request is recorded. JEV is never run on the game page: it rejects the
-game prompt (harnesses/jev/harness.py:59-61).
+Both APIs run through the one agent (harnesses/registry.py) on the wall clock only
+(providers/preflight.py, check_wall_clock). Each decision is a sequence of Choice questions, one
+HTTP request per attempt, and every request is recorded. JEV is never run on the game page: the
+pre-run checks reject it (providers/preflight.py, check_choice_task).
 
 Both catalog rows are experimental (benchmark_eligible False, providers/registry.py:76-94). The
 runner refuses them unless ALLOW_EXPERIMENTAL_MODEL=1 (evaluation/runner.py:1435-1443), but that
@@ -223,7 +222,7 @@ def _check_jev_history(records: list[dict]) -> None:
 def test_long_scenario(api, tmp_path):
     """60 decisions on the web form: text composition, a grouped decision, the first fold and the
     first archive. Pointer composition is not in it: only the game prompt offers pointer
-    candidates (harnesses/jev/harness.py:59, 90-91; game_candidates.py:56-72), which JEV refuses,
+    candidates (harnesses/jev/observation.py; game_candidates.py:56-72), which JEV refuses,
     so it is in the Luna game snapshot."""
     header, records = _play(
         api, script.WEB_LONG, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION
@@ -243,7 +242,7 @@ def test_long_scenario(api, tmp_path):
 
 
 def test_luna_game_snapshot(tmp_path):
-    """The game prompt and game candidates (harnesses/jev/harness.py:58-68, 90-91;
+    """The game prompt (context policy item 11) and game candidates (harnesses/jev/observation.py;
     selection.py:59) with keys, pointer, hold and release choices."""
     header, records = _play(
         "openai_decisions",

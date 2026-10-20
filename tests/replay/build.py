@@ -118,7 +118,7 @@ def build_episode(
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
     agent_trace = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
     agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1569
-    # create_agent loads the repository .env (harnesses/registry.py:11 calls
+    # create_agent loads the repository .env (harnesses/registry.py:10 calls
     # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
     injected = sorted(name for name in HISTORY_ENV if name in os.environ)
     if injected:

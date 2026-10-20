@@ -975,7 +975,8 @@ class DefaultHarness(VisionAgentBase):
     """Common frame, context, action, and audit behavior for every catalog model.
 
     The registered driver for ModelConfig.adapter_type supplies the protocol; its capabilities
-    select history transport, the action channel, and interruption behavior.
+    select history transport, the action channel, and interruption behavior. The context policy
+    selects the interaction profile (item 11) and the observation form (item 12).
     """
 
     interaction_profile: InteractionProfile  # set by initialize() from context policy item 11

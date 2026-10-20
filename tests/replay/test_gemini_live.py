@@ -207,7 +207,7 @@ def turn_script(
 @pytest.fixture
 def live_env(monkeypatch):
     """Client settings for the stub, set explicitly so that a repository .env cannot fill them
-    (create_agent loads it with setdefault: harnesses/registry.py:11, providers/registry.py:15-39)."""
+    (create_agent loads it with setdefault: harnesses/registry.py:10, providers/registry.py:15-39)."""
     monkeypatch.setenv("GEMINI_API_KEY", API_KEY)  # key slot 1 (live.py:108-119)
     monkeypatch.setenv("GEMINI_API_KEY_START_SLOT", "1")  # live.py:126-135
     # Either would switch the client to Vertex AI (google/genai/_api_client.py:655-681).
