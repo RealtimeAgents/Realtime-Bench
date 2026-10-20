@@ -13,10 +13,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from realtime_framework.evaluation import runner
+from realtime_framework.harnesses.default.harness import DefaultHarness
 
 from . import baseline
 from .build import build_episode
@@ -271,3 +273,76 @@ def test_short_case_properties(short_run):
 def test_short_case_baseline(short_run):
     case, run = short_run
     _compare(case.name, run, {"stream": True})
+
+
+# An exception that escapes the decision loop still ends the episode through _finalize
+# (runner.py:1224-1234): the snapshot is frozen, the stop reason latched and the run invalid.
+# These are property tests; an escaped exception's traceback names files and lines.
+
+
+def _check_finalized(run: Run, *, at: float, raised: str) -> None:
+    check_wall_clock_properties(run.env, "invalid_run")
+    assert [call["call"] for call in run.env.calls if call["finalizing"]] == [
+        "task.evaluation_snapshot",
+        "env.release_inputs",
+    ]
+    assert run.env._termination_snapshot_captured
+    assert run.env._termination == {
+        "stop_reason": "invalid_run",
+        "end_s": at,
+        "snapshot_s": at,
+        "snapshot_delay_s": 0.0,
+    }
+    logged = [call["line"] for call in run.env.calls if call["call"] == "runner.log"]
+    assert any(
+        line.startswith("[default] decision loop raised:") and line.rstrip().endswith(raised)
+        for line in logged
+    ), logged
+
+
+def test_environment_exception_is_finalized(tmp_path):
+    """Decision 1's wait for the next frame fails at 1.5 s, latched and raised by the
+    environment: the run keeps the environment's reason."""
+    run = _run(
+        tmp_path,
+        [Step(CLICK_NAME), TYPE_ADA],
+        [0.5, 0.5],
+        stream=True,
+        max_minutes=SHORT_MAX_MINUTES,
+        advance_failures={1: "page clock did not advance"},
+    )
+    assert run.env._invalid_run == {
+        "category": "environment",
+        "reason": "clock_advance_failed",
+        "detail": "page clock did not advance",
+    }
+    # The wait comes before the commit (runner.py:626, 692), so decision 1 is never committed.
+    assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
+    _check_finalized(run, at=1.5, raised="RuntimeError: page clock did not advance")
+
+
+def test_agent_exception_is_finalized(tmp_path):
+    """The agent raises as decision 1 binds its budget at 1.0 s (runner.py:951), before anything
+    is latched: the runner invalidates the run itself."""
+    configure_decision = DefaultHarness.configure_decision
+    budgets = []
+
+    def failing_configure_decision(agent, budget):
+        budgets.append(budget)
+        if len(budgets) == 2:
+            raise RuntimeError("budget rejected")
+        return configure_decision(agent, budget)
+
+    with mock.patch.object(DefaultHarness, "configure_decision", failing_configure_decision):
+        run = _run(
+            tmp_path,
+            [Step(CLICK_NAME)],
+            [0.5],
+            stream=True,
+            max_minutes=SHORT_MAX_MINUTES,
+        )
+    invalid = run.env._invalid_run
+    assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
+    assert invalid["detail"].rstrip().endswith("RuntimeError: budget rejected")
+    assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
+    _check_finalized(run, at=1.0, raised="RuntimeError: budget rejected")

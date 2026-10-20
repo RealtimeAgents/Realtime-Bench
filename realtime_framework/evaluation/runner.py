@@ -879,16 +879,19 @@ def run_stream(
         return _end_reported(env.done(), queried_at)
 
     k = 0
-    while not _environment_done() and env.tick_index() < max_ticks:
+
+    def _decide():
+        """Run one decision; False once the episode is over."""
+        nonlocal k
         if getattr(env, "_invalid_run", None):
-            break
+            return False
         try:
             obs = env.capture()
         except Exception:
             _invalidate("environment", "observation_capture_failed", traceback.format_exc())
-            break
+            return False
         if not _accept_observation(obs):
-            break
+            return False
         _record_observation(obs, decision=k)
         t_k = obs.tick_number
         metadata = getattr(obs, "metadata", {}) or {}
@@ -910,7 +913,7 @@ def run_stream(
             )
             if remaining_clock_tokens <= 0:
                 env.wait_until_tick(max_ticks)
-                break
+                return False
         # None when the model declares no native limit and no token clock bounds the episode.
         runtime_output_cap = (
             native_output_limit
@@ -1206,16 +1209,28 @@ def run_stream(
         status, over_budget, terminal_after_action = _apply(k, t_k, r)
         k += 1
         if status == "invalid_run":
-            break
+            return False
         if over_budget:
             _mark_budget_exhausted()
-            break
+            return False
         if status in ("terminal", "not_applied_terminal"):
-            break
+            return False
         if terminal_after_action:
-            break
+            return False
         if _past_deadline():
-            break
+            return False
+        return True
+
+    # An exception that escapes the loop still ends the episode through _finalize, which freezes
+    # the snapshot and latches the stop reason; the run is invalid.
+    try:
+        while not _environment_done() and env.tick_index() < max_ticks:
+            if not _decide():
+                break
+    except Exception:
+        failure = traceback.format_exc()
+        log(f"[default] decision loop raised:\n{failure}")
+        _invalidate("runner", "run_exception", failure)
     _finalize()
     return timeline
 
