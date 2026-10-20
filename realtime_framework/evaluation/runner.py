@@ -133,6 +133,12 @@ def run_stream(
     spent = 0.0  # cumulative deliberation (model-inference) time -- the "clock"
     observation_watchdog = ObservationStreamWatchdog()
     trace_failed = [False]
+    # When the loop first learned of each kind of end, in world seconds since the episode began.
+    end_signals = {}
+
+    def _world_s():
+        position = getattr(env, "clock_position", None)
+        return float(position() if callable(position) else env.tick_index()) * delta_s
 
     def _emit(event, payload=None):
         """Best-effort call surface whose failure invalidates, but never rewrites, runtime state."""
@@ -143,6 +149,7 @@ def run_stream(
         except Exception:
             trace_failed[0] = True
             failure = traceback.format_exc()
+            end_signals.setdefault("invalid_run", _world_s())
             if getattr(env, "_invalid_run", None) is None:
                 setattr(
                     env,
@@ -170,6 +177,7 @@ def run_stream(
 
     def _invalidate(category, reason, detail=None):
         """Latch the first non-model failure. Invalid runs are never scored by the runner."""
+        end_signals.setdefault("invalid_run", _world_s())
         if getattr(env, "_invalid_run", None) is None:
             value = {"category": category, "reason": reason}
             if detail:
@@ -291,11 +299,21 @@ def run_stream(
         f = getattr(env, "done", None)
         if f is None:
             return False
+        queried_at = _world_s()
         try:
-            return bool(f())
+            over = bool(f())
         except Exception:
             _invalidate("environment", "terminal_state_check_failed", traceback.format_exc())
             return True
+        return _end_reported(over, queried_at)
+
+    def _end_reported(over, queried_at):
+        """Record the ends a done() query reported at the time the query was made."""
+        if over and getattr(env, "_invalid_run", None):
+            end_signals.setdefault("invalid_run", queried_at)
+        if over and getattr(env, "_episode_over", False):
+            end_signals.setdefault("environment", queried_at)
+        return over
 
     def _move_timeout():
         """Return the tightest operational wall timeout and its attribution."""
@@ -777,11 +795,14 @@ def run_stream(
         setattr(env, "_think_spent", spent)
         snapshotter = getattr(getattr(env, "task", None), "evaluation_snapshot", None)
         setattr(env, "_termination_snapshot_captured", False)
+        finalized_s = _world_s()
+        snapshot_s = None
         if callable(snapshotter):
             try:
                 setattr(env, "_termination_snapshot", snapshotter())
                 setattr(env, "_termination_snapshot_captured", True)
                 setattr(env, "_termination_snapshot_error", None)
+                snapshot_s = finalized_s
             except Exception:
                 failure = traceback.format_exc()
                 setattr(env, "_termination_snapshot_error", failure)
@@ -804,6 +825,7 @@ def run_stream(
         else:
             reason = "completed"
         setattr(env, "_stop_reason", reason)
+        setattr(env, "_termination", _termination(reason, finalized_s, snapshot_s))
         release_inputs = getattr(env, "release_inputs", None)
         if callable(release_inputs):
             try:
@@ -811,7 +833,24 @@ def run_stream(
             except Exception:
                 log("[cleanup] failed to release stateful inputs:\n" + traceback.format_exc())
 
+    def _termination(reason, finalized_s, snapshot_s):
+        """What the report reads about the end: the stop reason, the end time its rule gives
+        and when the scored snapshot was frozen (None without one), in world seconds. An end the
+        loop first sees while finalizing ends at ``finalized_s``."""
+        if reason in {"time_limit", "tick_limit"}:
+            end_s = max_ticks * delta_s
+        else:
+            signal = reason if reason in {"invalid_run", "think_budget"} else "environment"
+            end_s = end_signals.get(signal, finalized_s)
+        return {
+            "stop_reason": reason,
+            "end_s": round(end_s, 9),
+            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
+            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
+        }
+
     def _mark_budget_exhausted():
+        end_signals.setdefault("think_budget", _world_s())
         setattr(env, "_think_exhausted", True)
         log(
             f"[think] deliberation budget exhausted: {spent:.1f}s >= {think_budget_s:g}s -> forfeit"
@@ -836,7 +875,8 @@ def run_stream(
         )
 
     def _environment_done():
-        return env.done()
+        queried_at = _world_s()
+        return _end_reported(env.done(), queried_at)
 
     k = 0
     while not _environment_done() and env.tick_index() < max_ticks:
@@ -1994,6 +2034,7 @@ def main():
     # the deadline can't rewrite a real environment terminal state into time_limit. Any invalid run
     # reports "invalid_run"; "setup_error" if we never reached the loop.
     latched = getattr(env, "_stop_reason", None) if env is not None else None
+    termination = getattr(env, "_termination", None) if env is not None else None
     stop_reason = (
         "invalid_run"
         if invalid_run is not None
@@ -2095,6 +2136,7 @@ def main():
             else None
         ),
         "loop_stop_reason": latched,
+        "termination": termination,
         "max_minutes": a.max_minutes,
         "seed": a.seed,
         "applied_seed": getattr(ctask, "applied_seed", None),
@@ -2386,6 +2428,7 @@ def _write_emergency_setup_summary(error: str):
             "actions_executed": 0,
             "stop_reason": "setup_error",
             "loop_stop_reason": None,
+            "termination": None,
             "verification": None,
             "error": error,
             "cost_usd": None,

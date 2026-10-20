@@ -102,6 +102,7 @@ def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:
             "record": "outcome",
             # Latched by _finalize (runner.py:772-812).
             "stop_reason": env._stop_reason,
+            "termination": env._termination,
             "invalid_run": getattr(env, "_invalid_run", None),
             "termination_snapshot_captured": env._termination_snapshot_captured,
             "termination_snapshot": getattr(env, "_termination_snapshot", None),
