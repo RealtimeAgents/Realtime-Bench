@@ -315,13 +315,15 @@ class ChoiceClient(Protocol):
 
 
 # Transport failures
-"""One retry policy for every model API.
+"""One retry policy for every model API, run by one executor.
 
-Drivers only classify a failed request; the harness owns whether and when to retry. A request is
+Drivers only classify a failed request; RequestRetry decides whether and when to send it again,
+per request unit: the harness's turn, a Decision question, a session connect. A request is
 retried only while no model output, usage, or call has been received, and always from canonical
 history, so a retry can never replay or duplicate a model action. SDK-level retries stay disabled
 so every attempt is recorded. Retry time is part of the decision: on the wall clock the world keeps
-running; on the token clock a request without output charges no tokens.
+running; on the token clock a request without output charges no tokens. Once the runner abandons
+a decision, none of its request units is sent again.
 """
 
 TRANSIENT = "transient"  # connection loss, timeout, 408, 5xx, overloaded
@@ -460,7 +462,8 @@ def _backoff(cancel: threading.Event, delay: float) -> None:
 
 @dataclass(frozen=True)
 class RequestRetry:
-    """Run one request unit under TRANSPORT_RETRY: a stateless turn or a Decision question.
+    """Run one request unit under TRANSPORT_RETRY: a turn, a Decision question, or a session
+    connect.
 
     ``send(attempt)`` makes one 1-based attempt. A failed attempt is classified, recorded and, if
     the policy allows, sent again after its delay. ``classify`` returns None for an exception that
