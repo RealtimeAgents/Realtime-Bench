@@ -413,3 +413,25 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
         horizon_s=SHORT_MAX_MINUTES * 60,
     )
     assert metrics["normalized_time_to_success"] == (round(2.5 / 3.75, 9) if solved else None)
+
+
+def test_snapshot_time_is_when_its_read_returns(tmp_path):
+    """The task ends the episode at 2.5 s and reading its state for the snapshot takes 1.5 s,
+    past the 3.75 s deadline: the record keeps the end at 2.5 s and the snapshot at 4.0 s, 1.5 s
+    late, and the task's reason still stops the episode."""
+    run = _run(
+        tmp_path,
+        [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
+        [0.5, 0.5, 0.5],
+        stream=True,
+        max_minutes=SHORT_MAX_MINUTES,
+        stop_check=_decided_after(3, "task_success"),
+        snapshot_seconds=1.5,
+    )
+    assert run.env._termination == {
+        "stop_reason": "task_success",
+        "end_s": 2.5,
+        "snapshot_s": 4.0,
+        "snapshot_delay_s": 1.5,
+    }
+    assert run.env._termination_snapshot["environment_tick"] == 4

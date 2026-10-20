@@ -60,7 +60,8 @@ class FakeEnvironment:
     GuestEnvironment's token-clock advance does (actions.py:235-241); run_stream does not catch
     it. ``stop_check(env)`` stands for the task's episode_over (runner.py:1684): a true value ends
     the episode, a string names the reason (actions.py:952-959). ``reply_latencies[i]`` is the
-    fake time request i takes.
+    fake time request i takes, and ``snapshot_seconds`` the time the evaluation snapshot's read of
+    the task state takes.
     """
 
     clock_mode = "wall"
@@ -77,6 +78,7 @@ class FakeEnvironment:
         failures: dict[int, str] | None = None,
         advance_failures: dict[int, str] | None = None,
         stop_check=None,
+        snapshot_seconds: float = 0.0,
     ):
         self.frames = frames
         self.clock = clock
@@ -92,6 +94,7 @@ class FakeEnvironment:
         self.failures = dict(failures or {})
         self.advance_failures = dict(advance_failures or {})
         self.stop_check = stop_check
+        self.snapshot_seconds = snapshot_seconds
         # The task hook run_stream reads through env.task (runner.py:778-788).
         self.task = types.SimpleNamespace(evaluation_snapshot=self._evaluation_snapshot)
         self.frame_ages = []  # actions.py:166; run_stream appends to it (runner.py:656-658)
@@ -243,6 +246,7 @@ class FakeEnvironment:
     def _evaluation_snapshot(self) -> dict:
         self.finalizing = True
         self.log("task.evaluation_snapshot")
+        self.clock.advance(self.snapshot_seconds)
         return {
             "kind": "replay_form",
             "applied_actions": sum(e["status"] == "applied" for e in self.executions),
