@@ -1734,15 +1734,14 @@ def main():
         is_game = (getattr(ctask, "category", None) == "browser_game") if ctask else False
         env = GuestEnvironment(
             guest,
-            env_fps,
             deadline,
+            ctask,
             frames_dir=frames_dir,
             honor_fail=(not is_game),
             stop_check=(getattr(ctask, "episode_over", None) if ctask else None),
             scene_capture=scene_capture,
             action_audit_path=run_dir / "action_lifecycle.jsonl",
             clock_mode=a.clock,
-            task=ctask,
             wall_start_time=wall_start_time,
         )
         start_episode = getattr(agent, "start_episode", None)
