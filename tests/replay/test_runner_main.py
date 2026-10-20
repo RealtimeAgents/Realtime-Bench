@@ -2,10 +2,10 @@
 
 The real main(), run_stream and GuestEnvironment run on a fake wall clock; the desktop, the guest,
 the task and the agent are fakes. The task's end check and its evaluation snapshot take fake
-time, and closing the agent (runner.py:1905) moves the clock past the deadline, so a world time
+time, and closing the agent (runner.py:1912) moves the clock past the deadline, so a world time
 read after teardown is past the horizon although the episode ended early. main() takes
-world_time_s from the termination record (runner.py:2088), hands the record to the run metrics
-(runner.py:2097) and writes it into run_summary.json (runner.py:2185).
+world_time_s from the termination record (runner.py:2095), hands the record to the run metrics
+(runner.py:2104) and writes it into run_summary.json (runner.py:2192).
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class FakeGuest:
 class FakeTask:
     """A realtime task whose end check reports ``reason`` once the guest has been clicked."""
 
-    category = "realtime"  # main() takes the wall origin from start_episode() (runner.py:1738)
+    category = "realtime"  # main() takes the wall origin from start_episode() (runner.py:1744)
 
     def __init__(self, clock, guest, reason, solved):
         self.clock, self.guest, self.reason, self.solved = clock, guest, reason, solved
@@ -163,7 +163,7 @@ def run_main(tmp_path, task, agent, clock, guest) -> dict:
         mock.patch.object(runner, "GuestClient", lambda **_: guest),
         mock.patch.object(runner.custom_tasks, "get", lambda task_id: task),
         mock.patch.object(runner, "set_up_agent", set_up_agent),
-        # An unscored cell exits 1 after the summary is written (runner.py:2290-2291).
+        # An unscored cell exits 1 after the summary is written (runner.py:2297-2298).
         contextlib.suppress(SystemExit),
     ):
         runner.main()

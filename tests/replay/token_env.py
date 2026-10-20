@@ -31,7 +31,7 @@ class _Guest:
 
 class TokenEnvironment(GuestEnvironment):
     """``task`` is the task the agent was set up with; ``max_minutes`` sets the horizon.
-    ``stop_check()`` stands for the task's episode_over, which main() passes (runner.py:1767)."""
+    ``stop_check()`` stands for the task's episode_over, which main() passes (runner.py:1773)."""
 
     def __init__(
         self, frames: FrameSource, task: ClockTask, *, max_minutes: float, stop_check=None

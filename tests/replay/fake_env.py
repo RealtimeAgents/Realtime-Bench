@@ -54,14 +54,15 @@ class FakeEnvironment:
     """GuestEnvironment's wall-clock behavior on a FakeClock. ``fps`` is the environment's rate.
 
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
-    into "rejected" (runner.py:533-537). ``failures`` maps a decision to an environment fault,
-    which invalidates the run (runner.py:538-541). ``advance_failures`` maps a decision to a
-    failure of its post-action wait, which the environment latches and raises again as
-    GuestEnvironment's token-clock advance does (actions.py:235-241); run_stream does not catch
-    it. ``stop_check(env)`` stands for the task's episode_over (runner.py:1684): a true value ends
-    the episode, a string names the reason (actions.py:952-959). ``reply_latencies[i]`` is the
-    fake time request i takes, and ``snapshot_seconds`` the time the evaluation snapshot's read of
-    the task state takes.
+    into "rejected" (runner.py:571-575). ``failures`` maps a decision to an environment fault,
+    which invalidates the run (runner.py:576-579). ``advance_failures`` maps a decision to a
+    failure of its post-action wait, which the environment latches and raises again. It stands in
+    for GuestEnvironment's token-clock advance (actions.py:235-241); the wall-clock wait only
+    polls (actions.py:251-252). run_stream catches the exception and still finalizes
+    (runner.py:1246-1258). ``stop_check(env)`` stands for the task's episode_over
+    (runner.py:1773): a true value ends the episode, a string names the reason
+    (actions.py:952-958). ``reply_latencies[i]`` is the fake time request i takes, and
+    ``snapshot_seconds`` the time the evaluation snapshot's read of the task state takes.
     """
 
     clock_mode = "wall"
