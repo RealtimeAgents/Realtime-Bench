@@ -1,5 +1,6 @@
 """TypeSafe JEV's text-only capability profile for OpenRouter Decisions."""
 
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
 
@@ -17,6 +18,7 @@ class JevDecisionsClient(OpenAIDecisionsClient):
         accepts_reasoning_effort=False,
         classifies_transport_errors=True,
     )
+    deployment = Deployment(family="streaming", provider="openrouter", key_env="OPENROUTER_API_KEY")
     max_choices = 255
     # Requests carry no provider routing block; responses still validate the TypeSafe route.
     pin_route = False

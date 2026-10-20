@@ -19,6 +19,7 @@ from realtime_framework.entity.model import (
     TRANSIENT,
     ChoiceContextLimitError,
     ChoiceReply,
+    Deployment,
     RealtimeCapabilities,
     TransportFailure,
     classify_http_failure,
@@ -60,6 +61,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
         classifies_transport_errors=True,
         request_size_estimation=True,
     )
+    deployment = Deployment(family="vlm", provider="openrouter", key_env="OPENROUTER_API_KEY")
     # Choices per question; the selection flow groups larger candidate sets.
     max_choices = 255
     pin_route = True
