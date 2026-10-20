@@ -26,7 +26,7 @@ BlockKind = Literal[
 ]
 Source = Literal["environment", "agent", "model"]
 # Neutral roles; no provider role names.
-Role = Literal["instruction", "input", "model", "none"]
+Role = Literal["instruction", "input", "model"]
 Position = Literal["head", "after_head", "in_order", "frame_prefix", "digest"]
 
 

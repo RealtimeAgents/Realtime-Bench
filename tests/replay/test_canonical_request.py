@@ -98,10 +98,10 @@ def test_session_prefix_is_rejoined_and_feedback_stays_on_the_turn():
     }
 
 
-def test_ledger_role_follows_the_policy_but_converts_to_user():
-    for api, role in (("openai_realtime", "instruction"), ("openai_decisions", "none")):
+def test_ledger_is_an_input():
+    for api in ("openai_realtime", "openai_decisions"):
         canonical = request(api, [turn(1)], LEDGER)
-        assert canonical.items[1].intent.role == role
+        assert canonical.items[1].intent.role == "input"
         assert chat_messages(canonical)[1]["role"] == "user"
 
 

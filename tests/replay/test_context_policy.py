@@ -125,12 +125,10 @@ def test_decision_history(api):
 
 
 def test_ledger_roles():
-    # openai_realtime_session.py:23, 205-221 (system item); openai_decisions.py:132-163 (no roles).
-    assert {api: path.ledger_role for api, path in POLICY.paths.items()} == {
-        **{api: "input" for api in APIS},
-        "openai_realtime": "instruction",
-        "openai_decisions": "none",
-    }
+    # Version 3: an input everywhere. Version 1 had OpenAI Realtime's system item
+    # (openai_realtime_session.py:23, 205-221) and Luna's role-less state
+    # (openai_decisions.py:132-163), which still places the ledger by position and header.
+    assert {path.ledger_role for path in POLICY.paths.values()} == {"input"}
 
 
 def test_gemini_tool_history_format():

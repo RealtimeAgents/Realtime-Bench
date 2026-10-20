@@ -6,9 +6,9 @@ action, usage and reported execution result of each decision. GenerationRequest.
 built every turn (harnesses/default/context.py:480-487) but the driver takes only its newest
 frame's id from it (providers/openai_realtime.py:355-357), and the trajectory's input_prompt
 shows the archived action ledger as a user message (harnesses/default/harness.py:1127-1133;
-providers/litellm.py:329-332) where the wire carries a system item
-(openai_realtime_session.py:205-221, 292-297). The canonical request is not recorded; the
-trajectory rows are, with input_prompt as a digest (baseline.py).
+providers/litellm.py:329-332), the role the wire item has had since context policy version 3
+(openai_realtime_session.py:205-221, 292-297; version 1 sent a system item). The canonical
+request is not recorded; the trajectory rows are, with input_prompt as a digest (baseline.py).
 
 All scripts run on the finite token clock with B=1024 and 61 ticks: decision k may emit
 min(32000, (61 - k) * 1024) tokens (evaluation/runner.py:866-881). That is the native limit up
@@ -160,6 +160,15 @@ def _is_placeholder(item: dict) -> bool:
     return item["content"] == [{"type": "input_text", "text": FOLDED_VISUAL_PLACEHOLDER}]
 
 
+def _is_ledger(item: dict) -> bool:
+    """The archived-action ledger item: a user item opened by the ledger header (context policy
+    version 3; openai_realtime_session.py:205-221)."""
+    if not item["content"][0]["text"].startswith(ARCHIVED_ACTION_LEDGER_HEADER + "\n"):
+        return False
+    assert item["role"] == "user"
+    return True
+
+
 def _applied_fold_pairs(stub: RealtimeStub) -> int:
     """Count in-place folds the stub applied, asserting each one put the placeholder where the
     deleted item was. A fold deletes the user item, then creates the placeholder after the item
@@ -210,7 +219,7 @@ def test_long_scenario(tmp_path):
             assert "event_id" in event
             if event["type"] == "conversation.item.delete":
                 actual.append(("delete", event["item_id"]))
-            elif event["item"]["role"] == "system":
+            elif _is_ledger(event["item"]):
                 actual.append(("ledger", event["previous_item_id"]))
                 ledger = event["item"]["content"][0]["text"]
             else:
@@ -220,7 +229,7 @@ def test_long_scenario(tmp_path):
         placeholders = [
             event["item"]["id"]
             for event in batch
-            if event["type"] == "conversation.item.create" and event["item"]["role"] == "user"
+            if event["type"] == "conversation.item.create" and _is_placeholder(event["item"])
         ]
         for j, item_id in zip(FOLDS.get(k, ()), placeholders, strict=True):
             user_items[j] = item_id
@@ -246,7 +255,7 @@ def test_long_scenario(tmp_path):
         archived = record["result"]["realtime_runtime"]["history_archived_turns"]
         assert archived == (len(ARCHIVED) if k == ARCHIVE else 0)
 
-    # The archive puts the ledger first, as a system item at root, one JSON line per archived
+    # The archive puts the ledger first, as a user item at root, one JSON line per archived
     # action (context.py:35-50; openai_realtime_session.py:288-297).
     lines = ledger.split("\n")
     assert lines[0] == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == 1 + len(ARCHIVED)
@@ -272,7 +281,7 @@ def test_long_scenario(tmp_path):
     # observation. Each turn's assistant item is the stub's own output item.
     sizes = [len(r["server_responses"][0]["context"]) for r in steps]
     assert [sizes[k] for k in (0, 19, 20, 49, 50, 59)] == [1, 39, 41, 99, 82, 100]
-    assert last_view[0][1:] == ("system", ledger, None)
+    assert last_view[0][1:] == ("user", ledger, None)
     for j, user, assistant in zip(range(10, 59), last_view[1:-1:2], last_view[2:-1:2]):
         assert assistant[1:] == ("assistant", LONG_SCENARIO[j].reply, None)
         assert user[1] == "user"
@@ -330,7 +339,7 @@ def test_dropped_response_reconnects(tmp_path):
 
 def test_dropped_response_after_archive_replays_ledger(tmp_path):
     """The same drop at decision 51, after the first archive. The rebuild replays the ledger
-    first, as a system item without an anchor (openai_realtime_session.py:229-231), then the
+    first, as a user item without an anchor (openai_realtime_session.py:229-231), then the
     retained turns 10-50, the folded ones as placeholders (233-236). Decisions 0-50 repeat the long
     scenario and are compared there; this baseline records decisions 51 and 52."""
     steps = LONG_SCENARIO[:53]
@@ -343,11 +352,11 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
 
     (archive,) = steps_records[ARCHIVE]["client_events"]
     creates = [e["item"] for e in archive["events"] if e["type"] == "conversation.item.create"]
-    (ledger,) = [item for item in creates if item["role"] == "system"]
+    (ledger,) = [item for item in creates if _is_ledger(item)]
     dropped, rebuilt = steps_records[51]["client_events"]
     session, replayed_ledger, *replay = rebuilt["events"]
     assert session["type"] == "session.update"
-    assert set(replayed_ledger) == {"type", "item"} and replayed_ledger["item"]["role"] == "system"
+    assert set(replayed_ledger) == {"type", "item"} and _is_ledger(replayed_ledger["item"])
     assert replayed_ledger["item"]["content"] == ledger["content"]
     replay, observation = _split(replay)
     _, dropped_observation = _split(dropped["events"])
