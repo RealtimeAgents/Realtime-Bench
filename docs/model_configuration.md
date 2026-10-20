@@ -73,9 +73,10 @@ A model that needs a new wire protocol gets a driver:
    recorded.
 2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
    timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports and
-   which optional methods it implements. Declare `deployment` (`Deployment`: catalog family and
-   provider, default key variable) and `model_defaults` (per-model ModelConfig defaults, usually
-   `{}`). Function-call drivers declare `entity.actions.gui_function_declarations()`.
+   which optional methods it implements; the pre-run checks (`providers/preflight.py`) read it.
+   Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
+   `model_defaults` (per-model ModelConfig defaults, usually `{}`). Function-call drivers send the
+   function declarations the harness puts in `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
    provider-measured usage.
 4. Implement `classify_transport_error(exc) -> TransportFailure` and declare
