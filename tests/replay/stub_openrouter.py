@@ -16,18 +16,9 @@ import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .stub import CREATED, Reply, _error, _pieces
+from .stub import CREATED, Failure, Reply, _error, _pieces
 
 HOLD_TIMEOUT_S = 30.0  # a Held reply's last event is sent after this even without a release
-
-
-@dataclass(frozen=True)
-class Failure:
-    """An HTTP error answered before any output is streamed."""
-
-    status: int
-    body: dict
-    headers: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
