@@ -99,11 +99,11 @@ def classify_realtime_message(direction: str, message: dict):
 
 class _Session:
     """One open connection: the number the trace gives its WebSocket connection, its session core
-    and its one receiver.
+    and its one reader.
 
-    At most one read is in flight. Each server event it reads goes to the core, which hands it to
-    the state it belongs to; whoever waits for an acknowledgement or a response event awaits that
-    read instead of receiving on its own.
+    The reader reads on demand: only while something waits for an acknowledgement or a response
+    event, and at most one read at a time, which every waiter awaits instead of receiving on its
+    own. Each server event it reads goes to the core, which hands it to the state it belongs to.
     """
 
     def __init__(self, number: int, conn, core: RealtimeSessionCore):
@@ -124,7 +124,8 @@ class _Session:
             if self.closed:
                 return
             if self._read is None:
-                # The read runs in this waiter's context, so the trace records it in its scope.
+                # The read runs in the context of the waiter that starts it: the trace records the
+                # message in that waiter's scope, whichever state the message turns out to be for.
                 self._read = asyncio.create_task(self._receive())
             await asyncio.wait({self._read})
 

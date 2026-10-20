@@ -4,10 +4,11 @@ The core mirrors what the server holds as far as the driver wrote it: each frame
 assistant items after it, and the archived-action ledger item. From a history view it plans the
 item creates and deletes that bring the server there, and it records what became of each one:
 unknown while it is written, sent once the write returned, acknowledged once the server
-confirmed it. Every server event of the
-connection is handed to ``receive`` in the order the connection delivered it, which passes it to
-the state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, a
-response event joins its generation. Sending and receiving are the driver's.
+confirmed it. Each server event the driver reads is handed to ``receive``, in the order the
+connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
+settles the in-place edit waiting for it, a response event joins its generation. Sending and
+receiving are the driver's; it reads only while something waits for an event, so what arrives
+after the last wait reaches the core with the next read.
 """
 
 from __future__ import annotations
@@ -84,12 +85,13 @@ class SentFrame:
 @dataclass(frozen=True)
 class EditBatch:
     """One planned in-place edit and the session it leaves: the ledger item, each retained
-    frame's user item, and the frames it removes. It leaves assistant items as they are."""
+    frame's user item id, text and folded state, and the frames it removes. It leaves assistant
+    items as they are."""
 
     operations: tuple[Operation, ...]
     ledger_item_id: str | None
     ledger_text: str
-    frames: dict[str, SentFrame]
+    frames: dict[str, tuple[str, str, bool]]
     removed: tuple[str, ...]
     visuals_folded: int
     prompts_edited: int
@@ -160,7 +162,10 @@ class Generation:
 class RealtimeSessionCore:
     """One connection's conversation: what it holds, the operations that change it, their fate.
 
-    ``new_id(kind)`` names each planned client item and client event.
+    ``new_id(kind)`` names each planned client item and client event. The mirror takes in a plan
+    as it is made, before the driver sends it (an in-place edit only once it is acknowledged), so
+    after a failed send it is ahead of the server; the session is not used again then, as the
+    runtime reconnects or rebuilds (harnesses/default/context.py).
     """
 
     def __init__(self, new_id: Callable[[str], str]):
@@ -308,7 +313,7 @@ class RealtimeSessionCore:
                 ledger_item_id = create.item_id
 
         previous_item_id = ledger_item_id or "root"
-        sent_frames: dict[str, SentFrame] = {}
+        sent_frames: dict[str, tuple[str, str, bool]] = {}
         folded_count = 0
         prompt_edit_count = 0
         for frame in frames:
@@ -327,7 +332,7 @@ class RealtimeSessionCore:
                 folded_count += int(folded and not sent.folded)
                 prompt_edit_count += int(prompt_changed)
                 user_item_id = replacement.item_id
-            sent_frames[frame.id] = SentFrame(user_item_id, frame.text, folded)
+            sent_frames[frame.id] = (user_item_id, frame.text, folded)
             assistant_item_ids = sent.assistant_item_ids
             previous_item_id = assistant_item_ids[-1] if assistant_item_ids else user_item_id
         return EditBatch(
@@ -384,11 +389,7 @@ class RealtimeSessionCore:
             del self.frames[frame_id]
         for frame_id, planned in batch.frames.items():
             sent = self.frames[frame_id]
-            sent.user_item_id, sent.text, sent.folded = (
-                planned.user_item_id,
-                planned.text,
-                planned.folded,
-            )
+            sent.user_item_id, sent.text, sent.folded = planned
         return batch
 
     def start_generation(self, frame_id: str) -> Generation:
