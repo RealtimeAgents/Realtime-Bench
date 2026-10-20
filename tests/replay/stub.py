@@ -10,6 +10,8 @@ request body is kept in arrival order.
 from __future__ import annotations
 
 import json
+import select
+import socket
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -31,11 +33,21 @@ class Received:
     body: bytes
 
 
+HOLD_LIMIT_S = 30.0  # a held request is released after this long even if the client stays
+_HELD = object()
+
+
 class ChatCompletionsStub:
-    def __init__(self, replies: list[Reply]):
+    def __init__(self, replies: list[Reply], on_request=None):
+        """``on_request(index)``, when given, runs on the server thread after request ``index``
+        (0-based) has been recorded and before it is answered. A true return holds the request:
+        nothing is sent and no reply is used until the client closes the connection, and
+        ``held`` records whether it did."""
         self._replies = list(replies)
+        self._on_request = on_request
         self.requests: list[Received] = []
         self.unscripted = 0
+        self.held: list[bool] = []
         self._server = HTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -56,8 +68,10 @@ class ChatCompletionsStub:
         self._server.server_close()
         self._thread.join()
 
-    def _next(self, path: str, body: bytes) -> Reply | None:
+    def _next(self, path: str, body: bytes):
         self.requests.append(Received(path, body))
+        if self._on_request is not None and self._on_request(len(self.requests) - 1):
+            return _HELD
         if not self._replies:
             self.unscripted += 1
             return None
@@ -70,6 +84,9 @@ class ChatCompletionsStub:
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 reply = stub._next(self.path, body)
+                if reply is _HELD:
+                    stub.held.append(self._wait_for_close())
+                    return
                 if reply is None:
                     # HTTP 400 is FATAL for the shared retry policy (entity/model.py:369-377), so
                     # an extra request fails its decision at once instead of being retried.
@@ -81,6 +98,13 @@ class ChatCompletionsStub:
                     self._send(200, "text/event-stream", _sse(reply, request["model"], index))
                 else:
                     self._send(200, "application/json", _completion(reply, request["model"], index))
+
+            def _wait_for_close(self) -> bool:
+                """A client waiting for its response sends nothing, so the socket turns readable
+                only when the client closes it, and then reads end-of-file."""
+                readable, _, _ = select.select([self.connection], [], [], HOLD_LIMIT_S)
+                self.close_connection = True
+                return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
 
             def _send(self, status: int, content_type: str, payload: bytes):
                 self.send_response(status)

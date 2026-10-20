@@ -71,12 +71,13 @@ def action_record(action: Action) -> dict:
 class Normalizer:
     """Normalize records of one session; random ids keep one mapping across all of them."""
 
-    def __init__(self):
+    def __init__(self, real_time_fields: frozenset[str] = REAL_TIME_FIELDS):
+        self._real_time_fields = real_time_fields
         self._ids: dict[str, str] = {}
         self._counts: dict[str, int] = {}
 
     def __call__(self, value, key: str | None = None):
-        if key in REAL_TIME_FIELDS and value is not None:
+        if key in self._real_time_fields and value is not None:
             return REAL_TIME
         if isinstance(value, Action):
             value = action_record(value)
