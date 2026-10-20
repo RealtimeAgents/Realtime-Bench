@@ -32,6 +32,7 @@ from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 
 from .stubs import WsStub, self_signed_tls
+from .test_pack import assert_no_secret
 
 KEY = "sk-replay-SECRET-0123456789abcdef"  # a fake key; it must never reach the trace or pack
 PROMPT = "frame {k}: the private page text of the replay form"
@@ -106,8 +107,7 @@ def _run(driver, run_dir: Path, turns: int):
     assert close_agent_trace(sink, None) is None
     trace.close()
     validate_episode_trace(run_dir / "episode_trace.jsonl")
-    for name in ("episode_trace.jsonl", "episode_blobs.pack"):
-        assert KEY.encode() not in (run_dir / name).read_bytes(), name
+    assert_no_secret(run_dir, KEY)
     text = (run_dir / "episode_trace.jsonl").read_text()
     assert "private page text" not in text and "system instruction" not in text
     return [json.loads(line) for line in text.splitlines()]
