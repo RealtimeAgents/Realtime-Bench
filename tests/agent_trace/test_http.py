@@ -45,6 +45,7 @@ from ..replay.scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
 from ..replay.steps import run_steps
 from ..replay.stub import _completion, _sse
 from .stubs import DROP, Answer, HttpStub
+from .test_pack import assert_no_secret
 
 KEY = "sk-replay-SECRET-0123456789abcdef"  # a fake key; it must never reach the trace or pack
 STEPS = LONG_SCENARIO[:2]
@@ -62,9 +63,8 @@ def _payloads(events, name) -> list[dict]:
 
 
 def _assert_no_key(run_dir: Path, *private: str) -> None:
-    """No key in the trace or the pack, and no request content in the (exported) trace."""
-    for name in ("episode_trace.jsonl", "episode_blobs.pack"):
-        assert KEY.encode() not in (run_dir / name).read_bytes(), name
+    """No key in the trace or the pack's bodies, and no request content in the (exported) trace."""
+    assert_no_secret(run_dir, KEY)
     trace = (run_dir / "episode_trace.jsonl").read_text()
     for text in private:
         assert text not in trace

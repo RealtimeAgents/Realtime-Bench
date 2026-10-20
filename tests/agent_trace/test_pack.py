@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,20 @@ from realtime_framework.providers.openai_realtime import classify_realtime_messa
 
 IMAGE = os.urandom(6000)
 PRIVATE = "Enter the private account number 4417 and the caller's home address"
+
+
+def assert_no_secret(run_dir: Path, secret: str) -> None:
+    """``secret`` is neither in the trace nor in any body rebuilt from the trace's locators.
+
+    Body templates are stored compressed, so a search of the pack's own bytes cannot find it.
+    """
+    text = (run_dir / "episode_trace.jsonl").read_text()
+    assert secret not in text, "episode_trace.jsonl"
+    pack = run_dir / "episode_blobs.pack"
+    for event in map(json.loads, text.splitlines()):
+        if "body" in event["payload"]:
+            body = event["payload"]["body"]
+            assert secret.encode() not in load_body(pack, body), (event["event"], body["sha256"])
 
 
 def _record(run_dir, bodies, *, session=()) -> tuple[list[dict], dict]:
@@ -142,6 +157,18 @@ def test_no_body_content_reaches_the_trace(tmp_path):
     pack = tmp_path / "episode_blobs.pack"
     assert load_body(pack, requests[0]["body"]) == small
     assert load_body(pack, session["body"]) == message.encode()
+
+
+def test_the_no_secret_check_finds_a_planted_key(tmp_path):
+    """A key echoed in an error reply sits in a compressed template, out of reach of a byte search
+    of the pack; the check reads the rebuilt bodies and finds it."""
+    key = "sk-planted-SECRET-0123456789abcdef"
+    reply = json.dumps({"error": {"message": f"Incorrect API key provided: {key}"}}).encode()
+    _record(tmp_path, [BODIES["data_url"], reply])
+    assert key.encode() not in (tmp_path / "episode_blobs.pack").read_bytes()
+    with pytest.raises(AssertionError, match="ModelRequestSent"):
+        assert_no_secret(tmp_path, key)
+    assert_no_secret(tmp_path, "sk-absent-SECRET")
 
 
 def test_a_resumed_attempt_appends_to_the_pack(tmp_path):
