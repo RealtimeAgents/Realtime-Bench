@@ -73,9 +73,10 @@ def ensure_observation_geometry(
 
 import hashlib as hashlib
 import threading as threading
-import time as time
 from typing import Callable as Callable
 
+from realtime_framework.clock import Clock
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import SANDBOX_CONTAINER
 from realtime_framework.entity.actions import DESKTOP_SIZE
 from realtime_framework.sandbox.browser.cdp import close_port
@@ -100,9 +101,13 @@ class BrowserSceneCapture:
         probe: Callable[[dict], dict] | None = None,
         desktop_size: tuple[int, int] = DESKTOP_SIZE,
         text_observation: bool = False,
+        clock: Clock | None = None,
     ):
         self.guest = guest
         self.task = task
+        # The operational clock: under the token clock GuestEnvironment restamps the observation
+        # with world time.
+        self.clock = clock or SystemClock()
         self.task_id = getattr(task, "task_id", None)
         self.debug_port = debug_port
         self.container = container
@@ -255,16 +260,16 @@ class BrowserSceneCapture:
             render_sync_attempts += 1
             frame_is_current = getattr(self.task, "captured_frame_is_current", None)
             if callable(frame_is_current):
-                deadline = time.monotonic() + 5.0
+                deadline = self.clock.monotonic() + 5.0
                 while not frame_is_current(screenshot):
-                    if time.monotonic() >= deadline:
+                    if self.clock.monotonic() >= deadline:
                         raise RuntimeError(
                             f"desktop capture never reached the render fence for {self.task_id}"
                         )
-                    time.sleep(0.01)
+                    self.clock.sleep(0.01)
                     screenshot = self.guest.screenshot()
                     render_sync_attempts += 1
-            captured_at = time.time()
+            captured_at = self.clock.time()
             post = self._probe() if pre.get("scene", {}).get("status") == "ok" else pre
             pre_binding = pre.setdefault("binding", {})
             if pre.get("scene", {}).get("status") != "ok":

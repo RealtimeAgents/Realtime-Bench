@@ -20,9 +20,9 @@ from unittest import mock
 
 import pytest
 
+from realtime_framework.clock import Clocks, SystemClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.evaluation import runner
-from realtime_framework.sandbox import actions
 
 FPS = 1
 MAX_MINUTES = 0.0625
@@ -39,9 +39,9 @@ FINALIZED_S = END_S + QUERY_S
 SNAPSHOT_AT_S = FINALIZED_S + SNAPSHOT_S  # when evaluation_snapshot() returned
 
 
-class FakeClock:
-    """The time module of runner.py and sandbox/actions.py: time() reads the fake clock and
-    sleep() advances it; anything else is the real module."""
+class FakeClock(SystemClock):
+    """The episode clocks and the time module of runner.py: time() reads the fake clock and
+    sleep() advances it; anything else is the real clock or module."""
 
     def __init__(self, now):
         self.now = now
@@ -158,7 +158,7 @@ def run_main(tmp_path, task, agent, clock, guest) -> dict:
         # main() writes SANDBOX_GRAPHICS_MODE and SCREEN_RECORDING_ENCODER into os.environ.
         mock.patch.dict(os.environ),
         mock.patch.object(runner, "time", clock),
-        mock.patch.object(actions, "time", clock),
+        mock.patch.object(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock)),
         mock.patch.object(runner, "R", DESKTOP),
         mock.patch.object(runner, "GuestClient", lambda **_: guest),
         mock.patch.object(runner.custom_tasks, "get", lambda task_id: task),
