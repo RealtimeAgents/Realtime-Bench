@@ -54,7 +54,6 @@ from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
 from realtime_framework.providers.context import validate_context_reserve
-from realtime_framework.providers.legacy import chat_messages as legacy_chat_messages
 
 LITELLM_VERSION = "1.104.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -318,8 +317,8 @@ def frame_text(prefix: str, prompt: str) -> str:
 def chat_messages(request) -> tuple[dict, ...]:
     """The canonical request as the OpenAI-format message list, before the compat flags apply.
 
-    Luna's size estimate and the trajectory summary count it too. Every ledger is a user message
-    at index 1, whatever its intended role. Live tool exchanges have no message form here.
+    Luna's size estimate counts it and the trajectory summary shows it. Every ledger is a user
+    message at index 1, whatever its intended role. Live tool exchanges have no message form here.
     """
     messages = []
     prefix = ""
@@ -364,21 +363,7 @@ def chat_messages(request) -> tuple[dict, ...]:
                 messages.append(message)
         elif block.kind == "execution_feedback":
             messages.append({"role": "user", "content": block.text})
-    messages = tuple(messages)
-    shadow_check("messages", messages == legacy_chat_messages(request))
-    SHADOW["messages"] += 1
-    SHADOW["by_api"][request.policy.api] = SHADOW["by_api"].get(request.policy.api, 0) + 1
-    return messages
-
-
-# Shadow check counters (temporary).
-SHADOW = {"messages": 0, "wire": 0, "by_api": {}, "mismatches": []}
-
-
-def shadow_check(name, ok):
-    if not ok:
-        SHADOW["mismatches"].append(name)
-        raise AssertionError(f"shadow mismatch: {name}")
+    return tuple(messages)
 
 
 # Per-API declarations
@@ -562,19 +547,14 @@ class LiteLLMDriver:
         protocol, compat = self.protocol, self.compat
         # A fresh list per call: the steps below edit it in place.
         messages = list(chat_messages(request.canonical))
-        legacy = list(legacy_chat_messages(request.canonical))
         if compat.strip_image_detail:
             _strip_image_detail(messages)
-            _strip_image_detail(legacy)
         if compat.cache_breakpoint == "always" or (
             compat.cache_breakpoint == "model_prefix"
             and self.config.model_name.startswith(("anthropic/", "google/"))
         ):
             # Anthropic and Gemini use explicit breakpoints; OpenAI uses implicit caching.
             _mark_cache_breakpoint(messages)
-            _mark_cache_breakpoint(legacy)
-        shadow_check("wire", messages == legacy)
-        SHADOW["wire"] += 1
         stream = self._stream_enabled()
         kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
         include_usage = protocol.include_usage
