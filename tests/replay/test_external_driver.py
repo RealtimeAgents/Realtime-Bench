@@ -513,6 +513,38 @@ def test_run_identity_records_the_driver_code(external, tmp_path, monkeypatch, c
     assert external_driver_identity("rtb_one:Driver")["source_sha256"] != one["source_sha256"]
 
 
+def test_effective_config_export_hashes_the_driver_code(external, tmp_path, monkeypatch, capsys):
+    """The effective-config export reports the configuration hash Harbor's resolve computes for
+    the same trial dry run, external driver identity included."""
+    from realtime_framework.evaluation import effective_config
+
+    write_model(external.models)
+    settings = trial_settings(capsys, MODEL_KEY)
+    harbor = resolved_request(monkeypatch, tmp_path, MODEL_KEY)["configuration_sha256"]
+
+    def probe(kind, environ, request, *, scratch, python=sys.executable):
+        """The trial probe's record of the cell (effective_config._probe_trial); the runner
+        probe adds nothing the hash reads."""
+        cell = {}
+        if kind == "trial":
+            cell = {
+                "error": None,
+                "settings": settings,
+                "runner_argv": [],
+                "runner_environ": {},
+                "attribution": {},
+                "python": python,
+            }
+        return {"models": {MODEL_KEY: {WEB_TASK: cell}}}
+
+    monkeypatch.setattr(effective_config, "_probe", probe)
+    launch = {((), (), sys.executable): [(MODEL_KEY, WEB_TASK, [])]}
+    exported = effective_config._launched_entry(launch, env_file=None, scratch=tmp_path)
+    assert exported["models"][MODEL_KEY][WEB_TASK]["configuration_sha256"] == harbor
+    without_driver = {key: value for key, value in settings.items() if key != "external_driver"}
+    assert configuration_sha256(without_driver) != harbor
+
+
 def test_configuration_hash_of_registered_models(capsys):
     """A registered model hashes only its model config and revision, as before."""
     settings = trial_settings(capsys, "my-model")
