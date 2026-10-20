@@ -29,8 +29,10 @@ Runtime invariants:
     skipped_budget | not_applied_time_limit | not_applied_tick_limit | terminal |
     not_applied_terminal | rejected | terminal_ignored | wait | none | invalid_run} and calls
     adapter.commit_action(status).
-  * Latched outcome: the stop reason is frozen on env at loop exit so
-    post-loop cleanup crossing the deadline can't rewrite a real environment terminal state into time_limit.
+  * Latched outcome: the stop reason and the termination record (its end time by rule and the
+    snapshot's time) are frozen on env at loop exit, also when the loop raises, so post-loop cleanup
+    crossing the deadline can't rewrite a real environment terminal state into time_limit or
+    lengthen the episode.
 """
 import hashlib as hashlib, math as math, threading as threading, time as time, traceback as traceback
 
@@ -133,6 +135,12 @@ def run_stream(
     spent = 0.0  # cumulative deliberation (model-inference) time -- the "clock"
     observation_watchdog = ObservationStreamWatchdog()
     trace_failed = [False]
+    # When the loop first learned of each kind of end, in world seconds since the episode began.
+    end_signals = {}
+
+    def _world_s():
+        position = getattr(env, "clock_position", None)
+        return float(position() if callable(position) else env.tick_index()) * delta_s
 
     def _emit(event, payload=None):
         """Best-effort call surface whose failure invalidates, but never rewrites, runtime state."""
@@ -143,6 +151,7 @@ def run_stream(
         except Exception:
             trace_failed[0] = True
             failure = traceback.format_exc()
+            end_signals.setdefault("invalid_run", _world_s())
             if getattr(env, "_invalid_run", None) is None:
                 setattr(
                     env,
@@ -170,6 +179,7 @@ def run_stream(
 
     def _invalidate(category, reason, detail=None):
         """Latch the first non-model failure. Invalid runs are never scored by the runner."""
+        end_signals.setdefault("invalid_run", _world_s())
         if getattr(env, "_invalid_run", None) is None:
             value = {"category": category, "reason": reason}
             if detail:
@@ -291,11 +301,21 @@ def run_stream(
         f = getattr(env, "done", None)
         if f is None:
             return False
+        queried_at = _world_s()
         try:
-            return bool(f())
+            over = bool(f())
         except Exception:
             _invalidate("environment", "terminal_state_check_failed", traceback.format_exc())
             return True
+        return _end_reported(over, queried_at)
+
+    def _end_reported(over, queried_at):
+        """Record the ends a done() query reported at the time the query was made."""
+        if over and getattr(env, "_invalid_run", None):
+            end_signals.setdefault("invalid_run", queried_at)
+        if over and getattr(env, "_episode_over", False):
+            end_signals.setdefault("environment", queried_at)
+        return over
 
     def _move_timeout():
         """Return the tightest operational wall timeout and its attribution."""
@@ -777,11 +797,14 @@ def run_stream(
         setattr(env, "_think_spent", spent)
         snapshotter = getattr(getattr(env, "task", None), "evaluation_snapshot", None)
         setattr(env, "_termination_snapshot_captured", False)
+        finalized_s = _world_s()
+        snapshot_s = None
         if callable(snapshotter):
             try:
                 setattr(env, "_termination_snapshot", snapshotter())
                 setattr(env, "_termination_snapshot_captured", True)
                 setattr(env, "_termination_snapshot_error", None)
+                snapshot_s = finalized_s
             except Exception:
                 failure = traceback.format_exc()
                 setattr(env, "_termination_snapshot_error", failure)
@@ -804,6 +827,7 @@ def run_stream(
         else:
             reason = "completed"
         setattr(env, "_stop_reason", reason)
+        setattr(env, "_termination", _termination(reason, finalized_s, snapshot_s))
         release_inputs = getattr(env, "release_inputs", None)
         if callable(release_inputs):
             try:
@@ -811,7 +835,24 @@ def run_stream(
             except Exception:
                 log("[cleanup] failed to release stateful inputs:\n" + traceback.format_exc())
 
+    def _termination(reason, finalized_s, snapshot_s):
+        """What the report reads about the end: the stop reason, the end time its rule gives
+        and when the scored snapshot was frozen (None without one), in world seconds. An end the
+        loop first sees while finalizing ends at ``finalized_s``."""
+        if reason in {"time_limit", "tick_limit"}:
+            end_s = max_ticks * delta_s
+        else:
+            signal = reason if reason in {"invalid_run", "think_budget"} else "environment"
+            end_s = end_signals.get(signal, finalized_s)
+        return {
+            "stop_reason": reason,
+            "end_s": round(end_s, 9),
+            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
+            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
+        }
+
     def _mark_budget_exhausted():
+        end_signals.setdefault("think_budget", _world_s())
         setattr(env, "_think_exhausted", True)
         log(
             f"[think] deliberation budget exhausted: {spent:.1f}s >= {think_budget_s:g}s -> forfeit"
@@ -836,19 +877,23 @@ def run_stream(
         )
 
     def _environment_done():
-        return env.done()
+        queried_at = _world_s()
+        return _end_reported(env.done(), queried_at)
 
     k = 0
-    while not _environment_done() and env.tick_index() < max_ticks:
+
+    def _decide():
+        """Run one decision; False once the episode is over."""
+        nonlocal k
         if getattr(env, "_invalid_run", None):
-            break
+            return False
         try:
             obs = env.capture()
         except Exception:
             _invalidate("environment", "observation_capture_failed", traceback.format_exc())
-            break
+            return False
         if not _accept_observation(obs):
-            break
+            return False
         _record_observation(obs, decision=k)
         t_k = obs.tick_number
         metadata = getattr(obs, "metadata", {}) or {}
@@ -870,7 +915,7 @@ def run_stream(
             )
             if remaining_clock_tokens <= 0:
                 env.wait_until_tick(max_ticks)
-                break
+                return False
         # None when the model declares no native limit and no token clock bounds the episode.
         runtime_output_cap = (
             native_output_limit
@@ -1166,16 +1211,28 @@ def run_stream(
         status, over_budget, terminal_after_action = _apply(k, t_k, r)
         k += 1
         if status == "invalid_run":
-            break
+            return False
         if over_budget:
             _mark_budget_exhausted()
-            break
+            return False
         if status in ("terminal", "not_applied_terminal"):
-            break
+            return False
         if terminal_after_action:
-            break
+            return False
         if _past_deadline():
-            break
+            return False
+        return True
+
+    # An exception that escapes the loop still ends the episode through _finalize, which freezes
+    # the snapshot and latches the stop reason; the run is invalid.
+    try:
+        while not _environment_done() and env.tick_index() < max_ticks:
+            if not _decide():
+                break
+    except Exception:
+        failure = traceback.format_exc()
+        log(f"[default] decision loop raised:\n{failure}")
+        _invalidate("runner", "run_exception", failure)
     _finalize()
     return timeline
 
@@ -1990,16 +2047,18 @@ def main():
         if invalid_run is not None
         else ("scored" if benchmark_cell_eligible else "experimental")
     )
-    # Stop reason is LATCHED by the runner at loop exit (env._stop_reason), so cleanup that crosses
-    # the deadline can't rewrite a real environment terminal state into time_limit. Any invalid run
-    # reports "invalid_run"; "setup_error" if we never reached the loop.
+    # The stop reason and the end time are LATCHED by the runner at loop exit (env._stop_reason,
+    # env._termination), so cleanup that crosses the deadline rewrites neither a real environment
+    # terminal state into time_limit nor the episode's length. Any invalid run reports
+    # "invalid_run"; "setup_error" if we never reached the loop.
     latched = getattr(env, "_stop_reason", None) if env is not None else None
+    termination = getattr(env, "_termination", None) if env is not None else None
     stop_reason = (
         "invalid_run"
         if invalid_run is not None
         else (latched or ("setup_error" if env is None else "unknown"))
     )
-    world_time_s = env.tick_index() / env_fps if env is not None else None
+    world_time_s = termination["end_s"] if termination is not None else None
     try:
         run_metrics = summarize_run_metrics(
             run_dir / "action_lifecycle.jsonl",
@@ -2008,7 +2067,7 @@ def main():
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
             fps=env_fps,
-            world_time_s=world_time_s,
+            termination=termination,
             horizon_s=a.max_minutes * 60,
         )
     except Exception:
@@ -2028,7 +2087,7 @@ def main():
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
             fps=env_fps,
-            world_time_s=None,
+            termination=None,
             horizon_s=a.max_minutes * 60,
             validate_decision_count=False,
         )
@@ -2095,6 +2154,7 @@ def main():
             else None
         ),
         "loop_stop_reason": latched,
+        "termination": termination,
         "max_minutes": a.max_minutes,
         "seed": a.seed,
         "applied_seed": getattr(ctask, "applied_seed", None),
@@ -2361,7 +2421,7 @@ def _write_emergency_setup_summary(error: str):
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
         fps=float(arg("--fps", "1.0")),
-        world_time_s=None,
+        termination=None,
         horizon_s=cap_minutes * 60,
     )
     cost_accounting = summarize_cost(None)
@@ -2386,6 +2446,7 @@ def _write_emergency_setup_summary(error: str):
             "actions_executed": 0,
             "stop_reason": "setup_error",
             "loop_stop_reason": None,
+            "termination": None,
             "verification": None,
             "error": error,
             "cost_usd": None,
