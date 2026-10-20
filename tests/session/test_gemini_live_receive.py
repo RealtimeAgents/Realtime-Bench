@@ -13,6 +13,7 @@ import logging
 import threading
 from types import SimpleNamespace
 
+import pytest
 from google.genai import errors as genai_errors
 from google.genai import live as genai_live
 from google.genai import types
@@ -20,19 +21,22 @@ from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 
 from realtime_framework.clock import SystemClock
-from realtime_framework.entity.actions import gui_function_declarations
+from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import (
+    CanonicalTurn,
     ConnectRequest,
     GenerationRequest,
     HistorySyncRequest,
+    ProviderObservation,
     SessionSeed,
     SyncDisposition,
 )
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
+from realtime_framework.providers.gemini.session import Delivery
 
 HANG = object()  # script step: the server sends nothing more
 
@@ -47,6 +51,7 @@ class FakeSocket:
             for frame in frames
         ]
         self.sent: list[dict] = []
+        self.fail = None  # a predicate on a client message whose send raises
 
     async def recv(self, decode=None):
         assert self.frames, "the driver read past the script"
@@ -59,7 +64,10 @@ class FakeSocket:
         return frame
 
     async def send(self, message):
-        self.sent.append(json.loads(message))
+        message = json.loads(message)
+        if self.fail is not None and self.fail(message):
+            raise server_closed(1011, "Internal error.")
+        self.sent.append(message)
 
 
 class FakeLive:
@@ -107,7 +115,7 @@ class Rig:
             adapter_type="gemini_live",
             model_name=model,
             api_key="replay-dummy-key",
-            **live.GeminiLiveDriver.model_defaults[model],
+            **live.GeminiLiveDriver.model_defaults.get(model, {}),
         )
         self.driver = live.GeminiLiveDriver(config, clock=RecordingClock(self.log))
         self.live = FakeLive(scripts, self.log)
@@ -118,9 +126,10 @@ class Rig:
         self.seed = SessionSeed("system instruction", model, None, 1.0, answer)
         policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
         call = CallParameters(model, config.reasoning_effort, None)
-        self.history = build_request(
-            policy, system_block(self.seed.system_instruction, None), (), None, answer, call
+        self.view = lambda turns: build_request(
+            policy, system_block(self.seed.system_instruction, None), tuple(turns), None, answer, call
         )
+        self.history = self.view(())
 
     async def connect(self) -> None:
         await self.driver.connect(ConnectRequest(seed=self.seed))
@@ -128,6 +137,18 @@ class Rig:
     async def start(self, generation_id: str):
         request = GenerationRequest(generation_id, None, "inf", "wall", canonical=self.history)
         return await self.driver.start_generation(request)
+
+
+def frame_turn(k: int) -> CanonicalTurn:
+    observation = ProviderObservation(
+        observation=Observation(b"", float(k), k, {"observation_id": f"obs-{k}"}),
+        prompt=f"frame {k}",
+        image_bytes=b"png %d" % k,
+        mime_type="image/png",
+        image_detail="auto",
+        geometry={},
+    )
+    return CanonicalTurn(observation, decision=k)
 
 
 def stamps(events) -> list[tuple]:
@@ -374,3 +395,39 @@ def test_a_failed_reply_does_not_resume(monkeypatch):
         ("connect", None),
         ("connect", None),
     ]
+
+
+def realtime_input_with(key: str):
+    return lambda message: key in message.get("realtime_input", {})
+
+
+@pytest.mark.parametrize(
+    ("model", "failing"),
+    [
+        ("gemini-3.8-live", None),
+        ("gemini-3.8-live", lambda message: "client_content" in message),
+        ("replay-gemini-live", None),  # the driver defaults: realtime_input
+        ("replay-gemini-live", realtime_input_with("activityStart")),
+        ("replay-gemini-live", realtime_input_with("video")),
+    ],
+    ids=["client-content", "client-content-fails", "realtime", "start-fails", "video-fails"],
+)
+def test_observation_delivery(monkeypatch, model, failing):
+    """An observation's blocks count as sent once handed to the connection, and as unknown when
+    a send of the observation fails, on either input transport."""
+    rig = Rig(monkeypatch, model, [[]])
+    rig.live.sockets[0].fail = failing
+    history = rig.view([frame_turn(0)])
+
+    async def run():
+        await rig.connect()
+        try:
+            await rig.driver.send_observation(None, history)
+        except genai_errors.APIError:
+            assert failing is not None
+        except ConnectionClosedError:
+            assert failing is not None
+
+    asyncio.run(run())
+    expected = Delivery.SENT if failing is None else Delivery.UNKNOWN
+    assert rig.driver._core.delivery[("block", "d0.frame")] == expected
