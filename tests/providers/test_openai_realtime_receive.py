@@ -12,6 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
+import threading
+
+import pytest
+from websockets.exceptions import ConnectionClosedOK
+from websockets.frames import Close
 
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.events import (
@@ -28,11 +34,11 @@ from realtime_framework.entity.model import (
     SyncDisposition,
 )
 from realtime_framework.entity.records import UNTRACED
-from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
+from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver, _Session
 from realtime_framework.providers.openai_realtime_session import Delivery
 from tests.agent_trace.stubs import WsStub
 
-from .test_openai_realtime_session import ANSWER, turn, view
+from .test_openai_realtime_session import ANSWER, deleted, opened, turn, view
 
 SEED = SessionSeed("system instruction", "gpt-realtime-replay", None, 1.0, ANSWER)
 USAGE = {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}
@@ -288,3 +294,66 @@ def test_an_incomplete_response_is_replaced_by_its_collected_output():
     assert set(create) == {"type", "item"} and create["item"]["role"] == "assistant"
     assert create["item"]["content"] == [{"type": "output_text", "text": '{"action": "wait"}'}]
     assert core.frames["d0.frame"].assistant_item_ids == [create["item"]["id"]]
+
+
+# ---- the receiver on a fake connection ----------------------------------------------------
+
+
+class _FakeConnection:
+    """Stands in for the SDK connection the receiver reads: recv() hands out what the test
+    queued and raises a queued exception (a ConnectionClosedOK is a clean close). It counts how
+    many recv calls run at once."""
+
+    def __init__(self):
+        self.queue: queue.Queue = queue.Queue()
+        self.in_flight = 0
+        self.most_in_flight = 0
+        self._lock = threading.Lock()
+
+    def recv(self):
+        with self._lock:
+            self.in_flight += 1
+            self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        try:
+            item = self.queue.get(timeout=5)
+            if isinstance(item, Exception):
+                raise item
+            return item
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+
+
+def _clean_close() -> ConnectionClosedOK:
+    return ConnectionClosedOK(Close(1000, "bye"), Close(1000, "bye"), True)
+
+
+def _waiting_edit():
+    """A core with a response in progress for decision 1 and, sent, an in-place edit that folds
+    decision 0."""
+    turns = [turn(0, "a0"), turn(1)]
+    core = opened(turns)
+    generation = core.start_generation("d1.frame")
+    turns[0].fold_visual()
+    batch = core.begin_edit(view(turns))
+    for operation in batch.operations:
+        core.sending(operation)
+    return core, generation, batch
+
+
+def _within(coroutine, timeout: float = 10.0):
+    """Run the coroutine, failing instead of hanging if it never ends."""
+    return asyncio.run(asyncio.wait_for(coroutine, timeout))
+
+
+def test_a_clean_close_during_an_edit_fails_it_with_that_close():
+    """The edit's fallback records the close itself, as it did before the session core split
+    (which read with conn.recv())."""
+    connection, closed = _FakeConnection(), _clean_close()
+    core, _, batch = _waiting_edit()
+    session = _Session(1, connection, core)
+    connection.queue.put(deleted(batch.operations[0].item_id))
+    connection.queue.put(closed)
+    with pytest.raises(ConnectionClosedOK) as raised:
+        _within(OpenAIRealtimeDriver._wait_for_item_edits(session))
+    assert raised.value is closed
