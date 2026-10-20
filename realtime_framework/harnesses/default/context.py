@@ -255,6 +255,16 @@ class RealtimeRuntime:
     def ledger_block(self, ledger: str) -> ContentBlock | None:
         return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
 
+    def history_view(
+        self,
+        request_builder: RequestBuilder,
+        ledger: str,
+        incoming: Iterable[CanonicalTurn] = (),
+    ) -> CanonicalRequest:
+        """The retained history (and the incoming frame) where a session encoder needs it before
+        or after the request exists: the same builder and blocks as the request."""
+        return request_builder(tuple(self._turns) + tuple(incoming), self.ledger_block(ledger))
+
     def _record_archived_turns(self, turns: Iterable[CanonicalTurn]) -> int:
         indexes = [
             turn.action_history_index for turn in turns if turn.action_history_index is not None
@@ -322,6 +332,7 @@ class RealtimeRuntime:
         *,
         reason: str,
         ledger: str,
+        request_builder: RequestBuilder,
         current_generation: GenerationHandle | None = None,
         force_rebuild: bool = False,
         removed_turns: tuple[CanonicalTurn, ...] = (),
@@ -337,6 +348,7 @@ class RealtimeRuntime:
                     turns=tuple(self._turns),
                     executed_action_ledger=ledger,
                     reason=reason,
+                    history=self.history_view(request_builder, ledger),
                     current_generation=current_generation,
                     force_rebuild=force_rebuild,
                     removed_turns=removed_turns,
@@ -377,7 +389,7 @@ class RealtimeRuntime:
             if self._cleanup_future is future:
                 self._cleanup_future = None
 
-    async def _ensure_ready(self, ledger: str) -> None:
+    async def _ensure_ready(self, ledger: str, request_builder: RequestBuilder) -> None:
         await self._wait_for_cleanup()
         if self._connected and self.state == RuntimeState.READY:
             return
@@ -385,6 +397,7 @@ class RealtimeRuntime:
             result = await self._synchronize(
                 reason="runtime_recovery",
                 ledger=ledger,
+                request_builder=request_builder,
                 force_rebuild=True,
             )
             if result.history_state != ProviderHistoryState.EXACT:
@@ -399,6 +412,7 @@ class RealtimeRuntime:
                 seed=seed,
                 turns=tuple(self._turns),
                 executed_action_ledger=ledger,
+                history=self.history_view(request_builder, ledger),
             )
         )
         self._record_reconnect()
@@ -419,7 +433,7 @@ class RealtimeRuntime:
         if len(observations) != 1:
             raise ValueError("each generation accepts exactly one observation")
         executed_action_ledger = self._action_ledger(action_history)
-        await self._ensure_ready(executed_action_ledger)
+        await self._ensure_ready(executed_action_ledger, request_builder)
         incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
         retained, incoming, removed_turns, retention = self._retained(self._turns, incoming)
         self._turns[:] = retained
@@ -434,6 +448,7 @@ class RealtimeRuntime:
             sync = await self._synchronize(
                 reason="history_block_compaction",
                 ledger=executed_action_ledger,
+                request_builder=request_builder,
                 force_rebuild=(
                     self.capabilities.persistent_session
                     and not self.capabilities.can_compact_history_in_place
@@ -448,13 +463,18 @@ class RealtimeRuntime:
         renewal_reason = getattr(self.driver, "connection_renewal_reason", None)
         reason = renewal_reason() if callable(renewal_reason) else None
         if reason:
-            sync = await self._synchronize(reason=reason, ledger=executed_action_ledger)
+            sync = await self._synchronize(
+                reason=reason, ledger=executed_action_ledger, request_builder=request_builder
+            )
             if sync.history_state != ProviderHistoryState.EXACT:
                 raise RuntimeError(f"connection renewal failed: {sync.detail}")
 
         if not incoming:
             raise RuntimeError("no current observation")
-        input_refs = [await self.driver.send_observation(turn.observation) for turn in incoming]
+        history = self.history_view(request_builder, executed_action_ledger, incoming)
+        input_refs = [
+            await self.driver.send_observation(turn.observation, history) for turn in incoming
+        ]
         input_refs = [refs or {} for refs in input_refs]
         for turn, refs in zip(incoming, input_refs):
             turn.provider_refs.update(refs or {})
@@ -578,6 +598,7 @@ class RealtimeRuntime:
             sync = await self._synchronize(
                 reason=provider_metadata.get("reconnect_reason", "provider_history_changed"),
                 ledger=executed_action_ledger,
+                request_builder=request_builder,
                 current_generation=generation,
                 force_rebuild=False,
             )

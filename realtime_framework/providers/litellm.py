@@ -516,7 +516,7 @@ class LiteLLMDriver:
     async def connect(self, request: ConnectRequest) -> None:
         return None
 
-    async def send_observation(self, observation: ProviderObservation) -> dict:
+    async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The complete canonical prompt is sent by start_generation; this hook intentionally has no
         # transport side effect for stateless APIs.
         return {"observation_id": observation.observation_id}

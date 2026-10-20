@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 
-from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.entity.events import TextDelta, UsageSnapshot
@@ -74,9 +74,12 @@ def _run(driver, run_dir: Path, turns: int):
     policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
     runtime = RealtimeRuntime(driver, policy, trace=sink)
     history: list[dict] = []
-    seed = SessionSeed("system instruction", config.model_name, None, 1.0)
+    channel = driver.capabilities.action_channel
+    # As DefaultHarness._answer_requirements declares them (harnesses/default/harness.py).
+    declarations = tuple(gui_function_declarations()) if channel == "function_call" else ()
+    answer = AnswerRequirements(channel, "standard_vlm", declarations)
+    seed = SessionSeed("system instruction", config.model_name, None, 1.0, answer, policy.texts)
     system = system_block(seed.system_instruction)
-    answer = AnswerRequirements(driver.capabilities.action_channel, "standard_vlm")
     call = CallParameters(config.model_name, config.reasoning_effort, None)
 
     def request_builder(turns, ledger):

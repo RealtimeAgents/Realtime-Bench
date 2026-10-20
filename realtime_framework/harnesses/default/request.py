@@ -7,6 +7,7 @@ role and placement; encoders only translate the result.
 
 from __future__ import annotations
 
+import json
 import time
 
 from realtime_framework.entity.context_policy import PathPolicy
@@ -100,11 +101,20 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
         exchanges = turn.provider_refs.get("native_tool_exchanges", [])
         initial_text = turn.provider_refs.get("native_initial_text", "")
         if exchanges or initial_text:
+            # Item 10: past calls replayed as text, never as calls the model would see as new.
+            transcript = (
+                policy.texts.gemini_tool_history_header
+                + "\n"
+                + json.dumps(exchanges, ensure_ascii=False)
+                if exchanges and policy.tool_call_replay == "tool_transcript"
+                else ""
+            )
             tools = ContentBlock(
                 f"d{turn.decision}.tools",
                 "tool_exchange",
                 "model",
                 BlockTime(wall_ns=turn.output_wall_ns),
+                text=transcript,
                 based_on=turn.observation.observation_id,
                 initial_text=initial_text,
                 exchanges=tuple(
