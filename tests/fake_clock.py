@@ -240,7 +240,11 @@ async def _run_sync(func, *args, abandon_on_cancel=False, cancellable=None, limi
     loop = asyncio.get_running_loop()
     if not isinstance(loop, _FakeLoop):
         return await _anyio_run_sync(
-            func, *args, abandon_on_cancel=abandon_on_cancel, cancellable=cancellable, limiter=limiter
+            func,
+            *args,
+            abandon_on_cancel=abandon_on_cancel,
+            cancellable=cancellable,
+            limiter=limiter,
         )
     context = contextvars.copy_context()
     return await loop.run_in_executor(None, functools.partial(context.run, func, *args))
@@ -393,9 +397,7 @@ class FakeClock:
     def timer(self, delay: float, callback) -> _Timer:
         timer = _Timer(self, callback)
         with self._cond:
-            heapq.heappush(
-                self._timers, (self._now + max(0.0, delay), next(self._sequence), timer)
-            )
+            heapq.heappush(self._timers, (self._now + max(0.0, delay), next(self._sequence), timer))
             self._fire_due_timers()
         return timer
 
