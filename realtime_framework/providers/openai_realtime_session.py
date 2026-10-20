@@ -3,10 +3,12 @@
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it, and the archived-action ledger item. From a history view it plans the
 item creates and deletes that bring the server there, and it records what became of each one:
-sent, confirmed by the server, or unknown when the send failed. Every server event of the
-connection is handed to ``receive`` in the order the connection delivered it, which passes it to
-the state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, a
-response event joins its generation. Sending and receiving are the driver's.
+unknown while it is written, sent once the write returned, acknowledged once the server
+confirmed it. Each server event the driver reads is handed to ``receive``, in the order the
+connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
+settles the in-place edit waiting for it, a response event joins its generation. Sending and
+receiving are the driver's; it reads only while something waits for an event, so what arrives
+after the last wait reaches the core with the next read.
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ from realtime_framework.entity.request import CanonicalRequest, FrameImage, Requ
 
 # Neutral request roles as Realtime message roles.
 ROLES = {"instruction": "system", "input": "user", "model": "assistant"}
-# The server events that confirm a create; conversation.item.added does not.
+# The server events that confirm a create, as the in-place edit has always waited for them. The
+# trace's classification (openai_realtime.py _ITEM_ACKS) links a create to its first answer,
+# conversation.item.added, as well.
 _CREATE_ACKS = {"conversation.item.created", "conversation.item.done"}
 
 
@@ -58,11 +62,14 @@ Operation = Create | Delete
 
 
 class Delivery(str, Enum):
-    """What is known about one planned operation."""
+    """What is known about one planned operation, in the Gemini Live core's terms
+    (providers/gemini/session.py): unknown from the start of its write until the write returns,
+    sent after that, acknowledged once the server confirmed it. A write that fails leaves it
+    unknown: the server may or may not have it."""
 
     SENT = "sent"
-    CONFIRMED = "confirmed"
-    UNKNOWN = "unknown"  # the send failed, so the server may or may not have it
+    ACKNOWLEDGED = "acknowledged"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -78,12 +85,13 @@ class SentFrame:
 @dataclass(frozen=True)
 class EditBatch:
     """One planned in-place edit and the session it leaves: the ledger item, each retained
-    frame's user item, and the frames it removes. It leaves assistant items as they are."""
+    frame's user item id, text and folded state, and the frames it removes. It leaves assistant
+    items as they are."""
 
     operations: tuple[Operation, ...]
     ledger_item_id: str | None
     ledger_text: str
-    frames: dict[str, SentFrame]
+    frames: dict[str, tuple[str, str, bool]]
     removed: tuple[str, ...]
     visuals_folded: int
     prompts_edited: int
@@ -139,20 +147,25 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
 
 @dataclass
 class Generation:
-    """One response on this connection: its number on the connection, the frame it answers, the
-    output items the server made for it, and its server events not yet taken, in arrival order."""
+    """One response on this connection: its number on the connection, the frame it answers, its
+    response id once the server created it, the output items the server made for it, the client
+    event that cancels it, and its server events not yet taken, in arrival order."""
 
     number: int
     answered: SentFrame
     response_id: str | None = None
     output_item_ids: list[str] = field(default_factory=list)
+    cancel_event_id: str | None = None
     events: deque = field(default_factory=deque)
 
 
 class RealtimeSessionCore:
     """One connection's conversation: what it holds, the operations that change it, their fate.
 
-    ``new_id(kind)`` names each planned client item and client event.
+    ``new_id(kind)`` names each planned client item and client event. The mirror takes in a plan
+    as it is made, before the driver sends it (an in-place edit only once it is acknowledged), so
+    after a failed send it is ahead of the server; the session is not used again then, as the
+    runtime reconnects or rebuilds (harnesses/default/context.py).
     """
 
     def __init__(self, new_id: Callable[[str], str]):
@@ -169,8 +182,11 @@ class RealtimeSessionCore:
         self._edit: EditBatch | None = None
         self._unconfirmed: set[tuple[str, str]] = set()
         self._edit_error = None
-        # The response in progress; the server runs one at a time in a session.
-        self._generation: Generation | None = None
+        # The responses in progress. The server answers each response.create with a
+        # response.created in the order it received them, so a requested response waits here for
+        # its id; every later event of a response names that id.
+        self._requested: deque[Generation] = deque()
+        self._responses: dict[str, Generation] = {}
         self._generations = 0
 
     # ---- planning ------------------------------------------------------------------------
@@ -297,7 +313,7 @@ class RealtimeSessionCore:
                 ledger_item_id = create.item_id
 
         previous_item_id = ledger_item_id or "root"
-        sent_frames: dict[str, SentFrame] = {}
+        sent_frames: dict[str, tuple[str, str, bool]] = {}
         folded_count = 0
         prompt_edit_count = 0
         for frame in frames:
@@ -316,7 +332,7 @@ class RealtimeSessionCore:
                 folded_count += int(folded and not sent.folded)
                 prompt_edit_count += int(prompt_changed)
                 user_item_id = replacement.item_id
-            sent_frames[frame.id] = SentFrame(user_item_id, frame.text, folded)
+            sent_frames[frame.id] = (user_item_id, frame.text, folded)
             assistant_item_ids = sent.assistant_item_ids
             previous_item_id = assistant_item_ids[-1] if assistant_item_ids else user_item_id
         return EditBatch(
@@ -346,11 +362,13 @@ class RealtimeSessionCore:
     # ---- what became of each operation ----------------------------------------------------
 
     def sending(self, operation: Operation) -> None:
-        """Record an operation as handed to the connection, before any answer can arrive."""
-        self.delivery[operation.key] = Delivery.SENT
-
-    def send_failed(self, operation: Operation) -> None:
+        """Record an operation whose write starts, before any answer to it can arrive."""
         self.delivery[operation.key] = Delivery.UNKNOWN
+
+    def sent(self, operation: Operation) -> None:
+        # While another waiter reads, the acknowledgement can arrive before the write returns.
+        if self.delivery[operation.key] is Delivery.UNKNOWN:
+            self.delivery[operation.key] = Delivery.SENT
 
     @property
     def edit_answered(self) -> bool:
@@ -371,25 +389,21 @@ class RealtimeSessionCore:
             del self.frames[frame_id]
         for frame_id, planned in batch.frames.items():
             sent = self.frames[frame_id]
-            sent.user_item_id, sent.text, sent.folded = (
-                planned.user_item_id,
-                planned.text,
-                planned.folded,
-            )
+            sent.user_item_id, sent.text, sent.folded = planned
         return batch
 
     def start_generation(self, frame_id: str) -> Generation:
-        """Register the response about to be requested for a sent frame. Its events go to it
-        until its response.done."""
+        """Register the response about to be requested for a sent frame. The first
+        response.created not yet taken is its; its events go to it until its response.done."""
         self._generations += 1
-        self._generation = Generation(self._generations, self.frames[frame_id])
-        return self._generation
+        generation = Generation(self._generations, self.frames[frame_id])
+        self._requested.append(generation)
+        return generation
 
     def receive(self, event) -> bool:
         """Apply one server event of this connection, in arrival order. Returns whether a state
         took it: an operation it confirms, or the edit or response it is about."""
         kind = getattr(event, "type", "")
-        generation = self._generation
         if kind in _CREATE_ACKS:
             return self._confirm(("create", str(getattr(getattr(event, "item", None), "id", ""))))
         if kind == "conversation.item.deleted":
@@ -404,11 +418,17 @@ class RealtimeSessionCore:
             if self._unconfirmed and self._edit_error is None and (event_id is None or about_edit):
                 self._edit_error = error
                 taken = True
-            if generation is not None and not about_edit:
-                generation.events.append(event)
-                taken = True
+            if not about_edit:
+                live = [*self._requested, *self._responses.values()]
+                cancelled = [g for g in live if event_id and g.cancel_event_id == event_id]
+                for generation in cancelled or live:
+                    generation.events.append(event)
+                    taken = True
             return taken
-        if kind.startswith("response.") and generation is not None:
+        if kind.startswith("response."):
+            generation = self._response_of(kind, event)
+            if generation is None:
+                return False
             generation.events.append(event)
             self._response_event(generation, kind, event)
             return True
@@ -418,15 +438,27 @@ class RealtimeSessionCore:
         self._unconfirmed.discard(key)
         if key not in self.delivery:
             return False
-        self.delivery[key] = Delivery.CONFIRMED
+        self.delivery[key] = Delivery.ACKNOWLEDGED
         return True
 
-    def _response_event(self, generation: Generation, kind: str, event) -> None:
-        """Record what a response event says about the conversation: the response id, the output
-        items the server made, and at response.done the answered frame's assistant items."""
+    def _response_of(self, kind: str, event) -> Generation | None:
+        """The generation a response event belongs to: response.created binds the earliest one
+        still waiting for its id, every later event goes to the one its response id names."""
         if kind == "response.created":
+            if not self._requested:
+                return None
+            generation = self._requested.popleft()
             generation.response_id = getattr(getattr(event, "response", None), "id", None)
-        elif kind in {"response.output_item.added", "response.output_item.done"}:
+            self._responses[generation.response_id] = generation
+            return generation
+        if kind == "response.done":
+            return self._responses.get(getattr(getattr(event, "response", None), "id", None))
+        return self._responses.get(getattr(event, "response_id", None))
+
+    def _response_event(self, generation: Generation, kind: str, event) -> None:
+        """Record what a response event says about the conversation: the output items the server
+        made, and at response.done the answered frame's assistant items."""
+        if kind in {"response.output_item.added", "response.output_item.done"}:
             self._output_item(generation, getattr(getattr(event, "item", None), "id", None))
         elif kind == "response.done":
             response = getattr(event, "response", None)
@@ -435,7 +467,7 @@ class RealtimeSessionCore:
             if getattr(response, "status", None) != "failed":
                 # A superseded response's session is closed and replayed before its next use.
                 generation.answered.assistant_item_ids = list(generation.output_item_ids)
-            self._generation = None
+            del self._responses[generation.response_id]
 
     @staticmethod
     def _output_item(generation: Generation, item_id) -> None:

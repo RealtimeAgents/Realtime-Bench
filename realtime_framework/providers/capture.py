@@ -285,7 +285,8 @@ def _connection_class(base, owner, channel: str, classify):
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.trace_connection_id = f"{channel}-{next(numbers)}"
+            self.trace_connection_number = next(numbers)
+            self.trace_connection_id = f"{channel}-{self.trace_connection_number}"
 
     return Recording
 

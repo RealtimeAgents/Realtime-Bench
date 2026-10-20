@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
-import itertools as itertools
 import logging as logging
 import os as os
 import threading as threading
@@ -17,6 +16,7 @@ from openai import APIConnectionError as APIConnectionError
 from openai import APITimeoutError as APITimeoutError
 from openai import OpenAI as OpenAI
 from websockets.exceptions import ConnectionClosed as ConnectionClosed
+from websockets.exceptions import ConnectionClosedOK as ConnectionClosedOK
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.providers.registry import load_project_secrets
@@ -56,6 +56,8 @@ from realtime_framework.providers.openai_realtime_session import history_frames
 
 logger = logging.getLogger(__name__)
 _CLIENT_ID_MAX_LENGTH = 32
+# What the trace links to an item create as its answers; the first is its acknowledgement. The
+# session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
 
 
@@ -96,24 +98,25 @@ def classify_realtime_message(direction: str, message: dict):
 
 
 class _Session:
-    """One open connection: its number among the driver's connections, its session core and its
-    one receiver.
+    """One open connection: the number the trace gives its WebSocket connection, its session core
+    and its one reader.
 
-    At most one read is in flight. Each server event it reads goes to the core, which hands it to
-    the state it belongs to; whoever waits for an acknowledgement or a response event awaits that
-    read instead of receiving on its own.
+    The reader reads on demand: only while something waits for an acknowledgement or a response
+    event, and at most one read at a time, which every waiter awaits instead of receiving on its
+    own. Each server event it reads goes to the core, which hands it to the state it belongs to.
     """
 
     def __init__(self, number: int, conn, core: RealtimeSessionCore):
         self.number = number
         self.core = core
-        self._events = iter(conn)
+        self._conn = conn
         self._read: asyncio.Task | None = None
-        self.closed = False
+        # How the connection ended: closed normally (by either side), or a failed read.
+        self.closed: ConnectionClosedOK | None = None
         self.failure: Exception | None = None
 
     async def receive_until(self, ready) -> None:
-        """Receive until ``ready()`` holds or the server closes the connection. A failed read
+        """Receive until ``ready()`` holds or the connection closes normally. A failed read
         raises in every waiter, once it has taken what was received before."""
         while not ready():
             if self.failure is not None:
@@ -121,19 +124,20 @@ class _Session:
             if self.closed:
                 return
             if self._read is None:
-                # The read runs in this waiter's context, so the trace records it in its scope.
+                # The read runs in the context of the waiter that starts it: the trace records the
+                # message in that waiter's scope, whichever state the message turns out to be for.
                 self._read = asyncio.create_task(self._receive())
             await asyncio.wait({self._read})
 
     async def _receive(self) -> None:
         try:
-            event = await asyncio.to_thread(next, self._events, None)
+            event = await asyncio.to_thread(self._conn.recv)
+        except ConnectionClosedOK as closed:
+            self.closed = closed
         except Exception as exc:  # noqa: BLE001 - every waiter raises it
             self.failure = exc
         else:
-            if event is None:
-                self.closed = True
-            elif not self.core.receive(event):
+            if not self.core.receive(event):
                 logger.debug(
                     "OpenAI Realtime connection %d: no state takes %s",
                     self.number,
@@ -183,7 +187,6 @@ class OpenAIRealtimeDriver:
         self._send_lock = threading.Lock()
         # The open connection's conversation and its receiver.
         self._session: _Session | None = None
-        self._session_numbers = itertools.count(1)
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
@@ -291,18 +294,16 @@ class OpenAIRealtimeDriver:
         core = self._session.core
         for operation in operations:
             core.sending(operation)
-            try:
-                await asyncio.to_thread(self._send, operation)
-            except Exception:
-                core.send_failed(operation)
-                raise
+            await asyncio.to_thread(self._send, operation)
+            core.sent(operation)
 
     @staticmethod
     async def _wait_for_item_edits(session: _Session) -> None:
-        """Wait until the server has answered the pending in-place edit."""
+        """Wait until the server has answered the pending in-place edit; a connection that closes
+        first fails it with that close."""
         await session.receive_until(lambda: session.core.edit_answered)
         if not session.core.edit_answered:
-            raise RuntimeError("OpenAI Realtime session closed during a history edit")
+            raise session.closed
 
     async def _close_current(self) -> None:
         cm, self._cm = self._cm, None
@@ -356,8 +357,12 @@ class OpenAIRealtimeDriver:
         await retry.run_async(send)
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
+        # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``
+        # (openai/resources/realtime/realtime.py:765).
         self._session = _Session(
-            next(self._session_numbers), self._conn, RealtimeSessionCore(self._new_client_id)
+            self._conn._connection.trace_connection_number,
+            self._conn,
+            RealtimeSessionCore(self._new_client_id),
         )
         # The history is None when the runtime opens the episode's first session.
         await self._send_all(self._session.core.replay(request.history))
@@ -376,15 +381,18 @@ class OpenAIRealtimeDriver:
                 },
             )
 
+    def _connected_session(self) -> _Session:
+        if self._session is None:
+            raise RuntimeError("OpenAI Realtime session is not connected")
+        return self._session
+
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The history ends with this observation's frame.
-        await self._send_all([self._session.core.observe(history)])
+        await self._send_all([self._connected_session().core.observe(history)])
         return {}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
-        if self._conn is None:
-            raise RuntimeError("OpenAI Realtime session is not connected")
-        session = self._session
+        session = self._connected_session()
         # The frame this response answers is the request's newest; its output items join it.
         _, frames = history_frames(request.canonical.items)
         core_generation = session.core.start_generation(frames[-1].id)
@@ -412,7 +420,7 @@ class OpenAIRealtimeDriver:
         while True:
             await session.receive_until(lambda: pending)
             if not pending:
-                return  # the server closed the connection
+                return  # the connection closed normally
             event = pending.popleft()
             event_type = getattr(event, "type", "")
             if event_type == "response.created":
@@ -428,7 +436,7 @@ class OpenAIRealtimeDriver:
                 continue
             if event_type == "error":
                 error = getattr(event, "error", None)
-                cancel_event_id = generation.metadata.get("cancel_event_id")
+                cancel_event_id = core_generation.cancel_event_id
                 cancel_race = bool(
                     cancel_event_id and getattr(error, "event_id", None) == cancel_event_id
                 )
@@ -519,7 +527,7 @@ class OpenAIRealtimeDriver:
             kwargs["response_id"] = response_id
         cancel_event_id = self._new_client_id("cancel")
         kwargs["event_id"] = cancel_event_id
-        generation.metadata["cancel_event_id"] = cancel_event_id
+        core_generation.cancel_event_id = cancel_event_id
         try:
             await asyncio.to_thread(self._wire, self._conn.response.cancel, **kwargs)
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
