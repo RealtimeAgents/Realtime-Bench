@@ -51,7 +51,7 @@ ARCHIVE, ARCHIVED = 50, range(0, 10)
 
 
 def realtime_config(base_url: str) -> ModelConfig:
-    """The runner's ModelConfig for the catalog key (evaluation/runner.py:1551-1555), pointed at
+    """The runner's ModelConfig for the catalog key (evaluation/runner.py:1549-1553), pointed at
     the stub. The placeholder key keeps any OPENAI_API_KEY in the environment or the .env from
     being used (providers/openai_realtime.py:210-211)."""
     config = catalog.to_model_config(

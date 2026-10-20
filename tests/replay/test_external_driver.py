@@ -376,7 +376,7 @@ def test_preflight_reads_the_external_declaration(external, capsys):
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")
     fails(lambda: catalog.get("ext-bad"), f"ext-bad.yaml: endpoint.api {message}")
-    # The runner's --adapter path (evaluation/runner.py:1550-1556) gets the same message.
+    # The runner's --adapter path (evaluation/runner.py:1548-1554) gets the same message.
     fails(lambda: catalog.adapter_class(api), message)
 
 

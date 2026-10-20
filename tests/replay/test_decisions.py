@@ -9,7 +9,7 @@ HTTP request per attempt, and every request is recorded. JEV is never run on the
 pre-run checks reject it (providers/preflight.py, check_choice_task).
 
 Both catalog rows are experimental (benchmark_eligible False, providers/registry.py:54-64). The
-runner refuses them unless ALLOW_EXPERIMENTAL_MODEL=1 (evaluation/runner.py:1446-1454), but that
+runner refuses them unless ALLOW_EXPERIMENTAL_MODEL=1 (evaluation/runner.py:1444-1452), but that
 is an argparse-level check that build_episode does not mirror, and nothing called here reads the
 variable, so it is not set.
 """
@@ -66,7 +66,7 @@ def dummy_key(monkeypatch):
 def _play(api, decisions, run_dir, *, task, instruction, scene=None):
     key, upstream = APIS[api]
     with DecisionsStub(upstream=upstream) as stub:
-        # The runner's config (runner.py:1550-1555), with the YAML's base_url at the stub.
+        # The runner's config (runner.py:1548-1553), with the YAML's base_url at the stub.
         config = catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed").model_copy(
             update={"api_base_url": stub.base_url}
         )

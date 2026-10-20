@@ -3,8 +3,8 @@
 runner.main() and build_episode both call set_up_agent (evaluation/runner.py); in place of a
 BrowserSceneCapture on the container's browser, build_episode hands it the synthetic frames.
 The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
-frame budget B (None on the wall clock and in pause mode, runner.py:1409-1410), and ``max_ticks``
-is the episode length run_stream receives (runner.py:1775). The finite token clock changes the
+frame budget B (None on the wall clock and in pause mode, runner.py:1407-1408), and ``max_ticks``
+is the episode length run_stream receives (runner.py:1714). The finite token clock changes the
 per-decision budget (runner.py:866-889) and the clock prompt (harnesses/default/prompts.py:177-201).
 """
 
