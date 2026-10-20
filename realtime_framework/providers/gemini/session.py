@@ -404,6 +404,13 @@ class SessionCore:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 
+    def generation_failed(self, connection: int) -> None:
+        """The reply on ``connection`` failed after the core applied its messages: if that is the
+        open connection, its session has no clean boundary to resume from."""
+        if connection == self.connection:
+            self.last_turn_clean = False
+            self.resume_handle = None
+
     def reader_failed(self, connection: int) -> None:
         """The connection's reader failed: no reply is read on it any more."""
         self.replies.pop(connection, None)
