@@ -177,6 +177,25 @@ def test_writer_error_invalidates_the_run(tmp_path):
     assert close_agent_trace(other, earlier) is earlier
 
 
+def test_a_long_write_error_keeps_its_exception_line(tmp_path):
+    """The invalid-run detail is the end of the writer's traceback, which names the exception."""
+    _, sink = _open(tmp_path)
+
+    def fail(data):
+        try:
+            raise ValueError("cannot encode " + "x" * 3000)
+        except ValueError as exc:
+            raise OSError("disk full") from exc
+
+    sink._store = fail
+    sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
+    invalid_run = close_agent_trace(sink, None)
+    (close,) = [e["payload"] for e in _events(tmp_path) if e["event"] == "AgentTraceClosed"]
+    assert len(close["error"]) > 2000
+    assert invalid_run["detail"] == close["error"][-2000:]
+    assert invalid_run["detail"].endswith("OSError: disk full\n")
+
+
 def test_blocked_writer_times_out_and_never_emits_after_the_fence(tmp_path):
     trace, sink = _open(tmp_path)
     entered, release = _block_writer(sink)
