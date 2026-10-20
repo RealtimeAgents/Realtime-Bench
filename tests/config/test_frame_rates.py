@@ -146,13 +146,13 @@ def test_a_run_plan_carries_both_rates_to_the_runner(tmp_path):
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
-def _trial(model_input_fps) -> tuple[dict, dict, dict]:
+def _trial(model_input_fps, fps=2.0) -> tuple[dict, dict, dict]:
     """A trial's identity (evaluation/harbor.py:506-520), its request, and the one-task local
     report whose group carries the identity reporting.report found in the run summary."""
     task = {
         "suite_id": "public", "suite_version": "1.0", "suite_hash": "0" * 64,
         "harness_version": "1.0", "harness_hash": "1" * 64, "task_id": WEB,
-        "category": "web", "fps": 2.0, "duration_minutes": 5.0, "seed": 42,
+        "category": "web", "fps": fps, "duration_minutes": 5.0, "seed": 42,
     }
     if model_input_fps is not None:
         task["model_input_fps"] = model_input_fps
@@ -189,13 +189,32 @@ def test_harbor_verify_compares_the_model_input_rate():
         verify(report, task, request)
 
 
+def _job(path, request):
+    trial = path / f"{WEB}__trial" / "agent"
+    trial.mkdir(parents=True)
+    (trial / "request.json").write_text(json.dumps(request))
+    return path
+
+
 def test_jobs_from_before_the_split_report_the_environment_rate(tmp_path):
     """A job recorded with one --fps has no model_input_fps; its model ran at that rate."""
     from realtime_framework.evaluation.harbor import aggregate
 
-    _, request, _ = _trial(None)
-    trial = tmp_path / f"{WEB}__trial" / "agent"
-    trial.mkdir(parents=True)
-    (trial / "request.json").write_text(json.dumps(request))
-    report = aggregate(tmp_path)
+    report = aggregate(_job(tmp_path, _trial(None)[1]))
     assert (report["fps"], report["model_input_fps"]) == (2.0, 2.0)
+
+
+def test_a_leaderboard_submission_needs_both_rates_at_one(tmp_path):
+    """rtbench upload's check of three jobs (evaluation/submission.py:53-76); each one's trial
+    has no report, which counts as a failed task."""
+    from realtime_framework.evaluation.submission import SubmissionError, check_runs
+
+    def jobs(name, model_input_fps):
+        request = _trial(model_input_fps, fps=1.0)[1]
+        return [_job(tmp_path / name / f"run{run}", request) for run in (1, 2, 3)]
+
+    assert len(check_runs(jobs("one", 1.0))) == 3
+    assert len(check_runs(jobs("before-the-split", None))) == 3
+    with pytest.raises(SubmissionError) as caught:
+        check_runs(jobs("split", 2.0))
+    assert str(caught.value) == f"{tmp_path / 'split' / 'run1'}: model_input_fps is 2.0, expected 1"

@@ -23,7 +23,10 @@ from realtime_tasks.registry import UNRELEASED
 DEFAULT_URL = "https://realtimeagents.org/api/submissions"
 RUNS = 3
 # The leaderboard setting; any other value is a different benchmark condition.
-REQUIRED = {"suite_id": "public", "clock": "wall", "fps": 1, "duration_minutes": 5.0, "seed": 42}
+REQUIRED = {
+    "suite_id": "public", "clock": "wall", "fps": 1, "model_input_fps": 1,
+    "duration_minutes": 5.0, "seed": 42,
+}
 # Fields every run of one submission must share.
 SAME = (
     "suite_version", "suite_hash", "harness_version", "harness_hash", "model", "model_revision",
