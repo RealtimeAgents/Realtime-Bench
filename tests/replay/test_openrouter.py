@@ -82,8 +82,8 @@ def openrouter_episode(monkeypatch, tmp_path, script, **clock):
     with OpenRouterStub(script, route=ROUTE) as stub:
         monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
         config = openrouter_config()
-        if clock.get("tokens_per_frame") is not None:  # runner.py:1444-1452
-            assert catalog.supports_finite_frame_budget(config.adapter_type)
+        if clock.get("tokens_per_frame") is not None:  # runner.py:1449-1456
+            assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
         episode = build_episode(
             config,
             tmp_path,

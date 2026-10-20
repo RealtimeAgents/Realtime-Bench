@@ -14,10 +14,7 @@ from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.entity.request import Candidate, ChoiceRequirements, SelectionMaterial
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.harness import DefaultHarness
-from realtime_framework.harnesses.default.prompts import (
-    GAME_SYSTEM_PROMPT,
-    REALTIME_WEB_SYSTEM_PROMPT,
-)
+from realtime_framework.harnesses.default.prompts import GAME_SYSTEM_PROMPT
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.jev.candidates import CANDIDATE_POLICY, observation_candidates
 from realtime_framework.harnesses.jev.game_candidates import (
@@ -56,29 +53,16 @@ class JevHarness(DefaultHarness):
         self._runtime = RealtimeRuntime(self.driver, self._context_policy, trace=self._trace)
 
     def initialize(self, task_instruction, initial_observation):
-        if getattr(self, "_clock_mode", None) != "wall":
-            raise ValueError("Choice Decisions supports wall clock only")
-        if getattr(self, "_stream_mode", "default") != "default":
-            raise ValueError("Choice Decisions requires default mode")
-        if getattr(self, "tool_runtime", None) is None:
-            raise ValueError("Choice Decisions requires a task-bound interactables runtime")
+        # The pre-run checks (providers/preflight.py) admit only the wall clock and, for
+        # text-only clients, web tasks.
         scenario = getattr(self, "system_prompt_override", None)
         self._game_choices = scenario == GAME_SYSTEM_PROMPT
-        if self._game_choices and self.driver.capabilities.observation_modality != "screenshot":
-            raise ValueError(f"Choice Decisions supports Web task evaluation only: {self.tool_runtime.task_id}")
-        if scenario not in {GAME_SYSTEM_PROMPT, REALTIME_WEB_SYSTEM_PROMPT}:
-            raise ValueError(f"Unsupported Choice Decisions scenario: {self.tool_runtime.task_id}")
         self.interaction_profile = (
             MULTIMODAL_GAME_CHOICE_PROFILE if self._game_choices else
             MULTIMODAL_CHOICE_PROFILE
             if self.driver.capabilities.observation_modality == "screenshot" else JEV_PROFILE
         )
         super().initialize(task_instruction, initial_observation)
-
-    def configure_decision(self, budget):
-        if budget.clock_mode != "wall":
-            raise ValueError("Choice Decisions supports wall clock only")
-        super().configure_decision(budget)
 
     def _prepare_observations(self, observations, tick, feedback=""):
         prepared, executions = super()._prepare_observations(observations, tick, feedback)

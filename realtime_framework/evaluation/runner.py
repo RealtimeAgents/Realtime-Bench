@@ -1212,7 +1212,9 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.providers.registry import validate_model_interaction
+from realtime_framework.providers.preflight import UnsupportedTokenBudget
+from realtime_framework.providers.preflight import check_episode
+from realtime_framework.providers.preflight import check_token_budget
 from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
@@ -1444,15 +1446,14 @@ def main():
             f"catalog cell {a.model!r} is excluded from maintained benchmark results; "
             "set ALLOW_EXPERIMENTAL_MODEL=1 only for explicitly non-comparable diagnostics"
         )
-    if (
-        a.clock == "token"
-        and tokens_per_frame is not None
-        and not catalog.supports_finite_frame_budget(requested_model_identity["adapter"])
-    ):
-        p.error(
-            f"adapter {requested_model_identity['adapter']!r} cannot report complete usage "
-            "for a finite token clock"
+    try:
+        check_token_budget(
+            requested_model_identity["adapter"],
+            clock_mode=a.clock,
+            tokens_per_frame=tokens_per_frame,
         )
+    except UnsupportedTokenBudget as exc:
+        p.error(str(exc))
     run_id = a.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1555,12 +1556,8 @@ def main():
                 fps=a.fps,
                 reasoning_effort=reasoning_effort,
             )
-        validate_model_interaction(
-            cfg.adapter_type,
-            clock_mode=a.clock,
-            fps=a.fps,
-            tokens_per_frame=tokens_per_frame,
-        )
+        # Every pre-run rule on the model, clock and task, before any of them is built.
+        check_episode(cfg, clock_mode=a.clock, task=ctask)
         # The agent borrows the episode trace's write entry; the runner still opens and closes it.
         agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
         agent = create_agent(cfg, log_dir=run_dir, trace=agent_trace)

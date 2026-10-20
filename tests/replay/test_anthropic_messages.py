@@ -257,7 +257,8 @@ def _header(config: ModelConfig, scenario: str, tokens_per_frame, max_ticks) -> 
 
 
 def test_long_scenario_token_clock(tmp_path, monkeypatch):
-    assert catalog.supports_finite_frame_budget("anthropic_messages")  # runner.py:1444-1452
+    # runner.py:1449-1456
+    assert catalog.adapter_class("anthropic_messages").capabilities.finite_frame_budget
     config, scripted, records = _run(
         tmp_path,
         monkeypatch,

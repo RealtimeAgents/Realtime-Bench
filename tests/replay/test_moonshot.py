@@ -60,7 +60,8 @@ def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame):
     )
     assert config.api_base_url == DEFAULT_MOONSHOT_BASE_URL
     if tokens_per_frame is not None:
-        assert catalog.supports_finite_frame_budget(config.adapter_type)  # runner.py:1444-1452
+        # runner.py:1449-1456
+        assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
     with KimiStub(kimi_replies(steps)) as stub:
         episode = build_episode(
             config,

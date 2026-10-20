@@ -315,13 +315,6 @@ def _driver_class(target: str) -> type:
     return implementation
 
 
-def validate_model_interaction(adapter_type, *, clock_mode, fps, tokens_per_frame=None):
-    """Validate API interaction requirements before starting an episode."""
-    del fps, tokens_per_frame
-    if adapter_class(adapter_type).capabilities.wall_clock_only and clock_mode != "wall":
-        raise ValueError(f"The {adapter_type} API requires a wall clock")
-
-
 # Catalog
 """Load model connection YAMLs and resolve API facts from the registered driver classes.
 
@@ -489,10 +482,6 @@ def vendor(key: str) -> str:
 def python_env(key: str) -> str:
     """Return the Python interpreter configured for model subprocesses."""
     return get(key).python_env
-
-
-def supports_finite_frame_budget(adapter_type: str) -> bool:
-    return adapter_class(adapter_type).capabilities.finite_frame_budget
 
 
 def benchmark_eligible(key: str) -> bool:

@@ -985,15 +985,6 @@ class DefaultHarness(VisionAgentBase):
 
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
-        capabilities = self.driver.capabilities
-        if (
-            capabilities.max_video_fps is not None
-            and float(self.config.fps) > capabilities.max_video_fps
-        ):
-            raise ValueError(
-                f"{capabilities.protocol_family} supports at most "
-                f"{capabilities.max_video_fps:g} fps; requested {self.config.fps:g}"
-            )
         self._pending_feedback = ""
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.

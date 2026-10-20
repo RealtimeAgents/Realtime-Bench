@@ -407,20 +407,10 @@ class LiteLLMDriver:
     def __init__(self, config):
         self.config = config
         deployment = self.deployment
-        if self.compat.output_limit_required and config.native_output_limit is None:
-            raise ValueError(
-                f"The {config.adapter_type} API requires {self.compat.output_limit_param}; "
-                "declare endpoint.native_output_limit in the model YAML"
-            )
         if not self.pressure_archive:
             # The runtime records physical context checks only for drivers that perform them.
             self.request_context_status = None
         if deployment.gateway == "openai_compatible":
-            if (
-                config.context_window_tokens is not None
-                and config.context_reserve_tokens >= config.context_window_tokens
-            ):
-                raise ValueError("Context capacity must exceed generation reserve")
             self.base_url = validate_endpoint(config.api_base_url)
         else:
             self.base_url = (
@@ -866,8 +856,6 @@ class LiteLLMDriver:
     # ---- complete responses ----------------------------------------------------------------
 
     async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        if self.deployment.gateway == "litellm" and request.clock_mode != "wall":
-            raise ValueError("Direct LiteLLM models require wall-clock evaluation in default mode")
         await asyncio.to_thread(pace_request)
         raw = {}
         # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
