@@ -695,7 +695,9 @@ def _probe(kind: str, environ: dict, request: dict, *, scratch: Path, python=sys
 
 
 def catalog_models() -> list[str]:
-    return sorted(path.stem for path in (ROOT / "configs" / "models").glob("*.yaml"))
+    from realtime_framework.providers.registry import MODELS_DIR
+
+    return sorted(path.stem for path in MODELS_DIR.glob("*.yaml"))
 
 
 def suite_tasks(suite: str = "public") -> list[str]:

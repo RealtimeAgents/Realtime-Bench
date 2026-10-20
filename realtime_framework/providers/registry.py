@@ -80,10 +80,10 @@ from functools import lru_cache
 
 _LITELLM = "realtime_framework.providers.litellm:"
 
-# The adapter_type of every ModelConfig is one of these keys, each naming its driver class
-# ("package.module:Class"), imported only when the API is selected. The class declares the API's
-# capabilities, deployment and per-model defaults; adding a protocol means adding a driver module
-# and one row here.
+# The adapter_type of a ModelConfig is one of these keys, each naming its driver class
+# ("package.module:Class"), imported only when the API is selected, or an external driver (below).
+# The class declares the API's capabilities, deployment and per-model defaults; adding a protocol
+# means adding a driver module and one row here.
 APIS = {
     "litellm": _LITELLM + "DirectLiteLLMDriver",
     "chat_completions": _LITELLM + "ChatCompletionsDriver",
@@ -98,6 +98,16 @@ APIS = {
     "openai_decisions": "realtime_framework.providers.openai_decisions:OpenAIDecisionsClient",
 }
 DEFAULT_EFFORTS = ["provider_default", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+# A model YAML may instead name a driver class kept outside the repository, as endpoint.api
+# "package.module:Class"; registered names contain no colon.
+_EXTERNAL_DRIVER = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
+)
+
+
+def is_external_driver(api) -> bool:
+    """Whether an API names an external driver class ("package.module:Class")."""
+    return isinstance(api, str) and _EXTERNAL_DRIVER.fullmatch(api) is not None
 
 
 def api_reasoning_efforts(api: str) -> list[str]:
@@ -179,7 +189,18 @@ def validate_connection(connection):
         elif not isinstance(value, str) or not value.strip() or any(c in value for c in "\n\r\t\0"):
             raise ValueError(f"endpoint.{name} must be a nonempty single-line string")
     api = settings.get("api", "chat_completions")
-    if api not in APIS:
+    if is_external_driver(api):
+        # A framework class is reached by its registered name, which keeps the name's rules.
+        module = api.partition(":")[0]
+        if module.partition(".")[0] == "realtime_framework":
+            names = [name for name, target in APIS.items() if target == api]
+            use = f"endpoint.api: {names[0]}" if names else f"one of {list(APIS)}"
+            raise ValueError(f"endpoint.api {api!r} is a framework class; use {use}")
+    elif ":" in api:
+        raise ValueError(
+            f'endpoint.api {api!r} is neither a registered API nor a "package.module:Class" target'
+        )
+    elif api not in APIS:
         raise ValueError(f"endpoint.api must be one of {list(APIS)}")
     if api == "litellm" and not all(settings["model"].partition("/")[::2]):
         raise ValueError("LiteLLM models use provider/model-id names")
@@ -249,7 +270,10 @@ def load_definitions(directory):
         definition = bridge_definition("remote-vlm")
         definition.update(key=key)
         api = settings.get("api", "chat_completions")
-        driver = adapter_class(api)
+        try:
+            driver = adapter_class(api)
+        except ValueError as exc:  # an external driver that cannot be imported or is incomplete
+            raise ValueError(f"{filename}: endpoint.api {exc}") from exc
         model_defaults = driver.model_defaults.get(settings["model"])
         profile = {} if model_defaults is None else {"defaults": deepcopy(model_defaults)}
         profile.update(CATALOG_POLICY.get((api, settings["model"]), {}))
@@ -288,23 +312,48 @@ def load_definitions(directory):
 
 
 # Factory
-"""Lazy driver resolution: the one lookup of a registered API's driver class.
+"""Lazy driver resolution: the one lookup of an API's driver class, registered or external.
 
 Only the selected implementation is imported, so optional SDKs never affect other APIs.
 """
 
 from importlib import import_module as import_module
 
-from realtime_framework.entity.model import ModelClient
+from realtime_framework.entity.context_policy import PathPolicy, phase1_context_policy
+from realtime_framework.entity.model import Deployment, ModelClient, RealtimeCapabilities
+
+# RealtimeDriver's methods, plus bind_trace, which the harness calls on every driver it builds.
+_DRIVER_METHODS = (
+    "connect",
+    "send_observation",
+    "start_generation",
+    "events",
+    "interrupt",
+    "sync_history",
+    "close",
+    "bind_trace",
+)
+_DRIVER_DECLARATIONS = (
+    ("capabilities", RealtimeCapabilities),
+    ("deployment", Deployment),
+    ("model_defaults", dict),
+)
+# Capability flags whose method the harness or runtime calls. The runtime calls
+# request_context_status whenever the context policy archives under pressure (_check_driver).
+_DECLARED_METHODS = {
+    "classifies_transport_errors": "classify_transport_error",
+    "connection_renewal": "connection_renewal_reason",
+    "maps_output_cap": "transport_output_token_cap",
+}
 
 
 def adapter_class(adapter_type: str) -> type[ModelClient]:
-    """Resolve one registered driver without importing unrelated provider stacks."""
-    try:
-        target = APIS[adapter_type]
-    except KeyError as exc:
-        raise ValueError(f"Unknown adapter type: {adapter_type!r}") from exc
-    return _driver_class(target)
+    """Resolve one driver without importing unrelated provider stacks."""
+    if adapter_type in APIS:
+        return _driver_class(APIS[adapter_type])
+    if is_external_driver(adapter_type):
+        return _external_class(adapter_type)
+    raise ValueError(f"Unknown adapter type: {adapter_type!r}")
 
 
 def _driver_class(target: str) -> type:
@@ -315,13 +364,51 @@ def _driver_class(target: str) -> type:
     return implementation
 
 
+def _external_class(target: str) -> type:
+    """Import an external driver from the current environment and check it under the
+    context-policy row it gets."""
+    module_name, _, class_name = target.partition(":")
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(
+            f"{target!r}: cannot import module {module_name!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+    if not hasattr(module, class_name):
+        raise ValueError(f"{target!r}: module {module_name!r} has no attribute {class_name!r}")
+    driver = getattr(module, class_name)
+    if not isinstance(driver, type):
+        raise ValueError(f"{target!r} is not a class")  # noqa: TRY004
+    _check_driver(target, driver, phase1_context_policy().for_path(target, {}))
+    return driver
+
+
+def _check_driver(target: str, driver: type, policy: PathPolicy) -> None:
+    """Check that a driver class has what the catalog, the pre-run checks, the harness and,
+    under ``policy``, the runtime read from it; registered drivers meet the same contract."""
+    methods = _DRIVER_METHODS
+    if policy.pressure_archive:  # the runtime counts every request against the context window
+        methods += ("request_context_status",)
+    missing = [name for name in methods if not callable(getattr(driver, name, None))]
+    if missing:
+        raise ValueError(f"{target!r} is not a model encoder: missing {', '.join(missing)}")
+    for name, kind in _DRIVER_DECLARATIONS:
+        if not isinstance(getattr(driver, name, None), kind):
+            declaration = f"a {kind.__name__} class attribute"
+            raise ValueError(f"{target!r} declares no {name} ({declaration})")  # noqa: TRY004
+    for flag, method in _DECLARED_METHODS.items():
+        if getattr(driver.capabilities, flag) and not callable(getattr(driver, method, None)):
+            raise ValueError(f"{target!r} declares {flag} but has no {method}()")
+
+
 # Catalog
-"""Load model connection YAMLs and resolve API facts from the registered driver classes.
+"""Load model connection YAMLs and resolve API facts from the driver classes.
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
 catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
-connections and reasoning effort. The loader imports the driver module of each API it reads;
-the LiteLLM and Gemini SDKs are imported only when a driver is constructed.
+connections and reasoning effort. The loader imports the driver module of each API it reads,
+an external driver's included; the LiteLLM and Gemini SDKs are imported only when a driver is
+constructed.
 """
 
 import difflib as difflib
@@ -334,6 +421,8 @@ from realtime_framework.entity.config import ModelConfig
 
 # All maintained runs omit temperature and use the provider default.
 TEMPERATURE_POLICIES = frozenset({"provider_default"})
+# The connection YAMLs, the user's own (external drivers included) beside the built-in presets.
+MODELS_DIR = PROJECT_ROOT / "configs" / "models"
 
 
 from realtime_framework.entity.model import ModelSpec as ModelEntry
@@ -348,9 +437,8 @@ def _load_entries() -> list[ModelEntry]:
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    models_dir = root / "configs" / "models"
     out: list[ModelEntry] = []
-    definitions = load_definitions(models_dir)
+    definitions = load_definitions(MODELS_DIR)
     definitions += [
         (key, bridge_definition(key)) for key in ("remote-vlm", "litellm-vlm")
     ]

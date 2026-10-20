@@ -1,0 +1,252 @@
+"""A driver kept outside the repository, selected by one model YAML.
+
+The package in external_template/ is copied into a temporary directory that is put on sys.path, as
+installing it into the run's environment would, and its YAML goes into a temporary models
+directory in place of configs/models (providers/registry.py MODELS_DIR). Nothing in the repository
+names the driver.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+
+import realtime_framework.providers.registry as catalog
+from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.providers.preflight import (
+    UnsupportedTokenBudget,
+    check_episode,
+    check_token_budget,
+)
+
+from .frames import ReplayTask
+
+TEMPLATE = Path(__file__).with_name("external_template")
+TARGET = "rtb_ext.chat:ExternalChatDriver"
+MODEL_KEY = "ext-replay"
+KEY_ENV = "REPLAY_EXT_API_KEY"
+WEB_TASK = "rt_waitlist_fit"  # a public task, for the Harbor trial worker
+FORM = '"package.module:Class"'
+
+
+@pytest.fixture
+def external(tmp_path, monkeypatch):
+    """The driver package on sys.path and an empty models directory for its YAML."""
+    saved = dict(os.environ)  # the trial worker writes os.environ (evaluation/_trial.py:101-102)
+    site = tmp_path / "site"
+    shutil.copytree(TEMPLATE, site)
+    monkeypatch.syspath_prepend(str(site))
+    models = tmp_path / "models"
+    models.mkdir()
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+    monkeypatch.setenv(KEY_ENV, "replay-external-key")
+    catalog._catalog_entries.cache_clear()
+    yield SimpleNamespace(site=site, models=models)
+    catalog._catalog_entries.cache_clear()
+    unload()
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+def unload():
+    """Forget the imported driver modules, as a new interpreter would."""
+    for name in [name for name in sys.modules if name.partition(".")[0] in ("rtb_ext", "rtb_one")]:
+        del sys.modules[name]
+
+
+def write_model(models: Path, api: str = TARGET, key: str = MODEL_KEY, **endpoint) -> Path:
+    fields = {
+        "api": api,
+        "model": "replay-vlm",
+        "base_url": "http://127.0.0.1:9/v1",
+        "api_key_env": KEY_ENV,
+        "native_output_limit": 4096,
+        **endpoint,
+    }
+    path = models / f"{key}.yaml"
+    path.write_text(yaml.safe_dump({"endpoint": fields, "reasoning_effort": "low"}))
+    return path
+
+
+def fails(call, message, kind=ValueError):
+    with pytest.raises(kind) as caught:
+        call()
+    assert type(caught.value) is kind
+    assert str(caught.value) == message
+
+
+# Loading and the pre-run checks read the class's own declarations.
+
+
+def test_preflight_reads_the_external_declaration(external, capsys):
+    write_model(external.models)
+    entry = catalog.get(MODEL_KEY)
+    assert (entry.adapter_type, entry.family, entry.provider, entry.key_env) == (
+        TARGET, "vlm", "replay-external", KEY_ENV,
+    )
+    assert (entry.native_output_limit, entry.native_output_limit_source) == (4096, "endpoint")
+    assert entry.reasoning_efforts == (*catalog.DEFAULT_EFFORTS, "fixed")
+    assert entry.benchmark_eligible and entry.comparison_scope == "model"
+    assert catalog.vendor(MODEL_KEY) == "replay"
+    config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort="low")
+    assert config.adapter_type == TARGET and config.api_key_env == KEY_ENV
+
+    fails(
+        lambda: check_token_budget(TARGET, clock_mode="token", tokens_per_frame=256),
+        f"adapter {TARGET!r} cannot report complete usage for a finite token clock",
+        UnsupportedTokenBudget,
+    )
+    fails(
+        lambda: check_episode(config, clock_mode="token", task=ReplayTask(), env_fps=1.0),
+        f"The {TARGET} API requires a wall clock",
+    )
+    check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=1.0)
+
+    from realtime_framework.evaluation._trial import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--catalog-model", MODEL_KEY, "--task", WEB_TASK, "--clock", "token", "--dry-run"])
+    assert caught.value.code == 2
+    assert capsys.readouterr().err.strip().endswith(f"The {TARGET} API requires a wall clock")
+
+
+# Refused at load: catalog.get is the first lookup of every entry point.
+
+
+@pytest.mark.parametrize(
+    "api, message",
+    [
+        (
+            "rtb_missing.chat:ExternalChatDriver",
+            (
+                "'rtb_missing.chat:ExternalChatDriver': cannot import module 'rtb_missing.chat': "
+                "ModuleNotFoundError: No module named 'rtb_missing'"
+            ),
+        ),
+        (
+            "rtb_ext.chat:Missing",
+            "'rtb_ext.chat:Missing': module 'rtb_ext.chat' has no attribute 'Missing'",
+        ),
+        ("rtb_ext.broken:not_a_class", "'rtb_ext.broken:not_a_class' is not a class"),
+        (
+            "rtb_ext.broken:NotAnEncoder",
+            (
+                "'rtb_ext.broken:NotAnEncoder' is not a model encoder: missing connect, "
+                "send_observation, start_generation, events, interrupt, sync_history, close, "
+                "bind_trace, request_context_status"
+            ),
+        ),
+        # The chat_completions context policy archives under pressure.
+        (
+            "rtb_ext.broken:NoContextStatus",
+            (
+                "'rtb_ext.broken:NoContextStatus' is not a model encoder: missing "
+                "request_context_status"
+            ),
+        ),
+        (
+            "rtb_ext.broken:NoCapabilities",
+            (
+                "'rtb_ext.broken:NoCapabilities' declares no capabilities "
+                "(a RealtimeCapabilities class attribute)"
+            ),
+        ),
+        (
+            "rtb_ext.broken:NoDeployment",
+            "'rtb_ext.broken:NoDeployment' declares no deployment (a Deployment class attribute)",
+        ),
+        (
+            "rtb_ext.broken:NoModelDefaults",
+            "'rtb_ext.broken:NoModelDefaults' declares no model_defaults (a dict class attribute)",
+        ),
+        (
+            "rtb_ext.broken:ClassifierFlagOnly",
+            (
+                "'rtb_ext.broken:ClassifierFlagOnly' declares classifies_transport_errors but has "
+                "no classify_transport_error()"
+            ),
+        ),
+        (
+            "rtb_ext.broken:RenewalFlagOnly",
+            (
+                "'rtb_ext.broken:RenewalFlagOnly' declares connection_renewal but has no "
+                "connection_renewal_reason()"
+            ),
+        ),
+        (
+            "rtb_ext.broken:OutputCapFlagOnly",
+            (
+                "'rtb_ext.broken:OutputCapFlagOnly' declares maps_output_cap but has no "
+                "transport_output_token_cap()"
+            ),
+        ),
+    ],
+    ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-context-status",
+         "no-capabilities", "no-deployment", "no-model-defaults", "classifier-flag",
+         "renewal-flag", "output-cap-flag"],
+)
+def test_external_driver_rejected(external, api, message):
+    write_model(external.models, api, key="ext-bad")
+    fails(lambda: catalog.get("ext-bad"), f"ext-bad.yaml: endpoint.api {message}")
+    # The runner's --adapter path (evaluation/runner.py:1550-1556) gets the same message.
+    fails(lambda: catalog.adapter_class(api), message)
+
+
+@pytest.mark.parametrize(
+    "api, endpoint, message",
+    [
+        *[
+            (api, {}, f"endpoint.api {api!r} is neither a registered API nor a {FORM} target")
+            for api in ("rtb_ext.chat:", "rtb_ext/chat:ExternalChatDriver", "a:b:c")
+        ],
+        (
+            "realtime_framework.providers.litellm:OpenRouterDriver",
+            {},
+            (
+                "endpoint.api 'realtime_framework.providers.litellm:OpenRouterDriver' is a "
+                "framework class; use endpoint.api: openrouter"
+            ),
+        ),
+        (
+            "realtime_framework.providers.litellm:LiteLLMDriver",
+            {},
+            (
+                "endpoint.api 'realtime_framework.providers.litellm:LiteLLMDriver' is a "
+                f"framework class; use one of {list(catalog.APIS)}"
+            ),
+        ),
+        # The rules of registered names stay theirs.
+        (TARGET, {"upstream_provider": "x"}, "upstream_provider is only valid for OpenRouter APIs"),
+        (
+            TARGET,
+            {"stream": False},
+            "stream/include_usage are transport options for chat_completions only",
+        ),
+    ],
+    ids=["empty-class", "path", "two-colons", "registered", "unregistered", "upstream", "stream"],
+)
+def test_external_endpoint_rejected(external, api, endpoint, message):
+    write_model(external.models, api, key="ext-bad", **endpoint)
+    fails(lambda: catalog.get("ext-bad"), message)
+
+
+def test_registered_drivers_meet_the_contract():
+    """External drivers are checked against the contract every registered driver meets, each
+    under its own context-policy row."""
+    policy = phase1_context_policy()
+    for api, target in catalog.APIS.items():
+        catalog._check_driver(target, catalog.adapter_class(api), policy.for_path(api, {}))
+
+
+def test_context_policy_of_an_external_driver():
+    """An external driver gets the chat_completions row, the plain stateless chat values."""
+    policy = phase1_context_policy()
+    assert policy.for_path(TARGET, {}) is policy.paths["chat_completions"]
+
+
