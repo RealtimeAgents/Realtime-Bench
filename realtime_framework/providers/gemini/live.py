@@ -10,6 +10,7 @@ import time as time
 from dataclasses import dataclass, field
 
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.model import GenerationHandle
@@ -152,6 +153,13 @@ class GeminiLiveDriver:
         action_channel="function_call",
         classifies_transport_errors=True,
         connection_renewal=True,
+    )
+    deployment = Deployment(
+        family="streaming",
+        provider="gemini",
+        key_env="GEMINI_API_KEY",
+        vendor="google",
+        litellm_provider="gemini",
     )
     model_defaults = {
         "gemini-3.1-flash-live-preview": {

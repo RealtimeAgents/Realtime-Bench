@@ -21,6 +21,7 @@ from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
 from realtime_framework.providers.registry import load_project_secrets
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
@@ -193,6 +194,13 @@ class OpenAIRealtimeDriver:
         terminal_output_usage=True,
         classifies_transport_errors=True,
         maps_output_cap=True,
+    )
+    deployment = Deployment(
+        family="streaming",
+        provider="openai",
+        key_env="OPENAI_API_KEY",
+        vendor="openai",
+        litellm_provider="openai",
     )
     model_defaults = {}
 

@@ -38,6 +38,7 @@ from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
@@ -337,12 +338,11 @@ class ChatProtocol:
     surface_tool_calls: bool = False
 
 
-@dataclass(frozen=True)
-class ChatDeployment:
+@dataclass(frozen=True, kw_only=True)
+class ChatDeployment(Deployment):
     """Where one API's requests go: gateway, address, key and route."""
 
     gateway: str
-    default_key_env: str | None
     default_base_url: str | None = None
     base_url_env: str | None = None
     # OpenRouter session id, provider pin, attribution headers and response route checks.
@@ -447,7 +447,7 @@ class LiteLLMDriver:
         return litellm
 
     def _resolve_key(self) -> str | None:
-        variable = self.config.api_key_env or self.deployment.default_key_env
+        variable = self.config.api_key_env or self.deployment.key_env
         key = self.config.api_key or (os.environ.get(variable) if variable else None)
         if key:
             return key
@@ -1081,8 +1081,11 @@ class OpenRouterDriver(LiteLLMDriver):
     capabilities = _STREAMING_CHAT
     protocol = ChatProtocol(sdk_provider="openrouter", reasoning_param="openrouter")
     deployment = ChatDeployment(
+        family="vlm",
+        provider="openrouter",
+        key_env="OPENROUTER_API_KEY",
+        litellm_provider="openrouter",
         gateway="openrouter",
-        default_key_env="OPENROUTER_API_KEY",
         default_base_url=DEFAULT_OPENROUTER_BASE_URL,
         base_url_env="OPENROUTER_BASE_URL",
         pin_route=True,
@@ -1094,8 +1097,12 @@ class MoonshotDriver(LiteLLMDriver):
     capabilities = replace(_STREAMING_CHAT, protocol_family="moonshot_chat")
     protocol = ChatProtocol(sdk_provider="moonshot", client="openai", usage="kimi")
     deployment = ChatDeployment(
+        family="vlm",
+        provider="moonshot",
+        key_env="MOONSHOT_API_KEY",
+        vendor="moonshot",
+        litellm_provider="moonshot",
         gateway="kimi_compatible",
-        default_key_env="MOONSHOT_API_KEY",
         default_base_url=DEFAULT_MOONSHOT_BASE_URL,
         base_url_env="MOONSHOT_BASE_URL",
     )
@@ -1112,8 +1119,12 @@ class AnthropicMessagesDriver(LiteLLMDriver):
         usage="anthropic",
     )
     deployment = ChatDeployment(
+        family="vlm",
+        provider="anthropic",
+        key_env="ANTHROPIC_API_KEY",
+        vendor="anthropic",
+        litellm_provider="anthropic",
         gateway="anthropic",
-        default_key_env="ANTHROPIC_API_KEY",
         default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
     )
     compat = ChatCompat(cache_breakpoint="always", output_limit_required=True)
@@ -1135,8 +1146,10 @@ class ChatCompletionsDriver(LiteLLMDriver):
         surface_tool_calls=True,
     )
     deployment = ChatDeployment(
+        family="vlm",
+        provider="compatible",
+        key_env="OPENAI_API_KEY",
         gateway="openai_compatible",
-        default_key_env="OPENAI_API_KEY",
         require_api_key=False,
     )
     compat = ChatCompat(strip_image_detail=True)
@@ -1152,7 +1165,14 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         wall_clock_only=True,
     )
     protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
-    deployment = ChatDeployment(gateway="litellm", default_key_env=None, require_api_key=False)
+    deployment = ChatDeployment(
+        family="vlm",
+        provider="litellm",
+        key_env=None,
+        litellm_provider="",
+        gateway="litellm",
+        require_api_key=False,
+    )
     compat = ChatCompat()
     preserve_reasoning_history = True
     assistant_turn_ref = True

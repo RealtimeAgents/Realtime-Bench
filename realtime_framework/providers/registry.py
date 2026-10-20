@@ -75,77 +75,27 @@ from urllib.parse import urlsplit as urlsplit
 
 import yaml
 
-from dataclasses import dataclass as dataclass
 from functools import lru_cache
-
-
-@dataclass(frozen=True)
-class ApiSpec:
-    """One registered model API: its lazy driver target and catalog/runner capabilities."""
-
-    driver: str  # "package.module:Class"; imported only when the API is selected
-    family: str
-    provider: str
-    key_env: str | None  # default credential variable
-    finite_frame_budget: bool = True  # reports complete usage for a finite token clock
-    wall_clock_only: bool = False
-    endpoint: bool = True  # selectable as endpoint.api in a model YAML
-    action_channel: str = "text_json"  # static driver capability used for harness selection
-    vendor: str | None = None  # model maker, when the API's model ids carry no vendor prefix
-    # LiteLLM provider whose bundled model map supplies native output limits; "" means the model
-    # id carries its own provider prefix, None means the endpoint must declare any limit.
-    litellm_provider: str | None = None
-    # False: the driver sends no reasoning setting, so `fixed` is the only truthful effort label.
-    reasoning_effort: bool = True
 
 
 _LITELLM = "realtime_framework.providers.litellm:"
 
-# The adapter_type of every ModelConfig is one of these keys. Adding a protocol means adding a
-# driver module and one row here; the harness selects behavior from driver capabilities.
+# The adapter_type of every ModelConfig is one of these keys, each naming its driver class
+# ("package.module:Class"), imported only when the API is selected. The class declares the API's
+# capabilities, deployment and per-model defaults; adding a protocol means adding a driver module
+# and one row here.
 APIS = {
-    "litellm": ApiSpec(
-        _LITELLM + "DirectLiteLLMDriver", "vlm", "litellm", None,
-        finite_frame_budget=False, wall_clock_only=True, litellm_provider="",
-    ),
-    "chat_completions": ApiSpec(
-        _LITELLM + "ChatCompletionsDriver", "vlm", "compatible", "OPENAI_API_KEY",
-        finite_frame_budget=False, wall_clock_only=True,
-    ),
-    "openrouter": ApiSpec(
-        _LITELLM + "OpenRouterDriver", "vlm", "openrouter", "OPENROUTER_API_KEY",
-        litellm_provider="openrouter",
-    ),
-    "anthropic_messages": ApiSpec(
-        _LITELLM + "AnthropicMessagesDriver", "vlm", "anthropic", "ANTHROPIC_API_KEY",
-        vendor="anthropic", litellm_provider="anthropic",
-    ),
-    "moonshot": ApiSpec(
-        _LITELLM + "MoonshotDriver", "vlm", "moonshot", "MOONSHOT_API_KEY", vendor="moonshot",
-        litellm_provider="moonshot",
-    ),
-    "openai_realtime": ApiSpec(
-        "realtime_framework.providers.openai_realtime:OpenAIRealtimeDriver", "streaming", "openai",
-        "OPENAI_API_KEY", vendor="openai", litellm_provider="openai",
-    ),
-    "gemini_live": ApiSpec(
-        "realtime_framework.providers.gemini.live:GeminiLiveDriver", "streaming", "gemini", "GEMINI_API_KEY",
-        action_channel="function_call", vendor="google", litellm_provider="gemini",
-    ),
+    "litellm": _LITELLM + "DirectLiteLLMDriver",
+    "chat_completions": _LITELLM + "ChatCompletionsDriver",
+    "openrouter": _LITELLM + "OpenRouterDriver",
+    "anthropic_messages": _LITELLM + "AnthropicMessagesDriver",
+    "moonshot": _LITELLM + "MoonshotDriver",
+    "openai_realtime": "realtime_framework.providers.openai_realtime:OpenAIRealtimeDriver",
+    "gemini_live": "realtime_framework.providers.gemini.live:GeminiLiveDriver",
     # OpenRouter Decisions API (choice questions), wall clock only.
-    "jev_decisions": ApiSpec(
-        "realtime_framework.providers.jev.decisions:JevDecisionsClient", "streaming", "openrouter",
-        "OPENROUTER_API_KEY",
-        finite_frame_budget=False, wall_clock_only=True,
-        action_channel="choice", reasoning_effort=False,
-    ),
+    "jev_decisions": "realtime_framework.providers.jev.decisions:JevDecisionsClient",
     # OpenAI Decisions models through OpenRouter's Decisions API, wall clock only.
-    "openai_decisions": ApiSpec(
-        "realtime_framework.providers.openai_decisions:OpenAIDecisionsClient",
-        "vlm", "openrouter", "OPENROUTER_API_KEY",
-        finite_frame_budget=False, wall_clock_only=True,
-        action_channel="choice", reasoning_effort=False,
-    ),
+    "openai_decisions": "realtime_framework.providers.openai_decisions:OpenAIDecisionsClient",
 }
 DEFAULT_EFFORTS = ["provider_default", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
@@ -155,7 +105,9 @@ def api_reasoning_efforts(api: str) -> list[str]:
 
     `fixed` records a model whose reasoning is not configurable, so no setting is sent.
     """
-    return [*DEFAULT_EFFORTS, "fixed"] if APIS[api].reasoning_effort else ["fixed"]
+    if adapter_class(api).capabilities.accepts_reasoning_effort:
+        return [*DEFAULT_EFFORTS, "fixed"]
+    return ["fixed"]
 
 
 @lru_cache(maxsize=1)
@@ -177,7 +129,7 @@ def _litellm_model_map() -> dict:
 
 def litellm_output_limit(api: str, model: str) -> int | None:
     """Return LiteLLM's max_output_tokens for an API's model id, or None when unlisted."""
-    provider = APIS[api].litellm_provider
+    provider = adapter_class(api).deployment.litellm_provider
     if provider is None:
         return None
     if not provider:
@@ -227,9 +179,8 @@ def validate_connection(connection):
         elif not isinstance(value, str) or not value.strip() or any(c in value for c in "\n\r\t\0"):
             raise ValueError(f"endpoint.{name} must be a nonempty single-line string")
     api = settings.get("api", "chat_completions")
-    if api not in APIS or not APIS[api].endpoint:
-        choices = [name for name, spec in APIS.items() if spec.endpoint]
-        raise ValueError(f"endpoint.api must be one of {choices}")
+    if api not in APIS:
+        raise ValueError(f"endpoint.api must be one of {list(APIS)}")
     if api == "litellm" and not all(settings["model"].partition("/")[::2]):
         raise ValueError("LiteLLM models use provider/model-id names")
     if api == "chat_completions" and "base_url" not in settings:
@@ -263,28 +214,16 @@ def validate_connection(connection):
 
 def bridge_definition(key):
     """Placeholder entry for the launcher's inline-endpoint keys (remote-vlm, litellm-vlm)."""
-    if key == "litellm-vlm":
-        return {
-            "key": key,
-            "family": "vlm",
-            "provider": "litellm",
-            "adapter_type": "litellm",
-            "model_name": key,
-            "key_env": None,
-            "reasoning_efforts": api_reasoning_efforts("litellm"),
-            "defaults": {
-                "temperature_policy": "provider_default",
-                "reasoning_effort": "provider_default",
-            },
-        }
+    api = "litellm" if key == "litellm-vlm" else "chat_completions"
+    deployment = adapter_class(api).deployment
     return {
         "key": key,
-        "family": "vlm",
-        "provider": "compatible",
-        "adapter_type": "chat_completions",
+        "family": deployment.family,
+        "provider": deployment.provider,
+        "adapter_type": api,
         "model_name": key,
-        "key_env": "OPENAI_API_KEY",
-        "reasoning_efforts": api_reasoning_efforts("chat_completions"),
+        "key_env": deployment.key_env,
+        "reasoning_efforts": api_reasoning_efforts(api),
         "defaults": {
             "temperature_policy": "provider_default",
             "reasoning_effort": "provider_default",
@@ -310,17 +249,17 @@ def load_definitions(directory):
         definition = bridge_definition("remote-vlm")
         definition.update(key=key)
         api = settings.get("api", "chat_completions")
-        spec = APIS[api]
-        model_defaults = adapter_class(api).model_defaults.get(settings["model"])
+        driver = adapter_class(api)
+        model_defaults = driver.model_defaults.get(settings["model"])
         profile = {} if model_defaults is None else {"defaults": deepcopy(model_defaults)}
         profile.update(CATALOG_POLICY.get((api, settings["model"]), {}))
         definition.update(
             adapter_type=api,
-            family=spec.family,
-            provider=spec.provider,
+            family=driver.deployment.family,
+            provider=driver.deployment.provider,
             model_name=settings["model"],
             api_base_url=settings.get("base_url"),
-            key_env=settings.get("api_key_env", spec.key_env),
+            key_env=settings.get("api_key_env", driver.deployment.key_env),
             reasoning_efforts=api_reasoning_efforts(api),
             **profile,
         )
@@ -336,7 +275,8 @@ def load_definitions(directory):
         if api in {"openrouter", "openai_decisions"}:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
         effort = value.get(
-            "reasoning_effort", "provider_default" if spec.reasoning_effort else "fixed"
+            "reasoning_effort",
+            "provider_default" if driver.capabilities.accepts_reasoning_effort else "fixed",
         )
         if not isinstance(effort, str) or effort not in definition["reasoning_efforts"]:
             raise ValueError(
@@ -348,7 +288,7 @@ def load_definitions(directory):
 
 
 # Factory
-"""Lazy driver resolution and API-level interaction rules.
+"""Lazy driver resolution: the one lookup of a registered API's driver class.
 
 Only the selected implementation is imported, so optional SDKs never affect other APIs.
 """
@@ -358,16 +298,13 @@ from importlib import import_module as import_module
 from realtime_framework.entity.model import ModelClient
 
 
-def api_spec(adapter_type: str) -> ApiSpec:
-    try:
-        return APIS[adapter_type]
-    except KeyError as exc:
-        raise ValueError(f"Unknown adapter type: {adapter_type!r}") from exc
-
-
 def adapter_class(adapter_type: str) -> type[ModelClient]:
     """Resolve one registered driver without importing unrelated provider stacks."""
-    return _driver_class(api_spec(adapter_type).driver)
+    try:
+        target = APIS[adapter_type]
+    except KeyError as exc:
+        raise ValueError(f"Unknown adapter type: {adapter_type!r}") from exc
+    return _driver_class(target)
 
 
 def _driver_class(target: str) -> type:
@@ -378,23 +315,20 @@ def _driver_class(target: str) -> type:
     return implementation
 
 
-adapter_capabilities = api_spec
-
-
 def validate_model_interaction(adapter_type, *, clock_mode, fps, tokens_per_frame=None):
     """Validate API interaction requirements before starting an episode."""
     del fps, tokens_per_frame
-    spec = api_spec(adapter_type)
-    if spec.wall_clock_only and clock_mode != "wall":
+    if adapter_class(adapter_type).capabilities.wall_clock_only and clock_mode != "wall":
         raise ValueError(f"The {adapter_type} API requires a wall clock")
 
 
 # Catalog
-"""Load model connection YAMLs and resolve internal API capabilities.
+"""Load model connection YAMLs and resolve API facts from the registered driver classes.
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
 catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
-connections and reasoning effort. No optional model SDK is imported by this loader.
+connections and reasoning effort. The loader imports the driver module of each API it reads;
+the LiteLLM and Gemini SDKs are imported only when a driver is constructed.
 """
 
 import difflib as difflib
@@ -549,7 +483,7 @@ def vendor(key: str) -> str:
     entry = get(key)
     if "/" in entry.model_name:
         return entry.model_name.split("/", 1)[0]
-    return APIS[entry.adapter_type].vendor or entry.provider
+    return adapter_class(entry.adapter_type).deployment.vendor or entry.provider
 
 
 def python_env(key: str) -> str:
@@ -558,7 +492,7 @@ def python_env(key: str) -> str:
 
 
 def supports_finite_frame_budget(adapter_type: str) -> bool:
-    return adapter_capabilities(adapter_type).finite_frame_budget
+    return adapter_class(adapter_type).capabilities.finite_frame_budget
 
 
 def benchmark_eligible(key: str) -> bool:

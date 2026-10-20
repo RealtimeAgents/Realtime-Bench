@@ -83,6 +83,19 @@ class RealtimeCapabilities:
     interaction_modes: frozenset[str] = frozenset({"turn_based"})
 
 
+@dataclass(frozen=True, kw_only=True)
+class Deployment:
+    """Where a registered API's requests go: catalog labels and the default credential."""
+
+    family: str  # catalog family: streaming | vlm
+    provider: str  # display/grouping label, e.g. openai | openrouter | gemini
+    key_env: str | None  # default credential variable
+    vendor: str | None = None  # model maker, when the API's model ids carry no vendor prefix
+    # LiteLLM provider whose bundled model map supplies native output limits; "" means the model
+    # id carries its own provider prefix, None means the endpoint must declare any limit.
+    litellm_provider: str | None = None
+
+
 @dataclass(frozen=True)
 class SessionSeed:
     system_instruction: str
