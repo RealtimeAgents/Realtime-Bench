@@ -15,7 +15,7 @@ received them. On this wire:
   base64 image source (factory.py:2408-2438), and the system message moves to the top-level
   ``system`` field (litellm/llms/anthropic/chat/transformation.py:1977-1986);
 - thinking is never sent back: its context policy replays no reasoning
-  (entity/context_policy.py:143, 164; harnesses/default/request.py:90).
+  (entity/context_policy.py:148, 169; harnesses/default/request.py:90).
 
 Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay/test_anthropic_messages.py``;
 without it the run is compared with tests/replay/baselines/.
@@ -73,7 +73,7 @@ def anthropic_config(base_url: str) -> ModelConfig:
     This is the only redirect: the deployment reads no base-URL variable
     (providers/litellm.py:1164-1172, 471-475), the driver always passes api_base, which LiteLLM
     prefers to ANTHROPIC_API_BASE (providers/litellm.py:626-627; litellm/main.py:2879-2886), and
-    to_model_config takes no api_base_url override (providers/registry.py:554-559).
+    to_model_config takes no api_base_url override (providers/registry.py:642-647).
     """
     effort = catalog.get(MODEL_KEY).defaults["reasoning_effort"]
     config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort=effort)

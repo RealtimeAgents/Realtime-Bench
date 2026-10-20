@@ -54,7 +54,7 @@ class DecisionsStub:
     @property
     def base_url(self) -> str:
         """A model YAML base_url as the catalog stores it, without a trailing slash
-        (providers/registry.py:201); httpx joins ``decisions`` below it."""
+        (providers/registry.py:222); httpx joins ``decisions`` below it."""
         return f"http://127.0.0.1:{self._server.server_address[1]}/api/alpha"
 
     def load(self, script) -> None:

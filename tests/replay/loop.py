@@ -41,7 +41,7 @@ EXECUTED = {"applied", "wait", "rejected"}
 
 class RecordingTrace:
     """Stands in for EpisodeTrace (runner.py:1466) and keeps each payload as EpisodeTrace
-    serializes it (evaluation/reporting.py:2033-2045)."""
+    serializes it (evaluation/reporting.py:2028-2040)."""
 
     def __init__(self, env: FakeEnvironment):
         self._env = env

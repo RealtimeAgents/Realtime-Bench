@@ -120,7 +120,7 @@ class Normalizer:
 def trajectory(run_dir: Path) -> list[dict]:
     """The agent's trajectory rows, one record each in the order written
     (harnesses/default/harness.py:163-223). The viewer and the reports read them
-    (evaluation/harbor_viewer.py:130, evaluation/reporting.py:1175)."""
+    (evaluation/harbor_viewer.py:130, evaluation/reporting.py:1176)."""
     lines = (run_dir / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()
     return [{"record": "trajectory", "row": json.loads(line)} for line in lines]
 

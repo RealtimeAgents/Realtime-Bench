@@ -155,7 +155,7 @@ class ModelConfig(BaseModel):
 # Settings read from the environment. Each field names its variable and parser; an unset variable
 # keeps the field default. The module that uses a group reads it once, at its import, so the
 # process environment at that moment decides the value (the runtime-config hash reads the same
-# variables again when it is computed: evaluation/config.py:628-630, 670).
+# variables again when it is computed: evaluation/config.py:678-680, 720).
 from typing import ClassVar as ClassVar
 
 

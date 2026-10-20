@@ -48,7 +48,7 @@ API_KEY = "replay-dummy-key"
 # providers/preflight.py:139-144): B is --tokens-per-frame (entity/config.py:33,
 # evaluation/runner.py:1354-1359) and the episode has --max-minutes 5 * 60 * fps ticks
 # (runner.py:1367, 1775). The catalog's native limit for these models is LiteLLM's 65536
-# (providers/registry.py:130-156), so the runtime cap min(65536, (N - t_k) * B) (runner.py:863-889)
+# (providers/registry.py:140-166), so the runtime cap min(65536, (N - t_k) * B) (runner.py:863-889)
 # falls below it from t_k = 45 on and is 61696 at the last decision.
 FPS = 1.0
 TOKENS_PER_FRAME = DEFAULT_TOKENS_PER_FRAME

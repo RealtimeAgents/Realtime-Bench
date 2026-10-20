@@ -26,8 +26,8 @@ SNAPSHOT = Path(__file__).with_name("effective_config_3831f39.json")
 # Keys the reorganization moves out of the export (none: Gemini's history_format stays in
 # provider_options, where ContextPolicy.for_path reads it).
 MOVED: frozenset[str] = frozenset()
-# Variables the catalog, to_model_config or effective_run_config read (providers/registry.py:406-
-# 415, 525-551; evaluation/config.py:422-444, 670). The export runs without them.
+# Variables the catalog, to_model_config or effective_run_config read (providers/registry.py:494-
+# 503, 613-639; evaluation/config.py:423-445, 720). The export runs without them.
 ENVIRONMENT = (
     "BENCHMARK_MODEL",
     "BENCHMARK_BASE_URL",
