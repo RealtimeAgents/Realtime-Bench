@@ -381,15 +381,18 @@ class OpenAIRealtimeDriver:
                 },
             )
 
+    def _connected_session(self) -> _Session:
+        if self._session is None:
+            raise RuntimeError("OpenAI Realtime session is not connected")
+        return self._session
+
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The history ends with this observation's frame.
-        await self._send_all([self._session.core.observe(history)])
+        await self._send_all([self._connected_session().core.observe(history)])
         return {}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
-        if self._conn is None:
-            raise RuntimeError("OpenAI Realtime session is not connected")
-        session = self._session
+        session = self._connected_session()
         # The frame this response answers is the request's newest; its output items join it.
         _, frames = history_frames(request.canonical.items)
         core_generation = session.core.start_generation(frames[-1].id)
