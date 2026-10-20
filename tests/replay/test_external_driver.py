@@ -504,6 +504,10 @@ def test_run_identity_records_the_driver_code(external, tmp_path, monkeypatch, c
     assert edited["source_sha256"] != identity["source_sha256"]
     assert configuration_sha256({**settings, "external_driver": edited}) != configuration
 
+    # So does any other file of the package, such as a prompt the driver reads.
+    (moved / "rtb_ext" / "system_prompt.txt").write_text("Act on the page.\n")
+    assert run_config(config)["external_driver"]["source_sha256"] != edited["source_sha256"]
+
     # A driver module outside any package is hashed alone.
     module = moved / "rtb_one.py"
     module.write_text("from rtb_ext.chat import ExternalChatDriver as Driver\n")
