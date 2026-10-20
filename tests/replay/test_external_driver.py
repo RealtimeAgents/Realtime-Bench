@@ -594,7 +594,8 @@ def resolved_request(monkeypatch, tmp_path, key: str) -> dict:
     environment._runner_environment = lambda extra_env: {}
     request = {
         "model": key, "mode": "default", "catalog_model": key, "suite": "public", "fps": 1,
-        "duration_minutes": 5.0, "seed": 42, "clock": "wall", "stream": True,
+        "model_input_fps": 1, "duration_minutes": 5.0, "seed": 42, "clock": "wall",
+        "stream": True,
     }
     return asyncio.run(environment.resolve(request))
 
