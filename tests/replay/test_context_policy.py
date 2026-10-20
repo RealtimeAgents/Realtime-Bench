@@ -21,15 +21,18 @@ from realtime_framework.harnesses.jev.prompts import (
     MULTIMODAL_CHOICE_PROFILE,
     MULTIMODAL_GAME_CHOICE_PROFILE,
 )
-from realtime_framework.providers.litellm import POLICIES
+from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import APIS, adapter_class
 
 POLICY = phase1_context_policy()
+# The LiteLLM APIs keep their context switches as driver class attributes (litellm.py).
+CHAT_DRIVERS = {
+    api: adapter_class(api) for api in APIS if issubclass(adapter_class(api), LiteLLMDriver)
+}
 
 
 def capabilities(api: str):
-    """LiteLLMDriver takes its capabilities from the wire policy of the API (litellm.py:453-454)."""
-    return POLICIES[api].capabilities if api in POLICIES else adapter_class(api).capabilities
+    return adapter_class(api).capabilities
 
 
 def test_one_path_per_registered_api():
@@ -81,12 +84,12 @@ def test_feedback_placement(api):
 
 def test_replay_and_pressure_sets():
     paths = POLICY.paths
-    # litellm.py:339-343 for the LiteLLM APIs; other drivers have none of these switches.
+    # The LiteLLM drivers' switches; other drivers have none of them.
     assert {api for api, path in paths.items() if path.reasoning_replay} == {
-        api for api, policy in POLICIES.items() if policy.preserve_reasoning_history
+        api for api, driver in CHAT_DRIVERS.items() if driver.preserve_reasoning_history
     }
     assert {api for api, path in paths.items() if path.verbatim_replay} == {
-        api for api, policy in POLICIES.items() if policy.assistant_turn_ref
+        api for api, driver in CHAT_DRIVERS.items() if driver.assistant_turn_ref
     }
     # Decision clients estimate only canonical history (harnesses/jev/driver.py:36-41).
     decisions = {
@@ -96,7 +99,7 @@ def test_replay_and_pressure_sets():
         and capabilities(api).history_replay == "canonical"
     }
     assert {api for api, path in paths.items() if path.pressure_archive} == {
-        api for api, policy in POLICIES.items() if policy.context_status
+        api for api, driver in CHAT_DRIVERS.items() if driver.pressure_archive
     } | decisions
 
 

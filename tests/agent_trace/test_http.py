@@ -33,7 +33,7 @@ from realtime_framework.providers.capture import REDACTED, SECRET_HEADERS
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
-from realtime_framework.providers.litellm import LiteLLMDriver
+from realtime_framework.providers.litellm import ChatCompletionsDriver
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
@@ -292,7 +292,7 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     )
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="tokenize")
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
-    driver = LiteLLMDriver(config)
+    driver = ChatCompletionsDriver(config)
     driver.bind_trace(sink)
     canonical = build_request(
         phase1_context_policy().for_path(config.adapter_type, config.provider_options),

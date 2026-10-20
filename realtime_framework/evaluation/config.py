@@ -695,14 +695,16 @@ def effective_run_config(
         "cdp_transport": "persistent_websocket_explicit_probe_preserves_default_target_v2",
         "environment_overrides": environment,
     }
-    from realtime_framework.providers.registry import APIS, LITELLM_DRIVER
+    from realtime_framework.providers.litellm import LiteLLMDriver
+    from realtime_framework.providers.registry import adapter_class
 
-    if adapter_type in APIS and APIS[adapter_type].driver == LITELLM_DRIVER:
+    driver = adapter_class(adapter_type)
+    if issubclass(driver, LiteLLMDriver):
         from importlib.metadata import version as version
 
-        streamed = adapter_type != "litellm" and (
-            adapter_type != "chat_completions" or model_config.get("chat_stream", True)
-        )
+        streamed = driver.protocol.stream
+        if streamed is None:
+            streamed = model_config.get("chat_stream", True)
         config["provider_transport"] = (
             "litellm_raw_provider_usage_v1"
             if streamed
@@ -711,11 +713,9 @@ def effective_run_config(
         config["provider_sdk_versions"] = {
             package: version(package) for package in ("litellm", "openai")
         }
-        from realtime_framework.providers.litellm import POLICIES
-
         # Requests without a decision cap send the native limit, or omit the parameter.
         config["provider_output_limit"] = {
-            "parameter": POLICIES[adapter_type].output_limit_param,
+            "parameter": driver.compat.output_limit_param,
             "uncapped_value": model_config.get("native_output_limit") or "provider_default",
         }
     if mode is not None:
