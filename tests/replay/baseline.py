@@ -35,12 +35,16 @@ REAL_TIME_FIELDS = frozenset(
         "provider_stream_started_monotonic_ns",
         # ToolRuntime.inspect (sandbox/observation/som.py:677, 713, 728)
         "tool_execution_latency_s",
+        # the retry backoff the harness sleeps for real (harnesses/default/harness.py:1248-1253,
+        # 1270-1271), jittered by the uuid4 generation id (entity/model.py:332-336)
+        "transport_reconnect_backoff_s",
     }
 )
 RANDOM_IDS = (
     ("generation", re.compile(r"turn-\d+-[0-9a-f]{12}")),  # uuid4: harness.py:1202
     ("inspection", re.compile(r"inspect-\d{6}-[0-9a-f]{8}")),  # uuid4: som.py:660
     ("stub", re.compile(r"http://127\.0\.0\.1:\d+")),  # the stub's OS-assigned port
+    ("session", re.compile(r"rtb-[0-9a-f]{32}")),  # uuid4 per driver: providers/litellm.py:483
 )
 DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # harness.py:1050
 
