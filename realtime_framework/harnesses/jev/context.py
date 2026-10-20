@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import json
 
+from realtime_framework.entity.context_policy import (
+    JEV_CURRENT_PREFIX,
+    JEV_HISTORY_PREFIX,
+    JEV_LEDGER_HEADER,
+)
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
@@ -45,8 +50,7 @@ def compact_ledger_messages(messages) -> list[dict]:
             records = [json.loads(line) for line in content[len(prefix):].splitlines() if line]
             records = compact_repeated_records(records, ("decision", "observed_at_tick"))
             content = (
-                "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and "
-                "occurrences preserve every action; start/step/count expands exact indices):\n"
+                JEV_LEDGER_HEADER + "\n"
                 + "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True,
                                       separators=(",", ":")) for r in records)
             )
@@ -72,13 +76,13 @@ def observation_messages(system_instruction: str, turns) -> tuple[dict, ...]:
                 "execution_feedback": turn.execution_feedback or "",
             })
     if history:
-        messages.append({"role": "user", "content": "Recent action and feedback history: "
+        messages.append({"role": "user", "content": JEV_HISTORY_PREFIX
                          + json.dumps(compact_repeated_records(history, ("observation_id",)),
                                       ensure_ascii=False)})
     latest = turns[-1]
     # The harness omits live candidates and the composition vocabulary from the prompt; they
     # are sent as native Choice criteria.
     current = json.loads(latest.observation.prompt.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
-    messages.append({"role": "user", "content": "Current observation: "
+    messages.append({"role": "user", "content": JEV_CURRENT_PREFIX
                      + json.dumps(current, ensure_ascii=False)})
     return tuple(messages)

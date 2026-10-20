@@ -12,6 +12,7 @@ import os
 
 import httpx
 
+from realtime_framework.entity.context_policy import LUNA_ACTION_LABEL, LUNA_OBSERVATION_LABEL
 from realtime_framework.entity.model import (
     FATAL,
     FOLDED_VISUAL_PLACEHOLDER,
@@ -142,10 +143,10 @@ class OpenAIDecisionsClient:
         for message in state["history"]:
             content = message.get("content")
             if message["role"] == "assistant":
-                text.append("Chosen action: " + content)
+                text.append(LUNA_ACTION_LABEL + content)
             elif isinstance(content, list) or content == FOLDED_VISUAL_PLACEHOLDER:
                 parts = content if isinstance(content, list) else [{"text": content}]
-                text.append("Observation: " + "".join(
+                text.append(LUNA_OBSERVATION_LABEL + "".join(
                     part.get("text") or "" for part in parts if part.get("type") != "image_url"
                 ))
                 images = [part for part in parts if part.get("type") == "image_url"]
