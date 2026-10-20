@@ -80,7 +80,9 @@ def test_feedback_placement(api):
 
 def test_presets():
     assert {api: path.preset for api, path in POLICY.paths.items() if path.preset} == {
-        "moonshot": "kimi_k3"
+        "openai_decisions": "luna",
+        "jev_decisions": "jev",
+        "moonshot": "kimi_k3",
     }
     for path in POLICY.paths.values():
         for item, value in PRESETS[path.preset].items() if path.preset else ():

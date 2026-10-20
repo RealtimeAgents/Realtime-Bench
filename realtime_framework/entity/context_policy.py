@@ -181,6 +181,16 @@ STANDARD = {
 }
 # What a model takes instead of the standard values, by preset name.
 PRESETS = {
+    # Luna's candidates are listed by the harness, so it is not compared with the chat models:
+    # it keeps the observation JSON beside the screenshot.
+    "luna": {"observation": "observation_json_screenshot"},
+    # JEV takes text only, within a 32k prompt: an action digest with the feedback in it, and
+    # the observation JSON without a screenshot.
+    "jev": {
+        "feedback": "digest",
+        "decision_history": DecisionHistory("action_digest"),
+        "observation": "observation_json_text",
+    },
     # Kimi's thinking-model guide requires K3's past reasoning_content in multi-turn
     # conversations; K3 is the moonshot API's model.
     "kimi_k3": {"reasoning_replay": True},
@@ -219,19 +229,17 @@ def current_context_policy() -> ContextPolicy:
         ),
         path(
             "openai_decisions",
+            "luna",
             decision_history=DecisionHistory("turns"),
             prompts={
                 "realtime": "multimodal_decisions",
                 "browser_game": "multimodal_game_decisions",
             },
-            observation="observation_json_screenshot",
         ),
         path(
             "jev_decisions",
-            feedback="digest",
-            decision_history=DecisionHistory("action_digest"),
+            "jev",
             prompts={"realtime": "jev_decisions", "browser_game": None},
-            observation="observation_json_text",
         ),
     )
     return ContextPolicy(CONTEXT_POLICY_VERSION, {value.api: value for value in paths})
