@@ -576,10 +576,11 @@ def harness_fingerprint() -> str:
 
 def external_driver_identity(target: str) -> dict:
     """The code an external driver ("package.module:Class") runs, which harness_fingerprint does
-    not cover: the module and class the model YAML names, and a digest of the sources of the
-    module's top-level package (or of the module alone, outside a package). Paths are relative
-    to the directory holding the package, so its install location is not part of the digest.
-    The record also names the context-policy row the driver gets (EXTERNAL_DRIVER_ROW)."""
+    not cover: the module and class the model YAML names, and a digest of every file of the
+    module's top-level package but its __pycache__ (or of the module alone, outside a package):
+    prompts, templates and compiled modules are driver code too. Paths are relative to the
+    directory holding the package, so its install location is not part of the digest. The record
+    also names the context-policy row the driver gets (EXTERNAL_DRIVER_ROW)."""
     from importlib import import_module
 
     module_name, _, class_name = target.partition(":")
@@ -589,9 +590,7 @@ def external_driver_identity(target: str) -> dict:
         entries += [
             (path.relative_to(location.parent).as_posix().encode(), _normalized_bytes(path))
             for path in (location.rglob("*") if location.is_dir() else [location])
-            if path.is_file()
-            and path.suffix in _SOURCE_SUFFIXES
-            and "__pycache__" not in path.parts
+            if path.is_file() and "__pycache__" not in path.parts
         ]
     return {
         "module": module_name,
