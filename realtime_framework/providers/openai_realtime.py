@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
+import itertools as itertools
 import logging as logging
 import os as os
 import threading as threading
@@ -90,14 +91,16 @@ def classify_realtime_message(direction: str, message: dict):
 
 
 class _Session:
-    """One open connection's session core and its one receiver.
+    """One open connection: its number among the driver's connections, its session core and its
+    one receiver.
 
     At most one read is in flight. Each server event it reads goes to the core, which hands it to
     the state it belongs to; whoever waits for an acknowledgement or a response event awaits that
     read instead of receiving on its own.
     """
 
-    def __init__(self, conn, core: RealtimeSessionCore):
+    def __init__(self, number: int, conn, core: RealtimeSessionCore):
+        self.number = number
         self.core = core
         self._events = iter(conn)
         self._read: asyncio.Task | None = None
@@ -125,8 +128,12 @@ class _Session:
         else:
             if event is None:
                 self.closed = True
-            else:
-                self.core.receive(event)
+            elif not self.core.receive(event):
+                logger.debug(
+                    "OpenAI Realtime connection %d: no state takes %s",
+                    self.number,
+                    getattr(event, "type", ""),
+                )
         finally:
             self._read = None
 
@@ -167,6 +174,7 @@ class OpenAIRealtimeDriver:
         self._send_lock = threading.Lock()
         # The open connection's conversation and its receiver.
         self._session: _Session | None = None
+        self._session_numbers = itertools.count(1)
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
@@ -329,7 +337,9 @@ class OpenAIRealtimeDriver:
                 await asyncio.sleep(2 * (attempt + 1))
         if self._conn is None:
             raise RuntimeError(f"OpenAI Realtime session open failed: {last_error!r}")
-        self._session = _Session(self._conn, RealtimeSessionCore(self._new_client_id))
+        self._session = _Session(
+            next(self._session_numbers), self._conn, RealtimeSessionCore(self._new_client_id)
+        )
         # The history is None when the runtime opens the episode's first session.
         await self._send_all(self._session.core.replay(request.history))
 
@@ -345,6 +355,12 @@ class OpenAIRealtimeDriver:
         # The frame this response answers is the request's newest; its output items join it.
         _, frames = history_frames(request.canonical.items)
         core_generation = session.core.start_generation(frames[-1].id)
+        logger.debug(
+            "OpenAI Realtime connection %d: generation %d is %s",
+            session.number,
+            core_generation.number,
+            request.generation_id,
+        )
         response = {"max_output_tokens": request.transport_output_token_cap}
         if self.config.reasoning_effort is not None:
             response["reasoning"] = {"effort": self.config.reasoning_effort}
@@ -358,6 +374,7 @@ class OpenAIRealtimeDriver:
     async def events(self, generation: GenerationHandle):
         session, core_generation = generation.opaque
         pending = core_generation.events
+        numbers = {"connection": session.number, "generation": core_generation.number}
         sequence = 0
         while True:
             await session.receive_until(lambda: pending)
@@ -373,6 +390,7 @@ class OpenAIRealtimeDriver:
                     event_type,
                     "started",
                     ProviderHistoryState.UNKNOWN,
+                    **numbers,
                 )
                 continue
             if event_type == "error":
@@ -388,6 +406,7 @@ class OpenAIRealtimeDriver:
                     event_type,
                     repr(error or "realtime error")[:500],
                     not cancel_race,
+                    **numbers,
                 )
                 continue
             if event_type.endswith(("output_text.delta", "text.delta")):
@@ -398,6 +417,7 @@ class OpenAIRealtimeDriver:
                     event_type,
                     getattr(event, "delta", "") or "",
                     "visible",
+                    **numbers,
                 )
                 continue
             if event_type == "response.done":
@@ -410,6 +430,7 @@ class OpenAIRealtimeDriver:
                         sequence,
                         event_type,
                         usage,
+                        **numbers,
                     )
                 status = getattr(response, "status", None)
                 details = getattr(response, "status_details", None)
@@ -431,6 +452,7 @@ class OpenAIRealtimeDriver:
                                 "error": object_dict(error) or error,
                             }
                         )[:500],
+                        **numbers,
                     )
                     return
                 boundary_metadata = {
@@ -450,6 +472,7 @@ class OpenAIRealtimeDriver:
                     "turn_complete" if status == "completed" else "interrupted",
                     state,
                     boundary_metadata,
+                    **numbers,
                 )
                 return
 

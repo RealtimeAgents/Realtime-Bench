@@ -139,9 +139,10 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
 
 @dataclass
 class Generation:
-    """One response on this connection: the frame it answers, the output items the server made
-    for it, and its server events not yet taken, in arrival order."""
+    """One response on this connection: its number on the connection, the frame it answers, the
+    output items the server made for it, and its server events not yet taken, in arrival order."""
 
+    number: int
     answered: SentFrame
     response_id: str | None = None
     output_item_ids: list[str] = field(default_factory=list)
@@ -170,6 +171,7 @@ class RealtimeSessionCore:
         self._edit_error = None
         # The response in progress; the server runs one at a time in a session.
         self._generation: Generation | None = None
+        self._generations = 0
 
     # ---- planning ------------------------------------------------------------------------
 
@@ -379,35 +381,45 @@ class RealtimeSessionCore:
     def start_generation(self, frame_id: str) -> Generation:
         """Register the response about to be requested for a sent frame. Its events go to it
         until its response.done."""
-        self._generation = Generation(self.frames[frame_id])
+        self._generations += 1
+        self._generation = Generation(self._generations, self.frames[frame_id])
         return self._generation
 
-    def receive(self, event) -> None:
-        """Apply one server event of this connection, in arrival order."""
+    def receive(self, event) -> bool:
+        """Apply one server event of this connection, in arrival order. Returns whether a state
+        took it: an operation it confirms, or the edit or response it is about."""
         kind = getattr(event, "type", "")
         generation = self._generation
         if kind in _CREATE_ACKS:
-            self._confirm(("create", str(getattr(getattr(event, "item", None), "id", ""))))
-        elif kind == "conversation.item.deleted":
-            self._confirm(("delete", str(getattr(event, "item_id", ""))))
-        elif kind == "error":
+            return self._confirm(("create", str(getattr(getattr(event, "item", None), "id", ""))))
+        if kind == "conversation.item.deleted":
+            return self._confirm(("delete", str(getattr(event, "item_id", ""))))
+        if kind == "error":
             error = getattr(event, "error", None)
             event_id = getattr(error, "event_id", None)
             edit = self._edit
             about_edit = edit is not None and event_id in edit.client_events
+            taken = False
             # An error that names no client event may be about any of them.
             if self._unconfirmed and self._edit_error is None and (event_id is None or about_edit):
                 self._edit_error = error
+                taken = True
             if generation is not None and not about_edit:
                 generation.events.append(event)
-        elif kind.startswith("response.") and generation is not None:
+                taken = True
+            return taken
+        if kind.startswith("response.") and generation is not None:
             generation.events.append(event)
             self._response_event(generation, kind, event)
+            return True
+        return False
 
-    def _confirm(self, key: tuple[str, str]) -> None:
-        if key in self.delivery:
-            self.delivery[key] = Delivery.CONFIRMED
+    def _confirm(self, key: tuple[str, str]) -> bool:
         self._unconfirmed.discard(key)
+        if key not in self.delivery:
+            return False
+        self.delivery[key] = Delivery.CONFIRMED
+        return True
 
     def _response_event(self, generation: Generation, kind: str, event) -> None:
         """Record what a response event says about the conversation: the response id, the output
