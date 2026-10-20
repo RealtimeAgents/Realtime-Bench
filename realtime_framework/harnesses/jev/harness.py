@@ -174,4 +174,11 @@ class JevHarness(DefaultHarness):
 
     @staticmethod
     def _request_messages(request) -> tuple[dict, ...]:
-        return decision_messages(request)
+        from realtime_framework.providers.decisions.history import render_digest
+        from realtime_framework.providers.decisions.selection import SHADOW, shadow_check
+
+        old = decision_messages(request)
+        if request.history_form == "action_digest":
+            shadow_check("summary", list(old) == render_digest(request, compact_ledger=False))
+            SHADOW["summaries"] += 1
+        return old

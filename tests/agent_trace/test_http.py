@@ -14,19 +14,29 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import phase1_context_policy
-from realtime_framework.entity.model import GenerationRequest
+from realtime_framework.entity.model import CanonicalTurn, GenerationRequest, ProviderObservation
 from realtime_framework.entity.records import trace_scope, validate_episode_trace
-from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.entity.request import (
+    AnswerRequirements,
+    CallParameters,
+    Candidate,
+    ChoiceRequirements,
+    SelectionMaterial,
+)
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
-from realtime_framework.harnesses.default.request import build_request, system_block
+from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.capture import REDACTED, SECRET_HEADERS
+from realtime_framework.providers.decisions.history import decision_messages
+from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
 from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
+from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 from ..replay.build import build_episode
 from ..replay.frames import ReplayTask
@@ -387,12 +397,42 @@ CANDIDATES = {
     "b": {"description": "click Name", "action": {"action": "click", "target": "P1"}},
     "c": {"description": "click I agree", "action": {"action": "click", "target": "P2"}},
 }
-HISTORY = (
-    {"role": "system", "content": "system"},
-    {"role": "user", "content": "older observation"},
-    {"role": "assistant", "content": '{"action": "wait"}'},
-    {"role": "user", "content": "current observation"},
-)
+
+
+def _turn(k, prompt, **recorded) -> CanonicalTurn:
+    observation = ProviderObservation(
+        observation=Observation(b"raw", 100.0 + k, float(k), {"observation_id": f"obs-{k}"}),
+        prompt=prompt,
+        image_bytes=b"png",
+        mime_type="image/png",
+        image_detail="auto",
+        geometry={},
+    )
+    return CanonicalTurn(observation=observation, decision=k, **recorded)
+
+
+def _request(config):
+    """One earlier turn and an archived action before the current frame: the JEV digest state is
+    then four messages (system, ledger, digest, current observation)."""
+    current = "Choose." + OBSERVATION_INTERACTABLES_HEADER + json.dumps({"observation_id": "obs-1"})
+    turns = (
+        _turn(0, "older observation", output='{"action": "wait"}', execution_feedback="applied"),
+        _turn(1, current),
+    )
+    choice = ChoiceRequirements(
+        GUI_INSTRUCTIONS,
+        tuple((key, Candidate(c["description"], c["action"])) for key, c in CANDIDATES.items()),
+        "replay_candidates",
+    )
+    return build_request(
+        phase1_context_policy().for_path(config.adapter_type, config.provider_options),
+        system_block("system"),
+        turns,
+        ledger_block('{"decision": 0}', 1, None),
+        AnswerRequirements("choice", "replay_choice", choice=choice),
+        CallParameters(config.model_name, "fixed", None),
+        SelectionMaterial("obs-1", False, None, None),
+    )
 
 
 def _decide(client_type, model, provider, script, run_dir, monkeypatch):
@@ -411,12 +451,23 @@ def _decide(client_type, model, provider, script, run_dir, monkeypatch):
         )
         client = client_type(config)
         client.bind_trace(sink)
-        observation = {"observation_id": "obs-1", "candidates": CANDIDATES}
+        request = _request(config)
+        # Shadow check: the old per-frame state and message list of the same request.
+        observation = {
+            "observation_id": "obs-1",
+            "candidates": CANDIDATES,
+            "candidate_policy": "replay_candidates",
+            "focused_input": None,
+            "text_composition": None,
+        }
+        messages = decision_messages(request)
 
         async def run():
             try:
                 with trace_scope(phase="decision", decision=0, generation_id="turn-0", attempt=1):
-                    return await ChoiceDecision(client, observation, HISTORY, trace=sink).run()
+                    return await ChoiceDecision(
+                        client, observation, messages, request, trace=sink
+                    ).run()
             finally:
                 await client.close()
 

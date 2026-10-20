@@ -1,6 +1,7 @@
 """JEV-only lossless history serialization; never controls candidate eligibility."""
 from __future__ import annotations
 
+import base64
 import json
 
 from realtime_framework.entity.context_policy import (
@@ -97,3 +98,102 @@ def decision_messages(request) -> tuple[dict, ...]:
     if request.history_form == "action_digest":
         return digest_messages(request)
     return chat_messages(request)
+
+
+# JEV message roles of the neutral item roles.
+JEV_ROLES = {"instruction": "system", "input": "user"}
+
+
+def render_transcript(request) -> tuple[list, list[str]]:
+    """Luna's state: every block in order, each image a top-level entry at its causal position.
+
+    Decisions state has no roles, and image parts must be top-level entries of the state array.
+    The canonical order keeps older turns a stable prefix for prompt caching; only the current
+    question's state follows the newest observation. Observations and chosen actions carry
+    plain labels: role-tagged turns make OpenAI refuse many-option questions more often.
+    Returns the entries up to the last image and the text after it.
+    """
+    texts = request.policy.texts
+    entries, text = [], []
+    for item in request.items:
+        block = item.block
+        if block.kind == "frame":
+            text.append(texts.luna_observation_label + block.text)
+            if block.image is not None:
+                encoded = base64.b64encode(block.image.data).decode("ascii")
+                entries.append("\n".join(text))
+                entries.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{block.image.mime_type};base64,{encoded}",
+                            "detail": block.image.detail,
+                        },
+                    }
+                )
+                text = []
+        elif block.kind == "model_output":
+            text.append(texts.luna_action_label + block.text)
+        elif block.kind == "action_ledger":
+            text.append(texts.ledger_header + "\n" + block.text)
+        else:  # system instruction, execution feedback
+            text.append(block.text)
+    return entries, text
+
+
+def transcript_state(transcript: tuple[list, list[str]], extra: dict) -> list:
+    """One question's state: the transcript, then the question's own state as JSON text."""
+    entries, text = transcript
+    if extra:
+        text = [*text, json.dumps(extra, ensure_ascii=False)]
+    return [*entries, "\n".join(text)] if text else list(entries)
+
+
+def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
+    """JEV's history: the system text, the archived ledger, a digest of the older turns' actions
+    and feedback, and the current observation. Older screenshots, SoM and choices are not resent.
+
+    The ledger is sent compacted; the trajectory summary shows it as the runtime keeps it.
+    """
+    texts = request.policy.texts
+    messages, history = [], []
+    for item in request.items:
+        block = item.block
+        role = JEV_ROLES.get(item.intent.role)
+        if block.kind == "system_instruction":
+            messages.append({"role": role, "content": block.text})
+        elif block.kind == "action_ledger":
+            if compact_ledger:
+                records = [json.loads(line) for line in block.text.splitlines() if line]
+                records = compact_repeated_records(records, ("decision", "observed_at_tick"))
+                content = texts.jev_ledger_header + "\n" + "\n".join(
+                    json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    for r in records
+                )
+            else:
+                content = texts.ledger_header + "\n" + block.text
+            messages.append({"role": role, "content": content})
+        elif block.kind == "model_output":
+            history.append({"observation_id": block.based_on, "action": block.text})
+        elif block.kind == "execution_feedback":
+            history[-1]["execution_feedback"] = block.text
+        elif block.kind == "frame":
+            if history:
+                compacted = compact_repeated_records(history, ("observation_id",))
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": texts.jev_history_prefix
+                        + json.dumps(compacted, ensure_ascii=False),
+                    }
+                )
+            # The harness omits live candidates and the composition vocabulary from the prompt;
+            # they are sent as native Choice criteria.
+            current = json.loads(block.text.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
+            messages.append(
+                {
+                    "role": role,
+                    "content": texts.jev_current_prefix + json.dumps(current, ensure_ascii=False),
+                }
+            )
+    return messages
