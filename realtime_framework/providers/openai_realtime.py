@@ -13,6 +13,7 @@ from copy import copy as copy
 from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from dataclasses import replace as replace
+from typing import ClassVar as ClassVar
 
 from openai import APIConnectionError as APIConnectionError
 from openai import APITimeoutError as APITimeoutError
@@ -21,6 +22,7 @@ from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
 from realtime_framework.providers.registry import load_project_secrets
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
@@ -191,7 +193,17 @@ class OpenAIRealtimeDriver:
         persistent_session=True,
         can_compact_history_in_place=True,
         terminal_output_usage=True,
+        classifies_transport_errors=True,
+        maps_output_cap=True,
     )
+    deployment = Deployment(
+        family="streaming",
+        provider="openai",
+        key_env="OPENAI_API_KEY",
+        vendor="openai",
+        litellm_provider="openai",
+    )
+    model_defaults: ClassVar[dict[str, dict]] = {}
 
     def __init__(self, config):
         self.config = config

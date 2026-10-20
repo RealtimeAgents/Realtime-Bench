@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import ClassVar
 
 import httpx
 
@@ -19,6 +20,7 @@ from realtime_framework.entity.model import (
     TRANSIENT,
     ChoiceContextLimitError,
     ChoiceReply,
+    Deployment,
     RealtimeCapabilities,
     TransportFailure,
     classify_http_failure,
@@ -54,10 +56,26 @@ class OpenAIDecisionsClient(DecisionEncoder):
         persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
+        finite_frame_budget=False,
+        wall_clock_only=True,
+        accepts_reasoning_effort=False,
+        classifies_transport_errors=True,
+        request_size_estimation=True,
     )
+    deployment = Deployment(family="vlm", provider="openrouter", key_env="OPENROUTER_API_KEY")
     # Choices per question; the selection flow groups larger candidate sets.
     max_choices = 255
     pin_route = True
+    # Per-model catalog defaults (providers/registry.py).
+    model_defaults: ClassVar[dict[str, dict]] = {
+        "openai/gpt-6-luna-decisions": {
+            # OpenRouter's published window. A 768 px screenshot measured 337 input tokens; the
+            # reserve covers one question's criteria (at most 255 candidates) and instructions.
+            "context_window_tokens": 1050000,
+            "context_image_tokens": 512,
+            "context_reserve_tokens": 32768,
+        },
+    }
 
     def __init__(self, config):
         self.config = config

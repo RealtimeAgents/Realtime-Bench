@@ -120,8 +120,8 @@ class ContextPolicy:
         path = self.paths[adapter_type]
         if path.tool_call_replay is None:
             return path
-        # Gemini Live takes the format from its maintained model profile (providers/registry.py
-        # MODEL_PROFILES); other models keep the driver default (gemini/live.py LIVE_OPTIONS).
+        # Gemini Live takes the format from its maintained model preset (gemini/live.py
+        # GeminiLiveDriver.model_defaults); other models keep the driver default (LIVE_OPTIONS).
         return replace(
             path,
             tool_call_replay=provider_options.get("history_format", path.tool_call_replay),

@@ -66,14 +66,17 @@ A model that needs a new wire protocol gets a driver:
    `events`, `interrupt`, `sync_history`, `close`. Stateless APIs make `connect` and
    `sync_history` no-ops and send `GenerationRequest.messages`; session APIs send each observation
    and keep native history.
-2. Declare `capabilities`: session persistence, interruption, usage timing, and `action_channel`
-   (`"text_json"` or `"function_call"`). Function-call drivers declare
-   `entity.actions.gui_function_declarations()`.
+2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
+   timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports and
+   which optional methods it implements. Declare `deployment` (`Deployment`: catalog family and
+   provider, default key variable) and `model_defaults` (per-model ModelConfig defaults, usually
+   `{}`). Function-call drivers declare `entity.actions.gui_function_declarations()`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
    provider-measured usage.
 4. Implement `classify_transport_error(exc) -> TransportFailure`. Do not retry in the driver or
    SDK; the harness retries transient failures itself and records every attempt.
-5. Register the API as one `ApiSpec` row in `APIS` (`realtime_framework/providers/registry.py`)
-   and reference it from a preset with `endpoint.api`.
+5. Register the driver class as one `"package.module:Class"` entry in `APIS`
+   (`realtime_framework/providers/registry.py`) and reference it from a preset with
+   `endpoint.api`.
 
 If your model cannot be reached through any of these, [contact us](submit.md#contact).

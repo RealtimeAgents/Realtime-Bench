@@ -54,8 +54,6 @@ class DecisionEncoder:
         return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):
-        if request.clock_mode != "wall":
-            raise ValueError("Choice Decisions supports wall clock only")
         metadata = await ChoiceDecision(self, request.canonical, trace=self._trace).run()
         metadata["history_form"] = request.canonical.history_form
         return GenerationHandle(request.generation_id, metadata=metadata)

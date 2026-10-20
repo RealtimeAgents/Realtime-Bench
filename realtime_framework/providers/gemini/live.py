@@ -8,8 +8,10 @@ import math as math
 import os as os
 import time as time
 from dataclasses import dataclass, field
+from typing import ClassVar as ClassVar
 
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.model import GenerationHandle
@@ -44,21 +46,34 @@ _HISTORY_CONTENTS_PER_MESSAGE = 12
 _SESSION_RELEASE_GRACE_S = 2.0
 _GO_AWAY_CLOSE_MARGIN_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
-_EXTENDED_THINKING_MODEL = "gemini-3.8-live-extended-thinking"
 
 
-# Wire options carried in ModelConfig.provider_options. Gemini 3.8 Extended Thinking requires
-# asynchronous tool declarations and remains active across intermediate utterance-level
-# turnComplete messages until interaction_status becomes IDLE. Ordered screenshot/text turns
-# (client_content) avoid synthesizing an audio activity for GUI input.
-LIVE_OPTIONS = {
+# Wire options carried in ModelConfig.provider_options: (default, allowed values). Gemini 3.8
+# Extended Thinking requires asynchronous tool declarations and remains active across
+# intermediate utterance-level turnComplete messages until interaction_status becomes IDLE.
+# Ordered screenshot/text turns (client_content) avoid synthesizing an audio activity for GUI input.
+LIVE_PROTOCOL_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
     "input_transport": ("realtime_input", ("realtime_input", "client_content")),
     # when_idle and omit both send no scheduling field; omit names that choice for Extended Thinking.
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
+}
+# Context policy item 10: how past tool calls are replayed into a rebuilt session. It stays in
+# provider_options, where the ContextPolicy and this driver read it, until step 4b.
+LIVE_HISTORY_OPTIONS = {
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
+LIVE_OPTIONS = {**LIVE_PROTOCOL_OPTIONS, **LIVE_HISTORY_OPTIONS}
+
+# Per-model presets, merged into the catalog entry's defaults (providers/registry.py).
+_CLIENT_CONTENT_TOOLS = {
+    "tool_behavior": "non_blocking",
+    "completion_signal": "turn_complete",
+    "input_transport": "client_content",
+    "tool_response_scheduling": "silent",
+}
+_TOOL_TRANSCRIPT = {"history_format": "tool_transcript"}  # context policy, see above
 
 
 _RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
@@ -79,18 +94,16 @@ def classify_live_message(direction: str, message: dict):
 
 
 def live_options(config) -> dict:
-    """Resolve and validate Gemini Live options with their documented defaults."""
-    options = dict(getattr(config, "provider_options", None) or {})
-    unknown = set(options) - set(LIVE_OPTIONS)
-    if unknown:
-        raise ValueError(f"Unknown Gemini Live provider_options: {sorted(unknown)}")
-    resolved = {}
-    for name, (default, allowed) in LIVE_OPTIONS.items():
-        value = options.get(name, default)
-        if value not in allowed:
-            raise ValueError(f"Gemini Live {name} must be one of {list(allowed)}, got {value!r}")
-        resolved[name] = value
-    return resolved
+    """Resolve Gemini Live options with their documented defaults.
+
+    The values are validated before the run (providers/preflight.py).
+    """
+    options = config.provider_options
+    return {name: options.get(name, default) for name, (default, _) in LIVE_OPTIONS.items()}
+
+
+# reasoning_effort values the session setup maps (GeminiLiveDriver._thinking_config).
+LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "high")
 
 
 class GoAwayDeadlineExceeded(RuntimeError):
@@ -136,7 +149,32 @@ class GeminiLiveDriver:
         max_video_fps=1.0,
         terminal_output_usage=True,
         action_channel="function_call",
+        classifies_transport_errors=True,
+        connection_renewal=True,
     )
+    deployment = Deployment(
+        family="streaming",
+        provider="gemini",
+        key_env="GEMINI_API_KEY",
+        vendor="google",
+        litellm_provider="gemini",
+    )
+    model_defaults: ClassVar[dict[str, dict]] = {
+        "gemini-3.1-flash-live-preview": {
+            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
+        },
+        "gemini-3.8-live": {
+            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
+        },
+        "gemini-3.8-live-extended-thinking": {
+            "provider_options": {
+                **_CLIENT_CONTENT_TOOLS,
+                "completion_signal": "interaction_idle",
+                "tool_response_scheduling": "omit",
+                **_TOOL_TRANSCRIPT,
+            },
+        },
+    }
 
     def __init__(self, config):
         from google import genai as genai
@@ -145,7 +183,6 @@ class GeminiLiveDriver:
         from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
         self.options = live_options(config)
-        self._validate_model_contract(config)
         if config.api_key:
             keys = [config.api_key]
         elif config.api_key_env and config.api_key_env != "GEMINI_API_KEY":
@@ -184,34 +221,6 @@ class GeminiLiveDriver:
         self._connect_metadata: dict = {}
         self._go_away_deadline: float | None = None
         self._last_turn_clean = False
-
-    @staticmethod
-    def _validate_model_contract(config) -> None:
-        """Reject setup combinations that violate the selected Live model's API contract."""
-        options = live_options(config)
-        if (
-            options["tool_response_scheduling"] == "silent"
-            and options["tool_behavior"] != "non_blocking"
-        ):
-            raise ValueError("Silent Gemini tool responses require non-blocking tools")
-        model_name = str(config.model_name).rsplit("/", 1)[-1]
-        if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
-            raise ValueError(
-                "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"
-            )
-        if model_name != _EXTENDED_THINKING_MODEL:
-            return
-        invalid = []
-        if config.reasoning_effort not in {"low", "medium", "high"}:
-            invalid.append("reasoning_effort must be low, medium, or high")
-        if options["tool_behavior"] != "non_blocking":
-            invalid.append("tool_behavior must be non_blocking")
-        if options["completion_signal"] != "interaction_idle":
-            invalid.append("completion_signal must be interaction_idle")
-        if options["tool_response_scheduling"] == "silent":
-            invalid.append("function scheduling is unsupported; use tool_response_scheduling=omit")
-        if invalid:
-            raise ValueError(f"{_EXTENDED_THINKING_MODEL} requires " + "; ".join(invalid))
 
     def _client_for_slot(self, index: int):
         client = self._clients.get(index)
@@ -341,14 +350,7 @@ class GeminiLiveDriver:
             "medium": self.types.ThinkingLevel.MEDIUM,
             "high": self.types.ThinkingLevel.HIGH,
         }
-        try:
-            level = levels[effort]
-        except KeyError as exc:
-            raise ValueError(
-                "Gemini Live reasoning_effort must be one of "
-                "none, fixed, minimal, low, medium, or high"
-            ) from exc
-        return self.types.ThinkingConfig(thinking_level=level)
+        return self.types.ThinkingConfig(thinking_level=levels[effort])
 
     def _function_declarations(self, seed):
         behavior = self.options["tool_behavior"]

@@ -333,7 +333,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
     if recording_encoder not in {"cpu", "gpu"}:
         raise ValueError("runtime.recording_encoder must be 'cpu' or 'gpu'")
 
-    from realtime_framework.providers.registry import validate_model_interaction
+    from realtime_framework.providers.preflight import validate_model_interaction
 
     for item in cells or models:
         model = item.get("model", item.get("key"))
@@ -401,7 +401,7 @@ from pathlib import Path as Path
 
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
 from realtime_framework.entity.context_policy import phase1_context_policy
-from realtime_framework.providers.registry import validate_model_interaction
+from realtime_framework.providers.preflight import validate_model_interaction
 from realtime_framework.entity.actions import SOM_REPRESENTATION_VERSION
 from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
 
@@ -695,14 +695,16 @@ def effective_run_config(
         "cdp_transport": "persistent_websocket_explicit_probe_preserves_default_target_v2",
         "environment_overrides": environment,
     }
-    from realtime_framework.providers.registry import APIS, LITELLM_DRIVER
+    from realtime_framework.providers.litellm import LiteLLMDriver
+    from realtime_framework.providers.registry import adapter_class
 
-    if adapter_type in APIS and APIS[adapter_type].driver == LITELLM_DRIVER:
+    driver = adapter_class(adapter_type)
+    if issubclass(driver, LiteLLMDriver):
         from importlib.metadata import version as version
 
-        streamed = adapter_type != "litellm" and (
-            adapter_type != "chat_completions" or model_config.get("chat_stream", True)
-        )
+        streamed = driver.protocol.stream
+        if streamed is None:
+            streamed = model_config.get("chat_stream", True)
         config["provider_transport"] = (
             "litellm_raw_provider_usage_v1"
             if streamed
@@ -711,11 +713,9 @@ def effective_run_config(
         config["provider_sdk_versions"] = {
             package: version(package) for package in ("litellm", "openai")
         }
-        from realtime_framework.providers.litellm import POLICIES
-
         # Requests without a decision cap send the native limit, or omit the parameter.
         config["provider_output_limit"] = {
-            "parameter": POLICIES[adapter_type].output_limit_param,
+            "parameter": driver.compat.output_limit_param,
             "uncapped_value": model_config.get("native_output_limit") or "provider_default",
         }
     if mode is not None:
@@ -781,14 +781,14 @@ def identity_main(argv=None) -> int:
         catalog.validate_reasoning_effort(args.model, reasoning_effort)
     except ValueError as exc:
         parser.error(str(exc))
-    if (
-        args.clock == "token"
-        and tokens_per_frame is not None
-        and not catalog.supports_finite_frame_budget(entry.adapter_type)
-    ):
-        parser.error(
-            f"adapter {entry.adapter_type!r} cannot report complete usage for a finite token clock"
+    from realtime_framework.providers.preflight import UnsupportedTokenBudget, check_token_budget
+
+    try:
+        check_token_budget(
+            entry.adapter_type, clock_mode=args.clock, tokens_per_frame=tokens_per_frame
         )
+    except UnsupportedTokenBudget as exc:
+        parser.error(str(exc))
     config = catalog.to_model_config(
         args.model,
         fps=args.fps,

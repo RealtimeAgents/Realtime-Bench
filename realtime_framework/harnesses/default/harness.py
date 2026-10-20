@@ -985,15 +985,6 @@ class DefaultHarness(VisionAgentBase):
 
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
-        capabilities = self.driver.capabilities
-        if (
-            capabilities.max_video_fps is not None
-            and float(self.config.fps) > capabilities.max_video_fps
-        ):
-            raise ValueError(
-                f"{capabilities.protocol_family} supports at most "
-                f"{capabilities.max_video_fps:g} fps; requested {self.config.fps:g}"
-            )
         self._pending_feedback = ""
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.
@@ -1018,9 +1009,8 @@ class DefaultHarness(VisionAgentBase):
         self._runtime.enqueue(observation)
 
     def transport_output_token_cap(self, provider_cap):
-        mapper = getattr(self.driver, "transport_output_token_cap", None)
-        if callable(mapper):
-            return mapper(provider_cap)
+        if self.driver.capabilities.maps_output_cap:
+            return self.driver.transport_output_token_cap(provider_cap)
         return None if provider_cap is None else int(provider_cap)
 
     def _prepare_observations(self, observations, tick, feedback=""):
@@ -1209,7 +1199,11 @@ class DefaultHarness(VisionAgentBase):
             else _GenerationOutputCollector
         )
         collector = collector_type(self)
-        classifier = getattr(self.driver, "classify_transport_error", None)
+        classifier = (
+            self.driver.classify_transport_error
+            if self.driver.capabilities.classifies_transport_errors
+            else None
+        )
         retry_reasons = []
         retry_delays = []
         retry_usages = []
