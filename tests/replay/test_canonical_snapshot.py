@@ -226,11 +226,11 @@ def test_luna_choice_parts(tmp_path):
     used = []
     driver_start = agent.driver.start_generation
 
-    async def remember_state(request):
-        used.append(agent._choice_state)
+    async def remember_choice(request):
+        used.append(agent._choice)
         return await driver_start(request)
 
-    agent.driver.start_generation = remember_state
+    agent.driver.start_generation = remember_choice
     try:
         for k, (value, _, status) in enumerate(LUNA_STEPS):
             agent.configure_decision(DecisionBudget(None, None, None, "wall"))
@@ -242,24 +242,8 @@ def test_luna_choice_parts(tmp_path):
     finally:
         agent.close()
     assert not script
-    # The choice parts equal the observation state the agent prepared.
-    for request, state in zip(requests, used, strict=True):
-        choice, selection = request.answer.choice, request.selection
-        assert [key for key, _ in choice.candidates] == list(state["candidates"])
-        assert [(c.description, c.action, c.audit) for _, c in choice.candidates] == [
-            (v["description"], v["action"], v.get("audit")) for v in state["candidates"].values()
-        ]
-        assert choice.candidate_policy == state["candidate_policy"]
-        assert (
-            selection.observation_id,
-            selection.game_choices,
-            selection.focused_input,
-            selection.text_composition,
-        ) == (
-            state["observation_id"],
-            state["game_choices"],
-            state["focused_input"],
-            state["text_composition"],
-        )
+    # Each request carries the choice parts the agent prepared for its own observation.
+    for request, (choice, selection) in zip(requests, used, strict=True):
+        assert (request.answer.choice, request.selection) == (choice, selection)
     assert requests[0].selection.text_composition and requests[0].selection.focused_input
     check("openai_decisions-compose", snapshot(requests))
