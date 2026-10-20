@@ -29,6 +29,11 @@ Other agent options:
 | `--ak model_revision=REV` | Record the deployment revision |
 | `--ak reasoning_effort=EFFORT` | Passed through unchanged; the provider rejects unsupported values (default: provider default) |
 
+The output limit of a direct run comes from LiteLLM's model map ([output limit](#output-limit)).
+LiteLLM maps `reasoning_effort` per provider; OpenRouter, for example, receives `max` as `xhigh`.
+Since LiteLLM 1.106.1 it no longer refuses `reasoning_effort` for an `openrouter/` model that its
+map does not mark as a reasoning model: the request is sent and OpenRouter decides.
+
 ## Write a preset
 
 A preset saves a model's connection as `configs/models/<name>.yaml`; run it with `-m <name>`.
@@ -55,9 +60,20 @@ reasoning_effort: high             # optional; `fixed` sends no reasoning settin
 | `anthropic_messages` | The Anthropic Messages API | `native_output_limit` |
 | `package.module:Class` | Your own driver class ([external driver](#use-an-external-driver)) | |
 
-Without `native_output_limit`, the limit comes from LiteLLM's bundled model map, or the provider
-default if the model is unknown there. The run records the resolved preset, so results with
-different settings are never mixed.
+### Output limit
+
+`native_output_limit` caps the output tokens of every request, reasoning included; unless a token
+clock budget is smaller, it is the output limit each request sends. Without it,
+presets on `openrouter`, `moonshot` and `anthropic_messages`, and direct runs, take the model's
+`max_output_tokens` from the model map bundled with the locked LiteLLM version, looked up as
+`provider/model-id`. A `chat_completions` endpoint, or a model the map does not list that way, has
+no limit and gets the provider default.
+
+These limits follow LiteLLM, so upgrading it changes them. From LiteLLM 1.104.1 to 1.106.1, 151
+models gained, lost or changed a limit and 54 limits went down, for example
+`openrouter/qwen/qwen3-235b-a22b-2507` from 235929 to 16384 tokens. To keep a limit across
+upgrades, declare it in a preset, as `configs/models/deepseek-v4.1-flash.yaml` does. The run
+records the resolved preset, limit included, so results with different settings are never mixed.
 
 ## Add a model API
 

@@ -47,7 +47,13 @@ from .stub_litellm import LiteLLMStub
 
 BASELINE = Path(__file__).parent / "baselines" / "litellm-nonstream-long.jsonl"
 MODEL_KEY = "litellm-vlm"  # the runner records the catalog key as the model (runner.py:1244-1252)
-LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:140-154)
+LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:142-156)
+# A model LiteLLM's bundled map lists: its max_output_tokens becomes the native limit
+# (registry.py:159-168, 507-508), which every request sends as max_tokens when no token clock
+# bounds it (build.py:63-79). The value is the locked LiteLLM's, so an upgrade that changes the
+# map row fails test_mapped_model_output_limit. The deepseek-v4.1-flash preset declares its own.
+MAPPED_MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
+MAPPED_OUTPUT_LIMIT = 943718
 API_KEY_ENV = "REPLAY_LITELLM_API_KEY"
 API_KEY = "replay-dummy-key"
 REASONING_EFFORT = "low"  # as --reasoning-effort low; sent top-level (providers/litellm.py:578-582)
@@ -97,10 +103,10 @@ def litellm_environment(monkeypatch):
     catalog._catalog_entries.cache_clear()
 
 
-def litellm_vlm_config(monkeypatch, base_url: str):
-    """What the runner builds for ``rtbench --model openai/replay-vlm --api-base <stub>
+def litellm_vlm_config(monkeypatch, base_url: str, model: str = LITELLM_MODEL):
+    """What the runner builds for ``rtbench --model <model> --api-base <stub>
     --api-key-env REPLAY_LITELLM_API_KEY --reasoning-effort low``."""
-    monkeypatch.setenv("BENCHMARK_LITELLM_MODEL", LITELLM_MODEL)
+    monkeypatch.setenv("BENCHMARK_LITELLM_MODEL", model)
     monkeypatch.setenv("BENCHMARK_LITELLM_API_BASE", base_url)
     monkeypatch.setenv("BENCHMARK_LITELLM_KEY_ENV", API_KEY_ENV)
     monkeypatch.setenv(API_KEY_ENV, API_KEY)
@@ -209,3 +215,24 @@ def test_long_scenario(litellm_environment, tmp_path):
     assert not problems, f"{len(problems)} difference(s) from {BASELINE.name}:\n" + "\n".join(
         problems[:60]
     )
+
+
+def test_mapped_model_output_limit(litellm_environment, tmp_path):
+    steps = LONG_SCENARIO[:2]
+    with LiteLLMStub(replies(steps)) as stub:
+        config = litellm_vlm_config(litellm_environment, stub.base_url, MAPPED_MODEL)
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+        )
+        try:
+            records = run_steps(episode, steps, stub)
+        finally:
+            episode.agent.close()
+    assert stub.unscripted == 0, "the agent sent requests beyond the script"
+    assert stub.unused_replies == 0, "scripted replies were left unused"
+    assert (config.native_output_limit, config.native_output_limit_source) == (
+        MAPPED_OUTPUT_LIMIT,
+        "litellm",
+    )
+    caps = [r["requests"][0]["body"]["max_tokens"] for r in records]
+    assert caps == [MAPPED_OUTPUT_LIMIT] * len(steps)
