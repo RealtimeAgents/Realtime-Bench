@@ -1,11 +1,13 @@
 """Gemini Live session core: what the session holds and what the driver does next, without I/O.
 
-GeminiLiveDriver (live.py) renders the history, writes and reads the WebSocket and reads the clock.
-It reports to this core what it rendered, wrote and received; the core keeps the session state and
-answers with the operations to perform: how to open the next connection and what to seed on it,
-whether a sync resumes or rebuilds, which tool calls to acknowledge, which connection and
-generation a server message belongs to and whether that generation's output ends with it. Nothing
-in it awaits, so each call is one transition, in the order of the session.
+From a history view the core plans what the session is sent: the contents that seed a new
+connection and the input of each observation, as neutral Contents and Parts. GeminiLiveDriver
+(live.py) turns them into google-genai types, writes and reads the WebSocket and reads the clock,
+and reports back what it wrote and received. The core keeps the session state and answers with
+the operations to perform: how to open the next connection and what to seed on it, whether a sync
+resumes or rebuilds, which tool calls to acknowledge, which connection and generation a server
+message belongs to and whether that generation's output ends with it. Nothing in it awaits, so
+each call is one transition, in the order of the session.
 
 Each connection keeps what the client delivered on it, by key: ``("setup",)``, ``("block", <history
 block id>)`` and ``("tool_response", <call id>)``. A write is unknown from its start until it
@@ -18,6 +20,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from realtime_framework.entity.request import CanonicalRequest, FrameImage
+
 SENT = "sent"
 ACKNOWLEDGED = "acknowledged"
 UNKNOWN = "unknown"
@@ -27,24 +31,80 @@ UNKNOWN = "unknown"
 HISTORY_CONTENTS_PER_MESSAGE = 12
 _GO_AWAY_CLOSE_MARGIN_S = 2.0
 
+# Gemini 3 requires a thought signature when a manually reconstructed history contains a model
+# function-call part. Live tool-call messages do not expose the original signature because bidi
+# function calls use the dedicated ToolCall message rather than model Content. Google documents
+# this sentinel for deterministic client-injected function-call history.
+REPLAY_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 
-def history_batches(history: list, limit: int = HISTORY_CONTENTS_PER_MESSAGE) -> list[list]:
+# Content roles for the request intents this session carries (ledger, frame; tool exchange).
+_ROLES = {"input": "user", "model": "model"}
+
+
+@dataclass(frozen=True)
+class Part:
+    """One part of a planned Content: text, a screenshot, a function call (with the thought
+    signature it carries) or a function response, as the google-genai Part of the same name."""
+
+    text: str | None = None
+    image: FrameImage | None = None
+    function_call: dict | None = None  # id, name, args
+    thought_signature: str | None = None
+    function_response: dict | None = None  # id, name, response, and its scheduling options
+
+
+@dataclass(frozen=True)
+class Content:
+    role: str
+    parts: tuple[Part, ...]
+
+
+@dataclass(frozen=True)
+class Observation:
+    """The newest frame of a history view as one input: the frame's execution feedback, then its
+    prompt, with its screenshot; and the delivery keys of the blocks it carries."""
+
+    role: str
+    text: str
+    image: FrameImage | None
+    observation_id: str
+    keys: tuple[tuple, ...]
+
+    @property
+    def content(self) -> Content:
+        return _frame_content(self.role, self.text, self.image)
+
+
+def _frame_prefixes(history: CanonicalRequest) -> dict:
+    """The execution-feedback block sent ahead of each frame's prompt, by frame block id."""
+    return {
+        item.block.attached_to: item.block
+        for item in history.items
+        if item.intent.position == "frame_prefix"
+    }
+
+
+def _frame_text(frame, prefix) -> str:
+    return f"{prefix.text}\n{frame.text}" if prefix is not None else frame.text
+
+
+def _frame_content(role: str, text: str, image: FrameImage | None) -> Content:
+    parts = (Part(text=text),) if image is None else (Part(text=text), Part(image=image))
+    return Content(role, parts)
+
+
+def history_batches(history: list[Content], limit: int = HISTORY_CONTENTS_PER_MESSAGE) -> list:
     """Pack history without splitting one observation/model/tool-response exchange."""
     groups = []
     group = []
     for content in history:
-        parts = getattr(content, "parts", None) or []
-        is_function_response = any(
-            getattr(part, "function_response", None) is not None for part in parts
-        )
-        has_function_call = any(getattr(part, "function_call", None) is not None for part in parts)
-        if getattr(content, "role", None) == "user" and group and not is_function_response:
+        is_function_response = any(part.function_response is not None for part in content.parts)
+        has_function_call = any(part.function_call is not None for part in content.parts)
+        if content.role == "user" and group and not is_function_response:
             groups.append(group)
             group = []
         group.append(content)
-        if is_function_response or (
-            getattr(content, "role", None) == "model" and not has_function_call
-        ):
+        if is_function_response or (content.role == "model" and not has_function_call):
             groups.append(group)
             group = []
     if group:
@@ -84,9 +144,13 @@ class Connect:
     """
 
     resume_handle: str | None
-    seed: tuple[list, ...]  # batches of the rendered history
+    seed: tuple[list[Content], ...]  # batches of the history view's contents
     seeded: tuple[str, ...]  # ids of the history-view blocks the seed replays
     release_grace: bool
+
+    @property
+    def contents(self) -> int:
+        return sum(len(batch) for batch in self.seed)
 
     @property
     def mode(self) -> str:
@@ -126,8 +190,16 @@ class SessionCore:
     generation, and is otherwise applied like any other message.
     """
 
-    def __init__(self, completion_signal: str):
-        self._completion_signal = completion_signal
+    def __init__(self, options: dict):
+        """``options`` are the driver's resolved Live options (live.py live_options)."""
+        self._completion_signal = options["completion_signal"]
+        # What a queued acknowledgement adds to each function response, and so each replayed
+        # receipt that did not store its own.
+        self.tool_response_options = (
+            {"will_continue": False, "scheduling": "SILENT"}
+            if options["tool_response_scheduling"] == "silent"
+            else {}
+        )
         self._connections = 0  # connections set up so far
         self._generations = 0  # generations started on the open connection
         self.connection: int | None = None  # the open connection's number, from 1
@@ -144,18 +216,118 @@ class SessionCore:
 
     # ---- connections ---------------------------------------------------------------------
 
-    def connect(self, history: list, seeded: tuple[str, ...], resume_handle) -> Connect:
-        """Close the open connection and plan the next one. A resume carries no history: the
+    def connect(
+        self, history: CanonicalRequest | None, resume_handle, *, replacing: bool
+    ) -> Connect:
+        """Plan the next connection, once the open one is closed (``replacing``: there was one),
+        from the history view (None for an empty session). A resume carries no history: the
         server restores the session from the handle."""
-        replacing = self.connection is not None
-        self.closed()
         self.resume_handle = resume_handle
+        contents, seeded = self._seed(history)
         return Connect(
             resume_handle,
-            tuple(history_batches(history)),
+            tuple(history_batches(contents)),
             seeded,
-            release_grace=replacing or bool(history),
+            release_grace=replacing or bool(contents),
         )
+
+    def _seed(self, history: CanonicalRequest | None) -> tuple[list[Content], tuple[str, ...]]:
+        """The Contents that replay the history view, and the ids of their blocks.
+
+        The system block travels in the setup instead. A model output is the canonical action of
+        the native call that its turn's tool block carries, so it has no Content of its own.
+        """
+        if history is None:
+            return [], ()
+        texts = history.policy.texts
+        prefixes = _frame_prefixes(history)
+        contents, seeded, turn_index = [], [], -1
+        for item in history.items:
+            block = item.block
+            if block.kind == "action_ledger":
+                text = texts.ledger_header + "\n" + block.text
+                contents.append(Content(_ROLES[item.intent.role], (Part(text=text),)))
+            elif block.kind == "frame":
+                turn_index += 1
+                prefix = prefixes.get(block.id)
+                text = _frame_text(block, prefix)
+                contents.append(_frame_content(_ROLES[item.intent.role], text, block.image))
+                if prefix is not None:
+                    seeded.append(prefix.id)
+            elif block.kind == "tool_exchange":
+                tool_contents = self._tool_contents(
+                    block, _ROLES[item.intent.role], turn_index, texts
+                )
+                if not tool_contents:
+                    continue
+                contents += tool_contents
+            else:
+                continue
+            seeded.append(block.id)
+        return contents, tuple(seeded)
+
+    def _tool_contents(self, block, role: str, turn_index: int, texts) -> list[Content]:
+        """One turn's tool rounds: the text spoken before the first call, then the policy's
+        transcript, or each round as native calls and their stored receipts."""
+        contents = []
+        if block.initial_text:
+            contents.append(Content(role, (Part(text=block.initial_text),)))
+        if block.text:
+            # Live tool messages do not expose their original thought signatures. Replaying
+            # synthetic native calls can stall the next interaction even after setup succeeds.
+            contents.append(Content(role, (Part(text=block.text),)))
+            return contents
+        for exchange_index, exchange in enumerate(block.exchanges):
+            calls = [call for call in exchange.calls if call.get("name")]
+            if not calls:
+                continue
+            responses_by_id = {
+                str(response.get("id") or ""): response for response in exchange.receipts
+            }
+            model_parts, response_parts = [], []
+            for call_index, call in enumerate(calls):
+                call_id = str(
+                    call.get("id") or f"history-{turn_index}-{exchange_index}-{call_index}"
+                )
+                name = str(call["name"])
+                # Gemini 3 parallel calls carry the thought signature only on the first
+                # function-call part in one model Content. Pydantic keeps Google's documented
+                # literal sentinel on the wire even though genuine signatures are bytes.
+                model_parts.append(
+                    Part(
+                        function_call={"id": call_id, "name": name, "args": call["arguments"]},
+                        thought_signature=REPLAY_THOUGHT_SIGNATURE if call_index == 0 else None,
+                    )
+                )
+                stored_response = responses_by_id.get(call_id, {})
+                response_options = dict(self.tool_response_options)
+                response_options.update(
+                    {
+                        key: stored_response[key]
+                        for key in ("will_continue", "scheduling")
+                        if key in stored_response
+                    }
+                )
+                response_parts.append(
+                    Part(
+                        function_response={
+                            "id": call_id,
+                            "name": str(stored_response.get("name") or name),
+                            "response": stored_response.get(
+                                "response", dict(texts.gemini_queued_tool_response)
+                            ),
+                            **response_options,
+                        }
+                    )
+                )
+            # Rebuild every provider-native tool exchange, including a response that had
+            # zero or multiple GUI calls and therefore became a benchmark WAIT. Replaying
+            # only a selected call would change the model-visible trajectory after reconnect.
+            contents.append(Content(role, tuple(model_parts)))
+            contents.append(Content("user", tuple(response_parts)))
+            if exchange.text_after:
+                contents.append(Content(role, (Part(text=exchange.text_after),)))
+        return contents
 
     def connected(self, connect: Connect) -> None:
         """The setup was acknowledged and the whole seed sent: the connection counts from here."""
@@ -191,13 +363,24 @@ class SessionCore:
         for key in keys:
             self.delivery[key] = SENT
 
-    def input_started(self, keys) -> None:
-        """An observation is being written: no handle resumes the session until its turn
-        completes cleanly."""
+    def observe(self, history: CanonicalRequest) -> Observation:
+        """Plan the history view's newest frame, after its feedback, as one input, and record it
+        as being written: no handle resumes the session until its turn completes cleanly."""
+        current = next(item for item in reversed(history.items) if item.block.kind == "frame")
+        frame = current.block
+        prefix = _frame_prefixes(history).get(frame.id)
+        observation = Observation(
+            _ROLES[current.intent.role],
+            _frame_text(frame, prefix),
+            frame.image,
+            frame.observation_id,
+            tuple(("block", block.id) for block in (frame, prefix) if block is not None),
+        )
         self.last_turn_clean = False
         self.resume_handle = None
         self.candidate_resume_handle = None
-        self.sending(keys)
+        self.sending(observation.keys)
+        return observation
 
     def interrupt_sent(self) -> None:
         self.resume_handle = None
@@ -217,7 +400,7 @@ class SessionCore:
 
     # ---- reads -----------------------------------------------------------------------------
 
-    def generation_started(self, generation_id: str) -> None:
+    def start_generation(self, generation_id: str) -> None:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 

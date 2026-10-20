@@ -20,6 +20,7 @@ from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
+from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
@@ -31,13 +32,10 @@ from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.providers.capture import async_ws_connection
+from realtime_framework.providers.gemini.session import Connect
+from realtime_framework.providers.gemini.session import Content
+from realtime_framework.providers.gemini.session import Part
 from realtime_framework.providers.gemini.session import SessionCore
-
-# Gemini 3 requires a thought signature when a manually reconstructed history contains a model
-# function-call part. Live tool-call messages do not expose the original signature because bidi
-# function calls use the dedicated ToolCall message rather than model Content. Google documents
-# this sentinel for deterministic client-injected function-call history.
-_REPLAY_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 
 _SESSION_RELEASE_GRACE_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
@@ -104,23 +102,6 @@ LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "hi
 
 class GoAwayDeadlineExceeded(RuntimeError):
     """An incomplete native turn must remain invalid, even without visible output."""
-
-
-# Content roles for the request intents this session carries (ledger, frame; tool exchange).
-_ROLES = {"input": "user", "model": "model"}
-
-
-def _frame_prefixes(history) -> dict:
-    """The execution-feedback block sent ahead of each frame's prompt, by frame block id."""
-    return {
-        item.block.attached_to: item.block
-        for item in history.items
-        if item.intent.position == "frame_prefix"
-    }
-
-
-def _frame_text(frame, prefix) -> str:
-    return f"{prefix.text}\n{frame.text}" if prefix is not None else frame.text
 
 
 class GeminiLiveDriver:
@@ -210,7 +191,7 @@ class GeminiLiveDriver:
         self._cm = None
         self._session = None
         self._received = None  # the open connection's receive loop
-        self._core = SessionCore(self.options["completion_signal"])
+        self._core = SessionCore(self.options)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
         self._connect_metadata: dict = {}
@@ -358,28 +339,20 @@ class GeminiLiveDriver:
             declarations.append(self.types.FunctionDeclaration(**values))
         return declarations
 
-    def _tool_response_options(self) -> dict:
-        if self.options["tool_response_scheduling"] == "silent":
-            return {
-                "will_continue": False,
-                "scheduling": self.types.FunctionResponseScheduling.SILENT,
-            }
-        return {}
-
-    def _live_config(self, request: ConnectRequest, *, resume_handle=None, has_history=False):
-        instruction = request.seed.system_instruction
+    def _live_config(self, seed: SessionSeed, connect: Connect):
+        """The setup of one planned connection."""
         return self.types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription=self.types.AudioTranscriptionConfig(),
-            tools=[
-                self.types.Tool(function_declarations=self._function_declarations(request.seed))
-            ],
+            tools=[self.types.Tool(function_declarations=self._function_declarations(seed))],
             thinking_config=self._thinking_config(),
-            system_instruction=self.types.Content(parts=[self.types.Part(text=instruction)]),
-            session_resumption=self.types.SessionResumptionConfig(handle=resume_handle),
+            system_instruction=self.types.Content(
+                parts=[self.types.Part(text=seed.system_instruction)]
+            ),
+            session_resumption=self.types.SessionResumptionConfig(handle=connect.resume_handle),
             history_config=(
                 self.types.HistoryConfig(initial_history_in_client_content=True)
-                if has_history
+                if connect.seed
                 else None
             ),
             realtime_input_config=(
@@ -389,131 +362,30 @@ class GeminiLiveDriver:
             ),
         )
 
-    def _seed_contents(self, request: ConnectRequest) -> tuple[list, tuple[str, ...]]:
-        """The Contents that replay the request's history view, and the ids of their blocks.
+    def _content(self, content: Content):
+        """A planned Content as google-genai's Content."""
+        return self.types.Content(
+            role=content.role, parts=[self._part(part) for part in content.parts]
+        )
 
-        The system block travels in the setup instead. A model output is the canonical action of
-        the native call that its turn's tool block carries, so it has no Content of its own.
-        """
-        history = request.history
-        if history is None:
-            return [], ()
-        texts = history.policy.texts
-        prefixes = _frame_prefixes(history)
-        contents, seeded, turn_index = [], [], -1
-        for item in history.items:
-            block = item.block
-            if block.kind == "action_ledger":
-                text = texts.ledger_header + "\n" + block.text
-                contents.append(
-                    self.types.Content(
-                        role=_ROLES[item.intent.role], parts=[self.types.Part(text=text)]
-                    )
-                )
-            elif block.kind == "frame":
-                turn_index += 1
-                prefix = prefixes.get(block.id)
-                contents.append(
-                    self.types.Content(
-                        role=_ROLES[item.intent.role], parts=self._frame_parts(block, prefix)
-                    )
-                )
-                if prefix is not None:
-                    seeded.append(prefix.id)
-            elif block.kind == "tool_exchange":
-                tool_contents = self._tool_contents(
-                    block, _ROLES[item.intent.role], turn_index, texts
-                )
-                if not tool_contents:
-                    continue
-                contents += tool_contents
-            else:
-                continue
-            seeded.append(block.id)
-        return contents, tuple(seeded)
-
-    def _frame_parts(self, frame, prefix) -> list:
-        parts = [self.types.Part(text=_frame_text(frame, prefix))]
-        if frame.image is not None:
-            parts.append(
-                self.types.Part(
-                    inline_data=self.types.Blob(
-                        mime_type=frame.image.mime_type, data=frame.image.data
-                    )
-                )
+    def _part(self, part: Part):
+        if part.image is not None:
+            return self.types.Part(
+                inline_data=self.types.Blob(mime_type=part.image.mime_type, data=part.image.data)
             )
-        return parts
-
-    def _tool_contents(self, block, role: str, turn_index: int, texts) -> list:
-        """One turn's tool rounds: the text spoken before the first call, then the policy's
-        transcript, or each round as native calls and their stored receipts."""
-        contents = []
-        if block.initial_text:
-            contents.append(
-                self.types.Content(role=role, parts=[self.types.Part(text=block.initial_text)])
+        if part.function_call is not None:
+            values = {"function_call": self.types.FunctionCall(**part.function_call)}
+            if part.thought_signature is not None:
+                values["thought_signature"] = part.thought_signature
+            return self.types.Part(**values)
+        if part.function_response is not None:
+            return self.types.Part(
+                function_response=self.types.FunctionResponse(**part.function_response)
             )
-        if block.text:
-            # Live tool messages do not expose their original thought signatures. Replaying
-            # synthetic native calls can stall the next interaction even after setup succeeds.
-            contents.append(self.types.Content(role=role, parts=[self.types.Part(text=block.text)]))
-            return contents
-        for exchange_index, exchange in enumerate(block.exchanges):
-            calls = [call for call in exchange.calls if call.get("name")]
-            if not calls:
-                continue
-            responses_by_id = {
-                str(response.get("id") or ""): response for response in exchange.receipts
-            }
-            model_parts, response_parts = [], []
-            for call_index, call in enumerate(calls):
-                call_id = str(
-                    call.get("id") or f"history-{turn_index}-{exchange_index}-{call_index}"
-                )
-                name = str(call["name"])
-                part_values = {
-                    "function_call": self.types.FunctionCall(
-                        id=call_id, name=name, args=call["arguments"]
-                    )
-                }
-                # Gemini 3 parallel calls carry the thought signature only on the first
-                # function-call part in one model Content. Pydantic keeps Google's documented
-                # literal sentinel on the wire even though genuine signatures are bytes.
-                if call_index == 0:
-                    part_values["thought_signature"] = _REPLAY_THOUGHT_SIGNATURE
-                model_parts.append(self.types.Part(**part_values))
-                stored_response = responses_by_id.get(call_id, {})
-                response_options = self._tool_response_options()
-                response_options.update(
-                    {
-                        key: stored_response[key]
-                        for key in ("will_continue", "scheduling")
-                        if key in stored_response
-                    }
-                )
-                response_parts.append(
-                    self.types.Part(
-                        function_response=self.types.FunctionResponse(
-                            id=call_id,
-                            name=str(stored_response.get("name") or name),
-                            response=stored_response.get(
-                                "response", dict(texts.gemini_queued_tool_response)
-                            ),
-                            **response_options,
-                        )
-                    )
-                )
-            # Rebuild every provider-native tool exchange, including a response that had
-            # zero or multiple GUI calls and therefore became a benchmark WAIT. Replaying
-            # only a selected call would change the model-visible trajectory after reconnect.
-            contents.append(self.types.Content(role=role, parts=model_parts))
-            contents.append(self.types.Content(role="user", parts=response_parts))
-            if exchange.text_after:
-                contents.append(
-                    self.types.Content(role=role, parts=[self.types.Part(text=exchange.text_after)])
-                )
-        return contents
+        return self.types.Part(text=part.text)
 
-    async def _close_current(self) -> None:
+    async def _close_current(self) -> bool:
+        """Close the open connection, if any; returns whether there was one."""
         cm, self._cm = self._cm, None
         self._session = None
         self._received = None
@@ -528,25 +400,21 @@ class GeminiLiveDriver:
                 )
             except Exception:  # noqa: BLE001, S110 - best-effort SDK cleanup
                 pass
+        return cm is not None
 
     async def connect(self, request: ConnectRequest) -> None:
         await self._connect_once(request)
 
     async def _connect_once(self, request: ConnectRequest) -> None:
-        history, seeded = self._seed_contents(request)
-        connect = self._core.connect(history, seeded, request.resume_handle)
-        await self._close_current()
+        replacing = await self._close_current()
+        connect = self._core.connect(request.history, request.resume_handle, replacing=replacing)
         if connect.release_grace:
             # Closing the local WebSocket and releasing the server-side Live session are not one
             # atomic operation. Apply the grace period to every reconnect/history replay, including
             # a retry whose failed predecessor no longer has a local context manager. This is
             # wall-clock-only and avoids briefly exceeding a one-session provider quota.
             await self.clock.sleep_async(_SESSION_RELEASE_GRACE_S)
-        config = self._live_config(
-            request,
-            resume_handle=request.resume_handle,
-            has_history=bool(history),
-        )
+        config = self._live_config(request.seed, connect)
         cm = self.client.aio.live.connect(model=request.seed.model_name, config=config)
         try:
             session = await cm.__aenter__()
@@ -558,7 +426,7 @@ class GeminiLiveDriver:
             # Bound the messages so screenshots do not form one oversized WebSocket frame.
             for index, batch in enumerate(connect.seed):
                 await session.send_client_content(
-                    turns=batch,
+                    turns=[self._content(content) for content in batch],
                     turn_complete=index == len(connect.seed) - 1,
                 )
         except BaseException as exc:
@@ -575,8 +443,8 @@ class GeminiLiveDriver:
         self._received = self._receive_loop(session, self._core.connection)
         self._connect_metadata = {
             "session_connect_mode": connect.mode,
-            "session_resume_handle_used": request.resume_handle is not None,
-            "history_seed_contents": len(history),
+            "session_resume_handle_used": connect.resume_handle is not None,
+            "history_seed_contents": connect.contents,
             "history_seed_messages": len(connect.seed),
             "session_replacement_grace_s": (
                 _SESSION_RELEASE_GRACE_S if connect.release_grace else 0.0
@@ -622,23 +490,17 @@ class GeminiLiveDriver:
             raise RuntimeError("Gemini Live session is not connected")
         if self._activity_open:
             raise RuntimeError("Gemini Live input activity is already open")
-        current = next(item for item in reversed(history.items) if item.block.kind == "frame")
-        frame = current.block
-        prefix = _frame_prefixes(history).get(frame.id)
-        keys = [("block", block.id) for block in (frame, prefix) if block is not None]
-        self._core.input_started(keys)
+        frame = self._core.observe(history)
         if self.options["input_transport"] == "client_content":
             # Send the screenshot with its grounding text in one Content that triggers generation
             # after any seeded history has been ingested. A realtime text trigger mixed with
             # synthetic silent audio can create a second user activity (including hallucinated
             # speech) and leave synchronous tools unfinished.
             await session.send_client_content(
-                turns=self.types.Content(
-                    role=_ROLES[current.intent.role], parts=self._frame_parts(frame, prefix)
-                ),
+                turns=self._content(frame.content),
                 turn_complete=True,
             )
-            self._core.sent(keys)
+            self._core.sent(frame.keys)
             return {"observation_id": frame.observation_id}
         await session.send_realtime_input(activity_start=self.types.ActivityStart())
         self._activity_open = True
@@ -658,7 +520,7 @@ class GeminiLiveDriver:
             self._last_video_sent_at = self.clock.monotonic()
             # Let media ingestion catch up before the corresponding SoM text arrives.
             await self.clock.sleep_async(1.0)
-            await session.send_realtime_input(text=_frame_text(frame, prefix))
+            await session.send_realtime_input(text=frame.text)
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.
             await session.send_realtime_input(
@@ -670,13 +532,13 @@ class GeminiLiveDriver:
             # An incomplete activity cannot be resumed as canonical context.
             self._activity_open = True
             raise
-        self._core.sent(keys)
+        self._core.sent(frame.keys)
         return {"observation_id": frame.observation_id}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
-        self._core.generation_started(request.generation_id)
+        self._core.start_generation(request.generation_id)
         return GenerationHandle(
             request.generation_id,
             # The policy's queued acknowledgement, sent for every call of this generation.
@@ -999,7 +861,7 @@ class GeminiLiveDriver:
                         id=call_id,
                         name=name,
                         response=dict(generation.opaque),
-                        **self._tool_response_options(),
+                        **self._core.tool_response_options,
                     )
                     for call_id, name in self._core.acknowledging()
                 ]
