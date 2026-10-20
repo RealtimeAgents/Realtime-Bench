@@ -231,8 +231,8 @@ def _check_merged_turns(records: list[dict]) -> None:
         assert kinds.count("image") == 2
 
 
-def _compare_or_record(name: str, header: dict, records: list[dict]) -> None:
-    actual = baseline.Normalizer()([header, *records])
+def _compare_or_record(name: str, header: dict, records: list[dict], run_dir: Path) -> None:
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(run_dir)])
     path = BASELINES / name
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(path, actual)
@@ -281,6 +281,7 @@ def test_long_scenario_token_clock(tmp_path, monkeypatch):
         "anthropic_messages-token-long.jsonl",
         _header(config, "long", TOKENS_PER_FRAME, MAX_TICKS),
         records,
+        tmp_path,
     )
 
 
@@ -293,5 +294,8 @@ def test_short_scenario_pause_mode(tmp_path, monkeypatch):
     caps = [r["requests"][0]["body"]["max_tokens"] for r in records]
     assert caps == [config.native_output_limit] * len(records)
     _compare_or_record(
-        "anthropic_messages-pause-short.jsonl", _header(config, "short", None, None), records
+        "anthropic_messages-pause-short.jsonl",
+        _header(config, "short", None, None),
+        records,
+        tmp_path,
     )

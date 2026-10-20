@@ -160,8 +160,8 @@ def _check_kimi_usage(records: list[dict]) -> None:
         assert result["provider_audio_output_tokens"] == 0
 
 
-def _compare_or_record(path: Path, header: dict, records: list[dict]) -> None:
-    actual = baseline.Normalizer()([header, *records])
+def _compare_or_record(path: Path, header: dict, records: list[dict], run_dir: Path) -> None:
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(run_dir)])
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(path, actual)
         return
@@ -200,6 +200,7 @@ def test_long_scenario_finite_token_clock(tmp_path, monkeypatch):
         BASELINES / "moonshot-token-long.jsonl",
         _header(config, "long", TOKENS_PER_FRAME),
         records,
+        tmp_path,
     )
 
 
@@ -215,4 +216,5 @@ def test_pause_mode_snapshot(tmp_path, monkeypatch):
         BASELINES / "moonshot-pause-short.jsonl",
         _header(config, "pause-short", None),
         records,
+        tmp_path,
     )

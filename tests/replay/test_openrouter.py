@@ -125,8 +125,8 @@ def header_record(config, scenario: str, clock: dict) -> dict:
     }
 
 
-def check_baseline(name: str, header: dict, records: list[dict]) -> list[dict]:
-    actual = baseline.Normalizer()([header, *records])
+def check_baseline(name: str, header: dict, records: list[dict], run_dir: Path) -> list[dict]:
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(run_dir)])
     path = BASELINES / name
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(path, actual)
@@ -193,7 +193,10 @@ def test_long_scenario(openrouter_env, tmp_path):
     ]
     assert caps[40] == NATIVE_OUTPUT_LIMIT and caps[41] < NATIVE_OUTPUT_LIMIT and min(caps) > 0
     actual = check_baseline(
-        "openrouter-token-long.jsonl", header_record(config, "long", TOKEN_CLOCK), records
+        "openrouter-token-long.jsonl",
+        header_record(config, "long", TOKEN_CLOCK),
+        records,
+        tmp_path,
     )
     check_one_session(actual)
 
@@ -216,7 +219,10 @@ def test_pause_mode_snapshot(openrouter_env, tmp_path):
     assert [r["requests"][0]["body"]["max_tokens"] for r in records] == [NATIVE_OUTPUT_LIMIT] * 3
     assert "B is unlimited" in records[0]["requests"][0]["body"]["messages"][0]["content"]
     actual = check_baseline(
-        "openrouter-pause-short.jsonl", header_record(config, "pause-short", clock), records
+        "openrouter-pause-short.jsonl",
+        header_record(config, "pause-short", clock),
+        records,
+        tmp_path,
     )
     check_one_session(actual)
 
@@ -285,7 +291,10 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     assert sleeps.calls == [TRANSPORT_RETRY.delay_s(1, runtime["generation_id"], classification[0])]
     assert 0.75 <= sleeps.calls[0] <= 1.25
     actual = check_baseline(
-        f"openrouter-{scenario}.jsonl", header_record(config, scenario, TOKEN_CLOCK), records
+        f"openrouter-{scenario}.jsonl",
+        header_record(config, scenario, TOKEN_CLOCK),
+        records,
+        tmp_path,
     )
     check_one_session(actual)
     return classification, runtime
@@ -400,5 +409,6 @@ def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
         f"openrouter-{clock_mode}-usage-last.jsonl",
         header_record(config, "usage-last", clock),
         records,
+        tmp_path,
     )
     check_one_session(actual)

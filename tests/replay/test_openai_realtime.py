@@ -6,7 +6,8 @@ action, usage and reported execution result of each decision. GenerationRequest.
 built every turn (harnesses/default/context.py:432-449) but the driver never reads it
 (providers/openai_realtime.py:319-337), and the trajectory's input_prompt shows the archived
 action ledger as a user message (harnesses/default/harness.py:1077-1091) where the wire carries
-a system item (openai_realtime.py:194-214, 569-578). Neither is recorded.
+a system item (openai_realtime.py:194-214, 569-578). The messages are not recorded; the
+trajectory rows are, with input_prompt as a digest (baseline.py).
 
 All scripts run on the finite token clock with B=1024 and 61 ticks: decision k may emit
 min(32000, (61 - k) * 1024) tokens (evaluation/runner.py:864-879). That is the native limit up
@@ -121,8 +122,8 @@ def _run(stub: RealtimeStub, steps, tmp_path: Path, scenario: str) -> list[dict]
     ]
 
 
-def _compare_with_baseline(name: str, records: list[dict]) -> None:
-    actual = baseline.Normalizer()(records)
+def _compare_with_baseline(name: str, records: list[dict], trajectory: list[dict]) -> None:
+    actual = baseline.Normalizer()([*records, *trajectory])
     path = BASELINES / f"openai_realtime-{name}.jsonl"
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(path, actual)
@@ -283,7 +284,7 @@ def test_long_scenario(tmp_path):
     wire_caps = [r["budget"]["transport_output_tokens"] for r in steps]
     assert wire_caps[:57] == ["inf"] * 57 and wire_caps[57:] == [4096, 3072, 2048]
 
-    _compare_with_baseline("token-long", records)
+    _compare_with_baseline("token-long", records, baseline.trajectory(tmp_path))
 
 
 def test_dropped_response_reconnects(tmp_path):
@@ -319,7 +320,7 @@ def test_dropped_response_reconnects(tmp_path):
     assert runtime["transport_reconnect_attempts"] == 1
     assert runtime["transport_reconnect_reason"].startswith("transient: ConnectionClosedError(")
     assert runtime["transport_retry_usage"] == [None]
-    _compare_with_baseline("token-dropped-response", records)
+    _compare_with_baseline("token-dropped-response", records, baseline.trajectory(tmp_path))
 
 
 def test_dropped_response_after_archive_replays_ledger(tmp_path):
@@ -356,6 +357,7 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
     _compare_with_baseline(
         "token-dropped-response-after-archive",
         [records[0], records[1], *steps_records[51:], records[-1]],
+        baseline.trajectory(tmp_path)[51:],
     )
 
 
@@ -372,7 +374,7 @@ def test_rejected_upgrade_retries_connect(tmp_path):
     assert initialize["connection"] == 2
     assert [event["type"] for event in initialize["events"]] == ["session.update"]
     assert all(_connections_used(r) == [2] for r in _steps(records))
-    _compare_with_baseline("token-rejected-upgrade", records)
+    _compare_with_baseline("token-rejected-upgrade", records, baseline.trajectory(tmp_path))
 
 
 def test_session_edit_error_rebuilds(tmp_path):
@@ -432,4 +434,4 @@ def test_session_edit_error_rebuilds(tmp_path):
     anchors = [origin.get(event["previous_item_id"]) for event in creates]
     assert anchors == ["assistant"] * 5 + ["this batch"] + ["assistant"] * 4
     assert creates[5]["previous_item_id"] == creates[4]["item"]["id"]
-    _compare_with_baseline("token-edit-error", records)
+    _compare_with_baseline("token-edit-error", records, baseline.trajectory(tmp_path))

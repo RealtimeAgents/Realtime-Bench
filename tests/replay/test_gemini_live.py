@@ -356,10 +356,10 @@ def run_episode(
 
 
 @contextlib.contextmanager
-def matches_baseline(name: str, records: list[dict]):
+def matches_baseline(name: str, records: list[dict], run_dir: Path):
     """Compare with the baseline before the checks in the body, so that any change first shows as
     field-level differences; with REPLAY_RECORD=1, write it only after the checks pass."""
-    actual = WireNormalizer()(records)
+    actual = WireNormalizer()([*records, *baseline.trajectory(run_dir)])
     path = BASELINES / f"gemini_live-{name}.jsonl"
     recording = os.environ.get("REPLAY_RECORD") == "1"
     if not recording:
@@ -473,7 +473,7 @@ def test_long_scenario(preset, live_env, tmp_path):
         name, config, preset.model, LONG_SCENARIO, turns, preset, live_env, tmp_path
     )
     steps = records[2:-1]
-    with matches_baseline(name, records):
+    with matches_baseline(name, records, tmp_path / "run"):
         check_session(stub, results)
         check_rebuilds(steps, results)
         check_rejection_feedback(steps)
@@ -505,7 +505,7 @@ def test_driver_default_short(live_env, tmp_path):
         name, config, preset.model, DEFAULT_SCENARIO, turns, preset, live_env, tmp_path
     )
     steps = records[2:-1]
-    with matches_baseline(name, records):
+    with matches_baseline(name, records, tmp_path / "run"):
         check_session(stub, results)
         for record in steps:
             sent = [next(iter(message)) for message in client_messages(record, "realtime_input")]
@@ -541,7 +541,7 @@ def test_resume_failure_short(live_env, tmp_path):
         setup_closes={"handle-1": (1008, "Session resumption handle is invalid.")},
     )
     steps = records[2:-1]
-    with matches_baseline(name, records):
+    with matches_baseline(name, records, tmp_path / "run"):
         check_session(stub, results)
         resume, replay = client_messages(steps[1], "setup")
         assert resume["sessionResumption"] == {"handle": "handle-1"}

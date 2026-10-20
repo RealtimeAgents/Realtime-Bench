@@ -5,7 +5,8 @@ state entry (Luna: the transcript's strings and image parts, providers/openai_de
 JEV: the history messages, harnesses/jev/selection.py:223-227), each question and each criteria
 order is stored once, on a "blob" line before its first use, and referenced as {"$blob": id}. The
 decision metadata repeats the questions (jev_calls and jev_question, harnesses/jev/driver.py:90-103)
-and references the same blobs. This is storage only: read() restores the records before comparison.
+and references the same blobs, in the step's result and in its trajectory row. This is storage
+only: read() restores the records before comparison.
 """
 
 from __future__ import annotations
@@ -48,27 +49,41 @@ def _pack_request(request: dict, blobs: _Blobs) -> dict:
     }
 
 
+def _pack_runtime(runtime: dict, blobs: _Blobs) -> dict:
+    return {
+        **runtime,
+        "jev_calls": [
+            {**call, "question": blobs.ref(call["question"])} for call in runtime["jev_calls"]
+        ],
+        "jev_question": blobs.ref(runtime["jev_question"]),
+    }
+
+
 def _pack_step(record: dict, blobs: _Blobs) -> dict:
     record = {**record, "requests": [_pack_request(r, blobs) for r in record["requests"]]}
     runtime = record["result"].get("realtime_runtime")
     if runtime is not None:  # a failed decision returns no runtime metadata (harness.py:1317-1329)
-        runtime = {
-            **runtime,
-            "jev_calls": [
-                {**call, "question": blobs.ref(call["question"])} for call in runtime["jev_calls"]
-            ],
-            "jev_question": blobs.ref(runtime["jev_question"]),
-        }
-        record["result"] = {**record["result"], "realtime_runtime": runtime}
+        record["result"] = {**record["result"], "realtime_runtime": _pack_runtime(runtime, blobs)}
     return record
+
+
+def _pack_trajectory(record: dict, blobs: _Blobs) -> dict:
+    """A trajectory row repeats its decision's runtime metadata (harness.py:1489)."""
+    runtime = record["row"].get("realtime_runtime")
+    if runtime is None:  # nor does a failed decision's row (harness.py:1294-1312)
+        return record
+    return {**record, "row": {**record["row"], "realtime_runtime": _pack_runtime(runtime, blobs)}}
 
 
 def write(path: Path, records: list[dict]) -> None:
     lines: list[str] = []
     blobs = _Blobs(lines)
     for record in records:
-        packed = _pack_step(record, blobs) if record["record"] == "step" else record
-        lines.append(_dumps(packed))
+        if record["record"] == "step":
+            record = _pack_step(record, blobs)
+        elif record["record"] == "trajectory":
+            record = _pack_trajectory(record, blobs)
+        lines.append(_dumps(record))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
