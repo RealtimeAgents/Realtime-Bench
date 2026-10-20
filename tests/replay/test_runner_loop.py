@@ -278,7 +278,7 @@ def test_short_case_baseline(short_run):
 
 
 # An exception that escapes the decision loop still ends the episode through _finalize
-# (runner.py:1226-1236): the snapshot is frozen, the stop reason latched and the run invalid.
+# (runner.py:1246-1258): the snapshot is frozen, the stop reason latched and the run invalid.
 # These are property tests; an escaped exception's traceback names files and lines.
 
 
@@ -318,13 +318,13 @@ def test_environment_exception_is_finalized(tmp_path):
         "reason": "clock_advance_failed",
         "detail": "page clock did not advance",
     }
-    # The wait comes before the commit (runner.py:628, 694), so decision 1 is never committed.
+    # The wait comes before the commit (runner.py:642, 708), so decision 1 is never committed.
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
     _check_finalized(run, at=1.5, raised="RuntimeError: page clock did not advance")
 
 
 def test_agent_exception_is_finalized(tmp_path):
-    """The agent raises as decision 1 binds its budget at 1.0 s (runner.py:953), before anything
+    """The agent raises as decision 1 binds its budget at 1.0 s (runner.py:973), before anything
     is latched: the runner invalidates the run itself."""
     configure_decision = DefaultHarness.configure_decision
     budgets = []
@@ -351,7 +351,7 @@ def test_agent_exception_is_finalized(tmp_path):
 
 
 # After run_stream returns, main() still saves the artifact, drains abandoned workers, closes the
-# agent and evaluates before it writes the summary (runner.py:1798-1928).
+# agent and evaluates before it writes the summary (runner.py:1831-1962).
 TEARDOWN_S = 2.0
 
 
@@ -380,7 +380,7 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
         "snapshot_s": 2.5,
         "snapshot_delay_s": 0.0,
     }
-    # The fields of run_summary.json that main() takes from the loop (runner.py:2054-2061).
+    # The fields of run_summary.json that main() takes from the loop (runner.py:2088-2095).
     summary = {
         "invalid_run": None,
         "solved": solved,

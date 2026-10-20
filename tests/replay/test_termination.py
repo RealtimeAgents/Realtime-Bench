@@ -4,7 +4,7 @@ _termination; evaluation/reporting.py episode_outcome).
 An unsolved episode that reached the scored horizon is a timeout, whatever the task reported at
 its end; one that ended earlier is a fail. On the token clock GuestEnvironment asks the task after
 every step (sandbox/actions.py:248), so a task whose own clock ends at the horizon reports its
-reason before run_stream's tick limit, and that reason is the stop reason (runner.py:831-832).
+reason before run_stream's tick limit, and that reason is the stop reason (runner.py:832-833).
 The episodes run the openrouter agent in pause mode against the real GuestEnvironment on a task
 clock (token_env.py).
 """
@@ -74,7 +74,7 @@ def test_task_end_at_the_horizon_is_a_timeout(monkeypatch, tmp_path, ends_at, ou
         "snapshot_s": ends_at,
         "snapshot_delay_s": 0.0,
     }
-    # The fields of run_summary.json that episode_outcome reads (runner.py:2081-2088).
+    # The fields of run_summary.json that episode_outcome reads (runner.py:2088-2095).
     summary = {
         "invalid_run": None,
         "solved": False,
