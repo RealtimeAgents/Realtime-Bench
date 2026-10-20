@@ -24,6 +24,7 @@ from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
     CanonicalTurn,
     ConnectRequest,
@@ -52,6 +53,7 @@ class FakeSocket:
         ]
         self.sent: list[dict] = []
         self.fail = None  # a predicate on a client message whose send raises
+        self.stall = None  # a predicate on a client message whose send never returns
 
     async def recv(self, decode=None):
         assert self.frames, "the driver read past the script"
@@ -67,6 +69,8 @@ class FakeSocket:
         message = json.loads(message)
         if self.fail is not None and self.fail(message):
             raise server_closed(1011, "Internal error.")
+        if self.stall is not None and self.stall(message):
+            await asyncio.Event().wait()
         self.sent.append(message)
 
 
@@ -483,3 +487,85 @@ def test_a_message_is_numbered_by_the_generation_in_flight_when_read(monkeypatch
     before, after = asyncio.run(run())
     assert before == [("TextDelta", 1, 1, "turn-0")]
     assert after == [("UsageSnapshot", 1, 2, "turn-1"), ("GenerationBoundary", 1, 2, "turn-1")]
+
+
+def test_idle_ends_a_turn_complete_reply(monkeypatch):
+    """With turn_complete as the completion signal, an IDLE status still ends the reply, without
+    a clean turn_complete boundary; events() returns without reading further."""
+    rig = Rig(monkeypatch, "gemini-3.8-live", [[IDLE]])
+
+    async def run():
+        await rig.connect()
+        return await drain(rig.driver.events(await rig.start("turn-0")))
+
+    assert stamps(asyncio.run(run())) == [("UsageSnapshot", 1, 1, "turn-0")]
+
+
+GO_AWAY_SOON = {"goAway": {"timeLeft": "2.1s"}}  # the client closes 2 s early: 0.1 s from now
+CALL = {"toolCall": {"functionCalls": [{"id": "call-0", "name": "wait", "args": {}}]}}
+
+
+@pytest.mark.parametrize(
+    ("script", "stall"),
+    [
+        ([GO_AWAY_SOON, HANG], None),
+        ([GO_AWAY_SOON, CALL], lambda message: "tool_response" in message),
+    ],
+    ids=["read", "acknowledgement"],
+)
+def test_the_go_away_deadline_bounds_the_reply(monkeypatch, script, stall):
+    """After a goAway the server closes the connection; a read or a tool acknowledgement still
+    pending at the deadline fails the reply, and the driver closes the connection."""
+    rig = Rig(monkeypatch, "gemini-3.8-live", [script])
+    rig.live.sockets[0].stall = stall
+
+    async def run():
+        await rig.connect()
+        try:
+            await drain(rig.driver.events(await rig.start("turn-0")))
+        except live.GoAwayDeadlineExceeded as exc:
+            return exc
+
+    assert isinstance(asyncio.run(asyncio.wait_for(run(), 5)), live.GoAwayDeadlineExceeded)
+    assert rig.driver._session is None and rig.driver._core.connection is None
+
+
+def test_an_interrupted_reply_is_contaminated(monkeypatch):
+    rig = Rig(
+        monkeypatch,
+        "gemini-3.8-live",
+        [
+            [
+                {"serverContent": {"interrupted": True}},
+                {"serverContent": {"generationComplete": True}},
+                TURN_COMPLETE,
+            ]
+        ],
+    )
+
+    async def run():
+        await rig.connect()
+        return await drain(rig.driver.events(await rig.start("turn-0")))
+
+    events = asyncio.run(run())
+    boundaries = [(event.kind, event.history_state) for event in events if hasattr(event, "kind")]
+    contaminated = ProviderHistoryState.CONTAMINATED
+    assert boundaries == [
+        ("interrupted", contaminated),
+        ("generation_complete", contaminated),
+        ("turn_complete", contaminated),
+    ]
+    assert events[-1].metadata["clean_turn_complete"] is False
+
+
+def test_a_cancelled_tool_call_fails_the_reply(monkeypatch):
+    rig = Rig(monkeypatch, "gemini-3.8-live", [[{"toolCallCancellation": {"ids": ["call-0"]}}]])
+
+    async def run():
+        await rig.connect()
+        try:
+            await drain(rig.driver.events(await rig.start("turn-0")))
+        except RuntimeError as exc:
+            return exc
+
+    assert str(asyncio.run(run())) == "Gemini cancelled a queued GUI function call"
