@@ -36,7 +36,9 @@ from realtime_framework.entity.records import _jsonable
 # 5: one pressure-archive rule for every API that declares a request estimate; JEV estimates
 #    its digest against its declared window instead of dropping history for a rejected
 #    one-option question.
-CONTEXT_POLICY_VERSION = 5
+# 6: text-JSON prompts: "All generated output tokens count." only under a finite B, and frame
+#    texts that stay true on older frames.
+CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
 JEV_LEDGER_HEADER = (

@@ -30,7 +30,9 @@ def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
         clock_mode,
     )
     # Role/rules vary by scenario family; the task-specific objective is injected separately.
-    agent.system_prompt_override = system_prompt_for_category(category)
+    agent.system_prompt_override = system_prompt_for_category(
+        category, finite_budget=clock_mode == "token" and tokens_per_frame is not None
+    )
     # The context policy's prompts (item 11) are keyed by it.
     agent.task_category = category
     # Copied into every GenerationRequest.clock_mode; no driver reads it any more (the wall-clock

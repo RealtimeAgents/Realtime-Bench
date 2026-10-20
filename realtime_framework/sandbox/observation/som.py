@@ -566,22 +566,30 @@ def resolve_action_references(
 OBSERVATION_INTERACTABLES_HEADER = (
     "\n\nCURRENT-SCREEN GROUNDING (read-only; no inspection round):\n"
 )
+# The text-JSON frames' header: a frame keeps it once newer frames follow, so it names the
+# frame's own screen.
+FRAME_INTERACTABLES_HEADER = (
+    "\n\nGROUNDING FOR THIS SCREEN (read-only; no inspection round):\n"
+)
 
 
 def without_observation_interactables(prompt: str) -> str:
     """Remove the appended SoM legend while keeping the frame prompt and execution feedback."""
-    return prompt.partition(OBSERVATION_INTERACTABLES_HEADER)[0]
+    for header in (OBSERVATION_INTERACTABLES_HEADER, FRAME_INTERACTABLES_HEADER):
+        if header in prompt:
+            return prompt.partition(header)[0]
+    return prompt
 
 
-def observation_prompt_with_interactables(base_prompt: str, text: str) -> str:
-    """Attach environment-provided controls to a visual observation.
+def observation_prompt_with_interactables(base_prompt: str, text: str, header: str) -> str:
+    """Attach environment-provided controls to a visual observation, after ``header``.
 
     This is observation data, not a model-invoked tool turn: the harness calls the read-only
     runtime for each frame and asks the model for its GUI action once.
     """
     return (
         base_prompt
-        + OBSERVATION_INTERACTABLES_HEADER
+        + header
         + (text or "No browser interactables were available for this screenshot.")
         + "\nUse only these marks; otherwise use raw coordinates."
     )

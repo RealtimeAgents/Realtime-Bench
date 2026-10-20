@@ -155,7 +155,7 @@ class ReplayGameTask(frames.ReplayTask):
     """The attributes the runner and BrowserSceneCapture read for a browser game."""
 
     task_id = "replay-game"
-    category = "browser_game"  # GAME_SYSTEM_PROMPT (harnesses/default/prompts.py:150-152)
+    category = "browser_game"  # GAME_ROLE (harnesses/default/prompts.py SCENARIO_ROLES)
     keys = ("ArrowLeft", "ArrowRight", "Space")  # read by load_tool_spec (interactables.py:868)
 
     def interactable_providers(self):
