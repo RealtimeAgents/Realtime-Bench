@@ -10,6 +10,8 @@ tree:
 Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_MODEL_COST_MAP=true):
 - deepseek-v4.1-flash declares its output limit on its endpoint: its native_output_limit_source
   and its run hashes changed.
+- LiteLLM 1.104.1 -> 1.106.1: provider_sdk_versions, the run hashes over it, and the
+  deepseek-v4.1-flash row of LiteLLM's map (litellm_output_limit) changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

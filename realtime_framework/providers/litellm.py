@@ -55,7 +55,7 @@ from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
 from realtime_framework.providers.context import validate_context_reserve
 
-LITELLM_VERSION = "1.104.1"
+LITELLM_VERSION = "1.106.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
