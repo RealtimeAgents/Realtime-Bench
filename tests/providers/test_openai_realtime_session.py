@@ -296,6 +296,84 @@ def test_repair_replaces_the_output_items_of_a_cut_response(output):
     assert ("create", "srv_extra") not in core.delivery
 
 
+def response_events(status: str = "completed") -> list:
+    """One response as the server streams it, with one output item."""
+    item = {"id": "srv_1", "type": "message", "role": "assistant"}
+    return [
+        server(type="response.created", response={"id": "resp_1"}),
+        server(type="response.output_item.added", response_id="resp_1", item=item),
+        server(type="response.output_text.delta", response_id="resp_1", delta="{}"),
+        server(type="response.done", response={"id": "resp_1", "status": status, "output": [item]}),
+    ]
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_response_events_join_their_generation(status):
+    core = opened([turn(0, "a0"), turn(1)])
+    generation = core.start_generation("d1.frame")
+    created, added, text, finished = response_events(status)
+    for event in (created, done("srv_1"), added, text, finished):
+        core.receive(event)
+    # Acknowledgements are the core's; the response's events are the generation's.
+    assert list(generation.events) == [created, added, text, finished]
+    assert (generation.response_id, generation.output_item_ids) == ("resp_1", ["srv_1"])
+    # A failed response leaves the frame without output items; a turn retry rebuilds it.
+    expected = [] if status == "failed" else ["srv_1"]
+    assert core.frames["d1.frame"].assistant_item_ids == expected
+    # After response.done no response is in progress.
+    core.receive(server(type="response.output_text.delta", response_id="resp_1", delta="late"))
+    assert len(generation.events) == 4
+
+
+@pytest.mark.parametrize(
+    ("named", "fails_edit", "reaches_generation"),
+    [("edit", True, False), ("none", True, True), ("cancel", False, True)],
+)
+def test_an_error_goes_to_the_state_it_names(named, fails_edit, reaches_generation):
+    """With an edit waiting and a response in progress: an error about the edit fails only the
+    edit, one about another client event (a cancel) goes only to the response, and one that names
+    none goes to both."""
+    turns = [turn(0, "a0"), turn(1)]
+    core = opened(turns)
+    generation = core.start_generation("d1.frame")
+    turns[0].fold_visual()
+    batch = core.begin_edit(view(turns))
+    sent(core, batch.operations)
+    event_id = {"edit": batch.operations[1].event_id, "none": None, "cancel": "rtb_cancel_1"}
+    event = error(event_id[named])
+    core.receive(event)
+    assert core.edit_answered == fails_edit
+    assert (list(generation.events) == [event]) == reaches_generation
+
+
+@pytest.mark.parametrize("response_first", [True, False])
+def test_an_edit_and_a_response_both_reach_the_mirror(response_first):
+    """A response that ends while an edit waits, or after it is applied, still gives the frame it
+    answered its output items, and the edit still replaces the folded user item."""
+    turns = [turn(0, "a0"), turn(1)]
+    core = opened(turns)
+    generation = core.start_generation("d1.frame")
+    turns[0].fold_visual()
+    batch = core.begin_edit(view(turns))
+    delete0, create0 = sent(core, batch.operations)
+    events = response_events()
+    if response_first:
+        for event in events:
+            core.receive(event)
+    core.receive(deleted(delete0.item_id))
+    core.receive(done(create0.item_id))
+    core.finish_edit()
+    if not response_first:
+        for event in events:
+            core.receive(event)
+    assert len(generation.events) == 4
+    assert (core.frames["d0.frame"].user_item_id, core.frames["d0.frame"].folded) == (
+        create0.item_id,
+        True,
+    )
+    assert core.frames["d1.frame"].assistant_item_ids == ["srv_1"]
+
+
 def test_delivery_is_sent_confirmed_or_unknown():
     core = new_core()
     confirmed, failed, pending = core.replay(view([turn(0, "a0"), turn(1)]))

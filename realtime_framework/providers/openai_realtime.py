@@ -33,7 +33,6 @@ from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
-from realtime_framework.providers.litellm import iterate_blocking
 from realtime_framework.providers.litellm import object_dict
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import QUOTA_EXHAUSTED
@@ -90,6 +89,48 @@ def classify_realtime_message(direction: str, message: dict):
     return kind, [], "response" if kind.startswith("response.") else "unsolicited"
 
 
+class _Session:
+    """One open connection's session core and its one receiver.
+
+    At most one read is in flight. Each server event it reads goes to the core, which hands it to
+    the state it belongs to; whoever waits for an acknowledgement or a response event awaits that
+    read instead of receiving on its own.
+    """
+
+    def __init__(self, conn, core: RealtimeSessionCore):
+        self.core = core
+        self._events = iter(conn)
+        self._read: asyncio.Task | None = None
+        self.closed = False
+        self.failure: Exception | None = None
+
+    async def receive_until(self, ready) -> None:
+        """Receive until ``ready()`` holds or the server closes the connection. A failed read
+        raises in every waiter, once it has taken what was received before."""
+        while not ready():
+            if self.failure is not None:
+                raise self.failure
+            if self.closed:
+                return
+            if self._read is None:
+                # The read runs in this waiter's context, so the trace records it in its scope.
+                self._read = asyncio.create_task(self._receive())
+            await asyncio.wait({self._read})
+
+    async def _receive(self) -> None:
+        try:
+            event = await asyncio.to_thread(next, self._events, None)
+        except Exception as exc:  # noqa: BLE001 - every waiter raises it
+            self.failure = exc
+        else:
+            if event is None:
+                self.closed = True
+            else:
+                self.core.receive(event)
+        finally:
+            self._read = None
+
+
 class OpenAIRealtimeDriver:
     capabilities = RealtimeCapabilities(
         protocol_family="openai_realtime",
@@ -124,8 +165,8 @@ class OpenAIRealtimeDriver:
         self._cm = None
         self._conn = None
         self._send_lock = threading.Lock()
-        # The open connection's conversation: what it holds and what became of each operation.
-        self._core: RealtimeSessionCore | None = None
+        # The open connection's conversation and its receiver.
+        self._session: _Session | None = None
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
@@ -223,7 +264,7 @@ class OpenAIRealtimeDriver:
 
     async def _send_all(self, operations) -> None:
         """Send planned operations in order; the session core records what became of each."""
-        core = self._core
+        core = self._session.core
         for operation in operations:
             core.sending(operation)
             try:
@@ -232,18 +273,17 @@ class OpenAIRealtimeDriver:
                 core.send_failed(operation)
                 raise
 
-    async def _wait_for_item_edits(self) -> None:
-        """Receive until the server has answered the pending in-place edit; the session core
-        decides which events answer it."""
-        if self._conn is None:
-            raise RuntimeError("OpenAI Realtime session is not connected")
-        while not self._core.edit_answered:
-            self._core.receive(await asyncio.to_thread(self._wire, self._conn.recv))
+    @staticmethod
+    async def _wait_for_item_edits(session: _Session) -> None:
+        """Wait until the server has answered the pending in-place edit."""
+        await session.receive_until(lambda: session.core.edit_answered)
+        if not session.core.edit_answered:
+            raise RuntimeError("OpenAI Realtime session closed during a history edit")
 
     async def _close_current(self) -> None:
         cm, self._cm = self._cm, None
         self._conn = None
-        self._core = None
+        self._session = None
         if cm is not None:
             try:
                 await asyncio.to_thread(cm.__exit__, None, None, None)
@@ -289,21 +329,22 @@ class OpenAIRealtimeDriver:
                 await asyncio.sleep(2 * (attempt + 1))
         if self._conn is None:
             raise RuntimeError(f"OpenAI Realtime session open failed: {last_error!r}")
-        self._core = RealtimeSessionCore(self._new_client_id)
+        self._session = _Session(self._conn, RealtimeSessionCore(self._new_client_id))
         # The history is None when the runtime opens the episode's first session.
-        await self._send_all(self._core.replay(request.history))
+        await self._send_all(self._session.core.replay(request.history))
 
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The history ends with this observation's frame.
-        await self._send_all([self._core.observe(history)])
+        await self._send_all([self._session.core.observe(history)])
         return {}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._conn is None:
             raise RuntimeError("OpenAI Realtime session is not connected")
+        session = self._session
         # The frame this response answers is the request's newest; its output items join it.
         _, frames = history_frames(request.canonical.items)
-        answered = self._core.frames[frames[-1].id]
+        core_generation = session.core.start_generation(frames[-1].id)
         response = {"max_output_tokens": request.transport_output_token_cap}
         if self.config.reasoning_effort is not None:
             response["reasoning"] = {"effort": self.config.reasoning_effort}
@@ -312,25 +353,19 @@ class OpenAIRealtimeDriver:
             self._conn.response.create,
             response=response,
         )
-        return GenerationHandle(
-            request.generation_id,
-            opaque=iter(self._conn),
-            metadata={
-                "output_item_ids": [],
-                "response_id": None,
-                "answered_frame": answered,
-            },
-        )
+        return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def events(self, generation: GenerationHandle):
+        session, core_generation = generation.opaque
+        pending = core_generation.events
         sequence = 0
-        started = False
-        async for event in iterate_blocking(generation.opaque):
+        while True:
+            await session.receive_until(lambda: pending)
+            if not pending:
+                return  # the server closed the connection
+            event = pending.popleft()
             event_type = getattr(event, "type", "")
             if event_type == "response.created":
-                started = True
-                response = getattr(event, "response", None)
-                generation.metadata["response_id"] = getattr(response, "id", None)
                 sequence += 1
                 yield GenerationBoundary(
                     generation.generation_id,
@@ -355,13 +390,6 @@ class OpenAIRealtimeDriver:
                     not cancel_race,
                 )
                 continue
-            if not started:
-                continue
-            if event_type in {"response.output_item.added", "response.output_item.done"}:
-                item_id = getattr(getattr(event, "item", None), "id", None)
-                if item_id and item_id not in generation.metadata["output_item_ids"]:
-                    generation.metadata["output_item_ids"].append(item_id)
-                continue
             if event_type.endswith(("output_text.delta", "text.delta")):
                 sequence += 1
                 yield TextDelta(
@@ -374,10 +402,6 @@ class OpenAIRealtimeDriver:
                 continue
             if event_type == "response.done":
                 response = getattr(event, "response", None)
-                for item in getattr(response, "output", None) or []:
-                    item_id = getattr(item, "id", None)
-                    if item_id and item_id not in generation.metadata["output_item_ids"]:
-                        generation.metadata["output_item_ids"].append(item_id)
                 usage = object_dict(getattr(response, "usage", None))
                 if usage is not None:
                     sequence += 1
@@ -409,10 +433,6 @@ class OpenAIRealtimeDriver:
                         )[:500],
                     )
                     return
-                # A superseded response's session is closed and replayed before its next use.
-                generation.metadata["answered_frame"].assistant_item_ids = list(
-                    generation.metadata["output_item_ids"]
-                )
                 boundary_metadata = {
                     "provider_response_status": status,
                     "provider_response_status_reason": reason,
@@ -437,7 +457,8 @@ class OpenAIRealtimeDriver:
         if self._conn is None:
             return InterruptResult(ProviderHistoryState.UNKNOWN)
         kwargs = {}
-        response_id = generation.metadata.get("response_id")
+        _, core_generation = generation.opaque
+        response_id = core_generation.response_id
         if response_id:
             kwargs["response_id"] = response_id
         cancel_event_id = self._new_client_id("cancel")
@@ -494,15 +515,16 @@ class OpenAIRealtimeDriver:
 
         # Validate every reference before the first mutating wire event. Any missing/stale provider
         # identity falls back to a canonical replay instead of risking a partial local plan.
-        problem = self._core.in_place_problem(request.history)
+        session = self._session
+        problem = session.core.in_place_problem(request.history)
         if problem is not None:
             return await self._fallback_from_in_place(request, problem)
 
         try:
-            batch = self._core.begin_edit(request.history)
+            batch = session.core.begin_edit(request.history)
             await self._send_all(batch.operations)
-            await self._wait_for_item_edits()
-            self._core.finish_edit()
+            await self._wait_for_item_edits(session)
+            session.core.finish_edit()
         except Exception as exc:  # noqa: BLE001 - a partial edit requires canonical replay
             return await self._fallback_from_in_place(request, repr(exc))
 
@@ -529,12 +551,13 @@ class OpenAIRealtimeDriver:
             return await self._compact_in_place(request)
         if request.force_rebuild or generation is None or self._conn is None:
             return await self._rebuild(request)
-        output_ids = list(generation.metadata.get("output_item_ids") or [])
+        _, core_generation = generation.opaque
+        output_ids = list(core_generation.output_item_ids)
         try:
             if not output_ids:
                 raise RuntimeError("response did not expose output item IDs")
             # The response answered the newest frame; its output replaces what the server kept.
-            await self._send_all(self._core.repair(request.history, output_ids))
+            await self._send_all(self._session.core.repair(request.history, output_ids))
             return HistorySyncResult(
                 SyncDisposition.EXACT,
                 ProviderHistoryState.EXACT,

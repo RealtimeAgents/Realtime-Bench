@@ -3,13 +3,15 @@
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it, and the archived-action ledger item. From a history view it plans the
 item creates and deletes that bring the server there, and it records what became of each one:
-sent, confirmed by the server, or unknown when the send failed. Server events are handed to
-``receive`` in the order the connection delivered them; an in-place edit is settled or failed
-there. Sending and receiving are the driver's.
+sent, confirmed by the server, or unknown when the send failed. Every server event of the
+connection is handed to ``receive`` in the order the connection delivered it, which passes it to
+the state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, a
+response event joins its generation. Sending and receiving are the driver's.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -75,12 +77,14 @@ class SentFrame:
 
 @dataclass(frozen=True)
 class EditBatch:
-    """One planned in-place edit and the session it leaves: the ledger item and the frames."""
+    """One planned in-place edit and the session it leaves: the ledger item, each retained
+    frame's user item, and the frames it removes. It leaves assistant items as they are."""
 
     operations: tuple[Operation, ...]
     ledger_item_id: str | None
     ledger_text: str
     frames: dict[str, SentFrame]
+    removed: tuple[str, ...]
     visuals_folded: int
     prompts_edited: int
 
@@ -133,6 +137,17 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
     return ledger, frames
 
 
+@dataclass
+class Generation:
+    """One response on this connection: the frame it answers, the output items the server made
+    for it, and its server events not yet taken, in arrival order."""
+
+    answered: SentFrame
+    response_id: str | None = None
+    output_item_ids: list[str] = field(default_factory=list)
+    events: deque = field(default_factory=deque)
+
+
 class RealtimeSessionCore:
     """One connection's conversation: what it holds, the operations that change it, their fate.
 
@@ -153,6 +168,8 @@ class RealtimeSessionCore:
         self._edit: EditBatch | None = None
         self._unconfirmed: set[tuple[str, str]] = set()
         self._edit_error = None
+        # The response in progress; the server runs one at a time in a session.
+        self._generation: Generation | None = None
 
     # ---- planning ------------------------------------------------------------------------
 
@@ -297,14 +314,15 @@ class RealtimeSessionCore:
                 folded_count += int(folded and not sent.folded)
                 prompt_edit_count += int(prompt_changed)
                 user_item_id = replacement.item_id
-            assistant_item_ids = list(sent.assistant_item_ids)
-            sent_frames[frame.id] = SentFrame(user_item_id, frame.text, folded, assistant_item_ids)
+            sent_frames[frame.id] = SentFrame(user_item_id, frame.text, folded)
+            assistant_item_ids = sent.assistant_item_ids
             previous_item_id = assistant_item_ids[-1] if assistant_item_ids else user_item_id
         return EditBatch(
             tuple(operations),
             ledger_item_id,
             ledger_text,
             sent_frames,
+            tuple(frame_id for frame_id in self.frames if frame_id not in retained),
             folded_count,
             prompt_edit_count,
         )
@@ -338,20 +356,36 @@ class RealtimeSessionCore:
         return not self._unconfirmed or self._edit_error is not None
 
     def finish_edit(self) -> EditBatch:
-        """End the answered edit. Confirmed whole, the session it leaves becomes the mirror; a
-        server error fails it, and the conversation is then whatever the server made of it."""
+        """End the answered edit. Confirmed whole, it is applied to the mirror in place, so a
+        response that ended while it waited keeps its output items; a server error fails it, and
+        the conversation is then whatever the server made of it."""
         batch, error = self._edit, self._edit_error
         self._edit, self._edit_error, self._unconfirmed = None, None, set()
         if error is not None:
             raise RuntimeError(f"Realtime history edit failed: {error!r}")
         self.ledger_item_id = batch.ledger_item_id
         self.ledger_text = batch.ledger_text
-        self.frames = batch.frames
+        for frame_id in batch.removed:
+            del self.frames[frame_id]
+        for frame_id, planned in batch.frames.items():
+            sent = self.frames[frame_id]
+            sent.user_item_id, sent.text, sent.folded = (
+                planned.user_item_id,
+                planned.text,
+                planned.folded,
+            )
         return batch
+
+    def start_generation(self, frame_id: str) -> Generation:
+        """Register the response about to be requested for a sent frame. Its events go to it
+        until its response.done."""
+        self._generation = Generation(self.frames[frame_id])
+        return self._generation
 
     def receive(self, event) -> None:
         """Apply one server event of this connection, in arrival order."""
         kind = getattr(event, "type", "")
+        generation = self._generation
         if kind in _CREATE_ACKS:
             self._confirm(("create", str(getattr(getattr(event, "item", None), "id", ""))))
         elif kind == "conversation.item.deleted":
@@ -360,15 +394,38 @@ class RealtimeSessionCore:
             error = getattr(event, "error", None)
             event_id = getattr(error, "event_id", None)
             edit = self._edit
+            about_edit = edit is not None and event_id in edit.client_events
             # An error that names no client event may be about any of them.
-            if (
-                self._unconfirmed
-                and self._edit_error is None
-                and (event_id is None or event_id in edit.client_events)
-            ):
+            if self._unconfirmed and self._edit_error is None and (event_id is None or about_edit):
                 self._edit_error = error
+            if generation is not None and not about_edit:
+                generation.events.append(event)
+        elif kind.startswith("response.") and generation is not None:
+            generation.events.append(event)
+            self._response_event(generation, kind, event)
 
     def _confirm(self, key: tuple[str, str]) -> None:
         if key in self.delivery:
             self.delivery[key] = Delivery.CONFIRMED
         self._unconfirmed.discard(key)
+
+    def _response_event(self, generation: Generation, kind: str, event) -> None:
+        """Record what a response event says about the conversation: the response id, the output
+        items the server made, and at response.done the answered frame's assistant items."""
+        if kind == "response.created":
+            generation.response_id = getattr(getattr(event, "response", None), "id", None)
+        elif kind in {"response.output_item.added", "response.output_item.done"}:
+            self._output_item(generation, getattr(getattr(event, "item", None), "id", None))
+        elif kind == "response.done":
+            response = getattr(event, "response", None)
+            for item in getattr(response, "output", None) or []:
+                self._output_item(generation, getattr(item, "id", None))
+            if getattr(response, "status", None) != "failed":
+                # A superseded response's session is closed and replayed before its next use.
+                generation.answered.assistant_item_ids = list(generation.output_item_ids)
+            self._generation = None
+
+    @staticmethod
+    def _output_item(generation: Generation, item_id) -> None:
+        if item_id and item_id not in generation.output_item_ids:
+            generation.output_item_ids.append(item_id)
