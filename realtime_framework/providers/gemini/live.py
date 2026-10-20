@@ -4,7 +4,6 @@ from __future__ import annotations
 """Gemini Live protocol driver for the shared realtime runtime."""
 
 import asyncio as asyncio
-import json as json
 import math as math
 import os as os
 import time as time
@@ -24,19 +23,14 @@ from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
-from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.events import EmptyInterruptedToolTurnError
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
-from realtime_framework.entity.context_policy import GEMINI_QUEUED_TOOL_RESPONSE
-from realtime_framework.entity.context_policy import GEMINI_TOOL_HISTORY_HEADER
+from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.providers.capture import async_ws_connection
-from realtime_framework.providers.legacy import session_frame_text
 
 # Gemini 3 requires a thought signature when a manually reconstructed history contains a model
 # function-call part. Live tool-call messages do not expose the original signature because bidi
@@ -187,8 +181,6 @@ class GeminiLiveDriver:
         self._mirror = _SessionMirror()
         self._activity_open = False
         self._last_video_sent_at: float | None = None
-        self._resume_handle = None
-        self._candidate_resume_handle = None
         self._resume_after_turn = False
         self._connect_metadata: dict = {}
         self._go_away_deadline: float | None = None
@@ -359,12 +351,10 @@ class GeminiLiveDriver:
             ) from exc
         return self.types.ThinkingConfig(thinking_level=level)
 
-    def _function_declarations(self, seed=None):
+    def _function_declarations(self, seed):
         behavior = self.options["tool_behavior"]
         declarations = []
-        # Shadow check while switching to the seed's answer requirements.
-        assert seed is None or list(seed.answer.function_declarations) == gui_function_declarations()
-        for item in gui_function_declarations() if seed is None else seed.answer.function_declarations:
+        for item in seed.answer.function_declarations:
             values = dict(item)
             if behavior == "non_blocking":
                 values["behavior"] = self.types.Behavior.NON_BLOCKING
@@ -384,15 +374,12 @@ class GeminiLiveDriver:
 
     def _live_config(self, request: ConnectRequest, *, resume_handle=None, has_history=False):
         instruction = request.seed.system_instruction
-        old_tools = [self.types.Tool(function_declarations=self._function_declarations())]
-        new_tools = [self.types.Tool(function_declarations=self._function_declarations(request.seed))]
-        assert [tool.model_dump(mode="json") for tool in new_tools] == [
-            tool.model_dump(mode="json") for tool in old_tools
-        ]
         return self.types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription=self.types.AudioTranscriptionConfig(),
-            tools=old_tools,
+            tools=[
+                self.types.Tool(function_declarations=self._function_declarations(request.seed))
+            ],
             thinking_config=self._thinking_config(),
             system_instruction=self.types.Content(parts=[self.types.Part(text=instruction)]),
             session_resumption=self.types.SessionResumptionConfig(handle=resume_handle),
@@ -407,225 +394,6 @@ class GeminiLiveDriver:
                 else None
             ),
         )
-
-    def _history(self, request: ConnectRequest):
-        contents = []
-        if request.executed_action_ledger:
-            contents.append(
-                self.types.Content(
-                    role="user",
-                    parts=[
-                        self.types.Part(
-                            text=ARCHIVED_ACTION_LEDGER_HEADER
-                            + "\n"
-                            + request.executed_action_ledger
-                        )
-                    ],
-                )
-            )
-        for index, turn in enumerate(request.turns):
-            observation = turn.observation
-            parts = [
-                self.types.Part(
-                    text=(
-                        FOLDED_VISUAL_PLACEHOLDER
-                        if turn.visual_folded
-                        else session_frame_text(observation)
-                    )
-                )
-            ]
-            if not turn.visual_folded:
-                parts.append(
-                    self.types.Part(
-                        inline_data=self.types.Blob(
-                            mime_type=observation.mime_type,
-                            data=observation.image_bytes,
-                        )
-                    )
-                )
-            contents.append(
-                self.types.Content(
-                    role="user",
-                    parts=parts,
-                )
-            )
-            native_exchanges = turn.provider_refs.get("native_tool_exchanges")
-            initial_text = turn.provider_refs.get("native_initial_text")
-            if initial_text:
-                contents.append(
-                    self.types.Content(
-                        role="model",
-                        parts=[self.types.Part(text=initial_text)],
-                    )
-                )
-            if not isinstance(native_exchanges, list):
-                native_call = turn.provider_refs.get("native_function_call")
-                native_exchanges = (
-                    [{"function_calls": [native_call]}] if isinstance(native_call, dict) else []
-                )
-            if native_exchanges and self.options["history_format"] == "tool_transcript":
-                # Live tool messages do not expose their original thought signatures. Replaying
-                # synthetic native calls can stall the next interaction even after setup succeeds.
-                # Preserve the complete past exchange as data, with current actions still required
-                # to use the declared native functions. Never replay it as a new tool request.
-                contents.append(
-                    self.types.Content(
-                        role="model",
-                        parts=[
-                            self.types.Part(
-                                text=GEMINI_TOOL_HISTORY_HEADER
-                                + "\n"
-                                + json.dumps(native_exchanges, ensure_ascii=False),
-                            )
-                        ],
-                    )
-                )
-                continue
-            replayed_native_exchange = False
-            for exchange_index, exchange in enumerate(native_exchanges):
-                if not isinstance(exchange, dict):
-                    continue
-                calls = exchange.get("function_calls")
-                if not isinstance(calls, list):
-                    continue
-                valid_calls = [
-                    call for call in calls if isinstance(call, dict) and call.get("name")
-                ]
-                if not valid_calls:
-                    continue
-                replayed_native_exchange = True
-                model_parts = []
-                response_parts = []
-                stored_responses = exchange.get("function_responses")
-                if not isinstance(stored_responses, list):
-                    stored_responses = []
-                responses_by_id = {
-                    str(response.get("id") or ""): response
-                    for response in stored_responses
-                    if isinstance(response, dict)
-                }
-                for call_index, call in enumerate(valid_calls):
-                    call_id = str(
-                        call.get("id") or f"history-{index}-{exchange_index}-{call_index}"
-                    )
-                    name = str(call["name"])
-                    arguments = call.get("arguments")
-                    if not isinstance(arguments, dict):
-                        arguments = {}
-                    part_values = {
-                        "function_call": self.types.FunctionCall(
-                            id=call_id,
-                            name=name,
-                            args=arguments,
-                        )
-                    }
-                    # Gemini 3 parallel calls carry the thought signature only on the first
-                    # function-call part in one model Content.
-                    if call_index == 0:
-                        part_values["thought_signature"] = _REPLAY_THOUGHT_SIGNATURE
-                    model_parts.append(self.types.Part(**part_values))
-                    stored_response = responses_by_id.get(call_id, {})
-                    response = stored_response.get("response")
-                    if not isinstance(response, dict):
-                        response = dict(GEMINI_QUEUED_TOOL_RESPONSE)
-                    response_options = self._tool_response_options()
-                    response_options.update(
-                        {
-                            key: stored_response[key]
-                            for key in ("will_continue", "scheduling")
-                            if key in stored_response
-                        }
-                    )
-                    response_parts.append(
-                        self.types.Part(
-                            function_response=self.types.FunctionResponse(
-                                id=call_id,
-                                name=str(stored_response.get("name") or name),
-                                response=response,
-                                **response_options,
-                            )
-                        )
-                    )
-                # Rebuild every provider-native tool exchange, including a response that had
-                # zero or multiple GUI calls and therefore became a benchmark WAIT. Replaying
-                # only a selected call would change the model-visible trajectory after reconnect.
-                contents.append(self.types.Content(role="model", parts=model_parts))
-                contents.append(self.types.Content(role="user", parts=response_parts))
-                if exchange.get("completion_text"):
-                    contents.append(
-                        self.types.Content(
-                            role="model",
-                            parts=[
-                                self.types.Part(text=exchange["completion_text"]),
-                            ],
-                        )
-                    )
-            if replayed_native_exchange:
-                continue
-            if turn.output:
-                native_call = turn.provider_refs.get("native_function_call")
-                if not isinstance(native_call, dict):
-                    try:
-                        action = json.loads(turn.output)
-                    except (TypeError, ValueError):
-                        action = None
-                    if isinstance(action, dict) and isinstance(action.get("action"), str):
-                        native_call = {
-                            "id": f"history-{index}",
-                            "name": action["action"],
-                            "arguments": {
-                                key: value for key, value in action.items() if key != "action"
-                            },
-                        }
-                if isinstance(native_call, dict) and native_call.get("name"):
-                    call_id = str(native_call.get("id") or f"history-{index}")
-                    name = str(native_call["name"])
-                    arguments = native_call.get("arguments")
-                    if not isinstance(arguments, dict):
-                        arguments = {}
-                    # Rebuild the provider-native tool exchange. Replaying the canonical action
-                    # as ordinary model text makes Gemini switch to spoken JSON after the first
-                    # visual-history fold, which also loses authoritative response-token usage.
-                    contents.append(
-                        self.types.Content(
-                            role="model",
-                            parts=[
-                                self.types.Part(
-                                    function_call=self.types.FunctionCall(
-                                        id=call_id,
-                                        name=name,
-                                        args=arguments,
-                                    ),
-                                    # Pydantic intentionally preserves Google's documented literal
-                                    # sentinel on the wire even though genuine signatures are bytes.
-                                    thought_signature=_REPLAY_THOUGHT_SIGNATURE,
-                                )
-                            ],
-                        )
-                    )
-                    contents.append(
-                        self.types.Content(
-                            role="user",
-                            parts=[
-                                self.types.Part(
-                                    function_response=self.types.FunctionResponse(
-                                        id=call_id,
-                                        name=name,
-                                        response=dict(GEMINI_QUEUED_TOOL_RESPONSE),
-                                        **self._tool_response_options(),
-                                    )
-                                )
-                            ],
-                        )
-                    )
-                    continue
-                contents.append(
-                    self.types.Content(
-                        role="model",
-                        parts=[self.types.Part(text=turn.output)],
-                    )
-                )
-        return contents
 
     def _seed_contents(self, request: ConnectRequest) -> tuple[list, tuple[str, ...]]:
         """The Contents that replay the request's history view, and the ids of their blocks.
@@ -714,7 +482,8 @@ class GeminiLiveDriver:
                     )
                 }
                 # Gemini 3 parallel calls carry the thought signature only on the first
-                # function-call part in one model Content.
+                # function-call part in one model Content. Pydantic keeps Google's documented
+                # literal sentinel on the wire even though genuine signatures are bytes.
                 if call_index == 0:
                     part_values["thought_signature"] = _REPLAY_THOUGHT_SIGNATURE
                 model_parts.append(self.types.Part(**part_values))
@@ -791,7 +560,7 @@ class GeminiLiveDriver:
         self._session = None
         self._activity_open = False
         self._last_video_sent_at = None
-        self._candidate_resume_handle = None
+        self._mirror.candidate_resume_handle = None
         self._mirror.pending_calls.clear()
         self._go_away_deadline = None
         if cm is not None:
@@ -810,13 +579,9 @@ class GeminiLiveDriver:
         replacing_session = self._cm is not None
         await self._close_current()
         self._seed = request.seed
-        self._resume_handle = request.resume_handle
-        history = [] if request.resume_handle is not None else self._history(request)
-        # Shadow check while switching to the history view.
-        new_history, _ = ([], ()) if request.resume_handle is not None else self._seed_contents(request)
-        assert [content.model_dump(mode="json") for content in new_history] == [
-            content.model_dump(mode="json") for content in history
-        ], "history view seed differs"
+        self._mirror.resume_handle = request.resume_handle
+        # A resume carries no history: the server restores the session from the handle.
+        history, seeded = self._seed_contents(request)
         history_batches = self._history_batches(history)
         if replacing_session or history:
             # Closing the local WebSocket and releasing the server-side Live session are not one
@@ -855,7 +620,9 @@ class GeminiLiveDriver:
         self._activity_open = False
         self._last_video_sent_at = None
         self._resume_after_turn = False
-        self._last_turn_clean = request.resume_handle is not None or bool(history)
+        if request.resume_handle is None:
+            self._mirror.seeded = seeded
+        self._last_turn_clean = request.resume_handle is not None or bool(self._mirror.seeded)
         self._connect_metadata = {
             "session_connect_mode": (
                 "session_resumption"
@@ -897,22 +664,10 @@ class GeminiLiveDriver:
                 "gemini_live_go_away_deadline_before_turn_complete"
             ) from None
 
-    async def send_observation(self, observation: ProviderObservation, history) -> dict:
-        """Send one decision's screenshot as one input activity."""
-        # Shadow check while switching to the history view.
-        frame = next(item.block for item in reversed(history.items) if item.block.kind == "frame")
-        prefix = _frame_prefixes(history).get(frame.id)
-        assert (
-            _frame_text(frame, prefix),
-            frame.image.data,
-            frame.image.mime_type,
-            frame.observation_id,
-        ) == (
-            session_frame_text(observation),
-            observation.image_bytes,
-            observation.mime_type,
-            observation.observation_id,
-        ), "history view frame differs"
+    async def send_observation(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> dict:
+        """Send the history view's newest frame, after its feedback, as one input activity."""
         if self._resume_after_turn:
             raise RuntimeError(
                 "Gemini Live requires canonical history synchronization before input"
@@ -922,9 +677,12 @@ class GeminiLiveDriver:
             raise RuntimeError("Gemini Live session is not connected")
         if self._activity_open:
             raise RuntimeError("Gemini Live input activity is already open")
+        current = next(item for item in reversed(history.items) if item.block.kind == "frame")
+        frame = current.block
+        prefix = _frame_prefixes(history).get(frame.id)
         self._last_turn_clean = False
-        self._resume_handle = None
-        self._candidate_resume_handle = None
+        self._mirror.resume_handle = None
+        self._mirror.candidate_resume_handle = None
         if self.options["input_transport"] == "client_content":
             # Send the screenshot with its grounding text in one Content that triggers generation
             # after any seeded history has been ingested. A realtime text trigger mixed with
@@ -932,20 +690,11 @@ class GeminiLiveDriver:
             # speech) and leave synchronous tools unfinished.
             await session.send_client_content(
                 turns=self.types.Content(
-                    role="user",
-                    parts=[
-                        self.types.Part(text=session_frame_text(observation)),
-                        self.types.Part(
-                            inline_data=self.types.Blob(
-                                data=observation.image_bytes,
-                                mime_type=observation.mime_type,
-                            )
-                        ),
-                    ],
+                    role=_ROLES[current.intent.role], parts=self._frame_parts(frame, prefix)
                 ),
                 turn_complete=True,
             )
-            return {"observation_id": observation.observation_id}
+            return {"observation_id": frame.observation_id}
         await session.send_realtime_input(activity_start=self.types.ActivityStart())
         self._activity_open = True
         try:
@@ -954,14 +703,14 @@ class GeminiLiveDriver:
                 await asyncio.sleep(max(0.0, 1.0 - (loop.time() - self._last_video_sent_at)))
             await session.send_realtime_input(
                 video=self.types.Blob(
-                    data=observation.image_bytes,
-                    mime_type=observation.mime_type,
+                    data=frame.image.data,
+                    mime_type=frame.image.mime_type,
                 )
             )
             self._last_video_sent_at = loop.time()
             # Let media ingestion catch up before the corresponding SoM text arrives.
             await asyncio.sleep(1.0)
-            await session.send_realtime_input(text=session_frame_text(observation))
+            await session.send_realtime_input(text=_frame_text(frame, prefix))
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.
             await session.send_realtime_input(
@@ -973,7 +722,7 @@ class GeminiLiveDriver:
             # An incomplete activity cannot be resumed as canonical context.
             self._activity_open = True
             raise
-        return {"observation_id": observation.observation_id}
+        return {"observation_id": frame.observation_id}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._session is None:
@@ -1218,14 +967,14 @@ class GeminiLiveDriver:
         update = getattr(message, "session_resumption_update", None)
         if update is not None:
             if not getattr(update, "resumable", False):
-                self._candidate_resume_handle = None
+                self._mirror.candidate_resume_handle = None
             elif getattr(update, "new_handle", None):
-                self._candidate_resume_handle = update.new_handle
+                self._mirror.candidate_resume_handle = update.new_handle
         # Resumption updates often arrive before the final server-content message. Promote the
         # latest candidate only at a clean turn boundary; a handle captured mid-generation may not
         # represent the complete provider turn.
-        if interaction_complete and self._candidate_resume_handle:
-            self._resume_handle = self._candidate_resume_handle
+        if interaction_complete and self._mirror.candidate_resume_handle:
+            self._mirror.resume_handle = self._mirror.candidate_resume_handle
         go_away = getattr(message, "go_away", None)
         if go_away is not None:
             self._resume_after_turn = True
@@ -1363,17 +1112,9 @@ class GeminiLiveDriver:
                         call.name or "",
                         arguments,
                     )
+                # Acknowledge every pending call as queued; the next observation carries its
+                # execution result.
                 function_responses = [
-                    self.types.FunctionResponse(
-                        id=call.id,
-                        name=call.name,
-                        response=dict(GEMINI_QUEUED_TOOL_RESPONSE),
-                        **self._tool_response_options(),
-                    )
-                    for call in calls
-                ]
-                # Shadow check while switching to the mirror and the seed's texts.
-                new_responses = [
                     self.types.FunctionResponse(
                         id=call_id,
                         name=name,
@@ -1382,9 +1123,6 @@ class GeminiLiveDriver:
                     )
                     for call_id, name in self._mirror.pending_calls
                 ]
-                assert [response.model_dump(mode="json") for response in new_responses] == [
-                    response.model_dump(mode="json") for response in function_responses
-                ], "mirror tool acknowledgement differs"
                 # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
                 # prevents its acknowledgement from triggering another model generation while
                 # the current decision drains through authoritative terminal usage.
@@ -1488,7 +1226,7 @@ class GeminiLiveDriver:
         try:
             await self._session.send_realtime_input(activity_start=self.types.ActivityStart())
             self._activity_open = True
-            self._resume_handle = None
+            self._mirror.resume_handle = None
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
         except Exception as exc:  # noqa: BLE001 - provider control boundary
             return InterruptResult(
@@ -1502,7 +1240,7 @@ class GeminiLiveDriver:
             can_resume = bool(
                 request.reason == "go_away"
                 and not request.force_rebuild
-                and self._resume_handle
+                and self._mirror.resume_handle
                 and self._last_turn_clean
                 and (
                     request.current_generation is None
@@ -1510,7 +1248,7 @@ class GeminiLiveDriver:
                 )
             )
             if can_resume:
-                handle = self._resume_handle
+                handle = self._mirror.resume_handle
                 try:
                     await self._connect_once(
                         ConnectRequest(
@@ -1531,14 +1269,7 @@ class GeminiLiveDriver:
                 except Exception as exc:  # noqa: BLE001 - fall through to canonical replay
                     resume_error = repr(exc)[:300]
             # Renew and replay with the same task credential, including resume failure fallback.
-            await self._connect_once(
-                ConnectRequest(
-                    seed=request.seed,
-                    turns=request.turns,
-                    executed_action_ledger=request.executed_action_ledger,
-                    history=request.history,
-                )
-            )
+            await self._connect_once(ConnectRequest(seed=request.seed, history=request.history))
             return HistorySyncResult(
                 SyncDisposition.REBUILT,
                 ProviderHistoryState.EXACT,

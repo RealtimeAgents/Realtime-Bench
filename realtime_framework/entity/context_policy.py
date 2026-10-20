@@ -6,8 +6,8 @@ from __future__ import annotations
 The phase-1 values copy what each code path did before the policy existed; changing any value
 changes the model-visible content, so it bumps the version. The values count in the effective run
 config and therefore in its hash. Retention, feedback placement, reasoning and verbatim replay,
-pressure archiving and the Decision history form and overflow are read from here, and the
-encoders take their fixed texts from here. The ledger role, tool-call replay format, prompts and
+pressure archiving, the Decision history form and overflow and the tool-call replay format are
+read from here, and the encoders take their fixed texts from here. The ledger role, prompts and
 observation form are recorded and pinned by tests until the encoders and the Decision agent read
 them (phase 1 steps 4 and 6).
 """
