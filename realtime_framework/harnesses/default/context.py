@@ -706,6 +706,7 @@ class RealtimeRuntime:
     def _turn_refs(turns: Iterable[CanonicalTurn]) -> list[dict]:
         return [
             {
+                "decision": turn.decision,
                 "observation_id": turn.observation.observation_id,
                 "tick": turn.observation.observation.tick_number,
                 "action_history_index": turn.action_history_index,
