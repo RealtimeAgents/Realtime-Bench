@@ -77,6 +77,7 @@ def new_core() -> RealtimeSessionCore:
 def sent(core: RealtimeSessionCore, operations) -> list:
     for operation in operations:
         core.sending(operation)
+        core.sent(operation)
     return list(operations)
 
 
@@ -175,7 +176,7 @@ def test_fold_in_place_waits_for_every_ack_in_any_order():
     assert core.edit_answered
 
     assert core.finish_edit() is batch
-    assert all(core.delivery[op.key] == Delivery.CONFIRMED for op in batch.operations)
+    assert all(core.delivery[op.key] == Delivery.ACKNOWLEDGED for op in batch.operations)
     assert {k: (f.user_item_id, f.folded) for k, f in core.frames.items()} == {
         "d0.frame": (create0.item_id, True),
         "d1.frame": (create1.item_id, True),
@@ -453,15 +454,21 @@ def test_an_edit_and_a_response_both_reach_the_mirror(response_first):
     assert core.frames["d1.frame"].assistant_item_ids == ["srv_1"]
 
 
-def test_delivery_is_sent_confirmed_or_unknown():
+def test_delivery_is_unknown_while_written_then_sent_then_acknowledged():
     core = new_core()
-    confirmed, failed, pending = core.replay(view([turn(0, "a0"), turn(1)]))
-    for operation in (confirmed, failed, pending):
+    acknowledged, early, failed, written = core.replay(view([turn(0, "a0"), turn(1, "a1")]))
+    for operation in (acknowledged, early, failed, written):
         core.sending(operation)
-    core.send_failed(failed)
-    core.receive(done(confirmed.item_id))
-    assert [core.delivery[op.key] for op in (confirmed, failed, pending)] == [
-        Delivery.CONFIRMED,
+    core.sent(acknowledged)
+    core.receive(done(acknowledged.item_id))
+    # Another waiter read the acknowledgement before this write returned.
+    core.receive(done(early.item_id))
+    core.sent(early)
+    core.sent(written)
+    # The write of ``failed`` never returned.
+    assert [core.delivery[op.key] for op in (acknowledged, early, failed, written)] == [
+        Delivery.ACKNOWLEDGED,
+        Delivery.ACKNOWLEDGED,
         Delivery.UNKNOWN,
         Delivery.SENT,
     ]

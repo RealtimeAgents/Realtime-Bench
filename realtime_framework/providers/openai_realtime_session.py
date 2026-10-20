@@ -3,7 +3,8 @@
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it, and the archived-action ledger item. From a history view it plans the
 item creates and deletes that bring the server there, and it records what became of each one:
-sent, confirmed by the server, or unknown when the send failed. Every server event of the
+unknown while it is written, sent once the write returned, acknowledged once the server
+confirmed it. Every server event of the
 connection is handed to ``receive`` in the order the connection delivered it, which passes it to
 the state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, a
 response event joins its generation. Sending and receiving are the driver's.
@@ -21,7 +22,9 @@ from realtime_framework.entity.request import CanonicalRequest, FrameImage, Requ
 
 # Neutral request roles as Realtime message roles.
 ROLES = {"instruction": "system", "input": "user", "model": "assistant"}
-# The server events that confirm a create; conversation.item.added does not.
+# The server events that confirm a create, as the in-place edit has always waited for them. The
+# trace's classification (openai_realtime.py _ITEM_ACKS) links a create to its first answer,
+# conversation.item.added, as well.
 _CREATE_ACKS = {"conversation.item.created", "conversation.item.done"}
 
 
@@ -58,11 +61,14 @@ Operation = Create | Delete
 
 
 class Delivery(str, Enum):
-    """What is known about one planned operation."""
+    """What is known about one planned operation, in the Gemini Live core's terms
+    (providers/gemini/session.py): unknown from the start of its write until the write returns,
+    sent after that, acknowledged once the server confirmed it. A write that fails leaves it
+    unknown: the server may or may not have it."""
 
     SENT = "sent"
-    CONFIRMED = "confirmed"
-    UNKNOWN = "unknown"  # the send failed, so the server may or may not have it
+    ACKNOWLEDGED = "acknowledged"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -351,11 +357,13 @@ class RealtimeSessionCore:
     # ---- what became of each operation ----------------------------------------------------
 
     def sending(self, operation: Operation) -> None:
-        """Record an operation as handed to the connection, before any answer can arrive."""
-        self.delivery[operation.key] = Delivery.SENT
-
-    def send_failed(self, operation: Operation) -> None:
+        """Record an operation whose write starts, before any answer to it can arrive."""
         self.delivery[operation.key] = Delivery.UNKNOWN
+
+    def sent(self, operation: Operation) -> None:
+        # While another waiter reads, the acknowledgement can arrive before the write returns.
+        if self.delivery[operation.key] is Delivery.UNKNOWN:
+            self.delivery[operation.key] = Delivery.SENT
 
     @property
     def edit_answered(self) -> bool:
@@ -429,7 +437,7 @@ class RealtimeSessionCore:
         self._unconfirmed.discard(key)
         if key not in self.delivery:
             return False
-        self.delivery[key] = Delivery.CONFIRMED
+        self.delivery[key] = Delivery.ACKNOWLEDGED
         return True
 
     def _response_of(self, kind: str, event) -> Generation | None:
