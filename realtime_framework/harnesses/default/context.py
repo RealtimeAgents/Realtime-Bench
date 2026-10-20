@@ -113,6 +113,7 @@ from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import RuntimeTurnResult
 from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.entity.request import ContentBlock
 from realtime_framework.harnesses.default.request import ledger_block
@@ -131,12 +132,17 @@ class RealtimeRuntime:
     driver follow the same generation state machine.
     """
 
-    def __init__(self, driver: RealtimeDriver, policy: PathPolicy):
+    def __init__(self, driver: RealtimeDriver, policy: PathPolicy, *, trace):
         if not isinstance(driver, RealtimeDriver):
             raise TypeError("realtime driver does not implement the required protocol")
         self.driver = driver
         self.capabilities = driver.capabilities
         self.policy = policy
+        self._trace = trace
+        # What the agent trace last recorded about the provider-side context: exact or unknown.
+        self._session_state = "exact"
+        # The context-policy items behind this turn's history_block_compaction sync.
+        self._compaction_items: list[str] = []
         self._state = RuntimeState.NEW
         self._state_lock = threading.RLock()
         self._epoch = 0
@@ -301,6 +307,13 @@ class RealtimeRuntime:
                 "archived_turns": len(archived),
                 "archived_actions": archived_actions,
                 "existing_history_changed": int(bool(archived) or folded_visuals > 0),
+                # The turns behind these counts, for the agent trace.
+                "folded_turn_refs": self._turn_refs(
+                    turn
+                    for turn in candidates
+                    if turn.visual_folded and not previously_folded[id(turn)]
+                ),
+                "archived_turn_refs": self._turn_refs(archived),
             },
         )
 
@@ -329,10 +342,12 @@ class RealtimeRuntime:
                     removed_turns=removed_turns,
                 )
             )
-        except Exception:
+        except Exception as exc:
             self._connected = False
             self._set_state(RuntimeState.BROKEN)
+            self._record_sync(reason, force_rebuild, removed_turns, error=exc)
             raise
+        self._record_sync(reason, force_rebuild, removed_turns, result=result)
         if result.history_state == ProviderHistoryState.EXACT:
             self._connected = True
             self._set_state(RuntimeState.READY)
@@ -386,6 +401,7 @@ class RealtimeRuntime:
                 executed_action_ledger=ledger,
             )
         )
+        self._record_reconnect()
         self._connected = True
         self._set_state(RuntimeState.READY)
 
@@ -407,6 +423,7 @@ class RealtimeRuntime:
         incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
         retained, incoming, removed_turns, retention = self._retained(self._turns, incoming)
         self._turns[:] = retained
+        self._record_retention(retention)
         executed_action_ledger = self._action_ledger(action_history)
         sync = HistorySyncResult(
             SyncDisposition.EXACT,
@@ -471,10 +488,12 @@ class RealtimeRuntime:
                 )
             archived = self._turns[: self.policy.turns.block]
             del self._turns[: len(archived)]
-            self._record_archived_turns(archived)
+            archived_actions = self._record_archived_turns(archived)
+            self._record_pressure_archive(archived, archived_actions, status)
             compactions += 1
             archived_count += len(archived)
 
+        self._record_generation_prepared(incoming, physical_metadata, epoch)
         self._set_state(RuntimeState.GENERATING)
         provider_call_started_monotonic_ns = time.monotonic_ns()
         provider_call_started_wall_time_ns = time.time_ns()
@@ -539,6 +558,10 @@ class RealtimeRuntime:
                     self._active_generation = None
 
         stale = not self.is_current(epoch)
+        if terminal_history != ProviderHistoryState.EXACT:
+            self._record_session_state(
+                "unknown", "generation_terminal_state", terminal_history, request.generation_id
+            )
         output = collector.finish()
         if not stale:
             incoming[-1].output = output.text
@@ -673,3 +696,188 @@ class RealtimeRuntime:
             if not loop.is_running():
                 loop.close()
         self._connected = False
+
+    # ---- agent trace -------------------------------------------------------------------------
+    # Each change to the model-visible history is recorded where it happens, so the history at any
+    # step follows from the trace. policy_item names the PathPolicy fields behind the change
+    # (entity/context_policy.py), and policy_values their values for this API.
+
+    @staticmethod
+    def _turn_refs(turns: Iterable[CanonicalTurn]) -> list[dict]:
+        return [
+            {
+                "decision": turn.decision,
+                "observation_id": turn.observation.observation_id,
+                "tick": turn.observation.observation.tick_number,
+                "action_history_index": turn.action_history_index,
+            }
+            for turn in turns
+        ]
+
+    def _history_changed(self, kind: str, trigger: str, policy_item, **fields) -> None:
+        self._trace.capture(
+            TraceEvent.HISTORY_CHANGED,
+            {
+                "kind": kind,
+                "trigger": trigger,
+                "policy_item": policy_item,
+                "policy_version": self.policy.version,
+                **fields,
+            },
+        )
+
+    def _ledger_change(self, archived_actions: int) -> dict:
+        total = self._archived_action_count
+        return {"archived_actions_before": total - archived_actions, "archived_actions_after": total}
+
+    def _record_retention(self, retention: dict) -> None:
+        """The policy archive and screenshot fold applied before this turn's request."""
+        self._compaction_items = []
+        if retention["archived_turn_refs"]:
+            self._compaction_items.append("turns")
+            self._history_changed(
+                "archive",
+                "policy",
+                "turns",
+                policy_values={"keep": self.policy.turns.keep, "block": self.policy.turns.block},
+                turns=retention["archived_turn_refs"],
+                ledger=self._ledger_change(retention["archived_actions"]),
+            )
+        if retention["folded_turn_refs"]:
+            self._compaction_items.append("visuals")
+            self._history_changed(
+                "visual_fold",
+                "policy",
+                "visuals",
+                policy_values={
+                    "keep": self.policy.visuals.keep,
+                    "block": self.policy.visuals.block,
+                },
+                turns=retention["folded_turn_refs"],
+            )
+
+    def _record_pressure_archive(self, archived, archived_actions, status) -> None:
+        self._history_changed(
+            "pressure_archive",
+            "policy",
+            "pressure_archive",
+            policy_values={"block": self.policy.turns.block},
+            turns=self._turn_refs(archived),
+            ledger=self._ledger_change(archived_actions),
+            request_context=status,
+        )
+
+    def _replay_items(self) -> list[str]:
+        # A replayed live session re-sends past tool calls in the policy's format.
+        return ["tool_call_replay"] if self.policy.tool_call_replay is not None else []
+
+    def _record_sync(self, reason, force_rebuild, removed_turns, *, result=None, error=None):
+        """One HistoryChanged per sync call, of the kind the driver's result reports.
+
+        The fallback kinds come from provider_metadata keys the drivers already return.
+        """
+        metadata = result.provider_metadata if result is not None else {}
+        trigger = {"history_block_compaction": "policy", "runtime_recovery": "recovery"}.get(
+            reason, "provider"
+        )
+        rebuilt = result is not None and (
+            result.disposition == SyncDisposition.REBUILT
+            or bool(metadata.get("history_session_reconnected"))
+        )
+        if metadata.get("session_resumed"):
+            kind, rebuilt = "session_resumed", False
+        elif metadata.get("resume_error"):
+            kind, trigger = "resume_fallback", "fallback"
+        elif metadata.get("history_in_place_edit_fallback"):
+            kind, trigger = "in_place_edit_fallback", "fallback"
+        else:
+            kind = "rebuild" if rebuilt else "sync"
+        policy_item = list(self._compaction_items) if reason == "history_block_compaction" else []
+        if rebuilt:
+            policy_item += self._replay_items()
+        self._history_changed(
+            kind,
+            trigger,
+            policy_item or None,
+            turns=self._turn_refs(removed_turns),
+            replayed_turns=len(self._turns) if rebuilt else None,
+            sync={
+                "reason": reason,
+                "force_rebuild": force_rebuild,
+                "disposition": result.disposition.value if result is not None else None,
+                "history_state": result.history_state.value if result is not None else None,
+                "detail": result.detail if result is not None else None,
+                "provider_metadata": metadata,
+            },
+            error=repr(error)[:500] if error is not None else None,
+        )
+        if result is None:
+            self._record_session_state("unknown", f"sync_error:{reason}", None)
+        elif kind == "session_resumed":
+            # Exact for the driver, but restored from the resume handle, not sent on this
+            # connection.
+            self._record_session_state("unknown", "session_resumed", result.history_state)
+        elif result.history_state == ProviderHistoryState.EXACT:
+            self._record_session_state("exact", f"sync:{reason}", result.history_state)
+        else:
+            self._record_session_state("unknown", f"sync:{reason}", result.history_state)
+
+    def _record_reconnect(self) -> None:
+        """_ensure_ready replayed the canonical turns on a new session after an abort or failure."""
+        if not self.capabilities.persistent_session:
+            return  # a stateless connect sends nothing; the next request carries the history
+        self._history_changed(
+            "rebuild",
+            "recovery",
+            self._replay_items() or None,
+            turns=[],
+            replayed_turns=len(self._turns),
+            sync={"reason": "reconnect"},
+        )
+        self._record_session_state("exact", "reconnect", ProviderHistoryState.EXACT)
+
+    def _record_generation_prepared(self, incoming, physical_metadata, epoch) -> None:
+        turns = self._turns + incoming
+        self._trace.capture(
+            TraceEvent.GENERATION_PREPARED,
+            {
+                "epoch": epoch,
+                "observation_id": incoming[-1].observation.observation_id,
+                "persistent_session": self.capabilities.persistent_session,
+                "history": {
+                    "archived_actions_total": self._archived_action_count,
+                    "detailed_turns": len(self._turns),
+                    "current_observations": len(incoming),
+                    "prompt_turns": len(turns),
+                    "active_visuals": sum(not turn.visual_folded for turn in turns),
+                    "folded_turns": sum(turn.visual_folded for turn in turns),
+                    "som_retained_blocks": sum(
+                        without_observation_interactables(turn.observation.prompt)
+                        != turn.observation.prompt
+                        for turn in self._turns
+                    ),
+                    "som_current_blocks": sum(
+                        without_observation_interactables(turn.observation.prompt)
+                        != turn.observation.prompt
+                        for turn in incoming
+                    ),
+                },
+                "request_context": physical_metadata or None,
+            },
+        )
+
+    def _record_session_state(self, state, cause, provider_state, generation_id=None) -> None:
+        """Record when the provider-side context becomes unknown, or exact again."""
+        if state == self._session_state:
+            return
+        self._session_state = state
+        self._trace.capture(
+            TraceEvent.SESSION_STATE_CHANGED,
+            {
+                "protocol_family": self.capabilities.protocol_family,
+                "state": state,
+                "cause": cause,
+                "provider_history_state": provider_state.value if provider_state else None,
+                "generation_id": generation_id,
+            },
+        )

@@ -1231,6 +1231,8 @@ from realtime_framework.evaluation.config import harness_fingerprint, harness_ve
 from realtime_framework.evaluation.reporting import summarize_run_metrics
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.evaluation.reporting import episode_outcome
+from realtime_framework.evaluation.agent_trace import AgentTraceSink
+from realtime_framework.evaluation.agent_trace import close_agent_trace
 from realtime_framework.entity.records import canonical_sha256
 import realtime_tasks.registry as custom_tasks
 from realtime_framework.sandbox.observation.som import ToolRuntime
@@ -1496,6 +1498,7 @@ def main():
     ctask = None
     task = None
     agent = None
+    agent_trace = None
     cfg = None
     env = None
     think_budget = None
@@ -1558,7 +1561,9 @@ def main():
             fps=a.fps,
             tokens_per_frame=tokens_per_frame,
         )
-        agent = create_agent(cfg, log_dir=run_dir)
+        # The agent borrows the episode trace's write entry; the runner still opens and closes it.
+        agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
+        agent = create_agent(cfg, log_dir=run_dir, trace=agent_trace)
         configure_agent(
             agent,
             fps=a.fps,
@@ -1976,6 +1981,10 @@ def main():
                 "reason": "provider_close_failed",
                 "detail": traceback.format_exc(),
             }
+        # After the agent is closed: stop new agent records, write the queued ones and fence the
+        # writer before the checkpoint below and EpisodeFinished.
+        if agent_trace is not None:
+            invalid_run = close_agent_trace(agent_trace, invalid_run)
         try:
             if tool_runtime is not None:
                 tool_runtime.close()

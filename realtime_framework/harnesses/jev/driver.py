@@ -41,6 +41,10 @@ class ChoiceDecisionDriver:
     async def request_context_status(self, request):
         return await self.client.request_context_status(request)
 
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
+        self.client.bind_trace(trace)
+
     async def connect(self, request):
         return None
 
@@ -65,7 +69,9 @@ class ChoiceDecisionDriver:
         if self.observation is None:
             raise RuntimeError("Choice Decisions requires a current observation")
         messages = decision_messages(request.canonical)
-        metadata = await ChoiceDecision(self.client, self.observation, messages).run()
+        metadata = await ChoiceDecision(
+            self.client, self.observation, messages, trace=self._trace
+        ).run()
         return GenerationHandle(request.generation_id, metadata=metadata)
 
     async def events(self, generation):

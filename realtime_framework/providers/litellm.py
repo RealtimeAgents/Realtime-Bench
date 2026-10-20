@@ -45,6 +45,9 @@ from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.providers.capture import HttpCapture
+from realtime_framework.providers.capture import LoggerCapture
+from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
 from realtime_framework.providers.context import validate_context_reserve
@@ -505,6 +508,9 @@ class LiteLLMDriver:
             raise ValueError(f"Credential variable {self.config.api_key_env!r} is empty or unset")
         return "not-required" if self.policy.client == "openai" else None
 
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
+
     # ---- lifecycle -------------------------------------------------------------------------
 
     async def connect(self, request: ConnectRequest) -> None:
@@ -590,13 +596,23 @@ class LiteLLMDriver:
             return self._http
         if self.policy.client == "openai":
             from openai import AsyncOpenAI as AsyncOpenAI
+            from openai import DefaultAsyncHttpxClient as DefaultAsyncHttpxClient
 
             # The harness owns retries (entity.model.TRANSPORT_RETRY) so every attempt is recorded.
-            self._http = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
+            # DefaultAsyncHttpxClient keeps the SDK's own client defaults and adds the hooks.
+            self._http_capture = HttpCapture(self, "litellm.openai_sdk", "generation")
+            self._http = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                max_retries=0,
+                http_client=DefaultAsyncHttpxClient(event_hooks=self._http_capture.hooks),
+            )
         else:
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as AsyncHTTPHandler
 
-            self._http = AsyncHTTPHandler()
+            # LiteLLM passes the hooks on to the client of its connection-error resend.
+            self._http_capture = HttpCapture(self, "litellm.httpx", "generation")
+            self._http = AsyncHTTPHandler(event_hooks=self._http_capture.hooks)
         return self._http
 
     def _transport_kwargs(self) -> dict:
@@ -869,6 +885,7 @@ class LiteLLMDriver:
             finally:
                 with self._lock:
                     self._responses.pop(id(response), None)
+                self._http_capture.record_open()
 
     @staticmethod
     def _delta_reasoning(delta) -> str:
@@ -902,8 +919,12 @@ class LiteLLMDriver:
             raise ValueError("Direct LiteLLM models require wall-clock evaluation in default mode")
         await asyncio.to_thread(pace_request)
         raw = {}
+        # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
+        logged = LoggerCapture(self) if self.policy.client is None else None
 
         def observe(details):
+            if logged is not None:
+                logged(details)
             if details.get("log_event_type") != "post_api_call":
                 return
             value = details.get("original_response")
@@ -1075,11 +1096,9 @@ class LiteLLMDriver:
         validate_context_reserve(self.config)
         messages = self._request_kwargs(request)["messages"]
         if self.config.context_counter == "vllm":
-            import httpx as httpx
-
             endpoint = self.base_url.removesuffix("/v1") + "/tokenize"
             response = await asyncio.to_thread(
-                httpx.post,
+                traced_post(self, "vllm.tokenize", "context_count"),
                 endpoint,
                 json={
                     "model": self.config.model_name,

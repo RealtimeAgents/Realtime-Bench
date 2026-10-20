@@ -52,10 +52,11 @@ class JevHarness(DefaultHarness):
             else JEV_PROFILE
         )
         self.driver = ChoiceDecisionDriver(client, self._observation_states)
+        self.driver.bind_trace(self._trace)
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
-        self._runtime = RealtimeRuntime(self.driver, self._context_policy)
+        self._runtime = RealtimeRuntime(self.driver, self._context_policy, trace=self._trace)
 
     def initialize(self, task_instruction, initial_observation):
         if getattr(self, "_clock_mode", None) != "wall":
