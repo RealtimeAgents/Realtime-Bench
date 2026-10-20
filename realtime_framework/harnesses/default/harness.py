@@ -681,17 +681,16 @@ class VisionAgentBase(StreamingAgent):
 
 from dataclasses import dataclass as dataclass
 
-from realtime_framework.harnesses.default.prompts import GAME_ROLE
-from realtime_framework.harnesses.default.prompts import GAME_SYSTEM_PROMPT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_ACTION_SPACE
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
-from realtime_framework.harnesses.default.prompts import REALTIME_WEB_ROLE
-from realtime_framework.harnesses.default.prompts import REALTIME_WEB_SYSTEM_PROMPT
+from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
 from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import bind_action
+from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
+from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 
 @dataclass(frozen=True)
@@ -700,20 +699,18 @@ class InteractionProfile:
     action_space: str | None = None
     output_contract: str = STREAM_OUTPUT_CONTRACT
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
+    # Opens each frame's interactables (bind_observation); choice profiles replace the whole
+    # frame text (harnesses/jev/observation.py).
+    interactables_header: str = OBSERVATION_INTERACTABLES_HEADER
 
     def system_instruction(self, agent) -> str:
         if self.action_space is None:
             return agent._system_instruction_text()
-        scenario = getattr(agent, "system_prompt_override", None) or REALTIME_WEB_SYSTEM_PROMPT
-        role = {
-            GAME_SYSTEM_PROMPT: GAME_ROLE,
-            REALTIME_WEB_SYSTEM_PROMPT: REALTIME_WEB_ROLE,
-        }.get(scenario, scenario)
         return "\n\n".join(
             filter(
                 None,
                 (
-                    role,
+                    SCENARIO_ROLES[agent.task_category],
                     self.action_space,
                     self.output_contract,
                     getattr(agent, "streaming_note", None),
@@ -732,7 +729,9 @@ class InteractionProfile:
         return geometry.image_size
 
 
-STANDARD_VLM_PROFILE = InteractionProfile("standard_vlm")
+STANDARD_VLM_PROFILE = InteractionProfile(
+    "standard_vlm", interactables_header=FRAME_INTERACTABLES_HEADER
+)
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
     action_space=FUNCTION_CALL_ACTION_SPACE,
@@ -930,7 +929,9 @@ def bind_observation(agent, observation, prompt, tick):
             model_image_bytes=prepared.data,
             model_image_mime_subtype=prepared.mime_subtype,
         )
-        prompt = observation_prompt_with_interactables(prompt, execution.get("text") or "")
+        prompt = observation_prompt_with_interactables(
+            prompt, execution.get("text") or "", agent.interaction_profile.interactables_header
+        )
     value = ProviderObservation(
         observation=observation,
         prompt=prompt,

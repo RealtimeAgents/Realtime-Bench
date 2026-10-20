@@ -73,15 +73,21 @@ GUI_JSON_ACTION_SPACE = (
     + GUI_ACTION_PARAMETER_RULES
 )
 
-STREAM_OUTPUT_CONTRACT = """ACTION OUTPUT
+_STREAM_OUTPUT_CONTRACT = """ACTION OUTPUT
 
 Use your configured or native reasoning internally. Your entire visible response must be exactly
 one valid action from the active action space. Output the action and its arguments only: no
 reasoning, commentary, labels, wrappers, tags, Markdown, ellipses, or placeholders.
-The action is final and immediately executable. All generated output tokens count.
+The action is final and immediately executable.{output_tokens}
 The adapter accepts common formatting wrappers when it can recover exactly one unambiguous valid
 action. If it finds no valid action or multiple different actions, the harness executes WAIT.
 """
+STREAM_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(output_tokens="")
+# Only a finite B charges output tokens to simulated time (budget_clock_prompt); the wall clock
+# charges none, and the pause clock lands each action at the tick it observed.
+FINITE_BUDGET_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(
+    output_tokens=" All generated output tokens count."
+)
 
 
 # Model/interface-specific native-tool instructions.
@@ -121,14 +127,14 @@ you reason, so use the latest visible state and complete the TASK through the vi
 or edit source code, call hidden APIs, or use developer tools or terminal shortcuts. The environment
 determines when the episode ends; use wait when no further UI interaction is needed."""
 
-GAME_SYSTEM_PROMPT = "\n\n".join((GAME_ROLE, GUI_JSON_ACTION_SPACE, STREAM_OUTPUT_CONTRACT))
-REALTIME_WEB_SYSTEM_PROMPT = "\n\n".join(
-    (
-        REALTIME_WEB_ROLE,
-        GUI_JSON_ACTION_SPACE,
-        STREAM_OUTPUT_CONTRACT,
-    )
-)
+SCENARIO_ROLES = {"browser_game": GAME_ROLE, "realtime": REALTIME_WEB_ROLE}
+
+
+def _scenario_prompt(role: str, contract: str) -> str:
+    return "\n\n".join((role, GUI_JSON_ACTION_SPACE, contract))
+
+
+REALTIME_WEB_SYSTEM_PROMPT = _scenario_prompt(REALTIME_WEB_ROLE, STREAM_OUTPUT_CONTRACT)
 
 
 def gui_system_prompt(
@@ -147,16 +153,16 @@ def gui_system_prompt(
     )
 
 
-def system_prompt_for_category(category: str | None) -> str:
-    if category == "browser_game":
-        return GAME_SYSTEM_PROMPT
-    if category == "realtime":
-        return REALTIME_WEB_SYSTEM_PROMPT
-    raise ValueError(f"unsupported task category for scenario prompt: {category!r}")
+def system_prompt_for_category(category: str | None, *, finite_budget: bool) -> str:
+    if category not in SCENARIO_ROLES:
+        raise ValueError(f"unsupported task category for scenario prompt: {category!r}")
+    contract = FINITE_BUDGET_OUTPUT_CONTRACT if finite_budget else STREAM_OUTPUT_CONTRACT
+    return _scenario_prompt(SCENARIO_ROLES[category], contract)
 
 
-# Shared screenshot marker for text-action adapters.
-FRAME_PROMPT = "Latest screen."
+# Shared screenshot marker for text-action adapters. Each frame keeps its text once newer frames
+# follow, so it names the screen of its own decision.
+FRAME_PROMPT = "Screen observed for this decision."
 
 # Stateful text-output VLM sessions can under-weight an old system message, so each frame repeats only
 # the wire format. Scenario role and task objective remain exclusively in the session seed.
