@@ -848,6 +848,7 @@ from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
+from realtime_framework.sandbox.observation.som import render_frame_number
 
 
 class _GenerationOutputCollector:
@@ -912,7 +913,7 @@ class _GenerationOutputCollector:
 
 def bind_observation(agent, observation, prompt, tick):
     """Prepare one capture for the model, attach its read-only interactables and enter it in the
-    frame table."""
+    frame table. Under streaming the frame's number is drawn on the screenshot."""
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
     observation.metadata = metadata
@@ -951,12 +952,15 @@ def bind_observation(agent, observation, prompt, tick):
         geometry=prepared.geometry.to_dict(),
         inspection=execution.get("proof") if execution else None,
     )
-    agent.frames.register(
+    frame = agent.frames.register(
         value.observation_id,
         observation.timestamp,
         value.geometry,
         execution["marks"] if execution else None,
     )
+    if agent.interaction_mode == "streaming":
+        value.image_bytes = render_frame_number(value.image_bytes, frame.frame)
+        value.mime_type = "image/png"
     return value, execution
 
 
@@ -994,6 +998,9 @@ class DefaultHarness(VisionAgentBase):
 
     interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
+    # "turn_based" or "streaming", set with the run's settings before initialize(). Streaming
+    # draws each frame's number on its screenshot.
+    interaction_mode = "turn_based"
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
         self._provider_usage_started = False
