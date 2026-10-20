@@ -1336,7 +1336,7 @@ class DefaultHarness(VisionAgentBase):
             )
 
         retry = RequestRetry(
-            request.generation_id,
+            f"{prepared[-1].observation_id}:turn",
             classify,
             record,
             replayable=lambda exc: not received_output(exc),

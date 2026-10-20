@@ -286,9 +286,11 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     (classification,) = classified
     runtime = records[0]["result"]["realtime_runtime"]
     assert runtime["transport_reconnect_attempts"] == 1
-    # The first retry waits 1 s +-25%, jittered by the generation id (entity/model.py:367-385).
+    # The first retry waits 1 s +-25%, jittered by the decision's observation
+    # (entity/model.py:367-385).
+    key = f"{records[0]['observation']['observation_id']}:turn"
     assert sleeps.calls == runtime["transport_reconnect_backoff_s"]
-    assert sleeps.calls == [TRANSPORT_RETRY.delay_s(1, runtime["generation_id"], classification[0])]
+    assert sleeps.calls == [TRANSPORT_RETRY.delay_s(1, key, classification[0])]
     assert 0.75 <= sleeps.calls[0] <= 1.25
     actual = check_baseline(
         f"openrouter-{scenario}.jsonl",
@@ -297,7 +299,7 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
         tmp_path,
     )
     check_one_session(actual)
-    return classification, runtime
+    return classification, key
 
 
 def test_whole_turn_retry_503(openrouter_env, tmp_path):
@@ -317,11 +319,11 @@ def test_whole_turn_retry_429_with_retry_after(openrouter_env, tmp_path):
     failure = Failure(
         429, {"error": {"message": "rate limited", "code": 429}}, (("Retry-After", "120"),)
     )
-    (kind, carried), runtime = _retry_scenario(openrouter_env, tmp_path, failure, "retry-429")
+    (kind, carried), key = _retry_scenario(openrouter_env, tmp_path, failure, "retry-429")
     assert kind == TransportFailure(RATE_LIMITED)  # retry_after_s is None
     assert carried[0] is None and 120.0 in carried
     honored = TransportFailure(RATE_LIMITED, 120.0)
-    assert TRANSPORT_RETRY.delay_s(1, runtime["generation_id"], honored) is None
+    assert TRANSPORT_RETRY.delay_s(1, key, honored) is None
 
 
 def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], list, list]:

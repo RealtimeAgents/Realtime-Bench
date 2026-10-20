@@ -37,9 +37,6 @@ REAL_TIME_FIELDS = frozenset(
         "provider_stream_started_monotonic_ns",
         # ToolRuntime.inspect (sandbox/observation/som.py:677, 713, 728)
         "tool_execution_latency_s",
-        # DefaultHarness retry sleeps, jittered by the random generation id
-        # (harnesses/default/harness.py:1306-1308, 1334, 1349; entity/model.py:382-385)
-        "transport_reconnect_backoff_s",
         # ChoiceDecision's candidate splits, question calls and text composition
         # (providers/decisions/selection.py:198, 216, 413)
         "latency_s",
