@@ -1,8 +1,9 @@
-"""Drive the real run_stream with an agent from build_episode against a FakeEnvironment.
+"""Drive the real run_stream with an agent from build_episode against a FakeEnvironment on the
+wall clock or a TokenEnvironment on the token clock.
 
-run_stream gets the arguments main() passes on the wall clock (evaluation/runner.py:1710-1721).
-Its own time.time() reads (runner.py:365-367, 382-415, 571, 756, 774) are pointed at the fake
-clock, so action timestamps, frame ages and the deadline all read one clock. After the loop the
+run_stream gets the arguments main() passes (evaluation/runner.py:1710-1721). Its own time.time()
+reads (runner.py:365-367, 382-415, 571, 756, 774) are pointed at the fake clock, so on the wall
+clock action timestamps, frame ages and the deadline all read one clock. After the loop the
 abandoned workers are drained (runner.py:1814-1819) and the agent is closed (runner.py:1820-1827),
 in main()'s order. main() would also call the agent's start_episode (runner.py:1691-1693), which
 no agent defines.
@@ -26,7 +27,8 @@ from .build import Episode
 from .fake_env import FakeEnvironment
 
 # Values derived from the agent's real-time decision latency (harnesses/default/harness.py:1168,
-# 1500), on top of the fields baseline.REAL_TIME_FIELDS already masks.
+# 1500), on top of the fields baseline.REAL_TIME_FIELDS already masks. On the token clock the last
+# two come from the output tokens instead.
 REAL_TIME_FIELDS = baseline.REAL_TIME_FIELDS | {
     "latency_s",  # InferenceCompleted copies the decision latency (runner.py:1062)
     "model_latency_s",  # so does the lifecycle record (runner.py:699)
@@ -54,10 +56,14 @@ class RecordingTrace:
         self._env.log("trace.checkpoint")
 
 
-def run_loop(episode: Episode, env: FakeEnvironment) -> list:
-    """Run one episode and return run_stream's timeline; ``env.calls`` holds everything else."""
-    if episode.clock_mode != "wall":
-        raise ValueError("FakeEnvironment has the wall clock only")
+def run_loop(episode: Episode, env) -> list:
+    """Run one episode and return run_stream's timeline; ``env.calls`` holds everything else.
+
+    ``env`` is a FakeEnvironment on the wall clock or a TokenEnvironment (token_env.py) on the
+    token clock. Its ``fps`` is the environment's rate and the agent's config.fps the
+    model-input rate, as main() passes them (runner.py:1713-1715)."""
+    if episode.clock_mode != env.clock_mode:
+        raise ValueError(f"a {env.clock_mode}-clock environment for a {episode.clock_mode} episode")
     agent = episode.agent
     commit_action = agent.commit_action
 
@@ -68,7 +74,9 @@ def run_loop(episode: Episode, env: FakeEnvironment) -> list:
     agent.commit_action = recording_commit  # what run_stream reports (runner.py:434-443, 674)
 
     def log(line):
-        env.log("runner.log", line=LOGGED_DELIBERATION.sub("δ=<real time>", line))
+        if episode.clock_mode == "wall":  # the token clock's δ comes from the output tokens
+            line = LOGGED_DELIBERATION.sub("δ=<real time>", line)
+        env.log("runner.log", line=line)
 
     with mock.patch.object(runner, "time", types.SimpleNamespace(time=env.clock.time)):
         try:
@@ -76,12 +84,13 @@ def run_loop(episode: Episode, env: FakeEnvironment) -> list:
                 agent,
                 env,
                 delta_s=1.0 / env.fps,
+                frame_ticks=env.fps / agent.config.fps,
                 max_ticks=env.max_minutes * 60 * env.fps,
                 log=log,
                 think_budget_s=None,
                 per_move_cap_s=None,
-                clock_mode="wall",
-                tokens_per_frame=None,
+                clock_mode=episode.clock_mode,
+                tokens_per_frame=episode.tokens_per_frame,
                 trace=RecordingTrace(env),
             )
         finally:

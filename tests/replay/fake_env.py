@@ -51,7 +51,7 @@ class Hang:
 
 
 class FakeEnvironment:
-    """GuestEnvironment's wall-clock behavior on a FakeClock.
+    """GuestEnvironment's wall-clock behavior on a FakeClock. ``fps`` is the environment's rate.
 
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
     into "rejected" (runner.py:533-537). ``failures`` maps a decision to an environment fault,
@@ -62,6 +62,8 @@ class FakeEnvironment:
     the episode, a string names the reason (actions.py:952-959). ``reply_latencies[i]`` is the
     fake time request i takes.
     """
+
+    clock_mode = "wall"
 
     def __init__(
         self,
@@ -120,7 +122,9 @@ class FakeEnvironment:
     def wait_until_tick(self, target) -> None:
         """GuestEnvironment polls until tick_index() reaches ``target`` or the deadline passes
         (actions.py:251-252); tick_index() is an integer, so a fractional target waits for the
-        next whole tick. The fake lands on the tick exactly, without the 30 ms polling step."""
+        next whole tick. The fake lands on the tick exactly, without the 30 ms polling step: on
+        the first clock reading whose tick_index() reaches it, which for a tick that is not a
+        whole number of seconds can lie a few ulps past t0 + tick * d."""
         before = self.clock.now
         if self.decision in self.advance_failures:
             message = self.advance_failures[self.decision]
@@ -133,6 +137,8 @@ class FakeEnvironment:
             raise RuntimeError(message)
         if self.tick_index() < target and self.clock.now < self.deadline:
             self.clock.now = min(self.t0 + math.ceil(target) * self.d, self.deadline)
+            while self.tick_index() < target and self.clock.now < self.deadline:
+                self.clock.now = math.nextafter(self.clock.now, math.inf)
         self.log("env.wait_until_tick", target=target, from_time=before, to_time=self.clock.now)
 
     # ---- observation ----
