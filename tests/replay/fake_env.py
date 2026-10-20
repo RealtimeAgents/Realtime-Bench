@@ -55,9 +55,12 @@ class FakeEnvironment:
 
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
     into "rejected" (runner.py:533-537). ``failures`` maps a decision to an environment fault,
-    which invalidates the run (runner.py:538-541). ``stop_check(env)`` stands for the task's
-    episode_over (runner.py:1684): a true value ends the episode, a string names the reason
-    (actions.py:952-959). ``reply_latencies[i]`` is the fake time request i takes.
+    which invalidates the run (runner.py:538-541). ``advance_failures`` maps a decision to a
+    failure of its post-action wait, which the environment latches and raises again as
+    GuestEnvironment's token-clock advance does (actions.py:235-241); run_stream does not catch
+    it. ``stop_check(env)`` stands for the task's episode_over (runner.py:1684): a true value ends
+    the episode, a string names the reason (actions.py:952-959). ``reply_latencies[i]`` is the
+    fake time request i takes.
     """
 
     def __init__(
@@ -70,6 +73,7 @@ class FakeEnvironment:
         reply_latencies: list,
         rejections: dict[int, str] | None = None,
         failures: dict[int, str] | None = None,
+        advance_failures: dict[int, str] | None = None,
         stop_check=None,
     ):
         self.frames = frames
@@ -84,6 +88,7 @@ class FakeEnvironment:
         self.reply_latencies = list(reply_latencies)
         self.rejections = dict(rejections or {})
         self.failures = dict(failures or {})
+        self.advance_failures = dict(advance_failures or {})
         self.stop_check = stop_check
         # The task hook run_stream reads through env.task (runner.py:778-788).
         self.task = types.SimpleNamespace(evaluation_snapshot=self._evaluation_snapshot)
@@ -117,6 +122,15 @@ class FakeEnvironment:
         (actions.py:251-252); tick_index() is an integer, so a fractional target waits for the
         next whole tick. The fake lands on the tick exactly, without the 30 ms polling step."""
         before = self.clock.now
+        if self.decision in self.advance_failures:
+            message = self.advance_failures[self.decision]
+            self._invalid_run = {
+                "category": "environment",
+                "reason": "clock_advance_failed",
+                "detail": message,
+            }
+            self.log("env.wait_until_tick", target=target, failed=message)
+            raise RuntimeError(message)
         if self.tick_index() < target and self.clock.now < self.deadline:
             self.clock.now = min(self.t0 + math.ceil(target) * self.d, self.deadline)
         self.log("env.wait_until_tick", target=target, from_time=before, to_time=self.clock.now)
