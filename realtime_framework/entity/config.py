@@ -225,3 +225,4 @@ class EnvironmentBudgetConfig:
     capture_s: float = 120.0  # capture one observation; the CDP call default
     state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
     clock_advance_s: float = 120.0  # advance or render one token-clock step; the CDP call default
+    snapshot_read_s: float = 8.0  # read the scored snapshot at the freeze; as other one-shot reads

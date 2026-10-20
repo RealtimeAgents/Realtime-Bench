@@ -80,7 +80,9 @@ def budgets(monkeypatch):
     """Shrink the configured operation budgets for one test."""
 
     def shrink(**fields):
-        monkeypatch.setattr(actions, "ENVIRONMENT_BUDGET", replace(actions.ENVIRONMENT_BUDGET, **fields))
+        value = replace(actions.ENVIRONMENT_BUDGET, **fields)
+        monkeypatch.setattr(actions, "ENVIRONMENT_BUDGET", value)
+        monkeypatch.setattr(runner, "ENVIRONMENT_BUDGET", value)
 
     return shrink
 
@@ -146,10 +148,10 @@ def test_an_action_budget_extends_for_text_input_and_holds_as_the_guest_request_
     assert action_timeout(Action(ActionType.DRAG, drag), budget) == 15.0
 
 
-def test_a_run_within_its_budgets_reads_acts_and_captures(game, monkeypatch):
+def test_a_run_within_its_budgets_reads_acts_captures_and_freezes(game, monkeypatch):
     with FakeGuest() as guest, FakeCDP(values={_GET_STATE: PLAYING}) as fake:
         task = game(fake)
-        # FakeCDP runs no page clock; reading, acting and capturing are what count here.
+        # FakeCDP runs no page clock; reading, acting, capturing and freezing are what count here.
         monkeypatch.setattr(task, "advance_clock", lambda frames=1, key_events=(): None)
         env = _environment(guest, task, stop_check=task.episode_over)
         agent, _ = _run(env)
@@ -242,4 +244,18 @@ def test_a_clock_advance_with_a_slow_connect_fails_within_its_budget(budgets, ga
     assert env._stop_reason == "invalid_run"
     assert len(guest.actions) == 1
     assert fake.commands == []
+    _spent_the_budget(elapsed)
+
+
+def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget(budgets, game):
+    # The game reads its snapshot through cdp_eval, which turns the timeout into an empty state;
+    # the read still fails because it returned after its deadline.
+    budgets(snapshot_read_s=BUDGET)
+    with FakeGuest() as guest, FakeCDP(mode="flood") as fake:
+        env = _environment(guest, game(fake), stop_check=lambda: True)
+        agent, elapsed = _run(env)
+    _invalid(env, "evaluation_snapshot_failed")
+    assert env._termination_snapshot_captured is False
+    assert "snapshot read took longer than 0.5 s" in env._termination_snapshot_error
+    assert agent.statuses == []
     _spent_the_budget(elapsed)
