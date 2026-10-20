@@ -500,7 +500,7 @@ class RealtimeRuntime:
                 tuple(self._turns + incoming), self.ledger_block(executed_action_ledger)
             )
             request = replace(request, canonical=canonical)
-            if not self.policy.pressure_archive:
+            if not (self.policy.pressure_archive and self.capabilities.request_size_estimation):
                 break
             status = dict(await self.driver.request_context_status(request))
             physical_metadata.setdefault("request_context_before", status)

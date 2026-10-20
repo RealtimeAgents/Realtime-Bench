@@ -132,8 +132,8 @@ class CallParameters:
 
 @dataclass(frozen=True)
 class CanonicalRequest:
-    # The context policy the request was generated under; encoders read its fixed texts and
-    # Decision overflow handling from here.
+    # The context policy the request was generated under; encoders read its fixed texts from
+    # here.
     policy: PathPolicy
     history_form: Literal["turns", "action_digest"]
     items: tuple[RequestItem, ...]  # in the order they are sent

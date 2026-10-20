@@ -63,12 +63,12 @@ def dummy_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", DUMMY_KEY)
 
 
-def _play(api, decisions, run_dir, *, task, instruction, scene=None):
+def _play(api, decisions, run_dir, *, task, instruction, scene=None, update=None):
     key, upstream = APIS[api]
     with DecisionsStub(upstream=upstream) as stub:
         # The runner's config (runner.py:1548-1553), with the YAML's base_url at the stub.
         config = catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed").model_copy(
-            update={"api_base_url": stub.base_url}
+            update={"api_base_url": stub.base_url, **(update or {})}
         )
         episode = build_episode(
             config, run_dir, task=task, instruction=instruction, model_key=key, scene=scene
@@ -295,45 +295,69 @@ def test_luna_question_retry(tmp_path):
     _settle("retry", header, records, tmp_path)
 
 
-def test_luna_context_overflow(tmp_path):
-    """A rejected group is bisected (selection.py:189-203); a rejected one-option question ends
-    the decision, since canonical history is never reduced (selection.py:249-255)."""
+@pytest.mark.parametrize("api", list(APIS))
+def test_candidate_overflow(api, tmp_path):
+    """Too many candidates: a rejected group is bisected (selection.py _choose); a rejected
+    one-option question ends the decision, since no history is dropped at question time."""
     header, records = _play(
-        "openai_decisions",
-        script.LUNA_OVERFLOW,
-        tmp_path,
-        task=ReplayTask(),
-        instruction=TASK_INSTRUCTION,
+        api, script.CANDIDATE_OVERFLOW, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION
     )
     split, failed = records
     assert _criteria_sizes(split) == [11, 5, 6, 2]
     assert [len(s["candidates"]) for s in _runtime(split)["jev_context_splits"]] == [11]
-    assert _runtime(split)["jev_history_reductions"] == []
     assert _criteria_sizes(failed) == [20, 10, 5, 2, 1]
+    assert len({json.dumps(body["state"]) for body in _bodies(failed)}) == 1
     assert failed["result"]["invalid_category"] == "provider"
     assert failed["result"]["invalid_reason"] == "provider_request_failed"
     assert failed["commit"] is None and failed["action_history_entry"] is None
     _settle("overflow", header, records, tmp_path)
 
 
-def test_jev_context_overflow(tmp_path):
-    """JEV bisects too; a rejected one-option question drops the oldest messages after the system
-    message, for that question only (selection.py:231-261)."""
+# (context_window_tokens, context_reserve_tokens) small enough that the estimate of decision 12
+# of the long script, and of no earlier one, exceeds the window less the reserve.
+PRESSURE_WINDOWS = {"openai_decisions": (56000, 4000), "jev_decisions": (8192, 512)}
+
+
+def _has_ledger(api: str, body: dict) -> bool:
+    if api == "openai_decisions":
+        return ARCHIVED_ACTION_LEDGER_HEADER in body["state"][0]
+    return body["state"]["history"][1]["content"].startswith(JEV_LEDGER_HEADER)
+
+
+@pytest.mark.parametrize("api", list(APIS))
+def test_history_overflow(api, tmp_path):
+    """History too long: the runtime estimates each request against the declared window and,
+    while it is over, archives the oldest turns into the ledger before the first question
+    (harnesses/default/context.py _run_turn), once per block, each a HistoryChanged."""
+    window, reserve = PRESSURE_WINDOWS[api]
     header, records = _play(
-        "jev_decisions",
-        script.JEV_OVERFLOW,
+        api,
+        script.HISTORY_OVERFLOW,
         tmp_path,
         task=ReplayTask(),
         instruction=TASK_INSTRUCTION,
+        update={"context_window_tokens": window, "context_reserve_tokens": reserve},
     )
-    reduced, failed = records[3], records[4]
-    assert _criteria_sizes(reduced) == [11, 5, 2, 1, 1, 1, 3, 6, 4]
-    assert [len(b["state"]["history"]) for b in _bodies(reduced)] == [3, 3, 3, 3, 2, 3, 3, 3, 3]
-    assert [len(s["candidates"]) for s in _runtime(reduced)["jev_context_splits"]] == [11, 5, 2]
-    assert _runtime(reduced)["jev_history_reductions"] == [
-        {"phase": "gui_action", "removed_messages": 1, "remaining": 2}
+    k = script.HISTORY_OVERFLOW_ARCHIVE
+    archived = [_runtime(r)["request_context_archived_turns"] for r in records]
+    assert archived == [0] * k + [10] + [0] * (len(records) - k - 1)
+    runtime = _runtime(records[k])
+    before, after = runtime["request_context_before"], runtime["request_context"]
+    assert before["pressure"] and before["soft_limit"] == window - reserve
+    assert not any(_runtime(r)["request_context"]["pressure"] for r in records)
+    assert after["input_tokens"] < before["input_tokens"]
+    assert runtime["history_archived_actions_total"] == 10
+    assert [_has_ledger(api, _bodies(r)[0]) for r in records] == [False] * k + [True] * (
+        len(records) - k
+    )
+    events = [
+        json.loads(line) for line in (tmp_path / "episode_trace.jsonl").read_text().splitlines()
     ]
-    assert reduced["result"]["raw"] == '{"action": "click", "target": "P3"}'
-    assert [len(b["state"]["history"]) for b in _bodies(failed)] == [3, 3, 3, 3, 2]
-    assert failed["result"]["invalid_reason"] == "provider_request_failed"
-    _settle("overflow", header, records, tmp_path)
+    (change,) = [
+        e["payload"]
+        for e in events
+        if e["event"] == "HistoryChanged" and e["payload"]["kind"] == "pressure_archive"
+    ]
+    assert change["scope"]["decision"] == k and change["policy_item"] == "pressure_archive"
+    assert change["ledger"] == {"archived_actions_before": 0, "archived_actions_after": 10}
+    _settle("history_overflow", header, records, tmp_path)

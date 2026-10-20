@@ -307,33 +307,17 @@ RETRY = [
 ]
 
 TOO_LARGE = Failure(413, "Request exceeds the model's context window")
-# Frame 1 offers 11 candidates (wait, click_P1-P3, click_R1, scroll x2, pan x4). A rejected
-# group is split in halves, both asked next (selection.py:189-203); winners meet in round 1.
-LUNA_OVERFLOW = [
+# Too many candidates. Frame 1 offers 11 (wait, click_P1-P3, click_R1, scroll x2, pan x4). A
+# rejected group is split in halves, both asked next (selection.py _choose); winners meet in
+# round 1.
+CANDIDATE_OVERFLOW = [
     decision(TOO_LARGE, "click_P1", "pan_up_R1", "click_P1"),
-    # Frame 2 offers 20: halves of 10, 5, 2, then one option. Canonical history is never reduced
-    # for a one-option question; the error ends the decision (selection.py:189-191, 249-255).
+    # Frame 2 offers 20: halves of 10, 5, 2, then one option. History is never reduced at
+    # question time; the error ends the decision.
     decision(TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE),
 ]
-JEV_OVERFLOW = [
-    wait(),
-    wait(),
-    wait(),
-    # [11] -> [5] -> [2] -> [1]: the one-option question drops the oldest message after the system
-    # message and is asked again; the next question starts from the full history again
-    # (selection.py:231-261).
-    decision(
-        TOO_LARGE,
-        TOO_LARGE,
-        TOO_LARGE,
-        TOO_LARGE,
-        "wait",
-        "click_P1",
-        "click_P3",
-        "pan_up_R1",
-        "click_P3",
-    ),
-    # The same, until only the system message and the current observation remain; then the
-    # error ends the decision.
-    decision(TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE),
-]
+# History too long: the first decisions of the long script under a small declared window
+# (test_decisions.py PRESSURE_WINDOWS). Before decision 12 the runtime archives the oldest ten
+# turns into the ledger, and the questions go out with the shorter history.
+HISTORY_OVERFLOW = WEB_LONG[:14]
+HISTORY_OVERFLOW_ARCHIVE = 12

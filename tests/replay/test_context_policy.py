@@ -22,14 +22,9 @@ from realtime_framework.entity.context_policy import (
     current_context_policy,
 )
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
-from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import APIS, adapter_class
 
 POLICY = current_context_policy()
-# The LiteLLM APIs keep their pressure-archive switch as a driver class attribute (litellm.py).
-CHAT_DRIVERS = {
-    api: adapter_class(api) for api in APIS if issubclass(adapter_class(api), LiteLLMDriver)
-}
 
 
 def capabilities(api: str):
@@ -100,16 +95,15 @@ def test_replay_and_pressure_sets():
         api for api in APIS if capabilities(api).reasoning_replay == "required"
     } == {"moonshot"}
     assert not any(path.verbatim_replay for path in paths.values())
-    # Decision clients estimate only canonical history (harnesses/jev/driver.py:36-41).
-    decisions = {
-        api
-        for api in APIS
-        if capabilities(api).action_channel == "choice"
-        and capabilities(api).history_replay == "canonical"
+    # Version 5: one pressure-archive rule, which the runtime applies where the API estimates its
+    # requests (harnesses/default/context.py _run_turn). That is where version 4 had it on, plus
+    # JEV, which estimates its digest instead of dropping history for one rejected option.
+    assert all(path.pressure_archive for path in paths.values())
+    assert {api for api in APIS if capabilities(api).request_size_estimation} == {
+        "chat_completions",
+        "openai_decisions",
+        "jev_decisions",
     }
-    assert {api for api, path in paths.items() if path.pressure_archive} == {
-        api for api, driver in CHAT_DRIVERS.items() if driver.pressure_archive
-    } | decisions
 
 
 @pytest.mark.parametrize("api", sorted(APIS))
@@ -120,8 +114,6 @@ def test_decision_history(api):
         assert history is None
         return
     assert history.form == ("turns" if caps.history_replay == "canonical" else "action_digest")
-    # Only a digest drops history when one option overflows (harnesses/jev/selection.py:232).
-    assert history.overflow == ("raise" if history.form == "turns" else "drop_oldest_half")
 
 
 def test_ledger_roles():
@@ -190,4 +182,4 @@ def test_policy_record_is_json():
 
     record = POLICY.paths["jev_decisions"].to_record()
     assert json.loads(json.dumps(record)) == record
-    assert record["decision_history"] == {"form": "action_digest", "overflow": "drop_oldest_half"}
+    assert record["decision_history"] == {"form": "action_digest"}

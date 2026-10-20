@@ -320,8 +320,8 @@ class ChoiceClient(Protocol):
     The client owns only transport: authentication, failure classification
     (classify_question_error), context-limit detection and response validation. Questions, their
     state, candidates, history and retries belong to the selection flow (providers/decisions).
-    With canonical history replay, ``request_context_status(request)`` reports physical context
-    pressure for the runtime.
+    A client that declares request_size_estimation reports context pressure for the runtime
+    through ``request_context_status(request)``.
     """
 
     capabilities: RealtimeCapabilities  # max_choices: options per question

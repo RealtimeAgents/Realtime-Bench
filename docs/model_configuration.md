@@ -126,10 +126,11 @@ driver as a [model API](#add-a-model-api).
    `("instruction", "input", "model")`), `feedback_placements=("separate_message",)` and
    `server_context="none"` for a stateless API. Each optional-method flag you set
    (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
-   `maps_output_cap`) needs its method. The driver runs under the
-   `chat_completions` context policy, which archives turns when a request exceeds the context
-   window, so it also implements `request_context_status(request)`; a driver that declares no
-   window returns `{"pressure": False, "counter": "unconfigured"}`.
+   `maps_output_cap`) needs its method. The driver runs under the `chat_completions` context
+   policy: with `request_size_estimation`, the runtime asks `request_context_status(request)`
+   before each request and archives the oldest turns while the request exceeds the context
+   window; without a declared window the method returns
+   `{"pressure": False, "counter": "unconfigured"}`.
 2. Install the package into the environment that runs the benchmark, for example
    `uv pip install -e /path/to/your-driver`. `PYTHONPATH` is not enough: each Harbor trial runs
    with `PYTHONPATH` set to this repository.
