@@ -285,3 +285,22 @@ def test_a_job_reports_its_mode(tmp_path, recorded, reported):
 
     report = aggregate(_job(tmp_path, _trial_identity(recorded)[1]))
     assert report["interaction_mode"] == reported
+
+
+def test_a_leaderboard_submission_is_turn_based(tmp_path):
+    """rtbench upload's check of three jobs (evaluation/submission.py check_runs); each one's
+    trial has no report, which counts as a failed task. Streaming results go to a separate
+    leaderboard."""
+    from realtime_framework.evaluation.submission import SubmissionError, check_runs
+
+    def jobs(name, interaction_mode):
+        request = _trial_identity(interaction_mode)[1]
+        return [_job(tmp_path / name / f"run{run}", request) for run in (1, 2, 3)]
+
+    assert len(check_runs(jobs("turn_based", "turn_based"))) == 3
+    assert len(check_runs(jobs("before-the-mode", None))) == 3
+    with pytest.raises(SubmissionError) as caught:
+        check_runs(jobs("streaming", "streaming"))
+    assert str(caught.value) == (
+        f"{tmp_path / 'streaming' / 'run1'}: interaction_mode is 'streaming', expected 'turn_based'"
+    )
