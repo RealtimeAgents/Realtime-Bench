@@ -476,8 +476,6 @@ class RealtimeRuntime:
             await self.driver.send_observation(turn.observation, history) for turn in incoming
         ]
         input_refs = [refs or {} for refs in input_refs]
-        for turn, refs in zip(incoming, input_refs):
-            turn.provider_refs.update(refs or {})
 
         compactions = 0
         archived_count = 0
