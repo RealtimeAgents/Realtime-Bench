@@ -49,7 +49,8 @@ class Episode:
     def budget(self, t_k: int) -> DecisionBudget:
         """The budget run_stream binds before the decision at clock position ``t_k``
         (runner.py:853, 863-915). Without a finite token clock nothing bounds the decision except
-        the native limit, and an agent with unbounded output sends no provider cap."""
+        the native limit, and an agent with unbounded output sends no provider cap. Step-driven
+        episodes observe one frame per tick, so run_stream's frame_ticks is 1 here."""
         agent = self.agent
         native_output_limit = getattr(getattr(agent, "config", None), "native_output_limit", None)
         remaining_clock_tokens = None
