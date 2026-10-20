@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from realtime_framework.entity.config import DecisionBudget, ModelConfig
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.registry import configure_agent, create_agent
@@ -112,11 +113,11 @@ def build_episode(
     ``before_initialize(agent)`` runs just before initialize(), which may open a connection.
     ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other than the form."""
     fps = config.fps
-    check_episode(config, clock_mode=clock_mode, task=task, env_fps=fps)  # runner.py:1565
+    check_episode(config, clock_mode=clock_mode, task=task, env_fps=fps)  # runner.py:1566
     # runner.main() opens the episode trace, then hands the agent its write entry.
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
     agent_trace = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
-    agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1563
+    agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1569
     # create_agent loads the repository .env (harnesses/registry.py:11 calls
     # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
     injected = sorted(name for name in HISTORY_ENV if name in os.environ)
@@ -124,7 +125,7 @@ def build_episode(
         raise RuntimeError(
             f"the repository .env sets {injected}; replay baselines use the defaults"
         )
-    configure_agent(  # runner.py:1564-1570; run_stream sets the clock mode again (runner.py:126)
+    configure_agent(  # runner.py:1570-1576; run_stream sets the clock mode again (runner.py:126)
         agent,
         fps=fps,
         tokens_per_frame=tokens_per_frame,
@@ -132,31 +133,30 @@ def build_episode(
         category=task.category,
     )
 
-    capabilities = agent.driver.capabilities  # runner.py:1601-1605
-    text_observation = (
-        capabilities.observation_modality == "text" or capabilities.action_channel == "choice"
-    )
-    frames = FrameSource(  # runner.py:1606-1613
+    # runner.py:1604-1607
+    context_policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
+    text_observation = context_policy.observation != "som_screenshot"
+    frames = FrameSource(  # runner.py:1608-1615
         task, text_observation=text_observation, fps=fps, **(scene or {})
     )
-    tool_runtime = ToolRuntime(  # runner.py:1614-1620
+    tool_runtime = ToolRuntime(  # runner.py:1616-1622
         run_dir / "tool_calls.jsonl",
         task_id=task.task_id,
         adapter=config.adapter_type,
         model=model_key,
         text_observation=text_observation,
     )
-    agent.bind_tool_runtime(tool_runtime)  # runner.py:1621-1622
+    agent.bind_tool_runtime(tool_runtime)  # runner.py:1623-1624
 
-    initial_observation = frames.capture(0)  # runner.py:1630
+    initial_observation = frames.capture(0)  # runner.py:1632
     interactables = initial_observation.metadata.get("interactables") or {}
-    # The runner refuses to start without a bound, stable first frame (runner.py:1631-1639).
+    # The runner refuses to start without a bound, stable first frame (runner.py:1633-1641).
     assert interactables.get("scene", {}).get("status") == "ok"
     assert interactables.get("binding", {}).get("stable")
     if before_initialize is not None:
         before_initialize(agent)
-    agent.initialize(instruction, initial_observation)  # runner.py:1644
-    agent.discard_pending_observations()  # runner.py:1647
+    agent.initialize(instruction, initial_observation)  # runner.py:1646
+    agent.discard_pending_observations()  # runner.py:1649
     return Episode(
         agent=agent,
         frames=frames,

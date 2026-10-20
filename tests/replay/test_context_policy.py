@@ -161,7 +161,8 @@ def test_prompts_and_observation_form(api):
         expected = {"realtime": profile, "browser_game": profile}
     assert dict(path.prompts) == expected
     assert {name for name in path.prompts.values() if name is not None} <= set(INTERACTION_PROFILES)
-    # evaluation/runner.py:1601-1605 switches choice and text models to the observation JSON.
+    # The rule by which the runner switched choice and text models to the observation JSON
+    # before it read item 12 (evaluation/runner.py).
     text_observation = caps.observation_modality == "text" or caps.action_channel == "choice"
     assert path.observation == (
         "som_screenshot"
