@@ -314,6 +314,14 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         or fps <= 0
     ):
         raise ValueError("runtime.fps must be positive")
+    model_input_fps = runtime.get("model_input_fps", fps)
+    if (
+        not isinstance(model_input_fps, (int, float))
+        or isinstance(model_input_fps, bool)
+        or not math.isfinite(model_input_fps)
+        or model_input_fps <= 0
+    ):
+        raise ValueError("runtime.model_input_fps must be positive")
     duration_minutes = runtime.get("duration_minutes")
     if (
         not isinstance(duration_minutes, (int, float))
@@ -367,6 +375,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             "mode": mode,
             "clock_mode": clock_mode,
             "fps": fps,
+            "model_input_fps": model_input_fps,
             "tokens_per_frame": tokens_per_frame,
             "duration_minutes": duration_minutes,
             "seed": task_seed(runtime.get("seed", DEFAULT_TASK_SEED)),

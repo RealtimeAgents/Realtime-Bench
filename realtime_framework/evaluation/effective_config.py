@@ -549,6 +549,7 @@ def _trial_command(plan: dict) -> tuple[list[str], str]:
         "--clock", runtime["clock_mode"],
         "--tokens-per-frame", os.environ["TOKENS_PER_FRAME"],
         "--fps", str(runtime["fps"]),
+        "--model-input-fps", str(runtime["model_input_fps"]),
         "--max-minutes", str(runtime["duration_minutes"]),
         "--seed", str(runtime["seed"]),
         "--reasoning-effort", model["reasoning_effort"],
@@ -626,6 +627,7 @@ def _probe_harbor(request: dict) -> dict:
                 "task_id": task,
                 "category": categories[task],
                 "fps": harbor_request["fps"],
+                "model_input_fps": harbor_request["model_input_fps"],
                 "duration_minutes": harbor_request["duration_minutes"],
                 "seed": harbor_request["seed"],
             }

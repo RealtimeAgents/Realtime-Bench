@@ -62,7 +62,13 @@ def main(argv=None):
         "--fps",
         type=positive,
         default=1.0,
-        help="Observation rate in frames/second (default: 1)",
+        help="Environment frame rate in frames/second (default: 1)",
+    )
+    parser.add_argument(
+        "--model-input-fps",
+        type=positive,
+        default=None,
+        help="Frames per second fed to the model (default: --fps)",
     )
     parser.add_argument(
         "--duration-minutes",
@@ -87,6 +93,7 @@ def main(argv=None):
         "--dry-run", action="store_true", help="Validate and print the plan; no API calls or files"
     )
     args = parser.parse_args(argv)
+    model_input_fps = args.fps if args.model_input_fps is None else args.model_input_fps
     if args.clock == "wall" or args.tokens_per_frame in (None, "unlimited"):
         tokens_per_frame = None
     else:
@@ -194,6 +201,7 @@ def main(argv=None):
             "clock_mode": args.clock,
             "tokens_per_frame": tokens_per_frame,
             "fps": args.fps,
+            "model_input_fps": model_input_fps,
             "duration_minutes": args.duration_minutes,
             "seed": args.seed,
             "protocol": protocol,
@@ -215,7 +223,9 @@ def main(argv=None):
                 endpoint[field] = value
         plan["models"][0]["endpoint"] = endpoint
     try:
-        resolved_model = catalog.to_model_config(key, fps=args.fps, reasoning_effort=effort)
+        resolved_model = catalog.to_model_config(
+            key, fps=model_input_fps, reasoning_effort=effort
+        )
     except (OSError, ValueError, ImportError) as exc:
         parser.error(str(exc))
     settings = {
@@ -303,6 +313,8 @@ def main(argv=None):
         env["TOKENS_PER_FRAME"],
         "--fps",
         str(args.fps),
+        "--model-input-fps",
+        str(model_input_fps),
         "--max-minutes",
         str(args.duration_minutes),
         "--seed",
