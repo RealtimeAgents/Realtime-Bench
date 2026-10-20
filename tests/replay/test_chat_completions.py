@@ -21,7 +21,7 @@ from realtime_framework.evaluation.agent_trace import load_body
 from . import baseline
 from .build import build_episode
 from .frames import ReplayTask
-from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
+from .scenario import LONG_SCENARIO, OUTSIDE_PAGE, TASK_INSTRUCTION, replies
 from .steps import run_steps
 from .stub import ChatCompletionsStub
 
@@ -108,9 +108,11 @@ def _check_agent_trace(run_dir: Path, stub: ChatCompletionsStub, records: list[d
     """The agent's records: one request per stub request, exactly as received, and the history
     changes at the first fold (decision 20, the 21st step) and the first archive (decision 50)."""
     validate_episode_trace(run_dir / "episode_trace.jsonl")
-    events = [
-        json.loads(line) for line in (run_dir / "episode_trace.jsonl").read_text().splitlines()
-    ]
+    text = (run_dir / "episode_trace.jsonl").read_text()
+    # Bodies live only in the pack: the trace is exported, and requests carry task content.
+    for private in (TASK_INSTRUCTION, "I agree to the terms", "EXECUTION RESULT", OUTSIDE_PAGE):
+        assert private not in text
+    events = [json.loads(line) for line in text.splitlines()]
     assert events[-1]["event"] == "AgentTraceClosed"
     closed = events[-1]["payload"]
     assert closed["written"] == closed["captures"] and closed["error"] is None

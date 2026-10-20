@@ -26,7 +26,7 @@ from realtime_framework.entity.model import (
     exception_chain,
     retry_after_seconds,
 )
-from realtime_framework.providers.capture import httpx_event_hooks
+from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.context import (
     context_status,
     estimated_request_tokens,
@@ -70,7 +70,7 @@ class OpenAIDecisionsClient:
             base_url=config.api_base_url or "https://openrouter.ai/api/alpha/",
             headers={"Authorization": f"Bearer {key}"},
             timeout=30.0,
-            event_hooks=httpx_event_hooks(self, "decisions.http", "choice_question"),
+            event_hooks=HttpCapture(self, "decisions.http", "choice_question").hooks,
         )
 
     def bind_trace(self, trace) -> None:
