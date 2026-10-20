@@ -2396,6 +2396,7 @@ def set_up_agent(
         adapter=cfg.adapter_type,
         model=model,
         text_observation=text_observation,
+        clock=clock,
     )
     if hasattr(agent, "bind_tool_runtime"):
         agent.bind_tool_runtime(setup.tool_runtime)
