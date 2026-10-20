@@ -47,18 +47,32 @@ _CONNECTION_CLOSE_TIMEOUT_S = 1.0
 _EXTENDED_THINKING_MODEL = "gemini-3.8-live-extended-thinking"
 
 
-# Wire options carried in ModelConfig.provider_options. Gemini 3.8 Extended Thinking requires
-# asynchronous tool declarations and remains active across intermediate utterance-level
-# turnComplete messages until interaction_status becomes IDLE. Ordered screenshot/text turns
-# (client_content) avoid synthesizing an audio activity for GUI input.
-LIVE_OPTIONS = {
+# Wire options carried in ModelConfig.provider_options: (default, allowed values). Gemini 3.8
+# Extended Thinking requires asynchronous tool declarations and remains active across
+# intermediate utterance-level turnComplete messages until interaction_status becomes IDLE.
+# Ordered screenshot/text turns (client_content) avoid synthesizing an audio activity for GUI input.
+LIVE_PROTOCOL_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
     "input_transport": ("realtime_input", ("realtime_input", "client_content")),
     # when_idle and omit both send no scheduling field; omit names that choice for Extended Thinking.
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
+}
+# Context policy item 10: how past tool calls are replayed into a rebuilt session. It stays in
+# provider_options, where the ContextPolicy and this driver read it, until step 4b.
+LIVE_HISTORY_OPTIONS = {
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
+LIVE_OPTIONS = {**LIVE_PROTOCOL_OPTIONS, **LIVE_HISTORY_OPTIONS}
+
+# Per-model presets, merged into the catalog entry's defaults (providers/registry.py).
+_CLIENT_CONTENT_TOOLS = {
+    "tool_behavior": "non_blocking",
+    "completion_signal": "turn_complete",
+    "input_transport": "client_content",
+    "tool_response_scheduling": "silent",
+}
+_TOOL_TRANSCRIPT = {"history_format": "tool_transcript"}  # context policy, see above
 
 
 _RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
@@ -137,6 +151,22 @@ class GeminiLiveDriver:
         terminal_output_usage=True,
         action_channel="function_call",
     )
+    model_defaults = {
+        "gemini-3.1-flash-live-preview": {
+            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
+        },
+        "gemini-3.8-live": {
+            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
+        },
+        "gemini-3.8-live-extended-thinking": {
+            "provider_options": {
+                **_CLIENT_CONTENT_TOOLS,
+                "completion_signal": "interaction_idle",
+                "tool_response_scheduling": "omit",
+                **_TOOL_TRANSCRIPT,
+            },
+        },
+    }
 
     def __init__(self, config):
         from google import genai as genai

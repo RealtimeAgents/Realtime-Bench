@@ -192,6 +192,7 @@ class OpenAIRealtimeDriver:
         can_compact_history_in_place=True,
         terminal_output_usage=True,
     )
+    model_defaults = {}
 
     def __init__(self, config):
         self.config = config
