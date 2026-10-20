@@ -52,6 +52,7 @@ class ChoiceDecision:
         self.digest = request.history_form == "action_digest"
         # Canonical replay is already bounded by the runtime's retention and context checks.
         self.overflow = request.policy.decision_history.overflow
+        self.policy_version = request.policy.version
         self.history = render_digest(request) if self.digest else render_transcript(request)
         self.calls = []
         self.retries = []
@@ -269,6 +270,7 @@ class ChoiceDecision:
                 "kind": kind,
                 "trigger": "fallback",
                 "policy_item": "decision_history" if kind == "choice_history_reduction" else None,
+                "policy_version": self.policy_version,
                 "choice": choice,
             },
         )

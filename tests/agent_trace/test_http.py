@@ -18,7 +18,7 @@ import pytest
 
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, phase1_context_policy
 from realtime_framework.entity.model import CanonicalTurn, GenerationRequest, ProviderObservation
 from realtime_framework.entity.records import trace_scope, validate_episode_trace
 from realtime_framework.entity.request import (
@@ -503,6 +503,7 @@ def test_decisions_context_limit_splits_the_candidates(tmp_path, monkeypatch):
     (split,) = _payloads(events, "HistoryChanged")
     assert split["kind"] == "choice_candidate_split" and split["trigger"] == "fallback"
     assert split["policy_item"] is None  # the context policy has no item for it yet
+    assert split["policy_version"] == CONTEXT_POLICY_VERSION  # as the runtime's records carry
     assert split["choice"]["candidates"] == ["a", "b", "c"]
     assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 4
 
@@ -515,6 +516,7 @@ def test_decisions_digest_overflow_reduces_the_history(tmp_path, monkeypatch):
     assert [c["kind"] for c in changes] == ["choice_candidate_split", "choice_history_reduction"]
     reduction = changes[1]
     assert reduction["policy_item"] == "decision_history"
+    assert reduction["policy_version"] == CONTEXT_POLICY_VERSION
     assert reduction["choice"] == {"phase": "gui_action", "removed_messages": 1, "remaining": 3}
     attempts = _payloads(events, "ModelAttemptFinished")
     assert [a["outcome"] for a in attempts] == ["context_limit", "context_limit", "ok", "ok", "ok"]
