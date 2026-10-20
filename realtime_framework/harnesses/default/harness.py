@@ -1006,6 +1006,8 @@ class DefaultHarness(VisionAgentBase):
                     model_name=self.model_name,
                     native_output_limit=self.config.native_output_limit,
                     fps=float(self.config.fps),
+                    answer=self._answer,
+                    texts=self._context_policy.texts,
                 ),
                 initial_observation,
             )

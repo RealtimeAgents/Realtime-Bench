@@ -16,10 +16,15 @@ from enum import Enum as Enum
 from typing import Any as Any
 from typing import Literal as Literal
 from typing import Protocol as Protocol
+from typing import TYPE_CHECKING
 from typing import runtime_checkable as runtime_checkable
 
 from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CanonicalRequest
+
+if TYPE_CHECKING:  # entity.context_policy imports this module
+    from realtime_framework.entity.context_policy import FixedTexts
 
 
 class RuntimeState(str, Enum):
@@ -71,6 +76,10 @@ class SessionSeed:
     model_name: str
     native_output_limit: int | None
     fps: float
+    # What a live session declares and writes outside any request: the function declarations
+    # of the setup, and the policy's fixed texts for the ledger header and the tool receipts.
+    answer: AnswerRequirements
+    texts: FixedTexts
 
 
 @dataclass
@@ -151,6 +160,8 @@ class ConnectRequest:
     turns: tuple[CanonicalTurn, ...] = ()
     executed_action_ledger: str = ""
     resume_handle: Any = None
+    # The retained history as the request builder renders it; None opens an empty session.
+    history: CanonicalRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +194,8 @@ class HistorySyncRequest:
     turns: tuple[CanonicalTurn, ...]
     executed_action_ledger: str
     reason: str
+    # The same history as turns and ledger, as the request builder renders it.
+    history: CanonicalRequest
     current_generation: GenerationHandle | None = None
     force_rebuild: bool = False
     removed_turns: tuple[CanonicalTurn, ...] = ()
@@ -231,7 +244,11 @@ class RealtimeDriver(Protocol):
 
     async def connect(self, request: ConnectRequest) -> None: ...
 
-    async def send_observation(self, observation: ProviderObservation) -> dict[str, Any]: ...
+    # ``history`` is the retained history plus this observation's frame, as the request builder
+    # renders it.
+    async def send_observation(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> dict[str, Any]: ...
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle: ...
 

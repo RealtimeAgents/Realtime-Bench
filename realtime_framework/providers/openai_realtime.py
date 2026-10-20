@@ -360,7 +360,7 @@ class OpenAIRealtimeDriver:
             turn.provider_refs["provider_visual_folded"] = turn.visual_folded
             turn.provider_refs["provider_observation_prompt"] = session_frame_text(turn.observation)
 
-    async def send_observation(self, observation: ProviderObservation) -> dict:
+    async def send_observation(self, observation: ProviderObservation, history) -> dict:
         item_id = await asyncio.to_thread(self._user_item, observation)
         return {
             "user_item_id": item_id,
