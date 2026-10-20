@@ -391,3 +391,26 @@ def test_reply_read_after_close_keeps_its_generation():
     current = receive(core, server_content(turnComplete=True))
     assert (current.connection, current.generation, current.generation_id) == (2, 1, "turn-1")
     assert current.complete and core.replies == {}
+
+
+def test_an_orphan_message_changes_nothing():
+    """After the reply has ended, and before the next generation starts, a message on the
+    connection is an orphan: received() takes it as nothing, and no state changes."""
+    core = session_core()
+    connected(core)
+    clean_turn(core, "turn-0", "handle-0")
+
+    def state():
+        return (
+            core.resume_handle,
+            core.candidate_resume_handle,
+            core.renewal_required,
+            core.go_away_deadline,
+            core.last_turn_clean,
+            dict(core.replies),
+        )
+
+    before = state()
+    for orphan in (update("handle-1"), go_away(), server_content(turnComplete=True)):
+        assert receive(core, orphan) is None
+    assert state() == before

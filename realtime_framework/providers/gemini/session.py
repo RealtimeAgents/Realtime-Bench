@@ -404,9 +404,13 @@ class SessionCore:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 
-    def received(self, connection: int, message, now: float) -> Received:
+    def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
-        monotonic clock)."""
+        monotonic clock). With no generation's reply being read on that connection the message is
+        an orphan: nothing takes it, and it changes nothing (None)."""
+        generation = self.replies.get(connection)
+        if generation is None:
+            return None
         server = getattr(message, "server_content", None)
         status = interaction_status(message)
         if self._completion_signal == "interaction_idle":
@@ -414,7 +418,6 @@ class SessionCore:
         else:
             complete = bool(server is not None and getattr(server, "turn_complete", False))
         interrupted = bool(server is not None and getattr(server, "interrupted", False))
-        generation = self.replies[connection]
         generation.interrupted = generation.interrupted or interrupted
         control = self._control(message, clean=complete and not generation.interrupted, now=now)
         if complete:
