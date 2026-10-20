@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
 import threading
 import time
@@ -14,7 +15,7 @@ import pytest
 from realtime_framework.clock import FrameClock, SystemClock, episode_clocks
 from realtime_framework.entity.model import TRANSIENT, RequestRetry, TransportFailure
 
-from .fake_clock import FakeClock, FakeClockStalled, wait_delivered
+from .fake_clock import FakeClock, FakeClockStalled, _unacknowledged, wait_delivered
 
 
 def test_episode_clocks_share_one_clock_on_the_wall_clock():
@@ -150,6 +151,21 @@ def test_retry_backoff_waits_on_the_clock(asynchronous):
     first, second = delays
     assert first > 0 and second > 0
     assert sent == [0.0, first, first + second]
+
+
+def test_bytes_the_peer_has_not_taken_count_as_in_flight():
+    """The send-queue query behind the in-flight check (SO_NWRITE on macOS, TIOCOUTQ on Linux)
+    sees what fills the send buffer while the peer reads nothing."""
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        client = socket.create_connection(server.getsockname())
+        peer, _ = server.accept()
+        with client, peer:
+            assert _unacknowledged(client.fileno()) == 0
+            client.setblocking(False)
+            with contextlib.suppress(BlockingIOError):
+                while True:
+                    client.send(b"x" * 65536)
+            assert _unacknowledged(client.fileno()) > 0
 
 
 def test_loopback_reply_is_never_overtaken_by_a_later_deadline():
