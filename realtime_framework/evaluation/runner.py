@@ -819,9 +819,9 @@ def run_stream(
                 with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s):
                     snapshot = snapshotter()
                 setattr(env, "_termination_snapshot", snapshot)
+                snapshot_s = _world_s()
                 setattr(env, "_termination_snapshot_captured", True)
                 setattr(env, "_termination_snapshot_error", None)
-                snapshot_s = finalized_s
             except Exception:
                 failure = traceback.format_exc()
                 setattr(env, "_termination_snapshot_error", failure)
@@ -854,8 +854,8 @@ def run_stream(
 
     def _termination(reason, finalized_s, snapshot_s):
         """What the report reads about the end: the stop reason, the end time its rule gives
-        and when the scored snapshot was frozen (None without one), in world seconds. An end the
-        loop first sees while finalizing ends at ``finalized_s``."""
+        and when the read of the scored snapshot returned (None without one), in world seconds.
+        An end the loop first sees while finalizing ends at ``finalized_s``."""
         if reason in {"time_limit", "tick_limit"}:
             end_s = max_ticks * delta_s
         else:
