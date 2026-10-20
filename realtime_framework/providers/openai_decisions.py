@@ -4,6 +4,10 @@ Only wire encoding, route validation, context estimation, failure classification
 usage live here; the registered class adds them to DecisionEncoder, which makes it a complete
 driver. Candidate actions come with the canonical request; the questions, their state,
 composition and retries belong to the selection flow (providers/decisions).
+
+The transport is httpx rather than LiteLLM's Decisions call (litellm.asystemone, 1.106.1): that
+call cannot send the provider routing block Luna pins its upstream with, takes no client to carry
+the HttpCapture hooks, and reports context limits, refusals and Retry-After in other shapes.
 """
 
 from __future__ import annotations
