@@ -224,6 +224,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -234,7 +235,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0c37e0e7890fdb90c9a18a538a49ab02daa5b0bc9f6b063afc59f30da4168a54"
+    "hash": "f8de692e76f92832479093aecd0f06ea9e661f3b8b2e08513c55391937db3ba1"
    },
    "token/None": {
     "config": {
@@ -344,6 +345,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -354,7 +356,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f7c4e61cd27889e9a1c447bc4726219944ec5ca2e3cd183a70f964147c1010de"
+    "hash": "981a88cb6ba2423f2b3c873e625387ae1c88ae33d6e28524bfa94ee974d7dbaf"
    },
    "wall/None": {
     "config": {
@@ -464,6 +466,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -474,7 +477,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "61ca809269debf566ce11244f8dd1c175e231db6547b33ec014ad832cf10f99b"
+    "hash": "b4af1347d284c6cd10dc6f961c5c5e879e0888f2586fd9d47edb304bd1c8f366"
    }
   },
   "vendor": "anthropic"
@@ -656,6 +659,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -666,7 +670,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "581b6306290fae7bc6cac387c7aee061292e123573ca15ed76403311bc3760bc"
+    "hash": "15e3cbe482041be820d3a594e2955a75085228e7b382f91f1aacb90ffad130eb"
    },
    "token/None": {
     "config": {
@@ -776,6 +780,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -786,7 +791,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7d26d84855275017dee738e12824b56ed92ee214350897dcd9a177446a26b328"
+    "hash": "7195f0ffafc6dbb92a88eb7a1691af8c411e20ac614f895bb13d24233b582771"
    },
    "wall/None": {
     "config": {
@@ -896,6 +901,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -906,7 +912,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c35afe52b7779acc85137f2f6b50b5b8fcd3830af25bd8cc53b454aeb3cd01a3"
+    "hash": "25b592929b4f3a93faa39c1015babb4541583cc5935f7ed7d7b9f6c95a313488"
    }
   },
   "vendor": "anthropic"
@@ -1087,6 +1093,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1097,7 +1104,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "43e13f4e5c1a92479fc6ce872f77c87f7a76d95ef917efe2e1be0dcd8acf677c"
+    "hash": "48aac39803e9bf2196f4572a75e1d87b57731c312097b4d17771f7ab01d9d63e"
    },
    "token/None": {
     "config": {
@@ -1207,6 +1214,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1217,7 +1225,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cce3de26fc5471816d3770633a481566e0130ca1b7bb1b799dd60d881f7c7f89"
+    "hash": "1ab382b1c5791685e9af72bb00d0afe83ac5070601055f414967d44737436d8e"
    },
    "wall/None": {
     "config": {
@@ -1327,6 +1335,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1337,7 +1346,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "77af04a2b398f5f974967efe6d62bfc9ff323e9989199a2b91e5c82d404fad2d"
+    "hash": "aadbad1e43782146bd6a58863805330b47387c822081693f5d1dee3ec1bd012a"
    }
   },
   "vendor": "anthropic"
@@ -1519,6 +1528,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1529,7 +1539,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9f715b03859b82a2057525bd687cede100a85e1753e6b92d7068c4082a07dc6b"
+    "hash": "47a983542999401f5124a59563a174782d653b3f3783f3ed290ea64fede4903f"
    },
    "token/None": {
     "config": {
@@ -1639,6 +1649,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1649,7 +1660,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1a05fa0c4de1c824eb6d93f5c08d1721569693633d48fc084210e7710f22a238"
+    "hash": "6ee0d9b546926ddc5b453078594ffbb1453f8dcc81c56e787fca5d2e5e6def7b"
    },
    "wall/None": {
     "config": {
@@ -1759,6 +1770,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1769,7 +1781,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "71c5e357219065fc745ea6e00fd586b4416dbeede2bbaba4578c38141c4378fb"
+    "hash": "351873c14e4e928432d8454a1d3963239778eac5c4d5163b48fb12d37fe9a181"
    }
   },
   "vendor": "deepseek"
@@ -1951,6 +1963,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -1961,7 +1974,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f838bca84fe100f737c0bbf692d6f8e8db4eaeab6a25832bc7eaa65754319133"
+    "hash": "d6c0c31ce803c3f24b8d23215f8db45fd17291b6a35f2520a4b8cab3ac96a1a4"
    },
    "token/None": {
     "config": {
@@ -2071,6 +2084,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2081,7 +2095,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2810af5c5aa4b432ae10f7b72aad1922f71af78d4f13941b076421795dd7bf99"
+    "hash": "e48d1509fd71d5593dabccf63dc73ac6c879273919f37cc6b3d5ceb5cc2995d9"
    },
    "wall/None": {
     "config": {
@@ -2191,6 +2205,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2201,7 +2216,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e3691e7350d3626a8061ad3654dfd6a1394d8788b9c6c6c27dd7698a0890cd06"
+    "hash": "160986d5e37bee3c7d87d1c98fad85f4a4cf203d8893dff21cac4010856587d4"
    }
   },
   "vendor": "google"
@@ -2392,6 +2407,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2402,7 +2418,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "94856e988e76533da5733f9abd83fdf54edfdadac05006e406b1d41d5a17b056"
+    "hash": "3f4de40e536d7c0e0713d8202f3f432d9ca943e8961323d5c63fdbdd50cff148"
    },
    "token/None": {
     "config": {
@@ -2509,6 +2525,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2519,7 +2536,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1bb16dfc38f22f3aa9c98e20522b9db26db51496c690668c6e69345d5b970d0b"
+    "hash": "c7879810d8b26527c6227cf50606e229926b81efbc0fecb24894c4509f62dea1"
    },
    "wall/None": {
     "config": {
@@ -2626,6 +2643,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2636,7 +2654,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ccbfca262602739b6d9a9d341017d73a280a00698a62b059a583b801711e813f"
+    "hash": "b53ab021e4146736bd9eefdb5d0e280b9c807228603f11a23890fd7685edfde2"
    }
   },
   "vendor": "google"
@@ -2827,6 +2845,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2837,7 +2856,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e864e34824f5614587363fece202ded1f0c7f58db07374cf9419ddd8fff5a78f"
+    "hash": "9dcd70db5095922afdc004e88e4957e4c0f0302d531e391cbc8844ebcb3b585e"
    },
    "token/None": {
     "config": {
@@ -2944,6 +2963,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -2954,7 +2974,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c07907187ac6919b23f1718cb46536a9a583f9942f62ea6a31c1a865eb3ebf15"
+    "hash": "04b9686abf1fb046c9c67922ad71a46d2609bb8bd0b1c598554d90ee45bc8282"
    },
    "wall/None": {
     "config": {
@@ -3061,6 +3081,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3071,7 +3092,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "45dc2fb398c6a87b44ccd23e90794b1cfeb52b5a77d9dc1cacf9f82bd5982485"
+    "hash": "bffaa3d48a324ad9944f7fb1025a53c0f00f18eb0880e05d3fbf9d5f367fb5eb"
    }
   },
   "vendor": "google"
@@ -3262,6 +3283,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3272,7 +3294,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6e2bbf8b964ed3017bc1a15380d12625cc9a4db66e172c0d6ccf9c8f37662a96"
+    "hash": "e77034709bc9955f1c7de95eee071eae8f81442ede0537f4700ae9e102573d49"
    },
    "token/None": {
     "config": {
@@ -3379,6 +3401,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3389,7 +3412,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d2118288d1dba00aade5278f84a611837ee6127f2c1df41003e3770f665b1938"
+    "hash": "a55ae927b16928b76f81fb534c7cf484a334ca45e6db5926ad0bcc219044a2e1"
    },
    "wall/None": {
     "config": {
@@ -3496,6 +3519,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3506,7 +3530,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "695414cafa4f4f03f357373091801b5a7af7270aafae1af727464ca31ad695c5"
+    "hash": "d181c9acd68ce60443c3deafc5fb5c73d649217fc7dd87ce87871ef4db8a187a"
    }
   },
   "vendor": "google"
@@ -3688,6 +3712,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3698,7 +3723,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bdd96ab4128e721b639eefd68d65abbe94b770bb73b84745ff993ff27650f171"
+    "hash": "75c0219d1e3148ce0c5234f91e93fca545f98c15321cde5da8f79149eba82823"
    },
    "token/None": {
     "config": {
@@ -3808,6 +3833,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3818,7 +3844,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "763e208cf21cd28bc7734eef152b6ef9d878c64e0129390d5a5cb1cf457dc9a9"
+    "hash": "03f1de053756899ef8d7e067e36d42f83035230361ccd82e2058aa8cd3b9c411"
    },
    "wall/None": {
     "config": {
@@ -3928,6 +3954,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -3938,7 +3965,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fb5df4dcd3adf6032427e48246bf7254594ccbec45ad50f31b4c6d428c17ccd5"
+    "hash": "9cbfa47835222e8a95e0d28f94f3365b2c8c40de16f2b3b41284d21c7e610b2c"
    }
   },
   "vendor": "openai"
@@ -4120,6 +4147,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4130,7 +4158,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d69f98a7ccb72f73ae51553ffffd56ffb111dbea059e98ce6e06872b016d094e"
+    "hash": "4f4e5e1c351e8f6af918f0952ea4f12a9b9d43d220e6c0b7f1fdd9153eaf7158"
    },
    "token/None": {
     "config": {
@@ -4240,6 +4268,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4250,7 +4279,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a999e4d4daf5b7f377efcb424c4bc8fdbb828137d173234b5b89abc1838af503"
+    "hash": "078d2ab2b89e70e47e2a134e43cf4f542b99a2d00cf46ed15b1cb28687a24f9f"
    },
    "wall/None": {
     "config": {
@@ -4360,6 +4389,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4370,7 +4400,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f02943699f943d7862c7f5d71e3add51c236a446831d0bdb3c1f716203c57dad"
+    "hash": "1bacb7cfb54a211ef24cf0bbbd597cbab9b0c2e968e76528895e03c3a643a418"
    }
   },
   "vendor": "openai"
@@ -4545,6 +4575,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4555,7 +4586,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d85df651def50a26c8918c9beda9dbc3bd1167d8965b3b66c1c10c7808ebd4c1"
+    "hash": "8b6e8600811a737313c50e04b00421786b557c528226c588eda5a0a90fd62ad1"
    }
   },
   "vendor": "openai"
@@ -4727,6 +4758,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4737,7 +4769,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "06f77c18477297d82af04843bb470aed428e265edbd5e5ba07416c36f2bc9a67"
+    "hash": "1c250b7d70644a1e2161776d99b4622435d7954dc7d4de40fd1c06aeda6d3ee6"
    },
    "token/None": {
     "config": {
@@ -4838,6 +4870,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4848,7 +4881,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "adb6064a0713086b995204d1d93d4f3a0d5490bc1f611b9baf61a6df6c2f8b18"
+    "hash": "0b55c1233d7270303a8034a07e443ad808509b3449eef8524936a27ceccca3b2"
    },
    "wall/None": {
     "config": {
@@ -4949,6 +4982,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "unknown",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -4959,7 +4993,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "df1d17a6a47f064de6eb68a45e0fe14dbd5bd1c65aa65be4e071e61ad1443e2b"
+    "hash": "9863bbc33ce72ece31a420d1b6758a5026cb9a098f8bd363200719eb18a424ae"
    }
   },
   "vendor": "openai"
@@ -5131,6 +5165,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -5141,7 +5176,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bbd9eec7b5f785d0c136ad8d19673418d2530c784444c935378e3c3e6fa80a4a"
+    "hash": "2f23778baa2544d70dfd6ed97f5a829da100bcc3e82f989fe76b93c172c525e2"
    }
   },
   "vendor": "typesafe"
@@ -5322,6 +5357,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -5332,7 +5368,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "944e70d1caac2a2f7c2c00ce866a274eb941201f6677bf2f0aca05a5d468c42f"
+    "hash": "279b3439b981680e2ccfad34330e46044e22234635e34867bad019e033712557"
    },
    "token/None": {
     "config": {
@@ -5442,6 +5478,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -5452,7 +5489,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "23178391afbde5086f707b2dc7222eedecaa96d2c03b7c22d3b4067482a46ad1"
+    "hash": "ab5c13274d40b09db59462f734962d0b3f680debda3b244997b68c4ff0c456f0"
    },
    "wall/None": {
     "config": {
@@ -5562,6 +5599,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -5572,7 +5610,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0d46633f04a8f3dc82bd5a95d234fe250400de3c8903e3329503fd346df09f8f"
+    "hash": "378344870be2710f856f7da0118cd7f0a95e39e8428f99d3c1bb3b3ef6a01408"
    }
   },
   "vendor": "moonshot"
@@ -5764,6 +5802,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -5774,7 +5813,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "361e8aa805a37314da12b6b87fd6ad6e07a7cdecba6624c2789a8a5656215090"
+    "hash": "bf97cc0d330618a43b0cb747a276a7c73800c4b0c0b99321d0d3ac4e5746385b"
    }
   },
   "vendor": "litellm"
@@ -5969,6 +6008,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -5979,7 +6019,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ca6194545a443dbbaa118e5225556eac1d934606d1e615f008341b44fbd485bb"
+    "hash": "54b99f4397ae4c7e196b6baeccc8a6254693d2d0e56720ca2d0e86c193a507cc"
    }
   },
   "vendor": "compatible"
@@ -6171,6 +6211,7 @@
      "realtime_business_action_barrier": "browser_input_to_server_and_render_completion_v2",
      "request_context_policy": "pending_multimodal_request_block_archive_with_ledger_v1",
      "seed": 42,
+     "server_context": "none",
      "stateless_execution_feedback_policy": "chronological_turn_feedback_v1",
      "termination_snapshot_policy": "freeze_before_input_release_v2",
      "think_budget_s": null,
@@ -6181,7 +6222,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6a26bac02f52499e089d2de5976a09ec8714c96abf7449e0ff19243a96043d09"
+    "hash": "e02820c9d7384b3fed6aab28ccc92bea01bd1ebd2e4b4b753e13b63acd4b0b1a"
    }
   },
   "vendor": "compatible"

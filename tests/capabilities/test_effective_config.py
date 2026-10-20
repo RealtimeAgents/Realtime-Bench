@@ -12,6 +12,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   and its run hashes changed.
 - LiteLLM 1.104.1 -> 1.106.1: provider_sdk_versions, the run hashes over it, and the
   deepseek-v4.1-flash row of LiteLLM's map (litellm_output_limit) changed.
+- The context-policy commits: each one that records a capability in the run identity or changes
+  a context-policy value or version re-exports it; only the keys it changes differ.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

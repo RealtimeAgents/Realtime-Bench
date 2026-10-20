@@ -167,7 +167,7 @@ class ChoiceDecision:
         round_index = 0
         while True:
             winners = []
-            size = self.client.max_choices
+            size = self.client.capabilities.max_choices
             groups = [remaining[start : start + size] for start in range(0, len(remaining), size)]
             group_index = 0
             while groups:

@@ -82,7 +82,7 @@ _LAST_NAMES = (
     "Lamarr", "Liskov", "Lovelace", "Perlman", "Shannon", "Turing", "Wirth",
 )  # fmt: skip
 # The field's datalist while the page offers suggestions: 240 names, enough for a candidate set
-# above one Choice question's 255 options (providers/openai_decisions.py:67).
+# above one Choice question's 255 options (providers/openai_decisions.py:63).
 NAME_SUGGESTIONS = tuple(f"{first} {last}" for first in _FIRST_NAMES for last in _LAST_NAMES)
 
 
