@@ -95,7 +95,8 @@ def _server(held: int | None = None, status: str = "completed"):
             return end("cancelled")
         if kind == "conversation.item.delete":
             deleted = {"type": "conversation.item.deleted", "item_id": message["item_id"]}
-            return [deleted, text(': "wait"')]
+            # Only the in-place edit names its client events.
+            return [deleted, text(': "wait"')] if "event_id" in message else [deleted]
         if kind == "conversation.item.create":
             item = {"id": message["item"]["id"]}
             acks = [
@@ -290,7 +291,13 @@ async def _repaired(driver: OpenAIRealtimeDriver):
         request = HistorySyncRequest(
             SEED, "provider_history_changed", view(turns), current_generation=generation
         )
-        return received, await driver.sync_history(request), driver._session.core
+        sync = await driver.sync_history(request)
+        # The repair does not wait for its acknowledgements; the stub records a message before
+        # it answers it, so once they are in, the stub has the delete and the create.
+        session = driver._session
+        confirmed = {Delivery.CONFIRMED}
+        await session.receive_until(lambda: set(session.core.delivery.values()) == confirmed)
+        return received, sync, session.core
     finally:
         await driver.close()
 
