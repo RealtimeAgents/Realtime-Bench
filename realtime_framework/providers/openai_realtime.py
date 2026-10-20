@@ -191,6 +191,8 @@ class OpenAIRealtimeDriver:
         persistent_session=True,
         can_compact_history_in_place=True,
         terminal_output_usage=True,
+        classifies_transport_errors=True,
+        maps_output_cap=True,
     )
     model_defaults = {}
 

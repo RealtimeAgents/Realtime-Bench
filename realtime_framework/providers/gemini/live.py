@@ -150,6 +150,8 @@ class GeminiLiveDriver:
         max_video_fps=1.0,
         terminal_output_usage=True,
         action_channel="function_call",
+        classifies_transport_errors=True,
+        connection_renewal=True,
     )
     model_defaults = {
         "gemini-3.1-flash-live-preview": {

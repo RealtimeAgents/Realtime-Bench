@@ -452,8 +452,11 @@ class RealtimeRuntime:
         physical_metadata = {}
         executed_action_ledger = self._action_ledger(action_history)
 
-        renewal_reason = getattr(self.driver, "connection_renewal_reason", None)
-        reason = renewal_reason() if callable(renewal_reason) else None
+        reason = (
+            self.driver.connection_renewal_reason()
+            if self.capabilities.connection_renewal
+            else None
+        )
         if reason:
             sync = await self._synchronize(
                 reason=reason, ledger=executed_action_ledger, request_builder=request_builder

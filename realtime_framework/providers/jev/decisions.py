@@ -12,6 +12,10 @@ class JevDecisionsClient(OpenAIDecisionsClient):
         observation_modality="text",
         # TypeSafe caps prompts at 32k tokens, below a few retained SoM turns.
         history_replay="action_digest",
+        finite_frame_budget=False,
+        wall_clock_only=True,
+        accepts_reasoning_effort=False,
+        classifies_transport_errors=True,
     )
     max_choices = 255
     # Requests carry no provider routing block; responses still validate the TypeSafe route.

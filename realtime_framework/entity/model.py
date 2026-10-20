@@ -45,7 +45,11 @@ class SyncDisposition(str, Enum):
 
 @dataclass(frozen=True)
 class RealtimeCapabilities:
-    """Static protocol facts used for validation, never as turn-result substitutes."""
+    """Static protocol facts used for validation, never as turn-result substitutes.
+
+    Every registered driver class declares them; the catalog, the pre-run checks
+    (providers/preflight.py), harness selection and the runtime read only this declaration.
+    """
 
     protocol_family: str
     persistent_session: bool
@@ -63,7 +67,20 @@ class RealtimeCapabilities:
     # How a stateless request replays history: the canonical retained turns (observations with
     # folded visuals, actions, execution feedback and the archived ledger) shared by every model,
     # or, for prompt windows too small to retain SoM turns, only a digest of actions and feedback.
+    # Context policy; step 4b moves its readers to the ContextPolicy.
     history_replay: Literal["canonical", "action_digest"] = "canonical"
+    # Reports complete usage for a finite token clock.
+    finite_frame_budget: bool = True
+    wall_clock_only: bool = False
+    # False: the driver sends no reasoning setting, so `fixed` is the only truthful effort label.
+    accepts_reasoning_effort: bool = True
+    # Optional driver methods the harness and runtime call.
+    classifies_transport_errors: bool = False  # classify_transport_error(exc)
+    connection_renewal: bool = False  # connection_renewal_reason()
+    request_size_estimation: bool = False  # request_context_status(request)
+    maps_output_cap: bool = False  # transport_output_token_cap(provider_cap)
+    # How the driver can interact: one request per frame ("turn_based"), or native streaming.
+    interaction_modes: frozenset[str] = frozenset({"turn_based"})
 
 
 @dataclass(frozen=True)
