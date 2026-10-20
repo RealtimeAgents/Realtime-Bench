@@ -18,6 +18,7 @@ from typing import ClassVar
 
 import httpx
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import (
     FATAL,
     REFUSED,
@@ -81,8 +82,9 @@ class OpenAIDecisionsClient(DecisionEncoder):
         },
     }
 
-    def __init__(self, config):
+    def __init__(self, config, *, clock=None):
         self.config = config
+        self.clock = clock or SystemClock()
         key = config.api_key or os.environ.get(config.api_key_env or "OPENROUTER_API_KEY")
         if not key:
             raise RuntimeError(f"Decisions requires {config.api_key_env or 'OPENROUTER_API_KEY'}")

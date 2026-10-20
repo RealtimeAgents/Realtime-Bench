@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import os as os
-import time as time
 from typing import ClassVar as ClassVar
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
@@ -156,7 +156,7 @@ class GeminiLiveDriver:
         },
     }
 
-    def __init__(self, config):
+    def __init__(self, config, *, clock=None):
         from google import genai as genai
         from google.genai import errors as errors
         from google.genai import types as types
@@ -176,6 +176,7 @@ class GeminiLiveDriver:
                 "Gemini Live needs GEMINI_API_KEY/GOOGLE_API_KEY or ModelConfig.api_key"
             )
         self.config = config
+        self.clock = clock or SystemClock()
         self.types = types
         self._api_error_type = errors.APIError
         self._connection_closed_type = ConnectionClosed
@@ -507,7 +508,7 @@ class GeminiLiveDriver:
         self._core.closed()
         if cm is not None:
             try:
-                await asyncio.wait_for(
+                await self.clock.wait_for(
                     cm.__aexit__(None, None, None),
                     _CONNECTION_CLOSE_TIMEOUT_S,
                 )
@@ -526,7 +527,7 @@ class GeminiLiveDriver:
             # atomic operation. Apply the grace period to every reconnect/history replay, including
             # a retry whose failed predecessor no longer has a local context manager. This is
             # wall-clock-only and avoids briefly exceeding a one-session provider quota.
-            await asyncio.sleep(_SESSION_RELEASE_GRACE_S)
+            await self.clock.sleep_async(_SESSION_RELEASE_GRACE_S)
         config = self._live_config(
             request,
             resume_handle=request.resume_handle,
@@ -583,9 +584,9 @@ class GeminiLiveDriver:
         deadline = self._core.go_away_deadline
         if deadline is None:
             return await operation
-        remaining = max(0.0, deadline - time.monotonic())
+        remaining = max(0.0, deadline - self.clock.monotonic())
         try:
-            return await asyncio.wait_for(operation, remaining)
+            return await self.clock.wait_for(operation, remaining)
         except asyncio.TimeoutError:
             await self._close_current()
             # A partial native turn cannot safely be replayed or charged as zero. This distinct
@@ -628,20 +629,21 @@ class GeminiLiveDriver:
         await session.send_realtime_input(activity_start=self.types.ActivityStart())
         self._activity_open = True
         try:
-            loop = asyncio.get_running_loop()
             if self._last_video_sent_at is not None:
                 # Video frames arrive no faster than the model-input frame rate.
                 interval = 1.0 / self.config.fps
-                await asyncio.sleep(max(0.0, interval - (loop.time() - self._last_video_sent_at)))
+                await self.clock.sleep_async(
+                    max(0.0, interval - (self.clock.monotonic() - self._last_video_sent_at))
+                )
             await session.send_realtime_input(
                 video=self.types.Blob(
                     data=frame.image.data,
                     mime_type=frame.image.mime_type,
                 )
             )
-            self._last_video_sent_at = loop.time()
+            self._last_video_sent_at = self.clock.monotonic()
             # Let media ingestion catch up before the corresponding SoM text arrives.
-            await asyncio.sleep(1.0)
+            await self.clock.sleep_async(1.0)
             await session.send_realtime_input(text=_frame_text(frame, prefix))
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.
@@ -865,7 +867,7 @@ class GeminiLiveDriver:
         """
         while True:
             async for message in session.receive():
-                yield self._core.received(connection, message, time.monotonic())
+                yield self._core.received(connection, message, self.clock.monotonic())
 
     async def events(self, generation: GenerationHandle):
         session, messages = self._session, self._received

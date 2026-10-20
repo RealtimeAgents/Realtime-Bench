@@ -1,7 +1,8 @@
 """Record what each outbound transport sends and receives, for the agent's trace sink.
 
 Every hook reads ``owner._trace`` (set by the driver's ``bind_trace``) at I/O time and hands the
-sink references only; hashing, serialization and storage happen on the sink's writer thread.
+sink references only; hashing, serialization and storage happen on the sink's writer thread. The
+HTTP hooks time each response on the driver's ``owner.clock``.
 Hooks only read: what is sent and received is unchanged. Headers carry credentials, cookies and
 account ids, so a recorded header keeps its value only when its name is on the allow-list below;
 every other header keeps its name and has its value redacted. WebSocket handshakes, request and
@@ -11,7 +12,6 @@ response headers alike, are not recorded at all.
 from __future__ import annotations
 
 import itertools
-import time
 import weakref
 
 import httpx
@@ -101,7 +101,8 @@ class _RecordingStream(httpx.AsyncByteStream):
         self._request_seq = request_seq
         self._response = response
         self._chunks: list[bytes] = []
-        self._headers_ns = time.monotonic_ns()
+        self._clock = capture.owner.clock
+        self._headers_ns = self._clock.monotonic_ns()
         self._first_byte_ns = None
         self._last_byte_ns = None
         self._complete = False
@@ -111,7 +112,7 @@ class _RecordingStream(httpx.AsyncByteStream):
     async def __aiter__(self):
         try:
             async for chunk in self._stream:
-                self._last_byte_ns = time.monotonic_ns()
+                self._last_byte_ns = self._clock.monotonic_ns()
                 if self._first_byte_ns is None:
                     self._first_byte_ns = self._last_byte_ns
                 self._chunks.append(chunk)

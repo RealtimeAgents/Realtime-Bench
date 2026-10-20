@@ -11,6 +11,7 @@ import time
 import pytest
 
 from realtime_framework.clock import FrameClock, SystemClock, episode_clocks
+from realtime_framework.entity.model import TRANSIENT, RequestRetry, TransportFailure
 
 from .fake_clock import FakeClock, FakeClockStalled, wait_delivered
 
@@ -111,6 +112,39 @@ def test_event_loop_runs_on_virtual_time():
         assert future.result() == (2.5, 4.0)
         assert clock.monotonic() == 4.0
         loop.call_soon_threadsafe(loop.stop)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["run", "run_async"])
+def test_retry_backoff_waits_on_the_clock(asynchronous):
+    """RequestRetry (entity/model.py) sends each retry once its delay has passed on its clock."""
+    clock = FakeClock()
+    sent, delays = [], []
+
+    def send(attempt):
+        sent.append(clock.monotonic())
+        if attempt < 3:
+            raise ConnectionError("dropped")
+        return attempt
+
+    async def send_async(attempt):
+        return send(attempt)
+
+    def record(attempt, exc, failure, delay):
+        delays.append(delay)
+
+    retry = RequestRetry("unit", lambda exc: TransportFailure(TRANSIENT), record, clock=clock)
+    with clock.participant():
+        if asynchronous:
+            loop = _running_loop(clock)
+            future = asyncio.run_coroutine_threadsafe(retry.run_async(send_async), loop)
+            assert clock.wait(future, 100.0) is True
+            assert future.result() == 3
+            loop.call_soon_threadsafe(loop.stop)
+        else:
+            assert retry.run(send) == 3
+    first, second = delays
+    assert first > 0 and second > 0
+    assert sent == [0.0, first, first + second]
 
 
 def test_loopback_reply_is_never_overtaken_by_a_later_deadline():
