@@ -432,6 +432,34 @@ def test_context_policy_of_an_external_driver():
     assert policy.for_path(TARGET, {}) is policy.paths["chat_completions"]
 
 
+def test_registered_api_needs_its_own_row(monkeypatch):
+    """Only an external driver falls back to the chat_completions row. A registered API without
+    a row of its own is refused when its policy is resolved: by the run identity Harbor and the
+    trial worker compute before a run, and by the agent the runner builds."""
+    from realtime_framework.entity.config import ModelConfig
+    from realtime_framework.harnesses.registry import create_agent
+
+    policy = phase1_context_policy()
+    assert policy.paths.keys() == catalog.APIS.keys()
+    monkeypatch.setitem(catalog.APIS, "my_api", catalog.APIS["chat_completions"])
+    monkeypatch.setenv(KEY_ENV, "replay-external-key")
+    message = (
+        "API 'my_api' has no context-policy row; add one in phase1_context_policy() "
+        "(realtime_framework/entity/context_policy.py)"
+    )
+    fails(lambda: policy.for_path("my_api", {}), message)
+    config = ModelConfig(
+        adapter_type="my_api",
+        model_name="replay-vlm",
+        api_base_url="http://127.0.0.1:9/v1",
+        api_key_env=KEY_ENV,
+        native_output_limit=4096,
+        fps=1.0,
+    )
+    fails(lambda: run_config(config), message)
+    fails(lambda: create_agent(config), message)
+
+
 # The driver's code is part of the run identity.
 
 

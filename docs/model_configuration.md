@@ -85,6 +85,9 @@ A model that needs a new wire protocol gets a driver:
 5. Register the driver class as one `"package.module:Class"` entry in `APIS`
    (`realtime_framework/providers/registry.py`) and reference it from a preset with
    `endpoint.api`.
+6. Add the API's own row to `phase1_context_policy()`
+   (`realtime_framework/entity/context_policy.py`); a registered API without one is refused when
+   its context policy is resolved.
 
 ## Use an external driver
 
