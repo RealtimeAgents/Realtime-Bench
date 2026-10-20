@@ -60,8 +60,7 @@ def build_request(
         for turn in turns:
             items += _turn_items(policy, turn)
     return CanonicalRequest(
-        policy_version=policy.version,
-        api=policy.api,
+        policy=policy,
         history_form=history_form,
         items=tuple(items),
         answer=answer,
