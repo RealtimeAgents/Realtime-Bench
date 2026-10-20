@@ -25,7 +25,12 @@ from realtime_framework.entity.model import (
     exception_chain,
 )
 from realtime_framework.providers.decisions.history import decision_messages
-from realtime_framework.providers.decisions.selection import SELECTION_POLICY, ChoiceDecision
+from realtime_framework.providers.decisions.selection import (
+    SELECTION_POLICY,
+    SHADOW,
+    ChoiceDecision,
+    shadow_check,
+)
 
 
 class ChoiceDecisionDriver:
@@ -69,8 +74,13 @@ class ChoiceDecisionDriver:
         if self.observation is None:
             raise RuntimeError("Choice Decisions requires a current observation")
         messages = decision_messages(request.canonical)
+        labels = {"turns": "canonical", "action_digest": "action_digest"}
+        shadow_check(
+            "label", labels[request.canonical.history_form] == self.capabilities.history_replay
+        )
+        SHADOW["labels"] += 1
         metadata = await ChoiceDecision(
-            self.client, self.observation, messages, trace=self._trace
+            self.client, self.observation, messages, request.canonical, trace=self._trace
         ).run()
         return GenerationHandle(request.generation_id, metadata=metadata)
 

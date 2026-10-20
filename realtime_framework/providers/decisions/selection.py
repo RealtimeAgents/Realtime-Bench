@@ -17,7 +17,12 @@ from realtime_framework.entity.model import (
     TransportFailureError,
 )
 from realtime_framework.entity.records import TraceEvent, current_trace_scope, trace_scope
-from realtime_framework.providers.decisions.history import compact_ledger_messages
+from realtime_framework.providers.decisions.history import (
+    compact_ledger_messages,
+    render_digest,
+    render_transcript,
+    transcript_state,
+)
 from realtime_framework.providers.decisions.questions import (
     COMPOSE_INSTRUCTIONS,
     GAME_INSTRUCTIONS,
@@ -32,12 +37,22 @@ from realtime_framework.providers.decisions.questions import (
 )
 
 SELECTION_POLICY = "exhaustive_groups_255_provider_split_then_winners_pointer_v6"
+# Shadow check counters (temporary).
+SHADOW = {
+    "decisions": 0, "questions": 0, "reductions": 0, "summaries": 0, "labels": 0, "mismatches": []
+}
+
+
+def shadow_check(name, ok):
+    if not ok:
+        SHADOW["mismatches"].append(name)
+        raise AssertionError(f"shadow mismatch: {name}")
 
 
 class ChoiceDecision:
     """Resolve one observation's candidates into one executable action, with a full trace."""
 
-    def __init__(self, client, observation_state, messages, *, trace):
+    def __init__(self, client, observation_state, messages, request, *, trace):
         self.client = client
         self.trace = trace
         self.observation = observation_state
@@ -49,6 +64,40 @@ class ChoiceDecision:
         self.context_splits = []
         self.history_reductions = []
         self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self._shadow_inputs(request)
+
+    def _shadow_inputs(self, request):
+        """Shadow check: the inputs read from the canonical request equal the old ones."""
+        choice, selection, state = request.answer.choice, request.selection, self.observation
+        new = [
+            (key, {"description": c.description, "action": c.action, "audit": c.audit})
+            for key, c in choice.candidates
+        ]
+        old = [
+            (key, {"description": v["description"], "action": v["action"], "audit": v.get("audit")})
+            for key, v in state["candidates"].items()
+        ]
+        shadow_check("candidates", new == old)
+        shadow_check(
+            "instructions",
+            choice.instructions
+            == (GAME_INSTRUCTIONS if state.get("game_choices") else GUI_INSTRUCTIONS),
+        )
+        shadow_check("candidate_policy", choice.candidate_policy == state.get("candidate_policy"))
+        shadow_check("observation_id", selection.observation_id == state["observation_id"])
+        shadow_check("focused_input", selection.focused_input == state.get("focused_input"))
+        shadow_check(
+            "text_composition", selection.text_composition == state.get("text_composition")
+        )
+        shadow_check("images", "images" not in state)
+        shadow_check("history_form", (request.history_form == "turns") == self.canonical)
+        overflow = request.policy.decision_history.overflow
+        shadow_check("overflow", (overflow == "raise") == self.canonical)
+        self._shadow_digest = request.history_form == "action_digest"
+        self._shadow_history = (
+            render_digest(request) if self._shadow_digest else render_transcript(request)
+        )
+        SHADOW["decisions"] += 1
 
     async def run(self) -> dict:
         candidates = self.observation["candidates"]
@@ -225,12 +274,22 @@ class ChoiceDecision:
         never reduced here: the runtime archives it before the request.
         """
         history = list(self.history)
+        shadow = list(self._shadow_history) if self._shadow_digest else None
         while True:
             state = {"history": history}
             if self.observation.get("images"):
                 state["images"] = self.observation["images"]
             if text_state is not None:
                 state["text_composition"] = text_state
+            if self._shadow_digest:
+                expected = {"history": shadow}
+                if text_state is not None:
+                    expected["text_composition"] = text_state
+            else:
+                extra = {} if text_state is None else {"text_composition": text_state}
+                expected = transcript_state(self._shadow_history, extra)
+            shadow_check("question state", self.client._wire_state(state) == expected)
+            SHADOW["questions"] += 1
             try:
                 return await self._decide_with_retries(state, question, phase=phase)
             except ChoiceContextLimitError:
@@ -239,6 +298,8 @@ class ChoiceDecision:
                     raise
                 removed = max(1, droppable // 2)
                 history = [history[0], *history[1 + removed :]]
+                shadow = [shadow[0], *shadow[1 + removed :]]
+                SHADOW["reductions"] += 1
                 self.history_reductions.append(
                     {"phase": phase, "removed_messages": removed, "remaining": len(history)}
                 )
