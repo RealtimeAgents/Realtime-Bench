@@ -221,6 +221,16 @@ class GeminiLiveDriver:
             },
         },
     }
+    # Native streaming only (interaction_mode "streaming"), recorded in the run configuration: the
+    # setup's context_window_compression. Once the context reaches trigger_tokens, the server drops
+    # the oldest turns (never the system instruction) down to sliding_window.target_tokens, which
+    # must be smaller. Placeholders until a smoke test: a target near what OpenAI Realtime keeps
+    # with its 20 frames, and a trigger at twice it (the server's default ratio), half of these
+    # models' 131,072-token window.
+    streaming_settings: ClassVar[dict] = {
+        "compression_trigger_tokens": 65_536,
+        "compression_target_tokens": 32_768,
+    }
 
     def __init__(self, config, *, clock=None):
         from google import genai as genai

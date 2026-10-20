@@ -167,6 +167,11 @@ class OpenAIRealtimeDriver:
         litellm_provider="openai",
     )
     model_defaults: ClassVar[dict[str, dict]] = {}
+    # Native streaming only (interaction_mode "streaming"), recorded in the run configuration: the
+    # session keeps the newest retained_frames frames and older frame items are deleted. A
+    # placeholder (the turn-based visual budget, 20 s at 1 fps) until a smoke test measures what a
+    # frame costs against the model's context.
+    streaming_settings: ClassVar[dict] = {"retained_frames": 20}
 
     def __init__(self, config, *, clock=None):
         self.config = config
