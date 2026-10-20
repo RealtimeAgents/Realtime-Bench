@@ -26,9 +26,9 @@ import pytest
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
-from realtime_framework.harnesses.jev.prompts import GAME_INSTRUCTIONS
-from realtime_framework.harnesses.jev.prompts import GROUP_NOTE
-from realtime_framework.harnesses.jev.prompts import GUI_INSTRUCTIONS
+from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
+from realtime_framework.providers.decisions.questions import GROUP_NOTE
+from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 
 from . import baseline, baseline_decisions
 from . import scenario_decisions as script

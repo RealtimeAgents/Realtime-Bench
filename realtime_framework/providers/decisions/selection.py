@@ -17,22 +17,18 @@ from realtime_framework.entity.model import (
     TransportFailureError,
 )
 from realtime_framework.entity.records import TraceEvent, current_trace_scope, trace_scope
-from realtime_framework.harnesses.jev.composition import (
-    TEXT_COMPOSITION_POLICY,
-    composition_candidates,
-    unicode_candidates,
-)
-from realtime_framework.harnesses.jev.context import compact_ledger_messages
-from realtime_framework.harnesses.jev.game_candidates import (
-    POINTER_COMPOSITION_POLICY,
-    coordinate_choices,
-)
-from realtime_framework.harnesses.jev.prompts import (
+from realtime_framework.providers.decisions.history import compact_ledger_messages
+from realtime_framework.providers.decisions.questions import (
     COMPOSE_INSTRUCTIONS,
     GAME_INSTRUCTIONS,
     GROUP_NOTE,
     GUI_INSTRUCTIONS,
+    POINTER_COMPOSITION_POLICY,
+    TEXT_COMPOSITION_POLICY,
     UNICODE_INSTRUCTIONS,
+    composition_candidates,
+    coordinate_choices,
+    unicode_candidates,
 )
 
 SELECTION_POLICY = "exhaustive_groups_255_provider_split_then_winners_pointer_v6"

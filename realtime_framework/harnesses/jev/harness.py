@@ -21,19 +21,21 @@ from realtime_framework.harnesses.default.prompts import (
 )
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.jev.candidates import CANDIDATE_POLICY, observation_candidates
-from realtime_framework.harnesses.jev.composition import TEXT_COMPOSITION_POLICY
-from realtime_framework.harnesses.jev.context import decision_messages
-from realtime_framework.harnesses.jev.driver import ChoiceDecisionDriver
 from realtime_framework.harnesses.jev.game_candidates import (
     GAME_CANDIDATE_POLICY,
     add_game_candidates,
 )
 from realtime_framework.harnesses.jev.prompts import (
-    GAME_INSTRUCTIONS,
-    GUI_INSTRUCTIONS,
     JEV_PROFILE,
     MULTIMODAL_CHOICE_PROFILE,
     MULTIMODAL_GAME_CHOICE_PROFILE,
+)
+from realtime_framework.providers.decisions.driver import ChoiceDecisionDriver
+from realtime_framework.providers.decisions.history import decision_messages
+from realtime_framework.providers.decisions.questions import (
+    GAME_INSTRUCTIONS,
+    GUI_INSTRUCTIONS,
+    TEXT_COMPOSITION_POLICY,
 )
 from realtime_framework.providers.registry import adapter_class
 from realtime_framework.sandbox.observation.interactables import format_interactables
