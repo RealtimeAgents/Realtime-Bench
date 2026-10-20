@@ -1,7 +1,7 @@
 """Deterministic synthetic frames, captured through the runner's own BrowserSceneCapture.
 
-The runner builds every observation with BrowserSceneCapture.capture (evaluation/runner.py:1606,
-1630; sandbox/actions.py:190-203). Here that class runs unchanged with its probe override
+The runner builds every observation with BrowserSceneCapture.capture (evaluation/runner.py:1608,
+1632; sandbox/actions.py:190-203). Here that class runs unchanged with its probe override
 (sandbox/observation/capture.py:100, 144-145), a guest that returns synthetic PNGs, and a fixed
 clock in place of the time.time() that stamps each capture (capture.py:267). Observation ids,
 screenshot hashes, frame geometry and the canonical interactables therefore come from
@@ -76,7 +76,7 @@ _LAST_NAMES = (
     "Lamarr", "Liskov", "Lovelace", "Perlman", "Shannon", "Turing", "Wirth",
 )  # fmt: skip
 # The field's datalist while the page offers suggestions: 240 names, enough for a candidate set
-# above one Choice question's 255 options (providers/openai_decisions.py:56).
+# above one Choice question's 255 options (providers/openai_decisions.py:67).
 NAME_SUGGESTIONS = tuple(f"{first} {last}" for first in _FIRST_NAMES for last in _LAST_NAMES)
 
 

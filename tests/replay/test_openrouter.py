@@ -1,10 +1,10 @@
-"""Replay baselines for the openrouter API: LiteLLMDriver with the openrouter wire policy
-(providers/litellm.py:346-356).
+"""Replay baselines for the openrouter API: LiteLLMDriver's OpenRouterDriver subclass
+(providers/litellm.py:1123-1136).
 
 The model is the catalog entry claude-opus-5 (configs/models/claude-opus-5.yaml:1-6): model
 anthropic/claude-opus-5 pinned to upstream anthropic, reasoning effort low, and the native output
-limit 128000 from LiteLLM's bundled model map (providers/registry.py:190-233). The entry has no
-base_url, so the driver takes OPENROUTER_BASE_URL (providers/litellm.py:472-477), here the stub.
+limit 128000 from LiteLLM's bundled model map (providers/registry.py:113-156). The entry has no
+base_url, so the driver takes OPENROUTER_BASE_URL (providers/litellm.py:470-475), here the stub.
 
 Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it the run is
 compared with tests/replay/baselines/.
@@ -39,19 +39,19 @@ MODEL_KEY = "claude-opus-5"
 DUMMY_KEY = "replay-dummy-openrouter-key"
 NATIVE_OUTPUT_LIMIT = 128000
 # OpenRouter names the upstream "Anthropic"; its slug is the pinned upstream_provider "anthropic"
-# (providers/litellm.py:722-724, 744-752).
+# (providers/litellm.py:736-738, 758-766).
 ROUTE = route_metadata("anthropic/claude-opus-5", "Anthropic")
 
 # The finite token clock: B charged tokens per frame over an N-tick episode (N is two minutes at
-# 1 fps, runner.py:1773). Decision k observes tick k (steps.py), and its cap
-# min(128000, (N - k) * B) (runner.py:864-879) is the native limit through k = 40 (exactly 128000
+# 1 fps, runner.py:1775). Decision k observes tick k (steps.py), and its cap
+# min(128000, (N - k) * B) (runner.py:866-881) is the native limit through k = 40 (exactly 128000
 # at k = 40) and the remaining clock from k = 41 on (126400, down to 97600 at k = 59), never zero
 # in the scenario.
 TOKEN_CLOCK = {"clock_mode": "token", "tokens_per_frame": 1600, "max_ticks": 120}
 
 # Request headers that change how OpenRouter serves or attributes the request: the auth scheme,
 # the body type, the route-metadata switch, and the app attribution the driver adds
-# (providers/litellm.py:618-625). Names are compared lowercased. Not compared: host (it carries the
+# (providers/litellm.py:631-638). Names are compared lowercased. Not compared: host (it carries the
 # stub's port), content-length, accept, accept-encoding, connection and user-agent.
 COMPARED_HEADERS = frozenset(
     {"authorization", "content-type", "http-referer", "x-openrouter-metadata", "x-title"}
@@ -60,8 +60,8 @@ COMPARED_HEADERS = frozenset(
 
 @pytest.fixture
 def openrouter_env(monkeypatch):
-    """The driver reads its key when it is built (providers/litellm.py:496-500) and the two
-    attribution header values on every request (providers/litellm.py:621-624)."""
+    """The driver reads its key when it is built (providers/litellm.py:494-498) and the two
+    attribution header values on every request (providers/litellm.py:634-637)."""
     monkeypatch.setenv("OPENROUTER_API_KEY", DUMMY_KEY)
     monkeypatch.delenv("OPENROUTER_REFERER", raising=False)
     monkeypatch.delenv("OPENROUTER_TITLE", raising=False)
@@ -69,8 +69,8 @@ def openrouter_env(monkeypatch):
 
 
 def openrouter_config():
-    """The ModelConfig runner.main() builds for ``--model claude-opus-5`` (runner.py:1422-1428,
-    1539-1544)."""
+    """The ModelConfig runner.main() builds for ``--model claude-opus-5`` (runner.py:1433-1439,
+    1550-1555)."""
     entry = catalog.get(MODEL_KEY)
     return catalog.to_model_config(
         MODEL_KEY, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]
@@ -82,7 +82,7 @@ def openrouter_episode(monkeypatch, tmp_path, script, **clock):
     with OpenRouterStub(script, route=ROUTE) as stub:
         monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
         config = openrouter_config()
-        if clock.get("tokens_per_frame") is not None:  # runner.py:1449-1456
+        if clock.get("tokens_per_frame") is not None:  # runner.py:1455-1462
             assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
         episode = build_episode(
             config,
@@ -139,7 +139,7 @@ def check_baseline(name: str, header: dict, records: list[dict], run_dir: Path) 
 
 
 def check_one_session(actual: list[dict]) -> None:
-    """Every request of one driver carries its one session id (providers/litellm.py:483, 565),
+    """Every request of one driver carries its one session id (providers/litellm.py:481, 568),
     which the baseline stores as a random id."""
     sessions = {
         request["body"]["session_id"]
@@ -152,7 +152,7 @@ def check_one_session(actual: list[dict]) -> None:
 
 def check_cache_breakpoints(records: list[dict]) -> None:
     """anthropic/ models get one ephemeral breakpoint, on the last content part of the newest
-    message (providers/litellm.py:293-302, 547-552)."""
+    message (providers/litellm.py:299-308, 549-554)."""
     for record in records:
         for request in record["requests"]:
             messages = request["body"]["messages"]
@@ -170,9 +170,9 @@ def check_cache_breakpoints(records: list[dict]) -> None:
 def test_long_scenario(openrouter_env, tmp_path):
     """LONG_SCENARIO on the finite token clock. The first screenshot fold and the first archive
     fall on the same decisions as for chat_completions: both APIs are stateless and share the
-    history policies (harnesses/default/context.py:251-293). The scripted statuses are the
+    history policies (harnesses/default/context.py:284-333). The scripted statuses are the
     wall-clock ones; the last, not_applied_time_limit, cannot occur on the token clock
-    (runner.py:524-525; sandbox/actions.py:274-275), but it reaches no request."""
+    (runner.py:526-527; sandbox/actions.py:274-275), but it reaches no request."""
     with openrouter_episode(openrouter_env, tmp_path, replies(LONG_SCENARIO), **TOKEN_CLOCK) as (
         stub,
         config,
@@ -185,7 +185,7 @@ def test_long_scenario(openrouter_env, tmp_path):
     _check_history_changes(records)
     _check_rejection_feedback(records)
     check_cache_breakpoints(records)
-    # Each request sends the decision's cap as max_tokens (providers/litellm.py:527-536, 561-563).
+    # Each request sends the decision's cap as max_tokens (providers/litellm.py:528-537, 563-565).
     caps = [r["requests"][0]["body"]["max_tokens"] for r in records]
     rate, horizon = TOKEN_CLOCK["tokens_per_frame"], TOKEN_CLOCK["max_ticks"]
     assert caps == [
@@ -202,9 +202,9 @@ def test_long_scenario(openrouter_env, tmp_path):
 
 
 def test_pause_mode_snapshot(openrouter_env, tmp_path):
-    """The token clock in pause mode (tokens_per_frame=None, runner.py:1401-1402). Nothing bounds
+    """The token clock in pause mode (tokens_per_frame=None, runner.py:1409-1410). Nothing bounds
     a decision but the native limit, which the driver sends because the harness asks for no
-    provider cap (harnesses/default/harness.py:920; providers/litellm.py:527-536), and the clock
+    provider cap (harnesses/default/harness.py:983; providers/litellm.py:528-537), and the clock
     prompt says that B is unlimited (harnesses/default/prompts.py:182-187)."""
     steps = LONG_SCENARIO[:3]
     clock = {"clock_mode": "token", "tokens_per_frame": None, "max_ticks": 120}
@@ -229,7 +229,7 @@ def test_pause_mode_snapshot(openrouter_env, tmp_path):
 
 class _Sleeps:
     """Stands in for the time module the harness uses and records its sleeps: the retry loop
-    sleeps its backoff for real (harnesses/default/harness.py:1271)."""
+    sleeps its backoff for real (harnesses/default/harness.py:1338)."""
 
     def __init__(self):
         self.calls = []
@@ -242,9 +242,9 @@ class _Sleeps:
 
 
 def _spy_classifier(driver) -> list[tuple[TransportFailure, list]]:
-    """Record each classify_transport_error result (providers/litellm.py:1042-1064) with the
+    """Record each classify_transport_error result (providers/litellm.py:1059-1081) with the
     Retry-After of every exception in the failure's chain. The harness looks the classifier up on
-    the driver for every decision (harnesses/default/harness.py:1225)."""
+    the driver for every decision (harnesses/default/harness.py:1274-1278)."""
     calls = []
     classify = driver.classify_transport_error
 
@@ -264,7 +264,7 @@ def _spy_classifier(driver) -> list[tuple[TransportFailure, list]]:
 def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     """One failed attempt before any output, then two decisions. The harness classifies the error,
     sleeps the shared backoff and sends the same request again, rebuilt from canonical history
-    (harnesses/default/harness.py:1231-1273); the failed attempt leaves no trace in later
+    (harnesses/default/harness.py:1284-1340); the failed attempt leaves no trace in later
     requests."""
     steps = LONG_SCENARIO[:2]
     sleeps = _Sleeps()
@@ -286,7 +286,7 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     (classification,) = classified
     runtime = records[0]["result"]["realtime_runtime"]
     assert runtime["transport_reconnect_attempts"] == 1
-    # The first retry waits 1 s +-25%, jittered by the generation id (entity/model.py:318-336).
+    # The first retry waits 1 s +-25%, jittered by the generation id (entity/model.py:367-385).
     assert sleeps.calls == runtime["transport_reconnect_backoff_s"]
     assert sleeps.calls == [TRANSPORT_RETRY.delay_s(1, runtime["generation_id"], classification[0])]
     assert 0.75 <= sleeps.calls[0] <= 1.25
@@ -301,7 +301,7 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
 
 
 def test_whole_turn_retry_503(openrouter_env, tmp_path):
-    """HTTP 503 before any output is TRANSIENT (entity/model.py:375-376) and retried once."""
+    """HTTP 503 before any output is TRANSIENT (entity/model.py:424-425) and retried once."""
     failure = Failure(503, {"error": {"message": "upstream down", "code": 503}})
     (kind, _), _ = _retry_scenario(openrouter_env, tmp_path, failure, "retry-503")
     assert kind == TransportFailure(TRANSIENT)
@@ -310,9 +310,9 @@ def test_whole_turn_retry_503(openrouter_env, tmp_path):
 def test_whole_turn_retry_429_with_retry_after(openrouter_env, tmp_path):
     """HTTP 429 with ``Retry-After: 120``, as today's code handles it: retried after the normal
     first backoff. The policy would not wait out a Retry-After above 30 s; it would end the
-    decision instead (entity/model.py:323-331). The header is lost because
+    decision instead (entity/model.py:372-380). The header is lost because
     classify_transport_error stops at the first exception in the chain that has a status
-    (providers/litellm.py:1047-1051): LiteLLM's RateLimitError, whose response has no Retry-After,
+    (providers/litellm.py:1064-1068): LiteLLM's RateLimitError, whose response has no Retry-After,
     while exceptions further down the chain carry the 120 s."""
     failure = Failure(
         429, {"error": {"message": "rate limited", "code": 429}}, (("Retry-After", "120"),)
@@ -326,7 +326,7 @@ def test_whole_turn_retry_429_with_retry_after(openrouter_env, tmp_path):
 
 def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], list, list]:
     """Wrap the driver so the test sees each request's clock mode and every event the runtime
-    reads (harnesses/default/context.py:518-533). Once the runtime has read the complete action
+    reads (harnesses/default/context.py:557-572). Once the runtime has read the complete action
     text, the stub releases the held usage chunk."""
     streams, clock_modes, released = [], [], []
     start_generation, events = driver.start_generation, driver.events
@@ -361,21 +361,22 @@ def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], li
 def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
     """Usage arrives only with the last event, after the whole action text.
 
-    The openrouter path declares terminal_output_usage=True (providers/litellm.py:306-310), but
-    nothing reads that flag, and no code on this path does what the runner comment says adapters
-    do with _clock_mode, deciding whether terminal usage may delay a committed wall-clock action
-    (runner.py:1571-1573): the harness passes _clock_mode on only as GenerationRequest.clock_mode
-    (harnesses/default/harness.py:1205), which the streaming driver never reads (its one reader,
-    providers/litellm.py:899, is the non-streaming litellm gateway). On either clock the runtime
-    reads every event before the decision returns (harnesses/default/context.py:519-533), and the
-    collector keeps the last usage (harnesses/default/harness.py:804-806). The usage matters to
-    the runner: on the finite token clock the output count places the action (runner.py:486-490)
-    and its absence invalidates the run (runner.py:477-485); on the wall clock the action lands
-    where the clock is when the decision returns (runner.py:507-510), so the wait delays it.
+    The openrouter path declares terminal_output_usage=True (providers/litellm.py:370-377), but
+    nothing reads that flag, and no code on this path does what the configure_agent comment says
+    adapters do with _clock_mode, deciding whether terminal usage may delay a committed wall-clock
+    action (harnesses/registry.py:31-33): the harness passes _clock_mode on only as
+    GenerationRequest.clock_mode (harnesses/default/harness.py:1248), which no driver reads (the
+    non-streaming litellm gateway's check that did is now the pre-run check_wall_clock,
+    providers/preflight.py:48-50). On either clock the runtime reads every event before the decision
+    returns (harnesses/default/context.py:558-572), and the collector keeps the last usage
+    (harnesses/default/harness.py:866-868). The usage matters to the runner: on the finite token
+    clock the output count places the action (runner.py:488-492) and its absence invalidates the run
+    (runner.py:479-487); on the wall clock the action lands where the clock is when the decision
+    returns (runner.py:509-512), so the wait delays it.
 
     Decision 0: the stub holds the usage chunk until the runtime has read the complete action
     text; the decision returns only after it, with that usage. Decision 1: the stream ends without
-    a usage chunk, which leaves provider_usage_missing_reason set (harness.py:82-84).
+    a usage chunk, which leaves provider_usage_missing_reason set (harness.py:84-86).
     """
     steps = LONG_SCENARIO[:2]
     held, unreported = replies(steps)

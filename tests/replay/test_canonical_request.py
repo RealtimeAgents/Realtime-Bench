@@ -1,4 +1,4 @@
-"""Canonical-request generation and the temporary converters, on hand-built turn records."""
+"""Canonical-request generation and its chat and digest renderings, on hand-built turn records."""
 
 from __future__ import annotations
 

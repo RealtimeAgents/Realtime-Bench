@@ -1,6 +1,7 @@
 """Pin the phase-1 context policy to the code paths that applied each value before it existed.
 
 Every check reads class-level capabilities or static tables, so no key or connection is needed.
+Line numbers cite those code paths as they were on 7912231.
 """
 
 from __future__ import annotations

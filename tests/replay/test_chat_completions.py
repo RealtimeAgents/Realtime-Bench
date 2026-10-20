@@ -29,14 +29,14 @@ BASELINES = Path(__file__).parent / "baselines"
 MODEL_KEY = "replay-model"
 
 # With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
-# oldest 10 (harnesses/default/context.py:27-36), and one holding 51 turns archives the oldest 10
-# (context.py:262-272). Decision k carries k earlier turns plus its own frame.
+# oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
+# (context.py:295-305). Decision k carries k earlier turns plus its own frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 
 
 def chat_completions_config(base_url: str, *, stream: bool) -> ModelConfig:
-    """What catalog.to_model_config(key, fps=1.0) returns (providers/registry.py:609-663) for
+    """What catalog.to_model_config(key, fps=1.0) returns (providers/registry.py:505-559) for
 
         endpoint: {api: chat_completions, model: replay-vlm, base_url: <stub>,
                    api_key_env: REPLAY_STUB_API_KEY, stream: <stream>, include_usage: <stream>,
@@ -44,7 +44,7 @@ def chat_completions_config(base_url: str, *, stream: bool) -> ModelConfig:
         reasoning_effort: low
 
     The key variable is never set; this API then sends a placeholder key
-    (providers/litellm.py:496-505).
+    (providers/litellm.py:494-503).
     """
     return ModelConfig(
         adapter_type="chat_completions",

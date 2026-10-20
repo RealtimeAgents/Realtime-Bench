@@ -22,36 +22,36 @@ from realtime_framework.entity.actions import Action
 REAL_TIME = "<real time>"
 REAL_TIME_FIELDS = frozenset(
     {
-        # DefaultHarness.stream_generate (harnesses/default/harness.py:1125, 1432, 1447, 1493-1497)
+        # DefaultHarness.stream_generate (harnesses/default/harness.py:1168, 1500, 1515, 1569-1573)
         "latency",
         "decision_wall_latency_s",
         "provider_call_wall_latency_s",
         "runtime_turn_wall_latency_s",
         "provider_ttft_s",
-        # the output collector's receive stamps (harnesses/default/harness.py:802-803)
+        # the output collector's receive stamps (harnesses/default/harness.py:864-865)
         "received_wall_time_ns",
         "received_monotonic_ns",
-        # RealtimeRuntime around the provider call (harnesses/default/context.py:477-489)
+        # RealtimeRuntime around the provider call (harnesses/default/context.py:516-528)
         "provider_call_started_monotonic_ns",
         "provider_call_started_wall_time_ns",
         "provider_stream_started_monotonic_ns",
         # ToolRuntime.inspect (sandbox/observation/som.py:677, 713, 728)
         "tool_execution_latency_s",
         # DefaultHarness retry sleeps, jittered by the random generation id
-        # (harnesses/default/harness.py:1251-1253, 1270, 1281; entity/model.py:333-336)
+        # (harnesses/default/harness.py:1306-1308, 1334, 1349; entity/model.py:382-385)
         "transport_reconnect_backoff_s",
         # ChoiceDecision's candidate splits, question calls and text composition
-        # (harnesses/jev/selection.py:182, 199, 325)
+        # (providers/decisions/selection.py:198, 216, 413)
         "latency_s",
     }
 )
 RANDOM_IDS = (
-    ("generation", re.compile(r"turn-\d+-[0-9a-f]{12}")),  # uuid4: harness.py:1202
+    ("generation", re.compile(r"turn-\d+-[0-9a-f]{12}")),  # uuid4: harness.py:1245
     ("inspection", re.compile(r"inspect-\d{6}-[0-9a-f]{8}")),  # uuid4: som.py:660
     ("stub", re.compile(r"(?:http|ws)://127\.0\.0\.1:\d+")),  # the stub's OS-assigned port
-    ("session", re.compile(r"rtb-[0-9a-f]{32}")),  # uuid4 per driver: providers/litellm.py:483
-    # OpenAI Realtime client ids "rtb_<kind>_" + uuid4 hex (providers/openai_realtime.py:119-126;
-    # kinds at 153, 183, 203, 557, 564, 570, 588, 593)
+    ("session", re.compile(r"rtb-[0-9a-f]{32}")),  # uuid4 per driver: providers/litellm.py:481
+    # OpenAI Realtime client ids "rtb_<kind>_" + uuid4 hex (providers/openai_realtime.py:277-284;
+    # kinds at 333, 346, 361, 735, 741, 745, 760, 764)
     ("rtb_user", re.compile(r"rtb_user_[0-9a-f]+")),
     ("rtb_assistant", re.compile(r"rtb_assistant_[0-9a-f]+")),
     ("rtb_ledger", re.compile(r"rtb_ledger_[0-9a-f]+")),
@@ -60,13 +60,13 @@ RANDOM_IDS = (
     # output item ids of the Realtime stub (tests/replay/ws_openai_realtime.py:423)
     ("server_item", re.compile(r"item_srv_\d+")),
 )
-DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # harness.py:1050
-# The trajectory's summary of the retained history (harnesses/default/harness.py:1485-1487).
+DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # providers/litellm.py:348
+# The trajectory's summary of the retained history (harnesses/default/harness.py:1557-1559).
 DIGESTED_FIELDS = frozenset({"input_prompt"})
 
 
 def action_record(action: Action) -> dict:
-    """The fields run_stream records for an action (runner.py:180-188)."""
+    """The fields run_stream records for an action (runner.py:182-190)."""
     return {
         "action_type": action.action_type.value,
         "parameters": action.parameters,

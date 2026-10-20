@@ -1,10 +1,10 @@
 """Drive the real run_stream with an agent from build_episode against a FakeEnvironment.
 
-run_stream gets the arguments main() passes on the wall clock (evaluation/runner.py:1769-1780).
-Its own time.time() reads (runner.py:363-365, 380-413, 569, 754, 772) are pointed at the fake
+run_stream gets the arguments main() passes on the wall clock (evaluation/runner.py:1771-1782).
+Its own time.time() reads (runner.py:365-367, 382-415, 571, 756, 774) are pointed at the fake
 clock, so action timestamps, frame ages and the deadline all read one clock. After the loop the
-abandoned workers are drained (runner.py:1873-1878) and the agent is closed (runner.py:1879-1886),
-in main()'s order. main() would also call the agent's start_episode (runner.py:1750-1752), which
+abandoned workers are drained (runner.py:1875-1880) and the agent is closed (runner.py:1881-1888),
+in main()'s order. main() would also call the agent's start_episode (runner.py:1752-1754), which
 no agent defines.
 
 Any agent build_episode returns can be driven, given a stub that calls ``env.model_request`` as
@@ -25,22 +25,22 @@ from . import baseline
 from .build import Episode
 from .fake_env import FakeEnvironment
 
-# Values derived from the agent's real-time decision latency (harnesses/default/harness.py:1125,
-# 1432), on top of the fields baseline.REAL_TIME_FIELDS already masks.
+# Values derived from the agent's real-time decision latency (harnesses/default/harness.py:1168,
+# 1500), on top of the fields baseline.REAL_TIME_FIELDS already masks.
 REAL_TIME_FIELDS = baseline.REAL_TIME_FIELDS | {
-    "latency_s",  # InferenceCompleted copies the decision latency (runner.py:1060)
-    "model_latency_s",  # so does the lifecycle record (runner.py:697)
-    "deliberation_ticks",  # the timeline's latency / delta_s (runner.py:500-501, 762)
-    "think_spent",  # the sum of decision latencies (runner.py:429, 775)
+    "latency_s",  # InferenceCompleted copies the decision latency (runner.py:1062)
+    "model_latency_s",  # so does the lifecycle record (runner.py:699)
+    "deliberation_ticks",  # the timeline's latency / delta_s (runner.py:502-503, 764)
+    "think_spent",  # the sum of decision latencies (runner.py:431, 777)
 }
-LOGGED_DELIBERATION = re.compile(r"δ=\S+")  # that latency in the decision log (runner.py:764)
+LOGGED_DELIBERATION = re.compile(r"δ=\S+")  # that latency in the decision log (runner.py:766)
 
-# Lifecycle statuses of a decision whose action reached env.execute (runner.py:530-544).
+# Lifecycle statuses of a decision whose action reached env.execute (runner.py:532-546).
 EXECUTED = {"applied", "wait", "rejected"}
 
 
 class RecordingTrace:
-    """Stands in for EpisodeTrace (runner.py:1456) and keeps each payload as EpisodeTrace
+    """Stands in for EpisodeTrace (runner.py:1466) and keeps each payload as EpisodeTrace
     serializes it (evaluation/reporting.py:2033-2045)."""
 
     def __init__(self, env: FakeEnvironment):
@@ -65,7 +65,7 @@ def run_loop(episode: Episode, env: FakeEnvironment) -> list:
         env.log("agent.commit_action", status=status, detail=detail)
         return commit_action(status, detail)
 
-    agent.commit_action = recording_commit  # what run_stream reports (runner.py:432-441, 672)
+    agent.commit_action = recording_commit  # what run_stream reports (runner.py:434-443, 674)
 
     def log(line):
         env.log("runner.log", line=LOGGED_DELIBERATION.sub("δ=<real time>", line))
@@ -100,7 +100,7 @@ def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:
     out.append(
         {
             "record": "outcome",
-            # Latched by _finalize (runner.py:770-810).
+            # Latched by _finalize (runner.py:772-812).
             "stop_reason": env._stop_reason,
             "invalid_run": getattr(env, "_invalid_run", None),
             "termination_snapshot_captured": env._termination_snapshot_captured,
@@ -132,7 +132,7 @@ def _strip(call: dict) -> dict:
 
 
 def resolved(env: FakeEnvironment) -> dict[int, dict]:
-    """Each decision's ActionResolved payload (runner.py:571-583)."""
+    """Each decision's ActionResolved payload (runner.py:573-585)."""
     return {
         call["decision"]: call["payload"]
         for call in env.calls

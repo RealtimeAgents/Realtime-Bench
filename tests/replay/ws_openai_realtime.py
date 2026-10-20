@@ -1,31 +1,31 @@
 """Scripted OpenAI Realtime WebSocket server on 127.0.0.1, and the replay step loop for it.
 
 The openai_realtime driver reaches the server through the OpenAI SDK's synchronous realtime
-client (providers/openai_realtime.py:62-68, 264-275). With ``ModelConfig.api_base_url`` set to
+client (providers/openai_realtime.py:211-217, 410-424). With ``ModelConfig.api_base_url`` set to
 ``base_url``, the SDK connects to ``ws://127.0.0.1:<port>/v1/realtime?model=<model>``
 (openai/resources/realtime/realtime.py:1151-1200). The server runs on the websockets library the
 SDK uses, without a message size limit: client frames carry base64 screenshots.
 
 Each connection keeps an ordered item list and answers the client events the driver sends:
-- session.update gets session.updated; the driver never reads either (openai_realtime.py:264-275).
+- session.update gets session.updated; the driver never reads either (openai_realtime.py:410-424).
 - conversation.item.create inserts the item at the end, at the start (``previous_item_id``
   "root") or right after its anchor, and gets conversation.item.added and
-  conversation.item.done. The in-place compaction waits for ``.done`` (openai_realtime.py:245-246).
-- conversation.item.delete removes the item and gets conversation.item.deleted (247-248).
+  conversation.item.done. The in-place compaction waits for ``.done`` (openai_realtime.py:390-391).
+- conversation.item.delete removes the item and gets conversation.item.deleted (392-393).
 - response.create gets the next scripted reply as one assistant text item. The usage always
   carries both token-detail objects, which the harness reads with ``.get``
-  (harnesses/default/harness.py:118-124).
-Acks carry only the item id and role: the driver reads nothing else from them (246, 248).
+  (harnesses/default/harness.py:120-126).
+Acks carry only the item id and role: the driver reads nothing else from them (391, 393).
 
 Before a create or delete is applied it is checked: a unique item id of at most 32 characters
-(openai_realtime.py:48), an existing anchor, content parts the SDK allows for the role
+(openai_realtime.py:55), an existing anchor, content parts the SDK allows for the role
 (openai/types/realtime/realtime_conversation_item_{user,system,assistant}_message.py) minus
-audio, since the session is text only (openai_realtime.py:268-275), and an existing delete
+audio, since the session is text only (openai_realtime.py:417-424), and an existing delete
 target. A failed check is a violation; the tests assert there are none.
 
 Errors always echo the client event they answer. The driver treats an error without one as fatal
 for the generation that reads it, and as a failure of any in-place edit it is waiting for
-(openai_realtime.py:239-244, 357-371). After any error the stub sends nothing more on that
+(openai_realtime.py:384-389, 526-540). After any error the stub sends nothing more on that
 connection but keeps recording. The client sends a whole edit batch before it reads; acks it
 never reads would fill its receive queue, stop its reader and stall its close handshake for the
 close timeout (websockets/sync/connection.py:87-95, 811, 989-993).
@@ -34,7 +34,7 @@ Scripted faults:
 - ``drop_responses``: answer these response.create calls (1-based, over the session) with
   response.created and then close the connection with 1011, before any output or usage.
 - ``edit_error_on_delete``: answer the n-th delete that carries an event_id with an error.
-  Only the in-place compaction sends deletes with an event_id (openai_realtime.py:555-591).
+  Only the in-place compaction sends deletes with an event_id (openai_realtime.py:732-760).
 - ``reject_upgrades``: refuse the first n WebSocket upgrades with HTTP 503.
 """
 
@@ -52,7 +52,7 @@ from websockets.sync.server import serve
 from .build import Episode
 from .steps import Step
 
-CLIENT_ID_MAX_LENGTH = 32  # the driver's client id limit (providers/openai_realtime.py:48)
+CLIENT_ID_MAX_LENGTH = 32  # the driver's client id limit (providers/openai_realtime.py:55)
 CONTENT_TYPES = {
     "user": {"input_text", "input_image"},
     "system": {"input_text"},
@@ -102,8 +102,8 @@ class Connection:
 def replies(steps: list[Step]) -> list[Reply]:
     """The stub's reply for each step, with usage sized like scenario.replies. Output tokens
     include reasoning (entity/usage.py:55-58, 99-100). The SDK's usage model has no
-    reasoning_tokens; the key survives its model_dump (providers/litellm.py:91-101), and the
-    harness and the usage normalization read it (harness.py:124; entity/usage.py:66)."""
+    reasoning_tokens; the key survives its model_dump (providers/litellm.py:97-107), and the
+    harness and the usage normalization read it (harness.py:126; entity/usage.py:66)."""
     out = []
     for k, step in enumerate(steps):
         reasoning_tokens = len(step.reasoning) // 4
@@ -226,7 +226,7 @@ class RealtimeStub:
             return events, self.responses[responses:]
 
     def wait_for_session_update(self) -> None:
-        """Each connect sends session.update and reads no reply (openai_realtime.py:264-275),
+        """Each connect sends session.update and reads no reply (openai_realtime.py:410-424),
         so initialize() can return before the stub has recorded it."""
         with self._lock:
             recorded = self._lock.wait_for(
@@ -404,7 +404,7 @@ class RealtimeStub:
             return [created], 1011
         if not self._replies:
             # Like the chat stub's HTTP 400: a FATAL failure ends the decision without a retry
-            # (openai_realtime.py:97-105, 408-425; entity/model.py:318-339).
+            # (openai_realtime.py:255-263, 577-594; entity/model.py:367-388).
             self.unscripted += 1
             entry["status"] = "failed"
             failed = {
@@ -472,7 +472,7 @@ def run_steps(episode: Episode, steps: list[Step], stub: RealtimeStub) -> list[d
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
         mark = stub.mark()
-        budget = episode.budget(observation.tick_number)  # t_k: runner.py:851
+        budget = episode.budget(observation.tick_number)  # t_k: runner.py:853
         agent.configure_decision(budget)
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)

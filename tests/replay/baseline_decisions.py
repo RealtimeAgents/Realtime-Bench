@@ -1,12 +1,12 @@
 """JSONL storage of Choice Decisions baselines; normalization and comparison are baseline.py's.
 
 Every question attempt resends the whole state, and one decision can ask many questions. So each
-state entry (Luna: the transcript's strings and image parts, providers/openai_decisions.py:132-163;
-JEV: the history messages, harnesses/jev/selection.py:223-227), each question and each criteria
-order is stored once, on a "blob" line before its first use, and referenced as {"$blob": id}. The
-decision metadata repeats the questions (jev_calls and jev_question, harnesses/jev/driver.py:90-103)
-and references the same blobs, in the step's result and in its trajectory row. This is storage
-only: read() restores the records before comparison.
+state entry (Luna: the transcript's strings and image parts, providers/decisions/history.py:45-87;
+JEV: the history messages, providers/decisions/selection.py:241-243), each question and each
+criteria order is stored once, on a "blob" line before its first use, and referenced as
+{"$blob": id}. The decision metadata repeats the questions (jev_calls and jev_question,
+providers/decisions/driver.py:82-95) and references the same blobs, in the step's result and in
+its trajectory row. This is storage only: read() restores the records before comparison.
 """
 
 from __future__ import annotations
@@ -62,15 +62,15 @@ def _pack_runtime(runtime: dict, blobs: _Blobs) -> dict:
 def _pack_step(record: dict, blobs: _Blobs) -> dict:
     record = {**record, "requests": [_pack_request(r, blobs) for r in record["requests"]]}
     runtime = record["result"].get("realtime_runtime")
-    if runtime is not None:  # a failed decision returns no runtime metadata (harness.py:1317-1329)
+    if runtime is not None:  # a failed decision returns no runtime metadata (harness.py:1385-1397)
         record["result"] = {**record["result"], "realtime_runtime": _pack_runtime(runtime, blobs)}
     return record
 
 
 def _pack_trajectory(record: dict, blobs: _Blobs) -> dict:
-    """A trajectory row repeats its decision's runtime metadata (harness.py:1489)."""
+    """A trajectory row repeats its decision's runtime metadata (harness.py:1561)."""
     runtime = record["row"].get("realtime_runtime")
-    if runtime is None:  # nor does a failed decision's row (harness.py:1294-1312)
+    if runtime is None:  # nor does a failed decision's row (harness.py:1366-1384)
         return record
     return {**record, "row": {**record["row"], "realtime_runtime": _pack_runtime(runtime, blobs)}}
 

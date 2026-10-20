@@ -1,9 +1,9 @@
 """Set up an agent the way evaluation/runner.py main() does, without containers or a task server.
 
 The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
-frame budget B (None on the wall clock and in pause mode, runner.py:1401-1402), and ``max_ticks``
-is the episode length run_stream receives (runner.py:1773). The finite token clock changes the
-per-decision budget (runner.py:864-887) and the clock prompt (harnesses/default/prompts.py:177-201).
+frame budget B (None on the wall clock and in pause mode, runner.py:1409-1410), and ``max_ticks``
+is the episode length run_stream receives (runner.py:1775). The finite token clock changes the
+per-decision budget (runner.py:866-889) and the clock prompt (harnesses/default/prompts.py:177-201).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class Episode:
 
     def budget(self, t_k: int) -> DecisionBudget:
         """The budget run_stream binds before the decision at clock position ``t_k``
-        (runner.py:851, 861-913). Without a finite token clock nothing bounds the decision except
+        (runner.py:853, 863-915). Without a finite token clock nothing bounds the decision except
         the native limit, and an agent with unbounded output sends no provider cap."""
         agent = self.agent
         native_output_limit = getattr(getattr(agent, "config", None), "native_output_limit", None)
@@ -56,7 +56,7 @@ class Episode:
             remaining_clock_tokens = max(
                 0, math.floor((float(self.max_ticks) - float(t_k)) * self.tokens_per_frame + 1e-9)
             )
-            # run_stream ends the episode here instead of deciding (runner.py:869-871).
+            # run_stream ends the episode here instead of deciding (runner.py:871-873).
             assert remaining_clock_tokens > 0, "the scenario outlasts the token clock"
         runtime_output_cap = (
             native_output_limit
@@ -76,7 +76,7 @@ class Episode:
             if callable(transport_cap_mapper)
             else provider_output_token_cap
         )
-        if not (  # runner.py:894-905
+        if not (  # runner.py:896-907
             transport_output_cap is None
             or transport_output_cap == "inf"
             or (
@@ -125,7 +125,7 @@ def build_episode(
         raise RuntimeError(
             f"the repository .env sets {injected}; replay baselines use the defaults"
         )
-    configure_agent(  # runner.py:1570-1576; run_stream sets the clock mode again (runner.py:126)
+    configure_agent(  # runner.py:1570-1576; run_stream sets the clock mode again (runner.py:128)
         agent,
         fps=fps,
         tokens_per_frame=tokens_per_frame,

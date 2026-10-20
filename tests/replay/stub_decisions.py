@@ -1,9 +1,9 @@
 """Scripted OpenRouter Decisions endpoint on 127.0.0.1 with an OS-assigned port.
 
 Both Decisions clients post each Choice question attempt to ``{base_url}/decisions``, one after
-another (providers/openai_decisions.py:184; harnesses/jev/selection.py:163-172, 246). The test loads
-one decision's script before the decision. Each request takes the next entry: an Answer is
-returned in the smallest body the client accepts (openai_decisions.py:90-105, 204-217), a Failure
+another (providers/openai_decisions.py:168; providers/decisions/selection.py:172-188, 321). The test
+loads one decision's script before the decision. Each request takes the next entry: an Answer is
+returned in the smallest body the client accepts (openai_decisions.py:115-130, 188-201), a Failure
 as the error status and body it names. Every request is kept in arrival order, with its path,
 lower-cased headers and raw body.
 """
@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-QUESTION_KEY = "next_action"  # providers/openai_decisions.py:34
+QUESTION_KEY = "next_action"  # providers/openai_decisions.py:39
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class Answer:
 
 @dataclass(frozen=True)
 class Failure:
-    """An error response; the client reads ``error.message`` (openai_decisions.py:185-203)."""
+    """An error response; the client reads ``error.message`` (openai_decisions.py:169-187)."""
 
     status: int
     message: str
@@ -54,7 +54,7 @@ class DecisionsStub:
     @property
     def base_url(self) -> str:
         """A model YAML base_url as the catalog stores it, without a trailing slash
-        (providers/registry.py:279); httpx joins ``decisions`` below it."""
+        (providers/registry.py:201); httpx joins ``decisions`` below it."""
         return f"http://127.0.0.1:{self._server.server_address[1]}/api/alpha"
 
     def load(self, script) -> None:
@@ -79,7 +79,7 @@ class DecisionsStub:
         index = len(self.requests) - 1
         if not self._script:
             self.unscripted += 1
-            # HTTP 400 is FATAL for the per-question retry (entity/model.py:369-377), so a
+            # HTTP 400 is FATAL for the per-question retry (entity/model.py:418-426), so a
             # question beyond the script fails its decision at once instead of being retried.
             return 400, _error(400, "request beyond the script")
         entry = self._script.pop(0)

@@ -1,6 +1,6 @@
 """Replay baselines for run_stream's own decision loop on the wall clock.
 
-The real run_stream (evaluation/runner.py:100-1178) drives the chat_completions agent from
+The real run_stream (evaluation/runner.py:102-1180) drives the chat_completions agent from
 build_episode against FakeEnvironment (fake_env.py). Each baseline records, decision by decision,
 the runner's calls into the environment, its trace events, the commit statuses the agent receives,
 the action lifecycle records and the runner log, then the stop reason and the agent's history.
@@ -42,7 +42,7 @@ LONG_MAX_MINUTES = 1.0625
 # Short cases: a 3.75 s episode at 1 fps, with decisions at 0, 1, 2 and 3 s.
 SHORT_MAX_MINUTES = 0.0625
 # A reply to a decision at 3.0 s that lands after the deadline but before tick 4, so only the
-# deadline checks stop it, not the tick limit (runner.py:524-529).
+# deadline checks stop it, not the tick limit (runner.py:526-531).
 LATE_REPLY_S = 0.875
 
 TYPE_ADA = Step('{"action": "type", "text": "Ada"}')
@@ -172,13 +172,13 @@ class Case:
     held: tuple[bool, ...] = ()
 
 
-# The runner waits time_remaining + DEADLINE_GRACE_S for a decision (runner.py:305-307, 335).
+# The runner waits time_remaining + DEADLINE_GRACE_S for a decision (runner.py:307-309, 337).
 # Decision 3 starts at 3.0 s with 0.75 s left.
 BOUNDED_WAIT_S = 0.75 + runner.DEADLINE_GRACE_S
 
 CASES = [
     # The reply to decision 3 lands at 3.875 s, after the deadline: not executed
-    # (runner.py:524-525).
+    # (runner.py:526-527).
     Case(
         "late_reply",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT), Step(CLICK_AGREE)],
@@ -187,7 +187,7 @@ CASES = [
         ["click", "type", "click"],
         "time_limit",
     ),
-    # DONE becomes WAIT (runner.py:1141-1151) and the episode goes on to the deadline.
+    # DONE becomes WAIT (runner.py:1143-1153) and the episode goes on to the deadline.
     Case(
         "done_reply",
         [Step(CLICK_NAME), Step('{"action": "done"}'), Step(CLICK_SUBMIT), Step(CLICK_AGREE)],
@@ -196,8 +196,8 @@ CASES = [
         ["click", "wait", "click"],
         "time_limit",
     ),
-    # The third applied action decides the task; run_stream stops at once (runner.py:543,
-    # 1173-1174) and latches the task's reason (runner.py:793-794).
+    # The third applied action decides the task; run_stream stops at once (runner.py:545,
+    # 1175-1176) and latches the task's reason (runner.py:795-796).
     Case(
         "environment_done",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
@@ -208,7 +208,7 @@ CASES = [
         env={"stop_check": _decided_after(3, "task_completed")},
     ),
     # The task is decided at 2.25 s, while decision 2 waits for its reply: the action is not
-    # executed (runner.py:526-527) and the reason defaults to game_decided (runner.py:794).
+    # executed (runner.py:528-529) and the reason defaults to game_decided (runner.py:796).
     Case(
         "environment_done_during_reply",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
@@ -219,8 +219,8 @@ CASES = [
         env={"stop_check": lambda env: env.clock.now >= env.t0 + 2.25},
     ),
     # Decision 3's reply never comes. The bounded wait expires, the agent is aborted and the
-    # decision is skipped (runner.py:335-343, 393-409, 521). The abort closes the held request;
-    # the abandoned worker then sends it again (harnesses/default/harness.py:1231-1273) and gets
+    # decision is skipped (runner.py:337-345, 395-411, 523). The abort closes the held request;
+    # the abandoned worker then sends it again (harnesses/default/harness.py:1284-1340) and gets
     # the fourth reply while it is drained.
     Case(
         "bounded_call_timeout",
@@ -232,7 +232,7 @@ CASES = [
         requests=5,
         held=(True,),
     ),
-    # A fault that is not the guest refusing the action invalidates the run (runner.py:536-539).
+    # A fault that is not the guest refusing the action invalidates the run (runner.py:538-541).
     Case(
         "environment_failure",
         [Step(CLICK_NAME), TYPE_ADA],
