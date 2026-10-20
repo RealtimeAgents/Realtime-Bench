@@ -628,7 +628,8 @@ def summarize_run_metrics(
     """Return run-level metrics derived from the authoritative decision lifecycle.
 
     Missing provider measurements remain missing. Rates use only decisions for which the relevant
-    predicate is known and expose their denominator explicitly.
+    predicate is known and expose their denominator explicitly. ``fps`` is the model-input frame
+    rate, whose frames ``tokens_per_frame`` is charged per.
     """
     records = _load_lifecycle(Path(lifecycle_path))
     if validate_decision_count and len(records) != total_decisions:
