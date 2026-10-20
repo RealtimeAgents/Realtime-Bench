@@ -217,7 +217,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -234,7 +234,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a54b024b1cc6780dab7551ffb6456667a206d4c874ba54bfb1be8b774f6c8141"
+    "hash": "0c37e0e7890fdb90c9a18a538a49ab02daa5b0bc9f6b063afc59f30da4168a54"
    },
    "token/None": {
     "config": {
@@ -337,7 +337,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -354,7 +354,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f4e1e1fc8efa225ecb818871e4cda75ffda542b556818d962ce2777dd2478756"
+    "hash": "f7c4e61cd27889e9a1c447bc4726219944ec5ca2e3cd183a70f964147c1010de"
    },
    "wall/None": {
     "config": {
@@ -457,7 +457,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -474,7 +474,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "37dd74c808bc2bd7d18a30a43cd4d49b36c8638534352f578a5c5c9ced98e6a2"
+    "hash": "61ca809269debf566ce11244f8dd1c175e231db6547b33ec014ad832cf10f99b"
    }
   },
   "vendor": "anthropic"
@@ -649,7 +649,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -666,7 +666,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1717fc5db9963e3b97c072a4ffb2e5dc136af9c03b731bc293d1574e605e6fcb"
+    "hash": "581b6306290fae7bc6cac387c7aee061292e123573ca15ed76403311bc3760bc"
    },
    "token/None": {
     "config": {
@@ -769,7 +769,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -786,7 +786,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "03fe09458cc7cd15c29dd720bd2c1c4ba03bf33adfeebb61e08e501edfdcf64c"
+    "hash": "7d26d84855275017dee738e12824b56ed92ee214350897dcd9a177446a26b328"
    },
    "wall/None": {
     "config": {
@@ -889,7 +889,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -906,7 +906,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c5a468ec09f8364ff9ac3fe518dde6034f743f5b693e5ef5041e65b9eed4a9af"
+    "hash": "c35afe52b7779acc85137f2f6b50b5b8fcd3830af25bd8cc53b454aeb3cd01a3"
    }
   },
   "vendor": "anthropic"
@@ -1080,7 +1080,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1097,7 +1097,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9e6e8d2f1e47c42979bec141a095e3f1fabfa12e74893d0c429ca95063db1dcd"
+    "hash": "43e13f4e5c1a92479fc6ce872f77c87f7a76d95ef917efe2e1be0dcd8acf677c"
    },
    "token/None": {
     "config": {
@@ -1200,7 +1200,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1217,7 +1217,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b6523fd4d9c75b1be9746b25654ffab12d5d0ced2fc7d22a4af73b8dd7c78731"
+    "hash": "cce3de26fc5471816d3770633a481566e0130ca1b7bb1b799dd60d881f7c7f89"
    },
    "wall/None": {
     "config": {
@@ -1320,7 +1320,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1337,7 +1337,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "351216c5a0ec744a32922e41b32ae8c03e30fe304a33b48bb1e3ff47098c68af"
+    "hash": "77af04a2b398f5f974967efe6d62bfc9ff323e9989199a2b91e5c82d404fad2d"
    }
   },
   "vendor": "anthropic"
@@ -1387,7 +1387,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 393216,
+  "litellm_output_limit": 943718,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -1512,7 +1512,7 @@
       "uncapped_value": 393216
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1529,7 +1529,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5eb5b6491188b6a56ee71fd77dec10381b610290ec14fc33885c75582ae5bb20"
+    "hash": "9f715b03859b82a2057525bd687cede100a85e1753e6b92d7068c4082a07dc6b"
    },
    "token/None": {
     "config": {
@@ -1632,7 +1632,7 @@
       "uncapped_value": 393216
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1649,7 +1649,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "62872396999d4b8b38da97e11c91f49b4d5dae7b6ea80a456414b46fcd6e465f"
+    "hash": "1a05fa0c4de1c824eb6d93f5c08d1721569693633d48fc084210e7710f22a238"
    },
    "wall/None": {
     "config": {
@@ -1752,7 +1752,7 @@
       "uncapped_value": 393216
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1769,7 +1769,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6a149a4db1e335856086767fbfddbbe3affc478e9af1b072076ec2572cf4aece"
+    "hash": "71c5e357219065fc745ea6e00fd586b4416dbeede2bbaba4578c38141c4378fb"
    }
   },
   "vendor": "deepseek"
@@ -1944,7 +1944,7 @@
       "uncapped_value": 65536
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -1961,7 +1961,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "39fda8b8a27713ff140cf942782c47b6b7caeee0fb55ed6187d13facc81bb64b"
+    "hash": "f838bca84fe100f737c0bbf692d6f8e8db4eaeab6a25832bc7eaa65754319133"
    },
    "token/None": {
     "config": {
@@ -2064,7 +2064,7 @@
       "uncapped_value": 65536
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -2081,7 +2081,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7f1b702d8e1d6d4ae11ea4b7c63a6cc66d4a0b8716ee69a39a8a251f4901d1c7"
+    "hash": "2810af5c5aa4b432ae10f7b72aad1922f71af78d4f13941b076421795dd7bf99"
    },
    "wall/None": {
     "config": {
@@ -2184,7 +2184,7 @@
       "uncapped_value": 65536
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -2201,7 +2201,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "515b5346bb8270076a4840a1353d91ca77edc0bc9ab225603bc452ef4c7e7f38"
+    "hash": "e3691e7350d3626a8061ad3654dfd6a1394d8788b9c6c6c27dd7698a0890cd06"
    }
   },
   "vendor": "google"
@@ -3681,7 +3681,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -3698,7 +3698,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4cdfd39e38471ce729a83cc9920848601310a6a3ed2c1c808545575c6a9882cf"
+    "hash": "bdd96ab4128e721b639eefd68d65abbe94b770bb73b84745ff993ff27650f171"
    },
    "token/None": {
     "config": {
@@ -3801,7 +3801,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -3818,7 +3818,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5c4e9405aef9820e116bb13e421f5403d9a456c14c888fd784d189d9d71209da"
+    "hash": "763e208cf21cd28bc7734eef152b6ef9d878c64e0129390d5a5cb1cf457dc9a9"
    },
    "wall/None": {
     "config": {
@@ -3921,7 +3921,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -3938,7 +3938,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "60c8b98adb8283e2c2aa8bc86c9cc5cd4c19c4660e7037479929f5fd1b8d4924"
+    "hash": "fb5df4dcd3adf6032427e48246bf7254594ccbec45ad50f31b4c6d428c17ccd5"
    }
   },
   "vendor": "openai"
@@ -4113,7 +4113,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -4130,7 +4130,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "66099d2baef9b1a39a1bae5bba0b641a467f2b0f835e897c2d18ff88f33a1e44"
+    "hash": "d69f98a7ccb72f73ae51553ffffd56ffb111dbea059e98ce6e06872b016d094e"
    },
    "token/None": {
     "config": {
@@ -4233,7 +4233,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -4250,7 +4250,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6ac6a58766af8b0b5be0097db97f85f7194dc7c6a393bc62dda153f1a3b13677"
+    "hash": "a999e4d4daf5b7f377efcb424c4bc8fdbb828137d173234b5b89abc1838af503"
    },
    "wall/None": {
     "config": {
@@ -4353,7 +4353,7 @@
       "uncapped_value": 128000
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -4370,7 +4370,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cfa03299b93b1f939f47e1b4a9e645f75090241007c217a73e1dc4aaaf9a32cd"
+    "hash": "f02943699f943d7862c7f5d71e3add51c236a446831d0bdb3c1f716203c57dad"
    }
   },
   "vendor": "openai"
@@ -5315,7 +5315,7 @@
       "uncapped_value": 1048576
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -5332,7 +5332,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "62c3ca76dee4f734a70ba9efe8fc9c3fe3e15fc0318598476bd0a8a7c9b3aaec"
+    "hash": "944e70d1caac2a2f7c2c00ce866a274eb941201f6677bf2f0aca05a5d468c42f"
    },
    "token/None": {
     "config": {
@@ -5435,7 +5435,7 @@
       "uncapped_value": 1048576
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -5452,7 +5452,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c91b49d8ae015eb0ffe473ba109e0fa53ab44c729af6ede102f4d040c4976a19"
+    "hash": "23178391afbde5086f707b2dc7222eedecaa96d2c03b7c22d3b4067482a46ad1"
    },
    "wall/None": {
     "config": {
@@ -5555,7 +5555,7 @@
       "uncapped_value": 1048576
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -5572,7 +5572,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4aed3ba6fe19df7b412e9b7c0f6642480e8c9b889dd2f2a38ad28cc66646189d"
+    "hash": "0d46633f04a8f3dc82bd5a95d234fe250400de3c8903e3329503fd346df09f8f"
    }
   },
   "vendor": "moonshot"
@@ -5757,7 +5757,7 @@
       "uncapped_value": "provider_default"
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_complete_response_raw_usage_v1",
@@ -5774,7 +5774,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "36e909c93cfeb3c8b7c70e8dcf8224eaf7bf606131236873e4d4b2afbade502f"
+    "hash": "361e8aa805a37314da12b6b87fd6ad6e07a7cdecba6624c2789a8a5656215090"
    }
   },
   "vendor": "litellm"
@@ -5962,7 +5962,7 @@
       "uncapped_value": "provider_default"
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -5979,7 +5979,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d9f185e9ab8bf8d67dfb20dda0768a9ccfffd1b556722bbab40164d0b9e3146f"
+    "hash": "ca6194545a443dbbaa118e5225556eac1d934606d1e615f008341b44fbd485bb"
    }
   },
   "vendor": "compatible"
@@ -6164,7 +6164,7 @@
       "uncapped_value": "provider_default"
      },
      "provider_sdk_versions": {
-      "litellm": "1.104.1",
+      "litellm": "1.106.1",
       "openai": "2.54.0"
      },
      "provider_transport": "litellm_raw_provider_usage_v1",
@@ -6181,7 +6181,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3bbdcf468613fe640752ae4fdc9302bb544de4e57600db366c4523e66b0e9b03"
+    "hash": "6a26bac02f52499e089d2de5976a09ec8714c96abf7449e0ff19243a96043d09"
    }
   },
   "vendor": "compatible"
