@@ -1,18 +1,27 @@
 """The Gemini Live session core (providers/gemini/session.py), driven directly: no driver, no
 WebSocket.
 
-The server messages are google-genai's LiveServerMessage, built from the wire JSON the replay stub
-sends (tests/replay/ws_gemini_live.py); the history is the Contents GeminiLiveDriver renders.
+The history views come from the request builder, as the runtime builds them; the server messages
+are google-genai's LiveServerMessage, built from the wire JSON the replay stub sends
+(tests/replay/ws_gemini_live.py).
 """
 
 from __future__ import annotations
 
 from google.genai import types
 
+from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
+from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.gemini.session import (
     ACKNOWLEDGED,
+    REPLAY_THOUGHT_SIGNATURE,
     SENT,
     UNKNOWN,
+    Content,
+    Part,
     SessionCore,
 )
 
@@ -21,6 +30,55 @@ GO_AWAY_RECONNECT = {
     "reconnect_reason": "go_away",
     "go_away_time_left": "30s",
 }
+QUEUED = {"status": "queued"}
+
+
+def session_core(completion_signal="turn_complete", tool_response_scheduling="when_idle"):
+    return SessionCore(
+        {
+            "completion_signal": completion_signal,
+            "tool_response_scheduling": tool_response_scheduling,
+        }
+    )
+
+
+def turn(k: int, *, calls=("click",), feedback: str = "", text_after: str = "") -> CanonicalTurn:
+    """Decision k, answered with one tool round of ``calls`` and their queued receipts."""
+    observation = ProviderObservation(
+        observation=Observation(b"", float(k), k, {"observation_id": f"obs-{k}"}),
+        prompt=f"frame {k}",
+        image_bytes=b"png %d" % k,
+        mime_type="image/png",
+        image_detail="auto",
+        geometry={},
+        feedback_prefix=feedback,
+    )
+    exchange = {
+        "function_calls": [
+            {"id": f"call-{k}-{i}", "name": name, "arguments": {"target": "P1"}}
+            for i, name in enumerate(calls)
+        ],
+        "function_responses": [
+            {"id": f"call-{k}-{i}", "name": name, "response": QUEUED}
+            for i, name in enumerate(calls)
+        ],
+        "completion_text": text_after,
+    }
+    refs = {"native_tool_exchanges": [exchange]} if calls else {}
+    return CanonicalTurn(observation, output="{}", provider_refs=refs, decision=k)
+
+
+def view(turns, *, ledger: str = "", history_format: str = "native_tools"):
+    """The history view the runtime builds for gemini_live from these turns."""
+    policy = current_context_policy().for_path("gemini_live", {"history_format": history_format})
+    return build_request(
+        policy,
+        system_block("system instruction", None),
+        tuple(turns),
+        ledger_block(ledger, 1, 0),
+        AnswerRequirements("function_call", "standard_vlm"),
+        CallParameters("gemini-live", None, None),
+    )
 
 
 def message(wire: dict) -> types.LiveServerMessage:
@@ -41,19 +99,8 @@ def server_content(**fields) -> types.LiveServerMessage:
     return message({"serverContent": fields})
 
 
-def exchange(k: int) -> list[types.Content]:
-    """One retained turn of a native_tools history: the frame, the call and its receipt."""
-    call = types.FunctionCall(id=f"call-{k}", name="click", args={"target": "P1"})
-    receipt = types.FunctionResponse(id=f"call-{k}", name="click", response={"status": "queued"})
-    return [
-        types.Content(role="user", parts=[types.Part(text=f"frame {k}")]),
-        types.Content(role="model", parts=[types.Part(function_call=call)]),
-        types.Content(role="user", parts=[types.Part(function_response=receipt)]),
-    ]
-
-
-def connected(core: SessionCore, history=(), seeded=(), resume_handle=None):
-    plan = core.connect(list(history), tuple(seeded), resume_handle)
+def connected(core: SessionCore, history=None, resume_handle=None):
+    plan = core.connect(history, resume_handle)
     core.connected(plan)
     return plan
 
@@ -64,9 +111,8 @@ def receive(core: SessionCore, message, now: float = 0.0):
 
 
 def start_turn(core: SessionCore, generation_id: str) -> None:
-    key = ("block", f"frame-{generation_id}")
-    core.input_started([key])
-    core.sent([key])
+    frame = core.observe(view([turn(0)]))
+    core.sent(frame.keys)
     core.start_generation(generation_id)
 
 
@@ -77,23 +123,27 @@ def clean_turn(core: SessionCore, generation_id: str, handle: str, *messages) ->
         receive(core, received)
 
 
+def frame_content(k: int, text: str | None = None) -> Content:
+    image = view([turn(k)]).items[1].block.image
+    return Content("user", (Part(text=text or f"frame {k}"), Part(image=image)))
+
+
 def test_new_session_then_rebuild():
-    core = SessionCore("turn_complete")
+    core = session_core()
     first = connected(core)
     assert (first.mode, first.release_grace, first.seed) == ("new_session", False, ())
     assert core.connection == 1
     assert core.delivery == {("setup",): ACKNOWLEDGED}
     assert not core.last_turn_clean  # nothing on the session yet: no handle to resume
 
-    history = [content for k in range(10) for content in exchange(k)]
-    seeded = tuple(f"block-{k}" for k in range(10))
-    rebuild = core.connect(history, seeded, None)
+    rebuild = core.connect(view([turn(k) for k in range(10)]), None)
     assert core.connection is None  # the open connection is closed first
     assert (rebuild.mode, rebuild.release_grace) == ("canonical_history_replay", True)
-    # Twelve contents per message at most, and never one exchange across two messages.
+    # Each turn is its frame, its calls and their receipts; twelve contents per message at most.
     assert [len(batch) for batch in rebuild.seed] == [12, 12, 6]
-    assert [content for batch in rebuild.seed for content in batch] == history
-    assert all(batch[0].parts[0].text for batch in rebuild.seed)
+    assert rebuild.contents == 30
+    seeded = tuple(f"d{k}.{kind}" for k in range(10) for kind in ("frame", "tools"))
+    assert rebuild.seeded == seeded
 
     core.connected(rebuild)
     assert core.connection == 2
@@ -104,14 +154,73 @@ def test_new_session_then_rebuild():
     assert core.last_turn_clean and not core.renewal_required
 
 
+def test_seed_replays_the_history_view():
+    """The ledger first, then per turn its frame after its feedback, its native calls (the
+    thought-signature sentinel on the first of a round only) and their stored receipts."""
+    core = session_core(tool_response_scheduling="silent")
+    turns = [
+        turn(0),
+        turn(1, calls=("click", "key"), feedback="EXECUTION RESULT: ok", text_after="done"),
+    ]
+    plan = core.connect(view(turns, ledger='{"decision": 0}'), None)
+    (contents,) = plan.seed
+    ledger, frame_0, calls_0, receipts_0, frame_1, calls_1, receipts_1, after_1 = contents
+    texts = current_context_policy().for_path("gemini_live", {}).texts
+    assert ledger == Content("user", (Part(text=texts.ledger_header + '\n{"decision": 0}'),))
+    assert frame_0 == frame_content(0)
+    assert frame_1 == frame_content(1, "EXECUTION RESULT: ok\nframe 1")
+    assert calls_0 == Content(
+        "model",
+        (
+            Part(
+                function_call={"id": "call-0-0", "name": "click", "args": {"target": "P1"}},
+                thought_signature=REPLAY_THOUGHT_SIGNATURE,
+            ),
+        ),
+    )
+    assert [part.thought_signature for part in calls_1.parts] == [REPLAY_THOUGHT_SIGNATURE, None]
+    silent = {"will_continue": False, "scheduling": "SILENT"}
+    assert receipts_0 == Content(
+        "user",
+        (
+            Part(
+                function_response={"id": "call-0-0", "name": "click", "response": QUEUED, **silent}
+            ),
+        ),
+    )
+    assert [part.function_response["id"] for part in receipts_1.parts] == ["call-1-0", "call-1-1"]
+    assert after_1 == Content("model", (Part(text="done"),))
+    assert plan.seeded == ("ledger", "d0.frame", "d0.tools", "d1.prefix", "d1.frame", "d1.tools")
+
+
+def test_seed_replays_tool_rounds_as_a_transcript():
+    plan = session_core().connect(view([turn(0)], history_format="tool_transcript"), None)
+    (contents,) = plan.seed
+    frame, transcript = contents
+    assert frame == frame_content(0)
+    assert transcript.role == "model" and len(transcript.parts) == 1
+    assert transcript.parts[0].text.endswith(
+        '"function_calls": [{"id": "call-0-0", "name": "click", '
+        '"arguments": {"target": "P1"}}], "function_responses": '
+        '[{"id": "call-0-0", "name": "click", "response": '
+        '{"status": "queued"}}], "completion_text": ""}]'
+    )
+
+
 def test_observation_and_acknowledgement_delivery():
-    core = SessionCore("turn_complete")
+    core = session_core()
     connected(core)
-    keys = [("block", "frame-0"), ("block", "feedback-0")]
-    core.input_started(keys)
-    assert all(core.delivery[key] == UNKNOWN for key in keys)
-    core.sent(keys)
-    assert all(core.delivery[key] == SENT for key in keys)
+    frame = core.observe(view([turn(0), turn(1, feedback="EXECUTION RESULT: ok")]))
+    assert (frame.role, frame.text, frame.observation_id) == (
+        "user",
+        "EXECUTION RESULT: ok\nframe 1",
+        "obs-1",
+    )
+    assert frame.content == frame_content(1, "EXECUTION RESULT: ok\nframe 1")
+    assert frame.keys == (("block", "d1.frame"), ("block", "d1.prefix"))
+    assert all(core.delivery[key] == UNKNOWN for key in frame.keys)
+    core.sent(frame.keys)
+    assert all(core.delivery[key] == SENT for key in frame.keys)
 
     core.start_generation("turn-0")
     core.calls_received([("call-0", "click")])
@@ -126,7 +235,7 @@ def test_observation_and_acknowledgement_delivery():
 
 
 def test_go_away_resumes_after_a_clean_turn():
-    core = SessionCore("turn_complete")
+    core = session_core()
     connected(core)
     start_turn(core, "turn-0")
 
@@ -163,7 +272,7 @@ def test_go_away_resumes_after_a_clean_turn():
         is None
     )
 
-    resume = core.connect([], (), "handle-0")
+    resume = core.connect(None, "handle-0")
     assert (resume.mode, resume.resume_handle, resume.seed, resume.release_grace) == (
         "session_resumption",
         "handle-0",
@@ -177,16 +286,16 @@ def test_go_away_resumes_after_a_clean_turn():
 
 
 def test_resume_failure_rebuilds():
-    core = SessionCore("turn_complete")
+    core = session_core()
     connected(core)
     clean_turn(core, "turn-0", "handle-0", go_away())
 
-    core.connect([], (), "handle-0")
+    core.connect(None, "handle-0")
     # The resume was refused: connected() never comes. The renewal is still owed.
     assert core.connection is None and core.renewal_required
     assert core.resume_handle == "handle-0"
 
-    rebuild = core.connect(exchange(0), ("frame-0", "tools-0"), None)
+    rebuild = core.connect(view([turn(0)]), None)
     # No open connection is left to replace, but a replayed history still waits for the release.
     assert rebuild.release_grace and rebuild.mode == "canonical_history_replay"
     assert core.resume_handle is None
@@ -196,7 +305,7 @@ def test_resume_failure_rebuilds():
 
 
 def test_interrupted_or_unresumable_turn_does_not_resume():
-    core = SessionCore("turn_complete")
+    core = session_core()
     connected(core)
     clean_turn(core, "turn-0", "handle-0")
     assert core.resume_handle == "handle-0"
@@ -219,7 +328,7 @@ def test_interrupted_or_unresumable_turn_does_not_resume():
 
 
 def test_extended_thinking_spans_intermediate_turn_complete():
-    core = SessionCore("interaction_idle")
+    core = session_core("interaction_idle")
     connected(core)
     start_turn(core, "turn-0")
     receive(core, update("handle-0"))
@@ -242,7 +351,7 @@ def test_extended_thinking_spans_intermediate_turn_complete():
 
 
 def test_idle_ends_a_turn_complete_interaction_uncleanly():
-    core = SessionCore("turn_complete")
+    core = session_core()
     connected(core)
     start_turn(core, "turn-0")
     receive(core, update("handle-0"))
@@ -255,7 +364,7 @@ def test_reply_read_after_close_keeps_its_generation():
     """An abort closes the connection while its reply is still being read. What its reader
     drains keeps that connection and generation, even once the next connection has started a
     generation of its own."""
-    core = SessionCore("turn_complete")
+    core = session_core()
     connected(core)
     start_turn(core, "turn-0")
     core.calls_received([("call-0", "click")])
@@ -265,7 +374,7 @@ def test_reply_read_after_close_keeps_its_generation():
     assert core.acknowledging() == () and core.go_away_deadline is None
     assert core.renewal_required  # the session state stays until the next connection
 
-    connected(core, exchange(0), ("frame-0",))
+    connected(core, view([turn(0)]))
     assert core.connection == 2 and not core.renewal_required
     start_turn(core, "turn-1")
 
