@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 
+import anyio.to_thread
 import pytest
 
 from realtime_framework.clock import FrameClock, SystemClock, episode_clocks
@@ -111,6 +112,10 @@ def test_event_loop_runs_on_virtual_time():
         assert clock.wait(future, 100.0) is True
         assert future.result() == (2.5, 4.0)
         assert clock.monotonic() == 4.0
+        # anyio's worker threads would not take part; on a fake loop the executor runs the call.
+        future = asyncio.run_coroutine_threadsafe(anyio.to_thread.run_sync(clock.sleep, 1.5), loop)
+        assert clock.wait(future, 100.0) is True
+        assert clock.monotonic() == 5.5
         loop.call_soon_threadsafe(loop.stop)
 
 

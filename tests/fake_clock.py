@@ -11,7 +11,9 @@ An event loop waits while it sits in select with nothing ready. A thread-safe ca
 socket, a pending connect or write, or bytes it sent that the peer's kernel has not acknowledged
 yet keep it busy: loopback delivery is asynchronous, so a reply can be in flight while neither end
 is ready. Test servers that wait with wait_readable() call wait_delivered() before they close a
-connection.
+connection. Work a loop hands to another thread must run on a participating thread too: the loop's
+default executor does, and on a fake loop anyio.to_thread.run_sync (LiteLLM runs its end-of-stream
+chunk builder there) is routed to that executor instead of anyio's own worker threads.
 
 When every participant waits and nothing is due, nothing can happen any more. A thread that joined
 with ``participant()`` and is waiting then raises FakeClockStalled instead of hanging the test.
@@ -21,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import fcntl
+import functools
 import heapq
 import itertools
 import select
@@ -34,11 +38,14 @@ import threading
 import time
 from contextlib import contextmanager
 
+import anyio.to_thread
+
 # A waiting thread blocks on the condition variable for at most this much real time before it
 # checks again (a socket it waits for, bytes in flight). It never decides when virtual time moves.
 _SOCKET_POLL_S = 0.005
 _RECHECK_S = 0.05
 _SO_NWRITE = 0x1024  # macOS: bytes in the send buffer the peer has not acknowledged
+_anyio_run_sync = anyio.to_thread.run_sync
 
 
 class FakeClockStalled(RuntimeError):
@@ -221,6 +228,17 @@ class _FakeLoop(asyncio.SelectorEventLoop):
             self._fake_clock._remove_loop(self._fake_state)
 
 
+async def _run_sync(func, *args, abandon_on_cancel=False, cancellable=None, limiter=None):
+    """anyio.to_thread.run_sync, on a fake loop through the loop's default executor."""
+    loop = asyncio.get_running_loop()
+    if not isinstance(loop, _FakeLoop):
+        return await _anyio_run_sync(
+            func, *args, abandon_on_cancel=abandon_on_cancel, cancellable=cancellable, limiter=limiter
+        )
+    context = contextvars.copy_context()
+    return await loop.run_in_executor(None, functools.partial(context.run, func, *args))
+
+
 class FakeClock:
     def __init__(self, wall_origin: float = 0.0):
         self._cond = threading.Condition(threading.RLock())
@@ -275,6 +293,7 @@ class FakeClock:
         return thread
 
     def new_event_loop(self) -> asyncio.AbstractEventLoop:
+        anyio.to_thread.run_sync = _run_sync
         state = _LoopState(f"loop-{next(self._sequence)}")
         with self._cond:
             self._loops.append(state)
