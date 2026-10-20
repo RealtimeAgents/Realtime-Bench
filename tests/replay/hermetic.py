@@ -1,11 +1,13 @@
-"""Process settings that keep the replay tests hermetic and offline.
+"""Process settings that keep the tests hermetic and offline.
 
-conftest.py imports this module before any framework module is imported.
+tests/conftest.py imports this module before any framework module is imported, whichever test
+folder or file is run.
 """
 
 from __future__ import annotations
 
 import os
+import socket
 import sys
 
 # Importing LiteLLM fetches its model cost map over the network unless this is set
@@ -36,12 +38,20 @@ for _name in FRAME_ENV + HISTORY_ENV + RUNNER_ENV:
     os.environ.pop(_name, None)
 
 
+LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+
 def _refuse_remote_connections(event, args):
-    """Every request must reach the local stub; refuse any other IP connection."""
+    """Every request must reach the local stub; refuse any other IP connection, and the name
+    lookup that would precede it (a lookup alone already queries the resolver)."""
     if event == "socket.connect":
         address = args[1]
-        if isinstance(address, tuple) and address[0] not in ("127.0.0.1", "::1"):
-            raise ConnectionRefusedError(f"replay tests are offline; refused {address!r}")
+        if isinstance(address, tuple) and address[0] not in LOOPBACK:
+            raise ConnectionRefusedError(f"tests are offline; refused {address!r}")
+    elif event == "socket.getaddrinfo":
+        host = args[0].decode() if isinstance(args[0], bytes) else args[0]
+        if host is not None and host not in LOOPBACK:
+            raise socket.gaierror(f"tests are offline; refused a lookup of {host!r}")
 
 
 sys.addaudithook(_refuse_remote_connections)
