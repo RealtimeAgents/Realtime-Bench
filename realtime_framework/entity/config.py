@@ -209,3 +209,19 @@ class RunnerTimingConfig:
     @classmethod
     def from_environ(cls, environ=os.environ) -> RunnerTimingConfig:
         return cls(**_environ_fields(cls.ENVIRONMENT, environ))
+
+
+@dataclass(frozen=True)
+class EnvironmentBudgetConfig:
+    """Overall time budget in seconds of each environment operation (sandbox/actions.py).
+
+    An operation's lock waits, connects and receives share its budget; running past it fails the
+    operation and invalidates the run.
+    """
+
+    # Execute one action; extended for text input and holds as the guest's request timeout is
+    # (sandbox/guest.py action_timeout).
+    action_s: float = 10.0
+    capture_s: float = 120.0  # capture one observation; the CDP call default
+    state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
+    clock_advance_s: float = 120.0  # advance or render one token-clock step; the CDP call default

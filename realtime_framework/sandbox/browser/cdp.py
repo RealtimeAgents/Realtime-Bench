@@ -19,10 +19,12 @@ from typing import Any as Any
 from websockets.sync.client import connect as connect
 
 from realtime_framework.sandbox.budget import Deadline as Deadline
+from realtime_framework.sandbox.budget import bounded as bounded
 
 
 def page_targets(port: int, timeout: float = 3) -> list[dict]:
-    with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/json", timeout=timeout) as response:
+    url = f"http://127.0.0.1:{int(port)}/json"
+    with urllib.request.urlopen(url, timeout=bounded(timeout)) as response:
         values = json.load(response)
     return [
         value
@@ -91,7 +93,8 @@ class PersistentCDPClient:
     @contextmanager
     def _locked(self, deadline: Deadline):
         """Hold the session lock; waiting for it spends the call's deadline."""
-        if not self._lock.acquire(timeout=deadline.remaining()):
+        left = deadline.remaining()
+        if not self._lock.acquire(timeout=-1 if left is None else left):
             raise deadline.exceeded()
         try:
             yield
@@ -171,7 +174,7 @@ class PersistentCDPClient:
     @contextmanager
     def transaction(self):
         """Prevent another harness thread from interleaving a multi-command operation."""
-        with self._lock:
+        with self._locked(Deadline(None, "CDP transaction")):
             yield self
 
     def _close_locked(self) -> None:
