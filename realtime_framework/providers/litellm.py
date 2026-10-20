@@ -465,9 +465,6 @@ class LiteLLMDriver:
     def __init__(self, config):
         self.config = config
         deployment = self.deployment
-        if not self.pressure_archive:
-            # The runtime records physical context checks only for drivers that perform them.
-            self.request_context_status = None
         if deployment.gateway == "openai_compatible":
             self.base_url = validate_endpoint(config.api_base_url)
         else:
