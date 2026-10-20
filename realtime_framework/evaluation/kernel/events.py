@@ -129,7 +129,7 @@ class ActionExecuted:
 
     decision: int
     result: Any = None  # the environment's execution record
-    held_keys: tuple[str, ...] = ()  # key identities a hold_key now holds under a lease
+    held_keys: tuple[str, ...] = ()  # token clock: key identities a hold_key now holds
     rejection: str | None = None  # the guest refused the action; the run stays valid
     error: str | None = None  # the environment failed; the run is invalid
 
@@ -139,8 +139,9 @@ class ActionExecuted:
 
 
 @dataclass(frozen=True)
-class ClockAdvanced:
-    """The environment advanced one AdvanceClock step."""
+class ClockStepped:
+    """The environment advanced the clock by one AdvanceClock step. (ClockAdvanced is the name of
+    the trace record the policy writes for a whole move.)"""
 
     error: str | None = None
 
@@ -151,7 +152,8 @@ class ClockAdvanced:
 
 @dataclass(frozen=True)
 class KeysReleased:
-    """Keys whose lease ended were released, by ReleaseKeys or by the shell's release timer."""
+    """Keys whose lease ended were released: by ReleaseKeys on the token clock, or by the shell's
+    release timer on the wall clock."""
 
     keys: tuple[str, ...]
     error: str | None = None
@@ -274,15 +276,21 @@ class DiscardResult:
 
 @dataclass(frozen=True)
 class Execute:
-    """Run one action in the environment; answer with ActionExecuted."""
+    """Run one action in the environment; answer with ActionExecuted.
+
+    On the wall clock a hold_key carries ``release_at``: the shell's own timer releases the keys
+    it presses then (a key already held until later keeps its later release), armed right after
+    the press and outside the kernel, so neither this command nor a later one keeps a key down
+    longer."""
 
     decision: int
     action: Action
+    release_at: float | None = None
 
 
 @dataclass(frozen=True)
 class AdvanceClock:
-    """Token clock: advance the environment by ``step`` ticks; answer with ClockAdvanced."""
+    """Token clock: advance the environment by ``step`` ticks; answer with ClockStepped."""
 
     step: float
 
@@ -292,14 +300,6 @@ class ReleaseKeys:
     """Token clock: release keys whose lease ended at this tick; answer with KeysReleased."""
 
     keys: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class ScheduleKeyRelease:
-    """Wall clock: release each key at its time on the shell's own timer, not through the kernel,
-    so a synchronous operation cannot make a key stay down longer."""
-
-    releases: tuple[tuple[str, float], ...]
 
 
 @dataclass(frozen=True)
