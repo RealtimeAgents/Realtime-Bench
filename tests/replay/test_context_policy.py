@@ -1,4 +1,5 @@
-"""Pin the phase-1 context policy to the code paths that applied each value before it existed.
+"""Pin the context policy to the code paths that applied each value before it existed, and each
+later version's change to what it changed.
 
 Every check reads class-level capabilities or static tables, so no key or connection is needed.
 Line numbers cite those code paths as they were on 7912231.
@@ -15,13 +16,17 @@ from realtime_framework.entity.config import (
     DEFAULT_DETAILED_HISTORY_TURNS,
     DEFAULT_VISUAL_FOLD_BLOCK_SIZE,
 )
-from realtime_framework.entity.context_policy import FIXED_TEXTS, current_context_policy
+from realtime_framework.entity.context_policy import (
+    FIXED_TEXTS,
+    PRESETS,
+    current_context_policy,
+)
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import APIS, adapter_class
 
 POLICY = current_context_policy()
-# The LiteLLM APIs keep their context switches as driver class attributes (litellm.py).
+# The LiteLLM APIs keep their pressure-archive switch as a driver class attribute (litellm.py).
 CHAT_DRIVERS = {
     api: adapter_class(api) for api in APIS if issubclass(adapter_class(api), LiteLLMDriver)
 }
@@ -78,15 +83,23 @@ def test_feedback_placement(api):
     assert POLICY.paths[api].feedback == expected
 
 
+def test_presets():
+    assert {api: path.preset for api, path in POLICY.paths.items() if path.preset} == {
+        "moonshot": "kimi_k3"
+    }
+    for path in POLICY.paths.values():
+        for item, value in PRESETS[path.preset].items() if path.preset else ():
+            assert getattr(path, item) == value, (path.api, item)
+
+
 def test_replay_and_pressure_sets():
     paths = POLICY.paths
-    # The LiteLLM drivers' switches; other drivers have none of them.
+    # Version 2: reasoning goes back only where the provider requires it (the Kimi K3 preset),
+    # and every reply is rebuilt from the model output.
     assert {api for api, path in paths.items() if path.reasoning_replay} == {
-        api for api, driver in CHAT_DRIVERS.items() if driver.preserve_reasoning_history
-    }
-    assert {api for api, path in paths.items() if path.verbatim_replay} == {
-        api for api, driver in CHAT_DRIVERS.items() if driver.assistant_turn_ref
-    }
+        api for api in APIS if capabilities(api).reasoning_replay == "required"
+    } == {"moonshot"}
+    assert not any(path.verbatim_replay for path in paths.values())
     # Decision clients estimate only canonical history (harnesses/jev/driver.py:36-41).
     decisions = {
         api

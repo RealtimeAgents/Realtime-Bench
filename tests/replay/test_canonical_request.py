@@ -105,32 +105,22 @@ def test_ledger_role_follows_the_policy_but_converts_to_user():
         assert chat_messages(canonical)[1]["role"] == "user"
 
 
-def test_reasoning_and_verbatim_replay():
+def test_reasoning_replay():
     reasoned = turn(1, output="A1")
     reasoned.output_reasoning = "R1"
     silent = turn(2)
     silent.output_reasoning = "R2"
     turns = [reasoned, silent, turn(3)]
-    assert chat_messages(request("chat_completions", turns))[2] == {
-        "role": "assistant",
-        "content": "A1",
-    }
+    # Every API but moonshot rebuilds the reply from the model output alone; a reply that was
+    # only reasoning leaves no assistant message.
+    for api in ("chat_completions", "litellm", "openrouter"):
+        assert [m for m in chat_messages(request(api, turns)) if m["role"] == "assistant"] == [
+            {"role": "assistant", "content": "A1"}
+        ], api
+    # The Kimi K3 preset keeps the reasoning (entity/context_policy.py PRESETS).
     moonshot = chat_messages(request("moonshot", turns))
     assert moonshot[2] == {"role": "assistant", "content": "A1", "reasoning_content": "R1"}
     assert moonshot[4] == {"role": "assistant", "content": "", "reasoning_content": "R2"}
-
-    message = {"role": "assistant", "content": "A1", "provider_specific_fields": {"x": 1}}
-    verbatim = turn(1, output="A1", assistant_message=message)
-    verbatim.output_reasoning = "R1"
-    sent = chat_messages(request("litellm", [verbatim, turn(2)]))[2]
-    assert sent == message and sent is not message
-    sent["provider_specific_fields"]["x"] = 2
-    assert message["provider_specific_fields"] == {"x": 1}
-    # Other APIs never replay a provider message.
-    assert chat_messages(request("openrouter", [verbatim, turn(2)]))[2] == {
-        "role": "assistant",
-        "content": "A1",
-    }
 
 
 def test_gemini_tool_exchanges_are_recorded_not_converted():

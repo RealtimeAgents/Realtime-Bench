@@ -83,13 +83,9 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
         )
         items.append(RequestItem(prefix, Intent("input", "frame_prefix")))
     items.append(RequestItem(frame, Intent("input", "in_order")))
-    provider_message = (
-        turn.provider_refs.get("assistant_message") if policy.verbatim_replay else None
-    )
     reasoning = turn.output_reasoning if policy.reasoning_replay else ""
-    if provider_message is not None or turn.output or reasoning:
-        output = _output(turn, reasoning=reasoning, provider_message=provider_message)
-        items.append(RequestItem(output, Intent("model", "in_order")))
+    if turn.output or reasoning:
+        items.append(RequestItem(_output(turn, reasoning=reasoning), Intent("model", "in_order")))
     # Stateless transports rebuild from this canonical sequence on every request. Attach each
     # action's actual execution result at its causal position, rather than appending a growing
     # duplicate ledger after the newest observation. Older turns form a stable prefix after their
@@ -168,7 +164,7 @@ def _frame(policy: PathPolicy, turn: CanonicalTurn) -> ContentBlock:
     )
 
 
-def _output(turn: CanonicalTurn, *, reasoning="", provider_message=None) -> ContentBlock:
+def _output(turn: CanonicalTurn, *, reasoning="") -> ContentBlock:
     return ContentBlock(
         f"d{turn.decision}.output",
         "model_output",
@@ -177,7 +173,6 @@ def _output(turn: CanonicalTurn, *, reasoning="", provider_message=None) -> Cont
         text=turn.output,
         based_on=turn.observation.observation_id,
         reasoning=reasoning,
-        provider_message=provider_message,
     )
 
 

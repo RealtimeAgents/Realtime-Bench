@@ -70,7 +70,6 @@ class ContentBlock:
     based_on: str | None = None  # output and tools: observation_id of the frame answered
     attached_to: str | None = None  # feedback: the output it reports, or the frame it prefixes
     reasoning: str = ""  # output: set only when the policy replays reasoning
-    provider_message: dict | None = None  # output: set only when the policy replays it verbatim
     initial_text: str = ""  # tools: model text before the first call
     exchanges: tuple[ToolExchange, ...] = ()
     revision: int | None = None  # ledger: archived action count it covers

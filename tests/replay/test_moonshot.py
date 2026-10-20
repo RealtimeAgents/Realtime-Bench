@@ -127,7 +127,7 @@ def _check_history_changes(records: list[dict]) -> None:
 
 
 def _check_reasoning_replay(records: list[dict], steps) -> None:
-    """The moonshot policy keeps reasoning (entity/context_policy.py:170): the runtime stores it
+    """The Kimi K3 preset keeps reasoning (entity/context_policy.py PRESETS): the runtime stores it
     with the turn (harnesses/default/context.py:587) and the next request carries it on the turn's
     assistant message (harnesses/default/request.py:90-93, providers/litellm.py:356-363)."""
     reasoned = [k for k, step in enumerate(steps) if step.reasoning]
