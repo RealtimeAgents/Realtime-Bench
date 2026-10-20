@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
+import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.events import GenerationBoundary, TextDelta, UsageSnapshot
 from realtime_framework.entity.model import RATE_LIMITED, TRANSIENT, TRANSPORT_RETRY
 from realtime_framework.entity.model import TransportFailure, exception_chain, retry_after_seconds
-from realtime_framework.harnesses.default import harness as harness_module
 
 from . import baseline
 from .build import build_episode
@@ -228,8 +228,8 @@ def test_pause_mode_snapshot(openrouter_env, tmp_path):
 
 
 class _Sleeps:
-    """Stands in for the time module the harness uses and records its sleeps: the retry loop
-    sleeps its backoff for real (harnesses/default/harness.py:1338)."""
+    """Stands in for the time module the retry executor uses and records its sleeps: it sleeps
+    the backoff for real (entity/model.py:457)."""
 
     def __init__(self):
         self.calls = []
@@ -268,7 +268,7 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     requests."""
     steps = LONG_SCENARIO[:2]
     sleeps = _Sleeps()
-    monkeypatch.setattr(harness_module, "time", sleeps)
+    monkeypatch.setattr(model_module, "time", sleeps)
     with openrouter_episode(monkeypatch, tmp_path, [failure, *replies(steps)], **TOKEN_CLOCK) as (
         stub,
         config,

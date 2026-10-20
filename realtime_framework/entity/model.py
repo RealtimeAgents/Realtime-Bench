@@ -426,6 +426,45 @@ def classify_http_failure(status: int, detail: str = "", retry_after_s=None) -> 
     return TransportFailure(FATAL)
 
 
+import time
+from collections.abc import Callable
+
+
+@dataclass(frozen=True)
+class RequestRetry:
+    """Run one request unit under TRANSPORT_RETRY: a stateless turn.
+
+    ``send(attempt)`` makes one 1-based attempt. A failed attempt is classified, recorded and, if
+    the policy allows, sent again after its delay. ``replayable`` is False once the failed attempt
+    received model output. ``record(attempt, exc, failure, delay)`` sees every failure before any
+    wait; delay is None when the request is not sent again, and the exception then propagates.
+    """
+
+    key: str  # the request unit's stable jitter key
+    classify: Callable[[BaseException], TransportFailure]
+    record: Callable[[int, BaseException, TransportFailure, float | None], None]
+    replayable: Callable[[BaseException], bool] = lambda exc: True
+
+    def run(self, send):
+        attempt = 1
+        while True:
+            try:
+                return send(attempt)
+            except Exception as exc:
+                delay = self._failed(attempt, exc)
+                if delay is None:
+                    raise
+            time.sleep(delay)
+            attempt += 1
+
+    def _failed(self, attempt: int, exc: Exception) -> float | None:
+        failure = self.classify(exc)
+        replayable = self.replayable(exc)
+        delay = TRANSPORT_RETRY.delay_s(attempt, self.key, failure) if replayable else None
+        self.record(attempt, exc, failure, delay)
+        return delay
+
+
 FOLDED_VISUAL_PLACEHOLDER = (
     "[Earlier screenshot and its interactables were folded from active visual context. "
     "The corresponding assistant reasoning and action remain in the conversation.]"
