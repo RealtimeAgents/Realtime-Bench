@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import ClassVar
 
 import httpx
 
@@ -66,7 +67,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
     max_choices = 255
     pin_route = True
     # Per-model catalog defaults (providers/registry.py).
-    model_defaults = {
+    model_defaults: ClassVar[dict[str, dict]] = {
         "openai/gpt-6-luna-decisions": {
             # OpenRouter's published window. A 768 px screenshot measured 337 input tokens; the
             # reserve covers one question's criteria (at most 255 candidates) and instructions.

@@ -13,6 +13,7 @@ from copy import copy as copy
 from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from dataclasses import replace as replace
+from typing import ClassVar as ClassVar
 
 from openai import APIConnectionError as APIConnectionError
 from openai import APITimeoutError as APITimeoutError
@@ -202,7 +203,7 @@ class OpenAIRealtimeDriver:
         vendor="openai",
         litellm_provider="openai",
     )
-    model_defaults = {}
+    model_defaults: ClassVar[dict[str, dict]] = {}
 
     def __init__(self, config):
         self.config = config

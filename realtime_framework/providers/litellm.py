@@ -25,6 +25,7 @@ from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from dataclasses import replace as replace
 from importlib.metadata import version as version
+from typing import ClassVar as ClassVar
 from urllib.parse import urlsplit as urlsplit
 
 from realtime_framework.entity.events import GenerationBoundary
@@ -396,7 +397,7 @@ class LiteLLMDriver:
     protocol: ChatProtocol
     deployment: ChatDeployment
     compat: ChatCompat
-    model_defaults = {}
+    model_defaults: ClassVar[dict[str, dict]] = {}
     # Context policy items 6-8 as each API applied them (entity/context_policy.py now decides
     # what is sent); tests/replay/test_context_policy.py pins the two to each other until
     # step 4b removes these copies.
