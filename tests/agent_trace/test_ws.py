@@ -14,6 +14,7 @@ from pathlib import Path
 
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.entity.events import TextDelta, UsageSnapshot
 from realtime_framework.entity.model import (
     GenerationOutput,
@@ -22,9 +23,11 @@ from realtime_framework.entity.model import (
     SessionSeed,
 )
 from realtime_framework.entity.records import trace_scope, validate_episode_trace
+from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.context import RealtimeRuntime
+from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from realtime_framework.providers.registry import MODEL_PROFILES
@@ -67,9 +70,18 @@ def _run(driver, run_dir: Path, turns: int):
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="ws")
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
     driver.bind_trace(sink)
-    runtime = RealtimeRuntime(driver, trace=sink)
+    config = driver.config
+    policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
+    runtime = RealtimeRuntime(driver, policy, trace=sink)
     history: list[dict] = []
-    seed = SessionSeed("system instruction", driver.config.model_name, None, 1.0)
+    seed = SessionSeed("system instruction", config.model_name, None, 1.0)
+    system = system_block(seed.system_instruction)
+    answer = AnswerRequirements(driver.capabilities.action_channel, "standard_vlm")
+    call = CallParameters(config.model_name, config.reasoning_effort, None)
+
+    def request_builder(turns, ledger):
+        return build_request(policy, system, turns, ledger, answer, call)
+
     try:
         with trace_scope(phase="initialize"):
             runtime.start(seed)
@@ -77,7 +89,13 @@ def _run(driver, run_dir: Path, turns: int):
             request = GenerationRequest(f"turn-{k}", None, "inf", "wall")
             with trace_scope(phase="decision", decision=k, generation_id=f"turn-{k}", attempt=1):
                 runtime.run_turn(
-                    [_observation(k)], request, _Collector(), action_history=history, timeout=60
+                    [_observation(k)],
+                    request,
+                    _Collector(),
+                    action_history=history,
+                    timeout=60,
+                    request_builder=request_builder,
+                    decision=k,
                 )
             history.append({"tick": k + 1, "executed": "wait", "result": "wait"})
     finally:
@@ -232,7 +250,7 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
         (2, "in_place_edit_fallback"),
     ]
     assert changes[1]["sync"]["disposition"] == "exact"
-    assert changes[1]["policy_item"] == ["screenshot_retention"]
+    assert changes[1]["policy_item"] == ["visuals"]
     fallback = changes[3]
     assert fallback["trigger"] == "fallback" and fallback["replayed_turns"] == 2
     assert "no such item" in fallback["sync"]["provider_metadata"]["history_in_place_edit_error"]
@@ -338,7 +356,7 @@ def test_gemini_live_session(tmp_path, monkeypatch):
     ]
     assert changes[0]["trigger"] == "provider" and changes[0]["sync"]["reason"] == "go_away"
     assert changes[1]["trigger"] == "fallback" and changes[1]["replayed_turns"] == 2
-    assert changes[1]["policy_item"] == ["gemini_tool_call_replay"]
+    assert changes[1]["policy_item"] == ["tool_call_replay"]
     assert "resume_error" in changes[1]["sync"]["provider_metadata"]
     states = [e["payload"] for e in events if e["event"] == "SessionStateChanged"]
     assert [(s["state"], s["cause"]) for s in states] == [

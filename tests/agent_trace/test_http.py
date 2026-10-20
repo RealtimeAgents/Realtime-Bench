@@ -15,10 +15,13 @@ from urllib.parse import urlsplit
 import pytest
 
 from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.records import trace_scope, validate_episode_trace
+from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
+from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.harnesses.jev.selection import ChoiceDecision
 from realtime_framework.providers.capture import REDACTED, SECRET_HEADERS
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
@@ -282,12 +285,20 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
     driver = LiteLLMDriver(config)
     driver.bind_trace(sink)
+    canonical = build_request(
+        phase1_context_policy().for_path(config.adapter_type, config.provider_options),
+        system_block("count me"),
+        (),
+        None,
+        AnswerRequirements("text_json", "standard_vlm"),
+        CallParameters(config.model_name, None, None),
+    )
     request = GenerationRequest(
         generation_id="turn-0-tokenize",
         provider_output_token_cap=None,
         transport_output_token_cap=None,
         clock_mode="wall",
-        messages=({"role": "user", "content": "count me"},),
+        canonical=canonical,
     )
     return driver, request, trace, sink
 
@@ -446,6 +457,7 @@ def test_decisions_context_limit_splits_the_candidates(tmp_path, monkeypatch):
     assert [a["criteria_count"] for a in attempts] == [3, 1, 2, 2]
     (split,) = _payloads(events, "HistoryChanged")
     assert split["kind"] == "choice_candidate_split" and split["trigger"] == "fallback"
+    assert split["policy_item"] is None  # the context policy has no item for it yet
     assert split["choice"]["candidates"] == ["a", "b", "c"]
     assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 4
 
@@ -457,7 +469,7 @@ def test_decisions_digest_overflow_reduces_the_history(tmp_path, monkeypatch):
     changes = _payloads(events, "HistoryChanged")
     assert [c["kind"] for c in changes] == ["choice_candidate_split", "choice_history_reduction"]
     reduction = changes[1]
-    assert reduction["policy_item"] == "jev_history"
+    assert reduction["policy_item"] == "decision_history"
     assert reduction["choice"] == {"phase": "gui_action", "removed_messages": 1, "remaining": 3}
     attempts = _payloads(events, "ModelAttemptFinished")
     assert [a["outcome"] for a in attempts] == ["context_limit", "context_limit", "ok", "ok", "ok"]
