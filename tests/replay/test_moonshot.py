@@ -39,7 +39,7 @@ ENDPOINT = DEFAULT_MOONSHOT_BASE_URL + "/chat/completions"
 MAX_TICKS = 60
 # Decision k observes tick k (steps.py). On the finite clock its cap is
 # min(native, floor((MAX_TICKS - k) * B)) (runner.py:863-886). kimi-k3's native limit is 1048576
-# (LiteLLM's bundled moonshot/kimi-k3, providers/registry.py:130-144), so with this B the native
+# (LiteLLM's bundled moonshot/kimi-k3, providers/registry.py:140-154), so with this B the native
 # limit applies through decision 28 and the remaining clock from decision 29 (1015808) down to
 # decision 59 (32768).
 TOKENS_PER_FRAME = 32768
@@ -127,7 +127,7 @@ def _check_history_changes(records: list[dict]) -> None:
 
 
 def _check_reasoning_replay(records: list[dict], steps) -> None:
-    """The moonshot policy keeps reasoning (entity/context_policy.py:165): the runtime stores it
+    """The moonshot policy keeps reasoning (entity/context_policy.py:170): the runtime stores it
     with the turn (harnesses/default/context.py:587) and the next request carries it on the turn's
     assistant message (harnesses/default/request.py:90-93, providers/litellm.py:356-363)."""
     reasoned = [k for k, step in enumerate(steps) if step.reasoning]

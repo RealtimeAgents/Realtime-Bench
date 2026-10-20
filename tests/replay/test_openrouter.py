@@ -3,7 +3,7 @@
 
 The model is the catalog entry claude-opus-5 (configs/models/claude-opus-5.yaml:1-6): model
 anthropic/claude-opus-5 pinned to upstream anthropic, reasoning effort low, and the native output
-limit 128000 from LiteLLM's bundled model map (providers/registry.py:113-156). The entry has no
+limit 128000 from LiteLLM's bundled model map (providers/registry.py:123-166). The entry has no
 base_url, so the driver takes OPENROUTER_BASE_URL (providers/litellm.py:470-475), here the stub.
 
 Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it the run is

@@ -36,7 +36,7 @@ FIRST_ARCHIVE, ARCHIVED = 50, 10
 
 
 def chat_completions_config(base_url: str, *, stream: bool) -> ModelConfig:
-    """What catalog.to_model_config(key, fps=1.0) returns (providers/registry.py:505-559) for
+    """What catalog.to_model_config(key, fps=1.0) returns (providers/registry.py:593-647) for
 
         endpoint: {api: chat_completions, model: replay-vlm, base_url: <stub>,
                    api_key_env: REPLAY_STUB_API_KEY, stream: <stream>, include_usage: <stream>,

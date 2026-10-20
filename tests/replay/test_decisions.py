@@ -41,7 +41,7 @@ BASELINES = Path(__file__).parent / "baselines"
 DUMMY_KEY = "replay-dummy-key"
 # api -> (catalog key = configs/models/<key>.yaml, upstream provider the response must name).
 # Luna's upstream is the YAML's upstream_provider; JEV's comes from its driver's model_defaults
-# (providers/jev/decisions.py:26-28; registry.py:253-254, 275-276; openai_decisions.py:191-192).
+# (providers/jev/decisions.py:26-28; registry.py:277-278, 299-300; openai_decisions.py:191-192).
 APIS = {
     "openai_decisions": ("gpt-6-luna-decisions", "openai"),
     "jev_decisions": ("jev-1.13", "typesafe"),

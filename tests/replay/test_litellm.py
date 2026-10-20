@@ -3,11 +3,11 @@
 The model is set up the way a ``--model provider/model-id`` run does it: the Harbor trial worker
 puts the endpoint into BENCHMARK_LITELLM_* (evaluation/harbor.py:443-479;
 evaluation/_trial.py:111-128), the catalog's bridge key ``litellm-vlm`` reads them when the
-catalog loads (providers/registry.py:412-417), and the runner builds the config from that key
+catalog loads (providers/registry.py:500-505), and the runner builds the config from that key
 (evaluation/runner.py:1432-1441, 1550-1555).
 
 What this API's driver class (providers/litellm.py:1202-1221) and context policy
-(entity/context_policy.py:161-162) change against chat_completions:
+(entity/context_policy.py:166-167) change against chat_completions:
 - one complete JSON response per request (providers/litellm.py:1210, 665-666, 913-949), and only
   on the wall clock (providers/litellm.py:1203-1209; providers/preflight.py:49-50);
 - the image detail stays in the request (no strip_image_detail; providers/litellm.py:346-350);
@@ -16,10 +16,10 @@ What this API's driver class (providers/litellm.py:1202-1221) and context policy
   harnesses/default/context.py:589; harnesses/default/request.py:87-89;
   providers/litellm.py:357-358). So an empty reply without reasoning still comes back, as an
   empty assistant message, where the other stateless APIs send none
-  (harnesses/default/request.py:91). Reasoning replay is on too (entity/context_policy.py:161;
+  (harnesses/default/request.py:91). Reasoning replay is on too (entity/context_policy.py:166;
   harnesses/default/request.py:90), but the dump takes precedence (providers/litellm.py:356-363):
   the reasoning reaches the model as the dump's reasoning_content;
-- no physical context check runs (entity/context_policy.py:145, 161; context.py:488-489), so the
+- no physical context check runs (entity/context_policy.py:150, 166; context.py:488-489), so the
   vLLM counter's /tokenize call never happens on this API.
 
 Record the baseline with
@@ -47,7 +47,7 @@ from .stub_litellm import LiteLLMStub
 
 BASELINE = Path(__file__).parent / "baselines" / "litellm-nonstream-long.jsonl"
 MODEL_KEY = "litellm-vlm"  # the runner records the catalog key as the model (runner.py:1246-1254)
-LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:130-144)
+LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:140-154)
 API_KEY_ENV = "REPLAY_LITELLM_API_KEY"
 API_KEY = "replay-dummy-key"
 REASONING_EFFORT = "low"  # as --reasoning-effort low; sent top-level (providers/litellm.py:578-582)
@@ -67,7 +67,7 @@ CLEARED_PREFIXES = (
     "OPENAI_",
 )
 CLEARED = (
-    "BENCHMARK_MODEL_REVISION",  # the bridge key's model_revision (providers/registry.py:524-525)
+    "BENCHMARK_MODEL_REVISION",  # the bridge key's model_revision (providers/registry.py:612-613)
     "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER",  # another OpenAI handler (litellm/main.py:2625)
     # httpx in place of LiteLLM's aiohttp transport (litellm/llms/custom_httpx/http_handler.py:
     # 1213-1242)
@@ -93,7 +93,7 @@ def litellm_environment(monkeypatch):
     # when set it sends every openai/ request to the Responses API (litellm/main.py:1072-1075).
     monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", False)
     yield monkeypatch
-    # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py:426-429).
+    # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py:514-517).
     catalog._catalog_entries.cache_clear()
 
 
@@ -105,7 +105,7 @@ def litellm_vlm_config(monkeypatch, base_url: str):
     monkeypatch.setenv("BENCHMARK_LITELLM_KEY_ENV", API_KEY_ENV)
     monkeypatch.setenv(API_KEY_ENV, API_KEY)
     # The bridge key reads BENCHMARK_LITELLM_* when the catalog first loads, and the catalog is
-    # cached (providers/registry.py:412-417, 426-429).
+    # cached (providers/registry.py:500-505, 514-517).
     catalog._catalog_entries.cache_clear()
     catalog.validate_reasoning_effort(MODEL_KEY, REASONING_EFFORT)  # runner.py:1435-1441
     return catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort=REASONING_EFFORT)

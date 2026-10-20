@@ -6,9 +6,9 @@ Entry points (each with its own defaults):
 
 - ``runner``: ``python -m realtime_framework.evaluation.runner --model M --task T``.
 - ``trial``: ``python -m realtime_framework.evaluation._trial --catalog-model M --task T``, which
-  loads ``.env`` and execs the runner (evaluation/_trial.py:99-322).
+  loads ``.env`` and execs the runner (evaluation/_trial.py:99-325).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
-  job file). Harbor resolves the trial (evaluation/harbor.py:265-535) and starts ``_trial``.
+  job file). Harbor resolves the trial (evaluation/harbor.py:265-534) and starts ``_trial``.
 - ``identity``: ``python -m realtime_framework.evaluation.config`` with the runner's defaults; it
   prints the hash the runner should record.
 
@@ -18,7 +18,7 @@ runs its own main() up to the decision loop. Only its outside calls are replaced
 guest, the browser, the task server, the model driver and the recorder. The replaced driver keeps
 the repository .env load it performs today (harnesses/registry.py:10).
 
-The first catalog lookup of every entry point imports LiteLLM (providers/registry.py:123-124),
+The first catalog lookup of every entry point imports LiteLLM (providers/registry.py:133-134),
 which loads a .env and fetches LiteLLM's model cost map (litellm/__init__.py:29-30). The probes set
 LITELLM_LOCAL_MODEL_COST_MAP=true so nothing leaves the machine; no exported value reads that map.
 
@@ -47,16 +47,16 @@ SCHEMA = "rtbench-effective-config.v1"
 CLOCK_ORIGIN = 1_760_000_000.0  # fixed task origin for the replaced task server
 
 # Non-secret variables the framework or its SDKs read, besides the ones the hash records
-# (evaluation/config.py:422-444).
+# (evaluation/config.py:423-445).
 _EXTRA_VARIABLES = frozenset(
     {
-        # Lane and child-process settings written by _trial (evaluation/_trial.py:270-288).
+        # Lane and child-process settings written by _trial (evaluation/_trial.py:273-291).
         "PYTHONPATH", "TASK_SUITE", "SEED", "CLOCK_MODE", "TOKENS_PER_FRAME", "TASK_PORT_OFFSET",
         "SANDBOX_DISPLAY_NUMBER", "SANDBOX_CONTAINER", "RT_SUITE_CONTAINER", "GUEST_AGENT_PORT",
         "VNC_PORT", "NOVNC_PORT", "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
         # Interpreters, roots and gates.
         "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
-        # Model bridges (providers/registry.py:406-416, 524-551).
+        # Model bridges (providers/registry.py:494-504, 612-639).
         "BENCHMARK_MODEL", "BENCHMARK_BASE_URL", "BENCHMARK_MODEL_REVISION",
         "BENCHMARK_LITELLM_MODEL", "BENCHMARK_LITELLM_API_BASE", "BENCHMARK_LITELLM_KEY_ENV",
         "BENCHMARK_CONTEXT_WINDOW_TOKENS", "BENCHMARK_CONTEXT_COUNTER",
@@ -178,7 +178,7 @@ def _load_env_file(path, attribution: dict) -> set:
 def _fresh_catalog(state: dict) -> None:
     """Make the next catalog lookup load it as a fresh process does.
 
-    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py:113-127). The
+    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py:123-137). The
     module stays imported after the first cell, so the load is repeated here for the later cells.
     """
     import realtime_framework.providers.registry as registry
@@ -441,7 +441,7 @@ def _recorded_vs_used(config: dict, settings: dict, agent_setup: dict) -> list[d
     """Settings whose recorded value implies something other than the value used.
 
     The hash records the import-time variables as found when it is computed
-    (evaluation/config.py:628-630, 670), not the values the modules read at import.
+    (evaluation/config.py:678-680, 720), not the values the modules read at import.
     """
     recorded = config["environment_overrides"]
     differences = [
@@ -511,7 +511,7 @@ def _probe_trial(request: dict) -> dict:
 
 def _trial_command(plan: dict) -> tuple[list[str], str]:
     """The runner argv and interpreter _trial execs, after writing the runner's environment into
-    os.environ (evaluation/_trial.py:269-322)."""
+    os.environ (evaluation/_trial.py:272-325)."""
     import realtime_framework.providers.registry as catalog
 
     runtime = plan["runtime"]
@@ -642,7 +642,7 @@ def _probe_harbor(request: dict) -> dict:
 
 
 def _probe_identity(request: dict) -> dict:
-    """The hash identity_main prints for the runner's defaults (evaluation/config.py:742-810)."""
+    """The hash identity_main prints for the runner's defaults (evaluation/config.py:794-862)."""
     from realtime_framework.evaluation.config import identity_main
 
     argparse.ArgumentParser.error = _reject
@@ -753,7 +753,7 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
                     cell["error"] = record["error"]
                     continue
                 cell["runner_argv"] = record["runner_argv"]
-                cell["configuration_sha256"] = hashlib.sha256(  # evaluation/harbor.py:521-534
+                cell["configuration_sha256"] = hashlib.sha256(  # evaluation/config.py:604-618
                     json.dumps(
                         {
                             "model_config": record["settings"]["model_config"],
