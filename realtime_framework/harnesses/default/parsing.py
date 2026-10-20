@@ -78,6 +78,8 @@ _CANONICAL_FIELDS = frozenset(
         "dy",
     }
 )
+# A streaming action also names the frame it is based on.
+_FRAMED_CANONICAL_FIELDS = _CANONICAL_FIELDS | {"frame"}
 _FENCE_RE = re.compile(
     r"^\s*```(?:json|javascript|js|python|yaml|yml|xml)?\s*(.*?)\s*```\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -191,14 +193,14 @@ def _looks_like_action_object(value: object) -> bool:
     return bool(keys & (_ACTION_KEYS | _CANONICAL_ACTION_NAMES))
 
 
-def _is_canonical_json_action(value: object) -> bool:
+def _is_canonical_json_action(value: object, fields: frozenset) -> bool:
     if (
         not isinstance(value, dict)
         or not isinstance(value.get("action"), str)
         or value["action"] not in _CANONICAL_ACTION_NAMES
     ):
         return False
-    if not set(value) <= _CANONICAL_FIELDS:
+    if not set(value) <= fields:
         return False
     for key in ("target", "start", "end"):
         if key in value and not isinstance(value[key], str):
@@ -640,8 +642,11 @@ from realtime_framework.entity.harness import Decision as ActionOutputResolution
 def resolve_action_output(
     content: str,
     parse_action: Callable[[str], Action | None],
+    *,
+    framed: bool = False,
 ) -> ActionOutputResolution:
-    """Resolve one unambiguous action from canonical or commonly wrapped model output."""
+    """Resolve one unambiguous action from canonical or commonly wrapped model output.
+    ``framed``: the canonical form also carries the frame field of a streaming action."""
     text = (content or "").strip()
     if len(text) > 1_000_000:
         return ActionOutputResolution(
@@ -670,7 +675,9 @@ def resolve_action_output(
             complete_value = json.loads(text)
         except (TypeError, ValueError):
             complete_value = None
-        canonical = _is_canonical_json_action(complete_value)
+        canonical = _is_canonical_json_action(
+            complete_value, _FRAMED_CANONICAL_FIELDS if framed else _CANONICAL_FIELDS
+        )
         return ActionOutputResolution(
             action=action,
             action_text=text,

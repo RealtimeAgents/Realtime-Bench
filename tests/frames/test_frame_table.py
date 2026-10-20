@@ -3,7 +3,12 @@ episode, and records when it was sent."""
 
 from __future__ import annotations
 
-from realtime_framework.harnesses.default.frames import FrameTable
+from realtime_framework.harnesses.default.frames import (
+    FRAME_NOT_IN_TABLE,
+    INVALID_FRAME_SYNTAX,
+    MISSING_FRAME,
+    FrameTable,
+)
 
 GEOMETRY = {"image_size": [768, 432], "screen_size": [1920, 1080]}
 
@@ -39,3 +44,32 @@ def test_a_frame_is_prepared_until_it_is_sent():
     assert (record.send_status, record.sent_unix_s) == ("prepared", None)
     table.record_sent(record.frame, 100.25)
     assert (record.send_status, record.sent_unix_s) == ("sent", 100.25)
+
+
+def test_locate_finds_any_sent_frame_by_number():
+    table = FrameTable()
+    records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, _marks(n)) for n in (1, 2, 3)]
+    for record in records:
+        table.record_sent(record.frame, record.captured_unix_s + 0.1)
+    assert [table.locate(n) for n in (1, 2, 3)] == [(record, None) for record in records]
+
+
+def test_locate_says_why_a_frame_reference_finds_nothing():
+    table = FrameTable()
+    table.record_sent(table.register("obs-1", 100.0, GEOMETRY, None).frame, 100.1)
+    table.register("obs-2", 101.0, GEOMETRY, None)  # prepared, never sent
+    assert table.locate(None) == (None, MISSING_FRAME)
+    for reference in ("1", 1.0, True, [1], {"frame": 1}):
+        assert table.locate(reference) == (None, INVALID_FRAME_SYNTAX)
+    for reference in (0, -1, 2, 3):
+        assert table.locate(reference) == (None, FRAME_NOT_IN_TABLE)
+
+
+def test_age_counts_the_frames_sent_since_and_the_seconds_since_capture():
+    table = FrameTable()
+    records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, None) for n in (1, 2, 3, 4)]
+    for record in records[:3]:
+        table.record_sent(record.frame, record.captured_unix_s + 0.1)
+    # Frame 4 is prepared but not sent yet: it does not count.
+    assert table.age(records[0], 104.5) == {"age_frames": 2, "age_s": 3.5}
+    assert table.age(records[2], 104.5) == {"age_frames": 0, "age_s": 1.5}
