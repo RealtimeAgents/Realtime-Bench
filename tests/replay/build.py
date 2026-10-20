@@ -115,7 +115,6 @@ def build_episode(
     ``before_initialize(agent)`` runs on the new agent, before initialize() may open a
     connection. ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other
     than the form."""
-    fps = config.fps  # main() passes --fps as both rates (runner.py:1421)
 
     def checked_create_agent(*args, **kwargs):
         agent = create_agent(*args, **kwargs)
@@ -140,13 +139,12 @@ def build_episode(
             task,
             instruction,
             clock_mode=clock_mode,
-            env_fps=fps,
             tokens_per_frame=tokens_per_frame,
             run_dir=run_dir,
             episode_trace=trace,
             model=model_key,
             open_capture=lambda text_observation: FrameSource(
-                task, text_observation=text_observation, fps=fps, **(scene or {})
+                task, text_observation=text_observation, fps=config.fps, **(scene or {})
             ),
         )
     return Episode(

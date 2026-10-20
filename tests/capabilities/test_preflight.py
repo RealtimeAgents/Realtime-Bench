@@ -46,10 +46,7 @@ def preset(key, **overrides):
 
 
 def episode(model_config, *, clock_mode="wall", task=WEB):
-    # The runner's --fps sets both rates (runner.py:1421).
-    check_episode(
-        model_config, clock_mode=clock_mode, task=tasks.get(task), env_fps=model_config.fps
-    )
+    check_episode(model_config, clock_mode=clock_mode, task=tasks.get(task))
 
 
 def fails(call, message, kind=ValueError):
