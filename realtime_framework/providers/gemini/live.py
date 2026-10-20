@@ -194,6 +194,7 @@ class GeminiLiveDriver:
         self.client = self._client_for_slot(self._api_key_index)
         self._cm = None
         self._session = None
+        self._received = None  # the open connection's receive loop
         self._core = SessionCore(self.options["completion_signal"])
         self._activity_open = False
         self._last_video_sent_at: float | None = None
@@ -500,6 +501,7 @@ class GeminiLiveDriver:
     async def _close_current(self) -> None:
         cm, self._cm = self._cm, None
         self._session = None
+        self._received = None
         self._activity_open = False
         self._last_video_sent_at = None
         self._core.closed()
@@ -555,6 +557,7 @@ class GeminiLiveDriver:
         self._activity_open = False
         self._last_video_sent_at = None
         self._core.connected(connect)
+        self._received = self._receive_loop(session, self._core.connection)
         self._connect_metadata = {
             "session_connect_mode": connect.mode,
             "session_resume_handle_used": request.resume_handle is not None,
@@ -851,42 +854,30 @@ class GeminiLiveDriver:
         text = getattr(transcript, "text", None)
         return [text] if text else []
 
-    async def _interaction_messages(self, session, connection):
-        """Span all utterances that belong to one model interaction, each applied to the core.
+    async def _receive_loop(self, session, connection: int):
+        """The one reader of a connection: each server message, applied to the core, which stamps
+        it with the connection and the generation whose reply was being received.
 
-        google-genai's ``session.receive()`` iterator ends at every ``turn_complete``. Extended
-        Thinking uses that marker for intermediate spoken fillers, so open another receive iterator
-        until the provider reports the interaction itself as IDLE.
+        google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
+        IDLE, so the loop opens the next one and spans every generation on the connection. Extended
+        Thinking uses ``turn_complete`` for intermediate spoken fillers; the core decides where a
+        generation ends. The loop reads only when the generation in flight asks for a message.
         """
         while True:
-            received = False
-            messages = session.receive().__aiter__()
-            while True:
-                try:
-                    message = await self._before_go_away_deadline(anext(messages))
-                except StopAsyncIteration:
-                    break
-                received = True
-                applied = self._core.received(connection, message, time.monotonic())
-                yield applied
-                if applied.complete:
-                    return
-            if self.options["completion_signal"] != "interaction_idle":
-                return
-            if not received:
-                raise RuntimeError(
-                    "Gemini Live receive stream ended before interaction_status became IDLE"
-                )
+            async for message in session.receive():
+                yield self._core.received(connection, message, time.monotonic())
 
     async def events(self, generation: GenerationHandle):
-        session = self._session
+        session, messages = self._session, self._received
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0
-        async for received in self._interaction_messages(session, self._core.connection):
+        while True:
+            received = await self._before_go_away_deadline(anext(messages))
             message = received.message
+            numbers = {"connection": received.connection, "generation": received.generation}
             raw_type = type(message).__name__
             server = getattr(message, "server_content", None)
             turn = getattr(server, "model_turn", None)
@@ -897,12 +888,13 @@ class GeminiLiveDriver:
                 generation.metadata["native_output_received"] = True
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "started",
                     ProviderHistoryState.UNKNOWN,
                     {"native_output_received": True},
+                    **numbers,
                 )
             for part in parts:
                 audio = getattr(part, "inline_data", None)
@@ -915,10 +907,11 @@ class GeminiLiveDriver:
                 latest_usage = usage
                 sequence += 1
                 yield UsageSnapshot(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     usage,
+                    **numbers,
                 )
             if received.status is not None:
                 generation.metadata["gemini_live_interaction_status"] = received.status
@@ -926,7 +919,7 @@ class GeminiLiveDriver:
                 generation.metadata.update(received.control)
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "go_away",
@@ -936,6 +929,7 @@ class GeminiLiveDriver:
                         else ProviderHistoryState.UNKNOWN
                     ),
                     received.control,
+                    **numbers,
                 )
             cancellation = getattr(message, "tool_call_cancellation", None)
             if cancellation is not None and getattr(cancellation, "ids", None):
@@ -952,11 +946,12 @@ class GeminiLiveDriver:
                     refs["native_initial_text"] = refs.get("native_initial_text", "") + text
                 sequence += 1
                 yield TextDelta(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     text,
                     "visible",
+                    **numbers,
                 )
             calls = getattr(getattr(message, "tool_call", None), "function_calls", None) or []
             if calls:
@@ -973,12 +968,13 @@ class GeminiLiveDriver:
                     call_records.append(call_record)
                     sequence += 1
                     yield FunctionCall(
-                        generation.generation_id,
+                        received.generation_id,
                         sequence,
                         raw_type,
                         call.id or "",
                         call.name or "",
                         arguments,
+                        **numbers,
                     )
                 # Acknowledge every pending call as queued; the next observation carries its
                 # execution result.
@@ -1020,11 +1016,12 @@ class GeminiLiveDriver:
             if received.interrupted:
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "interrupted",
                     ProviderHistoryState.CONTAMINATED,
+                    **numbers,
                 )
             if (
                 server is not None
@@ -1033,7 +1030,7 @@ class GeminiLiveDriver:
             ):
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "generation_complete",
@@ -1042,6 +1039,7 @@ class GeminiLiveDriver:
                         if received.contaminated
                         else ProviderHistoryState.UNKNOWN
                     ),
+                    **numbers,
                 )
             if received.complete:
                 generation.metadata["clean_turn_complete"] = not received.contaminated
@@ -1056,7 +1054,7 @@ class GeminiLiveDriver:
                     )
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "turn_complete",
@@ -1076,7 +1074,9 @@ class GeminiLiveDriver:
                             else "native_turn_complete"
                         ),
                     },
+                    **numbers,
                 )
+            if received.ends:
                 return
 
     async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
