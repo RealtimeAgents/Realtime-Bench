@@ -345,6 +345,7 @@ _DRIVER_DECLARATIONS = (
 _DECLARED_METHODS = {
     "classifies_transport_errors": "classify_transport_error",
     "connection_renewal": "connection_renewal_reason",
+    "request_size_estimation": "request_context_status",
     "maps_output_cap": "transport_output_token_cap",
 }
 

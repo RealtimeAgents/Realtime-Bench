@@ -757,6 +757,8 @@ def effective_run_config(
     from realtime_framework.providers.registry import adapter_class, is_external_driver
 
     driver = adapter_class(adapter_type)
+    # A live session's own items stay with the provider, unseen; recorded, never refused.
+    config["server_context"] = driver.capabilities.server_context
     if issubclass(driver, LiteLLMDriver):
         from importlib.metadata import version as version
 

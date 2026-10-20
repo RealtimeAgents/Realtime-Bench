@@ -370,6 +370,9 @@ def chat_messages(request) -> tuple[dict, ...]:
 _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
     persistent_session=False,
+    roles=("instruction", "input", "model"),
+    feedback_placements=("separate_message",),
+    server_context="none",
     terminal_output_usage=True,
     classifies_transport_errors=True,
     request_size_estimation=True,
@@ -1138,7 +1141,13 @@ class OpenRouterDriver(LiteLLMDriver):
 
 
 class MoonshotDriver(LiteLLMDriver):
-    capabilities = replace(_STREAMING_CHAT, protocol_family="moonshot_chat")
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="moonshot_chat",
+        # Kimi's thinking-model guide: for K3, passing reasoning_content back "is required in
+        # multi-turn conversations and tool-call loops".
+        reasoning_replay="required",
+    )
     protocol = ChatProtocol(sdk_provider="moonshot", client="openai", usage="kimi")
     deployment = ChatDeployment(
         family="vlm",
@@ -1204,6 +1213,8 @@ class DirectLiteLLMDriver(LiteLLMDriver):
     capabilities = replace(
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
+        # The provider's own message carries its reasoning back (context policy item 7).
+        reasoning_replay="optional",
         terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,

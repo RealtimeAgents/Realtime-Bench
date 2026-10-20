@@ -35,7 +35,7 @@ class DecisionEncoder:
     """The RealtimeDriver half of a Decisions encoder.
 
     A registered Decision API subclasses it with its protocol (``decide``,
-    ``classify_question_error``, ``max_choices``, ``bind_trace``, ``close``), capabilities,
+    ``classify_question_error``, ``bind_trace``, ``close``), capabilities (with ``max_choices``),
     deployment and the ``clock`` its constructor takes, so the registered class is the complete
     driver.
     """
@@ -93,7 +93,7 @@ class DecisionEncoder:
                 ),
                 "choice_protocol_family": self.capabilities.protocol_family,
                 "choice_history_replay": HISTORY_REPLAY_LABELS[data["history_form"]],
-                "choice_max_choices": self.max_choices,
+                "choice_max_choices": self.capabilities.max_choices,
                 "jev_transport_retries": data["retries"],
                 "jev_calls": data["jev_calls"],
                 "jev_candidate_count": data["candidate_count"],

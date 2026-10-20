@@ -126,6 +126,12 @@ class GeminiLiveDriver:
     capabilities = RealtimeCapabilities(
         protocol_family="gemini_live",
         persistent_session=True,
+        # The system instruction goes into the session setup, not into a content role.
+        roles=("input", "model"),
+        feedback_placements=("frame_prefix",),
+        server_context="unknown",
+        # tool_transcript: text that keeps the wire fields of each call and its receipt.
+        tool_call_replay=("native_tools", "tool_transcript"),
         max_video_fps=1.0,
         terminal_output_usage=True,
         action_channel="function_call",

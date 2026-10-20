@@ -68,6 +68,9 @@ class ExternalChatDriver:
     capabilities = RealtimeCapabilities(
         protocol_family="external_chat",
         persistent_session=False,
+        roles=tuple(ROLES),
+        feedback_placements=("separate_message",),
+        server_context="none",
         # Stated explicitly: the defaults claim complete usage on a finite token clock.
         finite_frame_budget=False,
         wall_clock_only=True,
