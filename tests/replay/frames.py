@@ -51,6 +51,13 @@ class ReplayTask:
     task_id = "replay-form"
     category = "realtime"
 
+    def activate_clock(self):
+        """The runner starts the task clock before the first frame. The synthetic page has no
+        clock: frame n is a function of n alone."""
+
+    def clock_snapshot(self) -> dict:
+        return {}
+
 
 def agree_checked(frame: int) -> bool:
     return frame > 10
@@ -425,6 +432,10 @@ class FrameSource:
             desktop_size=DESKTOP_SIZE,
             text_observation=text_observation,
         )
+
+    def ensure_page_focus(self) -> bool:
+        """With the probe override there is no browser to focus (capture.py:192-196)."""
+        return self._capture.ensure_page_focus()
 
     def capture(self, tick: float, at: float | None = None):
         """``at`` is the capture time; by default frame n is stamped CLOCK_ORIGIN + n/fps."""
