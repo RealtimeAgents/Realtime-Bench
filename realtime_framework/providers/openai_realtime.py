@@ -428,7 +428,7 @@ class OpenAIRealtimeDriver:
                 continue
             if event_type == "error":
                 error = getattr(event, "error", None)
-                cancel_event_id = generation.metadata.get("cancel_event_id")
+                cancel_event_id = core_generation.cancel_event_id
                 cancel_race = bool(
                     cancel_event_id and getattr(error, "event_id", None) == cancel_event_id
                 )
@@ -519,7 +519,7 @@ class OpenAIRealtimeDriver:
             kwargs["response_id"] = response_id
         cancel_event_id = self._new_client_id("cancel")
         kwargs["event_id"] = cancel_event_id
-        generation.metadata["cancel_event_id"] = cancel_event_id
+        core_generation.cancel_event_id = cancel_event_id
         try:
             await asyncio.to_thread(self._wire, self._conn.response.cancel, **kwargs)
             return InterruptResult(ProviderHistoryState.CONTAMINATED)

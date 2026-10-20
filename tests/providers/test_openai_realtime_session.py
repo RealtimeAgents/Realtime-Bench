@@ -326,6 +326,84 @@ def test_response_events_join_their_generation(status):
     assert (generation.number, core.start_generation("d1.frame").number) == (1, 2)
 
 
+def test_a_late_event_of_an_earlier_response_stays_with_it():
+    """A response.done of the first response that arrives after a second generation registered
+    ends the first one; the second waits for its own response.created."""
+    core = opened([turn(0, "a0"), turn(1, "a1"), turn(2)])
+    first = core.start_generation("d1.frame")
+    core.receive(server(type="response.created", response={"id": "resp_1"}))
+    second = core.start_generation("d2.frame")
+    output = [{"id": "srv_old"}]
+    late = server(
+        type="response.done", response={"id": "resp_1", "status": "cancelled", "output": output}
+    )
+    assert core.receive(late)
+    assert [event.type for event in first.events] == ["response.created", "response.done"]
+    assert list(second.events) == []
+    assert core.frames["d1.frame"].assistant_item_ids == ["srv_old"]
+    assert core.frames["d2.frame"].assistant_item_ids == []
+    own = server(type="response.created", response={"id": "resp_2"})
+    assert core.receive(own)
+    assert (list(second.events), second.response_id) == ([own], "resp_2")
+    # An ended response's events go nowhere.
+    assert not core.receive(
+        server(type="response.output_text.delta", response_id="resp_1", delta="x")
+    )
+
+
+def test_two_responses_in_flight_each_get_their_own_answer():
+    """Review finding 中-1, at the core: two generations on one connection, both requested before
+    the server answers either. Each response.created goes to the earliest generation still
+    waiting for one, and every later event goes by its response id, so the answer to the first
+    request never reaches the second generation.
+
+    The runtime reached this when a decision abandoned by abort() rebuilt the session, marked the
+    runtime ready and asked for its response on the connection the next decision then reused.
+    That can no longer happen. abort() sets the abandoned epoch's retry cancellation, which stops
+    the rebuild before it connects (RequestRetry, entity/model.py), and _run_turn checks the epoch
+    before it sends the observation (harnesses/default/context.py). A decision abandoned after
+    that check can still start its response, but only on the connection abort() closes: the next
+    decision waits for that cleanup and opens a new connection (_ensure_ready), whose core never
+    observed the abandoned frame, so start_generation there fails on it. Hence the core test.
+    """
+    core = opened([turn(0, "a0"), turn(1), turn(2)])
+    first, second = core.start_generation("d1.frame"), core.start_generation("d2.frame")
+    item_1, item_2 = {"id": "srv_1"}, {"id": "srv_2"}
+    events = [
+        server(type="response.created", response={"id": "resp_1"}),
+        server(type="response.created", response={"id": "resp_2"}),
+        server(type="response.output_text.delta", response_id="resp_2", delta="two"),
+        server(type="response.output_text.delta", response_id="resp_1", delta="one"),
+        server(
+            type="response.done",
+            response={"id": "resp_1", "status": "completed", "output": [item_1]},
+        ),
+        server(
+            type="response.done",
+            response={"id": "resp_2", "status": "completed", "output": [item_2]},
+        ),
+    ]
+    assert all(core.receive(event) for event in events)
+    assert (first.response_id, second.response_id) == ("resp_1", "resp_2")
+    assert list(first.events) == [events[0], events[3], events[4]]
+    assert list(second.events) == [events[1], events[2], events[5]]
+    assert core.frames["d1.frame"].assistant_item_ids == ["srv_1"]
+    assert core.frames["d2.frame"].assistant_item_ids == ["srv_2"]
+
+
+def test_an_error_goes_to_the_response_it_cancels():
+    """With two responses in progress, an error echoing one's cancel goes to that one; an error
+    that names no client event goes to both."""
+    core = opened([turn(0, "a0"), turn(1)])
+    first, second = core.start_generation("d0.frame"), core.start_generation("d1.frame")
+    first.cancel_event_id = "rtb_cancel_1"
+    cancel_race, unnamed = error("rtb_cancel_1"), error(None)
+    core.receive(cancel_race)
+    core.receive(unnamed)
+    assert list(first.events) == [cancel_race, unnamed]
+    assert list(second.events) == [unnamed]
+
+
 @pytest.mark.parametrize(
     ("named", "fails_edit", "reaches_generation"),
     [("edit", True, False), ("none", True, True), ("cancel", False, True)],
