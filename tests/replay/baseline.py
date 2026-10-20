@@ -4,7 +4,9 @@ Only non-semantic differences are normalized. Key order never counts. Random ids
 placeholders numbered in order of first appearance, one mapping for the whole session, so equal
 ids stay equal. Fields that hold real elapsed time or real clock readings keep their key and
 their null-ness but not their value. Everything else, model-visible times included, is compared
-exactly. Images are compared by the SHA-256 of their bytes rather than stored.
+exactly. Images are compared by the SHA-256 of their bytes rather than stored, and a trajectory
+row's input_prompt, a text summary of a whole request, by the SHA-256 and length of its
+normalized text.
 """
 
 from __future__ import annotations
@@ -59,6 +61,8 @@ RANDOM_IDS = (
     ("server_item", re.compile(r"item_srv_\d+")),
 )
 DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # harness.py:1050
+# The trajectory's summary of the retained history (harnesses/default/harness.py:1485-1487).
+DIGESTED_FIELDS = frozenset({"input_prompt"})
 
 
 def action_record(action: Action) -> dict:
@@ -82,6 +86,9 @@ class Normalizer:
     def __call__(self, value, key: str | None = None):
         if key in self._real_time_fields and value is not None:
             return REAL_TIME
+        if key in DIGESTED_FIELDS and isinstance(value, str):
+            text = self._string(value)
+            return {"length": len(text), "sha256": hashlib.sha256(text.encode()).hexdigest()}
         if isinstance(value, Action):
             value = action_record(value)
         if isinstance(value, dict):
@@ -108,6 +115,14 @@ class Normalizer:
             self._counts[kind] = self._counts.get(kind, 0) + 1
             self._ids[raw] = f"<{kind}-{self._counts[kind]}>"
         return self._ids[raw]
+
+
+def trajectory(run_dir: Path) -> list[dict]:
+    """The agent's trajectory rows, one record each in the order written
+    (harnesses/default/harness.py:163-223). The viewer and the reports read them
+    (evaluation/harbor_viewer.py:130, evaluation/reporting.py:1175)."""
+    lines = (run_dir / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()
+    return [{"record": "trajectory", "row": json.loads(line)} for line in lines]
 
 
 def _dumps(value) -> str:

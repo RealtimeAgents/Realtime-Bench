@@ -200,7 +200,7 @@ def test_long_scenario(litellm_environment, tmp_path):
         "scenario": "long",
         "config": config.model_dump(),
     }
-    actual = baseline.Normalizer()([header, *records])
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(tmp_path)])
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(BASELINE, actual)
         return

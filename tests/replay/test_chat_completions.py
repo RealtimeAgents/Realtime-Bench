@@ -172,7 +172,7 @@ def test_long_scenario(stream, tmp_path):
         "scenario": "long",
         "config": config.model_dump(),
     }
-    actual = baseline.Normalizer()([header, *records])
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(tmp_path)])
     path = BASELINES / f"chat_completions-{'stream' if stream else 'nonstream'}-long.jsonl"
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(path, actual)

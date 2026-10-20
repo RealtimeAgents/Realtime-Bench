@@ -90,8 +90,10 @@ def _play(api, decisions, run_dir, *, task, instruction, scene=None):
     return header, records
 
 
-def _settle(name: str, header: dict, records: list[dict]) -> None:
-    actual = baseline.Normalizer()([{**header, "scenario": name}, *records])
+def _settle(name: str, header: dict, records: list[dict], run_dir: Path) -> None:
+    actual = baseline.Normalizer()(
+        [{**header, "scenario": name}, *records, *baseline.trajectory(run_dir)]
+    )
     path = BASELINES / f"{header['api']}-{name}.jsonl"
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline_decisions.write(path, actual)
@@ -237,7 +239,7 @@ def test_long_scenario(api, tmp_path):
         _check_luna_history(records)
     else:
         _check_jev_history(records)
-    _settle("long", header, records)
+    _settle("long", header, records, tmp_path)
 
 
 def test_luna_game_snapshot(tmp_path):
@@ -274,7 +276,7 @@ def test_luna_game_snapshot(tmp_path):
     # The environment's refusal reaches the next request (harnesses/default/harness.py:1536-1538).
     assert records[1]["commit"]["detail"] == OUTSIDE_PAGE
     assert OUTSIDE_PAGE in json.dumps(_bodies(records[2])[0]["state"], ensure_ascii=False)
-    _settle("game", header, records)
+    _settle("game", header, records, tmp_path)
 
 
 def test_luna_question_retry(tmp_path):
@@ -290,7 +292,7 @@ def test_luna_question_retry(tmp_path):
     assert (retry["call"], retry["phase"], retry["kind"]) == (1, "text_edit", "transient")
     assert retried["result"]["raw"] == '{"action": "type", "text": "Ada Lovelace"}'
     assert "transport_reconnect_attempts" not in _runtime(retried)
-    _settle("retry", header, records)
+    _settle("retry", header, records, tmp_path)
 
 
 def test_luna_context_overflow(tmp_path):
@@ -311,7 +313,7 @@ def test_luna_context_overflow(tmp_path):
     assert failed["result"]["invalid_category"] == "provider"
     assert failed["result"]["invalid_reason"] == "provider_request_failed"
     assert failed["commit"] is None and failed["action_history_entry"] is None
-    _settle("overflow", header, records)
+    _settle("overflow", header, records, tmp_path)
 
 
 def test_jev_context_overflow(tmp_path):
@@ -334,4 +336,4 @@ def test_jev_context_overflow(tmp_path):
     assert reduced["result"]["raw"] == '{"action": "click", "target": "P3"}'
     assert [len(b["state"]["history"]) for b in _bodies(failed)] == [3, 3, 3, 3, 2]
     assert failed["result"]["invalid_reason"] == "provider_request_failed"
-    _settle("overflow", header, records)
+    _settle("overflow", header, records, tmp_path)

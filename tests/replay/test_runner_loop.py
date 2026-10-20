@@ -101,7 +101,11 @@ def _compare(name: str, run: Run, header: dict) -> None:
         **header,
     }
     actual = baseline.Normalizer(REAL_TIME_FIELDS)(
-        [header, *records(run.env, run.agent, run.timeline)]
+        [
+            header,
+            *records(run.env, run.agent, run.timeline),
+            *baseline.trajectory(run.agent.log_dir),
+        ]
     )
     path = BASELINES / f"chat_completions-runner-{name}.jsonl"
     if os.environ.get("REPLAY_RECORD") == "1":
