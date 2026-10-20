@@ -700,7 +700,9 @@ class GeminiLiveDriver:
         try:
             loop = asyncio.get_running_loop()
             if self._last_video_sent_at is not None:
-                await asyncio.sleep(max(0.0, 1.0 - (loop.time() - self._last_video_sent_at)))
+                # Video frames arrive no faster than the model-input frame rate.
+                interval = 1.0 / self.config.fps
+                await asyncio.sleep(max(0.0, interval - (loop.time() - self._last_video_sent_at)))
             await session.send_realtime_input(
                 video=self.types.Blob(
                     data=frame.image.data,
