@@ -221,6 +221,7 @@ def plan_job(path: Path) -> dict:
         "suite": plan["suite"],
         "fps": runtime["fps"],
         "model_input_fps": runtime["model_input_fps"],
+        "interaction_mode": runtime["interaction_mode"],
         "duration_minutes": runtime["duration_minutes"],
         "seed": runtime["seed"],
         "clock": runtime["clock_mode"],
