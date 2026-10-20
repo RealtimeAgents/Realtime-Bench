@@ -143,8 +143,8 @@ class ModelConfig(BaseModel):
     temperature_policy: Literal["provider_default"] = "provider_default"
     temperature: None = None
     reasoning_effort: Optional[str] = "low"
-    # Driver-specific wire options from the maintained model profile (for example Gemini Live
-    # tool scheduling). Each driver validates its own keys; the harness never reads them.
+    # Driver-specific wire options from the driver class's model_defaults (for example Gemini Live
+    # tool scheduling). Each driver validates its own keys; the context policy reads history_format.
     provider_options: dict = Field(default_factory=dict)
     # OpenRouter's concrete upstream provider slug. When set, the transport restricts routing to
     # this provider, disables fallbacks, and requires support for every requested parameter.
@@ -155,7 +155,7 @@ class ModelConfig(BaseModel):
 # Settings read from the environment. Each field names its variable and parser; an unset variable
 # keeps the field default. The module that uses a group reads it once, at its import, so the
 # process environment at that moment decides the value (the runtime-config hash reads the same
-# variables again when it is computed: evaluation/config.py:629-631, 664).
+# variables again when it is computed: evaluation/config.py:628-630, 670).
 from typing import ClassVar as ClassVar
 
 

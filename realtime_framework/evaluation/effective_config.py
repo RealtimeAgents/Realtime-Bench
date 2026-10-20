@@ -16,9 +16,9 @@ Each process an entry point starts is reproduced in a fresh interpreter with the
 would receive, so values read at import are the values that process would use. The runner process
 runs its own main() up to the decision loop. Only its outside calls are replaced: containers, the
 guest, the browser, the task server, the model driver and the recorder. The replaced driver keeps
-the repository .env load it performs today (harnesses/registry.py:11).
+the repository .env load it performs today (harnesses/registry.py:10).
 
-The first catalog lookup of every entry point imports LiteLLM (providers/registry.py:200-201),
+The first catalog lookup of every entry point imports LiteLLM (providers/registry.py:123-124),
 which loads a .env and fetches LiteLLM's model cost map (litellm/__init__.py:29-30). The probes set
 LITELLM_LOCAL_MODEL_COST_MAP=true so nothing leaves the machine; no exported value reads that map.
 
@@ -47,7 +47,7 @@ SCHEMA = "rtbench-effective-config.v1"
 CLOCK_ORIGIN = 1_760_000_000.0  # fixed task origin for the replaced task server
 
 # Non-secret variables the framework or its SDKs read, besides the ones the hash records
-# (evaluation/config.py:423-445).
+# (evaluation/config.py:422-444).
 _EXTRA_VARIABLES = frozenset(
     {
         # Lane and child-process settings written by _trial (evaluation/_trial.py:270-288).
@@ -56,13 +56,13 @@ _EXTRA_VARIABLES = frozenset(
         "VNC_PORT", "NOVNC_PORT", "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
         # Interpreters, roots and gates.
         "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
-        # Model bridges (providers/registry.py:506-516, 628-655).
+        # Model bridges (providers/registry.py:406-416, 524-551).
         "BENCHMARK_MODEL", "BENCHMARK_BASE_URL", "BENCHMARK_MODEL_REVISION",
         "BENCHMARK_LITELLM_MODEL", "BENCHMARK_LITELLM_API_BASE", "BENCHMARK_LITELLM_KEY_ENV",
         "BENCHMARK_CONTEXT_WINDOW_TOKENS", "BENCHMARK_CONTEXT_COUNTER",
         "BENCHMARK_CONTEXT_IMAGE_TOKENS", "BENCHMARK_CONTEXT_RESERVE_TOKENS",
         "STREAM_CHAT_STREAM", "STREAM_CHAT_INCLUDE_USAGE", "STREAM_CHAT_API_KEY_ENV",
-        # Read at call time, not recorded (providers/litellm.py:621-624; gemini/live.py:126-134).
+        # Read at call time, not recorded (providers/litellm.py:634-637; gemini/live.py:204-212).
         "OPENROUTER_REFERER", "OPENROUTER_TITLE", "GEMINI_API_KEY_START_SLOT",
         "OPENAI_ORG_ID", "OPENAI_PROJECT_ID",
         # Whether importing LiteLLM loads a .env (litellm/__init__.py:29-30).
@@ -178,7 +178,7 @@ def _load_env_file(path, attribution: dict) -> set:
 def _fresh_catalog(state: dict) -> None:
     """Make the next catalog lookup load it as a fresh process does.
 
-    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py:190-204). The
+    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py:113-127). The
     module stays imported after the first cell, so the load is repeated here for the later cells.
     """
     import realtime_framework.providers.registry as registry
@@ -259,7 +259,7 @@ class _Guest:
 
 
 class _Scene:
-    """Stands in for BrowserSceneCapture: a bound, stable first frame (runner.py:1630-1639)."""
+    """Stands in for BrowserSceneCapture: a bound, stable first frame (runner.py:1632-1641)."""
 
     def __init__(self, guest, task=None, **kwargs):
         pass
@@ -278,7 +278,7 @@ class _Scene:
 
 
 class _Task:
-    """The registered task with its task-server calls replaced (runner.py:1524-1597, 1697-1716)."""
+    """The registered task with its task-server calls replaced (runner.py:1535-1600, 1699-1718)."""
 
     def __init__(self, task):
         self._task = task
@@ -346,7 +346,7 @@ def _probe_runner(request: dict) -> dict:
     def create_agent(config, log_dir=None, *, trace=None):
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
-        # (harnesses/default/harness.py:943; harnesses/jev/harness.py:55).
+        # (harnesses/default/harness.py:1003).
         policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
         state["settings_at_agent_setup"] = {
             "active_visual_budget": policy.visuals.keep,
@@ -364,7 +364,7 @@ def _probe_runner(request: dict) -> dict:
             "clock_prompt": adapter.streaming_note,
             "settings_at_agent_setup": state["settings_at_agent_setup"],
             "settings_at_call": {
-                # providers/litellm.py:65, read before each LiteLLM-driver request.
+                # providers/litellm.py:71, read before each LiteLLM-driver request.
                 "min_request_interval_s": float(
                     os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0")
                 ),
@@ -441,7 +441,7 @@ def _recorded_vs_used(config: dict, settings: dict, agent_setup: dict) -> list[d
     """Settings whose recorded value implies something other than the value used.
 
     The hash records the import-time variables as found when it is computed
-    (evaluation/config.py:629-631, 664), not the values the modules read at import.
+    (evaluation/config.py:628-630, 670), not the values the modules read at import.
     """
     recorded = config["environment_overrides"]
     differences = [
@@ -642,7 +642,7 @@ def _probe_harbor(request: dict) -> dict:
 
 
 def _probe_identity(request: dict) -> dict:
-    """The hash identity_main prints for the runner's defaults (evaluation/config.py:736-804)."""
+    """The hash identity_main prints for the runner's defaults (evaluation/config.py:742-810)."""
     from realtime_framework.evaluation.config import identity_main
 
     argparse.ArgumentParser.error = _reject

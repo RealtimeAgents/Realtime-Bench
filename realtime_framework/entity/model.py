@@ -48,7 +48,7 @@ class RealtimeCapabilities:
     """Static protocol facts used for validation, never as turn-result substitutes.
 
     Every registered driver class declares them; the catalog, the pre-run checks
-    (providers/preflight.py), harness selection and the runtime read only this declaration.
+    (providers/preflight.py), the harness and the runtime read only this declaration.
     """
 
     protocol_family: str
@@ -67,7 +67,7 @@ class RealtimeCapabilities:
     # How a stateless request replays history: the canonical retained turns (observations with
     # folded visuals, actions, execution feedback and the archived ledger) shared by every model,
     # or, for prompt windows too small to retain SoM turns, only a digest of actions and feedback.
-    # Context policy; step 4b moves its readers to the ContextPolicy.
+    # Context policy items 3 and 9 decide what is sent; tests/replay/test_context_policy.py pins it.
     history_replay: Literal["canonical", "action_digest"] = "canonical"
     # Reports complete usage for a finite token clock.
     finite_frame_budget: bool = True

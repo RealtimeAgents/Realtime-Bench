@@ -455,9 +455,9 @@ class LiteLLMDriver:
     deployment: ChatDeployment
     compat: ChatCompat
     model_defaults: ClassVar[dict[str, dict]] = {}
-    # Context policy items 6-8 as each API applied them (entity/context_policy.py now decides
-    # what is sent); tests/replay/test_context_policy.py pins the two to each other until
-    # step 4b removes these copies.
+    # Context policy items 6-8 as each API applied them (entity/context_policy.py decides what
+    # is sent); tests/replay/test_context_policy.py pins the two to each other. Only
+    # assistant_turn_ref is read at run time: it keeps the message that verbatim replay sends.
     preserve_reasoning_history = False  # replay reasoning text in later requests
     assistant_turn_ref = False  # keep the provider's raw assistant message for verbatim replay
     pressure_archive = False  # archive turns when the request exceeds the context window
