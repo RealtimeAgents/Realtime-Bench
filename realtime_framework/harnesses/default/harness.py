@@ -802,6 +802,7 @@ INTERACTION_PROFILES = {
 import time as time
 import uuid as uuid
 from copy import deepcopy as deepcopy
+from dataclasses import replace as replace
 
 from realtime_framework.harnesses.default.parsing import resolve_action_output
 from realtime_framework.entity.model import GenerationOutput
@@ -838,6 +839,7 @@ from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
+from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import action_has_target_references
 from realtime_framework.entity.actions import gui_function_declarations
@@ -1087,6 +1089,17 @@ class DefaultHarness(VisionAgentBase):
                     except Exception:  # noqa: BLE001, S110 - preserve the preparation failure
                         pass
             raise
+        # (ChoiceRequirements, SelectionMaterial) of this decision's observation, for the request.
+        self._choice = None
+        if self._context_policy.observation != "som_screenshot":  # context policy item 12
+            for value, execution in zip(prepared_values, inspections):
+                self._choice = choice_observation(
+                    self.task_instruction,
+                    value,
+                    execution,
+                    frame_prompt=self.interaction_profile.frame_prompt,
+                    game=self.task_category == "browser_game",
+                )
         return prepared_values, inspections
 
     def _answer_requirements(self) -> AnswerRequirements:
@@ -1100,8 +1113,14 @@ class DefaultHarness(VisionAgentBase):
         )
 
     def _build_request(self, turns, ledger, call) -> CanonicalRequest:
+        answer, selection = self._answer, None
+        if self._choice is not None:
+            # The one observation this decision prepared (the runtime takes exactly one per
+            # generation); its candidates are the answer options.
+            choice, selection = self._choice
+            answer = replace(answer, choice=choice)
         return build_request(
-            self._context_policy, self._system_block, turns, ledger, self._answer, call
+            self._context_policy, self._system_block, turns, ledger, answer, call, selection
         )
 
     @staticmethod
