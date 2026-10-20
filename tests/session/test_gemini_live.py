@@ -17,7 +17,7 @@ from google.genai import types
 
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import ConnectRequest, GenerationRequest, SessionSeed
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
@@ -359,7 +359,7 @@ def test_receive_loop_stamps_connection_and_generation(monkeypatch):
     driver.client = SimpleNamespace(aio=SimpleNamespace(live=connections))
     answer = AnswerRequirements("function_call", "standard_vlm", tuple(gui_function_declarations()))
     seed = SessionSeed("system instruction", model, None, 1.0, answer)
-    policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
+    policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
     call = CallParameters(model, config.reasoning_effort, None)
     system = system_block(seed.system_instruction, None)
     canonical = build_request(policy, system, (), None, answer, call)

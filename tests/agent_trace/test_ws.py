@@ -14,7 +14,7 @@ from pathlib import Path
 
 from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.events import TextDelta, UsageSnapshot
 from realtime_framework.entity.model import (
     TRANSIENT,
@@ -74,7 +74,7 @@ def _run(driver, run_dir: Path, turns: int):
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
     driver.bind_trace(sink)
     config = driver.config
-    policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
+    policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
     runtime = RealtimeRuntime(driver, policy, trace=sink)
     history: list[dict] = []
     channel = driver.capabilities.action_channel

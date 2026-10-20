@@ -410,7 +410,7 @@ import os as os
 from pathlib import Path as Path
 
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import validate_model_interaction
 from realtime_framework.entity.actions import SOM_REPRESENTATION_VERSION
 from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
@@ -605,7 +605,7 @@ def external_driver_identity(target: str) -> dict:
         "module": module_name,
         "class": class_name,
         "source_sha256": _entries_sha256(sorted(entries)),
-        "context_policy_row": phase1_context_policy().for_path(target, {}).api,
+        "context_policy_row": current_context_policy().for_path(target, {}).api,
     }
 
 
@@ -689,7 +689,7 @@ def effective_run_config(
     from realtime_framework.sandbox.apptainer import runtime_identity
 
     adapter_type = model_config.get("adapter_type")
-    context_policy = phase1_context_policy().for_path(
+    context_policy = current_context_policy().for_path(
         adapter_type, model_config["provider_options"]
     )
     visual_budget = context_policy.visuals.keep

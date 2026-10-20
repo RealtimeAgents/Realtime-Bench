@@ -19,7 +19,7 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.gemini.live import (
     LIVE_OPTIONS,
     LIVE_REASONING_EFFORTS,
@@ -207,5 +207,5 @@ def check_episode(model_config, *, clock_mode, task) -> None:
     check_choice_task(driver, task)
     check_fps(driver, model_config)
     check_session_config(driver, model_config)
-    policy = phase1_context_policy().for_path(adapter_type, model_config.provider_options)
+    policy = current_context_policy().for_path(adapter_type, model_config.provider_options)
     check_context_policy(driver, policy, model_config)

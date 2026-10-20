@@ -15,12 +15,12 @@ from realtime_framework.entity.config import (
     DEFAULT_DETAILED_HISTORY_TURNS,
     DEFAULT_VISUAL_FOLD_BLOCK_SIZE,
 )
-from realtime_framework.entity.context_policy import PHASE1_TEXTS, phase1_context_policy
+from realtime_framework.entity.context_policy import FIXED_TEXTS, current_context_policy
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import APIS, adapter_class
 
-POLICY = phase1_context_policy()
+POLICY = current_context_policy()
 # The LiteLLM APIs keep their context switches as driver class attributes (litellm.py).
 CHAT_DRIVERS = {
     api: adapter_class(api) for api in APIS if issubclass(adapter_class(api), LiteLLMDriver)
@@ -47,7 +47,7 @@ def test_retention_and_texts_are_shared():
             DEFAULT_DETAILED_HISTORY_TURNS,
             DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE,
         )
-        assert path.texts == PHASE1_TEXTS
+        assert path.texts == FIXED_TEXTS
 
 
 def test_retention_follows_the_environment(monkeypatch):
@@ -55,7 +55,7 @@ def test_retention_follows_the_environment(monkeypatch):
     monkeypatch.setenv("STREAM_VISUAL_FOLD_BLOCK_SIZE", "3")
     monkeypatch.setenv("STREAM_DETAILED_HISTORY_TURNS", "12")
     monkeypatch.setenv("STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE", "4")
-    path = phase1_context_policy().paths["chat_completions"]
+    path = current_context_policy().paths["chat_completions"]
     assert (path.visuals.keep, path.visuals.block, path.turns.keep, path.turns.block) == (
         8,
         3,

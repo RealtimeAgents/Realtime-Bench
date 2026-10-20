@@ -19,7 +19,7 @@ import pytest
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import DecisionHistory, phase1_context_policy
+from realtime_framework.entity.context_policy import DecisionHistory, current_context_policy
 from realtime_framework.evaluation.config import effective_run_config, load_benchmark
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
@@ -326,7 +326,7 @@ def test_context_policy_fits_every_catalog_model():
 
 def policy_check(config, **values):
     driver = catalog.adapter_class(config.adapter_type)
-    policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
+    policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
     return lambda: check_context_policy(driver, replace(policy, **values), config)
 
 
