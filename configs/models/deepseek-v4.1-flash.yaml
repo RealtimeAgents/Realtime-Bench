@@ -3,4 +3,5 @@ endpoint:
   model: deepseek/deepseek-v4.1-flash
   api_key_env: OPENROUTER_API_KEY
   upstream_provider: together
+  native_output_limit: 393216
 reasoning_effort: low

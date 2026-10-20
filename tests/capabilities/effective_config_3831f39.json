@@ -1372,7 +1372,7 @@
    "key_env": "OPENROUTER_API_KEY",
    "model_name": "deepseek/deepseek-v4.1-flash",
    "native_output_limit": 393216,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openrouter",
    "reasoning_efforts": [
@@ -1403,7 +1403,7 @@
    "model_name": "deepseek/deepseek-v4.1-flash",
    "model_revision": null,
    "native_output_limit": 393216,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -1494,7 +1494,7 @@
       "model_name": "deepseek/deepseek-v4.1-flash",
       "model_revision": null,
       "native_output_limit": 393216,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -1502,7 +1502,7 @@
       "upstream_provider": "together"
      },
      "native_output_limit": 393216,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -1529,7 +1529,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5b8d955ed1f7dd3dbe3c49035ba4582adc7c2a5f507237a9feac1ef470699731"
+    "hash": "5eb5b6491188b6a56ee71fd77dec10381b610290ec14fc33885c75582ae5bb20"
    },
    "token/None": {
     "config": {
@@ -1614,7 +1614,7 @@
       "model_name": "deepseek/deepseek-v4.1-flash",
       "model_revision": null,
       "native_output_limit": 393216,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -1622,7 +1622,7 @@
       "upstream_provider": "together"
      },
      "native_output_limit": 393216,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -1649,7 +1649,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "98a0a5da50282b9728147f5be60900e88eca54f60d91511838051224ac414a91"
+    "hash": "62872396999d4b8b38da97e11c91f49b4d5dae7b6ea80a456414b46fcd6e465f"
    },
    "wall/None": {
     "config": {
@@ -1734,7 +1734,7 @@
       "model_name": "deepseek/deepseek-v4.1-flash",
       "model_revision": null,
       "native_output_limit": 393216,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -1742,7 +1742,7 @@
       "upstream_provider": "together"
      },
      "native_output_limit": 393216,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -1769,7 +1769,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "28c34d850755e4949db2c305e73671740d25c26d80ff5f66efbc0c08581f3c7d"
+    "hash": "6a149a4db1e335856086767fbfddbbe3affc478e9af1b072076ec2572cf4aece"
    }
   },
   "vendor": "deepseek"
