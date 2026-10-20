@@ -6,21 +6,19 @@ evaluation/_trial.py:111-128), the catalog's bridge key ``litellm-vlm`` reads th
 catalog loads (providers/registry.py:500-505), and the runner builds the config from that key
 (evaluation/runner.py:1430-1439, 1548-1553).
 
-What this API's driver class (providers/litellm.py:1202-1221) and context policy
-(entity/context_policy.py:166-167) change against chat_completions:
-- one complete JSON response per request (providers/litellm.py:1210, 665-666, 913-949), and only
-  on the wall clock (providers/litellm.py:1203-1209; providers/preflight.py:49-50);
-- the image detail stays in the request (no strip_image_detail; providers/litellm.py:346-350);
-- each reply comes back in the next request as LiteLLM's own dump of the response message,
-  provider_specific_fields included (providers/litellm.py:940, 947-948;
-  harnesses/default/context.py:589; harnesses/default/request.py:87-89;
-  providers/litellm.py:357-358). So an empty reply without reasoning still comes back, as an
-  empty assistant message, where the other stateless APIs send none
-  (harnesses/default/request.py:91). Reasoning replay is on too (entity/context_policy.py:166;
-  harnesses/default/request.py:90), but the dump takes precedence (providers/litellm.py:356-363):
-  the reasoning reaches the model as the dump's reasoning_content;
-- no physical context check runs (entity/context_policy.py:150, 166; context.py:488-489), so the
-  vLLM counter's /tokenize call never happens on this API.
+What this API's driver class (providers/litellm.py DirectLiteLLMDriver) and context policy
+(entity/context_policy.py, the standard values) change against chat_completions:
+- one complete JSON response per request (providers/litellm.py _start_complete_response), and
+  only on the wall clock (providers/preflight.py check_wall_clock);
+- the image detail stays in the request (no strip_image_detail; providers/litellm.py
+  chat_messages);
+- no physical context check runs (pressure_archive is off; harnesses/default/context.py
+  _run_turn), so the vLLM counter's /tokenize call never happens on this API.
+
+Since context policy version 2 each reply comes back in the next request rebuilt from the model
+output, as on the other stateless APIs (harnesses/default/request.py _turn_items): without
+LiteLLM's provider_specific_fields or the reply's reasoning, and not at all when the reply was
+empty. Version 1 replayed LiteLLM's own dump of the response message.
 
 Record the baseline with
 ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay/test_litellm.py``; without it the run is
@@ -163,20 +161,18 @@ def _check_rejection_feedback(records: list[dict]) -> None:
 
 
 def _check_assistant_replay(records: list[dict]) -> None:
-    """Decision k's reply comes back in request k + 1 as LiteLLM's dump of the response message
-    (providers/litellm.py:940, 947-948; context.py:589; harnesses/default/request.py:87-89;
-    providers/litellm.py:357-358): with provider_specific_fields, with reasoning_content when the
-    reply had reasoning, and with empty content when the reply was empty."""
+    """In request k + 1, decision k's frame is followed by its reply rebuilt from the model output,
+    or, after an empty reply, directly by its execution feedback."""
     for k, step in enumerate(LONG_SCENARIO[:-1]):
-        replayed = [m for m in _messages(records[k + 1]) if m["role"] == "assistant"][-1]
-        expected = {
-            "content": step.reply,
-            "role": "assistant",
-            "provider_specific_fields": {"refusal": None},
-        }
-        if step.reasoning:
-            expected["reasoning_content"] = step.reasoning
-        assert replayed == expected, f"decision {k}"
+        messages = _messages(records[k + 1])
+        frame = max(i for i, m in enumerate(messages[:-1]) if isinstance(m["content"], list))
+        following = messages[frame + 1]
+        if step.reply:
+            assert following == {"role": "assistant", "content": step.reply}, f"decision {k}"
+        else:
+            assert following["role"] == "user", f"decision {k}"
+            assert following["content"].startswith("EXECUTION RESULT: "), f"decision {k}"
+    assert any(step.reasoning for step in LONG_SCENARIO[:-1])
 
 
 def test_long_scenario(litellm_environment, tmp_path):

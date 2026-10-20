@@ -135,6 +135,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -161,7 +162,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -235,7 +236,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f8de692e76f92832479093aecd0f06ea9e661f3b8b2e08513c55391937db3ba1"
+    "hash": "5813ee03a39aeaaa47349839954180e87640279b5e01c95dcbffd9a44f9ac039"
    },
    "token/None": {
     "config": {
@@ -256,6 +257,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -282,7 +284,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -356,7 +358,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "981a88cb6ba2423f2b3c873e625387ae1c88ae33d6e28524bfa94ee974d7dbaf"
+    "hash": "c3d651c97dec94eb997fdee7b240edbcec5b83869f6dc93cd0439aaa55f0e340"
    },
    "wall/None": {
     "config": {
@@ -377,6 +379,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -403,7 +406,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -477,7 +480,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b4af1347d284c6cd10dc6f961c5c5e879e0888f2586fd9d47edb304bd1c8f366"
+    "hash": "b2ddab7775574584d634d62bf1cc6f44013601b622502c2a540283987ea27106"
    }
   },
   "vendor": "anthropic"
@@ -570,6 +573,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -596,7 +600,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -670,7 +674,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "15e3cbe482041be820d3a594e2955a75085228e7b382f91f1aacb90ffad130eb"
+    "hash": "1e0079b55ab5d82718649f78e2ee7d53fd524d37e43ab19fbd670e180adeb33d"
    },
    "token/None": {
     "config": {
@@ -691,6 +695,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -717,7 +722,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -791,7 +796,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7195f0ffafc6dbb92a88eb7a1691af8c411e20ac614f895bb13d24233b582771"
+    "hash": "fcfcd07e84df8cbedb391eba11d3eed3b0af07473927ab877c14f9fb89a6222f"
    },
    "wall/None": {
     "config": {
@@ -812,6 +817,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -838,7 +844,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -912,7 +918,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "25b592929b4f3a93faa39c1015babb4541583cc5935f7ed7d7b9f6c95a313488"
+    "hash": "8bc2a64f8cd3ebb707439a8986f82ebff2d48a126eb902ba1cc56af427aa3068"
    }
   },
   "vendor": "anthropic"
@@ -1004,6 +1010,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1030,7 +1037,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1104,7 +1111,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "48aac39803e9bf2196f4572a75e1d87b57731c312097b4d17771f7ab01d9d63e"
+    "hash": "37686e0f3715d0c53bc6aac038bb567ce07998479b1e00124320de023ce6e0c0"
    },
    "token/None": {
     "config": {
@@ -1125,6 +1132,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1151,7 +1159,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1225,7 +1233,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1ab382b1c5791685e9af72bb00d0afe83ac5070601055f414967d44737436d8e"
+    "hash": "b882364843e899acd4f816df05b3021d14b847cd80b5aace18ece5f7f978b573"
    },
    "wall/None": {
     "config": {
@@ -1246,6 +1254,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1272,7 +1281,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1346,7 +1355,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "aadbad1e43782146bd6a58863805330b47387c822081693f5d1dee3ec1bd012a"
+    "hash": "314aee6b8aabbffb4035c0556df200f6c80e29924ab134b64cf8e95296a4aaa9"
    }
   },
   "vendor": "anthropic"
@@ -1439,6 +1448,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1465,7 +1475,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1539,7 +1549,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "47a983542999401f5124a59563a174782d653b3f3783f3ed290ea64fede4903f"
+    "hash": "ae8ed86b9f5daeb7316e0177b0e21e9e4d1ba2d0ad0d21b86828c7c2b51edd01"
    },
    "token/None": {
     "config": {
@@ -1560,6 +1570,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1586,7 +1597,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1660,7 +1671,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6ee0d9b546926ddc5b453078594ffbb1453f8dcc81c56e787fca5d2e5e6def7b"
+    "hash": "5bb76fb96328046abdec2d23949aa8706bcab7de9ff71da7c6f4e7cecd80eafe"
    },
    "wall/None": {
     "config": {
@@ -1681,6 +1692,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1707,7 +1719,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1781,7 +1793,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "351873c14e4e928432d8454a1d3963239778eac5c4d5163b48fb12d37fe9a181"
+    "hash": "b27df83e5f350ed10ad492210b5fac5fa4cb0b75c9f143340f541cbcce97fe07"
    }
   },
   "vendor": "deepseek"
@@ -1874,6 +1886,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -1900,7 +1913,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1974,7 +1987,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d6c0c31ce803c3f24b8d23215f8db45fd17291b6a35f2520a4b8cab3ac96a1a4"
+    "hash": "a0f6e2649559fb0ca597723cce5b85a8cbfc6fb4094e65b652a9c4ac3e6c1208"
    },
    "token/None": {
     "config": {
@@ -1995,6 +2008,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -2021,7 +2035,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2095,7 +2109,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e48d1509fd71d5593dabccf63dc73ac6c879273919f37cc6b3d5ceb5cc2995d9"
+    "hash": "4183bb8d17fd1551f7e36d641e8e490f8b4cec8276cfa5d7b1d20bcf758255c8"
    },
    "wall/None": {
     "config": {
@@ -2116,6 +2130,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -2142,7 +2157,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2216,7 +2231,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "160986d5e37bee3c7d87d1c98fad85f4a4cf203d8893dff21cac4010856587d4"
+    "hash": "445a486a104585610da28f7d7b5157643236080d72460ad61016b8886510fd34"
    }
   },
   "vendor": "google"
@@ -2321,6 +2336,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -2347,7 +2363,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2418,7 +2434,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3f4de40e536d7c0e0713d8202f3f432d9ca943e8961323d5c63fdbdd50cff148"
+    "hash": "4127810da484baf42e34e5f7e8f82333537c847826c0cac15d582cbeb72b610a"
    },
    "token/None": {
     "config": {
@@ -2439,6 +2455,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -2465,7 +2482,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2536,7 +2553,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c7879810d8b26527c6227cf50606e229926b81efbc0fecb24894c4509f62dea1"
+    "hash": "dbb12030b260f0195e98ec0a6d520a334614272cef862b116281f0be13678e79"
    },
    "wall/None": {
     "config": {
@@ -2557,6 +2574,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -2583,7 +2601,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2654,7 +2672,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b53ab021e4146736bd9eefdb5d0e280b9c807228603f11a23890fd7685edfde2"
+    "hash": "db5585a8b6ff513235eac3fce096f93748ae3df644ca52d239aeaae0be238e43"
    }
   },
   "vendor": "google"
@@ -2759,6 +2777,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -2785,7 +2804,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2856,7 +2875,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9dcd70db5095922afdc004e88e4957e4c0f0302d531e391cbc8844ebcb3b585e"
+    "hash": "239e52fb5d308c0acedeaa02c5ca497d118439f53a4f5e1ddcb0d3c3062f075b"
    },
    "token/None": {
     "config": {
@@ -2877,6 +2896,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -2903,7 +2923,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2974,7 +2994,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "04b9686abf1fb046c9c67922ad71a46d2609bb8bd0b1c598554d90ee45bc8282"
+    "hash": "a46d0b1094c8d7e685382046fa8575ca5bedc8a7e944bcb80f2e68cc7aa11813"
    },
    "wall/None": {
     "config": {
@@ -2995,6 +3015,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -3021,7 +3042,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3092,7 +3113,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bffaa3d48a324ad9944f7fb1025a53c0f00f18eb0880e05d3fbf9d5f367fb5eb"
+    "hash": "c876fdc65e84368b05d985d4ddc418dae52589332feca8d77641db823de3f008"
    }
   },
   "vendor": "google"
@@ -3197,6 +3218,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -3223,7 +3245,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3294,7 +3316,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e77034709bc9955f1c7de95eee071eae8f81442ede0537f4700ae9e102573d49"
+    "hash": "525b21f9412737b7d2b28b46ddbb3f1a9604e30c62a6e8f8d6a249dfda6a5840"
    },
    "token/None": {
     "config": {
@@ -3315,6 +3337,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -3341,7 +3364,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3412,7 +3435,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a55ae927b16928b76f81fb534c7cf484a334ca45e6db5926ad0bcc219044a2e1"
+    "hash": "2355e986d6908272fd621564a037881d146ec6eb9db2c82286fc78d05d448887"
    },
    "wall/None": {
     "config": {
@@ -3433,6 +3456,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "function_call",
@@ -3459,7 +3483,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3530,7 +3554,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d181c9acd68ce60443c3deafc5fb5c73d649217fc7dd87ce87871ef4db8a187a"
+    "hash": "7cf0bded1ddfa265c10242f7ae1191983f41918bf8499f28ebfb1b1487729095"
    }
   },
   "vendor": "google"
@@ -3623,6 +3647,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -3649,7 +3674,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3723,7 +3748,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "75c0219d1e3148ce0c5234f91e93fca545f98c15321cde5da8f79149eba82823"
+    "hash": "8462a41b8cafbd10f34ec86bcda0d5e297d77b8e704ec594722364c1304f6364"
    },
    "token/None": {
     "config": {
@@ -3744,6 +3769,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -3770,7 +3796,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3844,7 +3870,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "03f1de053756899ef8d7e067e36d42f83035230361ccd82e2058aa8cd3b9c411"
+    "hash": "546ed44ef084a0a056e95bf5944fcaeb06b405c209115dbc876a896246aa852e"
    },
    "wall/None": {
     "config": {
@@ -3865,6 +3891,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -3891,7 +3918,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3965,7 +3992,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9cbfa47835222e8a95e0d28f94f3365b2c8c40de16f2b3b41284d21c7e610b2c"
+    "hash": "d0e2d2042c6b2a3c0c5fd86ef9eb9be00c68d735f82c3434e1d2c8e04e3edb74"
    }
   },
   "vendor": "openai"
@@ -4058,6 +4085,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -4084,7 +4112,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4158,7 +4186,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4f4e5e1c351e8f6af918f0952ea4f12a9b9d43d220e6c0b7f1fdd9153eaf7158"
+    "hash": "92609b7d8009833a61ee0d03756cdca82a58d24231df127f97de6aa0f36c9fcc"
    },
    "token/None": {
     "config": {
@@ -4179,6 +4207,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -4205,7 +4234,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4279,7 +4308,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "078d2ab2b89e70e47e2a134e43cf4f542b99a2d00cf46ed15b1cb28687a24f9f"
+    "hash": "0853d556fd97546645bc2d1bb6a111e9f5986de4947243402d2a745bcd10f5dc"
    },
    "wall/None": {
     "config": {
@@ -4300,6 +4329,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -4326,7 +4356,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4400,7 +4430,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1bacb7cfb54a211ef24cf0bbbd597cbab9b0c2e968e76528895e03c3a643a418"
+    "hash": "13286c1af890f9489c54cdd7edae4d76e3cc4e4e3e03a671c2fe45f1172a260f"
    }
   },
   "vendor": "openai"
@@ -4495,6 +4525,7 @@
       "feedback": "separate_message",
       "ledger_role": "none",
       "observation": "observation_json_screenshot",
+      "preset": null,
       "pressure_archive": true,
       "prompts": {
        "browser_game": "multimodal_game_decisions",
@@ -4521,7 +4552,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4586,7 +4617,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8b6e8600811a737313c50e04b00421786b557c528226c588eda5a0a90fd62ad1"
+    "hash": "a6b7c0e8d95384a1d792dd3e3ae72688b0e2cb52bc34d5e67a8ff019c700b14c"
    }
   },
   "vendor": "openai"
@@ -4678,6 +4709,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "instruction",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -4704,7 +4736,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4769,7 +4801,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1c250b7d70644a1e2161776d99b4622435d7954dc7d4de40fd1c06aeda6d3ee6"
+    "hash": "059ca40ffd0edb7bb121fa853b5584e234a44aae538b5f59b66c88f94cfaf737"
    },
    "token/None": {
     "config": {
@@ -4790,6 +4822,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "instruction",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -4816,7 +4849,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4881,7 +4914,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0b55c1233d7270303a8034a07e443ad808509b3449eef8524936a27ceccca3b2"
+    "hash": "28a35750373df8289c0fbac2f412d538dadb0fa7a37524f6691147904b0cce9f"
    },
    "wall/None": {
     "config": {
@@ -4902,6 +4935,7 @@
       "feedback": "frame_prefix",
       "ledger_role": "instruction",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -4928,7 +4962,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4993,7 +5027,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9863bbc33ce72ece31a420d1b6758a5026cb9a098f8bd363200719eb18a424ae"
+    "hash": "7efae31d4b6551563951b4a9263f88092274f377978aa6c0f91bcddd794d5032"
    }
   },
   "vendor": "openai"
@@ -5085,6 +5119,7 @@
       "feedback": "digest",
       "ledger_role": "input",
       "observation": "observation_json_text",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": null,
@@ -5111,7 +5146,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5176,7 +5211,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2f23778baa2544d70dfd6ed97f5a829da100bcc3e82f989fe76b93c172c525e2"
+    "hash": "985672b573a51adff469b52086a8196972f5a47249696e6acd8d9ce2ab695b3f"
    }
   },
   "vendor": "typesafe"
@@ -5268,6 +5303,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": "kimi_k3",
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -5294,7 +5330,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5368,7 +5404,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "279b3439b981680e2ccfad34330e46044e22234635e34867bad019e033712557"
+    "hash": "12352fe2316638c9892b27285135c8273c279bfdf3b1c27b3e8e58a2b4693ac6"
    },
    "token/None": {
     "config": {
@@ -5389,6 +5425,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": "kimi_k3",
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -5415,7 +5452,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5489,7 +5526,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ab5c13274d40b09db59462f734962d0b3f680debda3b244997b68c4ff0c456f0"
+    "hash": "0e31c99ccd0293d7232164e47879693aad01373d58aa67282a642b1cc1b5e438"
    },
    "wall/None": {
     "config": {
@@ -5510,6 +5547,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": "kimi_k3",
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -5536,7 +5574,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5610,7 +5648,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "378344870be2710f856f7da0118cd7f0a95e39e8428f99d3c1bb3b3ef6a01408"
+    "hash": "9fe8e08b8e95284031d2caf7a88951bc76842d412eaa44979b917c1a6728bd75"
    }
   },
   "vendor": "moonshot"
@@ -5713,12 +5751,13 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": false,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
-      "reasoning_replay": true,
+      "reasoning_replay": false,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
        "gemini_queued_tool_response": {
@@ -5738,8 +5777,8 @@
        "block": 10,
        "keep": 50
       },
-      "verbatim_replay": true,
-      "version": 1,
+      "verbatim_replay": false,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5813,7 +5852,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bf97cc0d330618a43b0cb747a276a7c73800c4b0c0b99321d0d3ac4e5746385b"
+    "hash": "f389fbc0bde9d9e63d5aa0e5d905c83886d65095160dbc8fb66860d0a8bdc52c"
    }
   },
   "vendor": "litellm"
@@ -5919,6 +5958,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -5945,7 +5985,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -6019,7 +6059,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "54b99f4397ae4c7e196b6baeccc8a6254693d2d0e56720ca2d0e86c193a507cc"
+    "hash": "5650b6cf7d42b1ed7bce75f69f742b5310f13d97bd22b0d3cfebf511c9dbdec2"
    }
   },
   "vendor": "compatible"
@@ -6122,6 +6162,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
+      "preset": null,
       "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
@@ -6148,7 +6189,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 1,
+      "version": 2,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -6222,7 +6263,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e02820c9d7384b3fed6aab28ccc92bea01bd1ebd2e4b4b753e13b63acd4b0b1a"
+    "hash": "b2153380c641da81689b600a46f5ba604962e053682d8a65d44f6b35e28a6188"
    }
   },
   "vendor": "compatible"

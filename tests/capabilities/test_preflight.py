@@ -19,7 +19,12 @@ import pytest
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import DecisionHistory, current_context_policy
+from realtime_framework.entity.context_policy import (
+    PRESETS,
+    STANDARD,
+    DecisionHistory,
+    current_context_policy,
+)
 from realtime_framework.evaluation.config import effective_run_config, load_benchmark
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
@@ -349,12 +354,6 @@ def policy_check(config, **values):
             "The gemini_live API has no instruction role for the action ledger",
         ),
         (
-            "kimi-k3",
-            {"reasoning_replay": False},
-            "The moonshot API requires past reasoning in later requests; "
-            "its context policy sends none",
-        ),
-        (
             "claude-opus-5",
             {"reasoning_replay": True},
             "The openrouter API cannot send past reasoning back",
@@ -377,11 +376,26 @@ def policy_check(config, **values):
             "observation",
         ),
     ],
-    ids=["live-feedback", "digest-feedback", "ledger-role", "reasoning-required",
-         "reasoning-unsupported", "history-form", "screenshot-input", "text-input"],
+    ids=["live-feedback", "digest-feedback", "ledger-role", "reasoning-unsupported",
+         "history-form", "screenshot-input", "text-input"],
 )
 def test_context_policy_item(key, values, message):
     fails(policy_check(preset(key), **values), message)
+
+
+def test_kimi_k3_runs_only_under_its_preset():
+    """Kimi requires K3's past reasoning back (providers/litellm.py MoonshotDriver); the standard
+    policy sends none."""
+    config = preset("kimi-k3")
+    row = current_context_policy().for_path(config.adapter_type, config.provider_options)
+    assert row.preset == "kimi_k3"
+    standard = {item: STANDARD[item] for item in PRESETS[row.preset]}
+    policy_check(config)()
+    fails(
+        policy_check(config, preset=None, **standard),
+        "The moonshot API requires past reasoning in later requests; "
+        "its context policy sends none",
+    )
 
 
 def test_context_window_needs_a_request_estimate():
