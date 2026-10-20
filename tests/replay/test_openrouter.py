@@ -13,7 +13,6 @@ compared with tests/replay/baselines/.
 from __future__ import annotations
 
 import os
-import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -228,17 +227,14 @@ def test_pause_mode_snapshot(openrouter_env, tmp_path):
 
 
 class _Sleeps:
-    """Stands in for the time module the retry executor uses and records its sleeps: it sleeps
-    the backoff for real (entity/model.py:457)."""
+    """Stands in for the retry executor's backoff and records its delays: it waits them out for
+    real (entity/model.py:457-458)."""
 
     def __init__(self):
         self.calls = []
 
-    def sleep(self, seconds):
+    def __call__(self, cancel, seconds):
         self.calls.append(seconds)
-
-    def __getattr__(self, name):
-        return getattr(time, name)
 
 
 def _spy_classifier(driver) -> list[tuple[TransportFailure, list]]:
@@ -268,7 +264,7 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     requests."""
     steps = LONG_SCENARIO[:2]
     sleeps = _Sleeps()
-    monkeypatch.setattr(model_module, "time", sleeps)
+    monkeypatch.setattr(model_module, "_backoff", sleeps)
     with openrouter_episode(monkeypatch, tmp_path, [failure, *replies(steps)], **TOKEN_CLOCK) as (
         stub,
         config,

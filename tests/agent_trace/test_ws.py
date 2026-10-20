@@ -99,6 +99,7 @@ def _run(driver, run_dir: Path, turns: int):
                     timeout=60,
                     request_builder=request_builder,
                     decision=k,
+                    epoch=runtime.generation_epoch(),
                 )
             history.append({"tick": k + 1, "executed": "wait", "result": "wait"})
     finally:

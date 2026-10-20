@@ -1,27 +1,36 @@
-"""An aborted decision's whole-turn retry still reaches the provider.
+"""An aborted decision sends no further request.
 
 When run_stream's bounded wait expires it keeps the generate worker in ``abandoned`` and calls the
-agent's abort (evaluation/runner.py:337-345). DefaultHarness.abort reaches only the runtime
-(harnesses/default/harness.py:1689-1692), which bumps the generation epoch and schedules a
-cleanup that closes the driver and clears ``_connected`` (harnesses/default/context.py:662-687).
-Nothing reaches the retry executor stream_generate runs (harness.py:1338-1345): its backoff is a
-plain ``time.sleep`` (entity/model.py:457) and every attempt calls run_turn, which reads the epoch
-afresh (context.py:640). The next attempt therefore reconnects in _ensure_ready
-(context.py:394-417), is current, and keeps its turn (context.py:577-590) and its action-history
-entry (harness.py:1449-1466).
+agent's abort (evaluation/runner.py:337-345). DefaultHarness.abort reaches the runtime
+(harnesses/default/harness.py:1700-1703), which ends the generation epoch and sets the epoch's
+event (harnesses/default/context.py:687-691). stream_generate takes the epoch and its event when
+the decision starts (harness.py:1159), runs every attempt under that epoch (context.py:640-651)
+and its retries inside retry_cancellation (harness.py:1350). Once the event is set the backoff
+ends, no attempt starts (entity/model.py:479-505), and an attempt already under way sends neither
+its observation nor its request (context.py:482-484). The worker ends with RetryCancelled, which
+nothing reads: run_stream has already moved on.
 
-Each test pins that behaviour as it is today: after the abort, the worker sends one more request,
-gets a reply that is not stale, and adds a turn and an action that nobody committed.
+Before this, the next attempt read the epoch afresh, reconnected and kept its reply: a request
+after the abort, and a turn and an action that nobody committed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
-import time
+
+import pytest
 
 import realtime_framework.entity.model as model_module
-from realtime_framework.entity.model import TRANSIENT, TransportFailure
+from realtime_framework.entity.model import (
+    RATE_LIMITED,
+    TRANSIENT,
+    RequestRetry,
+    RetryCancelled,
+    TransportFailure,
+    retry_cancellation,
+)
 from realtime_framework.evaluation import runner
 
 from .build import build_episode
@@ -46,41 +55,27 @@ from .test_openrouter import (
 from .ws_openai_realtime import RealtimeStub
 from .ws_openai_realtime import replies as realtime_replies
 
-WAIT_S = 10.0  # bound on every cross-thread wait; none is reached when the code behaves as pinned
+WAIT_S = 10.0  # bound on every cross-thread wait; none is reached when the code behaves
 STEP = Step(CLICK_NAME)
 UNAVAILABLE = Failure(503, {"error": {"message": "upstream down", "code": 503}})
 
 
-class _GatedSleep:
-    """Stands in for the retry executor's time module. The backoff (entity/model.py:457) records
-    its delay, sets ``entered`` and returns only once the test sets ``release``."""
+class _GatedBackoff:
+    """Wraps the retry executor's backoff (entity/model.py:457-458). It records the delay, sets
+    ``entered`` and waits for ``release`` before the real wait, so the test aborts first."""
 
     def __init__(self):
         self.calls = []
         self.entered = threading.Event()
         self.release = threading.Event()
+        self._wait = model_module._backoff
 
-    def sleep(self, seconds):
+    def __call__(self, cancel, seconds):
         self.calls.append(seconds)
         self.entered.set()
         if not self.release.wait(WAIT_S):
             raise AssertionError("the test never released the backoff")
-
-    def __getattr__(self, name):
-        return getattr(time, name)
-
-
-class _RecordedSleep:
-    """Records the backoff and returns at once."""
-
-    def __init__(self):
-        self.calls = []
-
-    def sleep(self, seconds):
-        self.calls.append(seconds)
-
-    def __getattr__(self, name):
-        return getattr(time, name)
+        self._wait(cancel, seconds)
 
 
 def _generate_in_worker(agent, observation, k=0):
@@ -103,8 +98,8 @@ def _generate_in_worker(agent, observation, k=0):
 
 def _abort_like_the_runner(agent) -> int:
     """_bounded_call's timeout branch calls adapter.abort() (runner.py:337-345). Waiting for the
-    scheduled cleanup (context.py:682-686) only makes the state below deterministic; the next
-    attempt waits for it anyway (context.py:395). Returns the epoch the abort moved to."""
+    scheduled cleanup (context.py:696-700) only makes the state below deterministic. Returns the
+    epoch the abort ended."""
     runtime = agent._runtime
     before = runtime.generation_epoch()
     agent.abort()
@@ -112,14 +107,15 @@ def _abort_like_the_runner(agent) -> int:
     assert cleanup is not None
     cleanup.result(timeout=WAIT_S)
     assert runtime.generation_epoch() == before + 1
-    assert runtime._connected is False  # context.py:672
-    return before + 1
+    assert runtime._connected is False  # context.py:683
+    return before
 
 
-def _finish(box, done):
+def _cancelled(box, done) -> RetryCancelled:
     assert done.wait(WAIT_S), "the abandoned worker never returned"
-    assert "error" not in box, repr(box.get("error"))
-    return box["result"]
+    assert "result" not in box, box.get("result")
+    assert isinstance(box.get("error"), RetryCancelled), repr(box.get("error"))
+    return box["error"]
 
 
 def _count_calls(target, name: str) -> list:
@@ -147,27 +143,71 @@ def _attempts(run_dir) -> list[tuple]:
     ]
 
 
-def _check_uncommitted_turn(agent, result, turn_epochs: list, epoch: int) -> None:
-    """Attempt 1 ran under the epoch before the abort; the retry read the abort's epoch at
-    context.py:640, so it is current: its turn and its action join the history although
-    run_stream discarded the decision."""
-    assert [call["epoch"] for call in turn_epochs] == [epoch - 1, epoch]
-    assert result.get("stale") is None and result.get("invalid_reason") is None
-    assert result["action"] is not None
-    assert result["realtime_runtime"]["transport_reconnect_attempts"] == 1
-    (turn,) = agent._runtime.turns
-    assert turn.output == STEP.reply and turn.execution_feedback == ""
-    (entry,) = agent.action_history
-    assert "result" not in entry and "requested" not in entry  # commit_action never saw it
+def _check_nothing_kept(agent, turn_epochs: list, epoch: int) -> None:
+    """Only attempt 1 ran, under the epoch the abort ended; no turn or action joins the history."""
+    assert [call["epoch"] for call in turn_epochs] == [epoch]
+    assert agent._runtime.turns == ()
+    assert agent.action_history == []
 
 
-def test_abort_during_backoff_still_sends_the_retry_today(openrouter_env, tmp_path):  # noqa: F811
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["run", "run_async"])
+def test_cancel_ends_the_backoff(asynchronous):
+    """A 25 s Retry-After backoff (entity/model.py:378-385) ends as soon as the epoch's event is
+    set, and the unit is not sent again."""
+    cancel, recorded = threading.Event(), threading.Event()
+    sent, delays = [], []
+
+    def send(attempt):
+        sent.append(attempt)
+        raise ConnectionError("dropped")
+
+    async def send_async(attempt):
+        send(attempt)
+
+    def record(attempt, exc, failure, delay):
+        delays.append(delay)
+        recorded.set()
+
+    retry = RequestRetry("unit", lambda exc: TransportFailure(RATE_LIMITED, 25.0), record)
+    box, done = {}, threading.Event()
+
+    def worker():
+        try:
+            with retry_cancellation(cancel):
+                if asynchronous:
+                    asyncio.run(retry.run_async(send_async))
+                else:
+                    retry.run(send)
+        except BaseException as exc:  # noqa: BLE001 - reported by the test
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=worker, daemon=True).start()
+    assert recorded.wait(WAIT_S)
+    cancel.set()
+    assert done.wait(WAIT_S), "the backoff was not cancelled"
+    assert isinstance(box.get("error"), RetryCancelled)
+    assert sent == [1] and delays == [25.0]
+
+
+def test_no_attempt_once_cancelled():
+    cancel = threading.Event()
+    cancel.set()
+    sent = []
+    retry = RequestRetry("unit", lambda exc: TransportFailure(TRANSIENT), lambda *args: None)
+    with retry_cancellation(cancel), pytest.raises(RetryCancelled):
+        retry.run(sent.append)
+    assert sent == []
+
+
+def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa: F811
     """Stateless API. Attempt 1 gets HTTP 503 (TRANSIENT, entity/model.py:424-425) and the
-    harness sleeps its backoff. The runner aborts the agent during that sleep. When the sleep
-    ends the loop sends the same request again, on the abort's epoch, and keeps the reply."""
-    sleeps = _GatedSleep()
-    openrouter_env.setattr(model_module, "time", sleeps)
-    with OpenRouterStub([UNAVAILABLE, *replies([STEP])], route=ROUTE) as stub:
+    harness backs off. The runner aborts the agent during the backoff: the wait ends, and the
+    same request is not sent again."""
+    backoff = _GatedBackoff()
+    openrouter_env.setattr(model_module, "_backoff", backoff)
+    with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
         episode = build_episode(
             openrouter_config(),
@@ -184,35 +224,35 @@ def test_abort_during_backoff_still_sends_the_retry_today(openrouter_env, tmp_pa
             observation = episode.frames.capture(0)
             agent.configure_decision(episode.budget(observation.tick_number))
             box, done = _generate_in_worker(agent, observation)
-            assert sleeps.entered.wait(WAIT_S), "attempt 1 was not retried"
+            assert backoff.entered.wait(WAIT_S), "attempt 1 was not retried"
             assert len(stub.requests) == 1
             epoch = _abort_like_the_runner(agent)
-            sleeps.release.set()
-            result = _finish(box, done)
+            backoff.release.set()
+            _cancelled(box, done)
         finally:
             episode.finish()
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    # One request after the abort: the same body, rebuilt from canonical history.
-    failed, retried = stub.requests
-    assert failed.body == retried.body
-    assert len(sleeps.calls) == 1
-    # _ensure_ready reconnected because the abort cleared _connected (context.py:408-417).
-    assert len(connects) == 1
-    _check_uncommitted_turn(agent, result, turn_epochs, epoch)
+    assert len(stub.requests) == 1
+    assert len(backoff.calls) == 1
+    assert connects == []  # no reconnect for the abandoned decision
+    _check_nothing_kept(agent, turn_epochs, epoch)
     sent = [
         (r["scope"]["decision"], r["scope"]["attempt"])
         for r in _trace(tmp_path, "ModelRequestSent")
     ]
-    assert sent == [(0, 1), (0, 2)]
-    assert _attempts(tmp_path) == [(1, "retry", None), (2, "ok", False)]
+    assert sent == [(0, 1)]
+    assert _attempts(tmp_path) == [(1, "retry", None)]
 
 
-def test_abort_mid_request_is_classified_transient_and_retried_today(tmp_path, monkeypatch):
+def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     """Stateless API, abort while the request is in flight. The stub holds request 0 until the
     client closes it; the abort's driver.close() does (providers/litellm.py:1033-1044). The
-    failure arrives before any output, is classified TRANSIENT, and the loop retries it."""
-    sleeps = _RecordedSleep()
-    monkeypatch.setattr(model_module, "time", sleeps)
+    failure arrives before any output and is classified TRANSIENT, but the epoch has ended: the
+    backoff returns at once and nothing is sent again. The reply scripted for a retry stays
+    unused."""
+    backoff = _GatedBackoff()
+    backoff.release.set()
+    monkeypatch.setattr(model_module, "_backoff", backoff)
     arrived = threading.Event()
 
     def hold_first(index):
@@ -242,42 +282,26 @@ def test_abort_mid_request_is_classified_transient_and_retried_today(tmp_path, m
             box, done = _generate_in_worker(agent, observation)
             assert arrived.wait(WAIT_S)
             epoch = _abort_like_the_runner(agent)
-            result = _finish(box, done)
+            _cancelled(box, done)
         finally:
             episode.finish()
     assert stub.held == [True]  # the abort closed the held request
-    assert stub.unscripted == 0 and stub.unused_replies == 0
-    assert len(stub.requests) == 2
+    assert stub.unscripted == 0 and stub.unused_replies == 1
+    assert len(stub.requests) == 1
     ((failure, error),) = classified
     assert failure == TransportFailure(TRANSIENT), error
-    assert len(sleeps.calls) == 1
-    _check_uncommitted_turn(agent, result, turn_epochs, epoch)
-    assert result["realtime_runtime"]["transport_reconnect_reason"].startswith("transient: ")
-    assert _attempts(tmp_path) == [(1, "retry", None), (2, "ok", False)]
+    assert len(backoff.calls) == 1
+    _check_nothing_kept(agent, turn_epochs, epoch)
+    assert _attempts(tmp_path) == [(1, "retry", None)]
 
 
-class _ReleasingEnvironment(FakeEnvironment):
-    """Releases the gated backoff from release_inputs, which _finalize calls after the episode's
-    evaluation snapshot (runner.py:806-812), so the retry goes out once the episode is over."""
-
-    def __init__(self, *args, release, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._release = release
-
-    def release_inputs(self):
-        super().release_inputs()
-        self._release.set()
-
-
-def test_runner_timeout_leaves_a_worker_that_retries_after_the_episode_today(tmp_path, monkeypatch):
+def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatch):
     """The real run_stream and _bounded_call on a 0.5 s wall-clock episode. Decision 0's request
     never comes back; the bounded wait (0.5 s, the grace set to 0 to keep it short) expires, the
-    decision is committed as skipped_timeout and the episode ends. The abandoned worker's
-    request was closed by the abort, so it retries; that request reaches the stub during the
-    drain, after the evaluation snapshot, and its reply becomes a turn and an action."""
+    decision is committed as skipped_timeout and the episode ends. The abort closes the request
+    and ends the epoch, so the abandoned worker does not send it again: the stub sees one
+    request, and neither a turn nor an action is left behind."""
     monkeypatch.setattr(runner, "DEADLINE_GRACE_S", 0.0)
-    sleeps = _GatedSleep()
-    monkeypatch.setattr(model_module, "time", sleeps)
     env_box = []
     with ChatCompletionsStub(
         replies([STEP]), on_request=lambda index: env_box[0].model_request(index)
@@ -291,23 +315,21 @@ def test_runner_timeout_leaves_a_worker_that_retries_after_the_episode_today(tmp
             model_key=CHAT_MODEL_KEY,
             clock_mode="wall",
         )
-        env = _ReleasingEnvironment(
+        env = FakeEnvironment(
             episode.frames,
             FakeClock(),
             fps=config.fps,
             max_minutes=0.5 / 60,
-            reply_latencies=[Hang(0.5), 0.0],
-            release=sleeps.release,
+            reply_latencies=[Hang(0.5)],
         )
         env_box.append(env)
         turn_epochs = _count_calls(episode.agent._runtime, "_run_turn")
         timeline = run_loop(episode, env)
     agent = episode.agent
-    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert stub.unscripted == 0 and stub.unused_replies == 1
     assert stub.held == [True]
-    assert len(stub.requests) == 2
-    # The runner's abort moved the epoch from 0 to 1 between the two attempts.
-    assert [call["epoch"] for call in turn_epochs] == [0, 1]
+    assert len(stub.requests) == 1
+    assert [call["epoch"] for call in turn_epochs] == [0]
     assert commit_statuses(env) == [(0, "skipped_timeout", "")]
     assert [action for *_, action in timeline] == [None]
     requests = [
@@ -315,64 +337,138 @@ def test_runner_timeout_leaves_a_worker_that_retries_after_the_episode_today(tmp
         for call in env.calls
         if call["call"] == "model.request"
     ]
-    assert requests == [(0, True, False), (1, False, True)]  # the retry came after the snapshot
-    assert any(
-        call["call"] == "runner.log" and "draining 1 abandoned generate worker" in call["line"]
-        for call in env.calls
+    assert requests == [(0, True, False)]
+    assert agent._runtime.turns == ()
+    assert agent.action_history == []
+    assert agent.token_usage["responses"] == 0
+
+
+def _session_episode(stub, tmp_path):
+    return build_episode(
+        realtime_config(stub.base_url),
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        model_key=REALTIME_MODEL_KEY,
+        clock_mode="token",
+        tokens_per_frame=TOKENS_PER_FRAME,
+        max_ticks=MAX_TICKS,
     )
-    assert len(sleeps.calls) == 1
-    (turn,) = agent._runtime.turns
-    assert turn.output == STEP.reply and turn.decision == 0
-    (entry,) = agent.action_history
-    assert entry["observation_tick"] == 0 and "result" not in entry
-    assert agent.token_usage["responses"] == 1
 
 
-def test_session_abort_during_backoff_reconnects_today(tmp_path, monkeypatch):
-    """Session API (OpenAI Realtime). response 1 is dropped with close 1011 before any output,
-    a TRANSIENT failure (providers/openai_realtime.py:233-250), and the harness sleeps its
-    backoff. The runner aborts during that sleep. The next attempt finds _connected cleared,
-    opens a second WebSocket through connect() (context.py:408-417) and runs a new response."""
-    sleeps = _GatedSleep()
-    monkeypatch.setattr(model_module, "time", sleeps)
+def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
+    """Session API (OpenAI Realtime). Response 1 is dropped with close 1011 before any output, a
+    TRANSIENT failure (providers/openai_realtime.py:233-250), and the harness backs off. The
+    runner aborts during the backoff: no second WebSocket opens and no second response runs."""
+    backoff = _GatedBackoff()
+    monkeypatch.setattr(model_module, "_backoff", backoff)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
-        episode = build_episode(
-            realtime_config(stub.base_url),
-            tmp_path,
-            task=ReplayTask(),
-            instruction=TASK_INSTRUCTION,
-            model_key=REALTIME_MODEL_KEY,
-            clock_mode="token",
-            tokens_per_frame=TOKENS_PER_FRAME,
-            max_ticks=MAX_TICKS,
-        )
+        episode = _session_episode(stub, tmp_path)
         agent = episode.agent
         try:
             stub.wait_for_session_update()
             connects = _count_calls(agent.driver, "connect")
-            syncs = _count_calls(agent.driver, "sync_history")
             turn_epochs = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
             agent.configure_decision(episode.budget(observation.tick_number))
             box, done = _generate_in_worker(agent, observation)
-            assert sleeps.entered.wait(WAIT_S), "the dropped response was not retried"
-            assert len(stub.connections) == 1 and len(stub.responses) == 1
+            assert backoff.entered.wait(WAIT_S), "the dropped response was not retried"
             epoch = _abort_like_the_runner(agent)
-            sleeps.release.set()
-            result = _finish(box, done)
+            backoff.release.set()
+            _cancelled(box, done)
+        finally:
+            episode.finish()
+        connections = stub.finish()
+        responses = list(stub.responses)
+    assert stub.violations == [] and stub.unscripted == 0
+    (first,) = connections
+    assert first["close"] == {"received": 1011, "sent": 1011}
+    assert [r["connection"] for r in responses] == [1]
+    assert connects == [] and len(backoff.calls) == 1
+    _check_nothing_kept(agent, turn_epochs, epoch)
+    assert _attempts(tmp_path) == [(1, "retry", None)]
+
+
+def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
+    """Stateless API. Attempt 1 gets HTTP 503, which leaves the runtime DIRTY
+    (context.py:665-671), so attempt 2 first recovers it (context.py:402-412). The abort lands
+    during that recovery; the attempt then stops before it sends its observation or its request
+    (context.py:482-484)."""
+    openrouter_env.setattr(model_module, "_backoff", lambda cancel, seconds: None)
+    with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = build_episode(
+            openrouter_config(),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=OPENROUTER_MODEL_KEY,
+            **TOKEN_CLOCK,
+        )
+        agent = episode.agent
+        try:
+            syncing, release = threading.Event(), threading.Event()
+            sync_history = agent.driver.sync_history
+
+            async def gated_sync(request):
+                syncing.set()
+                await asyncio.to_thread(release.wait, WAIT_S)
+                return await sync_history(request)
+
+            agent.driver.sync_history = gated_sync
+            turn_epochs = _count_calls(agent._runtime, "_run_turn")
+            observation = episode.frames.capture(0)
+            agent.configure_decision(episode.budget(observation.tick_number))
+            box, done = _generate_in_worker(agent, observation)
+            assert syncing.wait(WAIT_S), "attempt 2 did not recover the runtime"
+            epoch = _abort_like_the_runner(agent)
+            release.set()
+            _cancelled(box, done)
+        finally:
+            episode.finish()
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert len(stub.requests) == 1
+    assert [call["epoch"] for call in turn_epochs] == [epoch, epoch]
+    assert agent._runtime.turns == () and agent.action_history == []
+    assert _attempts(tmp_path) == [(1, "retry", None)]
+
+
+def test_session_abort_while_reconnecting_starts_no_response(tmp_path, monkeypatch):
+    """The abort lands while attempt 2 is reconnecting (context.py:402-425). The new session
+    opens and replays canonical history, but the attempt then stops before it sends its
+    observation or creates a response (context.py:482-484)."""
+    monkeypatch.setattr(model_module, "_backoff", lambda cancel, seconds: None)
+    with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
+        episode = _session_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            stub.wait_for_session_update()
+            connecting, release = threading.Event(), threading.Event()
+            connect = agent.driver.connect
+
+            async def gated_connect(request):
+                connecting.set()
+                await asyncio.to_thread(release.wait, WAIT_S)
+                return await connect(request)
+
+            agent.driver.connect = gated_connect
+            turn_epochs = _count_calls(agent._runtime, "_run_turn")
+            observation = episode.frames.capture(0)
+            agent.configure_decision(episode.budget(observation.tick_number))
+            box, done = _generate_in_worker(agent, observation)
+            assert connecting.wait(WAIT_S), "attempt 2 did not reconnect"
+            epoch = _abort_like_the_runner(agent)
+            release.set()
+            _cancelled(box, done)
         finally:
             episode.finish()
         connections = stub.finish()
         responses = list(stub.responses)
         second = [event["type"] for event in stub.connections[1].events]
-    assert stub.violations == [] and stub.unscripted == 0 and stub.unused_replies == 0
-    first, _ = connections
-    assert first["close"] == {"received": 1011, "sent": 1011}
-    # The new connection and response come after the abort.
-    assert [r["connection"] for r in responses] == [1, 2]
-    assert responses[1]["status"] == "completed"
-    assert second == ["session.update", "conversation.item.create", "response.create"]
-    assert len(connects) == 1 and len(syncs) == 0  # connect(), not the DIRTY-only recovery sync
-    assert len(sleeps.calls) == 1
-    _check_uncommitted_turn(agent, result, turn_epochs, epoch)
-    assert _attempts(tmp_path) == [(1, "retry", None), (2, "ok", False)]
+    assert stub.violations == [] and stub.unscripted == 0
+    assert len(connections) == 2
+    assert [r["connection"] for r in responses] == [1]
+    assert second == ["session.update"]  # an empty replay: no turn was kept
+    assert [call["epoch"] for call in turn_epochs] == [epoch, epoch]
+    assert agent._runtime.turns == () and agent.action_history == []
+    assert _attempts(tmp_path) == [(1, "retry", None)]
