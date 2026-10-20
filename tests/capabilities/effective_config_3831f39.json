@@ -4524,7 +4524,7 @@
       "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "observation_json_screenshot",
-      "preset": null,
+      "preset": "luna",
       "pressure_archive": true,
       "prompts": {
        "browser_game": "multimodal_game_decisions",
@@ -4616,7 +4616,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ce0a4301396a627316e6410e72b23345e27d7fff2de22a4e23d97c28876742cd"
+    "hash": "b2eec93533a17aec80cfc2ca92ee4af28073befde8cfc353f4a336398441dd94"
    }
   },
   "vendor": "openai"
@@ -5119,7 +5119,7 @@
       "feedback": "digest",
       "ledger_role": "input",
       "observation": "observation_json_text",
-      "preset": null,
+      "preset": "jev",
       "pressure_archive": true,
       "prompts": {
        "browser_game": null,
@@ -5211,7 +5211,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7a67f554bb77f4715117ab348b12d83c509b6a5d571b93e9331b20c51f2dec76"
+    "hash": "f818008cadfffa73e5884e9f13f54d9127976f96ebb073dcf2ce0b76264ef812"
    }
   },
   "vendor": "typesafe"
