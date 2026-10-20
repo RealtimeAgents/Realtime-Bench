@@ -1417,6 +1417,12 @@ def main():
     )
     p.add_argument("--fps", type=float, default=1.0)
     p.add_argument(
+        "--model-input-fps",
+        type=float,
+        default=None,
+        help="frames per second fed to the model (default: --fps, the environment's rate)",
+    )
+    p.add_argument(
         "--clock",
         choices=["wall", "token"],
         default=None,
@@ -1489,9 +1495,13 @@ def main():
     protocol = a.protocol or ("wall-clock" if a.clock == "wall" else "time-aware-token-v1")
     if not 0 < a.fps < float("inf") or not 0 < a.max_minutes < float("inf"):
         p.error("--fps and --max-minutes must be finite and positive")
-    # --fps sets the environment's frame rate (task clock, ticks, loop, recording, scored world
-    # time) and the model's input rate (ModelConfig.fps).
-    env_fps = model_input_fps = a.fps
+    if a.model_input_fps is None:
+        a.model_input_fps = a.fps  # prepare_episode_report reads it from the arguments
+    if not 0 < a.model_input_fps < float("inf"):
+        p.error("--model-input-fps must be finite and positive")
+    # --fps is the environment's frame rate (task clock, ticks, loop, scored world time);
+    # --model-input-fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
+    env_fps, model_input_fps = a.fps, a.model_input_fps
     if protocol == "time-aware-token-v1":
         if a.clock != "token":
             p.error("time-aware-token-v1 requires --clock token")
@@ -1543,6 +1553,7 @@ def main():
             "clock_mode": a.clock,
             "mode": a.mode,
             "fps": env_fps,
+            "model_input_fps": model_input_fps,
             "tokens_per_frame": tokens_per_frame,
             "reasoning_effort": reasoning_effort,
             "max_minutes": a.max_minutes,
@@ -1867,6 +1878,7 @@ def main():
                 protocol=protocol,
                 harness_hash=harness_hash,
                 fps=env_fps,
+                model_input_fps=model_input_fps,
                 runtime_config=runtime_config,
                 runtime_config_hash=runtime_config_hash,
                 snapshot=frozen_snapshot,
@@ -2121,6 +2133,7 @@ def main():
         protocol=protocol,
         harness_hash=harness_hash,
         fps=env_fps,
+        model_input_fps=model_input_fps,
         runtime_config_hash=runtime_config_hash,
     )
     summ = {
@@ -2413,6 +2426,8 @@ def _write_emergency_setup_summary(error: str):
         "wall-clock" if clock_mode == "wall" else "time-aware-token-v1",
     )
     cap_minutes = float(arg("--max-minutes", "5.0"))
+    env_fps = float(arg("--fps", "1.0"))
+    model_input_fps = float(arg("--model-input-fps", str(env_fps)))
     run_identity = resolve_run_identity(
         task_id=arg("--task"),
         **model_identity,
@@ -2420,7 +2435,8 @@ def _write_emergency_setup_summary(error: str):
         cap=cap_minutes,
         protocol=protocol,
         harness_hash=harness_fingerprint(),
-        fps=float(arg("--fps", "1.0")),
+        fps=env_fps,
+        model_input_fps=model_input_fps,
     )
     tokens_per_frame_arg = arg("--tokens-per-frame", str(DEFAULT_TOKENS_PER_FRAME))
     tokens_per_frame = (
@@ -2434,7 +2450,7 @@ def _write_emergency_setup_summary(error: str):
         solved=None,
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
-        fps=float(arg("--fps", "1.0")),
+        fps=model_input_fps,
         termination=None,
         horizon_s=cap_minutes * 60,
     )
