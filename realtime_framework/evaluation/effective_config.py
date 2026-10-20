@@ -735,6 +735,8 @@ def _runner_entry(environ, attribution, runs, *, env_file, scratch, python=sys.e
 
 def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
     """Run _trial for each cell of ``launch``, then the runner it would exec."""
+    from realtime_framework.evaluation.config import configuration_sha256
+
     models = {}
     runs_by_environment = {}
     for (environ, attribution, python), runs in launch.items():
@@ -753,16 +755,8 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
                     cell["error"] = record["error"]
                     continue
                 cell["runner_argv"] = record["runner_argv"]
-                cell["configuration_sha256"] = hashlib.sha256(  # evaluation/config.py:604-618
-                    json.dumps(
-                        {
-                            "model_config": record["settings"]["model_config"],
-                            "model_revision": record["settings"].get("model_revision"),
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
+                # Harbor hashes the same dry-run output (evaluation/harbor.py resolve).
+                cell["configuration_sha256"] = configuration_sha256(record["settings"])
                 key = (
                     tuple(sorted(record["runner_environ"].items())),
                     tuple(sorted((k, v) for k, v in record["attribution"].items() if v)),
