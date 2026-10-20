@@ -114,6 +114,7 @@ from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import RuntimeTurnResult
 from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.sandbox.observation.som import without_observation_interactables
 
 
@@ -139,6 +140,7 @@ class RealtimeRuntime:
         self._seed: SessionSeed | None = None
         self._turns: list[CanonicalTurn] = []
         self._archived_action_count = 0
+        self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
         self._buffer = CatchupBuffer()
         self._cleanup_future: concurrent.futures.Future | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -234,6 +236,7 @@ class RealtimeRuntime:
     def record_execution_feedback(self, feedback: str) -> None:
         if self._turns:
             self._turns[-1].execution_feedback = feedback
+            self._turns[-1].feedback_wall_ns = time.time_ns()
 
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
@@ -245,6 +248,8 @@ class RealtimeRuntime:
         before = self._archived_action_count
         if indexes:
             self._archived_action_count = max(before, max(indexes) + 1)
+        if self._archived_action_count > before:
+            self._ledger_wall_ns = time.time_ns()
         return self._archived_action_count - before
 
     def _retained(
@@ -385,12 +390,13 @@ class RealtimeRuntime:
         action_history: list[dict],
         epoch: int,
         message_builder: Callable[[tuple[CanonicalTurn, ...]], tuple[dict, ...]] | None,
+        decision: int,
     ) -> RuntimeTurnResult:
         if len(observations) != 1:
             raise ValueError("each generation accepts exactly one observation")
         executed_action_ledger = self._action_ledger(action_history)
         await self._ensure_ready(executed_action_ledger)
-        incoming = [CanonicalTurn(observation=value) for value in observations]
+        incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
         retained, incoming, removed_turns, retention = self._retained(self._turns, incoming)
         self._turns[:] = retained
         executed_action_ledger = self._action_ledger(action_history)
@@ -500,13 +506,13 @@ class RealtimeRuntime:
         provider_metadata.update(
             {
                 "history_som_retained_blocks": sum(
-                    without_observation_interactables(turn.observation.prompt)
-                    != turn.observation.prompt
+                    without_observation_interactables(session_frame_text(turn.observation))
+                    != session_frame_text(turn.observation)
                     for turn in self._turns
                 ),
                 "history_som_current_blocks": sum(
-                    without_observation_interactables(turn.observation.prompt)
-                    != turn.observation.prompt
+                    without_observation_interactables(session_frame_text(turn.observation))
+                    != session_frame_text(turn.observation)
                     for turn in incoming
                 ),
             }
@@ -537,6 +543,7 @@ class RealtimeRuntime:
         output = collector.finish()
         if not stale:
             incoming[-1].output = output.text
+            incoming[-1].output_wall_ns = time.time_ns()
             if output.reasoning_text and getattr(self.driver, "preserve_reasoning_history", False):
                 incoming[-1].provider_refs["reasoning_content"] = output.reasoning_text
             incoming[-1].action_history_index = len(action_history)
@@ -588,6 +595,7 @@ class RealtimeRuntime:
         action_history: list[dict],
         timeout: float | None,
         message_builder: Callable[[tuple[CanonicalTurn, ...]], tuple[dict, ...]] | None = None,
+        decision: int,
     ) -> RuntimeTurnResult:
         epoch = self.generation_epoch()
         try:
@@ -599,6 +607,7 @@ class RealtimeRuntime:
                     action_history=action_history,
                     epoch=epoch,
                     message_builder=message_builder,
+                    decision=decision,
                 ),
                 timeout=timeout,
             )

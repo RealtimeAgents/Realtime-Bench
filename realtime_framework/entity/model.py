@@ -81,6 +81,9 @@ class ProviderObservation:
     image_detail: str
     geometry: dict
     inspection: dict | None = None
+    # Session paths send the pending execution feedback before the frame prompt; it is kept
+    # apart from the prompt and dropped when the screenshot folds.
+    feedback_prefix: str = ""
 
     @property
     def observation_id(self) -> str:
@@ -98,6 +101,10 @@ class CanonicalTurn:
     action_history_index: int | None = None
     visual_folded: bool = False
     provider_refs: dict[str, Any] = field(default_factory=dict)
+    # The runner's decision index; a retry rebuilds the turn with the same index.
+    decision: int = field(kw_only=True)
+    output_wall_ns: int | None = None
+    feedback_wall_ns: int | None = None
 
     def fold_visual(self) -> None:
         """Release one old screenshot and its observation-bound structured payload."""
