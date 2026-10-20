@@ -112,7 +112,7 @@ def test_decision_history(api):
 
 
 def test_ledger_roles():
-    # openai_realtime.py:194-214 (system item); openai_decisions.py:132-163 (no roles).
+    # openai_realtime_session.py:23, 205-221 (system item); openai_decisions.py:132-163 (no roles).
     assert {api: path.ledger_role for api, path in POLICY.paths.items()} == {
         **{api: "input" for api in APIS},
         "openai_realtime": "instruction",
