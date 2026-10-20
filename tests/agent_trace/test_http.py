@@ -1,14 +1,16 @@
 """T3: every HTTP outbound path records the request it sent and the bytes it received.
 
 Each path runs against a local stub (tests/agent_trace/stubs.py). For the hooked paths the
-recorded method, URL, non-secret headers and body equal what the stub received, and the recorded
-response equals what the stub served. No API key reaches the trace or the pack.
+recorded method, URL, header names, allow-listed header values and body equal what the stub
+received, and the recorded response equals what the stub served. No API key reaches the trace or
+the pack, and no cookie or account id reaches the trace.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -29,7 +31,7 @@ from realtime_framework.entity.request import (
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
-from realtime_framework.providers.capture import REDACTED, SECRET_HEADERS
+from realtime_framework.providers.capture import REDACTED, header_kept
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
@@ -107,6 +109,11 @@ def _anthropic_answer(index, received):
     ]
     body = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
     return Answer(200, body.encode(), "text/event-stream")
+
+
+def _serving(answer, headers):
+    """``answer`` with ``headers`` added to every response."""
+    return lambda index, received: replace(answer(index, received), headers=headers)
 
 
 # api -> (channel, answer, ModelConfig fields; api_base_url is relative to the stub origin). The
@@ -200,12 +207,11 @@ def test_hooked_paths_record_the_wire(api, tmp_path, monkeypatch):
         assert url.path + (f"?{url.query}" if url.query else "") == wire.path
         recorded = {name.lower(): value for name, value in request["headers"]}
         on_wire = {name.lower(): value for name, value in wire.headers}
-        assert recorded.keys() == on_wire.keys()
-        for name, value in on_wire.items():
-            if name in SECRET_HEADERS:
-                assert KEY in value and recorded[name] == REDACTED
-            else:
-                assert recorded[name] == value, name
+        assert recorded == {
+            name: value if header_kept(name) else REDACTED for name, value in on_wire.items()
+        }
+        (credential,) = {"authorization", "x-api-key"} & on_wire.keys()
+        assert KEY in on_wire[credential]
         assert load_body(pack, request["body"]) == wire.body
         assert response["request_seq"] == request["capture_seq"]
         assert response["status_code"] == 200 and not response["error"]
@@ -434,11 +440,11 @@ def _request(config):
     )
 
 
-def _decide(client_type, model, provider, script, run_dir, monkeypatch):
+def _decide(client_type, model, provider, script, run_dir, monkeypatch, *, served_headers=()):
     monkeypatch.setenv("REPLAY_TRACE_KEY", KEY)
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="decisions")
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
-    with HttpStub(_decisions_answer(script, model, provider)) as stub:
+    with HttpStub(_serving(_decisions_answer(script, model, provider), served_headers)) as stub:
         config = ModelConfig(
             adapter_type="jev_decisions"
             if client_type is JevDecisionsClient
@@ -513,3 +519,73 @@ def test_decisions_digest_overflow_reduces_the_history(tmp_path, monkeypatch):
     attempts = _payloads(events, "ModelAttemptFinished")
     assert [a["outcome"] for a in attempts] == ["context_limit", "context_limit", "ok", "ok", "ok"]
     assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 5
+
+
+# ---- Headers --------------------------------------------------------------------------------
+
+COOKIE_VALUE = "COOKIE-VALUE-0123456789"
+ORGANIZATION = "org-ACCOUNT-0123456789"
+PROJECT = "proj_ACCOUNT_0123456789"
+ACCOUNT = (COOKIE_VALUE, ORGANIZATION, PROJECT)
+# A session cookie and the account a key belongs to, as a provider behind a CDN serves them,
+# beside headers whose values the trace keeps.
+SERVED_HEADERS = (
+    ("Set-Cookie", f"__cf_bm={COOKIE_VALUE}; Path=/"),
+    ("openai-organization", ORGANIZATION),
+    ("x-request-id", "req_replay_0123"),
+    ("x-ratelimit-remaining-requests", "4999"),
+)
+
+
+def _check_account_headers(events, stub, run_dir: Path) -> list[list[str]]:
+    """Recorded headers keep their names and only allow-listed values, so no cookie or account id
+    reaches the trace. Returns, per request, the headers that carried one on the wire."""
+    for request, wire in zip(_payloads(events, "ModelRequestSent"), stub.requests, strict=True):
+        assert {name.lower(): value for name, value in request["headers"]} == {
+            name.lower(): value if header_kept(name) else REDACTED for name, value in wire.headers
+        }
+    responses = _payloads(events, "ModelResponseReceived")
+    assert len(responses) == len(stub.requests)
+    for response in responses:
+        recorded = {name.lower(): value for name, value in response["headers"]}
+        assert recorded["set-cookie"] == recorded["openai-organization"] == REDACTED
+        assert recorded["x-request-id"] == "req_replay_0123"
+        assert recorded["x-ratelimit-remaining-requests"] == "4999"
+    trace = (run_dir / "episode_trace.jsonl").read_text()
+    assert [value for value in ACCOUNT if value in trace] == []
+    return [
+        sorted(name.lower() for name, value in wire.headers if any(v in value for v in ACCOUNT))
+        for wire in stub.requests
+    ]
+
+
+@pytest.mark.parametrize("api", sorted(HOOKED))
+def test_cookies_and_account_ids_stay_out_of_the_trace(api, tmp_path, monkeypatch):
+    channel, answer, fields = HOOKED[api]
+    monkeypatch.setenv("OPENAI_ORG_ID", ORGANIZATION)
+    monkeypatch.setenv("OPENAI_PROJECT_ID", PROJECT)
+    with HttpStub(_serving(answer, SERVED_HEADERS)) as stub:
+        events = _run(_config(stub, fields, monkeypatch), stub, tmp_path)
+    carried = _check_account_headers(events, stub, tmp_path)
+    if channel == "litellm.openai_sdk":
+        # The OpenAI SDK sends the account from the environment; its httpx client replays the
+        # served cookie.
+        account = ["openai-organization", "openai-project"]
+        assert carried == [account, ["cookie", *account]]
+    else:
+        # LiteLLM's aiohttp transport keeps no cookie for an IP-address host such as the stub's.
+        assert carried == [[], []]
+
+
+def test_decisions_cookie_stays_out_of_the_trace(tmp_path, monkeypatch):
+    _, events, stub = _decide(
+        OpenAIDecisionsClient,
+        "openai/gpt-6-luna-decisions",
+        "openai",
+        [503],
+        tmp_path,
+        monkeypatch,
+        served_headers=SERVED_HEADERS,
+    )
+    # The Decisions httpx client replays the cookie the rejected attempt was served.
+    assert _check_account_headers(events, stub, tmp_path) == [[], ["cookie"]]

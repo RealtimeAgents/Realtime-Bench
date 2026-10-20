@@ -2,9 +2,10 @@
 
 Every hook reads ``owner._trace`` (set by the driver's ``bind_trace``) at I/O time and hands the
 sink references only; hashing, serialization and storage happen on the sink's writer thread.
-Hooks only read: what is sent and received is unchanged. Credentials travel in headers, so the two
-headers real paths send them in are redacted at capture, and WebSocket handshakes are not
-recorded at all.
+Hooks only read: what is sent and received is unchanged. Headers carry credentials, cookies and
+account ids, so a recorded header keeps its value only when its name is on the allow-list below;
+every other header keeps its name and has its value redacted. WebSocket handshakes, request and
+response headers alike, are not recorded at all.
 """
 
 from __future__ import annotations
@@ -17,15 +18,43 @@ import httpx
 
 from realtime_framework.entity.records import TraceEvent
 
-# Decisions, OpenRouter, AsyncOpenAI and vLLM tokenize send Authorization; Anthropic x-api-key.
-SECRET_HEADERS = frozenset({"authorization", "x-api-key"})
+# Header values kept in the trace, each one a provider path sends.
+KEPT_HEADERS = frozenset(
+    {
+        # Message framing.
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+        # Request ids: Anthropic's, and the one the OpenAI SDK reports (openai/_response.py).
+        "request-id",
+        "x-request-id",
+        # Retry advice: entity.model.retry_after_seconds reads retry-after; the OpenAI SDK also
+        # reads retry-after-ms (openai/_base_client.py).
+        "retry-after",
+        "retry-after-ms",
+        # The API version and beta flags LiteLLM's Anthropic transport sends
+        # (litellm/llms/anthropic/common_utils.py get_anthropic_headers).
+        "anthropic-version",
+        "anthropic-beta",
+        # The OpenAI API's server processing time.
+        "openai-processing-ms",
+    }
+)
+# Rate-limit headers, as LiteLLM reads them: OpenAI-style (litellm_core_utils/
+# llm_response_utils/get_headers.py) and Anthropic's (llms/anthropic/common_utils.py).
+KEPT_HEADER_PREFIXES = ("x-ratelimit-", "anthropic-ratelimit-")
 REDACTED = "<redacted>"
+
+
+def header_kept(name: str) -> bool:
+    name = name.lower()
+    return name in KEPT_HEADERS or name.startswith(KEPT_HEADER_PREFIXES)
 
 
 def redacted_headers(headers: httpx.Headers) -> list[list[str]]:
     return [
-        [name, REDACTED if name.lower() in SECRET_HEADERS else value]
-        for name, value in headers.multi_items()
+        [name, value if header_kept(name) else REDACTED] for name, value in headers.multi_items()
     ]
 
 
