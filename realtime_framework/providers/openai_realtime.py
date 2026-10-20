@@ -37,10 +37,8 @@ from realtime_framework.entity.events import UsageSnapshot
 from realtime_framework.entity.context_policy import FixedTexts
 from realtime_framework.entity.request import FrameImage
 from realtime_framework.entity.request import RequestItem
-from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.providers.litellm import iterate_blocking
 from realtime_framework.providers.litellm import object_dict
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
@@ -49,7 +47,6 @@ from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
-from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.capture import sync_ws_connection
 
 logger = logging.getLogger(__name__)
@@ -116,15 +113,14 @@ class _Delete:
 
 @dataclass(frozen=True)
 class _EditBatch:
-    """One planned in-place edit and the ledger item the session holds after it."""
+    """One planned in-place edit and the session it leaves: the ledger item and the frames."""
 
     operations: tuple[_Create | _Delete, ...]
     ledger_item_id: str | None
+    ledger_text: str
+    frames: dict[str, _SentFrame]
     visuals_folded: int
     prompts_edited: int
-    observation_updates: tuple = ()
-    ledger_text: str = ""
-    frames: dict | None = None
 
     @property
     def created(self) -> set[str]:
@@ -313,42 +309,6 @@ class OpenAIRealtimeDriver:
             kwargs["event_id"] = operation.event_id
         self._wire(self._conn.conversation.item.create, **kwargs)
 
-    def _user_item(
-        self,
-        observation: ProviderObservation,
-        *,
-        folded: bool = False,
-        previous_item_id=None,
-        event_id: str | None = None,
-    ) -> _Create:
-        image = FrameImage(observation.image_bytes, observation.mime_type, observation.image_detail)
-        return _Create(
-            self._new_client_id("user"),
-            "user",
-            FOLDED_VISUAL_PLACEHOLDER if folded else session_frame_text(observation),
-            None if folded else image,
-            previous_item_id,
-            event_id,
-        )
-
-    def _assistant_item(self, text: str) -> _Create | None:
-        if not text:
-            return None
-        return _Create(self._new_client_id("assistant"), "assistant", text)
-
-    def _system_item(
-        self,
-        text: str,
-        *,
-        previous_item_id=None,
-        event_id: str | None = None,
-    ) -> _Create | None:
-        if not text:
-            return None
-        return _Create(
-            self._new_client_id("ledger"), "system", text, None, previous_item_id, event_id
-        )
-
     def _frame_create(
         self,
         frame: _ViewFrame,
@@ -393,33 +353,6 @@ class OpenAIRealtimeDriver:
             previous_item_id,
             event_id,
         )
-
-    def _shadow_plans(self, from_view, from_turns):
-        """Plan from the history view and from the turn records with the same client ids.
-
-        Temporary: the two plans must be equal before the turn-record source is deleted.
-        """
-        minted: list[str] = []
-        reused = iter(minted)
-
-        def mint(kind: str) -> str:
-            minted.append(OpenAIRealtimeDriver._new_client_id(kind))
-            return minted[-1]
-
-        def reuse(kind: str) -> str:
-            value = next(reused)
-            assert value.startswith(f"rtb_{kind}_"), (kind, value)
-            return value
-
-        self._new_client_id = mint
-        try:
-            planned = from_view()
-            self._new_client_id = reuse
-            shadow = from_turns()
-        finally:
-            del self._new_client_id
-        assert next(reused, None) is None, "the turn records planned fewer items"
-        return planned, shadow
 
     def _wait_for_item_edits(
         self,
@@ -498,39 +431,15 @@ class OpenAIRealtimeDriver:
                 await asyncio.sleep(2 * (attempt + 1))
         if self._conn is None:
             raise RuntimeError(f"OpenAI Realtime session open failed: {last_error!r}")
-        (operations, ledger, ledger_text, sent), (shadow, _, replayed) = self._shadow_plans(
-            lambda: self._view_replay(request), lambda: self._replay(request)
-        )
-        assert operations == shadow and ledger_text == request.executed_action_ledger
+        operations, ledger, ledger_text, sent = self._replay(request)
         for operation in operations:
             await asyncio.to_thread(self._send, operation)
         if ledger is not None:
             self._ledger_item_id = ledger.item_id
             self._ledger_text = ledger_text
         self._frames = sent
-        for turn, user, assistant in replayed:
-            turn.provider_refs["user_item_id"] = user.item_id
-            turn.provider_refs["assistant_item_ids"] = [assistant.item_id] if assistant else []
-            turn.provider_refs["provider_visual_folded"] = turn.visual_folded
-            turn.provider_refs["provider_observation_prompt"] = session_frame_text(turn.observation)
 
     def _replay(self, request: ConnectRequest):
-        """Plan a new session's items: the ledger, then each turn's user and assistant items."""
-        operations, replayed = [], []
-        ledger = None
-        if request.executed_action_ledger:
-            ledger = self._system_item(
-                ARCHIVED_ACTION_LEDGER_HEADER + "\n" + request.executed_action_ledger
-            )
-            operations.append(ledger)
-        for turn in request.turns:
-            user = self._user_item(turn.observation, folded=turn.visual_folded)
-            assistant = self._assistant_item(turn.output)
-            operations += [user] if assistant is None else [user, assistant]
-            replayed.append((turn, user, assistant))
-        return operations, ledger, replayed
-
-    def _view_replay(self, request: ConnectRequest):
         """Plan a new session's items from the history view: the ledger, then each frame's user
         item and its output's assistant item. Also returns the session they make."""
         history = request.history  # None when the runtime opens the episode's first session
@@ -555,10 +464,7 @@ class OpenAIRealtimeDriver:
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The history ends with this observation's frame.
         frame = _history_frames(history.items)[1][-1]
-        user, shadow = self._shadow_plans(
-            lambda: self._frame_create(frame), lambda: self._user_item(observation)
-        )
-        assert user == shadow
+        user = self._frame_create(frame)
         await asyncio.to_thread(self._send, user)
         self._frames[frame.id] = _SentFrame(user.item_id, frame.text, frame.item.block.folded)
         return {"user_item_id": user.item_id, "provider_observation_prompt": frame.text}
@@ -674,10 +580,6 @@ class OpenAIRealtimeDriver:
                         )[:500],
                     )
                     return
-                generation.metadata["completed_turn_refs"] = {
-                    "assistant_item_ids": list(generation.metadata["output_item_ids"]),
-                    "provider_visual_folded": False,
-                }
                 # A superseded response's session is closed and replayed before its next use.
                 generation.metadata["answered_frame"].assistant_item_ids = list(
                     generation.metadata["output_item_ids"]
@@ -724,12 +626,7 @@ class OpenAIRealtimeDriver:
     async def _rebuild(self, request: HistorySyncRequest) -> HistorySyncResult:
         try:
             await self.connect(
-                ConnectRequest(
-                    seed=request.seed,
-                    turns=request.turns,
-                    executed_action_ledger=request.executed_action_ledger,
-                    history=request.history,
-                )
+                ConnectRequest(seed=request.seed, history=request.history)
             )
             return HistorySyncResult(
                 SyncDisposition.REBUILT,
@@ -743,17 +640,6 @@ class OpenAIRealtimeDriver:
                 ProviderHistoryState.UNKNOWN,
                 detail=repr(exc)[:500],
             )
-
-    @staticmethod
-    def _turn_item_ids(turn) -> tuple[str, ...]:
-        values = []
-        user_id = turn.provider_refs.get("user_item_id")
-        if user_id:
-            values.append(str(user_id))
-        values.extend(
-            str(value) for value in turn.provider_refs.get("assistant_item_ids", ()) if value
-        )
-        return tuple(values)
 
     async def _fallback_from_in_place(
         self,
@@ -780,29 +666,21 @@ class OpenAIRealtimeDriver:
         # Validate every reference before the first mutating wire event. Any missing/stale provider
         # identity falls back to a canonical replay instead of risking a partial local plan.
         ledger, frames = _history_frames(request.history.items)
-        cause = self._view_obstacle(frames)
-        assert cause == self._turn_obstacle(request), (cause, self._turn_obstacle(request))
-        if cause is not None:
-            return await self._fallback_from_in_place(request, cause)
+        for frame in frames:
+            sent = self._frames.get(frame.id)
+            if sent is None:
+                return await self._fallback_from_in_place(
+                    request,
+                    "retained turn is missing its provider user item ID",
+                )
+            if sent.folded and not frame.item.block.folded:
+                return await self._fallback_from_in_place(
+                    request,
+                    "provider visual state cannot be unfolded in place",
+                )
 
-        batch, shadow = self._shadow_plans(
-            lambda: self._view_edit_batch(ledger, frames, request.history.policy.texts),
-            lambda: self._edit_batch(request),
-        )
-        assert (
-            batch.operations,
-            batch.ledger_item_id,
-            batch.ledger_text,
-            batch.visuals_folded,
-            batch.prompts_edited,
-        ) == (
-            shadow.operations,
-            shadow.ledger_item_id,
-            request.executed_action_ledger,
-            shadow.visuals_folded,
-            shadow.prompts_edited,
-        )
         try:
+            batch = self._edit_batch(ledger, frames, request.history.policy.texts)
             for operation in batch.operations:
                 self._send(operation)
             await asyncio.to_thread(
@@ -817,10 +695,6 @@ class OpenAIRealtimeDriver:
         self._ledger_item_id = batch.ledger_item_id
         self._ledger_text = batch.ledger_text
         self._frames = batch.frames
-        for turn, replacement_id in shadow.observation_updates:
-            turn.provider_refs["user_item_id"] = replacement_id
-            turn.provider_refs["provider_visual_folded"] = turn.visual_folded
-            turn.provider_refs["provider_observation_prompt"] = session_frame_text(turn.observation)
         return HistorySyncResult(
             SyncDisposition.EXACT,
             ProviderHistoryState.EXACT,
@@ -834,92 +708,7 @@ class OpenAIRealtimeDriver:
             },
         )
 
-    def _edit_batch(self, request: HistorySyncRequest) -> _EditBatch:
-        """Plan one in-place edit, in send order: delete the archived turns' items, replace the
-        ledger if it changed, then replace each retained user item whose text changed or whose
-        screenshot folded, after the item before it. Every operation names its client event."""
-        operations: list[_Create | _Delete] = []
-        observation_updates: list[tuple[object, str]] = []
-        folded_count = 0
-        prompt_edit_count = 0
-        new_ledger_id = self._ledger_item_id
-        ledger_changed = request.executed_action_ledger != self._ledger_text
-
-        for turn in request.removed_turns:
-            for item_id in self._turn_item_ids(turn):
-                operations.append(_Delete(item_id, self._new_client_id("delete")))
-
-        if ledger_changed:
-            if self._ledger_item_id:
-                operations.append(_Delete(self._ledger_item_id, self._new_client_id("delete")))
-            new_ledger_id = None
-            if request.executed_action_ledger:
-                ledger = self._system_item(
-                    ARCHIVED_ACTION_LEDGER_HEADER + "\n" + request.executed_action_ledger,
-                    previous_item_id="root",
-                    event_id=self._new_client_id("create"),
-                )
-                operations.append(ledger)
-                new_ledger_id = ledger.item_id
-
-        previous_item_id = new_ledger_id or "root"
-        for turn in request.turns:
-            user_id = str(turn.provider_refs["user_item_id"])
-            provider_folded = bool(turn.provider_refs.get("provider_visual_folded", False))
-            prompt_changed = (
-                turn.provider_refs.get("provider_observation_prompt")
-                != session_frame_text(turn.observation)
-            )
-            if prompt_changed or (turn.visual_folded and not provider_folded):
-                operations.append(_Delete(user_id, self._new_client_id("delete")))
-                replacement = self._user_item(
-                    turn.observation,
-                    folded=turn.visual_folded,
-                    previous_item_id=previous_item_id,
-                    event_id=self._new_client_id("create"),
-                )
-                operations.append(replacement)
-                observation_updates.append((turn, replacement.item_id))
-                folded_count += int(turn.visual_folded and not provider_folded)
-                prompt_edit_count += int(prompt_changed)
-                user_id = replacement.item_id
-
-            assistant_ids = [
-                str(value) for value in turn.provider_refs.get("assistant_item_ids", ()) if value
-            ]
-            previous_item_id = assistant_ids[-1] if assistant_ids else user_id
-        return _EditBatch(
-            tuple(operations),
-            new_ledger_id,
-            folded_count,
-            prompt_edit_count,
-            tuple(observation_updates),
-        )
-
-    @staticmethod
-    def _turn_obstacle(request: HistorySyncRequest) -> str | None:
-        for turn in request.removed_turns:
-            if not turn.provider_refs.get("user_item_id"):
-                return "archived turn is missing its provider user item ID"
-        for turn in request.turns:
-            if not turn.provider_refs.get("user_item_id"):
-                return "retained turn is missing its provider user item ID"
-            provider_folded = bool(turn.provider_refs.get("provider_visual_folded", False))
-            if provider_folded and not turn.visual_folded:
-                return "provider visual state cannot be unfolded in place"
-        return None
-
-    def _view_obstacle(self, frames: list[_ViewFrame]) -> str | None:
-        """Why in-place edits cannot turn the session into the history view, if they cannot."""
-        for frame in frames:
-            sent = self._frames.get(frame.id)
-            if sent is None:
-                return "retained turn is missing its provider user item ID"
-            if sent.folded and not frame.item.block.folded:
-                return "provider visual state cannot be unfolded in place"
-        return None
-
-    def _view_edit_batch(
+    def _edit_batch(
         self, ledger: RequestItem | None, frames: list[_ViewFrame], texts: FixedTexts
     ) -> _EditBatch:
         """Plan one in-place edit from the history view, in send order: delete the items of sent
@@ -974,10 +763,10 @@ class OpenAIRealtimeDriver:
         return _EditBatch(
             tuple(operations),
             ledger_item_id,
+            ledger_text,
+            sent_frames,
             folded_count,
             prompt_edit_count,
-            ledger_text=ledger_text,
-            frames=sent_frames,
         )
 
     async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
@@ -991,15 +780,12 @@ class OpenAIRealtimeDriver:
         if request.force_rebuild or generation is None or self._conn is None:
             return await self._rebuild(request)
         output_ids = list(generation.metadata.get("output_item_ids") or [])
-        _, frames = _history_frames(request.history.items)
-        replacement, shadow = self._shadow_plans(
-            lambda: self._output_create(frames[-1]),
-            lambda: self._assistant_item(request.turns[-1].output if request.turns else ""),
-        )
-        assert replacement == shadow
         try:
             if not output_ids:
                 raise RuntimeError("response did not expose output item IDs")
+            # The response answered the newest frame; its output replaces what the server kept.
+            _, frames = _history_frames(request.history.items)
+            replacement = self._output_create(frames[-1])
             for item_id in output_ids:
                 await asyncio.to_thread(self._send, _Delete(item_id))
             if replacement is not None:
@@ -1007,10 +793,6 @@ class OpenAIRealtimeDriver:
             self._frames[frames[-1].id].assistant_item_ids = (
                 [] if replacement is None else [replacement.item_id]
             )
-            if request.turns:
-                request.turns[-1].provider_refs["assistant_item_ids"] = (
-                    [replacement.item_id] if replacement else []
-                )
             return HistorySyncResult(
                 SyncDisposition.EXACT,
                 ProviderHistoryState.EXACT,
