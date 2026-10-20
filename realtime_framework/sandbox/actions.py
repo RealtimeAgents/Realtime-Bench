@@ -18,9 +18,9 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
 from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
 
-# A tapped key (KEY action under the token clock) stays down for this many ticks so that one
-# rendered frame observes it; 1/60 tick is one 60 Hz rAF at 1 fps.
-TAP_HOLD_TICKS = 1.0 / 60.0
+# A tapped key (KEY action under the token clock) stays down for this many seconds so that one
+# rendered frame observes it: one 60 Hz rAF at any environment fps.
+TAP_HOLD_S = 1.0 / 60.0
 
 # Reloading a browser game discards episode state. Reject F5/BrowserRefresh and
 # Ctrl/Meta+R for browser_game tasks; server-backed Web tasks may reload safely.
@@ -510,7 +510,7 @@ class GuestEnvironment:
                 # Games that poll key state once per draw (reading a keys-down map in draw())
                 # never see a keyDown+keyUp delivered inside one frozen instant. Render
                 # one frame with the key down before releasing it (~17 ms of virtual time).
-                self.wait_until_tick(self._logical_tick + TAP_HOLD_TICKS)
+                self.wait_until_tick(self._logical_tick + TAP_HOLD_S / self.d)
                 self.task.clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
             # A tap of an already-held key must not terminate its outstanding lease. The lease may
             # have expired during the rendered frame above, so only keys still held are pressed
