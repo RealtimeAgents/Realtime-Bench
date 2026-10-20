@@ -9,12 +9,15 @@ production code, built from inputs that are a pure function of the frame index.
 
 The probe returns what the CDP extractor returns for a screenshot model (scene, binding,
 controls, canvases, metrics: sandbox/browser/cdp_interactables.py:424-440, 470-484, 569-583;
-window assembly: sandbox/browser/cdp.py:244-283, 357-366). Text-observation (choice) models
-also receive accessibility and field-state fields, which this probe does not produce yet.
+window assembly: sandbox/browser/cdp.py:244-283, 357-366). With ``text_observation`` it also
+returns what a text-observation (choice) capture adds: the rendered field state of every DOM
+control (cdp_interactables.py:389-423) and the accessibility tree, read by the production
+capture_ax_frames from synthetic CDP nodes (cdp.py:262-270). Without it the output is unchanged.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -23,6 +26,7 @@ from unittest import mock
 
 from PIL import Image, ImageDraw
 
+from realtime_framework.sandbox.browser.ax import capture_ax_frames
 from realtime_framework.sandbox.observation import capture as capture_module
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 
@@ -55,6 +59,41 @@ def agree_checked(frame: int) -> bool:
 def next_enabled(frame: int) -> bool:
     """The Next button turns from unavailable (U1) into an actionable mark (P4)."""
     return frame > 30
+
+
+# The Name field's state, seen only by text-observation models. The screenshot does not draw it,
+# so the screenshot-model baselines do not depend on it. It follows the Decisions scenario
+# (scenario_decisions.py): a click on the field (decision 0, frame 1), composed text (frame 2),
+# Tab (frame 3), a click (frame 14), select all (frame 15), Backspace (frame 17), Tab (frame 18),
+# a click (frame 39) and a typed suggestion (frame 40). Decision k sees frame k + 1.
+NAME_PLACEHOLDER = "Full name"
+_FIRST_NAMES = (
+    "Ada", "Alan", "Barbara", "Claude", "Donald", "Edsger", "Frances", "Grace",
+    "Hedy", "John", "Katherine", "Linus", "Margaret", "Niklaus", "Radia", "Tim",
+)  # fmt: skip
+_LAST_NAMES = (
+    "Allen", "Babbage", "Dijkstra", "Hamilton", "Hopper", "Johnson", "Kay", "Knuth",
+    "Lamarr", "Liskov", "Lovelace", "Perlman", "Shannon", "Turing", "Wirth",
+)  # fmt: skip
+# The field's datalist while the page offers suggestions: 240 names, enough for a candidate set
+# above one Choice question's 255 options (providers/openai_decisions.py:56).
+NAME_SUGGESTIONS = tuple(f"{first} {last}" for first in _FIRST_NAMES for last in _LAST_NAMES)
+
+
+def name_focused(frame: int) -> bool:
+    return frame in (2, 3) or 15 <= frame <= 18 or frame in (40, 41)
+
+
+def name_value(frame: int) -> str:
+    return "Ada Lovelace" if 3 <= frame <= 17 or frame >= 41 else ""
+
+
+def name_text_selected(frame: int) -> bool:
+    return frame in (16, 17)
+
+
+def name_suggestions(frame: int) -> tuple[str, ...]:
+    return NAME_SUGGESTIONS if frame == 40 else ()
 
 
 def screenshot(frame: int) -> bytes:
@@ -117,7 +156,113 @@ def _control(
     }
 
 
-def probe(frame: int) -> dict:
+def _rgb(color: tuple[int, int, int]) -> str:
+    return f"rgb({color[0]}, {color[1]}, {color[2]})"
+
+
+def _text_observation(control: dict, frame: int, background: tuple[int, int, int]) -> dict:
+    """The fields the extractor adds to each DOM control for a text-observation model
+    (cdp_interactables.py:389-423). Inputs render no inner text; a button shows its label. Only
+    the Name textbox is an editable field, so only it has input constraints and a value."""
+    editable = control["role"] == "textbox"  # editableField (cdp_interactables.py:392)
+    textbox = {"border": f"2px solid {_rgb((120, 120, 120))}", "foreground": _rgb((0, 0, 0))}
+    button = {"border": f"0px none {_rgb((255, 255, 255))}", "foreground": _rgb((255, 255, 255))}
+    style = button if control["tag"] == "button" else textbox
+    return {
+        "visible_content": {
+            "source": "rendered_dom_and_accessibility",
+            "text": control["label"] if control["tag"] == "button" else "",
+            "image_labels": [],
+            "background_color": _rgb(background),
+            "foreground_color": style["foreground"],
+            "border": style["border"],
+        },
+        "select_options": [],
+        "select_multiple": False,
+        "input_constraints": (
+            {
+                "placeholder": NAME_PLACEHOLDER,
+                "pattern": "",
+                "min": None,
+                "max": None,
+                "step": None,
+                "maxlength": None,
+                "options": [{"value": name, "label": name} for name in name_suggestions(frame)],
+            }
+            if editable
+            else {}
+        ),
+        "focused": editable and name_focused(frame),
+        "value": name_value(frame) if editable else "",
+        "text_selected": editable and name_text_selected(frame),
+    }
+
+
+AX_FRAME_ID = "replay-main-frame"
+
+
+class _AxSession:
+    """Answers the CDP calls capture_ax_frames makes for a page without child frames
+    (sandbox/browser/ax.py:16-20, 25, 77, 101-105)."""
+
+    def __init__(self, nodes: list[dict]):
+        self._results = {
+            "Page.getFrameTree": {"frameTree": {"frame": {"id": AX_FRAME_ID}}},
+            "DOM.getDocument": {"root": {"nodeName": "#document", "children": []}},
+            "Accessibility.getFullAXTree": {"nodes": nodes},
+        }
+
+    def transaction(self):
+        return contextlib.nullcontext()
+
+    def call(self, method, params=None, *, timeout, session_id=None):
+        return {"result": self._results[method]}
+
+
+def ax_node(node_id: int, role: str, name: str = "", *, value=None, properties=(), children=()):
+    """One Accessibility.getFullAXTree node in the shape ax.py reads (ax.py:123-135, 145-197)."""
+    node = {
+        "nodeId": str(node_id),
+        "ignored": False,
+        "role": {"type": "role", "value": role},
+        "childIds": [str(child) for child in children],
+    }
+    if name:
+        node["name"] = {"type": "computedString", "value": name}
+    if value is not None:
+        node["value"] = {"type": "string", "value": value}
+    if properties:
+        node["properties"] = [{"name": key, "value": prop} for key, prop in properties]
+    return node
+
+
+def ax_fields(nodes: list[dict]) -> dict:
+    """ax_tree, ax_text and ax_capture, as the capture adds them to a window (cdp.py:262-270)."""
+    return capture_ax_frames(_AxSession(nodes))
+
+
+def _form_ax_nodes(frame: int) -> list[dict]:
+    focused = (("focused", {"type": "booleanOrUndefined", "value": True}),)
+    checked = {"type": "tristate", "value": "true" if agree_checked(frame) else "false"}
+    disabled = (("disabled", {"type": "boolean", "value": True}),)
+    return [
+        ax_node(1, "RootWebArea", TITLE, children=(2, 3, 4, 5, 6, 7)),
+        ax_node(2, "StaticText", "Name"),
+        ax_node(
+            3,
+            "textbox",
+            "Name",
+            value=name_value(frame),
+            properties=focused if name_focused(frame) else (),
+        ),
+        ax_node(4, "checkbox", "I agree to the terms", properties=(("checked", checked),)),
+        ax_node(5, "button", "Submit"),
+        ax_node(6, "button", "Next", properties=() if next_enabled(frame) else disabled),
+        ax_node(7, "Canvas", "Route map"),
+    ]
+
+
+def probe(frame: int, *, text_observation: bool = False) -> dict:
     name = _control(
         "dom-0001",
         0,
@@ -156,6 +301,15 @@ def probe(frame: int) -> dict:
             enabled=False,
             unavailable_reasons=["disabled"],
         )
+    if text_observation:
+        fills = {  # the backgrounds screenshot() draws
+            "dom-0001": (255, 255, 255),
+            "dom-0002": (30, 110, 220) if agree_checked(frame) else (255, 255, 255),
+            "dom-0003": (30, 110, 220),
+            "dom-0004": (40, 160, 80) if next_enabled(frame) else (190, 190, 190),
+        }
+        for control in (name, agree, submit, following):
+            control.update(_text_observation(control, frame, fills[control["id"]]))
     route_map = {
         "id": "canvas-1",
         "dom_order": 4,
@@ -236,6 +390,8 @@ def probe(frame: int) -> dict:
         "title": TITLE,
         "active": True,
     }
+    if text_observation:
+        window.update(ax_fields(_form_ax_nodes(frame)))
     return {**window, "binding": dict(window["binding"]), "windows": [window]}
 
 
@@ -244,19 +400,28 @@ class _Guest:
         self._source = source
 
     def screenshot(self) -> bytes:
-        return screenshot(self._source.frame)
+        return self._source.screenshot(self._source.frame)
 
 
 class FrameSource:
-    """Each capture() returns the next synthetic frame; frame 0 is the runner's initial capture."""
+    """Each capture() returns the next synthetic frame; frame 0 is the runner's initial capture.
 
-    def __init__(self, task, *, text_observation: bool, fps: float):
+    ``screenshot`` and ``probe`` give another page (scenario_decisions.py has a game page). The
+    capture reads the accessibility tree only in its first probe (capture.py:253, 268); this probe
+    adds it to both, and of the second probe only the target id and fingerprint are read
+    (capture.py:272-274).
+    """
+
+    def __init__(
+        self, task, *, text_observation: bool, fps: float, screenshot=screenshot, probe=probe
+    ):
         self.frame = -1
         self._fps = fps
+        self.screenshot = screenshot
         self._capture = BrowserSceneCapture(
             _Guest(self),
             task,
-            probe=lambda payload: probe(self.frame),
+            probe=lambda payload: probe(self.frame, text_observation=text_observation),
             desktop_size=DESKTOP_SIZE,
             text_observation=text_observation,
         )

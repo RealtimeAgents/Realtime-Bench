@@ -94,9 +94,11 @@ def build_episode(
     tokens_per_frame: int | None = None,
     max_ticks: int | None = None,
     before_initialize=None,
+    scene: dict | None = None,
 ) -> Episode:
     """``model_key`` stands for the catalog key the runner records as the model identity.
-    ``before_initialize(agent)`` runs just before initialize(), which may open a connection."""
+    ``before_initialize(agent)`` runs just before initialize(), which may open a connection.
+    ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other than the form."""
     fps = config.fps
     validate_model_interaction(  # runner.py:1554-1559
         config.adapter_type, clock_mode=clock_mode, fps=fps, tokens_per_frame=tokens_per_frame
@@ -118,7 +120,9 @@ def build_episode(
     text_observation = (
         capabilities.observation_modality == "text" or capabilities.action_channel == "choice"
     )
-    frames = FrameSource(task, text_observation=text_observation, fps=fps)  # runner.py:1606-1613
+    frames = FrameSource(  # runner.py:1606-1613
+        task, text_observation=text_observation, fps=fps, **(scene or {})
+    )
     tool_runtime = ToolRuntime(  # runner.py:1614-1620
         run_dir / "tool_calls.jsonl",
         task_id=task.task_id,
