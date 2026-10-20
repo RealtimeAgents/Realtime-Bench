@@ -209,7 +209,8 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
         original = driver.sync_history
 
         async def sync_history(request):
-            state["fail_delete"] = request.turns[-1].observation.observation_id == "obs-1"
+            frames = [item.block for item in request.history.items if item.block.kind == "frame"]
+            state["fail_delete"] = frames[-1].observation_id == "obs-1"
             return await original(request)
 
         driver.sync_history = sync_history
