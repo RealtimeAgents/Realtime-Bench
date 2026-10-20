@@ -435,8 +435,12 @@ import threading
 from collections.abc import Callable
 
 
-class RetryCancelled(RuntimeError):
-    """The generation a request unit belongs to was abandoned before the unit was sent again."""
+class RetryCancelled(BaseException):
+    """The generation a request unit belongs to was abandoned before the unit was sent again.
+
+    Like asyncio.CancelledError it is not an Exception, so the provider and session error handlers
+    it unwinds through neither record it as a failure nor turn it into session state.
+    """
 
 
 _NEVER_CANCELLED = threading.Event()
@@ -508,8 +512,6 @@ class RequestRetry:
         raise RetryCancelled(f"generation abandoned before attempt {attempt}")
 
     def _failed(self, attempt: int, exc: Exception) -> float | None:
-        if isinstance(exc, RetryCancelled):
-            return None
         failure = self.classify(exc)
         if failure is None:
             return None

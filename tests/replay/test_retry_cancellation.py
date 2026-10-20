@@ -7,8 +7,8 @@ event (harnesses/default/context.py:687-691). stream_generate takes the epoch an
 the decision starts (harness.py:1159), runs every attempt under that epoch (context.py:640-651)
 and its retries inside retry_cancellation (harness.py:1350). Once the event is set the backoff
 ends, no attempt starts (entity/model.py:479-505), and an attempt already under way sends neither
-its observation nor its request (context.py:482-484). The worker ends with RetryCancelled, which
-nothing reads: run_stream has already moved on.
+its observation nor its request (context.py:482-484). RetryCancelled unwinds to stream_generate,
+which returns a stale result without an action; nothing reads it, run_stream has moved on.
 
 Before this, the next attempt read the epoch afresh, reconnected and kept its reply: a request
 after the abort, and a turn and an action that nobody committed.
@@ -28,6 +28,7 @@ from realtime_framework.entity.model import (
     TRANSIENT,
     RequestRetry,
     RetryCancelled,
+    RuntimeState,
     TransportFailure,
     retry_cancellation,
 )
@@ -111,11 +112,12 @@ def _abort_like_the_runner(agent) -> int:
     return before
 
 
-def _cancelled(box, done) -> RetryCancelled:
+def _cancelled(box, done) -> dict:
     assert done.wait(WAIT_S), "the abandoned worker never returned"
-    assert "result" not in box, box.get("result")
-    assert isinstance(box.get("error"), RetryCancelled), repr(box.get("error"))
-    return box["error"]
+    assert "error" not in box, repr(box.get("error"))
+    result = box["result"]
+    assert result["stale"] is True and result["action"] is None, result
+    return result
 
 
 def _count_calls(target, name: str) -> list:
@@ -438,8 +440,7 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
     """Session API. Response 1 is dropped, and attempt 2 rebuilds the session through connect()
     (context.py:402-412; providers/openai_realtime.py:661-671). The abort lands before connect()
     opens it. connect()'s own attempts run under the decision's retry_cancellation
-    (providers/openai_realtime.py:435-454), so no WebSocket opens and no response runs, and the
-    rebuild passes the cancellation on (providers/openai_realtime.py:672-673)."""
+    (providers/openai_realtime.py:435-454), so no WebSocket opens and no response runs."""
     monkeypatch.setattr(model_module, "_backoff", lambda cancel, seconds: None)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
         episode = _session_episode(stub, tmp_path)
@@ -463,6 +464,8 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
             epoch = _abort_like_the_runner(agent)
             release.set()
             _cancelled(box, done)
+            # abort()'s state: the abandoned rebuild records no failure and no session state.
+            assert agent._runtime.state == RuntimeState.DIRTY
         finally:
             episode.finish()
         connections = stub.finish()
