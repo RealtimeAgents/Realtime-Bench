@@ -71,6 +71,13 @@ def main(argv=None):
         help="Frames per second fed to the model (default: --fps)",
     )
     parser.add_argument(
+        "--interaction-mode",
+        choices=("turn_based", "streaming"),
+        default="turn_based",
+        help="One frame per model generation, or frames streamed to a live model (default: "
+        "turn_based)",
+    )
+    parser.add_argument(
         "--duration-minutes",
         "--max-minutes",
         type=positive,
@@ -174,6 +181,7 @@ def main(argv=None):
             entry.adapter_type,
             clock_mode=args.clock,
             model_input_fps=model_input_fps,
+            interaction_mode=args.interaction_mode,
             tokens_per_frame=tokens_per_frame,
         )
     except (KeyError, ValueError) as exc:
@@ -202,6 +210,7 @@ def main(argv=None):
             "tokens_per_frame": tokens_per_frame,
             "fps": args.fps,
             "model_input_fps": model_input_fps,
+            "interaction_mode": args.interaction_mode,
             "duration_minutes": args.duration_minutes,
             "seed": args.seed,
             "protocol": protocol,
@@ -315,6 +324,8 @@ def main(argv=None):
         str(args.fps),
         "--model-input-fps",
         str(model_input_fps),
+        "--interaction-mode",
+        args.interaction_mode,
         "--max-minutes",
         str(args.duration_minutes),
         "--seed",

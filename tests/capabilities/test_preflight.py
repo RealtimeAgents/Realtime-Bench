@@ -457,6 +457,32 @@ def test_streaming_needs_a_live_api_run_config():
     )
 
 
+def test_streaming_needs_a_live_api_plan(tmp_path):
+    fails(
+        plan(tmp_path, "models: [my-model]\nruntime: {clock_mode: wall, "
+                       "interaction_mode: streaming}\n"),
+        NOT_LIVE,
+    )
+
+
+def test_streaming_plan_names_a_mode(tmp_path):
+    fails(
+        plan(tmp_path, "models: [my-model]\nruntime: {interaction_mode: live}\n"),
+        "runtime.interaction_mode must be 'turn_based' or 'streaming'",
+    )
+
+
+def test_streaming_trial(capsys):
+    from realtime_framework.evaluation._trial import main
+
+    usage_error(
+        capsys,
+        lambda: main(["--catalog-model", "gemini-live", "--task", WEB, "--interaction-mode",
+                      "streaming", "--dry-run"]),
+        "The gemini_live API does not support streaming",
+    )
+
+
 def test_streaming_identity():
     from realtime_framework.evaluation.config import identity_main
 
@@ -492,6 +518,26 @@ def test_streaming_needs_the_wall_clock(streaming_gemini):
     )
 
 
+@pytest.mark.parametrize("tokens_per_frame", ["64", "unlimited"], ids=["token", "pause"])
+def test_streaming_needs_the_wall_clock_plan(streaming_gemini, tmp_path, tokens_per_frame):
+    fails(
+        plan(tmp_path, "models: [gemini-live]\nruntime: {clock_mode: token, tokens_per_frame: "
+                       f"{tokens_per_frame}, interaction_mode: streaming}}\n"),
+        STREAMING_CLOCK,
+    )
+
+
+def test_streaming_needs_the_wall_clock_trial(streaming_gemini, capsys):
+    from realtime_framework.evaluation._trial import main
+
+    usage_error(
+        capsys,
+        lambda: main(["--catalog-model", "gemini-live", "--task", WEB, "--clock", "token",
+                      "--interaction-mode", "streaming", "--dry-run"]),
+        STREAMING_CLOCK,
+    )
+
+
 def test_streaming_frame_rate_cap(streaming_gemini):
     """The run plans and the Harbor trial worker apply the cap to a streaming run too; on a turn-
     based run only the runner does (check_fps)."""
@@ -505,6 +551,15 @@ def test_streaming_frame_rate_cap(streaming_gemini):
     validate_model_interaction("gemini_live", clock_mode="wall", model_input_fps=2.0)
     fails(lambda: episode(preset("gemini-live", fps=2.0), interaction_mode="streaming"), cap)
     episode(preset("gemini-live"), interaction_mode="streaming")
+
+
+def test_streaming_frame_rate_cap_plan(streaming_gemini, tmp_path):
+    """The plan's model-input rate defaults to its environment rate."""
+    fails(
+        plan(tmp_path, "models: [gemini-live]\nruntime: {clock_mode: wall, fps: 2, "
+                       "interaction_mode: streaming}\n"),
+        "gemini_live supports at most 1 fps; requested 2",
+    )
 
 
 # Catalog status and reasoning effort (unchanged entry points)

@@ -322,6 +322,9 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         or model_input_fps <= 0
     ):
         raise ValueError("runtime.model_input_fps must be positive")
+    interaction_mode = runtime.get("interaction_mode", "turn_based")
+    if interaction_mode not in {"turn_based", "streaming"}:
+        raise ValueError("runtime.interaction_mode must be 'turn_based' or 'streaming'")
     duration_minutes = runtime.get("duration_minutes")
     if (
         not isinstance(duration_minutes, (int, float))
@@ -352,6 +355,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             model_catalog[model]["adapter_type"],
             clock_mode=clock_mode,
             model_input_fps=model_input_fps,
+            interaction_mode=interaction_mode,
             tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
         )
 
@@ -376,6 +380,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             "clock_mode": clock_mode,
             "fps": fps,
             "model_input_fps": model_input_fps,
+            "interaction_mode": interaction_mode,
             "tokens_per_frame": tokens_per_frame,
             "duration_minutes": duration_minutes,
             "seed": task_seed(runtime.get("seed", DEFAULT_TASK_SEED)),
