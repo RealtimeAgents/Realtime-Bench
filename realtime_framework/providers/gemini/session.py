@@ -217,7 +217,7 @@ class SessionCore:
 
     # ---- reads -----------------------------------------------------------------------------
 
-    def generation_started(self, generation_id: str) -> None:
+    def start_generation(self, generation_id: str) -> None:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 

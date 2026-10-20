@@ -676,7 +676,7 @@ class GeminiLiveDriver:
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
-        self._core.generation_started(request.generation_id)
+        self._core.start_generation(request.generation_id)
         return GenerationHandle(
             request.generation_id,
             # The policy's queued acknowledgement, sent for every call of this generation.
