@@ -23,7 +23,8 @@ FRAME_NOT_IN_TABLE = "frame_not_in_table"
 class FrameRecord:
     frame: int  # 1-based, in the order frames are prepared for the model
     observation_id: str
-    captured_unix_s: float  # Observation.timestamp
+    # Observation.timestamp: wall time, or simulated seconds on the token clock (sandbox/actions.py).
+    captured_at: float
     geometry: dict  # FrameGeometry of the image the model is sent
     marks: dict | None  # the SoM mark map; None when the frame had no inspection
     # "prepared" until its request or session push went out, then "sent".
@@ -37,11 +38,9 @@ class FrameTable:
         self._newest_sent = 0
 
     def register(
-        self, observation_id: str, captured_unix_s: float, geometry: dict, marks: dict | None
+        self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None
     ) -> FrameRecord:
-        record = FrameRecord(
-            len(self._frames) + 1, observation_id, captured_unix_s, geometry, marks
-        )
+        record = FrameRecord(len(self._frames) + 1, observation_id, captured_at, geometry, marks)
         self._frames[record.frame] = record
         return record
 
@@ -67,8 +66,9 @@ class FrameTable:
 
     def age(self, record: FrameRecord, at_unix_s: float) -> dict:
         """How old a frame is when an action based on it arrives: the frames sent after it, and
-        the seconds since its capture."""
+        the seconds since its capture. Streaming runs on the wall clock only, so its frames'
+        capture times are wall time as well."""
         return {
             "age_frames": self._newest_sent - record.frame,
-            "age_s": at_unix_s - record.captured_unix_s,
+            "age_s": at_unix_s - record.captured_at,
         }
