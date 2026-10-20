@@ -57,17 +57,16 @@ def _response_payload(channel, purpose, request_seq, response, **fields) -> dict
 
 
 class _RecordingStream(httpx.AsyncByteStream):
-    """Pass response chunks through unchanged and record them when the response is closed.
+    """Pass response chunks through unchanged; record them once, when the response is closed.
 
-    httpx closes the stream after the last chunk, and the drivers close it on finish or interrupt,
-    so the recording also covers error bodies the SDK reads and streams cut short.
+    httpx closes the stream after the last chunk, SDKs close it when they stop reading, and the
+    drivers close it on interrupt, so error bodies the SDK reads and cut-short streams are covered.
+    ``complete`` means the transport reported the end of the body.
     """
 
-    def __init__(self, stream, owner, channel, purpose, request_seq, response):
-        self._stream = stream
-        self._owner = owner
-        self._channel = channel
-        self._purpose = purpose
+    def __init__(self, capture: HttpCapture, request_seq, response):
+        self._capture = capture
+        self._stream = response.stream
         self._request_seq = request_seq
         self._response = response
         self._chunks: list[bytes] = []
@@ -76,6 +75,7 @@ class _RecordingStream(httpx.AsyncByteStream):
         self._last_byte_ns = None
         self._complete = False
         self._error = None
+        self._recorded = False
 
     async def __aiter__(self):
         try:
@@ -94,44 +94,64 @@ class _RecordingStream(httpx.AsyncByteStream):
         try:
             await self._stream.aclose()
         finally:
-            self._owner._trace.capture(
-                TraceEvent.MODEL_RESPONSE_RECEIVED,
-                _response_payload(
-                    self._channel,
-                    self._purpose,
-                    self._request_seq,
-                    self._response,
-                    complete=self._complete,
-                    error=self._error,
-                    headers_monotonic_ns=self._headers_ns,
-                    first_byte_monotonic_ns=self._first_byte_ns,
-                    last_byte_monotonic_ns=self._last_byte_ns,
-                ),
-                body=self._chunks,
-            )
+            self.record()
+
+    def record(self) -> None:
+        # Closed by its SDK, or recorded at the end of the generation that left it open.
+        if self._recorded:
+            return
+        self._recorded = True
+        self._capture.open.discard(self)
+        capture = self._capture
+        capture.owner._trace.capture(
+            TraceEvent.MODEL_RESPONSE_RECEIVED,
+            _response_payload(
+                capture.channel,
+                capture.purpose,
+                self._request_seq,
+                self._response,
+                complete=self._complete,
+                error=self._error,
+                headers_monotonic_ns=self._headers_ns,
+                first_byte_monotonic_ns=self._first_byte_ns,
+                last_byte_monotonic_ns=self._last_byte_ns,
+            ),
+            body=self._chunks,
+        )
 
 
-def httpx_event_hooks(owner, channel: str, purpose: str) -> dict:
+class HttpCapture:
     """httpx event hooks for one client: each request as sent, each response's raw bytes.
 
     The request hook runs on the final request right before it is sent, with its body loaded; the
     response hook wraps the response stream before any byte is read.
     """
-    sent: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
-    async def on_request(request: httpx.Request) -> None:
-        sent[request] = owner._trace.capture(
+    def __init__(self, owner, channel: str, purpose: str):
+        self.owner = owner
+        self.channel = channel
+        self.purpose = purpose
+        self.open: set[_RecordingStream] = set()
+        self._sent: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self.hooks = {"request": [self._on_request], "response": [self._on_response]}
+
+    async def _on_request(self, request: httpx.Request) -> None:
+        self._sent[request] = self.owner._trace.capture(
             TraceEvent.MODEL_REQUEST_SENT,
-            _request_payload(channel, purpose, request),
+            _request_payload(self.channel, self.purpose, request),
             body=request.content,
         )
 
-    async def on_response(response: httpx.Response) -> None:
-        response.stream = _RecordingStream(
-            response.stream, owner, channel, purpose, sent.get(response.request), response
-        )
+    async def _on_response(self, response: httpx.Response) -> None:
+        stream = _RecordingStream(self, self._sent.get(response.request), response)
+        self.open.add(stream)
+        response.stream = stream
 
-    return {"request": [on_request], "response": [on_response]}
+    def record_open(self) -> None:
+        """Record responses still open when a generation ends: LiteLLM never closes its
+        Anthropic stream (its ModelResponseIterator has no aclose)."""
+        for stream in list(self.open):
+            stream.record()
 
 
 def traced_post(owner, channel: str, purpose: str):

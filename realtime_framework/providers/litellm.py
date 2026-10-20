@@ -45,8 +45,8 @@ from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
-from realtime_framework.providers.capture import httpx_event_hooks
 from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
@@ -600,21 +600,19 @@ class LiteLLMDriver:
 
             # The harness owns retries (entity.model.TRANSPORT_RETRY) so every attempt is recorded.
             # DefaultAsyncHttpxClient keeps the SDK's own client defaults and adds the hooks.
+            self._http_capture = HttpCapture(self, "litellm.openai_sdk", "generation")
             self._http = AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
                 max_retries=0,
-                http_client=DefaultAsyncHttpxClient(
-                    event_hooks=httpx_event_hooks(self, "litellm.openai_sdk", "generation")
-                ),
+                http_client=DefaultAsyncHttpxClient(event_hooks=self._http_capture.hooks),
             )
         else:
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as AsyncHTTPHandler
 
             # LiteLLM passes the hooks on to the client of its connection-error resend.
-            self._http = AsyncHTTPHandler(
-                event_hooks=httpx_event_hooks(self, "litellm.httpx", "generation")
-            )
+            self._http_capture = HttpCapture(self, "litellm.httpx", "generation")
+            self._http = AsyncHTTPHandler(event_hooks=self._http_capture.hooks)
         return self._http
 
     def _transport_kwargs(self) -> dict:
@@ -887,6 +885,7 @@ class LiteLLMDriver:
             finally:
                 with self._lock:
                     self._responses.pop(id(response), None)
+                self._http_capture.record_open()
 
     @staticmethod
     def _delta_reasoning(delta) -> str:

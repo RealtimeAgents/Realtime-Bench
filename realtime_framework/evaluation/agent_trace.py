@@ -6,10 +6,11 @@ that observed it, without I/O, hashing or serialization, and queued for one writ
 thread is the only agent-side caller of ``EpisodeTrace.emit``, whose lock already serializes it
 with the runner, so agent and runner records form one hash chain.
 
-Bodies go to ``episode_blobs.pack`` next to the trace. Long base64 spans are stored verbatim and
-once per hash; the rest of a body (its template) is inline when small, otherwise zlib-compressed in
-the pack. Events carry the locators, so the chain protects them. The pack is neither exported nor
-uploaded.
+Every body (request, reply, live-session message) goes to ``episode_blobs.pack`` next to the trace,
+never into the trace: the trace is exported and uploaded, the pack is neither, and bodies carry
+private task content. Long base64 spans are stored verbatim and once per hash; the rest of a body
+(its template) is stored zlib-compressed. Events carry only the locators, which the chain protects,
+and non-content metadata.
 """
 
 from __future__ import annotations
@@ -29,10 +30,8 @@ from realtime_framework.entity.records import TraceEvent, current_trace_scope
 # Bound on writing the queued agent records at episode end, sized like ABANDONED_DRAIN_S
 # (runner.py:50-52). A run whose agent records are incomplete is invalid.
 AGENT_TRACE_FLUSH_S = 30.0
-# Base64 spans at least this long are stored once in the pack.
+# Base64 spans at least this long are stored verbatim and once per hash.
 SPAN_MIN_CHARS = 4096
-# A body template up to this size stays inline in its event.
-INLINE_MAX_BYTES = 4096
 # Data URLs (chat, Realtime and Decisions images), and the JSON "data" field of google-genai
 # inlineData and of Anthropic image sources as httpx encodes them.
 SPAN_PREFIXES = (b";base64,", b'"data":"', b'"data": "')
@@ -111,7 +110,7 @@ def load_body(pack_path: Path, body: dict) -> bytes:
             data = pack.read(ref["length"])
             return zlib.decompress(data) if ref["encoding"] == "zlib" else data
 
-        template = body["inline"].encode("utf-8") if "inline" in body else read(body["template"])
+        template = read(body["template"])
         pieces, previous = [], 0
         for span in body.get("spans", ()):
             pieces += [template[previous : span["at"]], read(span["ref"])]
@@ -236,7 +235,11 @@ class AgentTraceSink:
         return event, record
 
     def _store(self, data: bytes) -> tuple[dict, bytes]:
-        """Describe one body: its hash, and a template with each long base64 span stored once."""
+        """Store one body in the pack: each long base64 span once, then the template.
+
+        Returns the locator for the event (no body content) and the template, from which a
+        session message is classified.
+        """
         described = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
         pieces, spans, previous, length = [], [], 0, 0
         for start, end in base64_spans(data):
@@ -247,16 +250,7 @@ class AgentTraceSink:
             time.sleep(0)  # let the runtime loop run between screenshots
         pieces.append(data[previous:])
         template = b"".join(pieces)
-        inline = None
-        if len(template) <= INLINE_MAX_BYTES:
-            try:
-                inline = template.decode("utf-8")
-            except UnicodeDecodeError:  # a compressed or binary body
-                pass
-        if inline is None:
-            described["template"] = self.pack.put(template, compress=True)
-        else:
-            described["inline"] = inline
+        described["template"] = self.pack.put(template, compress=True)
         if spans:
             described["spans"] = spans
         return described, template
