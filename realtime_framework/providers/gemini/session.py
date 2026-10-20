@@ -132,15 +132,10 @@ def history_batches(history: list[Content], limit: int = HISTORY_CONTENTS_PER_ME
 
 
 def interaction_status(message) -> str | None:
-    # The current SDK exposes status on server_content. Accept the top-level spelling too so
-    # the driver remains compatible with the wire shape documented for tool-call messages.
-    status = getattr(message, "interaction_status", None)
-    if status is None:
-        status = getattr(getattr(message, "server_content", None), "interaction_status", None)
-    status = getattr(status, "value", status)
+    status = getattr(getattr(message, "server_content", None), "interaction_status", None)
     if status is None:
         return None
-    return str(status).rsplit(".", 1)[-1].upper()
+    return str(getattr(status, "value", status)).rsplit(".", 1)[-1].upper()
 
 
 @dataclass(frozen=True)
