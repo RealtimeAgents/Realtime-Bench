@@ -792,7 +792,7 @@ from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import action_has_target_references
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.providers.decisions.history import render_digest
-from realtime_framework.providers.legacy import chat_messages
+from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 
 

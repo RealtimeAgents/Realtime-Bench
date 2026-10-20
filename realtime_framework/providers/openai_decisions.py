@@ -34,7 +34,7 @@ from realtime_framework.providers.context import (
     validate_context_reserve,
 )
 from realtime_framework.providers.decisions.driver import DecisionEncoder
-from realtime_framework.providers.legacy import chat_messages
+from realtime_framework.providers.litellm import chat_messages
 
 QUESTION_KEY = "next_action"
 
