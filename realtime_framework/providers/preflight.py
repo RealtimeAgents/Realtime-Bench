@@ -7,7 +7,8 @@ collected here:
 
 - runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
   check_token_budget;
-- run plans, effective_run_config and the Harbor trial worker: validate_model_interaction;
+- run plans, effective_run_config and the Harbor trial worker: validate_model_interaction
+  (check_wall_clock, check_interaction_mode);
 - the runner, once, before it builds the agent: check_episode.
 
 Construction-time failures (credentials, SDK pin, endpoint URL, Decisions route) stay in the
@@ -56,10 +57,46 @@ def check_wall_clock(driver, adapter_type, clock_mode) -> None:
         raise ValueError(f"The {adapter_type} API requires a wall clock")
 
 
-def validate_model_interaction(adapter_type, *, clock_mode, fps, tokens_per_frame=None):
+def check_interaction_mode(
+    driver, adapter_type, *, interaction_mode, clock_mode, model_input_fps
+) -> None:
+    """Native streaming pushes frames into a live session at the model-input rate while the model
+    generates, so it needs a live API that declares it, the wall clock (neither the token nor the
+    pause clock) and a model-input rate within the model's video cap."""
+    if interaction_mode == "turn_based":
+        return
+    capabilities = driver.capabilities
+    if not capabilities.persistent_session:
+        raise ValueError(
+            f"Streaming requires a live API (openai_realtime or gemini_live); {adapter_type} "
+            "is not one"
+        )
+    if interaction_mode not in capabilities.interaction_modes:
+        raise ValueError(f"The {adapter_type} API does not support streaming")
+    if clock_mode != "wall":
+        raise ValueError("Streaming requires a wall clock")
+    check_fps(driver, model_input_fps)
+
+
+def validate_model_interaction(
+    adapter_type,
+    *,
+    clock_mode,
+    model_input_fps,
+    interaction_mode="turn_based",
+    tokens_per_frame=None,
+):
     """Validate API interaction requirements before starting an episode."""
-    del fps, tokens_per_frame
-    check_wall_clock(adapter_class(adapter_type), adapter_type, clock_mode)
+    del tokens_per_frame
+    driver = adapter_class(adapter_type)
+    check_wall_clock(driver, adapter_type, clock_mode)
+    check_interaction_mode(
+        driver,
+        adapter_type,
+        interaction_mode=interaction_mode,
+        clock_mode=clock_mode,
+        model_input_fps=model_input_fps,
+    )
 
 
 def check_config(driver, config) -> None:
@@ -136,13 +173,16 @@ def check_choice_task(driver, task) -> None:
         raise ValueError(f"Choice Decisions supports Web task evaluation only: {task.task_id}")
 
 
-def check_fps(driver, config) -> None:
-    """A video cap bounds the model-input rate ``config.fps``; the environment may run faster."""
+def check_fps(driver, model_input_fps) -> None:
+    """A video cap bounds the model-input rate (ModelConfig.fps); the environment may run faster."""
     capabilities = driver.capabilities
-    if capabilities.max_video_fps is not None and float(config.fps) > capabilities.max_video_fps:
+    if (
+        capabilities.max_video_fps is not None
+        and float(model_input_fps) > capabilities.max_video_fps
+    ):
         raise ValueError(
             f"{capabilities.protocol_family} supports at most "
-            f"{capabilities.max_video_fps:g} fps; requested {config.fps:g}"
+            f"{capabilities.max_video_fps:g} fps; requested {model_input_fps:g}"
         )
 
 
@@ -196,21 +236,29 @@ def check_context_policy(driver, policy, config) -> None:
         )
 
 
-def check_episode(model_config, *, clock_mode, task) -> None:
+def check_episode(model_config, *, clock_mode, task, interaction_mode="turn_based") -> None:
     """The runner's rules, applied once before it builds the agent.
 
     Among themselves the rules keep the order in which they fired before: the clock check, then
     the driver's constructor, then initialize (the choice-task and frame-rate checks), then the
     session connect. All of them now precede the driver's construction, so the initialize and
-    connect rules are reported before a missing API key, which the constructor reports. The context
+    connect rules are reported before a missing API key, which the constructor reports. The
+    interaction-mode rules follow the clock check, as in validate_model_interaction. The context
     policy is checked last. ``task`` is the registered task (its category and task_id).
     """
     adapter_type = model_config.adapter_type
     driver = adapter_class(adapter_type)
     check_wall_clock(driver, adapter_type, clock_mode)
+    check_interaction_mode(
+        driver,
+        adapter_type,
+        interaction_mode=interaction_mode,
+        clock_mode=clock_mode,
+        model_input_fps=model_config.fps,
+    )
     check_config(driver, model_config)
     check_choice_task(driver, task)
-    check_fps(driver, model_config)
+    check_fps(driver, model_config.fps)
     check_session_config(driver, model_config)
     policy = current_context_policy().for_path(adapter_type, model_config.provider_options)
     check_context_policy(driver, policy, model_config)

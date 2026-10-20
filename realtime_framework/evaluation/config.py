@@ -351,7 +351,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         validate_model_interaction(
             model_catalog[model]["adapter_type"],
             clock_mode=clock_mode,
-            fps=fps,
+            model_input_fps=model_input_fps,
             tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
         )
 
@@ -673,7 +673,7 @@ def effective_run_config(
     validate_model_interaction(
         model_config.get("adapter_type"),
         clock_mode=clock_mode,
-        fps=fps,
+        model_input_fps=model_config["fps"],
         tokens_per_frame=tokens_per_frame,
     )
     if protocol == "time-aware-token-v1":

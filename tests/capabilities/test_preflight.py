@@ -31,6 +31,7 @@ from realtime_framework.providers.preflight import (
     check_context_policy,
     check_episode,
     check_token_budget,
+    validate_model_interaction,
 )
 
 GAME, WEB = "gomoku", "rt_waitlist_fit"
@@ -54,8 +55,11 @@ def preset(key, **overrides):
     )
 
 
-def episode(model_config, *, clock_mode="wall", task=WEB):
-    check_episode(model_config, clock_mode=clock_mode, task=tasks.get(task))
+def episode(model_config, *, clock_mode="wall", task=WEB, interaction_mode="turn_based"):
+    check_episode(
+        model_config, clock_mode=clock_mode, task=tasks.get(task),
+        interaction_mode=interaction_mode,
+    )
 
 
 def fails(call, message, kind=ValueError):
@@ -413,6 +417,72 @@ def test_context_window_needs_a_request_estimate():
         policy_check(preset("claude-opus-5", context_window_tokens=200000)),
         "The openrouter API declares a context window but no estimate of its requests",
     )
+
+
+# Native streaming (check_interaction_mode): rules added with the interaction mode, so their
+# messages are new rather than recorded on 8319a10.
+
+NOT_LIVE = (
+    "Streaming requires a live API (openai_realtime or gemini_live); chat_completions is not one"
+)
+STREAMING_CLOCK = "Streaming requires a wall clock"
+
+
+@pytest.fixture
+def streaming_gemini(monkeypatch):
+    """Gemini Live declaring native streaming, as it will once its streaming agent exists; no
+    driver declares it yet."""
+    from dataclasses import replace
+
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver
+
+    capabilities = replace(
+        GeminiLiveDriver.capabilities, interaction_modes=frozenset({"turn_based", "streaming"})
+    )
+    monkeypatch.setattr(GeminiLiveDriver, "capabilities", capabilities)
+
+
+def test_streaming_needs_a_live_api():
+    fails(lambda: episode(preset("my-model"), interaction_mode="streaming"), NOT_LIVE)
+
+
+def test_the_live_apis_are_the_persistent_sessions():
+    """The APIs the message names are the drivers that declare a persistent session."""
+    drivers = {api: catalog.adapter_class(api) for api in catalog.APIS}
+    live = {api for api, driver in drivers.items() if driver.capabilities.persistent_session}
+    assert live == {"openai_realtime", "gemini_live"}
+
+
+@pytest.mark.parametrize(
+    "key, api", [("gpt-realtime-2", "openai_realtime"), ("gemini-live", "gemini_live")]
+)
+def test_streaming_needs_the_driver_to_declare_it(key, api):
+    fails(
+        lambda: episode(preset(key), interaction_mode="streaming"),
+        f"The {api} API does not support streaming",
+    )
+
+
+def test_streaming_needs_the_wall_clock(streaming_gemini):
+    fails(
+        lambda: episode(preset("gemini-live"), clock_mode="token", interaction_mode="streaming"),
+        STREAMING_CLOCK,
+    )
+
+
+def test_streaming_frame_rate_cap(streaming_gemini):
+    """The run plans and the Harbor trial worker apply the cap to a streaming run too; on a turn-
+    based run only the runner does (check_fps)."""
+    cap = "gemini_live supports at most 1 fps; requested 2"
+    fails(
+        lambda: validate_model_interaction(
+            "gemini_live", clock_mode="wall", model_input_fps=2.0, interaction_mode="streaming"
+        ),
+        cap,
+    )
+    validate_model_interaction("gemini_live", clock_mode="wall", model_input_fps=2.0)
+    fails(lambda: episode(preset("gemini-live", fps=2.0), interaction_mode="streaming"), cap)
+    episode(preset("gemini-live"), interaction_mode="streaming")
 
 
 # Catalog status and reasoning effort (unchanged entry points)
