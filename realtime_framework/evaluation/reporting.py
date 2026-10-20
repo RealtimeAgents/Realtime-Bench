@@ -71,11 +71,13 @@ def resolve_run_identity(
     harness_hash=None,
     fps=None,
     model_input_fps=None,
+    interaction_mode=None,
     runtime_config_hash=None,
 ) -> dict:
     """Return the canonical fields that distinguish one executable run from another.
 
-    ``fps`` is the environment's frame rate and ``model_input_fps`` the model's."""
+    ``fps`` is the environment's frame rate and ``model_input_fps`` the model's;
+    ``interaction_mode`` is turn_based or streaming."""
     harness_hash = harness_hash or harness_fingerprint()
     identity = {
         **resolve_suite_metadata(task_id=task_id, ctask=ctask),
@@ -88,6 +90,7 @@ def resolve_run_identity(
         "harness_hash": harness_hash,
         "fps": fps,
         "model_input_fps": model_input_fps,
+        "interaction_mode": interaction_mode,
         "seed": getattr(ctask, "seed", None),
         "runtime_config_hash": runtime_config_hash,
     }
@@ -109,6 +112,7 @@ def capture_generation_artifact(
     harness_hash=None,
     fps=None,
     model_input_fps=None,
+    interaction_mode=None,
     runtime_config=None,
     runtime_config_hash=None,
     snapshot=None,
@@ -135,6 +139,7 @@ def capture_generation_artifact(
         harness_hash=harness_hash,
         fps=fps,
         model_input_fps=model_input_fps,
+        interaction_mode=interaction_mode,
         runtime_config_hash=runtime_config_hash,
     )
     manifest = {
@@ -877,6 +882,7 @@ def summary_ok(
     expected_harness_hash=None,
     expected_fps=None,
     expected_model_input_fps=None,
+    expected_interaction_mode=None,
     expected_seed=None,
     expected_runtime_config_hash=None,
     expected_interactables_protocol=None,
@@ -935,6 +941,7 @@ def summary_ok(
         "harness_hash": expected_harness_hash,
         "fps": expected_fps,
         "model_input_fps": expected_model_input_fps,
+        "interaction_mode": expected_interaction_mode,
         "seed": expected_seed,
         "runtime_config_hash": expected_runtime_config_hash,
         "interactables_protocol": expected_interactables_protocol,
@@ -958,6 +965,7 @@ def summary_main(argv=None) -> int:
     parser.add_argument("--expected-harness-hash")
     parser.add_argument("--expected-fps", type=float)
     parser.add_argument("--expected-model-input-fps", type=float)
+    parser.add_argument("--expected-interaction-mode")
     parser.add_argument("--expected-seed", type=int)
     parser.add_argument("--expected-runtime-config-hash")
     parser.add_argument("--expected-interactables-protocol")
@@ -985,6 +993,7 @@ def summary_main(argv=None) -> int:
             expected_harness_hash=args.expected_harness_hash,
             expected_fps=args.expected_fps,
             expected_model_input_fps=args.expected_model_input_fps,
+            expected_interaction_mode=args.expected_interaction_mode,
             expected_seed=args.expected_seed,
             expected_runtime_config_hash=args.expected_runtime_config_hash,
             expected_interactables_protocol=args.expected_interactables_protocol,
@@ -1535,13 +1544,14 @@ def prepare_episode_report(args):
         mode=args.mode, clock_mode=args.clock, protocol=args.protocol, seed=args.seed,
         tokens_per_frame=None if args.tokens_per_frame == "unlimited" else int(args.tokens_per_frame),
         think_budget_s=args.think_budget_s, per_move_cap_s=args.per_move_cap_s,
+        interaction_mode=args.interaction_mode,
     ))
     expected = {
         **resolve_run_identity(
             task_id=args.task, model=args.model, adapter=model_config.adapter_type,
             backend_model=model_config.model_name, mode=args.mode, cap=args.max_minutes,
             protocol=args.protocol, fps=args.fps, model_input_fps=args.model_input_fps,
-            runtime_config_hash=runtime_hash,
+            interaction_mode=args.interaction_mode, runtime_config_hash=runtime_hash,
         ),
         "seed": args.seed,
         "benchmark_cell": args.model,
@@ -1595,6 +1605,7 @@ def report(root):
                     "protocol",
                     "fps",
                     "model_input_fps",
+                    "interaction_mode",
                     "seed",
                     "cap",
                     "reasoning_effort",
@@ -1636,6 +1647,7 @@ def report(root):
                                 "protocol",
                                 "fps",
                                 "model_input_fps",
+                                "interaction_mode",
                                 "seed",
                                 "cap",
                                 "runtime_config_hash",
@@ -1946,6 +1958,7 @@ def reevaluate_main():
                 "harness_hash",
                 "fps",
                 "model_input_fps",
+                "interaction_mode",
                 "seed",
                 "runtime_config_hash",
             ):

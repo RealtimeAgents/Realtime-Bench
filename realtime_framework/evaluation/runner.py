@@ -1439,6 +1439,13 @@ def main():
         help="frames per second fed to the model (default: --fps, the environment's rate)",
     )
     p.add_argument(
+        "--interaction-mode",
+        choices=("turn_based", "streaming"),
+        default="turn_based",
+        help="turn_based: one frame per model generation (the leaderboard); streaming: frames "
+        "pushed into a live session while the model generates.",
+    )
+    p.add_argument(
         "--clock",
         choices=["wall", "token"],
         default=None,
@@ -1571,6 +1578,7 @@ def main():
             "mode": a.mode,
             "fps": env_fps,
             "model_input_fps": model_input_fps,
+            "interaction_mode": a.interaction_mode,
             "tokens_per_frame": tokens_per_frame,
             "reasoning_effort": reasoning_effort,
             "max_minutes": a.max_minutes,
@@ -1669,6 +1677,7 @@ def main():
                 ctask,
                 task,
                 clock_mode=a.clock,
+                interaction_mode=a.interaction_mode,
                 tokens_per_frame=tokens_per_frame,
                 run_dir=run_dir,
                 episode_trace=episode_trace,
@@ -1715,6 +1724,7 @@ def main():
             per_move_cap_s=per_move_cap,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
+            interaction_mode=a.interaction_mode,
         )
         runtime_config_hash = config_fingerprint(runtime_config)
         _atomic_write_json(
@@ -1901,6 +1911,7 @@ def main():
                 harness_hash=harness_hash,
                 fps=env_fps,
                 model_input_fps=model_input_fps,
+                interaction_mode=a.interaction_mode,
                 runtime_config=runtime_config,
                 runtime_config_hash=runtime_config_hash,
                 snapshot=frozen_snapshot,
@@ -2156,6 +2167,7 @@ def main():
         harness_hash=harness_hash,
         fps=env_fps,
         model_input_fps=model_input_fps,
+        interaction_mode=a.interaction_mode,
         runtime_config_hash=runtime_config_hash,
     )
     summ = {
@@ -2335,6 +2347,7 @@ def set_up_agent(
     instruction: str,
     *,
     clock_mode: str,
+    interaction_mode: str,
     tokens_per_frame: int | None,
     run_dir: Path,
     episode_trace: EpisodeTrace,
@@ -2350,8 +2363,8 @@ def set_up_agent(
     the agent reads (real time when omitted). What this makes is recorded in ``setup``.
     """
     clock = clock or SystemClock()
-    # Every pre-run rule on the model, clock and task, before any of them is built.
-    check_episode(cfg, clock_mode=clock_mode, task=ctask)
+    # Every pre-run rule on the model, clock, interaction mode and task, before any is built.
+    check_episode(cfg, clock_mode=clock_mode, task=ctask, interaction_mode=interaction_mode)
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
     agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace, clock=clock)
@@ -2463,6 +2476,7 @@ def _write_emergency_setup_summary(error: str):
         harness_hash=harness_fingerprint(),
         fps=env_fps,
         model_input_fps=model_input_fps,
+        interaction_mode=arg("--interaction-mode", "turn_based"),
     )
     tokens_per_frame_arg = arg("--tokens-per-frame", str(DEFAULT_TOKENS_PER_FRAME))
     tokens_per_frame = (

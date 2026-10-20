@@ -322,6 +322,9 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         or model_input_fps <= 0
     ):
         raise ValueError("runtime.model_input_fps must be positive")
+    interaction_mode = runtime.get("interaction_mode", "turn_based")
+    if interaction_mode not in {"turn_based", "streaming"}:
+        raise ValueError("runtime.interaction_mode must be 'turn_based' or 'streaming'")
     duration_minutes = runtime.get("duration_minutes")
     if (
         not isinstance(duration_minutes, (int, float))
@@ -351,7 +354,8 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         validate_model_interaction(
             model_catalog[model]["adapter_type"],
             clock_mode=clock_mode,
-            fps=fps,
+            model_input_fps=model_input_fps,
+            interaction_mode=interaction_mode,
             tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
         )
 
@@ -376,6 +380,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             "clock_mode": clock_mode,
             "fps": fps,
             "model_input_fps": model_input_fps,
+            "interaction_mode": interaction_mode,
             "tokens_per_frame": tokens_per_frame,
             "duration_minutes": duration_minutes,
             "seed": task_seed(runtime.get("seed", DEFAULT_TASK_SEED)),
@@ -664,6 +669,7 @@ def effective_run_config(
     tokens_per_frame: int | None = None,
     seed: int = DEFAULT_TASK_SEED,
     execution_feedback: bool | None = None,
+    interaction_mode: str = "turn_based",
 ) -> dict:
     """Capture non-secret effective settings that materially change a run."""
     if hasattr(model_config, "model_dump"):
@@ -673,7 +679,8 @@ def effective_run_config(
     validate_model_interaction(
         model_config.get("adapter_type"),
         clock_mode=clock_mode,
-        fps=fps,
+        model_input_fps=model_config["fps"],
+        interaction_mode=interaction_mode,
         tokens_per_frame=tokens_per_frame,
     )
     if protocol == "time-aware-token-v1":
@@ -734,6 +741,7 @@ def effective_run_config(
         "think_budget_s": think_budget_s,
         "per_move_cap_s": per_move_cap_s,
         "clock_mode": clock_mode,
+        "interaction_mode": interaction_mode,
         "tokens_per_frame": tokens_per_frame,
         "token_clock_timing_policy": (
             "fixed_action_at_observation_then_one_frame_per_decision"
@@ -780,6 +788,9 @@ def effective_run_config(
         }
     if is_external_driver(adapter_type):
         config["external_driver"] = external_driver_identity(adapter_type)
+    if interaction_mode == "streaming":
+        # validate_model_interaction admits only a live API that declares streaming.
+        config["streaming"] = dict(driver.streaming_settings)
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:
@@ -811,6 +822,9 @@ def identity_main(argv=None) -> int:
     parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
     parser.add_argument("--fps", type=float, required=True)
     parser.add_argument("--model-input-fps", type=float, help="default: --fps")
+    parser.add_argument(
+        "--interaction-mode", choices=("turn_based", "streaming"), default="turn_based"
+    )
     parser.add_argument("--max-minutes", type=float, required=True)
     parser.add_argument("--protocol", required=True)
     parser.add_argument("--think-budget-s", type=float)
@@ -868,6 +882,7 @@ def identity_main(argv=None) -> int:
         per_move_cap_s=per_move_cap,
         clock_mode=args.clock,
         tokens_per_frame=tokens_per_frame,
+        interaction_mode=args.interaction_mode,
     )
     print(config_fingerprint(effective))
     return 0

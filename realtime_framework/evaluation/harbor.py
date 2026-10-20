@@ -110,7 +110,8 @@ def verify(report, expected, request):
         raise ValueError("Missing, duplicate, invalid or unscored task")
     group = groups[0]
     for field in (
-        "suite_id", "suite_version", "suite_hash", "harness_hash", "fps", "model_input_fps", "seed"
+        "suite_id", "suite_version", "suite_hash", "harness_hash", "fps", "model_input_fps",
+        "interaction_mode", "seed",
     ):
         if group.get(field) != expected.get(field):
             raise ValueError(f"Report {field} mismatch")
@@ -218,6 +219,7 @@ class RealtimeBenchOptions(AgentOptions):
     )
     fps: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     model_input_fps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    interaction_mode: Literal["turn_based", "streaming"] = "turn_based"
     duration_minutes: float = Field(default=5.0, gt=0, allow_inf_nan=False)
     seed: int = DEFAULT_TASK_SEED
     model_revision: str | None = Field(default=None, min_length=1)
@@ -461,6 +463,8 @@ class ApptainerEnvironment(BaseEnvironment):
             str(self.task["fps"]),
             "--model-input-fps",
             str(self.task["model_input_fps"]),
+            "--interaction-mode",
+            self.task["interaction_mode"],
             "--duration-minutes",
             str(self.task["duration_minutes"]),
             "--seed",
@@ -514,6 +518,7 @@ class ApptainerEnvironment(BaseEnvironment):
             "category": suite_tasks[self.task_id],
             "fps": request["fps"],
             "model_input_fps": request["model_input_fps"],
+            "interaction_mode": request["interaction_mode"],
             "duration_minutes": request["duration_minutes"],
             "seed": request["seed"],
         }
@@ -731,7 +736,7 @@ def aggregate(job, *, official=False):
         raise ValueError("The job has no recorded trials")
     shared_fields = (
         "suite_id", "suite_version", "suite_hash", "harness_version", "harness_hash", "fps",
-        "model_input_fps", "duration_minutes", "seed",
+        "model_input_fps", "interaction_mode", "duration_minutes", "seed",
     )
     identities = {
         json.dumps(
@@ -827,6 +832,8 @@ def aggregate(job, *, official=False):
         "fps": identity["fps"],
         # Jobs recorded before the frame rates were split fed the model at the environment rate.
         "model_input_fps": identity.get("model_input_fps", identity["fps"]),
+        # Jobs recorded before the interaction mode was a run setting ran turn-based.
+        "interaction_mode": identity.get("interaction_mode", "turn_based"),
         "duration_minutes": identity["duration_minutes"],
         "clock": system.get("clock", "wall"),
         **(
