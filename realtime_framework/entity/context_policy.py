@@ -32,7 +32,9 @@ from realtime_framework.entity.records import _jsonable
 #    K3 keeps its reasoning through its preset.
 # 3: the action ledger is an input wherever there are roles; OpenAI Realtime sent it as an
 #    instruction (a system item), and Decisions state places it by position and header.
-CONTEXT_POLICY_VERSION = 3
+# 4: the fold placeholder says only what it removed; it claimed that the step's reasoning and
+#    action remain.
+CONTEXT_POLICY_VERSION = 4
 
 # Fixed model-visible texts the encoders write (item 5).
 JEV_LEDGER_HEADER = (
