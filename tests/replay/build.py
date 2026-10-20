@@ -93,8 +93,10 @@ def build_episode(
     clock_mode: str = "wall",
     tokens_per_frame: int | None = None,
     max_ticks: int | None = None,
+    before_initialize=None,
 ) -> Episode:
-    """``model_key`` stands for the catalog key the runner records as the model identity."""
+    """``model_key`` stands for the catalog key the runner records as the model identity.
+    ``before_initialize(agent)`` runs just before initialize(), which may open a connection."""
     fps = config.fps
     validate_model_interaction(  # runner.py:1554-1559
         config.adapter_type, clock_mode=clock_mode, fps=fps, tokens_per_frame=tokens_per_frame
@@ -131,6 +133,8 @@ def build_episode(
     # The runner refuses to start without a bound, stable first frame (runner.py:1631-1639).
     assert interactables.get("scene", {}).get("status") == "ok"
     assert interactables.get("binding", {}).get("stable")
+    if before_initialize is not None:
+        before_initialize(agent)
     agent.initialize(instruction, initial_observation)  # runner.py:1644
     agent.discard_pending_observations()  # runner.py:1647
     return Episode(
