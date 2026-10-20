@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
-import itertools as itertools
 import logging as logging
 import os as os
 import threading as threading
@@ -96,8 +95,8 @@ def classify_realtime_message(direction: str, message: dict):
 
 
 class _Session:
-    """One open connection: its number among the driver's connections, its session core and its
-    one receiver.
+    """One open connection: the number the trace gives its WebSocket connection, its session core
+    and its one receiver.
 
     At most one read is in flight. Each server event it reads goes to the core, which hands it to
     the state it belongs to; whoever waits for an acknowledgement or a response event awaits that
@@ -183,7 +182,6 @@ class OpenAIRealtimeDriver:
         self._send_lock = threading.Lock()
         # The open connection's conversation and its receiver.
         self._session: _Session | None = None
-        self._session_numbers = itertools.count(1)
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
@@ -356,8 +354,12 @@ class OpenAIRealtimeDriver:
         await retry.run_async(send)
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
+        # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``
+        # (openai/resources/realtime/realtime.py:765).
         self._session = _Session(
-            next(self._session_numbers), self._conn, RealtimeSessionCore(self._new_client_id)
+            self._conn._connection.trace_connection_number,
+            self._conn,
+            RealtimeSessionCore(self._new_client_id),
         )
         # The history is None when the runtime opens the episode's first session.
         await self._send_all(self._session.core.replay(request.history))

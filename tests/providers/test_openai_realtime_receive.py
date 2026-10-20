@@ -198,6 +198,34 @@ def test_events_carry_their_connection_and_generation():
     assert all(len(events) == 4 for events in responses)  # started, text, usage, turn_complete
 
 
+class _ServerConnections:
+    """An agent trace that keeps the connection id of each server message the driver read."""
+
+    def __init__(self):
+        self.ids: list[str] = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        if payload.get("direction") == "server":
+            self.ids.append(payload["connection_id"])
+
+
+def test_connection_numbers_follow_the_trace_after_a_refused_handshake():
+    """The trace numbers every WebSocket connection it sees, a refused upgrade included
+    (providers/capture.py); the events' connection numbers are the same numbers."""
+    trace = _ServerConnections()
+    with WsStub(_server(), reject=1) as stub:
+        driver = _driver(stub)
+        driver.bind_trace(trace)
+        responses = asyncio.run(_two_connections(driver))
+    assert stub.rejected == 1 and len(stub.connections) == 2
+    assert [{(e.connection, e.generation) for e in events} for events in responses] == [
+        {(2, 1)},
+        {(2, 2)},
+        {(3, 1)},
+    ]
+    assert sorted(set(trace.ids)) == ["openai_realtime.ws-2", "openai_realtime.ws-3"]
+
+
 async def _interrupted(driver: OpenAIRealtimeDriver):
     """A response cancelled after its first delta, as RealtimeRuntime.abort does it."""
     await driver.connect(ConnectRequest(seed=SEED))
