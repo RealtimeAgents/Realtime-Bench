@@ -109,7 +109,9 @@ def verify(report, expected, request):
     ):
         raise ValueError("Missing, duplicate, invalid or unscored task")
     group = groups[0]
-    for field in ("suite_id", "suite_version", "suite_hash", "harness_hash", "fps", "seed"):
+    for field in (
+        "suite_id", "suite_version", "suite_hash", "harness_hash", "fps", "model_input_fps", "seed"
+    ):
         if group.get(field) != expected.get(field):
             raise ValueError(f"Report {field} mismatch")
     if (
@@ -215,6 +217,7 @@ class RealtimeBenchOptions(AgentOptions):
         default="public", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*(@[0-9]+\.[0-9]+)?$"
     )
     fps: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    model_input_fps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     duration_minutes: float = Field(default=5.0, gt=0, allow_inf_nan=False)
     seed: int = DEFAULT_TASK_SEED
     model_revision: str | None = Field(default=None, min_length=1)
@@ -230,6 +233,8 @@ class RealtimeBenchOptions(AgentOptions):
     @model_validator(mode="after")
     def validate_integration(self):
         self.seed = task_seed(self.seed)
+        if self.model_input_fps is None:
+            self.model_input_fps = self.fps
         if self.api_base and self.base_url and self.api_base != self.base_url:
             raise ValueError("Supply only one of api_base or base_url")
         self.base_url = self.api_base or self.base_url
@@ -454,6 +459,8 @@ class ApptainerEnvironment(BaseEnvironment):
             str(self.lane),
             "--fps",
             str(self.task["fps"]),
+            "--model-input-fps",
+            str(self.task["model_input_fps"]),
             "--duration-minutes",
             str(self.task["duration_minutes"]),
             "--seed",
@@ -506,6 +513,7 @@ class ApptainerEnvironment(BaseEnvironment):
             "task_id": self.task_id,
             "category": suite_tasks[self.task_id],
             "fps": request["fps"],
+            "model_input_fps": request["model_input_fps"],
             "duration_minutes": request["duration_minutes"],
             "seed": request["seed"],
         }
@@ -723,7 +731,7 @@ def aggregate(job, *, official=False):
         raise ValueError("The job has no recorded trials")
     shared_fields = (
         "suite_id", "suite_version", "suite_hash", "harness_version", "harness_hash", "fps",
-        "duration_minutes", "seed",
+        "model_input_fps", "duration_minutes", "seed",
     )
     identities = {
         json.dumps(
@@ -817,6 +825,8 @@ def aggregate(job, *, official=False):
         "harness_version": identity.get("harness_version"),
         "harness_hash": identity["harness_hash"],
         "fps": identity["fps"],
+        # Jobs recorded before the frame rates were split fed the model at the environment rate.
+        "model_input_fps": identity.get("model_input_fps", identity["fps"]),
         "duration_minutes": identity["duration_minutes"],
         "clock": system.get("clock", "wall"),
         **(

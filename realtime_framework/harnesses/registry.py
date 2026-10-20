@@ -19,7 +19,7 @@ def create_agent(config, log_dir=None, *, trace=UNTRACED):
 
 def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
     """Apply the run's clock note, task category, scenario prompt and clock mode before
-    initialize()."""
+    initialize(). ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``."""
     from realtime_framework.harnesses.default.prompts import budget_clock_prompt
     from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 

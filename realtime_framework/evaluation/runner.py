@@ -12,6 +12,10 @@ cross any number of frame boundaries; an action whose completed response lands b
 horizon is not applied. With unlimited B, output length adds no action delay: the action lands at
 the observed tick and the world then advances one frame before the next observation.
 
+Frames are the model-input frames, ``frame_ticks`` environment ticks apart: frame j is due at
+j * frame_ticks, and one that falls between two ticks is observed at the next tick. The episode
+horizon ``max_ticks`` is in environment ticks.
+
 `env` must provide: capture() -> Observation, execute(action) -> status str, tick_index()
 (current env tick), done() -> bool, wait_until_tick(t). Optional: render_current_frame() commits
 action-visible pixels without advancing logical time; time_remaining() and past_deadline() enforce
@@ -101,10 +105,17 @@ class ObservationStreamWatchdog:
         return self._count >= self.threshold and first_seen_at is not None and now > first_seen_at
 
 
+def _whole_up(value):
+    """The smallest whole number at or above ``value``, within float noise."""
+    rounded = round(value)
+    return int(rounded) if abs(value - rounded) < 1e-9 else math.ceil(value)
+
+
 def run_stream(
     adapter,
     env,
     delta_s=1.0,
+    frame_ticks=1.0,
     max_ticks=60,
     log=print,
     think_budget_s=None,
@@ -117,6 +128,8 @@ def run_stream(
         raise ValueError(f"unsupported clock mode: {clock_mode!r}")
     if delta_s <= 0:
         raise ValueError("delta_s must be positive")
+    if frame_ticks <= 0:
+        raise ValueError("frame_ticks must be positive")
     if tokens_per_frame is not None and (
         type(tokens_per_frame) is not int or tokens_per_frame <= 0
     ):
@@ -245,6 +258,10 @@ def run_stream(
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
             return int(value)
         return _clock_output_tokens(r)[0]
+
+    def _frame_at(tick):
+        """The last model-input frame due at or before ``tick``."""
+        return math.floor(tick / frame_ticks + 1e-9)
 
     def _accept_observation(obs):
         """Gate captured frames through the replay watchdog; a frozen stream invalidates the run."""
@@ -508,7 +525,7 @@ def run_stream(
             # API cells are timestamped from their complete response usage; local cells use the
             # runtime's complete emitted-token count. Protocol delimiters are part of those counts.
             action_output_tokens = output_tokens
-            d_ticks = action_output_tokens / tokens_per_frame
+            d_ticks = action_output_tokens / tokens_per_frame * frame_ticks
             deliberation_s = d_ticks * delta_s
         elif clock_mode == "token":
             action_output_tokens = output_tokens
@@ -618,12 +635,8 @@ def run_stream(
             and env.tick_index() < max_ticks
         ):
             action_end_tick = max(float(tau_k), float(env.tick_index()))
-            rounded_action_tick = round(action_end_tick)
-            if abs(action_end_tick - rounded_action_tick) < 1e-9:
-                boundary = int(rounded_action_tick)
-            else:
-                boundary = math.ceil(action_end_tick)
-            next_observation_tick = min(max(int(math.floor(t_k)) + 1, boundary), max_ticks)
+            next_frame = max(_frame_at(t_k) + 1, _whole_up(action_end_tick / frame_ticks))
+            next_observation_tick = min(_whole_up(next_frame * frame_ticks), max_ticks)
             post_before = env.tick_index()
             env.wait_until_tick(next_observation_tick)
             post_after = env.tick_index()
@@ -641,7 +654,7 @@ def run_stream(
                 render_current_frame = getattr(env, "render_current_frame", None)
                 if callable(render_current_frame):
                     post_action_rendered = render_current_frame() is not None
-            crossed_boundaries = max(0, int(math.floor(post_after + 1e-9) - math.floor(t_k)))
+            crossed_boundaries = max(0, _frame_at(post_after) - _frame_at(t_k))
             dropped_frames = max(0, crossed_boundaries - 1)
             _emit(
                 TraceEvent.CLOCK_ADVANCED,
@@ -911,7 +924,10 @@ def run_stream(
         remaining_clock_tokens = None
         if clock_mode == "token" and tokens_per_frame is not None:
             remaining_clock_tokens = max(
-                0, math.floor((float(max_ticks) - float(t_k)) * tokens_per_frame + 1e-9)
+                0,
+                math.floor(
+                    (float(max_ticks) - float(t_k)) / frame_ticks * tokens_per_frame + 1e-9
+                ),
             )
             if remaining_clock_tokens <= 0:
                 env.wait_until_tick(max_ticks)
@@ -1401,6 +1417,12 @@ def main():
     )
     p.add_argument("--fps", type=float, default=1.0)
     p.add_argument(
+        "--model-input-fps",
+        type=float,
+        default=None,
+        help="frames per second fed to the model (default: --fps, the environment's rate)",
+    )
+    p.add_argument(
         "--clock",
         choices=["wall", "token"],
         default=None,
@@ -1473,9 +1495,13 @@ def main():
     protocol = a.protocol or ("wall-clock" if a.clock == "wall" else "time-aware-token-v1")
     if not 0 < a.fps < float("inf") or not 0 < a.max_minutes < float("inf"):
         p.error("--fps and --max-minutes must be finite and positive")
-    # --fps sets the environment's frame rate (task clock, ticks, loop, recording, scored world
-    # time) and the model's input rate (ModelConfig.fps).
-    env_fps = model_input_fps = a.fps
+    if a.model_input_fps is None:
+        a.model_input_fps = a.fps  # prepare_episode_report reads it from the arguments
+    if not 0 < a.model_input_fps < float("inf"):
+        p.error("--model-input-fps must be finite and positive")
+    # --fps is the environment's frame rate (task clock, ticks, loop, scored world time);
+    # --model-input-fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
+    env_fps, model_input_fps = a.fps, a.model_input_fps
     if protocol == "time-aware-token-v1":
         if a.clock != "token":
             p.error("time-aware-token-v1 requires --clock token")
@@ -1527,6 +1553,7 @@ def main():
             "clock_mode": a.clock,
             "mode": a.mode,
             "fps": env_fps,
+            "model_input_fps": model_input_fps,
             "tokens_per_frame": tokens_per_frame,
             "reasoning_effort": reasoning_effort,
             "max_minutes": a.max_minutes,
@@ -1625,7 +1652,6 @@ def main():
                 ctask,
                 task,
                 clock_mode=a.clock,
-                env_fps=env_fps,
                 tokens_per_frame=tokens_per_frame,
                 run_dir=run_dir,
                 episode_trace=episode_trace,
@@ -1734,15 +1760,14 @@ def main():
         is_game = (getattr(ctask, "category", None) == "browser_game") if ctask else False
         env = GuestEnvironment(
             guest,
-            env_fps,
             deadline,
+            ctask,
             frames_dir=frames_dir,
             honor_fail=(not is_game),
             stop_check=(getattr(ctask, "episode_over", None) if ctask else None),
             scene_capture=scene_capture,
             action_audit_path=run_dir / "action_lifecycle.jsonl",
             clock_mode=a.clock,
-            task=ctask,
             wall_start_time=wall_start_time,
         )
         start_episode = getattr(agent, "start_episode", None)
@@ -1768,6 +1793,7 @@ def main():
                 agent,
                 env,
                 delta_s=1.0 / env_fps,
+                frame_ticks=env_fps / model_input_fps,
                 max_ticks=a.max_minutes * 60 * env_fps,
                 log=lambda m: print(m, flush=True),
                 think_budget_s=think_budget,
@@ -1795,7 +1821,7 @@ def main():
             }
             _atomic_write_json(run_dir / "active-loop.json", active_loop)
             episode_trace.emit("ActiveLoopEnded", active_loop)
-        R._stop_screen_recording(run_dir, frames_dir, env_fps)
+        R._stop_screen_recording(run_dir, frames_dir, model_input_fps)
         _recorder_on = False
         # INFERENCE/EVAL BOUNDARY: run_stream freezes live scorer input at the latched terminal tick,
         # before it releases held keys or mouse buttons. Consume that exact snapshot here, before
@@ -1852,6 +1878,7 @@ def main():
                 protocol=protocol,
                 harness_hash=harness_hash,
                 fps=env_fps,
+                model_input_fps=model_input_fps,
                 runtime_config=runtime_config,
                 runtime_config_hash=runtime_config_hash,
                 snapshot=frozen_snapshot,
@@ -1958,7 +1985,7 @@ def main():
         # The shared container remains available for subsequent runs.
         if _recorder_on:
             try:
-                R._stop_screen_recording(run_dir, frames_dir, env_fps)
+                R._stop_screen_recording(run_dir, frames_dir, model_input_fps)
             except Exception:
                 pass
         try:
@@ -2066,7 +2093,7 @@ def main():
             solved=solved,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
-            fps=env_fps,
+            fps=model_input_fps,
             termination=termination,
             horizon_s=a.max_minutes * 60,
         )
@@ -2086,7 +2113,7 @@ def main():
             solved=None,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
-            fps=env_fps,
+            fps=model_input_fps,
             termination=None,
             horizon_s=a.max_minutes * 60,
             validate_decision_count=False,
@@ -2106,6 +2133,7 @@ def main():
         protocol=protocol,
         harness_hash=harness_hash,
         fps=env_fps,
+        model_input_fps=model_input_fps,
         runtime_config_hash=runtime_config_hash,
     )
     summ = {
@@ -2165,7 +2193,7 @@ def main():
         else 0,
         "output_clock_policy": OUTPUT_CLOCK_POLICY,
         "tokens_per_world_second": (
-            tokens_per_frame * env_fps
+            tokens_per_frame * model_input_fps
             if a.clock == "token" and tokens_per_frame is not None
             else None
         ),
@@ -2285,7 +2313,6 @@ def set_up_agent(
     instruction: str,
     *,
     clock_mode: str,
-    env_fps: float,
     tokens_per_frame: int | None,
     run_dir: Path,
     episode_trace: EpisodeTrace,
@@ -2299,13 +2326,13 @@ def set_up_agent(
     form the model's context policy names. What this makes is recorded in ``setup``.
     """
     # Every pre-run rule on the model, clock and task, before any of them is built.
-    check_episode(cfg, clock_mode=clock_mode, task=ctask, env_fps=env_fps)
+    check_episode(cfg, clock_mode=clock_mode, task=ctask)
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
     agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace)
     configure_agent(
         agent,
-        fps=env_fps,
+        fps=cfg.fps,
         tokens_per_frame=tokens_per_frame,
         clock_mode=clock_mode,
         category=getattr(ctask, "category", None),
@@ -2399,6 +2426,8 @@ def _write_emergency_setup_summary(error: str):
         "wall-clock" if clock_mode == "wall" else "time-aware-token-v1",
     )
     cap_minutes = float(arg("--max-minutes", "5.0"))
+    env_fps = float(arg("--fps", "1.0"))
+    model_input_fps = float(arg("--model-input-fps", str(env_fps)))
     run_identity = resolve_run_identity(
         task_id=arg("--task"),
         **model_identity,
@@ -2406,7 +2435,8 @@ def _write_emergency_setup_summary(error: str):
         cap=cap_minutes,
         protocol=protocol,
         harness_hash=harness_fingerprint(),
-        fps=float(arg("--fps", "1.0")),
+        fps=env_fps,
+        model_input_fps=model_input_fps,
     )
     tokens_per_frame_arg = arg("--tokens-per-frame", str(DEFAULT_TOKENS_PER_FRAME))
     tokens_per_frame = (
@@ -2420,7 +2450,7 @@ def _write_emergency_setup_summary(error: str):
         solved=None,
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
-        fps=float(arg("--fps", "1.0")),
+        fps=model_input_fps,
         termination=None,
         horizon_s=cap_minutes * 60,
     )

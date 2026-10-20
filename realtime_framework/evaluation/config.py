@@ -314,6 +314,14 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         or fps <= 0
     ):
         raise ValueError("runtime.fps must be positive")
+    model_input_fps = runtime.get("model_input_fps", fps)
+    if (
+        not isinstance(model_input_fps, (int, float))
+        or isinstance(model_input_fps, bool)
+        or not math.isfinite(model_input_fps)
+        or model_input_fps <= 0
+    ):
+        raise ValueError("runtime.model_input_fps must be positive")
     duration_minutes = runtime.get("duration_minutes")
     if (
         not isinstance(duration_minutes, (int, float))
@@ -367,6 +375,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             "mode": mode,
             "clock_mode": clock_mode,
             "fps": fps,
+            "model_input_fps": model_input_fps,
             "tokens_per_frame": tokens_per_frame,
             "duration_minutes": duration_minutes,
             "seed": task_seed(runtime.get("seed", DEFAULT_TASK_SEED)),
@@ -799,6 +808,7 @@ def identity_main(argv=None) -> int:
     parser.add_argument("--task", required=True)
     parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
     parser.add_argument("--fps", type=float, required=True)
+    parser.add_argument("--model-input-fps", type=float, help="default: --fps")
     parser.add_argument("--max-minutes", type=float, required=True)
     parser.add_argument("--protocol", required=True)
     parser.add_argument("--think-budget-s", type=float)
@@ -842,7 +852,7 @@ def identity_main(argv=None) -> int:
         parser.error(str(exc))
     config = catalog.to_model_config(
         args.model,
-        fps=args.fps,
+        fps=args.fps if args.model_input_fps is None else args.model_input_fps,
         reasoning_effort=reasoning_effort,
     )
     effective = effective_run_config(
