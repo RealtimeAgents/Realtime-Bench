@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from realtime_framework.entity.config import DecisionBudget, ModelConfig
+from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
+from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.prompts import budget_clock_prompt
 from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 from realtime_framework.harnesses.registry import create_agent
@@ -31,6 +33,18 @@ class Episode:
     clock_mode: str
     tokens_per_frame: int | None
     max_ticks: int | None
+    trace: EpisodeTrace
+    agent_trace: AgentTraceSink
+
+    def finish(self):
+        """Close the agent, then its records, in the order of runner.main()'s finally block.
+
+        Returns the invalid-run value closing the agent records produced (None when complete).
+        """
+        self.agent.close()
+        invalid_run = close_agent_trace(self.agent_trace, None)
+        self.trace.close()
+        return invalid_run
 
     def budget(self, t_k: int) -> DecisionBudget:
         """The budget run_stream binds before the decision at clock position ``t_k``
@@ -103,7 +117,10 @@ def build_episode(
     validate_model_interaction(  # runner.py:1554-1559
         config.adapter_type, clock_mode=clock_mode, fps=fps, tokens_per_frame=tokens_per_frame
     )
-    agent = create_agent(config, log_dir=run_dir)  # runner.py:1560
+    # runner.main() opens the episode trace, then hands the agent its write entry.
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
+    agent_trace = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1560
     # create_agent loads the repository .env (harnesses/registry.py:11 calls
     # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
     injected = sorted(name for name in HISTORY_ENV if name in os.environ)
@@ -147,4 +164,6 @@ def build_episode(
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
         max_ticks=max_ticks,
+        trace=trace,
+        agent_trace=agent_trace,
     )

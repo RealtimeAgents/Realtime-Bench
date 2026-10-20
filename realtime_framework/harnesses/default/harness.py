@@ -48,9 +48,11 @@ _KNOWN_ACTION_NAMES = frozenset(
 class VisionAgentBase(StreamingAgent):
     """Non-transport base of the default harness: trajectory logging and action parsing."""
 
-    def __init__(self, config: ModelConfig, log_dir: Path | None = None):
+    def __init__(self, config: ModelConfig, log_dir: Path | None = None, *, trace):
         self.config = config
         self.log_dir = log_dir
+        # The runner's episode-trace write entry; transports and the runtime record into it.
+        self._trace = trace
         self._trajectory_file = None
         self._log_lock = threading.Lock()
         if log_dir:
@@ -765,6 +767,8 @@ from realtime_framework.entity.events import EmptyInterruptedToolTurnError
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import TRANSPORT_RETRY
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.records import trace_scope
 
 
 def _retry_usage_status(usages):
@@ -924,9 +928,11 @@ class DefaultHarness(VisionAgentBase):
     interaction_profile: InteractionProfile = STANDARD_VLM_PROFILE
     supports_unbounded_output = True
 
-    def __init__(self, config, log_dir=None):
+    def __init__(self, config, log_dir=None, *, trace):
         self._provider_usage_started = False
-        super().__init__(config, log_dir)
+        # The decision an abort() belongs to: the runner aborts only the one in flight.
+        self._trace_decision = None
+        super().__init__(config, log_dir, trace=trace)
 
     @property
     def driver(self):
@@ -939,11 +945,12 @@ class DefaultHarness(VisionAgentBase):
 
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config)
+        self.driver.bind_trace(self._trace)
         self.interaction_profile = ACTION_CHANNEL_PROFILES[self.driver.capabilities.action_channel]
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
-        self._runtime = RealtimeRuntime(self.driver, self._context_policy)
+        self._runtime = RealtimeRuntime(self.driver, self._context_policy, trace=self._trace)
 
     def _record_provider_usage(self, result, observation, tick):
         """Audit harness-visible generations, including providers with inline usage."""
@@ -991,15 +998,16 @@ class DefaultHarness(VisionAgentBase):
         # Its inputs are set before initialize() and never change during the episode.
         self._system_block = system_block(fixed)
         self._answer = self._answer_requirements()
-        self._runtime.start(
-            SessionSeed(
-                system_instruction=fixed,
-                model_name=self.model_name,
-                native_output_limit=self.config.native_output_limit,
-                fps=float(self.config.fps),
-            ),
-            initial_observation,
-        )
+        with trace_scope(phase="initialize"):
+            self._runtime.start(
+                SessionSeed(
+                    system_instruction=fixed,
+                    model_name=self.model_name,
+                    native_output_limit=self.config.native_output_limit,
+                    fps=float(self.config.fps),
+                ),
+                initial_observation,
+            )
 
     def discard_pending_observations(self):
         self._runtime.discard_pending_observations()
@@ -1077,6 +1085,7 @@ class DefaultHarness(VisionAgentBase):
         }
 
     def stream_generate(self, tick=0):
+        self._trace_decision = tick
         observations = self._runtime.drain_observations()
         if not observations:
             return {
@@ -1202,8 +1211,10 @@ class DefaultHarness(VisionAgentBase):
         failure_detail = ""
         failure_reason = ""
         while True:
+            attempt = len(retry_reasons) + 1
             try:
-                runtime_result = run_once(collector)
+                with self._attempt_scope(request, attempt):
+                    runtime_result = run_once(collector)
             except Exception as exc:  # noqa: BLE001 - one shared retry policy below
                 received_output = not (
                     not collector.visible
@@ -1237,14 +1248,27 @@ class DefaultHarness(VisionAgentBase):
                             f"{len(retry_reasons)} transport retries exhausted: "
                             f"{'; '.join(retry_reasons)}; final error: {exc!r}"
                         )[:500]
+                    self._attempt_failed(
+                        request,
+                        attempt,
+                        exc,
+                        failure,
+                        received_output,
+                        collector.usage,
+                        invalid_reason=failure_reason,
+                    )
                     break
                 retry_reasons.append(f"{failure.kind}: {exc!r}"[:300])
                 retry_usages.append(collector.usage)
                 retry_delays.append(delay)
+                self._attempt_failed(
+                    request, attempt, exc, failure, received_output, collector.usage, delay=delay
+                )
                 time.sleep(delay)
                 collector = collector_type(self)
                 continue
             else:
+                self._attempt_finished(request, attempt, runtime_result)
                 if retry_reasons:
                     runtime_result.provider_metadata.update(
                         {
@@ -1526,12 +1550,73 @@ class DefaultHarness(VisionAgentBase):
         self._pending_feedback = feedback
         self._runtime.record_execution_feedback(feedback)
 
+    def _attempt_scope(self, request, attempt):
+        return trace_scope(
+            phase="decision",
+            decision=self._trace_decision,
+            generation_id=request.generation_id,
+            attempt=attempt,
+        )
+
+    def _attempt_finished(self, request, attempt, result) -> None:
+        """Record one completed attempt of the shared whole-turn retry."""
+        metadata = result.provider_metadata
+        with self._attempt_scope(request, attempt):
+            self._trace.capture(
+                TraceEvent.MODEL_ATTEMPT_FINISHED,
+                {
+                    "kind": "generation",
+                    "outcome": "stale" if result.stale else "ok",
+                    "usage": result.output.usage,
+                    "token_fields": result.output.token_fields,
+                    "runtime_turn_wall_latency_s": result.latency_s,
+                    "provider_call_wall_latency_s": result.provider_call_latency_s,
+                    "provider_call_started_monotonic_ns": metadata.get(
+                        "provider_call_started_monotonic_ns"
+                    ),
+                    "terminal_history_state": result.terminal_history_state.value,
+                    "interrupted": result.interrupted,
+                    "stale": result.stale,
+                    "backend_route": metadata.get("backend_route"),
+                },
+            )
+
+    def _attempt_failed(
+        self,
+        request,
+        attempt,
+        exc,
+        failure,
+        received_output,
+        usage,
+        *,
+        delay=None,
+        invalid_reason=None,
+    ) -> None:
+        """Record one failed attempt: retried after ``delay``, or final with ``invalid_reason``."""
+        with self._attempt_scope(request, attempt):
+            self._trace.capture(
+                TraceEvent.MODEL_ATTEMPT_FINISHED,
+                {
+                    "kind": "generation",
+                    "outcome": "retry" if delay is not None else "failed",
+                    "failure_kind": failure.kind,
+                    "invalid_reason": invalid_reason,
+                    "error": repr(exc)[:500],
+                    "received_output": received_output,
+                    "retry_delay_s": delay,
+                    "usage": usage,
+                },
+            )
+
     def abort(self):
         super().abort()
-        self._runtime.abort()
+        with trace_scope(phase="abort", decision=self._trace_decision):
+            self._runtime.abort()
 
     def close(self):
         try:
-            self._runtime.close()
+            with trace_scope(phase="close"):
+                self._runtime.close()
         finally:
             super().close()

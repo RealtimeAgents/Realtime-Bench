@@ -44,9 +44,47 @@ from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.providers.capture import sync_ws_connection
 
 logger = logging.getLogger(__name__)
 _CLIENT_ID_MAX_LENGTH = 32
+_ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
+
+
+def classify_realtime_message(direction: str, message: dict):
+    """Name a Realtime message and its acknowledgement keys, for the agent trace.
+
+    A client message lists the keys a later server message may answer; a server message lists
+    the keys it answers and its origin when it answers none.
+    """
+    kind = str(message.get("type", ""))
+    if direction == "client":
+        keys = []
+        if kind in {"session.update", "response.create", "response.cancel"}:
+            keys.append((kind,))
+        elif kind == "conversation.item.create":
+            keys.append(("item", (message.get("item") or {}).get("id")))
+        elif kind == "conversation.item.delete":
+            keys.append(("deleted", message.get("item_id")))
+        if message.get("event_id"):
+            keys.append(("event", message["event_id"]))  # answered by an error naming it
+        return kind, keys, None
+    if kind == "session.updated":
+        return kind, [("session.update",)], "unsolicited"
+    if kind == "response.created":
+        return kind, [("response.create",)], "response"
+    if kind == "response.done" and (message.get("response") or {}).get("status") == "cancelled":
+        return kind, [("response.cancel",)], "response"
+    if kind in _ITEM_ACKS:
+        # Output items the server creates during a response answer no client message.
+        return kind, [("item", (message.get("item") or {}).get("id"))], "response"
+    if kind == "conversation.item.deleted":
+        return kind, [("deleted", message.get("item_id"))], "unsolicited"
+    if kind == "error":
+        event_id = (message.get("error") or {}).get("event_id")
+        return kind, [("event", event_id)] if event_id else [], "unsolicited"
+    # Response events, and what the server sends on its own (session.created, rate_limits.updated).
+    return kind, [], "response" if kind.startswith("response.") else "unsolicited"
 
 
 class OpenAIRealtimeDriver:
@@ -67,11 +105,17 @@ class OpenAIRealtimeDriver:
         if config.api_base_url:
             kwargs["base_url"] = config.api_base_url
         self.client = OpenAI(**kwargs)
+        self._ws_connection = sync_ws_connection(
+            self, "openai_realtime.ws", classify_realtime_message
+        )
         self._cm = None
         self._conn = None
         self._send_lock = threading.Lock()
         self._ledger_item_id: str | None = None
         self._ledger_text = ""
+
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
 
     @staticmethod
     def classify_transport_error(exc: BaseException) -> TransportFailure:
@@ -263,7 +307,10 @@ class OpenAIRealtimeDriver:
         await self._close_current()
 
         def open_session():
-            cm = self.client.realtime.connect(model=request.seed.model_name)
+            cm = self.client.realtime.connect(
+                model=request.seed.model_name,
+                websocket_connection_options={"create_connection": self._ws_connection},
+            )
             conn = cm.__enter__()
             self._cm, self._conn = cm, conn
             conn.session.update(

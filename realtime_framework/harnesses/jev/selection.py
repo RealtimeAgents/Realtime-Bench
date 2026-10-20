@@ -16,6 +16,7 @@ from realtime_framework.entity.model import (
     ChoiceContextLimitError,
     TransportFailureError,
 )
+from realtime_framework.entity.records import TraceEvent, current_trace_scope, trace_scope
 from realtime_framework.harnesses.jev.composition import (
     TEXT_COMPOSITION_POLICY,
     composition_candidates,
@@ -40,8 +41,9 @@ SELECTION_POLICY = "exhaustive_groups_255_provider_split_then_winners_pointer_v6
 class ChoiceDecision:
     """Resolve one observation's candidates into one executable action, with a full trace."""
 
-    def __init__(self, client, observation_state, messages):
+    def __init__(self, client, observation_state, messages, *, trace):
         self.client = client
+        self.trace = trace
         self.observation = observation_state
         # Canonical replay is already bounded by the runtime's retention and context checks.
         self.canonical = client.capabilities.history_replay == "canonical"
@@ -168,8 +170,15 @@ class ChoiceDecision:
                     "criteria": {key: candidates[key]["description"] for key in group},
                 }
                 started = time.monotonic()
+                question_scope = {
+                    "choice_phase": phase,
+                    "round": round_index,
+                    "group": group_index,
+                    "question": len(self.calls),
+                }
                 try:
-                    reply = await self._ask(question, phase=phase, text_state=text_state)
+                    with trace_scope(choice=question_scope):
+                        reply = await self._ask(question, phase=phase, text_state=text_state)
                 except ChoiceContextLimitError:
                     if len(group) == 1:
                         raise
@@ -182,6 +191,7 @@ class ChoiceDecision:
                             "latency_s": time.monotonic() - started,
                         }
                     )
+                    self._history_changed("choice_candidate_split", self.context_splits[-1])
                     groups[0:0] = [group[:middle], group[middle:]]
                     continue
                 choice = reply.answer.get("choice")
@@ -236,20 +246,83 @@ class ChoiceDecision:
                 self.history_reductions.append(
                     {"phase": phase, "removed_messages": removed, "remaining": len(history)}
                 )
+                self._history_changed("choice_history_reduction", self.history_reductions[-1])
+
+    def _history_changed(self, kind, choice):
+        """Record a context-limit fallback. Dropping history follows the policy's
+        decision_history overflow; the candidate split has no context-policy item yet."""
+        self.trace.capture(
+            TraceEvent.HISTORY_CHANGED,
+            {
+                "kind": kind,
+                "trigger": "fallback",
+                "policy_item": "decision_history" if kind == "choice_history_reduction" else None,
+                "choice": choice,
+            },
+        )
+
+    @staticmethod
+    def _attempt_scope(transport_attempt):
+        return trace_scope(
+            choice={**current_trace_scope()["choice"], "transport_attempt": transport_attempt}
+        )
+
+    def _attempt_finished(
+        self,
+        transport_attempt,
+        started,
+        question,
+        outcome,
+        *,
+        reply=None,
+        error=None,
+        failure=None,
+        delay=None,
+    ):
+        """One ModelAttemptFinished per question attempt of the per-question retry."""
+        payload = {
+            "kind": "choice_question",
+            "outcome": outcome,
+            "failure_kind": failure.kind if failure is not None else None,
+            "error": repr(error)[:300] if error is not None else None,
+            "retry_delay_s": delay,
+            "criteria_count": len(question["criteria"]),
+            "answer": (
+                {name: reply.answer.get(name) for name in ("choice", "probabilities", "confidence")}
+                if reply is not None
+                else None
+            ),
+            "usage": reply.usage if reply is not None else None,
+            "latency_s": time.monotonic() - started,
+        }
+        with self._attempt_scope(transport_attempt):
+            self.trace.capture(TraceEvent.MODEL_ATTEMPT_FINISHED, payload)
 
     async def _decide_with_retries(self, state, question, *, phase):
         """One question under the shared transport retry policy; each attempt is recorded."""
         key = f"{self.observation['observation_id']}:{len(self.calls)}"
         retry = 0
         while True:
+            started = time.monotonic()
             try:
-                return await self.client.decide(state, question)
-            except ChoiceContextLimitError:
+                with self._attempt_scope(retry + 1):
+                    reply = await self.client.decide(state, question)
+            except ChoiceContextLimitError as exc:
+                self._attempt_finished(retry + 1, started, question, "context_limit", error=exc)
                 raise
             except Exception as exc:
                 retry += 1
                 failure = self.client.classify_transport_error(exc)
                 delay = TRANSPORT_RETRY.delay_s(retry, key, failure)
+                self._attempt_finished(
+                    retry,
+                    started,
+                    question,
+                    "failed" if delay is None else "retry",
+                    error=exc,
+                    failure=failure,
+                    delay=delay,
+                )
                 if delay is None:
                     # Name the question so an error report shows which step failed.
                     cause = RuntimeError(f"{phase} question {len(self.calls)}: {exc!r}")
@@ -264,6 +337,9 @@ class ChoiceDecision:
                     }
                 )
                 await asyncio.sleep(delay)
+            else:
+                self._attempt_finished(retry + 1, started, question, "ok", reply=reply)
+                return reply
 
     async def _compose_text(self):
         inventory = self.observation.get("text_composition")

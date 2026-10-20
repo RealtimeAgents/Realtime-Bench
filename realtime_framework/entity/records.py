@@ -164,3 +164,13 @@ def current_trace_scope() -> dict | None:
 class AgentTrace(Protocol):
     def capture(self, event: TraceEvent, payload: dict, *, body=None, classify=None) -> int | None:
         """Queue one record without I/O; return its capture sequence, or None once sealed."""
+
+
+class _Untraced:
+    """The write entry of an agent built outside the runner, without an episode trace."""
+
+    def capture(self, event, payload, *, body=None, classify=None) -> None:
+        return None
+
+
+UNTRACED = _Untraced()
