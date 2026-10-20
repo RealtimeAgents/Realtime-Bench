@@ -50,14 +50,13 @@ class ChoiceDecision:
         self.choice = request.answer.choice
         self.selection = request.selection
         self.digest = request.history_form == "action_digest"
-        # Canonical replay is already bounded by the runtime's retention and context checks.
-        self.overflow = request.policy.decision_history.overflow
         self.policy_version = request.policy.version
+        # Bounded before the request by the runtime's retention and context checks; every
+        # question of the decision sends it unchanged.
         self.history = render_digest(request) if self.digest else render_transcript(request)
         self.calls = []
         self.retries = []
         self.context_splits = []
-        self.history_reductions = []
         self.usage = {"input_tokens": 0, "output_tokens": 0}
 
     async def run(self) -> dict:
@@ -94,7 +93,6 @@ class ChoiceDecision:
             "selected_candidate": choice,
             "selected_candidate_audit": candidates[choice].get("audit"),
             "context_splits": self.context_splits,
-            "history_reductions": self.history_reductions,
             "observation_id": self.selection.observation_id,
             "retries": self.retries,
             "text_composition": composition,
@@ -230,46 +228,24 @@ class ChoiceDecision:
             round_index += 1
 
     async def _ask(self, question, *, phase, text_state=None):
-        """Ask one question; if even one option overflows a digest, drop its oldest history.
-
-        The digest state is [system, *older history, current observation]. The current observation
-        and instructions are never removed; every reduction is recorded. Canonical history is
-        never reduced here: the runtime archives it before the request.
-        """
-        history = self.history
-        while True:
-            if self.digest:
-                state = {"history": history}
-                if text_state is not None:
-                    state["text_composition"] = text_state
-            else:
-                extra = {} if text_state is None else {"text_composition": text_state}
-                state = transcript_state(history, extra)
-            try:
-                return await self._decide_with_retries(state, question, phase=phase)
-            except ChoiceContextLimitError:
-                # Context policy item 9: only a digest is reduced, and only for one option.
-                if self.overflow == "raise" or len(question["criteria"]) > 1:
-                    raise
-                droppable = len(history) - 2
-                if droppable <= 0:
-                    raise
-                removed = max(1, droppable // 2)
-                history = [history[0], *history[1 + removed :]]
-                self.history_reductions.append(
-                    {"phase": phase, "removed_messages": removed, "remaining": len(history)}
-                )
-                self._history_changed("choice_history_reduction", self.history_reductions[-1])
+        """Ask one question over the decision's history, plus this question's own state."""
+        if self.digest:
+            state = {"history": self.history}
+            if text_state is not None:
+                state["text_composition"] = text_state
+        else:
+            extra = {} if text_state is None else {"text_composition": text_state}
+            state = transcript_state(self.history, extra)
+        return await self._decide_with_retries(state, question, phase=phase)
 
     def _history_changed(self, kind, choice):
-        """Record a context-limit fallback. Dropping history follows the policy's
-        decision_history overflow; the candidate split has no context-policy item yet."""
+        """Record a context-limit fallback; the candidate split has no context-policy item yet."""
         self.trace.capture(
             TraceEvent.HISTORY_CHANGED,
             {
                 "kind": kind,
                 "trigger": "fallback",
-                "policy_item": "decision_history" if kind == "choice_history_reduction" else None,
+                "policy_item": None,
                 "policy_version": self.policy_version,
                 "choice": choice,
             },

@@ -183,7 +183,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
                 detail = str(response.json().get("error", {}).get("message", detail))[:500]
             except (ValueError, AttributeError):
                 pass
-            # Context rejection lets the harness split candidates or reduce retained history.
+            # Context rejection lets the selection flow split the question's candidates.
             if response.status_code == 413 or (
                 response.status_code == 400
                 and any(code in response.text for code in (

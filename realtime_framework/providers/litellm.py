@@ -354,13 +354,10 @@ def chat_messages(request) -> tuple[dict, ...]:
                 )
             prefix = ""
         elif block.kind == "model_output":
-            if block.provider_message is not None:
-                messages.append(copy.deepcopy(block.provider_message))
-            else:
-                message = {"role": "assistant", "content": block.text}
-                if block.reasoning:
-                    message["reasoning_content"] = block.reasoning
-                messages.append(message)
+            message = {"role": "assistant", "content": block.text}
+            if block.reasoning:
+                message["reasoning_content"] = block.reasoning
+            messages.append(message)
         elif block.kind == "execution_feedback":
             messages.append({"role": "user", "content": block.text})
     return tuple(messages)
@@ -375,7 +372,6 @@ _STREAMING_CHAT = RealtimeCapabilities(
     server_context="none",
     terminal_output_usage=True,
     classifies_transport_errors=True,
-    request_size_estimation=True,
     maps_output_cap=True,
 )
 
@@ -458,12 +454,6 @@ class LiteLLMDriver:
     deployment: ChatDeployment
     compat: ChatCompat
     model_defaults: ClassVar[dict[str, dict]] = {}
-    # Context policy items 6-8 as each API applied them (entity/context_policy.py decides what
-    # is sent); tests/replay/test_context_policy.py pins the two to each other. Only
-    # assistant_turn_ref is read at run time: it keeps the message that verbatim replay sends.
-    preserve_reasoning_history = False  # replay reasoning text in later requests
-    assistant_turn_ref = False  # keep the provider's raw assistant message for verbatim replay
-    pressure_archive = False  # archive turns when the request exceeds the context window
 
     def __init__(self, config, *, clock=None):
         self.config = config
@@ -948,8 +938,6 @@ class LiteLLMDriver:
             "message": message,
             "backend_route": self._backend_route(),
         }
-        if self.assistant_turn_ref:
-            metadata["completed_turn_refs"] = {"assistant_message": message}
         return GenerationHandle(request.generation_id, opaque=response, metadata=metadata)
 
     @staticmethod
@@ -1160,7 +1148,6 @@ class MoonshotDriver(LiteLLMDriver):
         base_url_env="MOONSHOT_BASE_URL",
     )
     compat = ChatCompat(strip_image_detail=True, output_limit_param="max_completion_tokens")
-    preserve_reasoning_history = True
 
 
 class AnthropicMessagesDriver(LiteLLMDriver):
@@ -1190,6 +1177,8 @@ class ChatCompletionsDriver(LiteLLMDriver):
         terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
+        # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
+        request_size_estimation=True,
     )
     protocol = ChatProtocol(
         sdk_provider="openai",
@@ -1206,15 +1195,12 @@ class ChatCompletionsDriver(LiteLLMDriver):
         require_api_key=False,
     )
     compat = ChatCompat(strip_image_detail=True)
-    pressure_archive = True
 
 
 class DirectLiteLLMDriver(LiteLLMDriver):
     capabilities = replace(
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
-        # The provider's own message carries its reasoning back (context policy item 7).
-        reasoning_replay="optional",
         terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
@@ -1229,5 +1215,3 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         require_api_key=False,
     )
     compat = ChatCompat()
-    preserve_reasoning_history = True
-    assistant_turn_ref = True

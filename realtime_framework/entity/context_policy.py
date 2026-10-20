@@ -3,13 +3,17 @@ from __future__ import annotations
 # Context policy
 """What each model API is shown at every step, and where: twelve named items and a version.
 
-The phase-1 values copy what each code path did before the policy existed; changing any value
-changes the model-visible content, so it bumps the version. The values count in the effective run
-config and therefore in its hash. Every item is read from here: retention, feedback placement,
-the ledger role, reasoning and verbatim replay, pressure archiving, the Decision history form
-and overflow, the tool-call replay format, the prompts (item 11) and the observation form
-(item 12); the encoders take their fixed texts (item 5) from here, and ContextPolicy.for_path
-takes Gemini's tool-call replay format from its model preset.
+Version 1 copied what each code path did before the policy existed; every later version changes
+one item (see CONTEXT_POLICY_VERSION). Changing any value changes the model-visible content, so it
+bumps the version. The values count in the effective run config and therefore in its hash. Every
+item is read from here: retention, feedback placement, the ledger role, reasoning and verbatim
+replay, pressure archiving, the Decision history form, the tool-call replay format, the prompts
+(item 11) and the observation form (item 12); the encoders take their fixed texts (item 5) from
+here, and ContextPolicy.for_path takes Gemini's tool-call replay format from its model preset.
+
+An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
+then its own. The pre-run checks hold each row against what the API declares
+(providers/preflight.py check_context_policy).
 """
 
 from collections.abc import Mapping
@@ -23,7 +27,16 @@ from realtime_framework.entity.config import (
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER, FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.records import _jsonable
 
-CONTEXT_POLICY_VERSION = 1
+# 2: generic LiteLLM rebuilds its replies from the model output and replays no reasoning; Kimi
+#    K3 keeps its reasoning through its preset.
+# 3: the action ledger is an input wherever there are roles; OpenAI Realtime sent it as an
+#    instruction (a system item), and Decisions state places it by position and header.
+# 4: the fold placeholder says only what it removed; it claimed that the step's reasoning and
+#    action remain.
+# 5: one pressure-archive rule for every API that declares a request estimate; JEV estimates
+#    its digest against its declared window instead of dropping history for a rejected
+#    one-option question.
+CONTEXT_POLICY_VERSION = 5
 
 # Fixed model-visible texts the encoders write (item 5).
 JEV_LEDGER_HEADER = (
@@ -55,8 +68,6 @@ class Retention:
 @dataclass(frozen=True)
 class DecisionHistory:
     form: Literal["turns", "action_digest"]
-    # What a Decision question does when the server rejects even one option for context.
-    overflow: Literal["raise", "drop_oldest_half"]
 
 
 @dataclass(frozen=True)
@@ -91,15 +102,23 @@ class PathPolicy:
 
     version: int
     api: str
+    preset: str | None  # the PRESETS entry this row takes; None: none
     visuals: Retention  # 1 screenshot retention
     turns: Retention  # 2 turn retention; archived actions form the ledger
     feedback: Literal["separate_message", "frame_prefix", "digest"]  # 3 execution feedback
-    ledger_role: Literal["instruction", "input", "none"]  # 4 role of the archived-action ledger
+    # 4 role of the archived-action ledger; an encoder without roles places it by position and
+    # header (RealtimeCapabilities.labels_instead_of_roles)
+    ledger_role: Literal["instruction", "input"]
     texts: FixedTexts  # 5 placeholder and fixed texts
     reasoning_replay: bool  # 6 send past reasoning back
-    verbatim_replay: bool  # 7 send the provider's own assistant message back
-    pressure_archive: bool  # 8 archive more turns when the request exceeds the context
-    decision_history: DecisionHistory | None  # 9 Decision history form and overflow
+    # 7 send the provider's own assistant message back; off: the reply is rebuilt from the model
+    # output, and no encoder can do otherwise
+    verbatim_replay: bool
+    # 8 before each request, archive the oldest turns while it exceeds the declared context
+    # window; it applies where the API declares an estimate of its requests
+    # (RealtimeCapabilities.request_size_estimation)
+    pressure_archive: bool
+    decision_history: DecisionHistory | None  # 9 Decision history form
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
     # 11 task category -> InteractionProfile.name; None: the category is rejected
     prompts: Mapping[str, str | None]
@@ -147,6 +166,35 @@ class ContextPolicy:
 
 
 _TEXT_JSON_PROMPTS = {"realtime": "standard_vlm", "browser_game": "standard_vlm"}
+# The standard values of the items that come neither from the environment (items 1 and 2) nor
+# from FIXED_TEXTS (item 5).
+STANDARD = {
+    "feedback": "separate_message",
+    "ledger_role": "input",
+    "reasoning_replay": False,
+    "verbatim_replay": False,
+    "pressure_archive": True,
+    "decision_history": None,
+    "tool_call_replay": None,
+    "prompts": _TEXT_JSON_PROMPTS,
+    "observation": "som_screenshot",
+}
+# What a model takes instead of the standard values, by preset name.
+PRESETS = {
+    # Luna's candidates are listed by the harness, so it is not compared with the chat models:
+    # it keeps the observation JSON beside the screenshot.
+    "luna": {"observation": "observation_json_screenshot"},
+    # JEV takes text only, within a 32k prompt: an action digest with the feedback in it, and
+    # the observation JSON without a screenshot.
+    "jev": {
+        "feedback": "digest",
+        "decision_history": DecisionHistory("action_digest"),
+        "observation": "observation_json_text",
+    },
+    # Kimi's thinking-model guide requires K3's past reasoning_content in multi-turn
+    # conversations; K3 is the moonshot API's model.
+    "kimi_k3": {"reasoning_replay": True},
+}
 
 
 def current_context_policy() -> ContextPolicy:
@@ -155,34 +203,24 @@ def current_context_policy() -> ContextPolicy:
     visuals = Retention(*effective_visual_fold_policy())
     turns = Retention(*effective_detailed_history_policy())
 
-    def path(api, **values) -> PathPolicy:
-        defaults = {
-            "feedback": "separate_message",
-            "ledger_role": "input",
-            "reasoning_replay": False,
-            "verbatim_replay": False,
-            "pressure_archive": False,
-            "decision_history": None,
-            "tool_call_replay": None,
-            "prompts": _TEXT_JSON_PROMPTS,
-            "observation": "som_screenshot",
-        }
+    def path(api, preset=None, **values) -> PathPolicy:
         return PathPolicy(
             version=CONTEXT_POLICY_VERSION,
             api=api,
+            preset=preset,
             visuals=visuals,
             turns=turns,
             texts=FIXED_TEXTS,
-            **{**defaults, **values},
+            **{**STANDARD, **(PRESETS[preset] if preset else {}), **values},
         )
 
     paths = (
-        path("litellm", reasoning_replay=True, verbatim_replay=True),
-        path("chat_completions", pressure_archive=True),
+        path("litellm"),
+        path("chat_completions"),
         path("openrouter"),
         path("anthropic_messages"),
-        path("moonshot", reasoning_replay=True),
-        path("openai_realtime", feedback="frame_prefix", ledger_role="instruction"),
+        path("moonshot", "kimi_k3"),
+        path("openai_realtime", feedback="frame_prefix"),
         path(
             "gemini_live",
             feedback="frame_prefix",
@@ -191,21 +229,17 @@ def current_context_policy() -> ContextPolicy:
         ),
         path(
             "openai_decisions",
-            ledger_role="none",
-            pressure_archive=True,
-            decision_history=DecisionHistory("turns", "raise"),
+            "luna",
+            decision_history=DecisionHistory("turns"),
             prompts={
                 "realtime": "multimodal_decisions",
                 "browser_game": "multimodal_game_decisions",
             },
-            observation="observation_json_screenshot",
         ),
         path(
             "jev_decisions",
-            feedback="digest",
-            decision_history=DecisionHistory("action_digest", "drop_oldest_half"),
+            "jev",
             prompts={"realtime": "jev_decisions", "browser_game": None},
-            observation="observation_json_text",
         ),
     )
     return ContextPolicy(CONTEXT_POLICY_VERSION, {value.api: value for value in paths})

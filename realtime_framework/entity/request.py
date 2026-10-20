@@ -26,7 +26,7 @@ BlockKind = Literal[
 ]
 Source = Literal["environment", "agent", "model"]
 # Neutral roles; no provider role names.
-Role = Literal["instruction", "input", "model", "none"]
+Role = Literal["instruction", "input", "model"]
 Position = Literal["head", "after_head", "in_order", "frame_prefix", "digest"]
 
 
@@ -70,7 +70,6 @@ class ContentBlock:
     based_on: str | None = None  # output and tools: observation_id of the frame answered
     attached_to: str | None = None  # feedback: the output it reports, or the frame it prefixes
     reasoning: str = ""  # output: set only when the policy replays reasoning
-    provider_message: dict | None = None  # output: set only when the policy replays it verbatim
     initial_text: str = ""  # tools: model text before the first call
     exchanges: tuple[ToolExchange, ...] = ()
     revision: int | None = None  # ledger: archived action count it covers
@@ -133,8 +132,8 @@ class CallParameters:
 
 @dataclass(frozen=True)
 class CanonicalRequest:
-    # The context policy the request was generated under; encoders read its fixed texts and
-    # Decision overflow handling from here.
+    # The context policy the request was generated under; encoders read its fixed texts from
+    # here.
     policy: PathPolicy
     history_form: Literal["turns", "action_digest"]
     items: tuple[RequestItem, ...]  # in the order they are sent

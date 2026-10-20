@@ -320,8 +320,8 @@ class ChoiceClient(Protocol):
     The client owns only transport: authentication, failure classification
     (classify_question_error), context-limit detection and response validation. Questions, their
     state, candidates, history and retries belong to the selection flow (providers/decisions).
-    With canonical history replay, ``request_context_status(request)`` reports physical context
-    pressure for the runtime.
+    A client that declares request_size_estimation reports context pressure for the runtime
+    through ``request_context_status(request)``.
     """
 
     capabilities: RealtimeCapabilities  # max_choices: options per question
@@ -544,9 +544,10 @@ class RequestRetry:
         return delay
 
 
+# Says only what the fold removed: whether this step's reply and feedback are still there differs
+# by path and by step.
 FOLDED_VISUAL_PLACEHOLDER = (
-    "[Earlier screenshot and its interactables were folded from active visual context. "
-    "The corresponding assistant reasoning and action remain in the conversation.]"
+    "[Earlier screenshot and its interactables were folded from active visual context.]"
 )
 
 ARCHIVED_ACTION_LEDGER_HEADER = (
