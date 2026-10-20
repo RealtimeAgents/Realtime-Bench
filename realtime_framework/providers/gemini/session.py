@@ -216,12 +216,12 @@ class SessionCore:
 
     # ---- connections ---------------------------------------------------------------------
 
-    def connect(self, history: CanonicalRequest | None, resume_handle) -> Connect:
-        """Close the open connection and plan the next one from the history view (None for an
-        empty session). A resume carries no history: the server restores the session from the
-        handle."""
-        replacing = self.connection is not None
-        self.closed()
+    def connect(
+        self, history: CanonicalRequest | None, resume_handle, *, replacing: bool
+    ) -> Connect:
+        """Plan the next connection, once the open one is closed (``replacing``: there was one),
+        from the history view (None for an empty session). A resume carries no history: the
+        server restores the session from the handle."""
         self.resume_handle = resume_handle
         contents, seeded = self._seed(history)
         return Connect(
