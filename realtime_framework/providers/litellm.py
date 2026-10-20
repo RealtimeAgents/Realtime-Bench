@@ -312,6 +312,9 @@ _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
     persistent_session=False,
     terminal_output_usage=True,
+    classifies_transport_errors=True,
+    request_size_estimation=True,
+    maps_output_cap=True,
 )
 
 
@@ -1121,6 +1124,8 @@ class ChatCompletionsDriver(LiteLLMDriver):
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
         terminal_output_usage=False,
+        finite_frame_budget=False,
+        wall_clock_only=True,
     )
     protocol = ChatProtocol(
         sdk_provider="openai",
@@ -1143,6 +1148,8 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
         terminal_output_usage=False,
+        finite_frame_budget=False,
+        wall_clock_only=True,
     )
     protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
     deployment = ChatDeployment(gateway="litellm", default_key_env=None, require_api_key=False)

@@ -54,6 +54,11 @@ class OpenAIDecisionsClient(DecisionEncoder):
         persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
+        finite_frame_budget=False,
+        wall_clock_only=True,
+        accepts_reasoning_effort=False,
+        classifies_transport_errors=True,
+        request_size_estimation=True,
     )
     # Choices per question; the selection flow groups larger candidate sets.
     max_choices = 255
