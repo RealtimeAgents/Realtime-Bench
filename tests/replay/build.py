@@ -21,9 +21,22 @@ from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.registry import create_agent
+from realtime_framework.sandbox.observation import som
 
+from . import baseline
 from .frames import FrameSource
 from .hermetic import HISTORY_ENV
+
+
+class ToolRuntime(som.ToolRuntime):
+    """The runner's tool runtime. The inspection proof keeps only the SHA-256 of the SoM-marked
+    image (sandbox/observation/som.py:448, 725), so each one is registered for the baselines."""
+
+    def inspect(self, observation, **kwargs) -> dict:
+        execution = super().inspect(observation, **kwargs)
+        if execution["image_bytes"]:
+            baseline.image_digest(execution["image_bytes"])
+        return execution
 
 
 @dataclass
@@ -132,7 +145,10 @@ def build_episode(
     # runner.main() opens the episode trace before it sets up the agent.
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
     setup = runner.AgentSetup()
-    with mock.patch.object(runner, "create_agent", checked_create_agent):
+    with (
+        mock.patch.object(runner, "create_agent", checked_create_agent),
+        mock.patch.object(runner, "ToolRuntime", ToolRuntime),
+    ):
         runner.set_up_agent(
             setup,
             config,

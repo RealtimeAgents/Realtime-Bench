@@ -24,7 +24,6 @@ without it the run is compared with tests/replay/baselines/.
 from __future__ import annotations
 
 import base64
-import hashlib
 import os
 from pathlib import Path
 
@@ -111,10 +110,10 @@ def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, max_ticks):
 
 
 def _add_wire_details(records: list[dict], stub: AnthropicMessagesStub) -> None:
-    """Give each request its compared headers, and store each image by the SHA-256 of its bytes.
+    """Give each request its compared headers, and store each image by its pixel digest.
 
     run_steps lists every step's requests in arrival order (steps.py:33, 49-52). Images travel as
-    base64 sources rather than data URLs, which baseline.Normalizer hashes.
+    base64 sources rather than data URLs, which baseline.Normalizer digests.
     """
     received = iter(stub.requests)
     for record in records:
@@ -124,7 +123,7 @@ def _add_wire_details(records: list[dict], stub: AnthropicMessagesStub) -> None:
                 for block in turn["content"]:
                     if block["type"] == "image":
                         data = base64.b64decode(block["source"]["data"])
-                        block["source"]["data"] = "sha256:" + hashlib.sha256(data).hexdigest()
+                        block["source"]["data"] = baseline.image_digest(data)
 
 
 def _turns(record: dict) -> list[dict]:
@@ -167,7 +166,7 @@ def _check_requests(records: list[dict], clock_text: str) -> None:
         assert newest["content"][-1]["cache_control"] == {"type": "ephemeral"}
         # The newest image is the SoM-marked frame its inspection bound (harness.py:918-948).
         marked_image = record["result"]["inspection"]["marked_image_sha256"]
-        assert newest["content"][-1]["source"]["data"] == "sha256:" + marked_image
+        assert newest["content"][-1]["source"]["data"] == baseline.registered_image(marked_image)
 
 
 def _check_usage(records: list[dict], scripted: list[Reply]) -> None:

@@ -4,18 +4,25 @@ Only non-semantic differences are normalized. Key order never counts. Random ids
 placeholders numbered in order of first appearance, one mapping for the whole session, so equal
 ids stay equal. Fields that hold real elapsed time or real clock readings keep their key and
 their null-ness but not their value. Everything else, model-visible times included, is compared
-exactly. Images are compared by the SHA-256 of their bytes rather than stored, and a trajectory
-row's input_prompt, a text summary of a whole request, by the SHA-256 and length of its
-normalized text.
+exactly. A trajectory row's input_prompt, a text summary of a whole request, is compared by the
+SHA-256 and length of its normalized text.
+
+Images are compared by their decoded pixels rather than stored: the same pixels encode to
+different PNG bytes under different zlib builds (Pillow's macOS wheels bundle zlib-ng, the Linux
+ones zlib). Where a record holds only the SHA-256 of an image's bytes, that image must have been
+registered with image_digest where the test produced it (frames.py, build.py).
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import re
 from pathlib import Path
+
+from PIL import Image
 
 from realtime_framework.entity.actions import Action
 
@@ -60,6 +67,38 @@ RANDOM_IDS = (
 DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # providers/litellm.py:348
 # The trajectory's summary of the retained history (harnesses/default/harness.py:1557-1559).
 DIGESTED_FIELDS = frozenset({"input_prompt"})
+# Fields that hold the SHA-256 of an image's bytes.
+IMAGE_SHA256_FIELDS = frozenset(
+    {
+        # the screenshot (sandbox/observation/capture.py:285, 301), as the step records copy it
+        # and the runner traces it (evaluation/runner.py:883)
+        "screenshot_sha256",
+        # the SoM-marked frame (sandbox/observation/som.py:448, 725)
+        "marked_image_sha256",
+    }
+)
+
+# Each registered image's pixel digest, by the SHA-256 of its encoded bytes.
+_IMAGES: dict[str, str] = {}
+
+
+def image_digest(data: bytes) -> str:
+    """The pixel digest "rgba:<width>x<height>:<SHA-256 of the RGBA pixels>" of an encoded image,
+    which this also registers under the SHA-256 of its bytes."""
+    key = hashlib.sha256(data).hexdigest()
+    if key not in _IMAGES:
+        with Image.open(io.BytesIO(data)) as image:
+            pixels = image.convert("RGBA")
+        digest = hashlib.sha256(pixels.tobytes()).hexdigest()
+        _IMAGES[key] = f"rgba:{pixels.width}x{pixels.height}:{digest}"
+    return _IMAGES[key]
+
+
+def registered_image(sha256: str) -> str:
+    """The pixel digest of the registered image whose bytes have this SHA-256."""
+    if sha256 not in _IMAGES:
+        raise LookupError(f"no registered image has bytes with SHA-256 {sha256}")
+    return _IMAGES[sha256]
 
 
 def action_record(action: Action) -> dict:
@@ -86,9 +125,15 @@ class Normalizer:
         if key in DIGESTED_FIELDS and isinstance(value, str):
             text = self._string(value)
             return {"length": len(text), "sha256": hashlib.sha256(text.encode()).hexdigest()}
+        if key in IMAGE_SHA256_FIELDS:
+            return registered_image(value)
         if isinstance(value, Action):
             value = action_record(value)
         if isinstance(value, dict):
+            # The image bytes of a canonical request record (entity/request.py:42, 146), as
+            # entity/records.py:61 describes bytes.
+            if value.keys() == {"byte_length", "sha256"}:
+                return registered_image(value["sha256"])
             return {name: self(value[name], name) for name in sorted(value)}
         if isinstance(value, (list, tuple)):
             return [self(item) for item in value]
@@ -101,8 +146,7 @@ class Normalizer:
     def _string(self, value: str) -> str:
         image = DATA_URL.fullmatch(value)
         if image:
-            digest = hashlib.sha256(base64.b64decode(image.group(2))).hexdigest()
-            return f"data:{image.group(1)};sha256,{digest}"
+            return f"data:{image.group(1)};{image_digest(base64.b64decode(image.group(2)))}"
         for kind, pattern in RANDOM_IDS:
             value = pattern.sub(lambda match, kind=kind: self._placeholder(kind, match[0]), value)
         return value

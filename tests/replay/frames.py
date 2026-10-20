@@ -30,6 +30,8 @@ from realtime_framework.sandbox.browser.ax import capture_ax_frames
 from realtime_framework.sandbox.observation import capture as capture_module
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 
+from . import baseline
+
 DESKTOP_SIZE = (1920, 1080)
 CLOCK_ORIGIN = 1_760_000_000.0  # wall-clock time of frame 0; frame n is n/fps seconds later
 
@@ -407,7 +409,11 @@ class _Guest:
         self._source = source
 
     def screenshot(self) -> bytes:
-        return self._source.screenshot(self._source.frame)
+        """The observation keeps the SHA-256 of these bytes (capture.py:285, 301), so they are
+        registered for the baselines."""
+        data = self._source.screenshot(self._source.frame)
+        baseline.image_digest(data)
+        return data
 
 
 class FrameSource:
