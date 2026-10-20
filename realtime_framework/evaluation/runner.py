@@ -1210,7 +1210,6 @@ import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
-from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
@@ -1218,7 +1217,6 @@ from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.providers.preflight import UnsupportedTokenBudget
 from realtime_framework.providers.preflight import check_episode
 from realtime_framework.providers.preflight import check_token_budget
-from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
 from realtime_framework.sandbox.actions import GuestEnvironment
@@ -1562,92 +1560,33 @@ def main():
                 fps=model_input_fps,
                 reasoning_effort=reasoning_effort,
             )
-        # Every pre-run rule on the model, clock and task, before any of them is built.
-        check_episode(cfg, clock_mode=a.clock, task=ctask, env_fps=env_fps)
-        # The agent borrows the episode trace's write entry; the runner still opens and closes it.
-        agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
-        agent = create_agent(cfg, log_dir=run_dir, trace=agent_trace)
-        configure_agent(
-            agent,
-            fps=env_fps,
-            tokens_per_frame=tokens_per_frame,
-            clock_mode=a.clock,
-            category=getattr(ctask, "category", None),
-        )
-        run_stage = "environment_setup"
-
-        # Prepare a valid provisional episode/frame for adapter initialization. Wall-clock tasks are restarted once more after initialize(), below, so none of
-        # this warmup consumes their scored action window.
-        if ctask is not None and hasattr(ctask, "reset_episode"):
-            category = getattr(ctask, "category", None)
-            if category in {"browser_game", "realtime"}:
-                try:
-                    _rb = ctask.reset_episode()
-                    print(f"[{category}] fresh episode reset; baseline={_rb}", flush=True)
-                    if category == "realtime" and a.clock != "token":
-                        time.sleep(0.45)
-                except Exception:
-                    detail = traceback.format_exc()
-                    environment_invalid = True
-                    print(
-                        f"[{category}] fresh restart FAILED; run is invalid:\n" + detail, flush=True
-                    )
-                    raise EnvironmentInvalidError(
-                        f"{category} episode restart failed before tick 0\n" + detail
-                    )
-        if ctask is not None:
-            ctask.activate_clock()
-            print(f"[clock] {ctask.clock_snapshot()}", flush=True)
-            run_stage = "tool_setup"
-            # Choice models need focused fields and control state to enumerate actions,
-            # including when they also receive screenshots (context policy item 12).
-            context_policy = phase1_context_policy().for_path(
-                cfg.adapter_type, cfg.provider_options
-            )
-            text_observation = context_policy.observation != "som_screenshot"
-            scene_capture = BrowserSceneCapture(
-                guest,
+        setup = AgentSetup()
+        try:
+            set_up_agent(
+                setup,
+                cfg,
                 ctask,
-                debug_port=getattr(ctask, "dbg_port", None),
-                container=R.CONTAINER_NAME,
-                desktop_size=(env_config.screen_width, env_config.screen_height),
-                text_observation=text_observation,
-            )
-            tool_runtime = ToolRuntime(
-                run_dir / "tool_calls.jsonl",
-                task_id=ctask.task_id,
-                adapter=cfg.adapter_type,
+                task,
+                clock_mode=a.clock,
+                env_fps=env_fps,
+                tokens_per_frame=tokens_per_frame,
+                run_dir=run_dir,
+                episode_trace=episode_trace,
                 model=requested_model_identity["model"],
-                text_observation=text_observation,
+                open_capture=lambda text_observation: BrowserSceneCapture(
+                    guest,
+                    ctask,
+                    debug_port=getattr(ctask, "dbg_port", None),
+                    container=R.CONTAINER_NAME,
+                    desktop_size=(env_config.screen_width, env_config.screen_height),
+                    text_observation=text_observation,
+                ),
             )
-            if hasattr(agent, "bind_tool_runtime"):
-                agent.bind_tool_runtime(tool_runtime)
-            run_stage = "environment_setup"
-            # Chrome can start with keyboard focus in its address bar; the model acts on the page.
-            try:
-                scene_capture.ensure_page_focus()
-            except Exception as exc:
-                environment_invalid = True
-                raise EnvironmentInvalidError(f"page did not take keyboard focus: {exc}") from exc
-            initial_observation = scene_capture.capture(0)
-            initial_interactables = initial_observation.metadata.get("interactables") or {}
-            if initial_interactables.get("scene", {}).get(
-                "status"
-            ) != "ok" or not initial_interactables.get("binding", {}).get("stable"):
-                environment_invalid = True
-                raise EnvironmentInvalidError(
-                    "initial observation has unavailable or unstable interactables: "
-                    + json.dumps(initial_interactables, default=str)[:1000]
-                )
-        else:
-            initial_observation = Observation(guest.screenshot(), time.time(), 0)
-            ensure_observation_geometry(initial_observation)
-        run_stage = "provider_setup"
-        agent.initialize(task, initial_observation)
-        # Initialization is allowed to open a native session or warm a local KV cache, but the
-        # scored first turn receives exactly one freshly bound observation from the frame clock.
-        agent.discard_pending_observations()
-        run_stage = "environment_setup"
+        finally:
+            # The cleanup below closes what setup made, also when one of its steps failed.
+            run_stage, environment_invalid = setup.stage, setup.environment_invalid
+            agent, agent_trace = setup.agent, setup.agent_trace
+            scene_capture, tool_runtime = setup.scene_capture, setup.tool_runtime
 
         # Optional legacy diagnostics may add deliberation caps explicitly. The maintained method
         # uses only the shared episode horizon T and therefore does not inherit task-local caps.
@@ -2262,6 +2201,115 @@ def main():
     )
     if not accepted or (custom_tasks.suite_id() == "tasks" and not isinstance(solved, bool)):
         raise SystemExit(1)
+
+
+class AgentSetup:
+    """What set_up_agent() has made so far. main() closes these after the episode, also when a
+    later setup step fails, so each is recorded as soon as it exists. ``stage`` is main()'s
+    run_stage, which attributes a failure, and ``environment_invalid`` marks a failed check of
+    the environment."""
+
+    def __init__(self):
+        self.stage = "provider_setup"
+        self.environment_invalid = False
+        self.agent_trace = None
+        self.agent = None
+        self.scene_capture = None
+        self.tool_runtime = None
+
+
+def set_up_agent(
+    setup: AgentSetup,
+    cfg: ModelConfig,
+    ctask,
+    instruction: str,
+    *,
+    clock_mode: str,
+    env_fps: float,
+    tokens_per_frame: int | None,
+    run_dir: Path,
+    episode_trace: EpisodeTrace,
+    model: str,
+    open_capture,
+) -> None:
+    """Turn a model config and a provisioned task into an agent initialized on the first frame.
+
+    ``instruction`` is the task description and ``model`` the model identity the tool trace
+    records. ``open_capture(text_observation)`` returns the scene capture for the observation
+    form the model's context policy names. What this makes is recorded in ``setup``.
+    """
+    # Every pre-run rule on the model, clock and task, before any of them is built.
+    check_episode(cfg, clock_mode=clock_mode, task=ctask, env_fps=env_fps)
+    # The agent borrows the episode trace's write entry; the runner still opens and closes it.
+    setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
+    agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace)
+    configure_agent(
+        agent,
+        fps=env_fps,
+        tokens_per_frame=tokens_per_frame,
+        clock_mode=clock_mode,
+        category=getattr(ctask, "category", None),
+    )
+    setup.stage = "environment_setup"
+
+    # Prepare a valid provisional episode/frame for adapter initialization. main() restarts
+    # wall-clock tasks once more after initialize(), so none of this warmup consumes their scored
+    # action window.
+    if hasattr(ctask, "reset_episode"):
+        category = getattr(ctask, "category", None)
+        if category in {"browser_game", "realtime"}:
+            try:
+                _rb = ctask.reset_episode()
+                print(f"[{category}] fresh episode reset; baseline={_rb}", flush=True)
+                if category == "realtime" and clock_mode != "token":
+                    time.sleep(0.45)
+            except Exception:
+                detail = traceback.format_exc()
+                setup.environment_invalid = True
+                print(f"[{category}] fresh restart FAILED; run is invalid:\n" + detail, flush=True)
+                raise EnvironmentInvalidError(
+                    f"{category} episode restart failed before tick 0\n" + detail
+                )
+    ctask.activate_clock()
+    print(f"[clock] {ctask.clock_snapshot()}", flush=True)
+    setup.stage = "tool_setup"
+    # Choice models need focused fields and control state to enumerate actions,
+    # including when they also receive screenshots (context policy item 12).
+    context_policy = phase1_context_policy().for_path(cfg.adapter_type, cfg.provider_options)
+    text_observation = context_policy.observation != "som_screenshot"
+    scene_capture = setup.scene_capture = open_capture(text_observation)
+    setup.tool_runtime = ToolRuntime(
+        run_dir / "tool_calls.jsonl",
+        task_id=ctask.task_id,
+        adapter=cfg.adapter_type,
+        model=model,
+        text_observation=text_observation,
+    )
+    if hasattr(agent, "bind_tool_runtime"):
+        agent.bind_tool_runtime(setup.tool_runtime)
+    setup.stage = "environment_setup"
+    # Chrome can start with keyboard focus in its address bar; the model acts on the page.
+    try:
+        scene_capture.ensure_page_focus()
+    except Exception as exc:
+        setup.environment_invalid = True
+        raise EnvironmentInvalidError(f"page did not take keyboard focus: {exc}") from exc
+    initial_observation = scene_capture.capture(0)
+    initial_interactables = initial_observation.metadata.get("interactables") or {}
+    if initial_interactables.get("scene", {}).get(
+        "status"
+    ) != "ok" or not initial_interactables.get("binding", {}).get("stable"):
+        setup.environment_invalid = True
+        raise EnvironmentInvalidError(
+            "initial observation has unavailable or unstable interactables: "
+            + json.dumps(initial_interactables, default=str)[:1000]
+        )
+    setup.stage = "provider_setup"
+    agent.initialize(instruction, initial_observation)
+    # Initialization is allowed to open a native session or warm a local KV cache, but the
+    # scored first turn receives exactly one freshly bound observation from the frame clock.
+    agent.discard_pending_observations()
+    setup.stage = "environment_setup"
 
 
 def _write_emergency_setup_summary(error: str):
