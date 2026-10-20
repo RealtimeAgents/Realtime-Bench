@@ -80,8 +80,10 @@ A model that needs a new wire protocol gets a driver:
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
    provider-measured usage.
 4. Implement `classify_transport_error(exc) -> TransportFailure` and declare
-   `classifies_transport_errors=True`. Do not retry in the driver or SDK; the harness retries
-   transient failures itself and records every attempt.
+   `classifies_transport_errors=True`. Do not write a retry loop in the driver or turn on SDK
+   retries: the shared executor (`RequestRetry`, `realtime_framework/entity/model.py`) retries
+   transient failures of each turn itself, stops once the runner abandons the decision, and
+   records every attempt.
 5. Register the driver class as one `"package.module:Class"` entry in `APIS`
    (`realtime_framework/providers/registry.py`) and reference it from a preset with
    `endpoint.api`.
