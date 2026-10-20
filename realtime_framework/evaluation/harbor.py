@@ -519,19 +519,15 @@ class ApptainerEnvironment(BaseEnvironment):
         if resolved.return_code:
             raise ValueError(f"Cannot resolve model configuration: {resolved.stderr.strip()}")
         launch = json.loads(resolved.stdout)
-        configuration = {
-            "model_config": launch["model_config"],
-            "model_revision": launch.get("model_revision"),
-        }
+        from realtime_framework.evaluation.config import configuration_sha256
+
         return {
             **request,
             "model": launch["model_config"]["model_name"],
             "model_revision": launch.get("model_revision"),
             # Compare with the actual report so edits between resolution and execution
             # cannot silently evaluate a different configuration.
-            "configuration_sha256": hashlib.sha256(
-                json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
+            "configuration_sha256": configuration_sha256(launch),
         }
 
     async def run_benchmark(self, request, extra_env=None):

@@ -8,6 +8,8 @@ names the driver.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -19,6 +21,11 @@ import yaml
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.evaluation.config import (
+    configuration_sha256,
+    effective_run_config,
+    external_driver_identity,
+)
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
     check_episode,
@@ -248,5 +255,68 @@ def test_context_policy_of_an_external_driver():
     """An external driver gets the chat_completions row, the plain stateless chat values."""
     policy = phase1_context_policy()
     assert policy.for_path(TARGET, {}) is policy.paths["chat_completions"]
+
+
+# The driver's code is part of the run identity.
+
+
+def trial_settings(capsys, key: str) -> dict:
+    """What the Harbor trial worker resolves for a catalog key (evaluation/_trial.py:221-232)."""
+    from realtime_framework.evaluation._trial import main
+
+    assert main(["--catalog-model", key, "--task", WEB_TASK, "--dry-run"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def run_config(config) -> dict:
+    return effective_run_config(
+        model_config=config, fps=1.0, max_minutes=5.0, protocol="wall-clock",
+        think_budget_s=None, per_move_cap_s=None, mode="default",
+    )
+
+
+def test_run_identity_records_the_driver_code(external, tmp_path, monkeypatch, capsys):
+    write_model(external.models)
+    config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort="low")
+    identity = run_config(config)["external_driver"]
+    assert identity.keys() == {"module", "class", "source_sha256", "context_policy_row"}
+    assert (identity["module"], identity["class"]) == ("rtb_ext.chat", "ExternalChatDriver")
+    assert identity["context_policy_row"] == "chat_completions"
+    settings = trial_settings(capsys, MODEL_KEY)
+    assert settings["external_driver"] == identity
+    configuration = configuration_sha256(settings)
+
+    # The same sources installed elsewhere: the digest does not depend on the location.
+    moved = tmp_path / "elsewhere"
+    shutil.copytree(external.site, moved)
+    unload()
+    monkeypatch.syspath_prepend(str(moved))
+    assert run_config(config)["external_driver"] == identity
+    assert Path(sys.modules["rtb_ext"].__file__).is_relative_to(moved)
+
+    # An edited source changes the run config and the configuration Harbor checks.
+    with (moved / "rtb_ext" / "chat.py").open("a") as source:
+        source.write("# edited\n")
+    edited = run_config(config)["external_driver"]
+    assert edited["source_sha256"] != identity["source_sha256"]
+    assert configuration_sha256({**settings, "external_driver": edited}) != configuration
+
+    # A driver module outside any package is hashed alone.
+    module = moved / "rtb_one.py"
+    module.write_text("from rtb_ext.chat import ExternalChatDriver as Driver\n")
+    one = external_driver_identity("rtb_one:Driver")
+    assert (one["module"], one["class"]) == ("rtb_one", "Driver")
+    module.write_text("from rtb_ext.chat import ExternalChatDriver as Driver  # edited\n")
+    assert external_driver_identity("rtb_one:Driver")["source_sha256"] != one["source_sha256"]
+
+
+def test_configuration_hash_of_registered_models(capsys):
+    """A registered model hashes only its model config and revision, as before."""
+    settings = trial_settings(capsys, "my-model")
+    assert "external_driver" not in settings
+    configuration = {key: settings[key] for key in ("model_config", "model_revision")}
+    assert configuration_sha256(settings) == hashlib.sha256(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 

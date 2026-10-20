@@ -8,6 +8,7 @@ import json as json
 from pathlib import Path as Path
 import time as time
 
+from realtime_framework.evaluation.config import configuration_sha256
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
 
 
@@ -1743,17 +1744,11 @@ def report(root):
     launch_path = root / "wall_clock_launch.json"
     if launch_path.is_file():
         launch = json.loads(launch_path.read_text())
-        configuration = {
-            "model_config": launch["model_config"],
-            "model_revision": launch.get("model_revision"),
-        }
         output["integration"] = {
             "model": launch["model_config"]["model_name"],
             "model_revision": launch.get("model_revision"),
             "mode": launch["plan"]["runtime"]["mode"],
-            "configuration_sha256": hashlib.sha256(
-                json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
+            "configuration_sha256": configuration_sha256(launch),
         }
     # Archived attempts are spend, never additional scored tasks.
     output["retry_attempts"] = []
