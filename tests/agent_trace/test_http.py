@@ -18,7 +18,7 @@ import pytest
 
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, phase1_context_policy
+from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, GenerationRequest, ProviderObservation
 from realtime_framework.entity.records import trace_scope, validate_episode_trace
 from realtime_framework.entity.request import (
@@ -301,7 +301,7 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     driver = ChatCompletionsDriver(config)
     driver.bind_trace(sink)
     canonical = build_request(
-        phase1_context_policy().for_path(config.adapter_type, config.provider_options),
+        current_context_policy().for_path(config.adapter_type, config.provider_options),
         system_block("count me", None),
         (),
         None,
@@ -430,7 +430,7 @@ def _request(config):
         "replay_candidates",
     )
     return build_request(
-        phase1_context_policy().for_path(config.adapter_type, config.provider_options),
+        current_context_policy().for_path(config.adapter_type, config.provider_options),
         system_block("system", None),
         turns,
         ledger_block('{"decision": 0}', 1, None),

@@ -15,7 +15,7 @@ from openai._models import construct_type_unchecked
 from openai.types.realtime import RealtimeServerEvent
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
@@ -27,7 +27,7 @@ from realtime_framework.providers.openai_realtime_session import (
     RealtimeSessionCore,
 )
 
-POLICY = phase1_context_policy().for_path("openai_realtime", {})
+POLICY = current_context_policy().for_path("openai_realtime", {})
 TEXTS = POLICY.texts
 SYSTEM = system_block("system instruction", None)
 ANSWER = AnswerRequirements("text_json", "standard_vlm")

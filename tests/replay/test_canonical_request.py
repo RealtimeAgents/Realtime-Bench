@@ -6,7 +6,7 @@ import base64
 import json
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import (
     ARCHIVED_ACTION_LEDGER_HEADER,
     FOLDED_VISUAL_PLACEHOLDER,
@@ -20,7 +20,7 @@ from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
-POLICY = phase1_context_policy()
+POLICY = current_context_policy()
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("replay-vlm", "low", None)
 SYSTEM = system_block("SYSTEM", None)

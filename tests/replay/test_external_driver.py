@@ -24,7 +24,7 @@ import pytest
 import yaml
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.config import (
@@ -433,14 +433,14 @@ def test_external_endpoint_rejected(external, api, endpoint, message):
 def test_registered_drivers_meet_the_contract():
     """External drivers are checked against the contract every registered driver meets, each
     under its own context-policy row."""
-    policy = phase1_context_policy()
+    policy = current_context_policy()
     for api, target in catalog.APIS.items():
         catalog._check_driver(target, catalog.adapter_class(api), policy.for_path(api, {}))
 
 
 def test_context_policy_of_an_external_driver():
     """An external driver gets the chat_completions row, the plain stateless chat values."""
-    policy = phase1_context_policy()
+    policy = current_context_policy()
     assert policy.for_path(TARGET, {}) is policy.paths["chat_completions"]
 
 
@@ -451,12 +451,12 @@ def test_registered_api_needs_its_own_row(monkeypatch):
     from realtime_framework.entity.config import ModelConfig
     from realtime_framework.harnesses.registry import create_agent
 
-    policy = phase1_context_policy()
+    policy = current_context_policy()
     assert policy.paths.keys() == catalog.APIS.keys()
     monkeypatch.setitem(catalog.APIS, "my_api", catalog.APIS["chat_completions"])
     monkeypatch.setenv(KEY_ENV, "replay-external-key")
     message = (
-        "API 'my_api' has no context-policy row; add one in phase1_context_policy() "
+        "API 'my_api' has no context-policy row; add one in current_context_policy() "
         "(realtime_framework/entity/context_policy.py)"
     )
     fails(lambda: policy.for_path("my_api", {}), message)

@@ -72,7 +72,7 @@ class FixedTexts:
     gemini_queued_tool_response: Mapping[str, str]
 
 
-PHASE1_TEXTS = FixedTexts(
+FIXED_TEXTS = FixedTexts(
     folded_visual=FOLDED_VISUAL_PLACEHOLDER,
     ledger_header=ARCHIVED_ACTION_LEDGER_HEADER,
     jev_ledger_header=JEV_LEDGER_HEADER,
@@ -134,7 +134,7 @@ class ContextPolicy:
         else:
             raise ValueError(
                 f"API {adapter_type!r} has no context-policy row; add one in "
-                "phase1_context_policy() (realtime_framework/entity/context_policy.py)"
+                "current_context_policy() (realtime_framework/entity/context_policy.py)"
             )
         if path.tool_call_replay is None:
             return path
@@ -149,8 +149,9 @@ class ContextPolicy:
 _TEXT_JSON_PROMPTS = {"realtime": "standard_vlm", "browser_game": "standard_vlm"}
 
 
-def phase1_context_policy() -> ContextPolicy:
-    """The phase-1 values; history windows keep their STREAM_* environment overrides."""
+def current_context_policy() -> ContextPolicy:
+    """The values at CONTEXT_POLICY_VERSION; history windows keep their STREAM_* environment
+    overrides."""
     visuals = Retention(*effective_visual_fold_policy())
     turns = Retention(*effective_detailed_history_policy())
 
@@ -171,7 +172,7 @@ def phase1_context_policy() -> ContextPolicy:
             api=api,
             visuals=visuals,
             turns=turns,
-            texts=PHASE1_TEXTS,
+            texts=FIXED_TEXTS,
             **{**defaults, **values},
         )
 

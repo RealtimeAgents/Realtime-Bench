@@ -321,7 +321,7 @@ Only the selected implementation is imported, so optional SDKs never affect othe
 
 from importlib import import_module as import_module
 
-from realtime_framework.entity.context_policy import PathPolicy, phase1_context_policy
+from realtime_framework.entity.context_policy import PathPolicy, current_context_policy
 from realtime_framework.entity.model import Deployment, ModelClient, RealtimeCapabilities
 
 # RealtimeDriver's methods, plus bind_trace, which the harness calls on every driver it builds.
@@ -382,7 +382,7 @@ def _external_class(target: str) -> type:
     driver = getattr(module, class_name)
     if not isinstance(driver, type):
         raise ValueError(f"{target!r} is not a class")  # noqa: TRY004
-    _check_driver(target, driver, phase1_context_policy().for_path(target, {}))
+    _check_driver(target, driver, current_context_policy().for_path(target, {}))
     return driver
 
 
