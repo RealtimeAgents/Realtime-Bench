@@ -479,7 +479,7 @@ class OpenAIRealtimeDriver:
         user = self._frame_create(frame)
         await asyncio.to_thread(self._send, user)
         self._frames[frame.id] = _SentFrame(user.item_id, frame.text, frame.item.block.folded)
-        return {"user_item_id": user.item_id, "provider_observation_prompt": frame.text}
+        return {}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._conn is None:

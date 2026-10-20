@@ -117,11 +117,16 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.entity.request import ContentBlock
 from realtime_framework.harnesses.default.request import ledger_block
-from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.sandbox.observation.som import without_observation_interactables
 
 # Builds the canonical request from the turns to send and the archived-action ledger block.
 RequestBuilder = Callable[[tuple[CanonicalTurn, ...], ContentBlock | None], CanonicalRequest]
+
+
+def session_frame_text(observation) -> str:
+    """The prompt the live drivers send for one ProviderObservation, after its pending feedback."""
+    prefix = observation.feedback_prefix
+    return f"{prefix}\n{observation.prompt}" if prefix else observation.prompt
 
 
 class RealtimeRuntime:
@@ -471,8 +476,6 @@ class RealtimeRuntime:
             await self.driver.send_observation(turn.observation, history) for turn in incoming
         ]
         input_refs = [refs or {} for refs in input_refs]
-        for turn, refs in zip(incoming, input_refs):
-            turn.provider_refs.update(refs or {})
 
         compactions = 0
         archived_count = 0

@@ -54,7 +54,6 @@ from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
 from realtime_framework.providers.context import validate_context_reserve
-from realtime_framework.providers.legacy import chat_messages
 
 LITELLM_VERSION = "1.104.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -309,6 +308,64 @@ def _mark_cache_breakpoint(messages: list[dict]) -> None:
             break
 
 
+# Chat protocol mapping
+def frame_text(prefix: str, prompt: str) -> str:
+    """A session frame's text: the pending execution feedback, then the frame prompt."""
+    return f"{prefix}\n{prompt}" if prefix else prompt
+
+
+def chat_messages(request) -> tuple[dict, ...]:
+    """The canonical request as the OpenAI-format message list, before the compat flags apply.
+
+    Luna's size estimate counts it and the trajectory summary shows it. Every ledger is a user
+    message at index 1, whatever its intended role. Live tool exchanges have no message form here.
+    """
+    messages = []
+    prefix = ""
+    for item in request.items:
+        block = item.block
+        if block.kind == "system_instruction":
+            messages.append({"role": "system", "content": block.text})
+        elif block.kind == "action_ledger":
+            messages.append(
+                {"role": "user", "content": request.policy.texts.ledger_header + "\n" + block.text}
+            )
+        elif item.intent.position == "frame_prefix":
+            prefix = block.text
+        elif block.kind == "frame":
+            if block.folded:
+                messages.append({"role": "user", "content": block.text})
+            else:
+                encoded = base64.b64encode(block.image.data).decode("ascii")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": frame_text(prefix, block.text)},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{block.image.mime_type};base64,{encoded}",
+                                    "detail": block.image.detail,
+                                },
+                            },
+                        ],
+                    }
+                )
+            prefix = ""
+        elif block.kind == "model_output":
+            if block.provider_message is not None:
+                messages.append(copy.deepcopy(block.provider_message))
+            else:
+                message = {"role": "assistant", "content": block.text}
+                if block.reasoning:
+                    message["reasoning_content"] = block.reasoning
+                messages.append(message)
+        elif block.kind == "execution_feedback":
+            messages.append({"role": "user", "content": block.text})
+    return tuple(messages)
+
+
 # Per-API declarations
 _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
@@ -408,9 +465,6 @@ class LiteLLMDriver:
     def __init__(self, config):
         self.config = config
         deployment = self.deployment
-        if not self.pressure_archive:
-            # The runtime records physical context checks only for drivers that perform them.
-            self.request_context_status = None
         if deployment.gateway == "openai_compatible":
             self.base_url = validate_endpoint(config.api_base_url)
         else:
