@@ -34,9 +34,10 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.evaluation import runner
 
+from ..fake_clock import FakeClock
 from .build import build_episode
-from .fake_env import FakeClock, FakeEnvironment, Hang
-from .frames import ReplayTask
+from .fake_env import FakeEnvironment, Hang
+from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import commit_statuses, run_loop
 from .scenario import CLICK_NAME, TASK_INSTRUCTION, replies
 from .steps import Step
@@ -305,10 +306,14 @@ def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatc
     and ends the epoch, so the abandoned worker does not send it again: the stub sees one
     request, and neither a turn nor an action is left behind."""
     monkeypatch.setattr(runner, "DEADLINE_GRACE_S", 0.0)
+    clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     env_box = []
-    with ChatCompletionsStub(
-        replies([STEP]), on_request=lambda index: env_box[0].model_request(index)
-    ) as stub:
+    with (
+        ChatCompletionsStub(
+            replies([STEP]), on_request=lambda index: env_box[0].model_request(index), clock=clock
+        ) as stub,
+        clock.participant(),
+    ):
         config = chat_completions_config(stub.base_url, stream=True)
         episode = build_episode(
             config,
@@ -317,10 +322,11 @@ def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatc
             instruction=TASK_INSTRUCTION,
             model_key=CHAT_MODEL_KEY,
             clock_mode="wall",
+            clock=clock,
         )
         env = FakeEnvironment(
             episode.frames,
-            FakeClock(),
+            clock,
             fps=config.fps,
             max_minutes=0.5 / 60,
             reply_latencies=[Hang(0.5)],

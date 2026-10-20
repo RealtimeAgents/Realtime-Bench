@@ -1,23 +1,23 @@
 """Drive the real run_stream with an agent from build_episode against a FakeEnvironment on the
 wall clock or a TokenEnvironment on the token clock.
 
-run_stream gets the arguments main() passes (evaluation/runner.py:1710-1721). Its own time.time()
-reads (runner.py:365-367, 382-415, 571, 756, 774) are pointed at the fake clock, so on the wall
-clock action timestamps, frame ages and the deadline all read one clock. After the loop the
-abandoned workers are drained (runner.py:1814-1819) and the agent is closed (runner.py:1820-1827),
-in main()'s order. main() would also call the agent's start_episode (runner.py:1691-1693), which
-no agent defines.
+run_stream gets the arguments main() passes (evaluation/runner.py:1710-1721), with the
+environment's clock as its clock: on the wall clock the fake clock (tests/fake_clock.py), so its
+bounded wait, its workers, action timestamps, frame ages and the deadline all run on one clock.
+After the loop the abandoned workers are drained (runner.py:1814-1819) and the agent is closed
+(runner.py:1820-1827), in main()'s order. main() would also call the agent's start_episode
+(runner.py:1691-1693), which no agent defines.
 
-Any agent build_episode returns can be driven, given a stub that calls ``env.model_request`` as
-its ``on_request`` hook (see fake_env.py).
+On the wall clock any agent build_episode returns on the same clock can be driven, given a stub
+that serves on that clock and calls ``env.model_request`` as its ``on_request`` hook (see
+fake_env.py); the calling thread takes part in the clock. On the token clock run_stream's clock is
+TokenEnvironment's, whose recorded times stay at the origin (token_env.py).
 """
 
 from __future__ import annotations
 
 import re
-import types
 from collections import Counter
-from unittest import mock
 
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import runner
@@ -78,24 +78,24 @@ def run_loop(episode: Episode, env) -> list:
             line = LOGGED_DELIBERATION.sub("δ=<real time>", line)
         env.log("runner.log", line=line)
 
-    with mock.patch.object(runner, "time", types.SimpleNamespace(time=env.clock.time)):
-        try:
-            return runner.run_stream(
-                agent,
-                env,
-                delta_s=1.0 / env.fps,
-                frame_ticks=env.fps / agent.config.fps,
-                max_ticks=env.max_minutes * 60 * env.fps,
-                log=log,
-                think_budget_s=None,
-                per_move_cap_s=None,
-                clock_mode=episode.clock_mode,
-                tokens_per_frame=episode.tokens_per_frame,
-                trace=RecordingTrace(env),
-            )
-        finally:
-            env._drain_abandoned()
-            agent.close()
+    try:
+        return runner.run_stream(
+            agent,
+            env,
+            delta_s=1.0 / env.fps,
+            frame_ticks=env.fps / agent.config.fps,
+            max_ticks=env.max_minutes * 60 * env.fps,
+            log=log,
+            think_budget_s=None,
+            per_move_cap_s=None,
+            clock_mode=episode.clock_mode,
+            tokens_per_frame=episode.tokens_per_frame,
+            trace=RecordingTrace(env),
+            clock=env.clock,
+        )
+    finally:
+        env._drain_abandoned()
+        agent.close()
 
 
 def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:

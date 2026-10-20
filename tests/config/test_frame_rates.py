@@ -112,6 +112,7 @@ def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch)
     import sys
     import types
 
+    from realtime_framework.clock import Clocks, SystemClock
     from realtime_framework.evaluation import effective_config as probe
     from realtime_framework.evaluation import reporting, runner
     from realtime_framework.sandbox import desktop
@@ -129,8 +130,15 @@ def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch)
         desktop, "make_video", lambda frames_dir, output_path, fps: videos.append(fps)
     )
     monkeypatch.setattr(reporting, "finalize_video", lambda run_dir: None)
-    clock = types.SimpleNamespace(time=runner.time.time, sleep=lambda seconds: None)
-    monkeypatch.setattr(runner, "time", clock)
+
+    class NoSleeps(SystemClock):
+        """main()'s setup waits take no time here."""
+
+        def sleep(self, seconds):
+            pass
+
+    clock = NoSleeps()
+    monkeypatch.setattr(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock))
     monkeypatch.setattr(runner, "GuestClient", probe._Guest)
     monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
     monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))

@@ -5,6 +5,10 @@ The chat_completions API reaches it through LiteLLM's OpenAI provider with an As
 request is answered with the next scripted reply: a JSON body when the request sets
 ``stream: false``, otherwise server-sent events ending in a usage chunk and ``[DONE]``. Every raw
 request body is kept in arrival order.
+
+Given a fake clock (tests/fake_clock.py), the stub serves on one of the clock's threads, so a
+reply's scripted latency is a sleep on that clock, and it waits on the clock for a held request's
+client to close.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ import socket
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from ..fake_clock import wait_delivered
 
 CREATED = 1_760_000_000  # fixed response timestamp
 STREAM_PIECE_CHARS = 12  # visible and reasoning text arrive in pieces of this size
@@ -38,18 +44,20 @@ _HELD = object()
 
 
 class ChatCompletionsStub:
-    def __init__(self, replies: list[Reply], on_request=None):
+    def __init__(self, replies: list[Reply], on_request=None, *, clock=None):
         """``on_request(index)``, when given, runs on the server thread after request ``index``
         (0-based) has been recorded and before it is answered. A true return holds the request:
         nothing is sent and no reply is used until the client closes the connection, and
         ``held`` records whether it did."""
         self._replies = list(replies)
         self._on_request = on_request
+        self._clock = clock
+        self._closing = False
         self.requests: list[Received] = []
         self.unscripted = 0
         self.held: list[bool] = []
         self._server = HTTPServer(("127.0.0.1", 0), self._handler())
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = None
 
     @property
     def base_url(self) -> str:
@@ -60,13 +68,25 @@ class ChatCompletionsStub:
         return len(self._replies)
 
     def __enter__(self):
-        self._thread.start()
+        if self._clock is None:
+            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+            self._thread.start()
+        else:
+            self._thread = self._clock.start_thread(self._serve_on_clock)
         return self
 
     def __exit__(self, *exc_info):
-        self._server.shutdown()
-        self._server.server_close()
+        if self._clock is None:
+            self._server.shutdown()
+        else:
+            self._closing = True
+            socket.create_connection(self._server.server_address).close()  # wakes the server
         self._thread.join()
+        self._server.server_close()
+
+    def _serve_on_clock(self):
+        while self._clock.wait_readable(self._server.socket) and not self._closing:
+            self._server.handle_request()
 
     def _next(self, path: str, body: bytes):
         self.requests.append(Received(path, body))
@@ -102,7 +122,10 @@ class ChatCompletionsStub:
             def _wait_for_close(self) -> bool:
                 """A client waiting for its response sends nothing, so the socket turns readable
                 only when the client closes it, and then reads end-of-file."""
-                readable, _, _ = select.select([self.connection], [], [], HOLD_LIMIT_S)
+                if stub._clock is None:
+                    readable, _, _ = select.select([self.connection], [], [], HOLD_LIMIT_S)
+                else:
+                    readable = stub._clock.wait_readable(self.connection, HOLD_LIMIT_S)
                 self.close_connection = True
                 return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
 
@@ -112,6 +135,9 @@ class ChatCompletionsStub:
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+                if stub._clock is not None:
+                    # The reply must not be in flight while the server waits on the clock again.
+                    wait_delivered(self.connection)
 
             def log_message(self, *args):
                 pass

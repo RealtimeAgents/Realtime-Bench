@@ -30,9 +30,10 @@ from realtime_framework.entity.records import TraceEvent
 
 from . import baseline
 from .build import build_episode
+from ..fake_clock import FakeClock
 from .clock_task import ClockTask
-from .fake_env import FakeClock, FakeEnvironment
-from .frames import ReplayTask
+from .fake_env import FakeEnvironment
+from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import REAL_TIME_FIELDS, check_wall_clock_properties, commit_statuses, records, run_loop
 from .scenario import CLICK_AGREE, CLICK_NAME, CLICK_SUBMIT, TASK_INSTRUCTION
 from .stub import ChatCompletionsStub, Reply
@@ -344,11 +345,16 @@ WALL_CASES = [
 
 @pytest.mark.parametrize("case", WALL_CASES, ids=[case.name for case in WALL_CASES])
 def test_wall_clock(case, tmp_path):
+    clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     env_box = []
-    with ChatCompletionsStub(
-        [reply(text, 8) for text in case.replies],
-        on_request=lambda index: env_box[0].model_request(index),
-    ) as stub:
+    with (
+        ChatCompletionsStub(
+            [reply(text, 8) for text in case.replies],
+            on_request=lambda index: env_box[0].model_request(index),
+            clock=clock,
+        ) as stub,
+        clock.participant(),
+    ):
         config = chat_completions_config(stub.base_url, stream=True).model_copy(
             update={"fps": case.model_input_fps}
         )
@@ -359,10 +365,11 @@ def test_wall_clock(case, tmp_path):
             instruction=TASK_INSTRUCTION,
             model_key=CHAT_MODEL_KEY,
             clock_mode="wall",
+            clock=clock,
         )
         env = FakeEnvironment(
             episode.frames,
-            FakeClock(),
+            clock,
             fps=case.env_fps,
             max_minutes=case.max_minutes,
             reply_latencies=case.latencies,
