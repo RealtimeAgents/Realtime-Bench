@@ -431,3 +431,55 @@ def test_observation_delivery(monkeypatch, model, failing):
     asyncio.run(run())
     expected = Delivery.SENT if failing is None else Delivery.UNKNOWN
     assert rig.driver._core.delivery[("block", "d0.frame")] == expected
+
+
+TRANSCRIPT = {"serverContent": {"outputTranscription": {"text": "partial"}}}
+
+
+def test_a_reply_read_after_reconnecting_keeps_its_connection_and_generation(monkeypatch):
+    """The second reply on connection 1 is read halfway when the driver reconnects and starts a
+    generation on connection 2. Reading on from the old events() still reads connection 1, and
+    numbers what it reads as that connection's second generation."""
+    rig = Rig(
+        monkeypatch,
+        "gemini-3.8-live",
+        [[TURN_COMPLETE, TRANSCRIPT, TURN_COMPLETE], [TURN_COMPLETE]],
+    )
+
+    async def run():
+        await rig.connect()
+        replies = [stamps(await drain(rig.driver.events(await rig.start("turn-0"))))]
+        old = rig.driver.events(await rig.start("turn-1"))
+        replies.append(stamps([await anext(old)]))
+        await rig.connect()
+        new = rig.driver.events(await rig.start("turn-2"))
+        replies.append(stamps(await drain(old)))
+        replies.append(stamps(await drain(new)))
+        return replies
+
+    turn_0, turn_1_before, turn_1_after, turn_2 = asyncio.run(run())
+    assert turn_0 == [("UsageSnapshot", 1, 1, "turn-0"), ("GenerationBoundary", 1, 1, "turn-0")]
+    assert turn_1_before == [("TextDelta", 1, 2, "turn-1")]
+    assert turn_1_after == [
+        ("UsageSnapshot", 1, 2, "turn-1"),
+        ("GenerationBoundary", 1, 2, "turn-1"),
+    ]
+    assert turn_2 == [("UsageSnapshot", 2, 1, "turn-2"), ("GenerationBoundary", 2, 1, "turn-2")]
+
+
+def test_a_message_is_numbered_by_the_generation_in_flight_when_read(monkeypatch):
+    """The receiver numbers a message when it reads it, by the generation then in flight on the
+    connection, whichever events() asked: here the first reply's consumer reads on after the next
+    generation has started."""
+    rig = Rig(monkeypatch, "gemini-3.8-live", [[TRANSCRIPT, TURN_COMPLETE]])
+
+    async def run():
+        await rig.connect()
+        first = rig.driver.events(await rig.start("turn-0"))
+        before = stamps([await anext(first)])
+        await rig.start("turn-1")
+        return before, stamps(await drain(first))
+
+    before, after = asyncio.run(run())
+    assert before == [("TextDelta", 1, 1, "turn-0")]
+    assert after == [("UsageSnapshot", 1, 2, "turn-1"), ("GenerationBoundary", 1, 2, "turn-1")]

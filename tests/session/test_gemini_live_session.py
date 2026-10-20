@@ -158,6 +158,15 @@ def test_new_session_then_rebuild():
     assert core.last_turn_clean and not core.renewal_required
 
 
+def test_seed_batches_keep_each_exchange_whole():
+    """A ledger ahead of the turns puts the exchanges off the 12-content grid; each message still
+    ends with a turn's receipts, never between a call and its receipt."""
+    connect = plan(session_core(), view([turn(k) for k in range(10)], ledger='{"decision": 0}'))
+    assert [len(batch) for batch in connect.seed] == [10, 12, 9]
+    for batch in connect.seed:
+        assert batch[-1].role == "user" and batch[-1].parts[0].function_response is not None
+
+
 def test_seed_replays_the_history_view():
     """The ledger first, then per turn its frame after its feedback, its native calls (the
     thought-signature sentinel on the first of a round only) and their stored receipts."""
@@ -327,8 +336,14 @@ def test_interrupted_or_unresumable_turn_does_not_resume():
     assert core.resume_handle is None and not core.last_turn_clean
     assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) is None
 
+    # The next observation drops the interrupted turn's candidate: a clean turn without an
+    # update of its own has no handle to promote.
     start_turn(core, "turn-2")
-    receive(core, update("handle-2"))
+    receive(core, server_content(turnComplete=True))
+    assert core.resume_handle is None and core.last_turn_clean
+
+    start_turn(core, "turn-3")
+    receive(core, update("handle-3"))
     receive(core, update(None))  # not resumable any more
     receive(core, server_content(turnComplete=True))
     assert core.resume_handle is None and core.last_turn_clean
