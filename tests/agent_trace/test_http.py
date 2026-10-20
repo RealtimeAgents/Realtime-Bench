@@ -30,7 +30,6 @@ from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agen
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.capture import REDACTED, SECRET_HEADERS
-from realtime_framework.providers.decisions.history import decision_messages
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
@@ -452,22 +451,11 @@ def _decide(client_type, model, provider, script, run_dir, monkeypatch):
         client = client_type(config)
         client.bind_trace(sink)
         request = _request(config)
-        # Shadow check: the old per-frame state and message list of the same request.
-        observation = {
-            "observation_id": "obs-1",
-            "candidates": CANDIDATES,
-            "candidate_policy": "replay_candidates",
-            "focused_input": None,
-            "text_composition": None,
-        }
-        messages = decision_messages(request)
 
         async def run():
             try:
                 with trace_scope(phase="decision", decision=0, generation_id="turn-0", attempt=1):
-                    return await ChoiceDecision(
-                        client, observation, messages, request, trace=sink
-                    ).run()
+                    return await ChoiceDecision(client, request, trace=sink).run()
             finally:
                 await client.close()
 

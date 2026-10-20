@@ -15,7 +15,7 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
-from realtime_framework.providers.decisions.history import decision_messages
+from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.legacy import chat_messages, session_frame_text
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
@@ -156,14 +156,14 @@ def test_action_digest():
     assert canonical.history_form == "action_digest"
     assert all(item.block.image is None for item in canonical.items)
     history = [{"observation_id": "o1", "action": "A1", "execution_feedback": "F1"}]
-    assert decision_messages(canonical) == (
+    assert tuple(render_digest(canonical, compact_ledger=False)) == (
         {"role": "system", "content": "SYSTEM"},
         {"role": "user", "content": ARCHIVED_ACTION_LEDGER_HEADER + '\n{"decision":1}'},
         {"role": "user", "content": "Recent action and feedback history: " + json.dumps(history)},
         {"role": "user", "content": 'Current observation: {"observation_id": "o3"}'},
     )
     # A stale first decision leaves no turn: the audit summary still renders the system text.
-    assert decision_messages(request("jev_decisions", [])) == (
+    assert tuple(render_digest(request("jev_decisions", []), compact_ledger=False)) == (
         {"role": "system", "content": "SYSTEM"},
     )
 
