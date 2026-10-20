@@ -50,7 +50,7 @@ class DecisionEncoder:
                 return current.failure
         return TransportFailure(FATAL)
 
-    async def send_observation(self, observation):
+    async def send_observation(self, observation, history):
         return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):

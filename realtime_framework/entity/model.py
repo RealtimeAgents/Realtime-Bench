@@ -19,6 +19,7 @@ from typing import Protocol as Protocol
 from typing import runtime_checkable as runtime_checkable
 
 from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CanonicalRequest
 
 
@@ -71,6 +72,9 @@ class SessionSeed:
     model_name: str
     native_output_limit: int | None
     fps: float
+    # The answer requirements a live session declares at setup, before any request exists: the
+    # function declarations.
+    answer: AnswerRequirements
 
 
 @dataclass
@@ -151,6 +155,8 @@ class ConnectRequest:
     turns: tuple[CanonicalTurn, ...] = ()
     executed_action_ledger: str = ""
     resume_handle: Any = None
+    # The retained history as the request builder renders it; None opens an empty session.
+    history: CanonicalRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +189,8 @@ class HistorySyncRequest:
     turns: tuple[CanonicalTurn, ...]
     executed_action_ledger: str
     reason: str
+    # The same history as turns and ledger, as the request builder renders it.
+    history: CanonicalRequest
     current_generation: GenerationHandle | None = None
     force_rebuild: bool = False
     removed_turns: tuple[CanonicalTurn, ...] = ()
@@ -231,7 +239,11 @@ class RealtimeDriver(Protocol):
 
     async def connect(self, request: ConnectRequest) -> None: ...
 
-    async def send_observation(self, observation: ProviderObservation) -> dict[str, Any]: ...
+    # ``history`` is the retained history plus this observation's frame, as the request builder
+    # renders it.
+    async def send_observation(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> dict[str, Any]: ...
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle: ...
 

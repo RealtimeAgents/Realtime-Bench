@@ -61,7 +61,8 @@ class ContentBlock:
     source: Source
     time: BlockTime
     # frame: prompt with its SoM block (folded: the placeholder); output: text or action JSON;
-    # feedback: the execution result; ledger: its JSON Lines; system: the instruction.
+    # feedback: the execution result; ledger: its JSON Lines; system: the instruction;
+    # tools: the exchanges as text when the policy replays them as a transcript.
     text: str = ""
     image: FrameImage | None = None  # unfolded frames of screenshot observations only
     folded: bool = False
