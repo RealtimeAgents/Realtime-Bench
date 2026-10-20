@@ -859,9 +859,12 @@ def run_stream(
         An end the loop first sees while finalizing ends at ``finalized_s``."""
         if reason in {"time_limit", "tick_limit"}:
             end_s = max_ticks * delta_s
-        else:
-            signal = reason if reason in {"invalid_run", "think_budget"} else "environment"
-            end_s = end_signals.get(signal, finalized_s)
+        elif reason in {"invalid_run", "think_budget"}:
+            end_s = end_signals.get(reason, finalized_s)
+        elif getattr(env, "_episode_over", False):  # the task's own reason
+            end_s = end_signals.get("environment", finalized_s)
+        else:  # agent_done, agent_fail and completed have no end signal
+            end_s = finalized_s
         return {
             "stop_reason": reason,
             "end_s": round(end_s, 9),
