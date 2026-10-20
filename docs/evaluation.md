@@ -23,7 +23,8 @@ shell to send it).
 | `--suite NAME[@VERSION]` | Suite from `realtime_tasks/sets/` (default: `public`). `public@1.0` refuses to run unless this checkout holds exactly that release. |
 | `-c JOB.yaml` | Harbor job configuration; see [job files](#job-files). |
 | `--ak duration_minutes=5` | Scored time limit per task in minutes (default: 5). |
-| `--ak fps=1` / `--ak seed=42` | Observation rate and [task seed](#task-seed) (defaults shown). |
+| `--ak fps=1` / `--ak seed=42` | Environment frame rate and [task seed](#task-seed) (defaults shown). |
+| `--ak model_input_fps=1` | Frames per second fed to the model; `tokens_per_frame` counts these frames (default: `fps`). |
 | `--ak clock=wall` | `wall` (default) or `token`; see [clocks](#clocks). |
 | `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else its API's default, `low` for most APIs; provider default for `-m provider/model-id` and `chat_completions` presets). |
 | `--ak api_base=https://HOST/v1` | Custom endpoint, e.g. with `-m openai/MODEL` for an OpenAI-compatible service. |
@@ -101,7 +102,8 @@ resources. Lanes isolate state, not untrusted code.
 
 The wall clock is the benchmark setting; token and pause are comparison settings and need
 complete provider usage (`litellm` and `chat_completions` presets support the wall clock only).
-Results under different clocks, time limits or FPS are not comparable. The plans in
+Results under different clocks, time limits or frame rates are not comparable; the leaderboard
+runs both frame rates at 1. The plans in
 `configs/runs/` run them directly; `-m` replaces their models:
 
 ```bash
