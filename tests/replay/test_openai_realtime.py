@@ -368,8 +368,9 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
 
 
 def test_rejected_upgrade_retries_connect(tmp_path):
-    """The driver's own connect retry: a refused upgrade fails one open_session attempt, and
-    connect() tries a new connection after a 2 s pause (openai_realtime.py:320-337)."""
+    """connect()'s retry: a refused upgrade (HTTP 503, TRANSIENT through its response's status,
+    providers/openai_realtime.py:257-263) fails one open_session attempt, and connect() tries a
+    new connection after the shared backoff (providers/openai_realtime.py:435-454)."""
     steps = LONG_SCENARIO[:2]
     with RealtimeStub(replies(steps), reject_upgrades=1) as stub:
         records = _run(stub, steps, tmp_path, "rejected-upgrade")

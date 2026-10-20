@@ -140,6 +140,7 @@ def _attempts(run_dir) -> list[tuple]:
     return [
         (a["scope"]["attempt"], a["outcome"], a.get("stale"))
         for a in _trace(run_dir, "ModelAttemptFinished")
+        if a["kind"] == "generation"
     ]
 
 
@@ -433,10 +434,12 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
     assert _attempts(tmp_path) == [(1, "retry", None)]
 
 
-def test_session_abort_while_reconnecting_starts_no_response(tmp_path, monkeypatch):
-    """The abort lands while attempt 2 is reconnecting (context.py:402-425). The new session
-    opens and replays canonical history, but the attempt then stops before it sends its
-    observation or creates a response (context.py:482-484)."""
+def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatch):
+    """Session API. Response 1 is dropped, and attempt 2 rebuilds the session through connect()
+    (context.py:402-412; providers/openai_realtime.py:661-671). The abort lands before connect()
+    opens it. connect()'s own attempts run under the decision's retry_cancellation
+    (providers/openai_realtime.py:435-454), so no WebSocket opens and no response runs, and the
+    rebuild passes the cancellation on (providers/openai_realtime.py:672-673)."""
     monkeypatch.setattr(model_module, "_backoff", lambda cancel, seconds: None)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
         episode = _session_episode(stub, tmp_path)
@@ -464,11 +467,11 @@ def test_session_abort_while_reconnecting_starts_no_response(tmp_path, monkeypat
             episode.finish()
         connections = stub.finish()
         responses = list(stub.responses)
-        second = [event["type"] for event in stub.connections[1].events]
     assert stub.violations == [] and stub.unscripted == 0
-    assert len(connections) == 2
+    assert len(connections) == 1
     assert [r["connection"] for r in responses] == [1]
-    assert second == ["session.update"]  # an empty replay: no turn was kept
     assert [call["epoch"] for call in turn_epochs] == [epoch, epoch]
     assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None)]
+    connects = [a for a in _trace(tmp_path, "ModelAttemptFinished") if a["kind"] != "generation"]
+    assert [a["scope"]["phase"] for a in connects] == ["initialize"]  # none for the decision

@@ -39,10 +39,15 @@ from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
+from realtime_framework.entity.model import RequestRetry
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
+from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.records import trace_scope
 from realtime_framework.providers.capture import sync_ws_connection
 from realtime_framework.providers.openai_realtime_session import Delete
 from realtime_framework.providers.openai_realtime_session import Operation
@@ -181,7 +186,8 @@ class OpenAIRealtimeDriver:
 
     @staticmethod
     def classify_transport_error(exc: BaseException) -> TransportFailure:
-        """Classify a failed turn; the harness retries it on a rebuilt session.
+        """Classify a failed turn, which the harness retries on a rebuilt session, or a failed
+        connect attempt, which connect() retries.
 
         Realtime WebSocket writes are not automatically replayed by the SDK. The harness retries
         only when it has received no output or usage for the failed turn, so rebuilding from
@@ -195,9 +201,15 @@ class OpenAIRealtimeDriver:
             TimeoutError,
         )
         for current in exception_chain(exc):
+            # A reconnect inside the turn already spent the shared retry budget.
+            if isinstance(current, TransportFailureError):
+                return current.failure
             if isinstance(current, transient):
                 return TransportFailure(TRANSIENT)
-            status = getattr(current, "status_code", None)
+            # A refused WebSocket upgrade (websockets InvalidStatus) carries its HTTP response.
+            status = getattr(current, "status_code", None) or getattr(
+                getattr(current, "response", None), "status_code", None
+            )
             if isinstance(status, int):
                 headers = getattr(getattr(current, "response", None), "headers", None)
                 return classify_http_failure(status, str(current), retry_after_seconds(headers))
@@ -317,31 +329,47 @@ class OpenAIRealtimeDriver:
                 }
             )
 
-        last_error = None
-        for attempt in range(5):
+        async def send(attempt):
             try:
-                await asyncio.to_thread(open_session)
-                break
-            except Exception as exc:
-                last_error = exc
+                with trace_scope(connect_attempt=attempt):
+                    await asyncio.to_thread(open_session)
+            except Exception:
                 await self._close_current()
-                if attempt == 4:
-                    raise RuntimeError(
-                        f"OpenAI Realtime session open failed after retries: {exc!r}"
-                    ) from exc
-                logger.warning(
-                    "OpenAI Realtime connect attempt %d failed: %s",
-                    attempt + 1,
-                    repr(exc)[:200],
-                )
-                await asyncio.sleep(2 * (attempt + 1))
-        if self._conn is None:
-            raise RuntimeError(f"OpenAI Realtime session open failed: {last_error!r}")
+                raise
+            self._connect_finished(attempt, "ok")
+
+        def record(attempt, exc, failure, delay):
+            self._connect_finished(
+                attempt, "failed" if delay is None else "retry", exc, failure, delay
+            )
+            if delay is None:
+                raise TransportFailureError(failure, exc, attempt - 1) from exc
+
+        # The session the connect resumes: the newest retained frame, or none at all.
+        frames = [] if request.history is None else history_frames(request.history.items)[1]
+        key = f"{frames[-1].id if frames else 'empty'}:connect"
+        await RequestRetry(key, self.classify_transport_error, record).run_async(send)
+        if self._conn is None:  # a concurrent close() ended the session that just opened
+            raise RuntimeError("OpenAI Realtime session closed while it opened")
         self._session = _Session(
             next(self._session_numbers), self._conn, RealtimeSessionCore(self._new_client_id)
         )
         # The history is None when the runtime opens the episode's first session.
         await self._send_all(self._session.core.replay(request.history))
+
+    def _connect_finished(self, attempt, outcome, error=None, failure=None, delay=None) -> None:
+        """One ModelAttemptFinished per open_session attempt of the shared connect retry."""
+        with trace_scope(connect_attempt=attempt):
+            self._trace.capture(
+                TraceEvent.MODEL_ATTEMPT_FINISHED,
+                {
+                    "kind": "session_connect",
+                    "outcome": outcome,
+                    "failure_kind": failure.kind if failure is not None else None,
+                    "error": repr(error)[:500] if error is not None else None,
+                    "retry_delay_s": delay,
+                },
+            )
 
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The history ends with this observation's frame.
@@ -507,6 +535,8 @@ class OpenAIRealtimeDriver:
                 detail=request.reason,
                 provider_metadata={"history_session_reconnected": True},
             )
+        except RetryCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - provider session boundary
             return HistorySyncResult(
                 SyncDisposition.BROKEN,
