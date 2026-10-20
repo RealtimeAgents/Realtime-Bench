@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 
 from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.request import Candidate, ChoiceRequirements, SelectionMaterial
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.harness import DefaultHarness
 from realtime_framework.harnesses.default.prompts import (
     GAME_SYSTEM_PROMPT,
     REALTIME_WEB_SYSTEM_PROMPT,
 )
+from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.jev.candidates import CANDIDATE_POLICY, observation_candidates
 from realtime_framework.harnesses.jev.composition import TEXT_COMPOSITION_POLICY
 from realtime_framework.harnesses.jev.context import decision_messages
@@ -26,6 +29,8 @@ from realtime_framework.harnesses.jev.game_candidates import (
     add_game_candidates,
 )
 from realtime_framework.harnesses.jev.prompts import (
+    GAME_INSTRUCTIONS,
+    GUI_INSTRUCTIONS,
     JEV_PROFILE,
     MULTIMODAL_CHOICE_PROFILE,
     MULTIMODAL_GAME_CHOICE_PROFILE,
@@ -135,6 +140,34 @@ class JevHarness(DefaultHarness):
                     },
                 }]
         return prepared, executions
+
+    def _build_request(self, turns, ledger, call):
+        # The one observation this decision prepared; its candidates are the answer options and
+        # the rest of its state is material for the selection flow only.
+        (state,) = self._observation_states.values()
+        choice = ChoiceRequirements(
+            instructions=GAME_INSTRUCTIONS if state["game_choices"] else GUI_INSTRUCTIONS,
+            candidates=tuple(
+                (key, Candidate(value["description"], value["action"], value.get("audit")))
+                for key, value in state["candidates"].items()
+            ),
+            candidate_policy=state["candidate_policy"],
+        )
+        selection = SelectionMaterial(
+            observation_id=state["observation_id"],
+            game_choices=state["game_choices"],
+            focused_input=state["focused_input"],
+            text_composition=state["text_composition"],
+        )
+        return build_request(
+            self._context_policy,
+            self._system_block,
+            turns,
+            ledger,
+            replace(self._answer, choice=choice),
+            call,
+            selection,
+        )
 
     @staticmethod
     def _request_messages(request) -> tuple[dict, ...]:
