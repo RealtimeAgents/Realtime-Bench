@@ -446,6 +446,28 @@ def test_streaming_needs_a_live_api():
     fails(lambda: episode(preset("my-model"), interaction_mode="streaming"), NOT_LIVE)
 
 
+def test_streaming_needs_a_live_api_run_config():
+    fails(
+        lambda: effective_run_config(
+            model_config=preset("my-model"), fps=1.0, max_minutes=5.0, protocol="wall-clock",
+            think_budget_s=None, per_move_cap_s=None, clock_mode="wall",
+            interaction_mode="streaming",
+        ),
+        NOT_LIVE,
+    )
+
+
+def test_streaming_identity():
+    from realtime_framework.evaluation.config import identity_main
+
+    fails(
+        lambda: identity_main(["--model", "gemini-live", "--task", WEB, "--fps", "1",
+                               "--max-minutes", "5", "--protocol", "wall-clock", "--clock",
+                               "wall", "--interaction-mode", "streaming"]),
+        "The gemini_live API does not support streaming",
+    )
+
+
 def test_the_live_apis_are_the_persistent_sessions():
     """The APIs the message names are the drivers that declare a persistent session."""
     drivers = {api: catalog.adapter_class(api) for api in catalog.APIS}
