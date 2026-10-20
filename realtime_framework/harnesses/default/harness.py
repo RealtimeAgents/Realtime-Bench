@@ -776,6 +776,7 @@ def _retry_usage_status(usages):
     return "partial" if any(u is not None for u in usages) else "unavailable"
 from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollector
 from realtime_framework.harnesses.default.context import RealtimeRuntime
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.harnesses.default.context import action_result_note
@@ -935,7 +936,10 @@ class DefaultHarness(VisionAgentBase):
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config)
         self.interaction_profile = ACTION_CHANNEL_PROFILES[self.driver.capabilities.action_channel]
-        self._runtime = RealtimeRuntime(self.driver)
+        self._context_policy = phase1_context_policy().for_path(
+            self.config.adapter_type, self.config.provider_options
+        )
+        self._runtime = RealtimeRuntime(self.driver, self._context_policy)
 
     def _record_provider_usage(self, result, observation, tick):
         """Audit harness-visible generations, including providers with inline usage."""

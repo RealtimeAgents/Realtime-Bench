@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.harness import DefaultHarness
 from realtime_framework.harnesses.default.prompts import (
@@ -46,7 +47,10 @@ class JevHarness(DefaultHarness):
             else JEV_PROFILE
         )
         self.driver = ChoiceDecisionDriver(client, self._observation_states)
-        self._runtime = RealtimeRuntime(self.driver)
+        self._context_policy = phase1_context_policy().for_path(
+            self.config.adapter_type, self.config.provider_options
+        )
+        self._runtime = RealtimeRuntime(self.driver, self._context_policy)
 
     def initialize(self, task_instruction, initial_observation):
         if getattr(self, "_clock_mode", None) != "wall":
