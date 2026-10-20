@@ -1,0 +1,40 @@
+results/
+results_v1/
+results_v2/
+results_v3/
+*.log
+__pycache__/
+*.py[cod]
+.secrets.env
+.env
+
+# Assistant and tool configuration
+/[Aa][Gg][Ee][Nn][Tt][Ss].md
+/CLAUDE.md
+.claude/
+.cloud/
+.vscode/
+
+# Python test, lint, type-check, coverage, and environment caches
+.pytest_cache/
+.pytest-cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.venv/
+.venv-harbor/
+.venv-mage/
+.venv-task-pages/
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# Generated evaluation outputs
+/harbor-public/
+log/
+audit_backup/
+audit_backup_*/
+
+# Temporary files
+temp/

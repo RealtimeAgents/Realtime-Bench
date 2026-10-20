@@ -1,0 +1,5 @@
+endpoint:
+  api: gemini_live
+  model: gemini-3.1-flash-live-preview
+  api_key_env: GEMINI_API_KEY
+reasoning_effort: low

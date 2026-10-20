@@ -1,0 +1,3 @@
+You are Morgan Vale, managing Fieldroom Goods' Desk pair promotion on the Online Store. The bundle must offer one Desk mat and one Cable pouch in the same color through a single shared color choice, with one option for every color currently sold by both products, each priced $5 below that color's separate-item total.
+
+From the 16:02:15 first-orders time until the campaign ends at 16:04:45, keep the Desk pair active, online and on exactly these terms; an order that cannot be placed, or is placed on other terms, ends the campaign. Component colors and prices can change while you work, so keep the bundle current. Do not change the component products' prices or any other listing.

@@ -1,0 +1,153 @@
+{
+  "repo": "sagarbudhwani/classic-chess-js",
+  "commit": "28f90f911db2d3638ff064795d67a87f1142b98b",
+  "local_root": "upstream",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "4db27eefd7c9a9ad9269b92ed801003381ac374ff0b1d6df8565ae275bb264a6",
+      "upstream_blob": "939edadbfcf61fdb799fbaf4680ec57c50024485",
+      "match": true,
+      "upstream_path": "LICENSE",
+      "status": "unchanged"
+    },
+    {
+      "path": "README.md",
+      "sha256": "e60d18625652cccc8db7b36621ad719a060121a84dba758bb7deb300b6fc897c",
+      "upstream_blob": "3f20eb2001c5f682e78041c88a06a0d6b58dfc13",
+      "match": true,
+      "upstream_path": "README.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "assets/screenshot.png",
+      "sha256": "edcb22fc0af49f6f16c4f865da60f11d44194d78fb33aa174ab8b8d980ca18f9",
+      "upstream_blob": "0fe3c5a6e3a5fcd8d24f2a33876f992f8a492b6a",
+      "match": true,
+      "upstream_path": "assets/screenshot.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "index.html",
+      "sha256": "e5ed5bad833967c42c6b9d4ebd220adf2dccaf4a596c038094fb0de348fcea22",
+      "upstream_blob": "123de7750c9ea36c2532db7db3e623d5a518c3ee",
+      "match": true,
+      "upstream_path": "index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/black_bishop.png",
+      "sha256": "5a96682830c0fc7c9af3deaf18da2deda1c1f8a5eab05b3699a35130888986d0",
+      "upstream_blob": "453cb32355348ceadcc41e5c371130e7be1dc45e",
+      "match": true,
+      "upstream_path": "pieces/black_bishop.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/black_king.png",
+      "sha256": "33cba7f386f00187cc626661cb293088c614f29b621e2de6fa5dc7f1b4121c14",
+      "upstream_blob": "225f869e9cc481683eae10622c0dad885c3aa3d4",
+      "match": true,
+      "upstream_path": "pieces/black_king.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/black_knight.png",
+      "sha256": "6572432b8243c3678e145b566ac9b868674e703de83fe6882d34669c708c1588",
+      "upstream_blob": "8e3d04e6fa29d261b11356ebf3503e09d20f3781",
+      "match": true,
+      "upstream_path": "pieces/black_knight.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/black_pawn.png",
+      "sha256": "f4ec7da5cbf21631b09cd6cf579ebf5cd499b2f5589b67157abcd619f3d67821",
+      "upstream_blob": "c432d38aeda8c8a49c772c9d7295d0359add9c01",
+      "match": true,
+      "upstream_path": "pieces/black_pawn.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/black_queen.png",
+      "sha256": "9ca9f6fb894526992e5dc6f95689ae642a2ad61f5989dc934923151bc98f0deb",
+      "upstream_blob": "0d94a1c29a50896a6fbe017e1eeda9b5a42fe0a4",
+      "match": true,
+      "upstream_path": "pieces/black_queen.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/black_rook.png",
+      "sha256": "e7ec16a1b2813032cd9f05042b9ca3a548b8d1eff1c0fac80e80d681c708c6e9",
+      "upstream_blob": "b9748e87f29861cb4ca00c7ce03df54f3f6b35a0",
+      "match": true,
+      "upstream_path": "pieces/black_rook.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/white_bishop.png",
+      "sha256": "35809c428ca4e639ab2115b655f2c88a226698f9356b0d0f6b3a1c12163850a4",
+      "upstream_blob": "26dae01cf054534b4f5c56ac60f334a7ab575f10",
+      "match": true,
+      "upstream_path": "pieces/white_bishop.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/white_king.png",
+      "sha256": "7c80d5f019344fb391c8e917dd22c952408924f190ceeaa0fd35f9a6998279ac",
+      "upstream_blob": "d7341649bbfa2508149d8f57562503e6076aaab6",
+      "match": true,
+      "upstream_path": "pieces/white_king.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/white_knight.png",
+      "sha256": "093439dc3d93db175f7a7218e28c10500128febb26a2a9b70e0dbbd7a116a6f5",
+      "upstream_blob": "2d716b15b180f2a9b194cd78df3a5e7e9a0c22b0",
+      "match": true,
+      "upstream_path": "pieces/white_knight.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/white_pawn.png",
+      "sha256": "08e29743cf803125a319566dff4ba300e3f70feb40f4de85bbe799f8404562f5",
+      "upstream_blob": "e98fae2bd8dd89313781f3107fe1b156e4674907",
+      "match": true,
+      "upstream_path": "pieces/white_pawn.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/white_queen.png",
+      "sha256": "6ce061abd293003c5bc670e4fec5fd79c4879ba42924a8a2fbf16a2d0f3c0a7c",
+      "upstream_blob": "a4fe68c80f79ab7b0b2ed6147383cda435407ea1",
+      "match": true,
+      "upstream_path": "pieces/white_queen.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "pieces/white_rook.png",
+      "sha256": "8167033208d67bc89c1ffc930a326c300714108f3091d70e3c6059e1d528011e",
+      "upstream_blob": "a805de496f4d152dd02026bed09b45548b6e88d8",
+      "match": true,
+      "upstream_path": "pieces/white_rook.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "script.js",
+      "sha256": "5b016795938008ff1f1d1c171a89ad5ef2e79b77697f07ca2840cbc741bd59fd",
+      "upstream_blob": "2c29790b85ffb64763a41cb3dd34b396f954b1ed",
+      "match": true,
+      "upstream_path": "script.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "styles.css",
+      "sha256": "a7a38ad7d4f9176de39c2067bb921a9d4a2c7654a0a3fccc968917172c08aa4c",
+      "upstream_blob": "029400b8aac0e49d002ab879e5c0117587c907b8",
+      "match": true,
+      "upstream_path": "styles.css",
+      "status": "unchanged"
+    }
+  ],
+  "schema": "realtime-bench-provenance-v1",
+  "upstream_url": "https://github.com/sagarbudhwani/classic-chess-js/tree/28f90f911db2d3638ff064795d67a87f1142b98b"
+}

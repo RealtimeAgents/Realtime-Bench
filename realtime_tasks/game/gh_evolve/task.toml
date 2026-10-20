@@ -1,0 +1,31 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_evolve"
+category = "browser_game"
+game_key = "55_evolve"
+tier = "55_01"
+idx = 56
+score_field = "game_state.evolution_upgrades"
+target = 4
+http_port = 8996
+dbg_port = 9296
+player_mode = "single"
+source = "pmotschmann/Evolve @ 3436358dcd03d9f9e071d51ea071e0a78c0322e4"
+keys = []
+rules = '''
+Each different upgrade counts once; buying the same upgrade again does not add to the total. At first RNA does not build up on its own: click RNA to gather it and Form DNA to turn 2 RNA into 1 DNA; these two buttons are not upgrades. Some upgrades later produce RNA or DNA over time. Resources count for nothing on their own. New upgrades unlock and prices change as you progress.'''
+description = "Allocate changing RNA and DNA resources to acquire four evolution upgrades."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

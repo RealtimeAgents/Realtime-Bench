@@ -1,0 +1,1 @@
+Defend Norman, who stands at the left edge of the room, from the villagers coming from the right, and bring the soul counter at the top of the screen to 200. If the hearts at the top left run out, Norman dies and you fail.

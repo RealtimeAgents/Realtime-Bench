@@ -1,0 +1,5 @@
+/* Phone layout for this task; loaded after the shared mobile.css. */
+@media (max-width: 900px) {
+  [data-mobile-task="rt_waitlist_fit"] .drawer-body { height: auto; padding: 16px; }
+  [data-mobile-task="rt_waitlist_fit"] :is(.drawer-footer, .composer) { position: static; height: auto; flex-wrap: wrap; }
+}

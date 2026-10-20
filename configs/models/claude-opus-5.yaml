@@ -1,0 +1,6 @@
+endpoint:
+  api: openrouter
+  model: anthropic/claude-opus-5
+  api_key_env: OPENROUTER_API_KEY
+  upstream_provider: anthropic
+reasoning_effort: low

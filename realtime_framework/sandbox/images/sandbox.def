@@ -1,0 +1,83 @@
+Bootstrap: docker
+From: {{ BASE_IMAGE }}
+
+# Every input is pinned so a rebuild reproduces the image: base images by digest, Debian/Ubuntu
+# packages through a dated archive snapshot, Chrome by version + SHA-256 and Python packages by
+# hashed lock. apptainer.build_image() selects the per-architecture BASE_IMAGE;
+# bump APT_SNAPSHOT and CHROME_* together and record the change in docs/running.md.
+%arguments
+    BASE_IMAGE=ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
+    APT_SNAPSHOT=20261011T000000Z
+    CHROME_VERSION=155.0.8059.39-1
+    CHROME_SHA256=c58aa0f2cd66179c9f050e062c882d27aa9b9f8c2b7c73fee3498560b5ed0b38
+    CHROME_DEB_URL=https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_155.0.8059.39-1_amd64.deb
+
+%files
+    realtime_framework/sandbox/guest_server/requirements.txt /opt/guest_agent/requirements.txt
+    realtime_framework/sandbox/guest_server/server.py /opt/guest_agent/server.py
+    realtime_framework/sandbox/images/scripts/entrypoint.sh /entrypoint.sh
+    realtime_framework/sandbox/images/scripts/pin-apt.sh /opt/pin-apt.sh
+
+%post
+    set -eu
+    umask 022
+    # Copied workspace files may be owner-only (host umask 077). The runtime
+    # uses the host UID, not the image owner, and must be able to read them.
+    chmod 0755 /entrypoint.sh
+    mkdir -p /home/user
+    chmod -R a+rX /opt/guest_agent /home/user
+    export DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
+    sh /opt/pin-apt.sh "{{ APT_SNAPSHOT }}" && rm /opt/pin-apt.sh
+    apt-get install -y \
+        xvfb x11vnc websockify novnc \
+        xfce4 xfce4-terminal dbus-x11 \
+        gnome-screenshot \
+        ffmpeg \
+        python3 python3-pip python3-tk python3-dev \
+        git curl wget sudo \
+        nano vim ripgrep \
+        xclip wmctrl xdotool \
+        sqlite3 \
+        fonts-noto-cjk fonts-noto-color-emoji
+    if [ "$(dpkg --print-architecture)" = arm64 ]; then
+        # Google ships no arm64 Chrome; the snapshot fixes Debian's chromium version.
+        apt-get install -y chromium
+        ln -s /usr/bin/chromium /usr/local/bin/google-chrome
+        ln -s /usr/bin/chromium /usr/local/bin/google-chrome-stable
+    else
+        curl -fsSL -o /tmp/chrome.deb "{{ CHROME_DEB_URL }}"
+        echo "{{ CHROME_SHA256 }}  /tmp/chrome.deb" | sha256sum -c -
+        apt-get install -y /tmp/chrome.deb
+        rm /tmp/chrome.deb
+        # The package installs Google's live repository; later apt use must stay on the snapshot.
+        rm -f /etc/apt/sources.list.d/google-chrome.* /etc/cron.daily/google-chrome
+        test -z "$(ls /etc/apt/sources.list.d)"
+        test "$(dpkg-query -W -f '${Version}' google-chrome-stable)" = "{{ CHROME_VERSION }}"
+    fi
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+    pip3 install --no-cache-dir --require-hashes -r /opt/guest_agent/requirements.txt
+    # Image provenance: read by apptainer.runtime_identity() and recorded in each run_config.json.
+    browser="$(google-chrome-stable --version)"
+    packages="$(dpkg-query -W -f '${Package}=${Version}\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
+    python_packages="$(pip3 freeze --all | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
+    . /etc/os-release
+    cat >> "$APPTAINER_LABELS" <<EOF
+org.rtbench.base_image {{ BASE_IMAGE }}
+org.rtbench.os $PRETTY_NAME
+org.rtbench.apt_snapshot {{ APT_SNAPSHOT }}
+org.rtbench.browser $browser
+org.rtbench.dpkg_sha256 $packages
+org.rtbench.pip_sha256 $python_packages
+EOF
+    mkdir -p /opt/sandbox-home && cp -a /home/user/. /opt/sandbox-home/ && touch /opt/sandbox-network.lock
+
+%environment
+    export DISPLAY=:99
+    export HOME=/home/user
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games
+
+%startscript
+    exec /entrypoint.sh
+
+%runscript
+    exec /entrypoint.sh

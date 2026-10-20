@@ -1,0 +1,6 @@
+endpoint:
+  api: openai_decisions
+  model: openai/gpt-6-luna-decisions
+  api_key_env: OPENROUTER_API_KEY
+  upstream_provider: openai
+reasoning_effort: fixed

@@ -1,0 +1,31 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_highway_404"
+category = "browser_game"
+game_key = "68_highway-404"
+tier = "68_01"
+idx = 69
+score_field = "game_state.mission_goal"
+target = 1
+http_port = 9009
+dbg_port = 9309
+player_mode = "single"
+source = "herebefrogs/highway-404 @ 9bbf0de17a49dc424f53b1f076573b6a789baa9d"
+keys = ["W", "A", "S", "D", "P", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
+rules = '''
+The road scrolls on its own. Hold A/D or ArrowLeft/ArrowRight to steer between lanes and W/S or ArrowUp/ArrowDown to move forward and back. Driving onto missing or collapsing pavement makes the car fall. Drive over a tile marked 418 to collect a teapot. Other numbered tiles change the road ahead or your car, for example 404 makes that lane collapse behind it, 301 and 302 move you to another lane, and 429 slows the road for a few seconds. P pauses and resumes the game.'''
+description = "Collect a teapot and survive 30 native seconds on a collapsing seven-lane highway."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

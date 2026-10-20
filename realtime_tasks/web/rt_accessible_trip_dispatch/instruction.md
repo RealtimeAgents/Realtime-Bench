@@ -1,0 +1,3 @@
+You are the Meridian Transit dispatcher on duty from 14:00 to 14:05. Assign Lena Park's 14:02 pickup by 14:01:30, and Nina Ellis's return by 14:04 for its 14:04:30 pickup; a Will Call return has no pickup time until Bookings schedules it. A pickup counts only when its driver reports the passenger on board before 14:05, and drivers can board only if the vehicle has room for the passenger's wheelchair and companion seats for the whole ride. Each vehicle's wheelchair and ambulatory capacity is on its Vehicles record.
+
+If a driver reports an outbound trip as No Show, cancel that passenger's paired return by 14:04. Apart from that cancellation and your two assignments, do not change any trip's status or assignment.

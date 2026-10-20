@@ -1,0 +1,5 @@
+endpoint:
+  api: openai_realtime
+  model: gpt-realtime-2
+  api_key_env: OPENAI_API_KEY
+reasoning_effort: low

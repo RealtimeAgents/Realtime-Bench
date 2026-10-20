@@ -1,0 +1,7 @@
+/* Phone layout for this task; loaded after the shared mobile.css. */
+@media (max-width: 900px) {
+  [data-mobile-task="rt_bundle_catalog_rebind"] body > aside { position: static; width: 100%; padding: 12px; }
+  [data-mobile-task="rt_bundle_catalog_rebind"] :is(.clock, .savebar) { position: static; margin: 12px; }
+  [data-mobile-task="rt_bundle_catalog_rebind"] main { padding-top: 12px; }
+  [data-mobile-task="rt_bundle_catalog_rebind"] :is(.media, .component-head) { flex-wrap: wrap; }
+}

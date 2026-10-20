@@ -1,0 +1,11 @@
+# Harbor job configuration: `uv run rtbench run -c configs/jobs/smoke.yaml -m MODEL`.
+# rtbench supplies the benchmark agent, environment and results directory when omitted.
+datasets:
+  - path: realtime_tasks/game
+    task_names: [gh_javascript_pong]
+  - path: realtime_tasks/web
+    task_names: [rt_accessible_trip_dispatch]
+agents:
+  - kwargs:
+      suite: public
+      duration_minutes: 5

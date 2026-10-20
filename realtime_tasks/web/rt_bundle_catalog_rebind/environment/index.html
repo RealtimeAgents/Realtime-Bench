@@ -1,0 +1,12 @@
+<!doctype html>
+<html data-mobile-task="rt_bundle_catalog_rebind" lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fieldroom Goods · Loomcart</title>
+<link rel="stylesheet" href="/assets/rt_bundle_catalog_rebind/style.css"><link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}">
+<link rel="stylesheet" href="/assets/rt_bundle_catalog_rebind/mobile.css">
+<script src="{{ url_for('static', filename='mobile.js') }}" defer></script>
+</head><body>
+<header><div class="brand">loomcart</div><div class="search-placeholder">⌕ &nbsp; Search</div><div class="store"><span class="avatar">FG</span><span>Fieldroom Goods</span></div></header>
+<aside><div class="muted tiny" style="padding:0 12px 17px">STORE ADMIN</div><button data-route="orders"><span class="navicon">▤</span>Orders</button><button data-route="products"><span class="navicon">◇</span>Products</button><small>Sales channels</small><div style="padding:8px 13px">◉ &nbsp; Online Store</div><small>Apps</small><button data-route="bundle"><span class="navicon">▦</span>Bundles</button><div class="clock" id="clock" aria-label="Promotion clock"><div class="clock-head">Promotion</div><div class="clock-time" id="clock-time">--:--:--</div><div class="clock-line">First orders <b id="first-at">--:--:--</b> · <span id="first-left"></span></div><div class="clock-line">Campaign ends <b id="end-at">--:--:--</b> · <span id="end-left"></span></div><div class="clock-phase" id="clock-phase" hidden></div></div><div class="muted tiny" style="position:absolute;bottom:25px;left:25px">Morgan Vale<br>Store owner</div></aside>
+<div id="savebar" class="savebar" hidden><strong>Unsaved changes</strong><span class="spacer"></span><button id="discard">Discard</button><button id="top-save">Save</button></div><main id="app"><div class="muted">Opening product…</div></main><div id="overlay"></div><script src="/static/realtime-runtime.js"></script>
+<script>window.__taskBootstrap={"v0":{{ scenario|tojson }},"v1":{{ episode|tojson }}};</script>
+<script src="/assets/rt_bundle_catalog_rebind/app.js"></script>
+</body></html>

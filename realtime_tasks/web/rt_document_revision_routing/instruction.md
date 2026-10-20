@@ -1,0 +1,5 @@
+You are Morgan Hall at Ridgeway Skills; the page clock starts at 14:00. Version 1 of the Northline Tools training agreement has outdated terms and Casey Wu signs it at 14:01:30; open it for editing before then so it never completes.
+
+Send no revised version until the final roster and the room offers are both posted in the private comments. Then use the earliest offered date whose room seats every confirmed attendee for at most $1,250 total, keeping date, venue, fee and attendee count consistent, and send it by 14:04.
+
+Ada Brooks must sign before Casey Wu receives the new version, and Jamie Cole's accounts copy must go out only after both have signed. Recipient order only takes effect when Set signing order is turned on in Recipients; when it is off, every recipient is emailed as soon as you send, whatever their position in the list. Every version you send counts and cannot be corrected by sending again, so each one must carry the final terms and this signing order. By 14:05 both new signatures and the accounts delivery must be complete.

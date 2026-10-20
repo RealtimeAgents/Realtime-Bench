@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_pickup_driver_handoff"
+scenario = "rt_pickup_driver_handoff"
+category = "realtime"
+description = "Lyft Concierge Web-derived active ride map, details card and coordinator-driver chat. The meeting point is a structured control (entrance chips plus an optional note) and is scored on the selected entrance, not on chat wording. Earlier acknowledgements do not transfer to a reassigned driver; the replacement's current entrance report requires a revised meeting point."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

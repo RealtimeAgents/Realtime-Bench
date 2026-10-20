@@ -1,0 +1,1 @@
+Win Gomoku as Black against the Easy computer playing White: be first to place five Black stones in a row horizontally, vertically or diagonally on the 15x15 board. You lose if White gets five in a row first or if the Move clock in the top bar reaches 0 on your turn.

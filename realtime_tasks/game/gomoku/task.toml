@@ -1,0 +1,48 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gomoku"
+category = "browser_game"
+game_key = "50_gomoku"
+tier = "50_01"
+idx = 51
+score_field = "metrics.legitimate_black_win"
+target = 1
+http_port = 8991
+dbg_port = 9291
+player_mode = "single"
+deferred_start = true
+source = "vajvip/gomoku @ 1484e1ce609ac63d05a5b6c7a05f1b39e13f3560"
+keys = []
+rules = '''
+You move first. Renju forbidden-move restrictions are off: every empty intersection is a legal move for Black, and five or more in a row wins. Click an empty intersection to place a stone; White replies after each move. You have 10 seconds per move: the Move clock counts down only on your turn and resets when you place a stone. Do not click the mode, difficulty or side controls in the right-hand panel; any click there voids the win.'''
+description = "Play the Gomoku browser game and achieve its evaluated goal: connect five as Black against the configured Easy AI with at most 10 seconds per move. Success is measured when `metrics.legitimate_black_win` reaches 1."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+
+[metadata.interactables]
+schema_version = 1
+task_id = "gomoku"
+elements = []
+
+[[metadata.interactables.canvases]]
+selector = "#board"
+label = "Gomoku board"
+actions = ["click"]
+
+[metadata.interactables.canvases.grid]
+column_labels = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"]
+row_labels = ["15", "14", "13", "12", "11", "10", "9", "8", "7", "6", "5", "4", "3", "2", "1"]
+inset_x = 0.045
+inset_y = 0.045

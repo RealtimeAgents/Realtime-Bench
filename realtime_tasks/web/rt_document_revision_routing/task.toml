@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_document_revision_routing"
+category = "realtime"
+scenario = "rt_document_revision_routing"
+description = "Withdraw an obsolete training agreement, reconcile live colleague facts, and route fresh signatures before the accounts copy."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

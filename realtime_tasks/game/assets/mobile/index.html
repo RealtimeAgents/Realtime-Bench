@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Game · Touch controls</title>
+  <link rel="stylesheet" href="mobile.css">
+  <script src="mobile-controls.js" defer></script>
+</head>
+<body>
+  <header><strong id="title">Game</strong><button id="zoom" type="button">Zoom in</button><button id="pan" type="button" aria-pressed="false" disabled>Pan view</button></header>
+  <div id="view-container"><main id="viewport" aria-label="Game view; zoom in to scroll the board">
+    <div id="stage"><iframe id="game" title="Game" allow="autoplay; fullscreen; gamepad"></iframe></div>
+  </main><div id="pan-surface" hidden aria-label="Drag to pan the zoomed game view"></div></div>
+  <nav id="controls" aria-label="Touch game controls"></nav>
+  <p id="hint">Hold buttons to move. Touch the game to click or drag. Zoom in for small targets; use Pan view to move around.</p>
+</body>
+</html>

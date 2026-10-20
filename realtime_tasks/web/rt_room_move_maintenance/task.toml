@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_room_move_maintenance"
+scenario = "rt_room_move_maintenance"
+category = "realtime"
+description = "Cloudbeds-derived room calendar with in-house relocation, preserved historical stay segment, a room-level maintenance comment thread, independently revised repair dates that later displace a confirmed arrival, click-only Out of Service dates, and a live strip counting down the plumber arrival and the online channel sync. Unsafe moves and exposed damaged-room inventory have irreversible consequences."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

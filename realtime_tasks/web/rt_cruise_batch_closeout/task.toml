@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_cruise_batch_closeout"
+scenario = "rt_cruise_batch_closeout"
+category = "realtime"
+description = "Close weather-cancelled cruise sales and settle separately consented booking cohorts without reopening cancelled inventory."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

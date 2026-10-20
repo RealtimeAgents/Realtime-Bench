@@ -1,0 +1,5 @@
+endpoint:
+  api: anthropic_messages
+  model: claude-opus-5
+  api_key_env: ANTHROPIC_API_KEY
+reasoning_effort: low

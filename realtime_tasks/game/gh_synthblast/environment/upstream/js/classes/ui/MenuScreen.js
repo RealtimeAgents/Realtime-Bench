@@ -1,0 +1,141 @@
+import * as PIXI from "pixi.js";
+import Button from "./Button.js";
+import Screen from "./Screen.js";
+
+class MenuScreen extends Screen {
+
+    constructor(game, rendererPixi, sounds, uiCallbacks) {
+        super(game, rendererPixi, sounds, uiCallbacks);
+        this.init();
+    }
+
+    init() {
+        if (this.pixiStage) this.pixiStage.destroy(true);
+        this.pixiStage = new PIXI.Container();
+        this.elements = [];
+        let numberOfButtons = 3;
+        let buttonWidth = Math.max(this.game.width / 3, 350);
+        let buttonHeight = Math.min(this.game.height / 15, 70);
+        let buttonSpacing = Math.min(this.game.height / 30, 30);
+        let allHeight = numberOfButtons * buttonHeight + (numberOfButtons - 1) * buttonSpacing;
+        let y = (this.game.height - allHeight) / 2;
+        let x = (this.game.width - buttonWidth) / 2;
+
+        let fill = new PIXI.Graphics();
+        fill.rect(x, y, buttonWidth, allHeight).fill(0x000000);
+        fill.alpha = .8;
+        this.fill = fill;
+        this.pixiStage.addChild(fill);
+
+        // play
+        this.elements.push(
+            new Button(x, y, buttonWidth, buttonHeight, this.pixiStage, "P ^ Ł * 4 ^ ¥", this.uiCallbacks.pressPlay)
+        );
+        y += buttonHeight + buttonSpacing;
+
+        let musicButton;
+        musicButton = new Button(
+            x,
+            y,
+            buttonWidth,
+            buttonHeight,
+            this.pixiStage,
+            this.uiCallbacks.isMusicOn() ? "Music: on" : "Music: off",
+            () => {
+                let isOn = this.uiCallbacks.toggleMusic();
+                musicButton.setLabel(isOn ? "Music: on" : "Music: off");
+            }
+        );
+        this.elements.push(musicButton);
+        y += buttonHeight + buttonSpacing;
+
+        this.elements.push(
+            new Button(x, y, buttonWidth, buttonHeight, this.pixiStage, "S0URC3 C0D3",
+                function () {
+                    window.location.href = 'https://github.com/brianrisk/SYNTHBLAST'
+                }
+            )
+        );
+        y += buttonHeight + buttonSpacing;
+
+        // upgrades
+        // this.elements.push(
+        //     new Button(x, y, buttonWidth, buttonHeight, this.pixiStage, "EQU1PM3NT", function () {
+        //     })
+        // );
+        // y += buttonHeight + buttonSpacing;
+
+
+        // leaderboard
+        // this.elements.push(
+        //     new Button(x,y,buttonWidth,buttonHeight,this.pixiStage, "LEAD3RB04RD", function() {})
+        // );
+        // y += buttonHeight + buttonSpacing;
+
+
+        // settings
+        // this.elements.push(
+        //     new Button(x, y, buttonWidth, buttonHeight, this.pixiStage, "S3TT1NG5", function () {
+        //     })
+        // );
+        // y += buttonHeight + buttonSpacing;
+
+        if (this.isMobile) {
+
+        } else {
+
+        }
+    }
+
+
+    /* **************************************************************************
+     *  EVENTS
+     */
+
+    touchStart(event) {
+        for (let i = 0; i < event.changedTouches.length; i++) {
+            let touch = event.changedTouches[i];
+            this.down(touch);
+        }
+    }
+
+    touchEnd(event) {
+        for (let i = 0; i < event.changedTouches.length; i++) {
+            let touch = event.changedTouches[i];
+            this.up(touch);
+        }
+    }
+
+    onDocumentKeyDown(event) {
+        if (event.code === "Space" || event.code === "Enter") {
+            event.preventDefault();
+            this.uiCallbacks.pressPlay();
+        }
+    }
+
+    onDocumentKeyUp(event) {
+
+    }
+
+    mouseDown(event) {
+        this.down(event);
+    }
+
+    mouseUp(event) {
+        this.up(event);
+    }
+
+    down(event) {
+        this.elements.forEach(element => element.down(event));
+    }
+
+    up(event) {
+        this.elements.forEach(element => element.up(event));
+    }
+
+    render() {
+        this.rendererPixi.render({container: this.pixiStage, clear: false});
+    }
+}
+
+export default MenuScreen;

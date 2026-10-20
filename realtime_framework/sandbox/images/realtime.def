@@ -1,0 +1,24 @@
+Bootstrap: docker
+From: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+
+%files
+    realtime_tasks /app/realtime_tasks
+    realtime_framework/sandbox/images/realtime-requirements.txt /app/requirements.txt
+
+%post
+    umask 022
+    chmod -R a+rX /app
+    pip install --no-cache-dir --require-hashes -r /app/requirements.txt
+
+%environment
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONUNBUFFERED=1
+    export PYTHONPATH=/app
+
+%startscript
+    cd /app
+    exec python -m realtime_tasks.web.app
+
+%runscript
+    cd /app
+    exec python -m realtime_tasks.web.app

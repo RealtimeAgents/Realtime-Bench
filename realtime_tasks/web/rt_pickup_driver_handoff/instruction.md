@@ -1,0 +1,3 @@
+You are Alex Morgan, coordinating Lena Ortiz's ride WF-7308. Lena, waiting inside the Harbor Conference Centre foyer, needs a step-free entrance within 60 metres. Before the first-reply countdown ends at 16:01:30, send her driver a meeting point that meets this need, based on their entrance report.
+
+Lena boards only if the arriving driver has acknowledged the latest meeting point you sent them. If the driver changes, access may differ and the previous report and acknowledgement no longer count: ask the new driver for a fresh entrance report, then send a meeting point based on it and get it acknowledged before they arrive. Never cancel or request another ride.

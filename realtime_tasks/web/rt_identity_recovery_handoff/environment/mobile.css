@@ -1,0 +1,11 @@
+/* Phone layout for this task; loaded after the shared mobile.css. */
+@media (max-width: 900px) {
+  [data-mobile-task="rt_identity_recovery_handoff"] .terminal { position: static; }
+}
+@media (max-width: 900px) {
+  [data-mobile-task="rt_identity_recovery_handoff"] .count-box { min-width: 0; }
+  [data-mobile-task="rt_identity_recovery_handoff"] .chart { overflow: hidden; }
+}
+@media (max-width: 900px) {
+  [data-mobile-task="rt_identity_recovery_handoff"] .top .clock { white-space: normal; }
+}

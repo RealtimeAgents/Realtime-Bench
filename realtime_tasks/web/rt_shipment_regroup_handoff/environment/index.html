@@ -1,0 +1,11 @@
+<!doctype html>
+<html data-mobile-task="rt_shipment_regroup_handoff" lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Parcelwork · Shipping</title>
+<link rel="stylesheet" href="/assets/rt_shipment_regroup_handoff/style.css"><link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}">
+<script src="{{ url_for('static', filename='mobile.js') }}" defer></script>
+</head><body>
+<header class="topbar"><span class="wordmark">parcelwork<span style="color:#cab3cd"> /</span></span><button id="nav-orders" class="on">Orders</button><button id="nav-shipments">Shipments</button><div class="deadlines" id="deadlines" aria-label="Warehouse clock and cutoffs"><b id="clock-now">--:--:--</b><span id="clock-due"></span></div><span class="account">MeadowPost &nbsp; · &nbsp; Riley Chen</span></header>
+<div id="app"></div><div id="modal-root"></div>
+<script src="/static/realtime-runtime.js"></script>
+<script>window.__taskBootstrap={"v0":{{ episode|tojson }}};</script>
+<script src="/assets/rt_shipment_regroup_handoff/app.js"></script>
+</body></html>

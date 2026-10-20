@@ -1,0 +1,32 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "gh_javascript_pong"
+category = "browser_game"
+game_key = "27_javascript-pong"
+tier = "27_01"
+idx = 24
+score_field = "game_state.player_returns"
+target = 6
+http_port = 8964
+dbg_port = 9264
+player_mode = "single"
+source = "jakesgordon/javascript-pong @ ca3240536e4f79ab7144388e56ed19de715b6662"
+deferred_start = true
+keys = ["q", "a"]
+rules = '''
+Hold Q to move the paddle up and A to move it down; it stops when you release the key. Every bounce off your paddle counts as one return, whatever happens to the ball afterwards; your own points do not count. Each ball that gets past your paddle gives the computer a point, and at 3 points you lose. The ball crosses the court in about 8 seconds and does not speed up. When the ball hits your paddle while you hold Q or A, its vertical speed is halved if the key's direction matches the ball's and multiplied by 1.5 if it is opposite. This follows the key you hold, not the paddle's movement: it still applies when the paddle is stopped against a wall, and holding both keys keeps the paddle still but counts as moving up. A ball that glances off the top or bottom end of your paddle and keeps travelling left is not a return.'''
+description = "Return the ball six times in pinned open-source JavaScript Pong before the computer scores three. The benchmark launch page sets an approximately 8 s horizontal court crossing with no continuous rally acceleration (upstream defaults are 4 s and 8 px/s^2), while preserving native paddle spin: after collision reflection, an active paddle direction multiplies vertical velocity by 0.5 when aligned with the ball's vertical direction or 1.5 when opposed. The ball and the computer paddle keep moving during reasoning, and every ball that passes the left paddle is an irreversible point; `game_state.player_returns` (read-only count of rebounds off the left paddle) must reach 6 before the computer reaches 3."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"

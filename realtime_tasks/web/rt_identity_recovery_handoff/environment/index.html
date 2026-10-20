@@ -1,0 +1,13 @@
+<!doctype html>
+<html data-mobile-task="rt_identity_recovery_handoff" lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cairn Access · Morgan Lane</title>
+<link rel="stylesheet" href="/assets/rt_identity_recovery_handoff/style.css"><link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}">
+<link rel="stylesheet" href="/assets/rt_identity_recovery_handoff/mobile.css">
+<script src="{{ url_for('static', filename='mobile.js') }}" defer></script>
+</head><body>
+<div class="top"><div class="brand">cairn<span>ACCESS</span></div><div class="org">Harborline Engineering</div><div class="clock" id="clock" aria-label="Console clock and handover deadlines"><b id="clock-now">--:--:-- UTC</b><small id="clock-due"></small></div><div class="identity">Alex Chen<small>Administrator</small></div></div>
+<div class="terminal" id="terminal" role="status" hidden></div>
+<aside class="sidebar" id="navigation"></aside><main class="workspace" id="app"></main><div id="modal-root"></div>
+<script src="/static/realtime-runtime.js"></script>
+<script>window.__taskBootstrap={"v0":{{ episode|tojson }}};</script>
+<script src="/assets/rt_identity_recovery_handoff/app.js"></script>
+</body></html>

@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-10-08",
+  "repository": "https://github.com/bencoder/js13k-2019",
+  "commit": "39bd729b5f18f82bda6c7b1e094e70521c09fbfd",
+  "method": "Git blob SHA-1 comparison against pinned upstream tree; SHA-256 identifies local reviewed bytes. Modified files are explicitly distinguished.",
+  "files": [
+    {
+      "file": "upstream/LICENSE",
+      "sha256": "b2f8ef47d7b003a89d55b2dce93a93b7a2f91d21355b1306f694eb89a8435637",
+      "upstream_path": "LICENSE",
+      "upstream_git_blob": "93778e0167503566293d80de34dabb652f50b225",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/README.md",
+      "sha256": "0c83204aa66b33912ed926c1a5da092454d0beb024545e66b8036c83bbb02bb4",
+      "upstream_path": "README.md",
+      "upstream_git_blob": "0649d59d72d1656e5294cd56d555e63dfc86f0e5",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/build3d.js",
+      "sha256": "5ba73bbc821cdbba381b2a1ad3a2929740ad845730407041971dd14568be79b6",
+      "upstream_path": "src/build3d.js",
+      "upstream_git_blob": "0591785802ad14d99ade03c66a5acfbb7055deec",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/collision.js",
+      "sha256": "965cd0bf04977492ac4b916ad270b4d6df007dd7a8bdaac26f15cecbc09d87b7",
+      "upstream_path": "src/collision.js",
+      "upstream_git_blob": "f835ee2ae0a9069d71c5d92be433061cf705b784",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/draw3d.js",
+      "sha256": "ad26728c31a826c832aa7d1350f18050189d13341acba9ad217399e98adcf8f7",
+      "upstream_path": "src/draw3d.js",
+      "upstream_git_blob": "c2fcde4973b29e8219cd28e2fb09cc9d4f459668",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/game.js",
+      "sha256": "c9f33d1e96cb0b8ae1adb8ca35bcb304aad4b4569afd58316722a95db10b06d5",
+      "upstream_path": "src/game.js",
+      "upstream_git_blob": "8f6150c97e8d33654cbe409feea80f3350e72f9f",
+      "matches_upstream": false
+    },
+    {
+      "file": "upstream/ghost.js",
+      "sha256": "d00e607713468e29bdec7fdbf6a01fb2568591f7e8b33616c2d5801c5a3f617f",
+      "upstream_path": "src/ghost.js",
+      "upstream_git_blob": "6569fdbaaf0e78ed13c351bdb7d4488ee71062be",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/index.html",
+      "sha256": "7e250c1e1636a857de6e8a5d338ba1db9e6c733edb5111a6621cce97922e871f",
+      "upstream_path": "src/index.html",
+      "upstream_git_blob": "91e05d417d5caf1b93a263c2d0bc6b7861e95489",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/jsfxr.min.js",
+      "sha256": "2d733bb2419a255e16c04822222123d3fb46c95cd4dbf5f0587d930687d362b4",
+      "upstream_path": "src/jsfxr.min.js",
+      "upstream_git_blob": "8d5a2ca0286e0db8df0ae77a34e135023e927e1b",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/level.js",
+      "sha256": "4bac6a87cb2b6ef418e6129c8f14c2697efa11991ef784d63f3219628ca0a103",
+      "upstream_path": "src/level.js",
+      "upstream_git_blob": "21bf1d206f38abd7a6d51bd8495b9a58767ef5d7",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/levels.js",
+      "sha256": "1f1460a0ae562ee1fcc194fe194b56b7f8a97fd50c70de81df829a3f50cc9026",
+      "upstream_path": "src/levels.js",
+      "upstream_git_blob": "2193a9c8de3cd5777d6cf8e502872082e9f36497",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/main.js",
+      "sha256": "bc8d822d807cee7a684944bbc2efa45f28bcd390fb391ce4390fecf1c7637790",
+      "upstream_path": "src/main.js",
+      "upstream_git_blob": "5a73d1a7f7752e832d79480a2f074d037580c3a0",
+      "matches_upstream": false
+    },
+    {
+      "file": "upstream/mat4.js",
+      "sha256": "b0b8123fc9b572c68f5ec5a76502349898d0ba1ac83fc355bd9e828d9b4a6174",
+      "upstream_path": "src/mat4.js",
+      "upstream_git_blob": "a6af1fd9855c2cc6416fee537199fff0a1fd2ee1",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/math.js",
+      "sha256": "4240057416af02ca6d7533016234f695cfda8a1d41f536b9305c02d0fd6e40b5",
+      "upstream_path": "src/math.js",
+      "upstream_git_blob": "a1be89ca60cae995727681711e60b608c014bd0d",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/player.js",
+      "sha256": "dd94f407f964ad6d1799afbf0a111eec04cad8edd0caeb9ad30818a4ff6559f8",
+      "upstream_path": "src/player.js",
+      "upstream_git_blob": "53b654947e95c4b79eb0351852526aa216308233",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/settings.js",
+      "sha256": "cce3acb88ef32ff1c47dd55834dd57a42c8309eab1a8ae06596c7505edec71ed",
+      "upstream_path": "src/settings.js",
+      "upstream_git_blob": "7be29d4b0c6f71be3fff43d442bc362dcbfce0f7",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/shaders.js",
+      "sha256": "ebfbf9055df0e2e678b9000ce936a5521f84f96fe4e45e82a15975ab163ffc85",
+      "upstream_path": "src/shaders.js",
+      "upstream_git_blob": "a1905848111e59d5fb28f97b68eae24fd4ede4ae",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/sound.js",
+      "sha256": "38856163c54ade7c52886f26dc6c40b50c5f19f1d766c5e75725a007fed798a7",
+      "upstream_path": "src/sound.js",
+      "upstream_git_blob": "b4e6c951daa102a6f44f7f6c2ea45a8f0b39074c",
+      "matches_upstream": true
+    },
+    {
+      "file": "upstream/styles.css",
+      "sha256": "28e25908fde21e8740207a2d2a0abb51058526acff7c5263805fc0d432716e30",
+      "upstream_path": "src/styles.css",
+      "upstream_git_blob": "9ad4f701e652159f4b4ffff0ae02b44ec5ff22e2",
+      "matches_upstream": false
+    },
+    {
+      "file": "upstream/vectors.js",
+      "sha256": "8e09db7911d9c8255a117110df5019040bd94ac2002cf1b718e5fd0676914dad",
+      "upstream_path": "src/vectors.js",
+      "upstream_git_blob": "aeda220b91dfa1d86d863d9b94139ed91ca0f120",
+      "matches_upstream": true
+    }
+  ]
+}

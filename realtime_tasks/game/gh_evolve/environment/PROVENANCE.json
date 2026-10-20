@@ -1,0 +1,1002 @@
+{
+  "repo": "pmotschmann/Evolve",
+  "commit": "3436358dcd03d9f9e071d51ea071e0a78c0322e4",
+  "local_root": "upstream",
+  "files": [
+    {
+      "path": "Dockerfile",
+      "sha256": "d33aa8c512b0c9f7c3245fd01303481e1660cf8e58ff9ac2479d7aee43c0ba1c",
+      "upstream_blob": "c382a028396592e50e5fd43d2780ce5ceb5bd5f3",
+      "match": true,
+      "upstream_path": "Dockerfile",
+      "status": "unchanged"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "upstream_blob": "a612ad9813b006ce81d1ee438dd784da99a54007",
+      "match": true,
+      "upstream_path": "LICENSE",
+      "status": "unchanged"
+    },
+    {
+      "path": "README.md",
+      "sha256": "f2692c8c2be2e60bb6cbc00655d7df3724b53a72eb36ec2e83779a5ac39ac68e",
+      "upstream_blob": "0c5f6e0d60117b19e3ddc22255997e6d2a5ac4d6",
+      "match": true,
+      "upstream_path": "README.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "buildEvolve.js",
+      "sha256": "995ecb54e93724b88701ad5674a59f7faa0828900470ac7623232113ad478f39",
+      "upstream_blob": "fb3baebe47cd0cff080752274ac7ae4aa33281dd",
+      "match": true,
+      "upstream_path": "buildEvolve.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "buildEvolveDebug.js",
+      "sha256": "027fbe77e23688b5271d6044cd6fbe2716913d77232c50d6a11ad07a75e8a26c",
+      "upstream_blob": "984cd2ba128df55b7e690bebe8e2367c65c77b85",
+      "match": true,
+      "upstream_path": "buildEvolveDebug.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "buildWiki.js",
+      "sha256": "c333f25e18c7d0e54c07468086045b4bbce4205757428025582b59e42866540c",
+      "upstream_blob": "34e9ae8add9940f200d5713a20993f2b2021b074",
+      "match": true,
+      "upstream_path": "buildWiki.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "buildWikiDebug.js",
+      "sha256": "266b694983ed9ed5498b3b3ab2b7fdf1c207f5e39907bcbe21455edd24ca9b1b",
+      "upstream_blob": "7ddea90411ebf2c271ca92db1f0c3fe7591c4db8",
+      "match": true,
+      "upstream_path": "buildWikiDebug.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "evolve/evolve.css",
+      "sha256": "e5db58a67cabf1184deff0ac36d32f2426845c3076919fa15b6c166d9927ad80",
+      "upstream_blob": "b6c38da36b737f8b9e971f12c423db86231b7f14",
+      "match": true,
+      "upstream_path": "evolve/evolve.css",
+      "status": "unchanged"
+    },
+    {
+      "path": "evolve/evolve.js",
+      "sha256": "8723b5b37eb3e717cb149bd1a41ab7d053758cae15248512f4f2b45757f8255e",
+      "upstream_blob": "90e08f0209d4f338de6d41f69a4aef5e918756e5",
+      "match": true,
+      "upstream_path": "evolve/evolve.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "evolve/main.js",
+      "sha256": "c3fd43db685523f253047a2f19f7ceb73b5c24bee4547a26964ce66c7072833f",
+      "upstream_blob": "2080e1aeab88e64c1bfe05e6fd7c73b543256e6c",
+      "match": false,
+      "upstream_path": "evolve/main.js",
+      "status": "modified"
+    },
+    {
+      "path": "evolved-light.ico",
+      "sha256": "be220acfa37f5d42d54bce6336c03916f7e00eda363ba597a32f1cd7652d01ad",
+      "upstream_blob": "19652e478c7436ea6785cfcbc9d0e5958046c299",
+      "match": true,
+      "upstream_path": "evolved-light.ico",
+      "status": "unchanged"
+    },
+    {
+      "path": "evolved.ico",
+      "sha256": "6d3df67c674cb05807e7fd02c4537ca137bd31653279e19e439f7b1f2e7a9fd7",
+      "upstream_blob": "067623f1046edd3af565f8496a2e5dda18d5cdad",
+      "match": true,
+      "upstream_path": "evolved.ico",
+      "status": "unchanged"
+    },
+    {
+      "path": "font/weathericons-regular-webfont.eot",
+      "sha256": "3afed4f78c201830d945410a7e27a9feb483282555b2870aafc99d2db65f4c2c",
+      "upstream_blob": "330b7ec7a0f940fa5b4313d8ac5cefb6de3093e9",
+      "match": true,
+      "upstream_path": "font/weathericons-regular-webfont.eot",
+      "status": "unchanged"
+    },
+    {
+      "path": "font/weathericons-regular-webfont.svg",
+      "sha256": "e1bd62a72dc31598b1f10cbafe01a9892716902d738fda2a947bce41aa93c1a5",
+      "upstream_blob": "397d7305b424f3fac9c80a01c94e6238092c2777",
+      "match": true,
+      "upstream_path": "font/weathericons-regular-webfont.svg",
+      "status": "unchanged"
+    },
+    {
+      "path": "font/weathericons-regular-webfont.ttf",
+      "sha256": "176bda6661f213dde47c2114d76e476ec8ca9aae07dd54f9550d2d28fe02b4fd",
+      "upstream_blob": "948f0a5d26e899539e7821aa5a500932f76ba582",
+      "match": true,
+      "upstream_path": "font/weathericons-regular-webfont.ttf",
+      "status": "unchanged"
+    },
+    {
+      "path": "font/weathericons-regular-webfont.woff",
+      "sha256": "d4e90136fa6f4b26d5613c85b84f823af1d7b34fc3d2e3549740b3aea510caad",
+      "upstream_blob": "e0b2f94833249963a4d6650571fdb36f6911c02f",
+      "match": true,
+      "upstream_path": "font/weathericons-regular-webfont.woff",
+      "status": "unchanged"
+    },
+    {
+      "path": "font/weathericons-regular-webfont.woff2",
+      "sha256": "9327647771c09df82095dba3591c77cca41a9cedca948ae01e7fb70c690dcbd5",
+      "upstream_blob": "bb0c19ddfa700f04c76c942b7e04a65972c31fff",
+      "match": true,
+      "upstream_path": "font/weathericons-regular-webfont.woff2",
+      "status": "unchanged"
+    },
+    {
+      "path": "index.html",
+      "sha256": "d4e8c0e244c385e346da3eb29e38b8083f8cbf2c32724292a5f17e7eddcb3f89",
+      "upstream_blob": "d98d5baaee2efe5add0ca1ebc3145ba9ba9cd680",
+      "match": false,
+      "upstream_path": "index.html",
+      "status": "modified"
+    },
+    {
+      "path": "lib/blocking-resource.png",
+      "sha256": "f91b2173e9f730669a9c02476289cd62f376f04872c30e9e685d4fec65248b62",
+      "upstream_blob": "998a7f8b9150bf943904493e7b6a563a1e0c5f97",
+      "match": true,
+      "upstream_path": "lib/blocking-resource.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/blocking-stack.png",
+      "sha256": "5120e77ede8053c736f2de2bb00a63182c2aeea5a5033b14c63bb69915c23291",
+      "upstream_blob": "23285c5dcf081cce5ba858a94cfd928391c59f5a",
+      "match": true,
+      "upstream_path": "lib/blocking-stack.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/buefy.min.0.9.22.css",
+      "sha256": "63911adc98c2e61ac039ce248697592213da1a202f4b62561a97f97c394afb3f",
+      "upstream_blob": "7bbc23e87bbafd5ecbfef7546cde161b37afa3fe",
+      "match": true,
+      "upstream_path": "lib/buefy.min.0.9.22.css",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/cat.png",
+      "sha256": "ae8d10fef800aff32edd200587b26f294de4a64adc6a07ccd5b6b476ebaf409b",
+      "upstream_blob": "bcc6369d3450f5c5a181fc116fa8874bdecc5720",
+      "match": true,
+      "upstream_path": "lib/cat.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/copper-miner.png",
+      "sha256": "a1f72095f92d7c0d01647bfc8186f1f99925cdd9aa50bd64c093a543a51fffab",
+      "upstream_blob": "654fdc26392a8330efd7e3f6840873a0017f6925",
+      "match": true,
+      "upstream_path": "lib/copper-miner.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/cryptojs.min.js",
+      "sha256": "eab5d90a71736f267af39fdf32caa8c71673fd06703279b01e0f92b0d7be0bfc",
+      "upstream_blob": "1deebee38fe2c7c4042e210ad0c43138229d02b4",
+      "match": true,
+      "upstream_path": "lib/cryptojs.min.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/dog.png",
+      "sha256": "f99425f33c4cd1bdf1e05148dc282131786a20dbcde6be3223f92d1fd9e793cc",
+      "upstream_blob": "f923d215b58cac4cd9c540a9381715b55b599397",
+      "match": true,
+      "upstream_path": "lib/dog.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/html5sortable.min.js",
+      "sha256": "a50a868186bb87cf661791e42a433e59b804748e7d2adafdd400e2468816f8a5",
+      "upstream_blob": "3a7241283b886678007899b2a7f68beca186189b",
+      "match": true,
+      "upstream_path": "lib/html5sortable.min.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/less.3.9.min.js",
+      "sha256": "a81ec6c5b96dde7538cb9352adaa1b760143951266432440a95b61143e2a0c57",
+      "upstream_blob": "df31a7afb4beae7524d4c06ea73e6621104ba59b",
+      "match": true,
+      "upstream_path": "lib/less.3.9.min.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/lz-string.min.js",
+      "sha256": "4c09d32507760252ea4fd3364d4ec61639e88fd4887f02de667a44b4b90feb6e",
+      "upstream_blob": "b2088b1f60f601be8ec077012489b7974adfc0c4",
+      "match": true,
+      "upstream_path": "lib/lz-string.min.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/mine.png",
+      "sha256": "593166cc5bc4754c4b50836bfde73e4eb7dc2b8cb1b8448528ff3135cd16e3e3",
+      "upstream_blob": "c9c632fe3b23d333d2cfed90cc86f8e74541d832",
+      "match": true,
+      "upstream_path": "lib/mine.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/noise.png",
+      "sha256": "f1a5d805d0d6e68144e34751491bf23e5c759f5ac9302a34301db168ec7c40ec",
+      "upstream_blob": "330861caf4bbede33ca424c5bbbfba74ab1c6d02",
+      "match": true,
+      "upstream_path": "lib/noise.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/weather-icons-wind.min.css",
+      "sha256": "86ec8c2d707329b529f9ad831e51149ae25299cd924198aefe36e910b8d81921",
+      "upstream_blob": "d6568f33e54c37135a040b901e1e8db782d4d478",
+      "match": true,
+      "upstream_path": "lib/weather-icons-wind.min.css",
+      "status": "unchanged"
+    },
+    {
+      "path": "lib/weather-icons.min.css",
+      "sha256": "29c09c6a4a8c69a981ad315ac5bf6d92b3f68aad57f2f527b26f3a5bca517202",
+      "upstream_blob": "4ec4215e68bae3f0b77730440fdc7afca6a2d4f8",
+      "match": true,
+      "upstream_path": "lib/weather-icons.min.css",
+      "status": "unchanged"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "9867341a58b25fbc99b8b6341d65d8293426b61fcd7cc25f3557007419006694",
+      "upstream_blob": "2e71d307831895cc52f4830bbbe4c85bf3a2c8bc",
+      "match": true,
+      "upstream_path": "package-lock.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "package.json",
+      "sha256": "0ab8ce36a2f2c01f69b4a6d5585eaa4f9323311bc2f236881d1e61ad31f88784",
+      "upstream_blob": "7ec5337da5476c0b0d468e205770183b400273a1",
+      "match": true,
+      "upstream_path": "package.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "save.html",
+      "sha256": "dda0bcbe23b91c71086142e35edcf383542fb367e61af7cb7366d9cb247bcc5d",
+      "upstream_blob": "5667b9601dc57b01d59929212e7b76e625791188",
+      "match": true,
+      "upstream_path": "save.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/achieve.js",
+      "sha256": "c90b3d147bded05ea49f8bb2048a3ab350b750f1bdf8c90d0c69cfef3392130a",
+      "upstream_blob": "72c45c34a01ed6948f069ab1eb986a13a8058f31",
+      "match": true,
+      "upstream_path": "src/achieve.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/actions.js",
+      "sha256": "7669462f464b864cffa3a51c922dd860d15f015441301bcf15ee0f056a11ba7c",
+      "upstream_blob": "558c045d057f12e211a451020c03a91e80137383",
+      "match": true,
+      "upstream_path": "src/actions.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/arpa.js",
+      "sha256": "f155b5f9cbadc46213a1d133965dff20aa28d8023e350dbd33eccbaf70a6a38a",
+      "upstream_blob": "9ef9e0e25be91eeccbbc7eb21cfd4c62d52fc37d",
+      "match": true,
+      "upstream_path": "src/arpa.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/civics.js",
+      "sha256": "8bdb9e8958308781eba481e1db7c37446ee96dc2fd0f95b617f1f147aa70e25e",
+      "upstream_blob": "5155e3264e1f0cb5972d061ae0c72dcdafb96bac",
+      "match": true,
+      "upstream_path": "src/civics.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/debug.js",
+      "sha256": "f455c53dacd0da298c6df25c041ef92c50b89b014e2002764bde61dd031edeaf",
+      "upstream_blob": "97be4a6b174867df97af4706ae619fa72ab25f33",
+      "match": true,
+      "upstream_path": "src/debug.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/edenic.js",
+      "sha256": "63cf5e685dfde089fc908b2d4da90e812cf41d72280d70db6da378a5575b9fd3",
+      "upstream_blob": "01e7a2c03287abcfb84d0afb6380d40aeb051254",
+      "match": true,
+      "upstream_path": "src/edenic.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/events.js",
+      "sha256": "433c02e51377c4f26469aee725f8297271e089746fbe06c122b65928eee5acb9",
+      "upstream_blob": "b9109996d66b749e801f0b3539ff5e78590e661e",
+      "match": true,
+      "upstream_path": "src/events.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/evolve.less",
+      "sha256": "0987293e2e0fe5520cf9e880a7b3342e8b721d4afc57eb9ce562f69205ae5bc1",
+      "upstream_blob": "891f71797ce2cf98135f40cb0d33b649e2aa3203",
+      "match": true,
+      "upstream_path": "src/evolve.less",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/functions.js",
+      "sha256": "652314ce9863600db8f903488c81fc14df9ee4efc8caf4b91d78e657cbc07527",
+      "upstream_blob": "502a3faa26723554ef00fe838b197491ade88b67",
+      "match": true,
+      "upstream_path": "src/functions.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/governor.js",
+      "sha256": "f40d2b1e04c7e81283ed32163b4b97dde2bf9ea89fa24f32fd8d47437727bc81",
+      "upstream_blob": "666229c978b2547b487c6d385c60cbee61827468",
+      "match": true,
+      "upstream_path": "src/governor.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/index.js",
+      "sha256": "f5b113a0d00b4cd74e092e23969e25ee0085ac59bff2544b9430a7071bc62a83",
+      "upstream_blob": "8845ee9e0bbfafeaa64b80426f594f1a009ffecf",
+      "match": true,
+      "upstream_path": "src/index.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/industry.js",
+      "sha256": "a86c307921b24d9c8f74e3b7329717e01ad0341973fc791c9f3672bc9b1b4bb4",
+      "upstream_blob": "7dee185f560243d57974b373f8d70c5de0335c74",
+      "match": true,
+      "upstream_path": "src/industry.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/jobs.js",
+      "sha256": "e331e1146b919194d7e19a06c97b4229358ac34aa7d2dea2c218f68c42d40e94",
+      "upstream_blob": "3094ea38151fa8c09b2f718816e75761ff6ff724",
+      "match": true,
+      "upstream_path": "src/jobs.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/locale.js",
+      "sha256": "145e79f4e9f3e9a45db31c26bb1fe9a8c56e4a7858d22528b5224ff45e0d0141",
+      "upstream_blob": "df5a1f1a5037b144942f31803107ff81eadb5e67",
+      "match": true,
+      "upstream_path": "src/locale.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/main.js",
+      "sha256": "40575d2e9551029f1641eb8916861e65d296570d9f3dd6f04fea8ce997c7c745",
+      "upstream_blob": "a7f7ee0f647a22019600276131941f117181dc14",
+      "match": true,
+      "upstream_path": "src/main.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/portal.js",
+      "sha256": "d1c0762a879b6c7250738cf0b6fb5ad09db33261b308a9740fabec3436b7069f",
+      "upstream_blob": "cb0efe89d16d9705ecb9930a490a450b9b135213",
+      "match": true,
+      "upstream_path": "src/portal.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/prod.js",
+      "sha256": "a45e4c7a345c45c27bbf6ee0ba56c57b4b7c72df1b94cc74d4e82e49cd04618a",
+      "upstream_blob": "849e4209971639a62cae579f6b89189bbb6cf986",
+      "match": true,
+      "upstream_path": "src/prod.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/races.js",
+      "sha256": "dfc8ecab37a6ef4023c9a333421280ba8f892aead1e4deea4b2ded823f1a0058",
+      "upstream_blob": "20098de8df0d00925b716d97d15cd35ff2c6a8ef",
+      "match": true,
+      "upstream_path": "src/races.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/resets.js",
+      "sha256": "9fbe5086c4a126ab1552f8f2a21d5145d927b915ce1afeb3dbb9126401dbdda7",
+      "upstream_blob": "2a461be5cde244a83feeb67410cfa46e62d6b7bf",
+      "match": true,
+      "upstream_path": "src/resets.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/resources.js",
+      "sha256": "6af32e1cbb02483ab17106fcbc83de124abcec70a8e92046ec20948c9b763aed",
+      "upstream_blob": "cbb6c9bda4cf93d50cb346bf7323bcd8e15ed80b",
+      "match": true,
+      "upstream_path": "src/resources.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/seasons.js",
+      "sha256": "a2e25504c670a318594c9a0764b26e1ebe8d67f9254eb5f807827739b8a2678b",
+      "upstream_blob": "bcb2147aa2515d9a538100e9d37d92bd0c134951",
+      "match": true,
+      "upstream_path": "src/seasons.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/space.js",
+      "sha256": "f70fe14712db2c1cb817bd9cc86b4565fac75e007bb4c05fac2d9c453107d1b2",
+      "upstream_blob": "8a516b399edf553235a13de457ab2bb22ceae948",
+      "match": true,
+      "upstream_path": "src/space.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/tech.js",
+      "sha256": "3f7088cae7358ec7d6d79574d37bf93b0bcda3b644b7221f301c2f058e1de94e",
+      "upstream_blob": "e947dba7b75020b6e08da2124bd35accf87c4da5",
+      "match": true,
+      "upstream_path": "src/tech.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/truepath.js",
+      "sha256": "72c43f511780925f3b6b7e1fb81c8be3a385aa1a415fd93df640cc4b67c78d95",
+      "upstream_blob": "036ec529ff9ada9a31808cafe31cb4a1c1f683a0",
+      "match": true,
+      "upstream_path": "src/truepath.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/vars.js",
+      "sha256": "2d44d07d37d3ac7f15e05d2ef820d7abf1a319b5c591af17af27608e9cd7ef97",
+      "upstream_blob": "f385095b2e600aa42f2710f6ecae6d80ceb639bb",
+      "match": false,
+      "upstream_path": "src/vars.js",
+      "status": "modified"
+    },
+    {
+      "path": "src/wiki/achieve.js",
+      "sha256": "17359da80c8f6c5b6d3f3c03fb485e9efe57907800af5611ab7fb6f40d9ff168",
+      "upstream_blob": "680c0542968845402d304d04aeaaff1486827bd2",
+      "match": true,
+      "upstream_path": "src/wiki/achieve.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/arpa.js",
+      "sha256": "14544968300f384cb2163137ed20d32a740a2c772aa19474d4992b8c11d68ee5",
+      "upstream_blob": "de40d7cf8b949afc93092fb1c2d2aa6ce5e6c4f5",
+      "match": true,
+      "upstream_path": "src/wiki/arpa.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/basics.js",
+      "sha256": "220a90ec922d915bb1e8ea08798e7ff8139a8fcaf1ba073f141b4ca24969b967",
+      "upstream_blob": "c4b2dcf4394eaf3510ecc1315792013d66f62784",
+      "match": true,
+      "upstream_path": "src/wiki/basics.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/blood.js",
+      "sha256": "7d92713197b8e100d490c96f342ae8b558a8a0f73ee86a83d14ac60146ea94db",
+      "upstream_blob": "ff36d23c88bc73367df3dd70190d8c9ca03b2330",
+      "match": true,
+      "upstream_path": "src/wiki/blood.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/challenges.js",
+      "sha256": "f63a33b95b569ba018b2b91730d4446fb5972a248f5bce155413c7938af1dca9",
+      "upstream_blob": "94901757bd8ab59244dfcb62b10e6c7d2ebf6009",
+      "match": true,
+      "upstream_path": "src/wiki/challenges.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/change.js",
+      "sha256": "45dfcb31f9bf33640e419f450e8304f8ebb9fd46961c90954a71285a21156d60",
+      "upstream_blob": "d7dae3b903afa2e4ad016270d1acdf0de71ed35b",
+      "match": true,
+      "upstream_path": "src/wiki/change.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/combat.js",
+      "sha256": "52ed9b7c07f0bff8039796e8263cf830192a0675a30324a63ceb92859822cc24",
+      "upstream_blob": "3e2bd91762698f0e7f87e98517459bd9c6604992",
+      "match": true,
+      "upstream_path": "src/wiki/combat.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/crispr.js",
+      "sha256": "66dc2014f1c83536e82d948a56cf4f6218d74cd429cb55726836ab1523cbfd5b",
+      "upstream_blob": "a13e5382e30cd09b66bccc9ab9646a2a2dfb4b6a",
+      "match": true,
+      "upstream_path": "src/wiki/crispr.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/events.js",
+      "sha256": "e7b7ef75d4e3dafd665363d08258cd418e01b4a1680572b37454828f8f1e311b",
+      "upstream_blob": "a543cdeede296a79f691846250bbd0fd986799f3",
+      "match": true,
+      "upstream_path": "src/wiki/events.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/faq.js",
+      "sha256": "74307b4b7b18a4c2a96f893715e20d476cd91f0ac7d787de448ea12e0bceda47",
+      "upstream_blob": "297ba121b152da9274fb02a4600585a8109c10b4",
+      "match": true,
+      "upstream_path": "src/wiki/faq.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/functions.js",
+      "sha256": "a7f4b3b0a0ba5c107edc0718fd3d97691f232d4673ec4625591a733688f0d5f1",
+      "upstream_blob": "6a089b5cf9a23352fb336a49309544db23881630",
+      "match": true,
+      "upstream_path": "src/wiki/functions.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/gameplay.js",
+      "sha256": "322486404b8f581ae154cee739829f19bd98c7d97cd744d44f2c36f25a5e4f30",
+      "upstream_blob": "bb03161528b0088378fe03e874ced7f04cea5617",
+      "match": true,
+      "upstream_path": "src/wiki/gameplay.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/government.js",
+      "sha256": "bcc6f7d90fb729d7758acfda01227dd99f4094f097408e3dfe43d45a3f73c1d5",
+      "upstream_blob": "6852c1aaa457706bb329554e0b4f9f7a433900a1",
+      "match": true,
+      "upstream_path": "src/wiki/government.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/governor.js",
+      "sha256": "def46896f733e4f5fe16d417bb4e7a6aae1728dbb3fb8cabe13c853c5298ff26",
+      "upstream_blob": "d85cdf4272f179bb064098872196f83e232c1fef",
+      "match": true,
+      "upstream_path": "src/wiki/governor.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/hell.js",
+      "sha256": "3f05670dc514d03a10c5b205623e9591912ba9efc2dea0453012443301b825e6",
+      "upstream_blob": "b65dacf2d098d0ea1fad415a6281a6c16de948d4",
+      "match": true,
+      "upstream_path": "src/wiki/hell.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/init.js",
+      "sha256": "546566e3b1b22e68849af15f979acae0e797533c6e01e8fcc0b8d84cabdb2eee",
+      "upstream_blob": "92300ba2fd209e34bdc94eb9a4234b12e4bcebed",
+      "match": true,
+      "upstream_path": "src/wiki/init.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/mechanics.js",
+      "sha256": "c349577b4185a46f42ae7e837ea577ec47183ea16618470b00d0f3620dd74c6e",
+      "upstream_blob": "7a4383b45331e22048e635f1334e6e249307c8cb",
+      "match": true,
+      "upstream_path": "src/wiki/mechanics.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/p_res.js",
+      "sha256": "0b4fe66687e28ab0d5d620da3fd359d0530156b7551c2d8160ce232c1554aa15",
+      "upstream_blob": "510b64db1a8e479f0c2ade287c4ca2f2e95c21fb",
+      "match": true,
+      "upstream_path": "src/wiki/p_res.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/perks.js",
+      "sha256": "52ba4beb389c6690aa5d561e747ef55e9606aac7cfa929eea13fdeb1f5cf7be9",
+      "upstream_blob": "bc44c30ce6ecb81d8f1aac1e077450663438f238",
+      "match": true,
+      "upstream_path": "src/wiki/perks.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/planets.js",
+      "sha256": "71a0069aa3c00fce4ae291f4a1f11ba2d69fcd563e0e66c2cb7b51c769b69c9c",
+      "upstream_blob": "d9fea7f27b48b1fb70cd423ea51ad19d1fc6d560",
+      "match": true,
+      "upstream_path": "src/wiki/planets.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/prestige.js",
+      "sha256": "8cdf7b315fe5edc61c74929ae64680fc379cb2f899b0dd13442a649835e14da7",
+      "upstream_blob": "ac570c83ff9079cdd78890bf2a30b75d6a99f615",
+      "match": true,
+      "upstream_path": "src/wiki/prestige.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/projects.js",
+      "sha256": "c7fe375e982013307615b53e7b297006a956a6f0aad910732e9a2c26501ec872",
+      "upstream_blob": "9b9a32377308726b4807e29ae62a9a5a88fff26c",
+      "match": true,
+      "upstream_path": "src/wiki/projects.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/resets.js",
+      "sha256": "c6b48a1415a3ef8d35e07e0d4876ca5fd35ccc638de991e18b2833f326e5f711",
+      "upstream_blob": "2d42b3917564c369d6e3ec25c6e33c8e1f8f5b39",
+      "match": true,
+      "upstream_path": "src/wiki/resets.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/search.js",
+      "sha256": "b9808176fefb8f3d59db6e67dae0537fa07f4ae7d2036b3ed2d82359e3ecd951",
+      "upstream_blob": "cec454e9a01dc920e48ac2c47e53c004edc30876",
+      "match": true,
+      "upstream_path": "src/wiki/search.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/species.js",
+      "sha256": "df6f0dbd819ee8dd3fa444e1f85865c073547fc82feec5e5cd08e5d2d87509b9",
+      "upstream_blob": "d2e51047e17ec68b4dfe755af66f350e10051d26",
+      "match": true,
+      "upstream_path": "src/wiki/species.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/structures.js",
+      "sha256": "577619081779aadb290df99185b09dc0aeadfc12b17dbf42241d48277b577c3a",
+      "upstream_blob": "a10c6608b0b5da757844bf6e2b8457e45e78b255",
+      "match": true,
+      "upstream_path": "src/wiki/structures.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/structuresIndex.js",
+      "sha256": "56b40370578e0d9f4a527cda82277427fd31e40927a556835540b84893494996",
+      "upstream_blob": "3fe8d6391c67124fce2c3530d55a9194f8c515bb",
+      "match": true,
+      "upstream_path": "src/wiki/structuresIndex.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/tech.js",
+      "sha256": "7fd0944179b385e74f143d1ba30627b56f13c89d41b2c011ab3a589baa371aab",
+      "upstream_blob": "a4336ea7869912901b8a103fc4c5b8c4da054a1c",
+      "match": true,
+      "upstream_path": "src/wiki/tech.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/universes.js",
+      "sha256": "5db410dde8f9ba11eec61554cfe99b26952d7d81bf61ecdc442287df1ada29c8",
+      "upstream_blob": "8c06da7236d3581680ee4908c87f9e0f0f4e51b9",
+      "match": true,
+      "upstream_path": "src/wiki/universes.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/wiki.js",
+      "sha256": "f2d671c485d28278bef4393c97f1d3b99b765deb54e03e6ac7a3a164a98d5880",
+      "upstream_blob": "e1ff51582bd1b6cabf9975e5c8614e5eef6e20c0",
+      "match": true,
+      "upstream_path": "src/wiki/wiki.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "src/wiki/wiki.less",
+      "sha256": "979b7ccb2aab5012b47f38965c51972ac626bb459ac63cf445c933e20dedf849",
+      "upstream_blob": "3d22db2cd0e0214022eddac8fd1c388537ce499a",
+      "match": true,
+      "upstream_path": "src/wiki/wiki.less",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "strings/checkStrings.py",
+      "sha256": "4b2e0e929da42aab79e971fb28607ae4f43c9374080ec0813b306d16ac9a41da",
+      "upstream_blob": "31532c02e87e2d0b7f14879d94e3ca8dc045675e",
+      "match": true,
+      "upstream_path": "strings/checkStrings.py",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/convert zh-CN to zh-TW using opencc.py",
+      "sha256": "dae7eb229b01e40876b0782304be779ef11c4648bd32c3e683b08c6197efb1b0",
+      "upstream_blob": "2960b40b15f9f94dba49fd8afa23b046343135dd",
+      "match": true,
+      "upstream_path": "strings/convert zh-CN to zh-TW using opencc.py",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/readme.md",
+      "sha256": "32018914b90a120b7b45db13f306bbeab4b6444eef403aed02930dac02f62037",
+      "upstream_blob": "c2561ac3cb1fc6bcc59e9cc0bf687b8ad649e13b",
+      "match": true,
+      "upstream_path": "strings/readme.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.cs-CZ.json",
+      "sha256": "198dbfda5ae64a817507f6c6c806a627931ef49d5375e437baa3046205a222ef",
+      "upstream_blob": "e35477e8c7fdac0adf158d409a87fdcd49fc7d8c",
+      "match": true,
+      "upstream_path": "strings/strings.cs-CZ.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.de-DE.json",
+      "sha256": "cfa864c14d78902fe4d67156cd3752f84dc8af26bd3b885ac02bdf5b4889fae6",
+      "upstream_blob": "127c3e15416d435e8a00c0f1767ff8e5fbf5d912",
+      "match": true,
+      "upstream_path": "strings/strings.de-DE.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.es-ES.json",
+      "sha256": "6d90f0a6e3de5bf30e01f140c1a53e913e0c0be63d9b7274c04bb816effffc3c",
+      "upstream_blob": "89f84c99fbc67dcbe8728764c3c0c1fed237a2a9",
+      "match": true,
+      "upstream_path": "strings/strings.es-ES.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.im-PL.json",
+      "sha256": "2a03009bbe4bfcc13eca713d024b3fa711c394fc17a07f3db6acbad8daa1a045",
+      "upstream_blob": "0f59d81e1771cff6641eb228eb8125b4e0dd3f97",
+      "match": true,
+      "upstream_path": "strings/strings.im-PL.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.it-IT.json",
+      "sha256": "7e54be5394063ed66fbeccaa80c4aa767b09e27ff9c74d53114fb053c1d79646",
+      "upstream_blob": "01f0a1cd37c0b7203c5a8d713235e17f868656b8",
+      "match": true,
+      "upstream_path": "strings/strings.it-IT.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.ja-JP.json",
+      "sha256": "76673406d65ff7e3d1605b2825435f101484ade4d99aea4eaf7f6f98cdb3f732",
+      "upstream_blob": "b9b332376845d7d63154af59564288117f72716a",
+      "match": true,
+      "upstream_path": "strings/strings.ja-JP.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.json",
+      "sha256": "025b2acce3db27ff064e2197feab457e8c838f110b07dd80bf8d86ca79e035b4",
+      "upstream_blob": "f3efeaf39312f64cf3664dc42f1a6e72ac778a04",
+      "match": true,
+      "upstream_path": "strings/strings.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.ko-KR.json",
+      "sha256": "9c7dd9ae64cd256ec1ede6c792a1ea6fc347abcfd1c8b4a9d43880414c9ed133",
+      "upstream_blob": "ca57ffc1893ad2223a2321aba8fb4ea883706eeb",
+      "match": true,
+      "upstream_path": "strings/strings.ko-KR.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.pl-PL.json",
+      "sha256": "63b34559d08d9016d8d7aaa8c5cbe0d1fbb67604a56b1eddb1d8ba232965a0c1",
+      "upstream_blob": "8deda518d8764263ccba28c4b89d6b84d6711289",
+      "match": true,
+      "upstream_path": "strings/strings.pl-PL.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.pt-BR.json",
+      "sha256": "f5dd25daf08b57b9a99c0c5358b51a22feed6e5e5af3d0e183195bc49ddc0b23",
+      "upstream_blob": "4607c3ac3dd294354fd68fbb510415e6b27a3050",
+      "match": true,
+      "upstream_path": "strings/strings.pt-BR.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.ru-RU.json",
+      "sha256": "5e1fa20946e47ed31c66976a05608b6ff883ec2d719c746433a8e4a964de41aa",
+      "upstream_blob": "86ed626f38fd36cb4b39097489ca2f895586b838",
+      "match": true,
+      "upstream_path": "strings/strings.ru-RU.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.zh-CN.json",
+      "sha256": "e75684baca33e239f7a3a12d64c44de7dbdebe12e5e14d74af719c71533c8c64",
+      "upstream_blob": "e74157943870d7f461198952810c820906149b55",
+      "match": true,
+      "upstream_path": "strings/strings.zh-CN.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/strings.zh-TW.json",
+      "sha256": "b9f0e25a9fe57c89ce10c2136888a2776016e4a48f72aa61bd86fdea79770eb4",
+      "upstream_blob": "cea9f0b063b16489e34aeea52f919fcd522e8f42",
+      "match": true,
+      "upstream_path": "strings/strings.zh-TW.json",
+      "status": "unchanged"
+    },
+    {
+      "path": "strings/updateStrings.py",
+      "sha256": "80954f6afe382adac6eaf1dbe124601cbfe4e53aacc5fc9b690af3101f685cc7",
+      "upstream_blob": "e2748c464fa8c583271c136bce499ccd107f6d11",
+      "match": true,
+      "upstream_path": "strings/updateStrings.py",
+      "status": "unchanged"
+    },
+    {
+      "path": "vendor/BUEFY-LICENSE.txt",
+      "sha256": "e1687bcc33d6c3b3912529e8031ce2708aa4a4ce6b4c559b9f0a91b5332a8c56",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/CHART-LICENSE.md",
+      "sha256": "5a0877ad6d818529be4f33009d0942cdf7e2ed7656156f4aba7308459a546030",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/JQUERY-LICENSE.txt",
+      "sha256": "d4db9ebe6f29f5168eac45ad713f055623ac5d0dcd5ba92da23d650ae012020d",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/POPPER-LICENSE.md",
+      "sha256": "bf67e2c9b7974543bb18ced3a0b37f53729aaff953b442dd89a3adaf90fd93e8",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/SORTABLE-LICENSE.txt",
+      "sha256": "e94dfc31e800d169257569db270457c9f028440c9ccae41e7eb78b2db18f1298",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/VUE-LICENSE.txt",
+      "sha256": "17fb24bc303763f3fe1911ee24e5225c7ad59f0e3a5d8123e9b730c100a306a6",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/buefy-0.9.22.min.js",
+      "sha256": "2b7930132457dacc2b82fd78aafd54118f77fd68d1a2c575babba5728df27c65",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/chart-3.8.2.min.js",
+      "sha256": "b2b67bc02e022e563417d5058e2ebc753c18250e68f7742eab6fa2c90e201ff2",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/jquery-3.6.3.min.js",
+      "sha256": "a6f3f0faea4b3d48e03176341bef0ed3151ffbf226d4c6635f1c6039c0500575",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/popper-2.9.2.min.js",
+      "sha256": "5a07c69f9061eb12e39a031358a4f567f30a002ad6182639ac84fd1bda2f6e65",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/sortable-1.10.2.min.js",
+      "sha256": "f16c34735a8a0cc7474f6fb7b37dfaf64cd25dc808aefab34b0ce3759e6a1c3b",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "vendor/vue-2.7.14.min.js",
+      "sha256": "d601f229247b261d18181988f7337b3f652165187f3c22a109821a50ea96a0f9",
+      "upstream_blob": null,
+      "match": false,
+      "upstream_path": null,
+      "status": "added_or_generated"
+    },
+    {
+      "path": "wiki/wiki.css",
+      "sha256": "1f023618bacde32af0b4c7eef39d00d19b707eca06e9088e75bd441b025c4069",
+      "upstream_blob": "08a5554ac90923494f40eafe036a6061502743b8",
+      "match": true,
+      "upstream_path": "wiki/wiki.css",
+      "status": "unchanged"
+    },
+    {
+      "path": "wiki/wiki.js",
+      "sha256": "804ad62e077c230b1c299e7ade944f28969ec2c04376888bbeecd6fc40a4e403",
+      "upstream_blob": "6de59e0720936c840f0dc7f0df4914eb1cf1f88f",
+      "match": true,
+      "upstream_path": "wiki/wiki.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "wiki.html",
+      "sha256": "9db73471bfa9b82037f25526b59d79615184845941383b842bd0571fd957183c",
+      "upstream_blob": "621516b3a3278d432b9d03b097e03b0f76a9318d",
+      "match": true,
+      "upstream_path": "wiki.html",
+      "status": "unchanged"
+    }
+  ],
+  "schema": "realtime-bench-provenance-v1",
+  "upstream_url": "https://github.com/pmotschmann/Evolve/tree/3436358dcd03d9f9e071d51ea071e0a78c0322e4",
+  "reviewed": "2026-10-11"
+}

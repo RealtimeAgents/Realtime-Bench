@@ -1,0 +1,8 @@
+# Copy this file as <your-model-name>.yaml, then fill in the connection.
+endpoint:
+  api: chat_completions
+  model: YOUR_MODEL
+  base_url: https://YOUR_HOST/v1
+  api_key_env: OPENAI_API_KEY
+  # native_output_limit: 32768  # Optional max output tokens; omit for the provider default.
+# reasoning_effort: high  # Optional; omit for the provider default.

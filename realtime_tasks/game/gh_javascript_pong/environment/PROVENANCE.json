@@ -1,0 +1,305 @@
+{
+  "repo": "jakesgordon/javascript-pong",
+  "commit": "ca3240536e4f79ab7144388e56ed19de715b6662",
+  "local_root": "upstream",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "e21a35a09a2eb2681e7b3472226ae95a9317c11bb928dc27f579c5b38068f933",
+      "upstream_blob": "b831a05d83a60f4beadbbc58b4018c1caacf332d",
+      "match": true,
+      "upstream_path": "LICENSE",
+      "status": "unchanged"
+    },
+    {
+      "path": "README.md",
+      "sha256": "1d87a6d199059f6510b478aff7371e65e0a183e423fe457c5097a94dec1f6262",
+      "upstream_blob": "30f603b83a761c7a1d4d6f03d47268de3edb6ce1",
+      "match": true,
+      "upstream_path": "README.md",
+      "status": "unchanged"
+    },
+    {
+      "path": "game.js",
+      "sha256": "dc27867e038b5e099f6100335adb63a8728f26e06044df8a0c060578ebe9ee77",
+      "upstream_blob": "370d007491300310e6089e0e31da17d14d6c7155",
+      "match": true,
+      "upstream_path": "game.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "images/press1.png",
+      "sha256": "0fae68e2730c7e68e0e91a465884a53211d5c767fdd66908eb8c786ae8d44ccc",
+      "upstream_blob": "cd0874cb9934ef72730bce4e3cb185ef3fbe019f",
+      "match": true,
+      "upstream_path": "images/press1.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "images/press2.png",
+      "sha256": "413c77606c80dd3b75483a6ae3d21f490b415b096f9a7e6d9559fe672f6d8e26",
+      "upstream_blob": "52ca2b254b1fa4875164547e357eb7a2b40909da",
+      "match": true,
+      "upstream_path": "images/press2.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "images/winner.png",
+      "sha256": "3b2649482f87a8da46cbb7a5b61eef199cebae358f0902f091b47712e33a0276",
+      "upstream_blob": "50f4558f8b7b61a072a90cf2ebfea136921d2348",
+      "match": true,
+      "upstream_path": "images/winner.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "index.html",
+      "sha256": "09a3f3b4b4e714ae9d003278d0299370e1bc2f675bde2b22980922692693d53f",
+      "upstream_blob": "acfbd9132560b37b6db3c6ec5a0ccca1f46c9d08",
+      "match": true,
+      "upstream_path": "index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "part1/game.js",
+      "sha256": "e967726e830684da8c8fc45801ab551660837479ceeea000bd4233e1c95e601a",
+      "upstream_blob": "29145bad58e1fec73f3dba609775cbf52d354d3c",
+      "match": true,
+      "upstream_path": "part1/game.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part1/index.html",
+      "sha256": "1a2c019f447a6c4ffe70abc570aa8b3fbf2df16d7fc2e477bfabb5cf33d81d91",
+      "upstream_blob": "fcc86a63080daf9a7481ec2850d973a0970d5b3f",
+      "match": true,
+      "upstream_path": "part1/index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "part1/pong.js",
+      "sha256": "200de74f3cb220ce39ad504cea728b0283e986620ecf352dfcd3d08aa0533837",
+      "upstream_blob": "e543d227ac9c798fdf196456597898f2a5ab588e",
+      "match": true,
+      "upstream_path": "part1/pong.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part2/game.js",
+      "sha256": "7cf08d7c4a71c98fea6ef0644b19accdf4c6ee3f27e8005d113e8e9a3c33488c",
+      "upstream_blob": "75f11ea6bd4b883f96a55ca8fce72cc4e745c919",
+      "match": true,
+      "upstream_path": "part2/game.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part2/index.html",
+      "sha256": "259aa0231656a5e3e6957af7785b2845f30ed900633adcf300ee400e6993a754",
+      "upstream_blob": "36c354acdabbd05f568d30d77b03725cd05a4d1f",
+      "match": true,
+      "upstream_path": "part2/index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "part2/pong.js",
+      "sha256": "cdb97cd2dcaa85610149af5fdba8944397ecf739b3839cde4cb89d1c63b14b84",
+      "upstream_blob": "275276feaedcd099372fa09e05d71d37fe484980",
+      "match": true,
+      "upstream_path": "part2/pong.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part3/game.js",
+      "sha256": "e967726e830684da8c8fc45801ab551660837479ceeea000bd4233e1c95e601a",
+      "upstream_blob": "29145bad58e1fec73f3dba609775cbf52d354d3c",
+      "match": true,
+      "upstream_path": "part3/game.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part3/images/press1.png",
+      "sha256": "0fae68e2730c7e68e0e91a465884a53211d5c767fdd66908eb8c786ae8d44ccc",
+      "upstream_blob": "cd0874cb9934ef72730bce4e3cb185ef3fbe019f",
+      "match": true,
+      "upstream_path": "part3/images/press1.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part3/images/press2.png",
+      "sha256": "413c77606c80dd3b75483a6ae3d21f490b415b096f9a7e6d9559fe672f6d8e26",
+      "upstream_blob": "52ca2b254b1fa4875164547e357eb7a2b40909da",
+      "match": true,
+      "upstream_path": "part3/images/press2.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part3/images/winner.png",
+      "sha256": "3b2649482f87a8da46cbb7a5b61eef199cebae358f0902f091b47712e33a0276",
+      "upstream_blob": "50f4558f8b7b61a072a90cf2ebfea136921d2348",
+      "match": true,
+      "upstream_path": "part3/images/winner.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part3/index.html",
+      "sha256": "5e419fcf20c2ade84e889c4c8a1a48f82189ab254650fb72a1eef3c51dd9e7b1",
+      "upstream_blob": "a3b1500b05740e3a15b63e7e0f9b158bd4702e48",
+      "match": true,
+      "upstream_path": "part3/index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "part3/pong.js",
+      "sha256": "b2a2dd42b3907a8857fca87462b64a6238f11691e617382105cb9ab84b270d83",
+      "upstream_blob": "f2cc346038eafae782e83f1bd760a550f5378402",
+      "match": true,
+      "upstream_path": "part3/pong.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part4/game.js",
+      "sha256": "e967726e830684da8c8fc45801ab551660837479ceeea000bd4233e1c95e601a",
+      "upstream_blob": "29145bad58e1fec73f3dba609775cbf52d354d3c",
+      "match": true,
+      "upstream_path": "part4/game.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part4/images/press1.png",
+      "sha256": "0fae68e2730c7e68e0e91a465884a53211d5c767fdd66908eb8c786ae8d44ccc",
+      "upstream_blob": "cd0874cb9934ef72730bce4e3cb185ef3fbe019f",
+      "match": true,
+      "upstream_path": "part4/images/press1.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part4/images/press2.png",
+      "sha256": "413c77606c80dd3b75483a6ae3d21f490b415b096f9a7e6d9559fe672f6d8e26",
+      "upstream_blob": "52ca2b254b1fa4875164547e357eb7a2b40909da",
+      "match": true,
+      "upstream_path": "part4/images/press2.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part4/images/winner.png",
+      "sha256": "3b2649482f87a8da46cbb7a5b61eef199cebae358f0902f091b47712e33a0276",
+      "upstream_blob": "50f4558f8b7b61a072a90cf2ebfea136921d2348",
+      "match": true,
+      "upstream_path": "part4/images/winner.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part4/index.html",
+      "sha256": "7135c7348b77c0e9e72a407ca792a531e29d644024f5d1a6bace5accb92392ef",
+      "upstream_blob": "d02ecf7e4eaf3a896d80d26ddf42b6d0f850ad27",
+      "match": true,
+      "upstream_path": "part4/index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "part4/pong.js",
+      "sha256": "264966b0a90c98b67992e60f53848df8630f7c46fdf827fdafbd525572ba7d3f",
+      "upstream_blob": "147b532de344e60fb317cbf528f80de750dd470b",
+      "match": true,
+      "upstream_path": "part4/pong.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part5/game.js",
+      "sha256": "e967726e830684da8c8fc45801ab551660837479ceeea000bd4233e1c95e601a",
+      "upstream_blob": "29145bad58e1fec73f3dba609775cbf52d354d3c",
+      "match": true,
+      "upstream_path": "part5/game.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "part5/images/press1.png",
+      "sha256": "0fae68e2730c7e68e0e91a465884a53211d5c767fdd66908eb8c786ae8d44ccc",
+      "upstream_blob": "cd0874cb9934ef72730bce4e3cb185ef3fbe019f",
+      "match": true,
+      "upstream_path": "part5/images/press1.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part5/images/press2.png",
+      "sha256": "413c77606c80dd3b75483a6ae3d21f490b415b096f9a7e6d9559fe672f6d8e26",
+      "upstream_blob": "52ca2b254b1fa4875164547e357eb7a2b40909da",
+      "match": true,
+      "upstream_path": "part5/images/press2.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part5/images/winner.png",
+      "sha256": "3b2649482f87a8da46cbb7a5b61eef199cebae358f0902f091b47712e33a0276",
+      "upstream_blob": "50f4558f8b7b61a072a90cf2ebfea136921d2348",
+      "match": true,
+      "upstream_path": "part5/images/winner.png",
+      "status": "unchanged"
+    },
+    {
+      "path": "part5/index.html",
+      "sha256": "1e2cf491c7f4d9f998cca5909f00b2e969449358a20b1c4869a3f7f842754fe1",
+      "upstream_blob": "60f0885e3a282041f8ccbaf24b8612854676c809",
+      "match": true,
+      "upstream_path": "part5/index.html",
+      "status": "unchanged"
+    },
+    {
+      "path": "part5/pong.js",
+      "sha256": "ba4cc8f36029594badc811115b2a85ada7013d51703bb4572b2d5057c609d01f",
+      "upstream_blob": "892fd2d7057f97c1031988499c55d3672e483215",
+      "match": true,
+      "upstream_path": "part5/pong.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "pong.css",
+      "sha256": "40d2b3a86b7b63e821e15df99d77805c0ddbd1856c3b9e3d73ba0720dc2de503",
+      "upstream_blob": "b123350d4329b3b7d8498c114be1dff88e65107a",
+      "match": true,
+      "upstream_path": "pong.css",
+      "status": "unchanged"
+    },
+    {
+      "path": "pong.js",
+      "sha256": "38ea07c0aee1e393b74d47a0f2437f565a6172073399c853913fda296ca610ee",
+      "upstream_blob": "2688ac4b0135c47135aede22787fa7a09e6fb12e",
+      "match": true,
+      "upstream_path": "pong.js",
+      "status": "unchanged"
+    },
+    {
+      "path": "sounds/goal.wav",
+      "sha256": "4c0d6ede95d74aafbee1f6ff6176a1ced5c8de50602a07798d070e81692e11ac",
+      "upstream_blob": "965c2d2ad14f716f5c261d2be8860cfc1ea56cb1",
+      "match": true,
+      "upstream_path": "sounds/goal.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "sounds/ping.wav",
+      "sha256": "aeea689cf04220990577e626921e47f4691939747c0539240a6e1e077875a391",
+      "upstream_blob": "0f45c68047fcda6038ef8a4b0edc91bf7b3389e9",
+      "match": true,
+      "upstream_path": "sounds/ping.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "sounds/pong.wav",
+      "sha256": "2f9c88daef0e644498a8e5881bec03f73c8a407e8c43fe54b00bb4745fd05818",
+      "upstream_blob": "e3eedf156256ab26c5bc12bd2abc4c6623c82df9",
+      "match": true,
+      "upstream_path": "sounds/pong.wav",
+      "status": "unchanged"
+    },
+    {
+      "path": "sounds/wall.wav",
+      "sha256": "93dfe35096d18579b3cc401ccb70cc901aec0d8283841e7567a593ac94dddbab",
+      "upstream_blob": "32a1129474a5d9364731a7a66b82a8030dd2958d",
+      "match": true,
+      "upstream_path": "sounds/wall.wav",
+      "status": "unchanged"
+    }
+  ],
+  "schema": "realtime-bench-provenance-v1",
+  "upstream_url": "https://github.com/jakesgordon/javascript-pong/tree/ca3240536e4f79ab7144388e56ed19de715b6662"
+}

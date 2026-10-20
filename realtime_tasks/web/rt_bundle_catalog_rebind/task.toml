@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_bundle_catalog_rebind"
+scenario = "rt_bundle_catalog_rebind"
+category = "realtime"
+description = "E-commerce product-merchandising simulation of Shopify Bundles and native product details, with original Loomcart/Fieldroom styling. Independently changing component options invalidate the parent binding and force Draft; the merchant must reconcile shared option values, save composition and separately publish. Later component repricing leaves parent prices unchanged. Strict scoring joins actual early and later checkout snapshots, complete current variant coverage, current pricing, publication and preservation. No model result or human approval is implied by registration."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

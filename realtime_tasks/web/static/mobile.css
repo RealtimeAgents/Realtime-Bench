@@ -1,0 +1,129 @@
+/* Presentation only: desktop geometry and task commands remain owned by each page. */
+@media (max-width: 900px) {
+  html, body { min-width: 0 !important; max-width: 100%; height: auto; }
+  body { overflow: auto !important; overflow-wrap: anywhere; }
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(main, section, article, aside, header, footer, nav, div, form) { min-width: 0; }
+  :where(button, input, select, textarea, [role="button"], a) { touch-action: manipulation; }
+  :where(button, input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    max-width: 100%; min-height: 44px; font-size: 16px;
+  }
+  :where(button, [role="button"]) { white-space: normal; overflow-wrap: anywhere; }
+  :where(input, select, textarea) { min-width: 0; }
+  img { max-width: 100%; }
+  :is(.shell, #shell, .app, .page, .main, .layout, .workspace, .columns, .grid,
+      .editor, .summary, .overview, .detail-layout, .matching-grid, .cabin-layout,
+      .checkout-layout, .send-layout, .order-layout, .section-grid, .source-layout,
+      .planner-main, .profile-grid, .details-grid, .device-facts, .deploymentpair,
+      .compare, .filters, .expanded-content, .details, .product, .platform-list,
+      .event-lines, .order-body, .mailbox-rail) {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0 !important; max-width: 100%;
+  }
+  :is(.page, main, .main, .content, .overview) { padding-left: 12px; padding-right: 12px; }
+  :is(.top, .bar, .header, .topbar, .head, .heading, .titlebar, .toolbar,
+      .actions, .timing, .title-actions, .offer-actions, .modal footer,
+      .dialog footer, .dialog-actions, .modal-actions, .footer-actions) {
+    flex-wrap: wrap; height: auto; min-height: 44px; gap: 10px;
+    max-width: 100%;
+  }
+  :is(.top, .bar, .header, .topbar, .titlebar) { padding: 12px; position: relative; top: auto; }
+  :is(.sidebar, .sidepanel, .right-summary, .rail, .margin, .paper-wrap) {
+    width: auto; min-width: 0; max-width: 100%;
+  }
+  :is(.modal-shade, .modal-backdrop, .backdrop, .overlay, .offer-backdrop,
+      .shade, .scrim, .dialog-backdrop, .idle-overlay, .rt-reload-overlay) {
+    padding: 12px; overflow: auto; overscroll-behavior: contain;
+  }
+  :is([role="dialog"], dialog, .modal, .dialog, .offer-dialog, .confirm-box,
+      .login-paper, .idle-modal, .rt-reload-card) {
+    min-width: 0 !important; width: min(100%, 560px); max-width: 100%;
+    max-height: calc(100dvh - 24px); overflow: auto; overscroll-behavior: contain;
+    overflow-wrap: anywhere;
+  }
+  :is(.drawer, .side-drawer) { max-width: 100vw; max-height: 100dvh; overflow: auto; }
+  :is(.toast, .toast-region, .activity-toast, .success-toast) { max-width: calc(100vw - 24px); }
+  /* Wide datasets keep their row/column relationships in a local scroll region. */
+  :is(.table-wrap, .table-scroll, .grid-scroll, .calendar-scroll, .schedule-scroll,
+      .board-scroll, .timeline-scroll, .lane) { max-width: 100%; overflow: auto; }
+  table { display: block; max-width: 100%; overflow-x: auto; }
+  :is(.form-row, .device-setting, .section, .fact, .facts, .detail-grid,
+      .metadata-grid, .confirm-grid, .review, .refund-facts) {
+    grid-template-columns: minmax(0, 1fr); min-width: 0;
+  }
+  :is(.fields, .two, .form-grid, .detailsgrid, .receipt-grid, .return-grid,
+      .passenger-fields, .ticket-grid, .boarding-passes, .review-grid) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :is(.move-buttons button, .move button) { min-width: 44px; min-height: 44px; }
+  .rt-fact b { white-space: normal; overflow: visible; }
+
+}
+/* Short landscape screens need scrollable dialogs too, even above the phone breakpoint. */
+@media (max-height: 540px) and (pointer: coarse) {
+  :is([role="dialog"], dialog, .modal, .dialog, .offer-dialog, .confirm-box) {
+    max-height: calc(100dvh - 24px); overflow: auto;
+  }
+}
+@media (max-width: 900px) {
+  /* Fixed desktop navigation becomes a normal-flow section, leaving full width for work. */
+  :is(.sidebar, .nav-side) { position: static; inset: auto; width: 100%; max-height: none; }
+  :is(main, .content, .workspace) { margin-left: 0 !important; }
+  :is(body > header, .page-head, .section-head, .section-heading, .clocks,
+      .tabs, .nav, .subnav, .live, .statusbar, .detail-top, .driverhead,
+      .batchbar, .orderbar, .grid-head, .card-title, .status-line, .buy-bar,
+      .dialog-head, .dialog-foot, .dialoghead, .dialogfoot, .modal-head, .modal-foot,
+      .dialog-footer, .filter, .filter-fields, .count-row, .users-strip, .tools-line,
+      .links, .buttons, .top .right) {
+    flex-wrap: wrap; height: auto; min-height: 44px; gap: 10px;
+    white-space: normal; max-width: 100%;
+  }
+  body > header { position: relative; inset: auto; padding: 12px; }
+  :is(.clocks, .timing, .live, .deadlines) > span { white-space: normal; min-width: 0; }
+  .live { overflow: visible; padding: 10px 12px; }
+  .detail { min-width: 0 !important; }
+  .detail-top { position: relative; inset: auto; padding: 12px; }
+  th, td { min-width: 90px; overflow-wrap: normal; }
+  :is([role="dialog"], dialog, .modal, .dialog, .offer-dialog, .confirm-box) {
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+  }
+  :is(.dialog-shade, .modal-layer) { padding: 12px; overflow: auto; }
+  :is(.modal-body, .dialog-body, .dialogbody) { min-height: 0; overflow: auto; }
+  .rt-toast-stack { left: 12px; right: 12px; width: auto; max-width: calc(100vw - 24px); }
+}
+@media (max-width: 900px) {
+  .page-title { flex-wrap: wrap; gap: 10px; }
+}
+@media (max-width: 900px) {
+  :is(.main, .page) { margin-left: 0 !important; }
+}
+@media (max-width: 900px) {
+  :is(input, select, textarea) { font-size: 16px !important; }
+  :is(.modal-shade, .modal-backdrop, .backdrop, .overlay, .offer-backdrop,
+      .shade, .scrim, .dialog-backdrop, .idle-overlay, .rt-reload-overlay,
+      .dialog-shade, .modal-layer) {
+    top: var(--mobile-viewport-top, 0px); bottom: auto;
+    height: var(--mobile-viewport-height, 100dvh);
+  }
+  :is([role="dialog"], dialog, .modal, .dialog, .offer-dialog, .confirm-box) {
+    max-height: calc(var(--mobile-viewport-height, 100dvh) - 24px) !important;
+  }
+  dialog[open] { top: calc(var(--mobile-viewport-top, 0px) + 12px); bottom: auto; margin-top: 0; }
+  :is(.drawer, .side-drawer, .appointment-drawer) {
+    top: var(--mobile-viewport-top, 0px); bottom: auto;
+    height: var(--mobile-viewport-height, 100dvh); max-height: var(--mobile-viewport-height, 100dvh);
+  }
+}
+@media (max-width: 900px) {
+  :is(.confirm-shade, .drawer-shade, .idle-backdrop, .boarding-drawer, .modalback,
+      .session-modal, .login-sheet, .rules, .veil, .modal-bg) {
+    top: var(--mobile-viewport-top, 0px); bottom: auto;
+    height: var(--mobile-viewport-height, 100dvh); padding: 12px; overflow: auto;
+  }
+  :is(.confirm-shade, .idle-backdrop, .boarding-drawer, .modalback,
+      .session-modal, .login-sheet, .rules, .veil, .modal-bg) > :is(section, div, form, article) {
+    min-width: 0; max-width: 100%; max-height: calc(var(--mobile-viewport-height, 100dvh) - 24px);
+    overflow: auto;
+  }
+}

@@ -1,0 +1,1 @@
+Drive the car down Highway 404: collect at least one teapot (the teapot counter at the bottom right shows 1 or more) and stay on the road for 30 seconds. The clock at the bottom left counts down from 6:44, so keep going until it shows 6:14 or less. If the car falls off the road, the game ends and you fail.

@@ -1,0 +1,22 @@
+schema_version = "1.4"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 120
+
+[environment]
+build_timeout_sec = 600
+network_mode = "public"
+
+[metadata]
+task_id = "rt_identity_recovery_handoff"
+category = "realtime"
+scenario = "rt_identity_recovery_handoff"
+description = "A researched Duo-style account recovery and mobile-factor handover with government-ID completion, base-status lockout, independent device confirmation, activation delivery, remembered browser authentication, and personal versus shared device retirement."
+instruction = "instruction.md"
+evaluation = "tests/evaluation.py"
+entry = "environment/index.html"
+backend = "product"
+engine = "environment/engine.py"

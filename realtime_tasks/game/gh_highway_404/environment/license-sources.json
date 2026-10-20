@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-10-08",
+  "scope": "Supplemental notices restored during public-20 review. Source/grant inference limitations are documented in RIGHTS.md.",
+  "files": [
+    {
+      "file": "licenses/ZzFX-MIT.txt",
+      "sha256": "3cc22a9ed0b1dd02189c1b6f4edb14847623f043589cc78b24ab839ef09b6e36",
+      "sources": [
+        "https://raw.githubusercontent.com/KilledByAPixel/ZzFX/master/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/ZzFXM-MIT.txt",
+      "sha256": "ce94b9d9ec1f26f2badf6269f6fd5833ab336cf4c3c0ab7743eb2a43122510e4",
+      "sources": [
+        "https://raw.githubusercontent.com/keithclark/ZzFXM/master/LICENSE"
+      ],
+      "method": "verbatim upstream license"
+    },
+    {
+      "file": "licenses/canvas-sketch-util-MIT.txt",
+      "sha256": "47bc590c39d8ccccfc544875a9faebf44bafa828ef20315b396b5d0629f0cfd6",
+      "sources": [
+        "https://raw.githubusercontent.com/mattdesl/canvas-sketch-util/master/LICENSE.md"
+      ],
+      "method": "verbatim upstream license"
+    }
+  ]
+}

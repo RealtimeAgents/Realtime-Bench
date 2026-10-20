@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script src="mobile/entry.js" data-game="44_synthblast"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Open-source browser game</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #05070b; }
+    #game-frame { width: 100%; height: 100%; border: 0; display: block; background: #05070b; }
+    #task-timer {
+      position: fixed; top: 18px; right: 22px; z-index: 10;
+      min-width: 150px; padding: 10px 14px; border: 2px solid #d6f4ff;
+      border-radius: 8px; background: rgba(5, 14, 23, .88); color: #f5fbff;
+      font: 700 22px/1.15 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      text-align: center; letter-spacing: .03em; pointer-events: none;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+    }
+    #task-timer.urgent { border-color: #ffad66; color: #ffe2c6; }
+    #task-timer.expired { border-color: #ff6b6b; color: #ffd2d2; }
+  </style>
+</head>
+<body>
+  <div id="task-timer" role="timer" aria-live="polite">TIME 180</div>
+  <iframe id="game-frame" title="Open-source browser game" allow="autoplay; fullscreen; gamepad" tabindex="0"></iframe>
+  <script src="game_config.js"></script>
+  <script src="game_api.js"></script>
+</body>
+</html>

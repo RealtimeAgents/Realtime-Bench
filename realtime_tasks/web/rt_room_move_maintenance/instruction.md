@@ -1,0 +1,3 @@
+You are on the front desk at 15:00, 17 Sep 2026. Room 203 has a ceiling leak; maintenance posts the repair dates in its accommodation comments. Before the plumber arrives at 15:01:20, move Maya Chen to a clean Double free for her remaining stay, keeping her completed night, departure and rate.
+
+Keep 203 Out of Service without gaps from today until the reopening date in the newest comment that confirms dates (the block's To date is the morning the room reopens), updating the calendar if they are revised. At the 15:03:50 channel sync, any unblocked night of 203 is sold online. Move any reservation the confirmed closure covers to an available Double for its original dates and rate. Leave other guests and rooms unchanged.
