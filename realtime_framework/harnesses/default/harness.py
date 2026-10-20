@@ -784,6 +784,7 @@ from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import action_has_target_references
+from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 
 
@@ -1012,9 +1013,9 @@ class DefaultHarness(VisionAgentBase):
         try:
             for index, observation in enumerate(observations):
                 prompt = self.interaction_profile.frame_prompt
-                if index == 0 and feedback and self.driver.capabilities.persistent_session:
-                    prompt = feedback + "\n" + prompt
                 prepared, execution = bind_observation(self, observation, prompt, tick)
+                if index == 0 and feedback and self._context_policy.feedback == "frame_prefix":
+                    prepared.feedback_prefix = feedback
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
@@ -1047,7 +1048,7 @@ class DefaultHarness(VisionAgentBase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": observation.prompt},
+                            {"type": "text", "text": session_frame_text(observation)},
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -1218,6 +1219,7 @@ class DefaultHarness(VisionAgentBase):
                 action_history=self.action_history,
                 timeout=None,
                 message_builder=self._messages,
+                decision=tick,
             )
 
         collector_type = (

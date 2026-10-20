@@ -28,6 +28,7 @@ from realtime_framework.entity.events import EmptyInterruptedToolTurnError
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.model import FATAL
+from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
@@ -368,7 +369,11 @@ class GeminiLiveDriver:
             observation = turn.observation
             parts = [
                 self.types.Part(
-                    text=(FOLDED_VISUAL_PLACEHOLDER if turn.visual_folded else observation.prompt)
+                    text=(
+                        FOLDED_VISUAL_PLACEHOLDER
+                        if turn.visual_folded
+                        else session_frame_text(observation)
+                    )
                 )
             ]
             if not turn.visual_folded:
@@ -727,7 +732,7 @@ class GeminiLiveDriver:
                 turns=self.types.Content(
                     role="user",
                     parts=[
-                        self.types.Part(text=observation.prompt),
+                        self.types.Part(text=session_frame_text(observation)),
                         self.types.Part(
                             inline_data=self.types.Blob(
                                 data=observation.image_bytes,
@@ -754,7 +759,7 @@ class GeminiLiveDriver:
             self._last_video_sent_at = loop.time()
             # Let media ingestion catch up before the corresponding SoM text arrives.
             await asyncio.sleep(1.0)
-            await session.send_realtime_input(text=observation.prompt)
+            await session.send_realtime_input(text=session_frame_text(observation))
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.
             await session.send_realtime_input(
