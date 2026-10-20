@@ -17,10 +17,13 @@ from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.entity.events import TextDelta, UsageSnapshot
 from realtime_framework.entity.model import (
+    TRANSIENT,
+    TRANSPORT_RETRY,
     GenerationOutput,
     GenerationRequest,
     ProviderObservation,
     SessionSeed,
+    TransportFailure,
 )
 from realtime_framework.entity.records import trace_scope, validate_episode_trace
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
@@ -220,7 +223,22 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
     assert stub.rejected == 1
     (failed,) = _messages(events, "openai_realtime.ws-1")
     assert failed["direction"] == "lifecycle" and failed["message_type"] == "handshake_failed"
-    assert failed["scope"] == {"phase": "initialize"}
+    assert failed["scope"] == {"phase": "initialize", "connect_attempt": 1}
+    # connect() retries the refused upgrade (HTTP 503) under the shared policy, and records each
+    # attempt; turn 2's rebuild connects once more.
+    attempts = [
+        e["payload"]
+        for e in events
+        if e["event"] == "ModelAttemptFinished" and e["payload"]["kind"] == "session_connect"
+    ]
+    connects = [
+        (a["scope"].get("decision"), a["scope"]["connect_attempt"], a["outcome"], a["failure_kind"])
+        for a in attempts
+    ]
+    assert connects == [(None, 1, "retry", "transient"), (None, 2, "ok", None), (2, 1, "ok", None)]
+    assert attempts[0]["retry_delay_s"] == TRANSPORT_RETRY.delay_s(
+        1, "empty:connect", TransportFailure(TRANSIENT)
+    )
     first, rebuilt = _check_frames(events, stub, "openai_realtime.ws", pack)
     messages = _messages(events, first)
 
