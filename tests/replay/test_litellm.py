@@ -3,22 +3,23 @@
 The model is set up the way a ``--model provider/model-id`` run does it: the Harbor trial worker
 puts the endpoint into BENCHMARK_LITELLM_* (evaluation/harbor.py:443-479;
 evaluation/_trial.py:111-128), the catalog's bridge key ``litellm-vlm`` reads them when the
-catalog loads (providers/registry.py:512-517), and the runner builds the config from that key
-(evaluation/runner.py:1421-1430, 1539-1544).
+catalog loads (providers/registry.py:412-417), and the runner builds the config from that key
+(evaluation/runner.py:1432-1441, 1550-1555).
 
-What this API's wire policy (providers/litellm.py:402-417) changes against chat_completions:
-- one complete JSON response per request (providers/litellm.py:412, 651-652, 898-932), and only
-  on the wall clock (providers/registry.py:137-140, 415-416; providers/litellm.py:899-900);
-- the image detail stays in the request (no strip_image_detail; harnesses/default/harness.py:
-  1048-1052);
+What this API's driver class (providers/litellm.py:1202-1221) and context policy
+(entity/context_policy.py:161-162) change against chat_completions:
+- one complete JSON response per request (providers/litellm.py:1210, 665-666, 913-949), and only
+  on the wall clock (providers/litellm.py:1203-1209; providers/preflight.py:49-50);
+- the image detail stays in the request (no strip_image_detail; providers/litellm.py:346-350);
 - each reply comes back in the next request as LiteLLM's own dump of the response message,
-  provider_specific_fields included (providers/litellm.py:923, 930-931;
-  harnesses/default/context.py:546; harness.py:1062-1063). So an empty reply without reasoning
-  still comes back, as an empty assistant message, where the other stateless APIs send none
-  (harness.py:1064). Reasoning replay is on too (providers/litellm.py:413; context.py:543-544),
-  but the dump takes precedence (harness.py:1057-1068): the reasoning reaches the model as the
-  dump's reasoning_content;
-- no physical context check runs (providers/litellm.py:462-464; context.py:433, 450-451), so the
+  provider_specific_fields included (providers/litellm.py:940, 947-948;
+  harnesses/default/context.py:589; harnesses/default/request.py:87-89;
+  providers/litellm.py:357-358). So an empty reply without reasoning still comes back, as an
+  empty assistant message, where the other stateless APIs send none
+  (harnesses/default/request.py:91). Reasoning replay is on too (entity/context_policy.py:161;
+  harnesses/default/request.py:90), but the dump takes precedence (providers/litellm.py:356-363):
+  the reasoning reaches the model as the dump's reasoning_content;
+- no physical context check runs (entity/context_policy.py:145, 161; context.py:488-489), so the
   vLLM counter's /tokenize call never happens on this API.
 
 Record the baseline with
@@ -45,16 +46,16 @@ from .steps import run_steps
 from .stub_litellm import LiteLLMStub
 
 BASELINE = Path(__file__).parent / "baselines" / "litellm-nonstream-long.jsonl"
-MODEL_KEY = "litellm-vlm"  # the runner records the catalog key as the model (runner.py:1238-1246)
-LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:207-221)
+MODEL_KEY = "litellm-vlm"  # the runner records the catalog key as the model (runner.py:1246-1254)
+LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:130-144)
 API_KEY_ENV = "REPLAY_LITELLM_API_KEY"
 API_KEY = "replay-dummy-key"
-REASONING_EFFORT = "low"  # as --reasoning-effort low; sent top-level (providers/litellm.py:575-579)
+REASONING_EFFORT = "low"  # as --reasoning-effort low; sent top-level (providers/litellm.py:578-582)
 
 # With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
-# oldest 10 (harnesses/default/context.py:27-36), and one holding 51 turns archives the oldest 10
-# into the ledger that becomes messages[1] (context.py:262-272, 436-448). Decision k carries k
-# earlier turns plus its own frame.
+# oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
+# into the ledger that becomes messages[1] (context.py:295-305; harnesses/default/request.py:53-55;
+# providers/litellm.py:329-332). Decision k carries k earlier turns plus its own frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 
@@ -66,13 +67,13 @@ CLEARED_PREFIXES = (
     "OPENAI_",
 )
 CLEARED = (
-    "BENCHMARK_MODEL_REVISION",  # the bridge key's model_revision (providers/registry.py:628-629)
+    "BENCHMARK_MODEL_REVISION",  # the bridge key's model_revision (providers/registry.py:524-525)
     "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER",  # another OpenAI handler (litellm/main.py:2625)
     # httpx in place of LiteLLM's aiohttp transport (litellm/llms/custom_httpx/http_handler.py:
     # 1213-1242)
     "DISABLE_AIOHTTP_TRANSPORT",
     "LITELLM_HTTP2",
-    "STREAM_MIN_REQUEST_INTERVAL",  # a sleep before each request (providers/litellm.py:63-72, 901)
+    "STREAM_MIN_REQUEST_INTERVAL",  # a sleep before each request (providers/litellm.py:69-78, 914)
 )
 
 
@@ -92,7 +93,7 @@ def litellm_environment(monkeypatch):
     # when set it sends every openai/ request to the Responses API (litellm/main.py:1072-1075).
     monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", False)
     yield monkeypatch
-    # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py:526-529).
+    # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py:426-429).
     catalog._catalog_entries.cache_clear()
 
 
@@ -104,9 +105,9 @@ def litellm_vlm_config(monkeypatch, base_url: str):
     monkeypatch.setenv("BENCHMARK_LITELLM_KEY_ENV", API_KEY_ENV)
     monkeypatch.setenv(API_KEY_ENV, API_KEY)
     # The bridge key reads BENCHMARK_LITELLM_* when the catalog first loads, and the catalog is
-    # cached (providers/registry.py:512-517, 526-529).
+    # cached (providers/registry.py:412-417, 426-429).
     catalog._catalog_entries.cache_clear()
-    catalog.validate_reasoning_effort(MODEL_KEY, REASONING_EFFORT)  # runner.py:1424-1430
+    catalog.validate_reasoning_effort(MODEL_KEY, REASONING_EFFORT)  # runner.py:1435-1441
     return catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort=REASONING_EFFORT)
 
 
@@ -141,7 +142,7 @@ def _check_history_changes(records: list[dict]) -> None:
 
 def _check_rejection_feedback(records: list[dict]) -> None:
     """A rejected action's detail reaches the model as its own message in the next request
-    (harness.py:1073-1074, 1536-1546)."""
+    (harnesses/default/request.py:98-99; providers/litellm.py:364-365; harness.py:1612-1622)."""
     rejected = [k for k, r in enumerate(records) if r["commit"]["detail"]]
     assert rejected
     for k in rejected:
@@ -157,9 +158,9 @@ def _check_rejection_feedback(records: list[dict]) -> None:
 
 def _check_assistant_replay(records: list[dict]) -> None:
     """Decision k's reply comes back in request k + 1 as LiteLLM's dump of the response message
-    (providers/litellm.py:923, 930-931; context.py:546; harness.py:1062-1063): with
-    provider_specific_fields, with reasoning_content when the reply had reasoning, and with empty
-    content when the reply was empty."""
+    (providers/litellm.py:940, 947-948; context.py:589; harnesses/default/request.py:87-89;
+    providers/litellm.py:357-358): with provider_specific_fields, with reasoning_content when the
+    reply had reasoning, and with empty content when the reply was empty."""
     for k, step in enumerate(LONG_SCENARIO[:-1]):
         replayed = [m for m in _messages(records[k + 1]) if m["role"] == "assistant"][-1]
         expected = {

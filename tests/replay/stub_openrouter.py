@@ -1,9 +1,9 @@
 """Scripted OpenRouter chat completions endpoint on 127.0.0.1 with an OS-assigned port.
 
 The openrouter API posts through LiteLLM's OpenRouter provider with LiteLLM's own HTTP handler
-(providers/litellm.py:346-356, 594-597) to ``{OPENROUTER_BASE_URL}/chat/completions``; the driver
+(providers/litellm.py:1123-1136, 605-610) to ``{OPENROUTER_BASE_URL}/chat/completions``; the driver
 reads OPENROUTER_BASE_URL because the catalog entries carry no base_url (providers/litellm.py:
-472-477). Each request takes the next script entry: a Reply is streamed as OpenRouter server-sent
+470-475). Each request takes the next script entry: a Reply is streamed as OpenRouter server-sent
 events, a Failure is answered with its HTTP status, headers and JSON error body, and a Held reply
 is streamed up to its last event, which waits until the test releases it. Every request is kept
 with its method, path, headers and raw body, in arrival order.
@@ -47,7 +47,7 @@ class Received:
 
 def route_metadata(model: str, provider: str) -> dict:
     """The route OpenRouter reports when X-OpenRouter-Metadata is enabled, in the form the driver
-    reads (providers/litellm.py:718-720, 726-742): exactly one selected endpoint."""
+    reads (providers/litellm.py:732-734, 740-756): exactly one selected endpoint."""
     return {
         "requested": model,
         "strategy": "ordered",
@@ -71,7 +71,7 @@ class OpenRouterStub:
     @property
     def base_url(self) -> str:
         """The OPENROUTER_BASE_URL form: the API prefix, as in https://openrouter.ai/api/v1
-        (providers/litellm.py:53)."""
+        (providers/litellm.py:59)."""
         return f"http://127.0.0.1:{self._server.server_address[1]}/api/v1"
 
     @property
@@ -111,7 +111,7 @@ class OpenRouterStub:
                 received = Received(self.command, self.path, tuple(self.headers.items()), body)
                 entry = stub._next(received)
                 if entry is None:
-                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py:369-377), so
+                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py:418-426), so
                     # an extra request fails its decision at once instead of being retried.
                     self._start(400, (), "application/json", _error("request beyond the script"))
                     return

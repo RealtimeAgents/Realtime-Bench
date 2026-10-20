@@ -1,11 +1,11 @@
 """Drive scripted Choice Decisions into an agent, in the order run_stream calls it.
 
-As in steps.py: per decision run_stream captures a frame (runner.py:844), binds the budget
-(runner.py:906-913), prefills and generates (runner.py:915-917), hands the result to the
-trajectory writer (runner.py:1126-1129) and reports the execution result (runner.py:672). In
+As in steps.py: per decision run_stream captures a frame (runner.py:846), binds the budget
+(runner.py:908-915), prefills and generates (runner.py:917-919), hands the result to the
+trajectory writer (runner.py:1128-1131) and reports the execution result (runner.py:674). In
 addition each decision loads its own script into the stub, every question attempt is recorded
 with an allow-list of headers, and an invalid decision ends the episode: run_stream invalidates
-the run without committing an action (runner.py:453-459) and stops deciding (runner.py:840-841).
+the run without committing an action (runner.py:455-461) and stops deciding (runner.py:842-843).
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ class Decision:
 
 def request_record(received) -> dict:
     """The baseline ignores key order, but a question's criteria order is the order of its
-    options, taken from the candidate order (harnesses/jev/selection.py:156-168). It is kept as a
-    list beside the body."""
+    options, taken from the candidate order (providers/decisions/selection.py:165-177). It is
+    kept as a list beside the body."""
     body = json.loads(received.body)
     return {
         "path": received.path,
@@ -54,7 +54,7 @@ def run_decisions(
         first_request = len(stub.requests)
         history_length = len(agent.action_history)
         stub.load(step.script)
-        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py:851
+        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py:853
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)
         agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry
@@ -75,7 +75,7 @@ def run_decisions(
                 "requests": [request_record(r) for r in stub.requests[first_request:]],
                 "result": result,
                 "commit": None if invalid else {"status": step.status, "detail": step.detail},
-                # A failed decision adds no action (harnesses/default/harness.py:1289-1329).
+                # A failed decision adds no action (harnesses/default/harness.py:1357-1397).
                 "action_history_entry": (
                     dict(agent.action_history[-1])
                     if len(agent.action_history) > history_length

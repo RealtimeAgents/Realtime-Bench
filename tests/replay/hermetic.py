@@ -16,7 +16,8 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
 # Environment settings that change what the model receives. Baselines use the code defaults.
 # Frame encoding is read once, at import (FRAME_ENCODING in sandbox/observation/capture.py).
 FRAME_ENV = ("FRAME_MAX_DIM", "FRAME_JPEG_QUALITY", "FRAME_IMAGE_DETAIL")
-# Screenshot folding and history archiving are read on every request (entity/config.py:41-90).
+# Screenshot folding and history archiving are read when the context policy is built
+# (entity/config.py:41-90).
 HISTORY_ENV = (
     "STREAM_ACTIVE_VISUAL_BUDGET",
     "STREAM_VISUAL_FOLD_BLOCK_SIZE",

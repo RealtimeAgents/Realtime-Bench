@@ -2,13 +2,13 @@
 
 Decision k sees frame k + 1. A decision's script holds one entry per question attempt: the
 choice key the model answers, or a Failure the endpoint returns. The criteria keys come from the
-current frame's candidates (harnesses/jev/candidates.py:159-311, game_candidates.py:9-83,
-composition.py:67-112). Both APIs get the same candidates on the same frame, so the web
-scripts serve both.
+current frame's candidates (harnesses/jev/candidates.py:159-311, game_candidates.py:8-71,
+providers/decisions/questions.py:57-113). Both APIs get the same candidates on the same frame,
+so the web scripts serve both.
 
 Statuses are scripted as in scenario.py: "applied" for executed GUI actions, "wait" for WAIT
-(sandbox/actions.py:830-936), "rejected" with the environment's message (runner.py:531-535, 672)
-and "not_applied_time_limit" past the deadline (runner.py:524). Every web candidate is a page
+(sandbox/actions.py:830-936), "rejected" with the environment's message (runner.py:533-537, 674)
+and "not_applied_time_limit" past the deadline (runner.py:526). Every web candidate is a page
 mark or a key the guest accepts (sandbox/guest_server/server.py:22-63), so the web scenario has
 no rejection; the game page has one, a composed screen pointer on the browser toolbar.
 """
@@ -43,8 +43,9 @@ def wait() -> Decision:
     return decision("wait", status="wait")
 
 
-# Composition keys on frames 2 and 16 (composition.py:81-93). Fragments are numbered in inventory
-# order, which starts with the task instruction's words (composition.py:20, 53-60).
+# Composition keys on frames 2 and 16 (providers/decisions/questions.py:71-83). Fragments are
+# numbered in inventory order, which starts with the task instruction's words
+# (composition.py:14, 47-54).
 ADA, LOVELACE, SPACE = "fragment_3", "fragment_4", "char_000020"
 # Frame 40: the datalist's "Ada Lovelace" is the eleventh literal (candidates.py:101-102, 263-271).
 SUGGESTED_NAME = "type_11"
@@ -57,7 +58,9 @@ WEB_LONG = [
     decision("click_P2"),
     decision("click_R1"),
     wait(),
-    wait(),  # two identical turns: the JEV digest and ledger compact them (jev/context.py:10-35)
+    # two identical turns: the JEV digest and ledger compact them
+    # (providers/decisions/history.py:13-38)
+    wait(),
     decision("scroll_down_R1"),
     decision("pan_right_R1"),
     decision("click_P3"),
@@ -68,7 +71,7 @@ WEB_LONG = [
     decision("click_P1"),
     decision("select_all"),
     # Every edit operation once: a character, a code point by six hex digits, delete, a Unicode
-    # round left with Back, clear, then cancel, which yields WAIT (selection.py:268-326).
+    # round left with Back, clear, then cancel, which yields WAIT (selection.py:356-414).
     decision(
         "compose_text",
         "char_000041",
@@ -111,7 +114,7 @@ WEB_LONG = [
     wait(),
     decision("pan_left_R1"),
     decision("click_P1"),
-    # 261 candidates: groups of 255 and 6, then their winners (selection.py:150-212)
+    # 261 candidates: groups of 255 and 6, then their winners (selection.py:159-229)
     decision(SUGGESTED_NAME, "pan_up_R1", SUGGESTED_NAME),
     # 40-49
     decision("press_enter"),
@@ -268,7 +271,7 @@ def game_probe(frame: int, *, text_observation: bool = False) -> dict:
 GAME_SCENE = {"screenshot": game_screenshot, "probe": game_probe}
 
 # Pointer composition: x then y, each a coarse hundred and then the value within it, unless the
-# coarse choice is 1000 (selection.py:118-148). The model image is 768x432 (capture.py:317-329).
+# coarse choice is 1000 (selection.py:127-157). The model image is 768x432 (capture.py:315-325).
 GAME_DECISIONS = [
     decision("game_pointer_screen_click", "400", "437", "200", "250"),  # click (336, 108)
     # (393, 13) in the model image is (982, 32) on the desktop (entity/actions.py:273-280), on the
@@ -285,7 +288,7 @@ GAME_DECISIONS = [
     decision("game_pointer_R1_mouse_down", "1000", "500", "512"),  # R1@1000,512
     decision("game_pointer_R1_move", "700", "750", "500", "500"),  # R1@750,500
     decision("game_mouse_release"),
-    # The second key's options keep the first pick's gap (selection.py:96-116)
+    # The second key's options keep the first pick's gap (selection.py:105-125)
     decision("game_hold_pair", "0", "2", "0.5"),  # ArrowLeft+Space for 0.5 s
     decision("game_key_1"),  # tap ArrowRight
     decision("game_hold_2_1.0"),  # hold Space for 1 s
@@ -295,7 +298,7 @@ GAME_DECISIONS = [
 
 
 # Failures -------------------------------------------------------------------------------------
-# One retry: a transient 503 on the second question of a composition (selection.py:240-266).
+# One retry: a transient 503 on the second question of a composition (selection.py:313-354).
 RETRY = [
     decision("click_P1"),
     decision(
@@ -305,11 +308,11 @@ RETRY = [
 
 TOO_LARGE = Failure(413, "Request exceeds the model's context window")
 # Frame 1 offers 11 candidates (wait, click_P1-P3, click_R1, scroll x2, pan x4). A rejected
-# group is split in halves, both asked next (selection.py:173-186); winners meet in round 1.
+# group is split in halves, both asked next (selection.py:189-203); winners meet in round 1.
 LUNA_OVERFLOW = [
     decision(TOO_LARGE, "click_P1", "pan_up_R1", "click_P1"),
     # Frame 2 offers 20: halves of 10, 5, 2, then one option. Canonical history is never reduced
-    # for a one-option question; the error ends the decision (selection.py:173-175, 230-233).
+    # for a one-option question; the error ends the decision (selection.py:189-191, 249-255).
     decision(TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE),
 ]
 JEV_OVERFLOW = [
@@ -318,7 +321,7 @@ JEV_OVERFLOW = [
     wait(),
     # [11] -> [5] -> [2] -> [1]: the one-option question drops the oldest message after the system
     # message and is asked again; the next question starts from the full history again
-    # (selection.py:214-238).
+    # (selection.py:231-261).
     decision(
         TOO_LARGE,
         TOO_LARGE,

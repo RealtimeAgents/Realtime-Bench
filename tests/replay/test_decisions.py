@@ -8,8 +8,8 @@ Both APIs run through the one agent (harnesses/registry.py) on the wall clock on
 HTTP request per attempt, and every request is recorded. JEV is never run on the game page: the
 pre-run checks reject it (providers/preflight.py, check_choice_task).
 
-Both catalog rows are experimental (benchmark_eligible False, providers/registry.py:76-94). The
-runner refuses them unless ALLOW_EXPERIMENTAL_MODEL=1 (evaluation/runner.py:1435-1443), but that
+Both catalog rows are experimental (benchmark_eligible False, providers/registry.py:54-64). The
+runner refuses them unless ALLOW_EXPERIMENTAL_MODEL=1 (evaluation/runner.py:1446-1454), but that
 is an argparse-level check that build_episode does not mirror, and nothing called here reads the
 variable, so it is not set.
 """
@@ -40,24 +40,25 @@ from .stub_decisions import DecisionsStub
 BASELINES = Path(__file__).parent / "baselines"
 DUMMY_KEY = "replay-dummy-key"
 # api -> (catalog key = configs/models/<key>.yaml, upstream provider the response must name).
-# Luna's upstream is the YAML's upstream_provider; JEV's comes from its model profile
-# (providers/registry.py:78-79, 363-364; providers/openai_decisions.py:207-208).
+# Luna's upstream is the YAML's upstream_provider; JEV's comes from its driver's model_defaults
+# (providers/jev/decisions.py:26-28; registry.py:253-254, 275-276; openai_decisions.py:191-192).
 APIS = {
     "openai_decisions": ("gpt-6-luna-decisions", "openai"),
     "jev_decisions": ("jev-1.13", "typesafe"),
 }
 
 # With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
-# oldest 10 (harnesses/default/context.py:27-36), and one holding 51 turns archives the oldest 10
-# (context.py:262-272). Decision k carries k earlier turns plus its own frame.
+# oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
+# (context.py:295-305). Decision k carries k earlier turns plus its own frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
-JEV_LEDGER_HEADER = "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs;"  # jev/context.py:48
+# entity/context_policy.py:30
+JEV_LEDGER_HEADER = "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs;"
 
 
 @pytest.fixture(autouse=True)
 def dummy_key(monkeypatch):
-    """The YAMLs name OPENROUTER_API_KEY (openai_decisions.py:61); create_agent's .env loading
+    """The YAMLs name OPENROUTER_API_KEY (openai_decisions.py:82); create_agent's .env loading
     only fills unset variables (providers/registry.py:38), so this dummy wins."""
     monkeypatch.setenv("OPENROUTER_API_KEY", DUMMY_KEY)
 
@@ -65,7 +66,7 @@ def dummy_key(monkeypatch):
 def _play(api, decisions, run_dir, *, task, instruction, scene=None):
     key, upstream = APIS[api]
     with DecisionsStub(upstream=upstream) as stub:
-        # The runner's config (runner.py:1539-1544), with the YAML's base_url at the stub.
+        # The runner's config (runner.py:1550-1555), with the YAML's base_url at the stub.
         config = catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed").model_copy(
             update={"api_base_url": stub.base_url}
         )
@@ -116,8 +117,8 @@ def _runtime(record: dict) -> dict:
 
 
 def _check_requests(api: str, records: list[dict]) -> None:
-    """One POST per question attempt (openai_decisions.py:184), the route block only for Luna
-    (openai_decisions.py:83-88; providers/jev/decisions.py:17-18)."""
+    """One POST per question attempt (openai_decisions.py:168), the route block only for Luna
+    (openai_decisions.py:108-113; providers/jev/decisions.py:24-25)."""
     for record in records:
         for request in record["requests"]:
             assert request["path"] == "/api/alpha/decisions"
@@ -130,7 +131,7 @@ def _check_requests(api: str, records: list[dict]) -> None:
 
 def _check_composition(records: list[dict]) -> None:
     """Decision 1 composes the name; decision 15 uses every other edit and cancels
-    (selection.py:268-326)."""
+    (selection.py:356-414)."""
     typed = records[1]
     assert typed["result"]["raw"] == '{"action": "type", "text": "Ada Lovelace"}'
     composed = _runtime(typed)["jev_text_composition"]
@@ -160,7 +161,7 @@ def _check_composition(records: list[dict]) -> None:
 
 def _check_grouping(records: list[dict]) -> None:
     """261 candidates: groups of 255 and 6 with the group note, then their two winners
-    (selection.py:156-212)."""
+    (selection.py:165-229)."""
     grouped = records[script.GROUPED_DECISION]
     assert len(grouped["requests"]) == 3
     assert _criteria_sizes(grouped) == [255, 6, 2]
@@ -182,8 +183,8 @@ def _check_history_counters(records: list[dict]) -> None:
 
 
 def _check_luna_history(records: list[dict]) -> None:
-    """The transcript drops a folded turn's image and keeps a placeholder observation; the
-    ledger joins the first string (openai_decisions.py:141-163; default/context.py:437-449)."""
+    """The transcript drops a folded turn's image and keeps a placeholder observation; the ledger
+    joins the first string (decisions/history.py:54-79; default/request.py:53-55, 155-161)."""
     states = [_bodies(r)[0]["state"] for r in records]
     images = [sum(isinstance(entry, dict) for entry in state) for state in states]
     placeholders = [
@@ -205,9 +206,9 @@ def _check_luna_history(records: list[dict]) -> None:
 
 def _check_jev_history(records: list[dict]) -> None:
     """JEV's digest reads only each older turn's observation id, action and feedback
-    (jev/context.py:66-77), and a fold keeps the observation id (entity/model.py:102-126). A fold
-    therefore changes no request, and only the runtime counter shows it. The ledger is compacted
-    into its own message (jev/context.py:38-55)."""
+    (default/request.py:138-141; decisions/history.py:113-126), and a fold keeps the observation id
+    (entity/model.py:146-170). A fold therefore changes no request, and only the runtime counter
+    shows it. The ledger is compacted into its own message (decisions/history.py:102-112)."""
     for record in records:
         for body in _bodies(record):
             text = json.dumps(body, ensure_ascii=False)
@@ -222,7 +223,7 @@ def _check_jev_history(records: list[dict]) -> None:
 def test_long_scenario(api, tmp_path):
     """60 decisions on the web form: text composition, a grouped decision, the first fold and the
     first archive. Pointer composition is not in it: only the game prompt offers pointer
-    candidates (harnesses/jev/observation.py; game_candidates.py:56-72), which JEV refuses,
+    candidates (harnesses/jev/observation.py; game_candidates.py:55-71), which JEV refuses,
     so it is in the Luna game snapshot."""
     header, records = _play(
         api, script.WEB_LONG, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION
@@ -242,8 +243,8 @@ def test_long_scenario(api, tmp_path):
 
 
 def test_luna_game_snapshot(tmp_path):
-    """The game prompt (context policy item 11) and game candidates (harnesses/jev/observation.py;
-    selection.py:59) with keys, pointer, hold and release choices."""
+    """The game prompt (context policy item 11) and game candidates
+    (harnesses/jev/observation.py:43, 70) with keys, pointer, hold and release choices."""
     header, records = _play(
         "openai_decisions",
         script.GAME_DECISIONS,
@@ -272,15 +273,15 @@ def test_luna_game_snapshot(tmp_path):
         {"action": "mouse_down", "target": "R1@1000,512"},
     ]
     assert raws[5] == {"action": "hold_key", "key": "ArrowLeft+Space", "duration": 0.5}
-    # The environment's refusal reaches the next request (harnesses/default/harness.py:1536-1538).
+    # The environment's refusal reaches the next request (harnesses/default/harness.py:1612-1614).
     assert records[1]["commit"]["detail"] == OUTSIDE_PAGE
     assert OUTSIDE_PAGE in json.dumps(_bodies(records[2])[0]["state"], ensure_ascii=False)
     _settle("game", header, records, tmp_path)
 
 
 def test_luna_question_retry(tmp_path):
-    """A transient failure is retried for that question alone (selection.py:240-266); the
-    decision-level retry never runs for Decisions (harnesses/jev/driver.py:46-52)."""
+    """A transient failure is retried for that question alone (selection.py:313-354); the
+    decision-level retry never runs for Decisions (providers/decisions/driver.py:45-51)."""
     header, records = _play(
         "openai_decisions", script.RETRY, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION
     )
@@ -295,8 +296,8 @@ def test_luna_question_retry(tmp_path):
 
 
 def test_luna_context_overflow(tmp_path):
-    """A rejected group is bisected (selection.py:173-186); a rejected one-option question ends
-    the decision, since canonical history is never reduced (selection.py:230-233)."""
+    """A rejected group is bisected (selection.py:189-203); a rejected one-option question ends
+    the decision, since canonical history is never reduced (selection.py:249-255)."""
     header, records = _play(
         "openai_decisions",
         script.LUNA_OVERFLOW,
@@ -317,7 +318,7 @@ def test_luna_context_overflow(tmp_path):
 
 def test_jev_context_overflow(tmp_path):
     """JEV bisects too; a rejected one-option question drops the oldest messages after the system
-    message, for that question only (selection.py:214-238)."""
+    message, for that question only (selection.py:231-261)."""
     header, records = _play(
         "jev_decisions",
         script.JEV_OVERFLOW,

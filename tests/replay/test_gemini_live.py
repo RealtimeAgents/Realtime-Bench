@@ -3,19 +3,19 @@
 Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it the
 run is compared with tests/replay/baselines/.
 
-The harness builds OpenAI-format messages for this API on every turn, but the driver never reads
-them (harnesses/default/harness.py:1209-1217; providers/gemini/live.py:771-794): the model sees the
-session's setup, the history replayed on each new connection and one observation per decision.
+The harness builds a canonical request for this API on every turn, but the driver sends only part
+of it (harnesses/default/harness.py:1257-1266; providers/gemini/live.py:667-752): the model sees
+the session's setup, the history replayed on each new connection and one observation per decision.
 The baseline is therefore what reaches the WebSocket, the client frames of every connection in
 arrival order, plus each decision's parsed action, usage and commit.
 
 Scripts:
-- the long scenario for the two maintained presets (providers/registry.py:52-75), which differ in
+- the long scenario for the two maintained presets (live.py:70-76, 162-177), which differ in
   the completion signal and the tool acknowledgement;
-- the driver defaults, reached by a model id without a profile (evaluation/runner.py:1546-1553):
-  realtime_input observations and native_tools history (live.py:62-69);
+- the driver defaults, reached by a model id without a preset (evaluation/runner.py:1557-1564):
+  realtime_input observations and native_tools history (live.py:55-67);
 - a resume that the server rejects, which falls back to replaying the history
-  (live.py:1290-1328).
+  (live.py:1252-1284).
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ from .ws_gemini_live import AWAIT_ACK, REALTIME_INPUT_ORDER, LiveStub, WireNorma
 BASELINES = Path(__file__).parent / "baselines"
 API_KEY = "replay-dummy-key"
 
-# The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py:92-98,
-# harnesses/default/harness.py:972-980): B is --tokens-per-frame (entity/config.py:33,
-# evaluation/runner.py:1346-1351) and the episode has --max-minutes 5 * 60 * fps ticks
-# (runner.py:1359, 1773). The catalog's native limit for these models is LiteLLM's 65536
-# (providers/registry.py:207-233), so the runtime cap min(65536, (N - t_k) * B) (runner.py:861-887)
+# The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py:146-154,
+# providers/preflight.py:139-144): B is --tokens-per-frame (entity/config.py:33,
+# evaluation/runner.py:1354-1359) and the episode has --max-minutes 5 * 60 * fps ticks
+# (runner.py:1367, 1775). The catalog's native limit for these models is LiteLLM's 65536
+# (providers/registry.py:130-156), so the runtime cap min(65536, (N - t_k) * B) (runner.py:863-889)
 # falls below it from t_k = 45 on and is 61696 at the last decision.
 FPS = 1.0
 TOKENS_PER_FRAME = DEFAULT_TOKENS_PER_FRAME
@@ -56,9 +56,9 @@ MAX_TICKS = 300
 FIRST_CAPPED_STEP = 45
 
 # Decision k (0-based) holds k earlier turns plus its own frame. A 21st active screenshot folds the
-# oldest 10 (entity/config.py:35-36; harnesses/default/context.py:27-36) and a 51st turn archives the
-# oldest 10 (config.py:37-38; context.py:262-272). Either change rebuilds the session, because a
-# persistent Gemini session cannot be edited in place (context.py:403-412; live.py:92-98). Counted
+# oldest 10 (entity/config.py:35-36; harnesses/default/context.py:24-32) and a 51st turn archives
+# the oldest 10 (config.py:37-38; context.py:295-305). Either change rebuilds the session, because a
+# persistent Gemini session cannot be edited in place (context.py:444-454; live.py:146-154). Counted
 # from 1, these are decisions 21, 31, 41 and 51.
 REBUILD_STEPS = (20, 30, 40, 50)
 FOLDED = 10
@@ -75,7 +75,7 @@ AUDIO_MIME = "audio/pcm;rate=24000"
 
 def native_reply(reply: str) -> tuple[list[tuple[str, dict]], str]:
     """A scenario reply as Gemini gives it on the function_call channel, where only native calls
-    can carry an action (harness.py:1219-1223; parsing.py:837-955): the calls it makes, or what
+    can carry an action (harness.py:1268-1272; parsing.py:837-955): the calls it makes, or what
     it says when the reply holds no action."""
     text = reply
     if text.startswith("```"):  # a fenced action
@@ -96,7 +96,7 @@ def native_reply(reply: str) -> tuple[list[tuple[str, dict]], str]:
 
 def usage_metadata(k: int, step: Step, speech: str) -> dict:
     """Usage in the scale of scenario.replies. Speech is the forced AUDIO output, which the token
-    clock does not charge (live.py:796-956). Zero counts are omitted, as in the protobuf JSON."""
+    clock does not charge (live.py:754-914). Zero counts are omitted, as in the protobuf JSON."""
     prompt = 1500 + 260 * k
     response = 4 + len(step.reply) // 4
     thoughts = len(step.reasoning) // 4
@@ -115,7 +115,7 @@ def usage_metadata(k: int, step: Step, speech: str) -> dict:
 
 
 def turn_complete(k: int, usage: dict) -> list[dict]:
-    """completion_signal=turn_complete ends the turn at turnComplete (live.py:977-981)."""
+    """completion_signal=turn_complete ends the turn at turnComplete (live.py:935-939)."""
     return [
         {"serverContent": {"generationComplete": True}},
         {"serverContent": {"turnComplete": True}, "usageMetadata": usage},
@@ -124,7 +124,7 @@ def turn_complete(k: int, usage: dict) -> list[dict]:
 
 def interaction_idle(k: int, usage: dict) -> list[dict]:
     """completion_signal=interaction_idle spans intermediate turnComplete messages until
-    interactionStatus is IDLE (live.py:983-1007). The SDK ends its receive iterator at a bare
+    interactionStatus is IDLE (live.py:941-965). The SDK ends its receive iterator at a bare
     turnComplete, so the driver reopens it, and continues it past an IN_PROGRESS status
     (google/genai/live.py:87-99, 471-475); alternate decisions take each shape."""
     intermediate = {"turnComplete": True}
@@ -139,13 +139,13 @@ def interaction_idle(k: int, usage: dict) -> list[dict]:
 @dataclass(frozen=True)
 class Preset:
     name: str
-    model: str  # catalog key, or the model id of a model without a profile
+    model: str  # catalog key, or the model id of a model without a preset
     history_format: str
-    ack_options: dict  # what each queued acknowledgement adds (live.py:323-329)
+    ack_options: dict  # what each queued acknowledgement adds (live.py:368-374)
     completion: Callable[[int, dict], list[dict]]
 
 
-# The two maintained presets (providers/registry.py:52-75) and the driver defaults (live.py:62-69).
+# The two maintained presets (live.py:70-76, 162-177) and the driver defaults (live.py:55-67).
 TOOL_TRANSCRIPT = Preset(
     "tool-transcript",
     "gemini-3.8-live",
@@ -168,8 +168,8 @@ def turn_script(
 ) -> list:
     """The server's reply to decision k: speech or calls, a resumption update, then completion.
 
-    ``resumable=False`` withholds the resumption handle (live.py:1011-1016); ``go_away`` asks the
-    client to reconnect after the turn (live.py:1022-1045; context.py:549-558).
+    ``resumable=False`` withholds the resumption handle (live.py:969-974); ``go_away`` asks the
+    client to reconnect after the turn (live.py:980-1003; context.py:592-602).
     """
     calls, speech = native_reply(step.reply)
     script = []
@@ -208,8 +208,8 @@ def turn_script(
 def live_env(monkeypatch):
     """Client settings for the stub, set explicitly so that a repository .env cannot fill them
     (create_agent loads it with setdefault: harnesses/registry.py:10, providers/registry.py:15-39)."""
-    monkeypatch.setenv("GEMINI_API_KEY", API_KEY)  # key slot 1 (live.py:108-119)
-    monkeypatch.setenv("GEMINI_API_KEY_START_SLOT", "1")  # live.py:126-135
+    monkeypatch.setenv("GEMINI_API_KEY", API_KEY)  # key slot 1 (live.py:186-197)
+    monkeypatch.setenv("GEMINI_API_KEY_START_SLOT", "1")  # live.py:204-214
     # Either would switch the client to Vertex AI (google/genai/_api_client.py:655-681).
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "")
     monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "")
@@ -219,7 +219,7 @@ def live_env(monkeypatch):
 
 
 def catalog_config(key: str) -> ModelConfig:
-    """What the runner builds for a catalog key (runner.py:1424-1431, 1539-1544). Its
+    """What the runner builds for a catalog key (runner.py:1435-1442, 1550-1555). Its
     api_base_url stays None; the stub is reached through GOOGLE_GEMINI_BASE_URL."""
     effort = catalog.get(key).defaults["reasoning_effort"]
     return catalog.to_model_config(key, fps=FPS, reasoning_effort=effort)
@@ -240,7 +240,7 @@ def run_live_steps(
     records, results = [], []
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
-        budget = episode.budget(observation.tick_number)  # t_k: runner.py:851
+        budget = episode.budget(observation.tick_number)  # t_k: runner.py:853
         first = len(stub.events)
         agent.configure_decision(budget)
         agent.stream_prefill(observation)
@@ -262,10 +262,10 @@ def run_live_steps(
                 "transport_output_tokens": budget.transport_output_tokens,
             },
             "action": result["action"],
-            # A failed decision has no action protocol (harnesses/default/harness.py:1317-1329).
+            # A failed decision has no action protocol (harnesses/default/harness.py:1385-1397).
             "action_protocol": result.get("action_protocol"),
             "usage": result["usage"],
-            # What the runner charges the token clock with (runner.py:207-229).
+            # What the runner charges the token clock with (runner.py:209-231).
             "clock_usage": {
                 name: result.get(name)
                 for name in (
@@ -278,7 +278,7 @@ def run_live_steps(
         }
         if result.get("invalid_reason"):
             # run_stream invalidates the episode and stops without committing
-            # (runner.py:453-459, 1166-1167).
+            # (runner.py:455-461, 1168-1169).
             stub.wait_until_idle()
             invalid = {name: result.get(name) for name in ("invalid_reason", "invalid_detail")}
             records.append({**record, "frames": step_frames(stub, first), **invalid})
@@ -386,9 +386,9 @@ def client_messages(record: dict, key: str) -> list[dict]:
 
 def seed_and_observations(record: dict) -> tuple[list[dict], list[dict]]:
     """A decision's client_content split into the history seeded after a setup with
-    historyConfig, up to the message completing it (live.py:644-653), and the observations
-    (live.py:721-741). A rebuild seeds before the observation, a replay after the turn seeds
-    after it (harnesses/default/context.py:403-414, 549-558)."""
+    historyConfig, up to the message completing it (live.py:602-611), and the observations
+    (live.py:686-697). A rebuild seeds before the observation, a replay after the turn seeds
+    after it (harnesses/default/context.py:444-456, 592-602)."""
     seed, observations, seeding = [], [], False
     for frame in record["frames"]:
         message = frame["msg"]
@@ -409,7 +409,7 @@ def seed_contents(record: dict) -> list[dict]:
 
 
 def observation_prompt(record: dict) -> str:
-    """The text of the decision's observation, for either transport (live.py:721-769)."""
+    """The text of the decision's observation, for either transport (live.py:686-725)."""
     realtime_input = client_messages(record, "realtime_input")
     texts = [message["text"] for message in realtime_input if "text" in message]
     if texts:
@@ -448,7 +448,7 @@ def check_rebuilds(steps: list[dict], results: list[dict]) -> None:
 
 def check_rejection_feedback(steps: list[dict]) -> None:
     """A rejected action's detail reaches the model at the start of the next frame's prompt on a
-    persistent session (harness.py:1005-1013, 1526-1546)."""
+    persistent session (harness.py:1071-1079, 1602-1622)."""
     rejected = [k for k, record in enumerate(steps) if record["commit"]["detail"]]
     assert rejected
     for k in rejected:
@@ -488,12 +488,12 @@ DEFAULT_SCENARIO = [
 
 
 def test_driver_default_short(live_env, tmp_path):
-    """A model id without a profile runs on the driver defaults (live.py:62-84). The goAway of
-    decision 1 comes without a resumption handle, so the session is replayed at once
-    (live.py:1280-1328), in the native_tools format with the thought-signature sentinel
-    (live.py:43-47, 459-463)."""
+    """A model id without a preset runs on the driver defaults (live.py:55-67, 96-102). The goAway
+    of decision 1 comes without a resumption handle, so the session is replayed at once
+    (live.py:1242-1284), in the native_tools format with the thought-signature sentinel
+    (live.py:37-41, 485-490)."""
     preset = DRIVER_DEFAULT
-    config = ModelConfig(  # runner.py:1434, 1546-1553 for --adapter gemini_live --model <id>
+    config = ModelConfig(  # runner.py:1445, 1557-1564 for --adapter gemini_live --model <id>
         adapter_type="gemini_live", model_name=preset.model, fps=FPS, reasoning_effort="low"
     )
     turns = [
@@ -523,7 +523,7 @@ def test_driver_default_short(live_env, tmp_path):
 
 def test_resume_failure_short(live_env, tmp_path):
     """After a goAway the driver resumes with the promoted handle; the server rejects it, and the
-    driver replays the full history on a new session instead (live.py:1290-1328)."""
+    driver replays the full history on a new session instead (live.py:1252-1284)."""
     preset = TOOL_TRANSCRIPT
     config = catalog_config(preset.model)
     scenario = LONG_SCENARIO[:3]

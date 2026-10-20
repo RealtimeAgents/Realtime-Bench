@@ -1,7 +1,7 @@
 """Scripted Gemini Live endpoint: a TLS WebSocket server on 127.0.0.1 with an OS-assigned port.
 
 The gemini_live driver opens every session with google-genai's live client
-(providers/gemini/live.py:175-185, 639). With an API key the client connects to
+(providers/gemini/live.py:225-234, 597). With an API key the client connects to
 ``wss://<base>/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent``
 (google/genai/live.py:963-996, 1117-1119), always over TLS: the base URL's scheme is replaced by
 wss (google/genai/_api_client.py:1297-1304). The catalog configs carry no api_base_url, so the
@@ -11,7 +11,7 @@ trust its certificate through SSL_CERT_FILE, which the client reads when the dri
 
 Each connection runs BidiGenerateContent the way the driver uses it: one ``setup`` answered by
 ``setupComplete`` (google/genai/live.py:1120-1161), a seeded history when the setup asks for one
-(live.py:640-653), then one scripted reply per observation, consumed in order across
+(live.py:598-611), then one scripted reply per observation, consumed in order across
 connections. Every frame is kept in arrival order with its connection number. The server also
 checks what the protocol makes it acknowledge: the setup of every reconnect, the seeded history
 against the tool exchanges it acknowledged before, and each queued tool acknowledgement.
@@ -44,24 +44,25 @@ from . import baseline
 
 BIDI_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 # The driver acknowledges every call as queued, before the runner executes it
-# (providers/gemini/live.py:36-41, 1158-1172).
+# (entity/context_policy.py:41-46; providers/gemini/live.py:1119-1133).
 QUEUED_RESPONSE = {
     "status": "queued_not_executed",
     "instruction": (
         "End this turn silently. Await the next observation for the actual execution result."
     ),
 }
-# The tool_transcript history replays past exchanges as one model text each (live.py:403-420).
+# The tool_transcript history replays past exchanges as one model text each (live.py:462-466;
+# harnesses/default/request.py:105-111).
 TRANSCRIPT_HEADER = (
     "Historical GUI tool exchanges, already acknowledged "
     "(current actions must use native functions):\n"
 )
-SEED_CONTENTS_PER_MESSAGE = 12  # live.py:51, 567-601
-# realtime_input sends one observation as these five messages (live.py:742-763).
+SEED_CONTENTS_PER_MESSAGE = 12  # live.py:45, 523-557
+# realtime_input sends one observation as these five messages (live.py:698-719).
 REALTIME_INPUT_ORDER = ("activityStart", "video", "text", "audio", "activityEnd")
 # Answers an observation that has no scripted reply. The driver classifies 1008 with this reason
-# as FATAL (live.py:215-275), which the shared policy never retries (entity/model.py:309-311,
-# 326-329), so the decision fails at once instead of waiting for a reply.
+# as FATAL (live.py:267-327), which the shared policy never retries (entity/model.py:358-360,
+# 375-378), so the decision fails at once instead of waiting for a reply.
 UNSCRIPTED_CLOSE = (1008, "observation beyond the script")
 
 AWAIT_ACK = object()  # script step: read the acknowledgement of every call sent so far
@@ -106,7 +107,7 @@ class LiveStub:
 
     ``turns`` holds one reply per observation. A reply is a list of server frames, with
     AWAIT_ACK where the client must acknowledge the calls sent before it. ``history_format`` and
-    ``ack_options`` are the client's Live options the checks depend on (live.py:62-69, 323-329).
+    ``ack_options`` are the client's Live options the checks depend on (live.py:55-67, 368-374).
     ``setup_closes`` maps a resumption handle to the close code and reason that answer a setup
     resuming with it.
     """
@@ -180,8 +181,8 @@ class LiveStub:
         """Block until the newest connection waits for the next observation, or has ended.
 
         The driver returns from a decision once it has sent its last frame, which can still be in
-        flight, for example the seed of a history replayed after the turn (live.py:649-653;
-        harnesses/default/context.py:549-558). Waiting here assigns every frame to the decision
+        flight, for example the seed of a history replayed after the turn (live.py:607-611;
+        harnesses/default/context.py:592-602). Waiting here assigns every frame to the decision
         that sent it. A decision ends on a closed connection when the stub closed it for an
         observation beyond the script.
         """
@@ -230,7 +231,7 @@ class LiveStub:
             await self._session(ws, conn)
         except ConnectionClosed as closed:
             # The driver closes every session it replaces or ends with a close frame
-            # (live.py:603-617).
+            # (live.py:559-574).
             self._record(
                 conn, "c2s_close", {"code": closed.rcvd.code, "reason": closed.rcvd.reason}
             )
@@ -264,16 +265,16 @@ class LiveStub:
         handle = setup["sessionResumption"].get("handle")
         if handle is not None:
             # A resume carries the handle promoted by the last clean turn and no history
-            # (live.py:619-638, 1280-1298).
+            # (live.py:576-596, 1242-1260).
             self._check(handle == self._resume_handle, f"conn {conn}: resumes with {handle!r}")
             self._check("historyConfig" not in setup, f"conn {conn}: a resume seeds history")
         else:
-            # Every later session replays the history it replaces (live.py:626-638, 1311-1318).
+            # Every later session replays the history it replaces (live.py:584-596, 1273-1274).
             self._check(
                 ("historyConfig" in setup) == (conn > 1),
                 f"conn {conn}: historyConfig {setup.get('historyConfig')!r}",
             )
-        # Everything else is the same LiveConnectConfig on every connect (live.py:331-350).
+        # Everything else is the same LiveConnectConfig on every connect (live.py:376-397).
         session = {
             name: value
             for name, value in setup.items()
@@ -289,7 +290,7 @@ class LiveStub:
 
     async def _seed(self, ws, conn: int) -> int:
         """Read the seeded history: client_content messages, the last one completing the turn
-        (live.py:644-653). Returns the number of screenshots in it."""
+        (live.py:602-611). Returns the number of screenshots in it."""
         self._set_state(conn, "seeding")
         contents = []
         while True:
@@ -305,7 +306,7 @@ class LiveStub:
         ledgers = [
             i for i, text in enumerate(texts) if text.startswith(ARCHIVED_ACTION_LEDGER_HEADER)
         ]
-        # The archived-action ledger is the first content, from the user (live.py:354-366).
+        # The archived-action ledger is the first content, from the user (live.py:413-419).
         self._check(
             ledgers in ([], [0]) and all(contents[i]["role"] == "user" for i in ledgers),
             f"conn {conn}: ledger contents at {ledgers}",
@@ -324,7 +325,7 @@ class LiveStub:
         """The tool exchanges a seed replays, in the form _play records them."""
         parts = [part for content in contents for part in content["parts"]]
         if self._history_format == "tool_transcript":
-            # Past calls are model text, never function parts (live.py:403-420).
+            # Past calls are model text, never function parts (live.py:462-466).
             self._check(
                 not any("functionCall" in part or "functionResponse" in part for part in parts),
                 f"conn {conn}: function parts in a tool_transcript seed",
@@ -336,7 +337,7 @@ class LiveStub:
                     exchanges += json.loads(text[len(TRANSCRIPT_HEADER) :])
             return exchanges
         # native_tools: a model content of function calls, then a user content of their
-        # responses (live.py:421-499).
+        # responses (live.py:467-520).
         exchanges = []
         for content in contents:
             calls = [part["functionCall"] for part in content["parts"] if "functionCall" in part]
@@ -359,7 +360,7 @@ class LiveStub:
 
     async def _observation(self, ws, conn: int) -> None:
         """Read one observation: a completed client_content turn, or the realtime_input
-        sequence (live.py:721-769)."""
+        sequence (live.py:686-725)."""
         message = await self._recv(ws, conn)
         self._set_state(conn, "generating")
         if "client_content" in message:
@@ -377,8 +378,8 @@ class LiveStub:
         )
 
     async def _play(self, ws, conn: int, turn: list) -> None:
-        # Sending an observation clears the client's resumption handles (live.py:718-720); only
-        # an update within this turn can supply the next one (live.py:1011-1021).
+        # Sending an observation clears the client's resumption handles (live.py:683-685); only
+        # an update within this turn can supply the next one (live.py:969-979).
         self._resume_handle = None
         calls = []
         for step in turn:
@@ -397,7 +398,7 @@ class LiveStub:
 
     async def _acknowledgement(self, ws, conn: int, calls: list[dict]) -> None:
         """All calls of one toolCall are acknowledged together, once each, as queued
-        (live.py:1158-1172)."""
+        (live.py:1119-1133)."""
         responses = (await self._recv(ws, conn))["tool_response"]["functionResponses"]
         expected = [
             {
@@ -424,8 +425,8 @@ class WireNormalizer(baseline.Normalizer):
     """baseline.Normalizer for Gemini Live frames.
 
     google-genai sends bytes as URL-safe base64 (google/genai/_common.py:579, 699-729). The driver
-    sends bytes in three blobs: a content part's inlineData (providers/gemini/live.py:375-381,
-    731-736) and realtime_input's video and audio (live.py:748-753, 760-762). Each blob's data
+    sends bytes in three blobs: a content part's inlineData (providers/gemini/live.py:445-451)
+    and realtime_input's video and audio (live.py:704-709, 716-718). Each blob's data
     becomes the SHA-256 of its decoded bytes; its other keys, and everything outside the blobs,
     are normalized as for the chat payloads.
     """
