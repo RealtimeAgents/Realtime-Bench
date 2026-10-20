@@ -246,10 +246,11 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
     suite_id = raw.get("suite", "public")
     if not isinstance(suite_id, str):
         raise ValueError("suite must be NAME or NAME@MAJOR.MINOR")
+    from realtime_framework.providers.registry import MODELS_DIR
     from realtime_framework.providers.registry import bridge_definition
     from realtime_framework.providers.registry import load_definitions
 
-    model_files = load_definitions(ROOT / "configs" / "models")
+    model_files = load_definitions(MODELS_DIR)
     model_files += [
         (key, bridge_definition(key)) for key in ("remote-vlm", "litellm-vlm")
     ]

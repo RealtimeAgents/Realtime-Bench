@@ -444,7 +444,7 @@ class ModelSpec:
     key: str  # stable CLI id, e.g. "gpt-5.2" (primary identifier)
     family: str  # streaming | vlm
     provider: str  # display/grouping label, e.g. openai | openrouter | gemini
-    adapter_type: str  # registered API key (providers.registry.APIS)
+    adapter_type: str  # registered API key (providers.registry.APIS) or package.module:Class
     model_name: str  # backend deployment/model id
     native_output_limit: Optional[int] = None  # physical model/provider cap; never benchmark B
     native_output_limit_source: Optional[str] = None  # endpoint | litellm | None (unknown)
