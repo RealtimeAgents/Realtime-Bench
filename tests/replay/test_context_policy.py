@@ -15,12 +15,7 @@ from realtime_framework.entity.config import (
     DEFAULT_VISUAL_FOLD_BLOCK_SIZE,
 )
 from realtime_framework.entity.context_policy import PHASE1_TEXTS, phase1_context_policy
-from realtime_framework.harnesses.default.harness import ACTION_CHANNEL_PROFILES
-from realtime_framework.harnesses.jev.prompts import (
-    JEV_PROFILE,
-    MULTIMODAL_CHOICE_PROFILE,
-    MULTIMODAL_GAME_CHOICE_PROFILE,
-)
+from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import APIS, adapter_class
 
@@ -144,23 +139,28 @@ def test_gemini_tool_history_format():
     )
 
 
+# The profile each agent picked before item 11 existed: by action channel, and for choice models
+# by observation modality and scenario. JEV rejects games (providers/preflight.py).
+CHANNEL_PROFILES = {"text_json": "standard_vlm", "function_call": "function_call"}
+
+
 @pytest.mark.parametrize("api", sorted(APIS))
 def test_prompts_and_observation_form(api):
     caps = capabilities(api)
     path = POLICY.paths[api]
     if caps.action_channel == "choice":
-        # harnesses/jev/harness.py:43-47, 58-68: JEV rejects games.
         if caps.observation_modality == "screenshot":
             expected = {
-                "realtime": MULTIMODAL_CHOICE_PROFILE.name,
-                "browser_game": MULTIMODAL_GAME_CHOICE_PROFILE.name,
+                "realtime": "multimodal_decisions",
+                "browser_game": "multimodal_game_decisions",
             }
         else:
-            expected = {"realtime": JEV_PROFILE.name, "browser_game": None}
+            expected = {"realtime": "jev_decisions", "browser_game": None}
     else:
-        profile = ACTION_CHANNEL_PROFILES[caps.action_channel]  # harness.py:937
-        expected = {"realtime": profile.name, "browser_game": profile.name}
+        profile = CHANNEL_PROFILES[caps.action_channel]
+        expected = {"realtime": profile, "browser_game": profile}
     assert dict(path.prompts) == expected
+    assert {name for name in path.prompts.values() if name is not None} <= set(INTERACTION_PROFILES)
     # evaluation/runner.py:1601-1605 switches choice and text models to the observation JSON.
     text_observation = caps.observation_modality == "text" or caps.action_channel == "choice"
     assert path.observation == (
