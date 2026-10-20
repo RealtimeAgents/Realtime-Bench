@@ -1,25 +1,29 @@
 """Every pre-run check that can reject a configuration, at each entry point that applies it.
 
 One test per condition, asserting the exact message each check produced before the checks were
-collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0). The runner's own
-rules run in check_episode (evaluation/runner.py:2242); its argparse checks and those of
-identity_main and the Harbor trial worker are exercised through their main functions, which fail
-before any container or network is used.
+collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0); the context-policy
+checks came later and are pinned as written. The runner's own rules run in check_episode
+(evaluation/runner.py:2242); its argparse checks and those of identity_main and the Harbor trial
+worker are exercised through their main functions, which fail before any container or network is
+used.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 
 import pytest
 
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
 from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.context_policy import DecisionHistory, phase1_context_policy
 from realtime_framework.evaluation.config import effective_run_config, load_benchmark
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
+    check_context_policy,
     check_episode,
     check_token_budget,
 )
@@ -311,6 +315,84 @@ def test_episode_rule_order(key, effort, message):
     fails(lambda: episode(preset(key, fps=2.0, reasoning_effort=effort)), message)
 
 
+# The context policy against the encoder's declarations (check_context_policy, the last rule of
+# check_episode). No catalog model breaks a rule, so each case changes one item of its policy.
+
+
+def test_context_policy_fits_every_catalog_model():
+    for key in catalog.CATALOG:
+        episode(preset(key))
+
+
+def policy_check(config, **values):
+    driver = catalog.adapter_class(config.adapter_type)
+    policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
+    return lambda: check_context_policy(driver, replace(policy, **values), config)
+
+
+@pytest.mark.parametrize(
+    "key, values, message",
+    [
+        (
+            "gpt-realtime-2",
+            {"feedback": "separate_message"},
+            "The openai_realtime API cannot place execution feedback as separate_message",
+        ),
+        (
+            "jev-1.13",
+            {"feedback": "separate_message"},
+            "The jev_decisions API cannot place execution feedback as separate_message",
+        ),
+        (
+            "gemini-live",
+            {"ledger_role": "instruction"},
+            "The gemini_live API has no instruction role for the action ledger",
+        ),
+        (
+            "kimi-k3",
+            {"reasoning_replay": False},
+            "The moonshot API requires past reasoning in later requests; "
+            "its context policy sends none",
+        ),
+        (
+            "claude-opus-5",
+            {"reasoning_replay": True},
+            "The openrouter API cannot send past reasoning back",
+        ),
+        (
+            "jev-1.13",
+            {"decision_history": DecisionHistory("turns", "raise")},
+            "The jev_decisions API cannot replay history as turns",
+        ),
+        (
+            "gpt-6-luna-decisions",
+            {"observation": "observation_json_text"},
+            "The openai_decisions API takes screenshot input, not the observation_json_text "
+            "observation",
+        ),
+        (
+            "jev-1.13",
+            {"observation": "observation_json_screenshot"},
+            "The jev_decisions API takes text input, not the observation_json_screenshot "
+            "observation",
+        ),
+    ],
+    ids=["live-feedback", "digest-feedback", "ledger-role", "reasoning-required",
+         "reasoning-unsupported", "history-form", "screenshot-input", "text-input"],
+)
+def test_context_policy_item(key, values, message):
+    fails(policy_check(preset(key), **values), message)
+
+
+def test_context_window_needs_a_request_estimate():
+    # Luna estimates its requests against its window; JEV declares no estimate.
+    policy_check(preset("gpt-6-luna-decisions"))()
+    fails(
+        policy_check(preset("jev-1.13", context_window_tokens=32768), pressure_archive=True),
+        "The jev_decisions API declares a context window but no estimate of its requests",
+    )
+
+
 # Catalog status and reasoning effort (unchanged entry points)
 
 
@@ -424,3 +506,24 @@ def test_declared_methods_exist():
             if getattr(capabilities, flag):
                 assert callable(getattr(driver, method, None)), (api, method)
         assert capabilities.interaction_modes == {"turn_based"}
+
+
+def test_declared_roles_are_the_encoders_roles():
+    """The roles each encoder maps a request intent onto (openai_realtime_session.py ROLES,
+    gemini/live.py _ROLES); Decisions state has none."""
+    from realtime_framework.providers import openai_realtime_session
+    from realtime_framework.providers.gemini import live
+
+    for api, roles in (
+        ("openai_realtime", openai_realtime_session.ROLES),
+        ("gemini_live", live._ROLES),
+    ):
+        assert set(catalog.adapter_class(api).capabilities.roles) == set(roles), api
+    for api in catalog.APIS:
+        capabilities = catalog.adapter_class(api).capabilities
+        assert capabilities.labels_instead_of_roles == (capabilities.action_channel == "choice")
+        assert bool(capabilities.roles) != capabilities.labels_instead_of_roles, api
+        assert (capabilities.max_choices is not None) == (capabilities.action_channel == "choice")
+        assert capabilities.server_context == (
+            "unknown" if capabilities.persistent_session else "none"
+        ), api

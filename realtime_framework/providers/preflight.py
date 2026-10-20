@@ -1,8 +1,9 @@
 """Pre-run checks: every rule that rejects a run configuration before an episode starts.
 
 Each rule reads only the registered driver class's declarations (capabilities, deployment,
-compat flags, option tables) and the configuration. Every entry point keeps the rules it applied
-before the checks were collected here:
+compat flags, option tables), the configuration and, for check_context_policy, the context
+policy the run resolves. Every entry point keeps the rules it applied before the checks were
+collected here:
 
 - runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
   check_token_budget;
@@ -18,6 +19,7 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.providers.gemini.live import (
     LIVE_OPTIONS,
     LIVE_REASONING_EFFORTS,
@@ -151,14 +153,52 @@ def check_session_config(driver, config) -> None:
         )
 
 
+_HISTORY_FORMS = {"canonical": "turns", "action_digest": "action_digest"}
+
+
+def check_context_policy(driver, policy, config) -> None:
+    """The context policy's items, held against what the encoder declares it can render."""
+    capabilities = driver.capabilities
+    api = config.adapter_type
+    if policy.feedback not in capabilities.feedback_placements:
+        raise ValueError(f"The {api} API cannot place execution feedback as {policy.feedback}")
+    if policy.ledger_role not in capabilities.roles and not capabilities.labels_instead_of_roles:
+        raise ValueError(f"The {api} API has no {policy.ledger_role} role for the action ledger")
+    if capabilities.reasoning_replay == "required" and not policy.reasoning_replay:
+        raise ValueError(
+            f"The {api} API requires past reasoning in later requests; "
+            "its context policy sends none"
+        )
+    if capabilities.reasoning_replay == "unsupported" and policy.reasoning_replay:
+        raise ValueError(f"The {api} API cannot send past reasoning back")
+    if (
+        policy.pressure_archive
+        and config.context_window_tokens is not None
+        and not capabilities.request_size_estimation
+    ):
+        raise ValueError(
+            f"The {api} API declares a context window but no estimate of its requests"
+        )
+    form = "turns" if policy.decision_history is None else policy.decision_history.form
+    if form != _HISTORY_FORMS[capabilities.history_replay]:
+        raise ValueError(f"The {api} API cannot replay history as {form}")
+    if (policy.observation == "observation_json_text") != (
+        capabilities.observation_modality == "text"
+    ):
+        raise ValueError(
+            f"The {api} API takes {capabilities.observation_modality} input, "
+            f"not the {policy.observation} observation"
+        )
+
+
 def check_episode(model_config, *, clock_mode, task) -> None:
     """The runner's rules, applied once before it builds the agent.
 
     Among themselves the rules keep the order in which they fired before: the clock check, then
     the driver's constructor, then initialize (the choice-task and frame-rate checks), then the
     session connect. All of them now precede the driver's construction, so the initialize and
-    connect rules are reported before a missing API key, which the constructor reports. ``task``
-    is the registered task (its category and task_id).
+    connect rules are reported before a missing API key, which the constructor reports. The context
+    policy is checked last. ``task`` is the registered task (its category and task_id).
     """
     adapter_type = model_config.adapter_type
     driver = adapter_class(adapter_type)
@@ -167,3 +207,5 @@ def check_episode(model_config, *, clock_mode, task) -> None:
     check_choice_task(driver, task)
     check_fps(driver, model_config)
     check_session_config(driver, model_config)
+    policy = phase1_context_policy().for_path(adapter_type, model_config.provider_options)
+    check_context_policy(driver, policy, model_config)
