@@ -109,6 +109,7 @@ from realtime_framework.entity.events import ProviderError
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeDriver
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import RuntimeTurnResult
 from realtime_framework.entity.model import SessionSeed
@@ -151,6 +152,8 @@ class RealtimeRuntime:
         self._state = RuntimeState.NEW
         self._state_lock = threading.RLock()
         self._epoch = 0
+        # Set when the current epoch ends; the request units of its generation stop retrying.
+        self._epoch_ended = threading.Event()
         self._active_generation: GenerationHandle | None = None
         self._connected = False
         self._seed: SessionSeed | None = None
@@ -244,6 +247,11 @@ class RealtimeRuntime:
     def generation_epoch(self) -> int:
         with self._state_lock:
             return self._epoch
+
+    def epoch_scope(self) -> tuple[int, threading.Event]:
+        """The current epoch and the event abort() or close() sets when it ends."""
+        with self._state_lock:
+            return self._epoch, self._epoch_ended
 
     def is_current(self, epoch: int) -> bool:
         with self._state_lock:
@@ -471,6 +479,9 @@ class RealtimeRuntime:
 
         if not incoming:
             raise RuntimeError("no current observation")
+        # An abandoned epoch sends neither its observation nor its request.
+        if not self.is_current(epoch):
+            raise RetryCancelled("generation abandoned before its request")
         history = self.history_view(request_builder, executed_action_ledger, incoming)
         input_refs = [
             await self.driver.send_observation(turn.observation, history) for turn in incoming
@@ -636,8 +647,8 @@ class RealtimeRuntime:
         timeout: float | None,
         request_builder: RequestBuilder,
         decision: int,
+        epoch: int,
     ) -> RuntimeTurnResult:
-        epoch = self.generation_epoch()
         try:
             return self._submit(
                 self._run_turn(
@@ -676,6 +687,8 @@ class RealtimeRuntime:
     def abort(self) -> None:
         with self._state_lock:
             self._epoch += 1
+            self._epoch_ended.set()
+            self._epoch_ended = threading.Event()
             generation = self._active_generation
             if self._state != RuntimeState.CLOSED:
                 self._state = RuntimeState.DIRTY
@@ -691,6 +704,7 @@ class RealtimeRuntime:
             if self._state == RuntimeState.CLOSED:
                 return
             self._epoch += 1
+            self._epoch_ended.set()  # a closed runtime has no current epoch
             self._state = RuntimeState.CLOSED
         loop = self._loop
         if loop is not None and not loop.is_closed():

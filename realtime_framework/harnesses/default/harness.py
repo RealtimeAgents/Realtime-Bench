@@ -816,8 +816,10 @@ from realtime_framework.entity.events import UsageSnapshot
 from realtime_framework.providers.registry import adapter_class
 from realtime_framework.entity.events import EmptyInterruptedToolTurnError
 from realtime_framework.entity.model import FATAL
-from realtime_framework.entity.model import TRANSPORT_RETRY
+from realtime_framework.entity.model import RequestRetry
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import retry_cancellation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import trace_scope
 
@@ -1153,6 +1155,8 @@ class DefaultHarness(VisionAgentBase):
 
     def stream_generate(self, tick=0):
         self._trace_decision = tick
+        # The runner abandons this decision by aborting its epoch: its retries stop there.
+        epoch, abandoned = self._runtime.epoch_scope()
         observations = self._runtime.drain_observations()
         if not observations:
             return {
@@ -1263,6 +1267,7 @@ class DefaultHarness(VisionAgentBase):
                 timeout=None,
                 request_builder=lambda turns, ledger: self._build_request(turns, ledger, call),
                 decision=tick,
+                epoch=epoch,
             )
 
         collector_type = (
@@ -1270,89 +1275,108 @@ class DefaultHarness(VisionAgentBase):
             if self.driver.capabilities.action_channel == "function_call"
             else _GenerationOutputCollector
         )
-        collector = collector_type(self)
         classifier = (
             self.driver.classify_transport_error
             if self.driver.capabilities.classifies_transport_errors
             else None
         )
+        collector = None
         retry_reasons = []
         retry_delays = []
         retry_usages = []
         failure_detail = ""
         failure_reason = ""
-        while True:
-            attempt = len(retry_reasons) + 1
-            try:
-                with self._attempt_scope(request, attempt):
-                    runtime_result = run_once(collector)
-            except Exception as exc:  # noqa: BLE001 - one shared retry policy below
-                received_output = not (
-                    not collector.visible
-                    and not collector.reasoning
-                    and (collector.usage is None or isinstance(exc, EmptyInterruptedToolTurnError))
-                    and not getattr(collector, "calls", ())
-                    and not getattr(collector, "received_native_output", False)
-                )
-                failure = TransportFailure(FATAL)
-                if callable(classifier):
-                    try:
-                        failure = classifier(exc)
-                    except Exception:  # noqa: BLE001, S110 - unclassifiable stays fatal
-                        pass
-                delay = (
-                    None
-                    if received_output
-                    else TRANSPORT_RETRY.delay_s(
-                        len(retry_reasons) + 1, request.generation_id, failure
-                    )
-                )
-                if delay is None:
-                    # A partially received turn cannot be replayed without risking a duplicate
-                    # action, whatever the cause.
-                    failure_reason = (
-                        "provider_stream_interrupted" if received_output else failure.invalid_reason
-                    )
-                    failure_detail = repr(exc)[:500]
-                    if retry_reasons:
-                        failure_detail = (
-                            f"{len(retry_reasons)} transport retries exhausted: "
-                            f"{'; '.join(retry_reasons)}; final error: {exc!r}"
-                        )[:500]
-                    self._attempt_failed(
-                        request,
-                        attempt,
-                        exc,
-                        failure,
-                        received_output,
-                        collector.usage,
-                        invalid_reason=failure_reason,
-                    )
-                    break
+
+        def send(attempt):
+            nonlocal collector
+            collector = collector_type(self)
+            with self._attempt_scope(request, attempt):
+                return run_once(collector)
+
+        def classify(exc):
+            if callable(classifier):
+                try:
+                    return classifier(exc)
+                except Exception:  # noqa: BLE001, S110 - unclassifiable stays fatal
+                    pass
+            return TransportFailure(FATAL)
+
+        def received_output(exc):
+            return not (
+                not collector.visible
+                and not collector.reasoning
+                and (collector.usage is None or isinstance(exc, EmptyInterruptedToolTurnError))
+                and not getattr(collector, "calls", ())
+                and not getattr(collector, "received_native_output", False)
+            )
+
+        def record(attempt, exc, failure, delay):
+            nonlocal failure_detail, failure_reason
+            received = received_output(exc)
+            if delay is not None:
                 retry_reasons.append(f"{failure.kind}: {exc!r}"[:300])
                 retry_usages.append(collector.usage)
                 retry_delays.append(delay)
                 self._attempt_failed(
-                    request, attempt, exc, failure, received_output, collector.usage, delay=delay
+                    request, attempt, exc, failure, received, collector.usage, delay=delay
                 )
-                time.sleep(delay)
-                collector = collector_type(self)
-                continue
-            else:
-                self._attempt_finished(request, attempt, runtime_result)
-                if retry_reasons:
-                    runtime_result.provider_metadata.update(
-                        {
-                            "transport_reconnect_attempts": len(retry_reasons),
-                            "transport_reconnect_reason": retry_reasons[0],
-                            "transport_reconnect_reasons": retry_reasons,
-                            "transport_reconnect_backoff_s": retry_delays,
-                            "transport_reconnect_replayed_from_canonical_history": True,
-                            "transport_retry_usage": retry_usages,
-                            "transport_retry_usage_status": _retry_usage_status(retry_usages),
-                        }
-                    )
-                break
+                return
+            # A partially received turn cannot be replayed without risking a duplicate action,
+            # whatever the cause.
+            failure_reason = "provider_stream_interrupted" if received else failure.invalid_reason
+            failure_detail = repr(exc)[:500]
+            if retry_reasons:
+                failure_detail = (
+                    f"{len(retry_reasons)} transport retries exhausted: "
+                    f"{'; '.join(retry_reasons)}; final error: {exc!r}"
+                )[:500]
+            self._attempt_failed(
+                request,
+                attempt,
+                exc,
+                failure,
+                received,
+                collector.usage,
+                invalid_reason=failure_reason,
+            )
+
+        retry = RequestRetry(
+            f"{prepared[-1].observation_id}:turn",
+            classify,
+            record,
+            replayable=lambda exc: not received_output(exc),
+        )
+        try:
+            with retry_cancellation(abandoned):
+                runtime_result = retry.run(send)
+        except RetryCancelled:
+            for execution in inspection_executions:
+                if execution is not None:
+                    self.tool_runtime.finish(execution, outcome="superseded_by_timeout")
+            return {
+                "action": None,
+                "thinking": "",
+                "raw": "",
+                "latency": time.monotonic() - started,
+                "usage": None,
+                "stale": True,
+            }
+        except Exception:  # noqa: BLE001, S110 - record() kept the final failure
+            pass
+        else:
+            self._attempt_finished(request, len(retry_reasons) + 1, runtime_result)
+            if retry_reasons:
+                runtime_result.provider_metadata.update(
+                    {
+                        "transport_reconnect_attempts": len(retry_reasons),
+                        "transport_reconnect_reason": retry_reasons[0],
+                        "transport_reconnect_reasons": retry_reasons,
+                        "transport_reconnect_backoff_s": retry_delays,
+                        "transport_reconnect_replayed_from_canonical_history": True,
+                        "transport_retry_usage": retry_usages,
+                        "transport_retry_usage_status": _retry_usage_status(retry_usages),
+                    }
+                )
 
         if failure_detail:
             latency = time.monotonic() - started

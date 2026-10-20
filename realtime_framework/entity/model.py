@@ -315,13 +315,15 @@ class ChoiceClient(Protocol):
 
 
 # Transport failures
-"""One retry policy for every model API.
+"""One retry policy for every model API, run by one executor.
 
-Drivers only classify a failed request; the harness owns whether and when to retry. A request is
+Drivers only classify a failed request; RequestRetry decides whether and when to send it again,
+per request unit: the harness's turn, a Decision question, a session connect. A request is
 retried only while no model output, usage, or call has been received, and always from canonical
 history, so a retry can never replay or duplicate a model action. SDK-level retries stay disabled
 so every attempt is recorded. Retry time is part of the decision: on the wall clock the world keeps
-running; on the token clock a request without output charges no tokens.
+running; on the token clock a request without output charges no tokens. Once the runner abandons
+a decision, none of its request units is sent again.
 """
 
 TRANSIENT = "transient"  # connection loss, timeout, 408, 5xx, overloaded
@@ -424,6 +426,99 @@ def classify_http_failure(status: int, detail: str = "", retry_after_s=None) -> 
     if status == 408 or status >= 500:
         return TransportFailure(TRANSIENT, retry_after_s)
     return TransportFailure(FATAL)
+
+
+import asyncio
+import contextlib
+import contextvars
+import threading
+from collections.abc import Callable
+
+
+class RetryCancelled(BaseException):
+    """The generation a request unit belongs to was abandoned before the unit was sent again.
+
+    Like asyncio.CancelledError it is not an Exception, so the provider and session error handlers
+    it unwinds through neither record it as a failure nor turn it into session state.
+    """
+
+
+_NEVER_CANCELLED = threading.Event()
+_RETRY_CANCEL: contextvars.ContextVar[threading.Event] = contextvars.ContextVar(
+    "retry_cancel", default=_NEVER_CANCELLED
+)
+
+
+@contextlib.contextmanager
+def retry_cancellation(cancel: threading.Event):
+    """Cancel every request unit sent in this context once ``cancel`` is set. Like trace_scope,
+    the ContextVar follows the call into the runtime's event loop."""
+    token = _RETRY_CANCEL.set(cancel)
+    try:
+        yield
+    finally:
+        _RETRY_CANCEL.reset(token)
+
+
+def _backoff(cancel: threading.Event, delay: float) -> None:
+    cancel.wait(delay)
+
+
+@dataclass(frozen=True)
+class RequestRetry:
+    """Run one request unit under TRANSPORT_RETRY: a turn, a Decision question, or a session
+    connect.
+
+    ``send(attempt)`` makes one 1-based attempt. A failed attempt is classified, recorded and, if
+    the policy allows, sent again after its delay. ``classify`` returns None for an exception that
+    is not a transport failure; it propagates unrecorded. ``replayable`` is False once the failed
+    attempt received model output. ``record(attempt, exc, failure, delay)`` sees every classified
+    failure before any wait; delay is None when the request is not sent again, and the exception
+    then propagates unless ``record`` raises its own. Once the context's retry_cancellation is
+    set, the backoff ends, no attempt starts, and RetryCancelled passes enclosing units unrecorded.
+    """
+
+    key: str  # the request unit's stable jitter key
+    classify: Callable[[BaseException], TransportFailure | None]
+    record: Callable[[int, BaseException, TransportFailure, float | None], None]
+    replayable: Callable[[BaseException], bool] = lambda exc: True
+
+    def run(self, send):
+        cancel = _RETRY_CANCEL.get()
+        attempt = 1
+        while not cancel.is_set():
+            try:
+                return send(attempt)
+            except Exception as exc:
+                delay = self._failed(attempt, exc)
+                if delay is None:
+                    raise
+            _backoff(cancel, delay)
+            attempt += 1
+        raise RetryCancelled(f"generation abandoned before attempt {attempt}")
+
+    async def run_async(self, send):
+        cancel = _RETRY_CANCEL.get()
+        attempt = 1
+        while not cancel.is_set():
+            try:
+                return await send(attempt)
+            except Exception as exc:
+                delay = self._failed(attempt, exc)
+                if delay is None:
+                    raise
+            await asyncio.to_thread(_backoff, cancel, delay)
+            attempt += 1
+        raise RetryCancelled(f"generation abandoned before attempt {attempt}")
+
+    def _failed(self, attempt: int, exc: Exception) -> float | None:
+        failure = self.classify(exc)
+        if failure is None:
+            return None
+        replayable = self.replayable(exc)
+        delay = TRANSPORT_RETRY.delay_s(attempt, self.key, failure) if replayable else None
+        self.record(attempt, exc, failure, delay)
+        return delay
 
 
 FOLDED_VISUAL_PLACEHOLDER = (
