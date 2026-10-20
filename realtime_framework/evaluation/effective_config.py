@@ -345,7 +345,7 @@ def _probe_runner(request: dict) -> dict:
     tasks.get = lambda task_id: _Task(registered(task_id))
     state = {}
 
-    def create_agent(config, log_dir=None, *, trace=None):
+    def create_agent(config, log_dir=None, *, trace=None, clock=None):
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
         # (harnesses/default/harness.py:1003).
@@ -361,7 +361,9 @@ def _probe_runner(request: dict) -> dict:
     def run_stream(adapter, env, **loop):
         _attribute(state["attribution"], state["start"], "runner", claimed=state["claimed"])
         state["loop"] = {
-            "run_stream": {key: loop[key] for key in loop if key not in {"log", "trace"}},
+            "run_stream": {
+                key: loop[key] for key in loop if key not in {"log", "trace", "clock"}
+            },
             "guest_environment": {"tick_seconds": env.d, "clock_mode": env.clock_mode},
             "clock_prompt": adapter.streaming_note,
             "settings_at_agent_setup": state["settings_at_agent_setup"],

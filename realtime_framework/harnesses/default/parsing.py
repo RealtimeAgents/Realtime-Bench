@@ -750,7 +750,6 @@ def resolve_action_output(
 The tool is acknowledged as queued, never falsely as executed. Only terminal native usage
 authorizes the action. Audio transcription cannot supply an action.
 """
-import time as time
 
 from realtime_framework.entity.events import FunctionCall
 from realtime_framework.entity.events import GenerationBoundary
@@ -784,8 +783,8 @@ class FunctionCallTurnCollector:
 
     def consume(self, event):
         received = {
-            "received_wall_time_ns": time.time_ns(),
-            "received_monotonic_ns": time.monotonic_ns(),
+            "received_wall_time_ns": self.agent.clock.time_ns(),
+            "received_monotonic_ns": self.agent.clock.monotonic_ns(),
             "receive_timestamp_source": "collector_consume",
         }
         if isinstance(event, UsageSnapshot):

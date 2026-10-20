@@ -41,6 +41,57 @@ hash = "64127ec9aa30de94227cfe1641538487008897fab2d7cecb9d389094ef746041"
 line-length = 100
 target-version = "py312"
 
+# Framework code reads the time and waits only through the episode clocks
+# (realtime_framework/clock.py), so a fake clock can run an episode. tests/test_clock_lint.py
+# runs this rule, and also finds loop.time(), which ruff cannot resolve.
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"time.time".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"time.time_ns".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"time.monotonic".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"time.monotonic_ns".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"time.perf_counter".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"time.perf_counter_ns".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"datetime.datetime.now".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"datetime.datetime.utcnow".msg = "read the time from the episode clock (realtime_framework/clock.py)"
+"time.sleep".msg = "wait with Clock.sleep"
+"threading.Timer".msg = "start timers with Clock.timer"
+"asyncio.sleep".msg = "wait with Clock.sleep_async"
+"asyncio.wait_for".msg = "bound waits with Clock.wait_for"
+"asyncio.timeout".msg = "bound waits with Clock.wait_for"
+"asyncio.timeout_at".msg = "bound waits with Clock.wait_for"
+"asyncio.new_event_loop".msg = "make loops with Clock.new_event_loop, so loop.time() is the clock's"
+"asyncio.run".msg = "make loops with Clock.new_event_loop, so loop.time() is the clock's"
+
+[tool.ruff.lint.per-file-ignores]
+# The clock module makes these calls for everyone else.
+"realtime_framework/clock.py" = ["TID251"]
+# Task code does not change in phase 2; its time reads are listed in the clock report.
+"realtime_tasks/**" = ["TID251"]
+# Tests wait in real time where they mean to, and tests/fake_clock.py implements the fake clock.
+"tests/**" = ["TID251"]
+# Outside an episode or outside the runner process: image and container setup, the guest server
+# inside the sandbox, Harbor trials and results, and submission.
+"realtime_framework/sandbox/apptainer.py" = ["TID251"]
+"realtime_framework/sandbox/desktop.py" = ["TID251"]
+"realtime_framework/sandbox/guest_server/server.py" = ["TID251"]
+"realtime_framework/evaluation/_trial.py" = ["TID251"]
+"realtime_framework/evaluation/harbor.py" = ["TID251"]
+"realtime_framework/evaluation/harbor_results.py" = ["TID251"]
+"realtime_framework/evaluation/submission.py" = ["TID251"]
+# Guest and browser I/O with real-time bounds of its own (HTTP and CDP timeouts, render fences),
+# which the task adapters also call.
+"realtime_framework/sandbox/guest.py" = ["TID251"]
+"realtime_framework/sandbox/browser/cdp.py" = ["TID251"]
+"realtime_framework/sandbox/browser/clock.py" = ["TID251"]
+# Records only: trace, pack and report timestamps, and the trace writer's GIL yields.
+"realtime_framework/evaluation/agent_trace.py" = ["TID251"]
+"realtime_framework/evaluation/reporting.py" = ["TID251"]
+# Replaces time.sleep while it runs runner main() up to the loop to export the configuration.
+"realtime_framework/evaluation/effective_config.py" = ["TID251"]
+
 [tool.setuptools.package-data]
 "realtime_tasks" = ["**/*"]
 "realtime_framework.sandbox" = ["images/**/*", "guest_server/requirements.txt"]

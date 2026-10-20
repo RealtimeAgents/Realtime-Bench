@@ -90,12 +90,13 @@ def action_result_note(status: str, detail: str = "") -> str:
 
 import asyncio as asyncio
 import concurrent.futures
-import time as time
 from copy import deepcopy as deepcopy
 from collections.abc import Callable as Callable
 from collections.abc import Iterable as Iterable
 from dataclasses import replace as replace
 
+from realtime_framework.clock import Clock
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.model import CanonicalTurn
 from realtime_framework.entity.model import ConnectRequest
@@ -138,13 +139,17 @@ class RealtimeRuntime:
     driver follow the same generation state machine.
     """
 
-    def __init__(self, driver: RealtimeDriver, policy: PathPolicy, *, trace):
+    def __init__(
+        self, driver: RealtimeDriver, policy: PathPolicy, *, trace, clock: Clock | None = None
+    ):
         if not isinstance(driver, RealtimeDriver):
             raise TypeError("realtime driver does not implement the required protocol")
         self.driver = driver
         self.capabilities = driver.capabilities
         self.policy = policy
         self._trace = trace
+        # The operational clock; it makes the loop, so the drivers' waits run on its time.
+        self.clock = clock or SystemClock()
         # What the agent trace last recorded about the provider-side context: exact or unknown.
         self._session_state = "exact"
         # The context-policy items behind this turn's history_block_compaction sync.
@@ -153,7 +158,7 @@ class RealtimeRuntime:
         self._state_lock = threading.RLock()
         self._epoch = 0
         # Set when the current epoch ends; the request units of its generation stop retrying.
-        self._epoch_ended = threading.Event()
+        self._epoch_ended = self.clock.event()
         self._active_generation: GenerationHandle | None = None
         self._connected = False
         self._seed: SessionSeed | None = None
@@ -187,7 +192,7 @@ class RealtimeRuntime:
     def _start_loop(self) -> None:
         if self._loop is not None and not self._loop.is_closed():
             return
-        loop = asyncio.new_event_loop()
+        loop = self.clock.new_event_loop()
         ready = threading.Event()
 
         def run() -> None:
@@ -211,12 +216,11 @@ class RealtimeRuntime:
             coroutine.close()
             raise RuntimeError("realtime runtime event loop is not running")
         future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
+        if not self.clock.wait(future, timeout):
             if not future.done():
                 future.cancel()
             raise TimeoutError(f"realtime runtime operation exceeded {timeout:g}s") from None
+        return future.result()
 
     def start(self, seed: SessionSeed, initial_observation=None, *, timeout: float = 60.0) -> None:
         self._start_loop()
@@ -260,7 +264,7 @@ class RealtimeRuntime:
     def record_execution_feedback(self, feedback: str) -> None:
         if self._turns:
             self._turns[-1].execution_feedback = feedback
-            self._turns[-1].feedback_wall_ns = time.time_ns()
+            self._turns[-1].feedback_wall_ns = self.clock.time_ns()
 
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
@@ -286,7 +290,7 @@ class RealtimeRuntime:
         if indexes:
             self._archived_action_count = max(before, max(indexes) + 1)
         if self._archived_action_count > before:
-            self._ledger_wall_ns = time.time_ns()
+            self._ledger_wall_ns = self.clock.time_ns()
         return self._archived_action_count - before
 
     def _retained(
@@ -524,14 +528,14 @@ class RealtimeRuntime:
 
         self._record_generation_prepared(incoming, physical_metadata, epoch)
         self._set_state(RuntimeState.GENERATING)
-        provider_call_started_monotonic_ns = time.monotonic_ns()
-        provider_call_started_wall_time_ns = time.time_ns()
+        provider_call_started_monotonic_ns = self.clock.monotonic_ns()
+        provider_call_started_wall_time_ns = self.clock.time_ns()
         generation = await self.driver.start_generation(request)
-        stream_started_monotonic_ns = time.monotonic_ns()
+        stream_started_monotonic_ns = self.clock.monotonic_ns()
         generation.metadata.setdefault("input_refs", input_refs)
         with self._state_lock:
             self._active_generation = generation
-        started = time.monotonic()
+        started = self.clock.monotonic()
         terminal_history = ProviderHistoryState.UNKNOWN
         provider_metadata: dict = {
             "provider_call_started_monotonic_ns": provider_call_started_monotonic_ns,
@@ -594,7 +598,7 @@ class RealtimeRuntime:
         output = collector.finish()
         if not stale:
             incoming[-1].output = output.text
-            incoming[-1].output_wall_ns = time.time_ns()
+            incoming[-1].output_wall_ns = self.clock.time_ns()
             incoming[-1].output_reasoning = output.reasoning_text
             incoming[-1].action_history_index = len(action_history)
             incoming[-1].provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
@@ -623,7 +627,7 @@ class RealtimeRuntime:
         else:
             self._set_state(RuntimeState.READY)
 
-        finished_monotonic_ns = time.monotonic_ns()
+        finished_monotonic_ns = self.clock.monotonic_ns()
         return RuntimeTurnResult(
             output=output,
             generation_id=request.generation_id,
@@ -631,7 +635,7 @@ class RealtimeRuntime:
             terminal_history_state=terminal_history,
             interrupted=False,
             stale=stale,
-            latency_s=time.monotonic() - started,
+            latency_s=self.clock.monotonic() - started,
             provider_call_latency_s=(finished_monotonic_ns - provider_call_started_monotonic_ns)
             / 1_000_000_000,
             provider_metadata=provider_metadata,
@@ -688,7 +692,7 @@ class RealtimeRuntime:
         with self._state_lock:
             self._epoch += 1
             self._epoch_ended.set()
-            self._epoch_ended = threading.Event()
+            self._epoch_ended = self.clock.event()
             generation = self._active_generation
             if self._state != RuntimeState.CLOSED:
                 self._state = RuntimeState.DIRTY
@@ -710,10 +714,7 @@ class RealtimeRuntime:
         if loop is not None and not loop.is_closed():
             cleanup = self._cleanup_future
             if cleanup is not None:
-                try:
-                    cleanup.result(timeout=5.0)
-                except Exception:  # noqa: BLE001, S110 - final close retries independently
-                    pass
+                self.clock.wait(cleanup, 5.0)
             try:
                 self._submit(self._wait_for_cleanup(), timeout=5.0)
             except Exception:  # noqa: BLE001, S110 - final close retries independently

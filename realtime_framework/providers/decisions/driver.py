@@ -35,8 +35,9 @@ class DecisionEncoder:
     """The RealtimeDriver half of a Decisions encoder.
 
     A registered Decision API subclasses it with its protocol (``decide``,
-    ``classify_question_error``, ``max_choices``, ``bind_trace``, ``close``), capabilities and
-    deployment, so the registered class is the complete driver.
+    ``classify_question_error``, ``max_choices``, ``bind_trace``, ``close``), capabilities,
+    deployment and the ``clock`` its constructor takes, so the registered class is the complete
+    driver.
     """
 
     async def connect(self, request):
@@ -54,7 +55,9 @@ class DecisionEncoder:
         return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):
-        metadata = await ChoiceDecision(self, request.canonical, trace=self._trace).run()
+        metadata = await ChoiceDecision(
+            self, request.canonical, trace=self._trace, clock=self.clock
+        ).run()
         metadata["history_form"] = request.canonical.history_form
         return GenerationHandle(request.generation_id, metadata=metadata)
 

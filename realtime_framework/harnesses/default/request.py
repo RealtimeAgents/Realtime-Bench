@@ -8,7 +8,6 @@ role and placement; encoders only translate the result.
 from __future__ import annotations
 
 import json
-import time
 
 from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.model import CanonicalTurn
@@ -26,9 +25,9 @@ from realtime_framework.entity.request import (
 )
 
 
-def system_block(text: str) -> ContentBlock:
+def system_block(text: str, wall_ns: int | None) -> ContentBlock:
     return ContentBlock(
-        "system", "system_instruction", "agent", BlockTime(wall_ns=time.time_ns()), text=text
+        "system", "system_instruction", "agent", BlockTime(wall_ns=wall_ns), text=text
     )
 
 

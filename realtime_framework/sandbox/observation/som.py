@@ -601,10 +601,10 @@ def valid_inspection_proof(proof: dict | None, observation_id: str | None) -> bo
 """Project observation-bound interactables and persist an independent audit trace."""
 
 import threading as threading
-import time as time
 import uuid as uuid
 from pathlib import Path as Path
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.sandbox.observation.interactables import project_result
 from realtime_framework.sandbox.observation.interactables import result_digest
 
@@ -620,10 +620,13 @@ class ToolRuntime:
         adapter: str | None = None,
         model: str | None = None,
         text_observation: bool = False,
+        clock=None,
     ):
         self.task_id = task_id
         self.adapter = adapter
         self.model = model
+        # The operational clock, which times each inspection for the audit trace.
+        self.clock = clock or SystemClock()
         # Text-observation models (no screenshot input) get control appearance and field state.
         self.text_observation = text_observation
         self._lock = threading.Lock()
@@ -674,7 +677,7 @@ class ToolRuntime:
         protocol_error: str | None = None,
     ) -> dict:
         """Return the cached result attached to ``observation`` and a runner-verifiable proof."""
-        started = time.time()
+        started = self.clock.time()
         metadata = getattr(observation, "metadata", {}) or {}
         expected = metadata.get("observation_id")
         canonical = metadata.get("interactables")
@@ -710,7 +713,7 @@ class ToolRuntime:
                 text_observation=self.text_observation,
             )
             text = som["text"]
-        elapsed = time.time() - started
+        elapsed = self.clock.time() - started
         proof = {
             "valid": error is None,
             "call_id": call_id,

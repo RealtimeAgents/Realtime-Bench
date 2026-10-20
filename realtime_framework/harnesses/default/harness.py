@@ -799,11 +799,11 @@ INTERACTION_PROFILES = {
 # Default harness
 """The benchmark-facing harness for every registered model API, composed with its driver."""
 
-import time as time
 import uuid as uuid
 from copy import deepcopy as deepcopy
 from dataclasses import replace as replace
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.harnesses.default.parsing import resolve_action_output
 from realtime_framework.entity.model import GenerationOutput
 from realtime_framework.entity.model import GenerationRequest
@@ -863,8 +863,8 @@ class _GenerationOutputCollector:
         self._native_counts_complete = True
 
     def consume(self, event: ProviderEvent) -> None:
-        received_wall_time_ns = time.time_ns()
-        received_monotonic_ns = time.monotonic_ns()
+        received_wall_time_ns = self.agent.clock.time_ns()
+        received_monotonic_ns = self.agent.clock.monotonic_ns()
         if isinstance(event, UsageSnapshot):
             self.usage = event.usage
             return
@@ -984,10 +984,12 @@ class DefaultHarness(VisionAgentBase):
     interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
 
-    def __init__(self, config, log_dir=None, *, trace):
+    def __init__(self, config, log_dir=None, *, trace, clock=None):
         self._provider_usage_started = False
         # The decision an abort() belongs to: the runner aborts only the one in flight.
         self._trace_decision = None
+        # The episode's operational clock; the runtime, the driver and the retry wait read it.
+        self.clock = clock or SystemClock()
         super().__init__(config, log_dir, trace=trace)
 
     @property
@@ -1000,12 +1002,14 @@ class DefaultHarness(VisionAgentBase):
         self._driver = value
 
     def _setup_backend(self):
-        self.driver = adapter_class(self.config.adapter_type)(self.config)
+        self.driver = adapter_class(self.config.adapter_type)(self.config, clock=self.clock)
         self.driver.bind_trace(self._trace)
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
-        self._runtime = RealtimeRuntime(self.driver, self._context_policy, trace=self._trace)
+        self._runtime = RealtimeRuntime(
+            self.driver, self._context_policy, trace=self._trace, clock=self.clock
+        )
 
     def _record_provider_usage(self, result, observation, tick):
         """Audit harness-visible generations, including providers with inline usage."""
@@ -1028,7 +1032,7 @@ class DefaultHarness(VisionAgentBase):
                 else result.output.token_fields.get("provider_usage_missing_reason")
                 or "backend_did_not_return_usage"
             ),
-            "recorded_unix_s": time.time(),
+            "recorded_unix_s": self.clock.time(),
             "scope": "harness_generation",
         }
         if self.log_dir:
@@ -1045,7 +1049,7 @@ class DefaultHarness(VisionAgentBase):
         ]
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.
-        self._system_block = system_block(fixed)
+        self._system_block = system_block(fixed, self.clock.time_ns())
         self._answer = self._answer_requirements()
         with trace_scope(phase="initialize"):
             self._runtime.start(
@@ -1169,7 +1173,7 @@ class DefaultHarness(VisionAgentBase):
                 "invalid_reason": "generation_error",
                 "invalid_detail": "no current observation",
             }
-        started = time.monotonic()
+        started = self.clock.monotonic()
         feedback = self._pending_feedback
         try:
             prepared, inspection_executions = self._prepare_observations(
@@ -1178,7 +1182,7 @@ class DefaultHarness(VisionAgentBase):
                 feedback,
             )
         except Exception as exc:  # noqa: BLE001 - preparation faults become invalid-run metadata
-            latency = time.monotonic() - started
+            latency = self.clock.monotonic() - started
             detail = repr(exc)[:500]
             log_entry = {
                 "type": "decision",
@@ -1216,7 +1220,7 @@ class DefaultHarness(VisionAgentBase):
             for execution in inspection_executions:
                 if execution is not None:
                     self.tool_runtime.finish(execution, outcome="inspection_protocol_error")
-            latency = time.monotonic() - started
+            latency = self.clock.monotonic() - started
             result = self._invalid_observation_result(invalid_proof, latency)
             result["decision_wall_latency_s"] = latency
             result["_trajectory_entry"] = {
@@ -1345,6 +1349,7 @@ class DefaultHarness(VisionAgentBase):
             classify,
             record,
             replayable=lambda exc: not received_output(exc),
+            clock=self.clock,
         )
         try:
             with retry_cancellation(abandoned):
@@ -1357,7 +1362,7 @@ class DefaultHarness(VisionAgentBase):
                 "action": None,
                 "thinking": "",
                 "raw": "",
-                "latency": time.monotonic() - started,
+                "latency": self.clock.monotonic() - started,
                 "usage": None,
                 "stale": True,
             }
@@ -1379,7 +1384,7 @@ class DefaultHarness(VisionAgentBase):
                 )
 
         if failure_detail:
-            latency = time.monotonic() - started
+            latency = self.clock.monotonic() - started
             for execution in inspection_executions:
                 if execution is not None:
                     self.tool_runtime.finish(
@@ -1521,7 +1526,7 @@ class DefaultHarness(VisionAgentBase):
             },
             **runtime_result.provider_metadata,
         }
-        decision_wall_latency_s = time.monotonic() - started
+        decision_wall_latency_s = self.clock.monotonic() - started
         request_started_ns = runtime_result.provider_metadata.get(
             "provider_call_started_monotonic_ns"
         )

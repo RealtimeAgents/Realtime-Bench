@@ -38,8 +38,9 @@ Runtime invariants:
     crossing the deadline can't rewrite a real environment terminal state into time_limit or
     lengthen the episode.
 """
-import hashlib as hashlib, math as math, threading as threading, time as time, traceback as traceback
+import hashlib as hashlib, math as math, traceback as traceback
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.evaluation.config import DEFAULT_MODE
 
 from realtime_framework.entity.actions import Action
@@ -73,7 +74,7 @@ PROVIDER_WATCHDOG_S = RUNNER_TIMING.provider_watchdog_s
 class ObservationStreamWatchdog:
     """Detect a producer replaying the exact same observation instead of advancing its stream."""
 
-    def __init__(self, threshold=OBSERVATION_FREEZE_N, clock=time.monotonic):
+    def __init__(self, threshold=OBSERVATION_FREEZE_N, *, clock):
         self.threshold = max(2, int(threshold))
         self.clock = clock
         self._fingerprint = None
@@ -125,7 +126,11 @@ def run_stream(
     clock_mode="token",
     tokens_per_frame=None,
     trace=None,
+    clock=None,
 ):
+    """``clock`` is the episode's operational clock (realtime_framework/clock.py), real time when
+    omitted; on the wall clock it is also the semantic clock ``env`` reads."""
+    clock = clock or SystemClock()
     if clock_mode not in {"token", "wall"}:
         raise ValueError(f"unsupported clock mode: {clock_mode!r}")
     if delta_s <= 0:
@@ -148,7 +153,7 @@ def run_stream(
     _drained = []  # one-shot latch for _drain_abandoned
     tau_prev = -1
     spent = 0.0  # cumulative deliberation (model-inference) time -- the "clock"
-    observation_watchdog = ObservationStreamWatchdog()
+    observation_watchdog = ObservationStreamWatchdog(clock=clock.monotonic)
     trace_failed = [False]
     # When the loop first learned of each kind of end, in world seconds since the episode began.
     end_signals = {}
@@ -362,7 +367,7 @@ def run_stream(
             except Exception:
                 return None, "error", traceback.format_exc()
         box = {}
-        done = threading.Event()
+        done = clock.event()
 
         def worker():
             try:
@@ -372,9 +377,8 @@ def run_stream(
             finally:
                 done.set()
 
-        worker_thread = threading.Thread(target=worker, daemon=True)
-        worker_thread.start()
-        if not done.wait(timeout):
+        worker_thread = clock.start_thread(worker)
+        if not clock.wait(done, timeout):
             abandoned.append((worker_thread, done))  # still running; drained at teardown
             ab = getattr(adapter, "abort", None)  # cooperative release of the abandoned session
             if ab is not None:
@@ -402,9 +406,9 @@ def run_stream(
         log(
             f"[default] draining {len(pending)} abandoned generate worker(s), <= {ABANDONED_DRAIN_S:g}s"
         )
-        limit = time.time() + ABANDONED_DRAIN_S
+        limit = clock.time() + ABANDONED_DRAIN_S
         for _, d in pending:
-            d.wait(max(0.0, limit - time.time()))
+            clock.wait(d, max(0.0, limit - clock.time()))
         live = sum(1 for t, _ in pending if t.is_alive())
         if live:
             log(
@@ -419,7 +423,7 @@ def run_stream(
     def _run_step(step_fn, k):
         """One bounded per-move step -> a normalized generate-result dict (always has action/latency).
         A timeout or crash yields action=None and flags the adapter for a session rebuild."""
-        t0 = time.time()
+        t0 = clock.time()
         timeout, timeout_reason = _move_timeout()
         if getattr(env, "_invalid_run", None):
             return {
@@ -437,14 +441,14 @@ def run_stream(
             if timeout_reason == "provider_watchdog":
                 return {
                     "action": None,
-                    "latency": round(time.time() - t0, 2),
+                    "latency": round(clock.time() - t0, 2),
                     "invalid_category": "provider",
                     "invalid_reason": "generation_watchdog_timeout",
                     "invalid_detail": f"generation exceeded {timeout:g}s",
                 }
             return {
                 "action": None,
-                "latency": round(time.time() - t0, 2),
+                "latency": round(clock.time() - t0, 2),
                 "timed_out": True,
                 "harness_timeout_reason": timeout_reason,
                 "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
@@ -452,7 +456,7 @@ def run_stream(
         log(f"[default] k={k} generation failed, recovering:\n{err}")
         return {
             "action": None,
-            "latency": round(time.time() - t0, 2),
+            "latency": round(clock.time() - t0, 2),
             "error": True,
             "invalid_category": "provider",
             "invalid_reason": "generation_error",
@@ -608,7 +612,7 @@ def run_stream(
         )
         # Timestamp the start of execution. Guest/CDP dispatch latency is an environment cost, not
         # extra model deliberation, so it must not move the committed action's recorded position.
-        action_resolved_at = time.time()
+        action_resolved_at = clock.time()
         status = _land_action()
         action_result = {
             "decision": k,
@@ -789,7 +793,7 @@ def run_stream(
                             if clock_mode == "token"
                             else None
                         ),
-                        "recorded_unix_s": time.time(),
+                        "recorded_unix_s": clock.time(),
                     }
                 )
             except Exception:
@@ -807,7 +811,7 @@ def run_stream(
 
     def _finalize():
         # Presentation boundary precedes scorer snapshot and input-release cleanup.
-        setattr(env, "_active_end_unix_s", time.time())
+        setattr(env, "_active_end_unix_s", clock.time())
         # Freeze scorer input before cleanup: keyUp/mouseUp are real application-visible events and
         # must never alter the state scored at a terminal condition or at the horizon.
         setattr(env, "_think_spent", spent)
@@ -817,7 +821,9 @@ def run_stream(
         snapshot_s = None
         if callable(snapshotter):
             try:
-                with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s):
+                with operation_budget(
+                    "snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s, clock=clock
+                ):
                     snapshot = snapshotter()
                 setattr(env, "_termination_snapshot", snapshot)
                 snapshot_s = _world_s()
@@ -1282,7 +1288,6 @@ import json as json
 import logging as logging
 import os as os
 import sys as sys
-import time as time
 from datetime import datetime as datetime
 from pathlib import Path as Path
 
@@ -1291,6 +1296,7 @@ sys.path.insert(0, str(ROOT))
 
 import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
+from realtime_framework.clock import episode_clocks
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
@@ -1551,7 +1557,8 @@ def main():
         )
     except UnsupportedTokenBudget as exc:
         p.error(str(exc))
-    run_id = a.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    clocks = episode_clocks(a.clock, env_fps)
+    run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     episode_trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_id)
@@ -1620,7 +1627,7 @@ def main():
     harness_hash = harness_fingerprint()
     runtime_config = None
     runtime_config_hash = None
-    t0 = time.time()
+    t0 = clocks.operational.time()
     run_stage = "environment_setup"
     try:
         # -------- provision the registered task --------
@@ -1631,7 +1638,7 @@ def main():
         url = ctask.provision()
         if url:
             R.open_local_url_in_container(url, debug_port=getattr(ctask, "dbg_port", None))
-        time.sleep(5)
+        clocks.operational.sleep(5)
 
         # -------- resolve the model + build the agent --------
         # A catalog key (e.g. gpt-realtime-2, claude-opus-5) sets the adapter +
@@ -1673,7 +1680,9 @@ def main():
                     container=R.CONTAINER_NAME,
                     desktop_size=(env_config.screen_width, env_config.screen_height),
                     text_observation=text_observation,
+                    clock=clocks.operational,
                 ),
+                clock=clocks.operational,
             )
         finally:
             # The cleanup below closes what setup made, also when one of its steps failed.
@@ -1744,7 +1753,7 @@ def main():
                 )
                 if category == "realtime":
                     # Let the open page render the held, restarted state before the clock starts.
-                    time.sleep(0.45)
+                    clocks.operational.sleep(0.45)
                 episode_start = ctask.start_episode()
                 wall_start_time = float(episode_start["clock_origin"])
                 print(f"[{category}] scored wall episode started; {episode_start}", flush=True)
@@ -1763,7 +1772,7 @@ def main():
         if a.clock == "token":
             deadline = None
         else:
-            wall_start_time = wall_start_time or time.time()
+            wall_start_time = wall_start_time or clocks.semantic.time()
             deadline = wall_start_time + a.max_minutes * 60
         # Game tasks ignore model failure declarations. Any task may expose episode_over for a
         # server-owned terminal state; realtime tasks use it for irreversible failures.
@@ -1779,13 +1788,14 @@ def main():
             action_audit_path=run_dir / "action_lifecycle.jsonl",
             clock_mode=a.clock,
             wall_start_time=wall_start_time,
+            clocks=clocks,
         )
         start_episode = getattr(agent, "start_episode", None)
         if callable(start_episode):
             start_episode(wall_start_time, a.max_minutes * 60)
 
         # -------- run the streaming loop --------
-        _loop_t0 = time.time()
+        _loop_t0 = clocks.operational.time()
         run_stage = "inference"
         _active_start = wall_start_time if a.clock == "wall" else _loop_t0
         episode_trace.emit(
@@ -1811,13 +1821,14 @@ def main():
                 clock_mode=a.clock,
                 tokens_per_frame=tokens_per_frame,
                 trace=episode_trace,
+                clock=clocks.operational,
             )
             error = getattr(env, "_loop_error", None)
         finally:
             # The agent's run window is recorded even when the loop ends in an error.
             # Physical diagnostic only; the token-clock horizon is simulated and does not bound wall time.
-            loop_time_s = round(time.time() - _loop_t0, 1)
-            _active_end = getattr(env, "_active_end_unix_s", time.time())
+            loop_time_s = round(clocks.operational.time() - _loop_t0, 1)
+            _active_end = getattr(env, "_active_end_unix_s", clocks.operational.time())
             active_loop = {
                 "start_unix_s": _active_start,
                 "end_unix_s": _active_end,
@@ -2238,7 +2249,7 @@ def main():
         ),
         "wall_time_s": model_timing["wall_time_s"],
         "model_timing": model_timing,
-        "total_run_time_s": round(time.time() - t0, 1),
+        "total_run_time_s": round(clocks.operational.time() - t0, 1),
         "verification": verification,
         "error": error,
         "generation_artifact": (
@@ -2329,18 +2340,21 @@ def set_up_agent(
     episode_trace: EpisodeTrace,
     model: str,
     open_capture,
+    clock=None,
 ) -> None:
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
     ``instruction`` is the task description and ``model`` the model identity the tool trace
     records. ``open_capture(text_observation)`` returns the scene capture for the observation
-    form the model's context policy names. What this makes is recorded in ``setup``.
+    form the model's context policy names. ``clock`` is the episode's operational clock, which
+    the agent reads (real time when omitted). What this makes is recorded in ``setup``.
     """
+    clock = clock or SystemClock()
     # Every pre-run rule on the model, clock and task, before any of them is built.
     check_episode(cfg, clock_mode=clock_mode, task=ctask)
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
-    agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace)
+    agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace, clock=clock)
     configure_agent(
         agent,
         fps=cfg.fps,
@@ -2360,7 +2374,7 @@ def set_up_agent(
                 _rb = ctask.reset_episode()
                 print(f"[{category}] fresh episode reset; baseline={_rb}", flush=True)
                 if category == "realtime" and clock_mode != "token":
-                    time.sleep(0.45)
+                    clock.sleep(0.45)
             except Exception:
                 detail = traceback.format_exc()
                 setup.environment_invalid = True
@@ -2382,6 +2396,7 @@ def set_up_agent(
         adapter=cfg.adapter_type,
         model=model,
         text_observation=text_observation,
+        clock=clock,
     )
     if hasattr(agent, "bind_tool_runtime"):
         agent.bind_tool_runtime(setup.tool_runtime)
