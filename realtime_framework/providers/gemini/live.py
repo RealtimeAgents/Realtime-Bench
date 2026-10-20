@@ -177,7 +177,6 @@ class GeminiLiveDriver:
         self.client = self._client_for_slot(self._api_key_index)
         self._cm = None
         self._session = None
-        self._seed = None
         self._mirror = _SessionMirror()
         self._activity_open = False
         self._last_video_sent_at: float | None = None
@@ -404,7 +403,7 @@ class GeminiLiveDriver:
         history = request.history
         if history is None:
             return [], ()
-        texts = request.seed.texts
+        texts = history.policy.texts
         prefixes = _frame_prefixes(history)
         contents, seeded, turn_index = [], [], -1
         for item in history.items:
@@ -578,7 +577,6 @@ class GeminiLiveDriver:
     async def _connect_once(self, request: ConnectRequest) -> None:
         replacing_session = self._cm is not None
         await self._close_current()
-        self._seed = request.seed
         self._mirror.resume_handle = request.resume_handle
         # A resume carries no history: the server restores the session from the handle.
         history, seeded = self._seed_contents(request)
@@ -729,6 +727,8 @@ class GeminiLiveDriver:
             raise RuntimeError("Gemini Live session is not connected")
         return GenerationHandle(
             request.generation_id,
+            # The policy's queued acknowledgement, sent for every call of this generation.
+            opaque=request.canonical.policy.texts.gemini_queued_tool_response,
             metadata={
                 **self._connect_metadata,
                 "input_audio_carrier_ms": (
@@ -1118,7 +1118,7 @@ class GeminiLiveDriver:
                     self.types.FunctionResponse(
                         id=call_id,
                         name=name,
-                        response=dict(self._seed.texts.gemini_queued_tool_response),
+                        response=dict(generation.opaque),
                         **self._tool_response_options(),
                     )
                     for call_id, name in self._mirror.pending_calls
