@@ -404,6 +404,10 @@ class SessionCore:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 
+    def reader_failed(self, connection: int) -> None:
+        """The connection's reader failed: no reply is read on it any more."""
+        self.replies.pop(connection, None)
+
     def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
         monotonic clock). With no generation's reply being read on that connection the message is

@@ -254,6 +254,7 @@ def test_a_failed_read_leaves_the_connection_unusable(monkeypatch):
     first, second = asyncio.run(run())
     assert isinstance(first, genai_errors.APIError) and first.code == 1011
     assert second is first
+    assert rig.driver._core.replies == {}  # neither reply is waited for any more
     # The failure keeps the close code the transport classification reads.
     assert rig.driver.classify_transport_error(second).retryable
 
@@ -280,6 +281,7 @@ def test_a_cancelled_read_leaves_the_connection_unusable(monkeypatch):
     failure = asyncio.run(run())
     assert str(failure) == "Gemini Live connection 1: a read was cancelled"
     assert isinstance(failure.__cause__, asyncio.CancelledError)
+    assert rig.driver._core.replies == {}
 
 
 def test_an_orphan_message_is_logged_and_skipped(monkeypatch, caplog):

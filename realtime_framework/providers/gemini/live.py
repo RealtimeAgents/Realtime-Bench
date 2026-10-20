@@ -133,41 +133,44 @@ class _Receiver:
         self._opened_empty = False  # it has given no message yet
 
     async def next(self) -> Received:
-        if self.failure is not None:
-            raise self.failure
-        try:
-            while True:
-                if self._messages is None:
-                    self._messages = self._session.receive().__aiter__()
-                    self._opened_empty = True
-                try:
-                    message = await anext(self._messages)
-                except StopAsyncIteration:
-                    if self._opened_empty:
-                        raise RuntimeError(
-                            f"Gemini Live connection {self.number}: receive() ended without a"
-                            " message"
-                        ) from None
-                    self._messages = None
-                    continue
-                self._opened_empty = False
-                received = self._core.received(self.number, message, self._clock.monotonic())
-                if received is not None:
-                    return received
-                logger.debug(
-                    "Gemini Live connection %d: no generation takes %s",
-                    self.number,
-                    type(message).__name__,
+        if self.failure is None:
+            try:
+                return await self._read()
+            except asyncio.CancelledError as exc:
+                self.failure = RuntimeError(
+                    f"Gemini Live connection {self.number}: a read was cancelled"
                 )
-        except asyncio.CancelledError as exc:
-            self.failure = RuntimeError(
-                f"Gemini Live connection {self.number}: a read was cancelled"
+                self.failure.__cause__ = exc
+                self._core.reader_failed(self.number)
+                raise
+            except Exception as exc:
+                self.failure = exc
+        self._core.reader_failed(self.number)
+        raise self.failure
+
+    async def _read(self) -> Received:
+        while True:
+            if self._messages is None:
+                self._messages = self._session.receive().__aiter__()
+                self._opened_empty = True
+            try:
+                message = await anext(self._messages)
+            except StopAsyncIteration:
+                if self._opened_empty:
+                    raise RuntimeError(
+                        f"Gemini Live connection {self.number}: receive() ended without a message"
+                    ) from None
+                self._messages = None
+                continue
+            self._opened_empty = False
+            received = self._core.received(self.number, message, self._clock.monotonic())
+            if received is not None:
+                return received
+            logger.debug(
+                "Gemini Live connection %d: no generation takes %s",
+                self.number,
+                type(message).__name__,
             )
-            self.failure.__cause__ = exc
-            raise
-        except Exception as exc:
-            self.failure = exc
-            raise
 
 
 class GeminiLiveDriver:
