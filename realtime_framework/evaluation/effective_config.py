@@ -259,7 +259,8 @@ class _Guest:
 
 
 class _Scene:
-    """Stands in for BrowserSceneCapture: a bound, stable first frame (runner.py:1632-1641)."""
+    """Stands in for BrowserSceneCapture: a bound, stable first frame (runner.py:2297-2306, in
+    set_up_agent)."""
 
     def __init__(self, guest, task=None, **kwargs):
         pass
@@ -278,7 +279,8 @@ class _Scene:
 
 
 class _Task:
-    """The registered task with its task-server calls replaced (runner.py:1535-1600, 1699-1718)."""
+    """The registered task with its task-server calls replaced (runner.py:1533-1539 and
+    1638-1657 in main, 2258-2274 in set_up_agent)."""
 
     def __init__(self, task):
         self._task = task

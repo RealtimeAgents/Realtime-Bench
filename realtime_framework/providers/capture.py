@@ -90,7 +90,9 @@ class _RecordingStream(httpx.AsyncByteStream):
 
     httpx closes the stream after the last chunk, SDKs close it when they stop reading, and the
     drivers close it on interrupt, so error bodies the SDK reads and cut-short streams are covered.
-    ``complete`` means the transport reported the end of the body.
+    ``complete`` means the transport reported the end of the body. An SDK that stops reading at
+    its own end-of-stream event (the OpenAI SDK at ``[DONE]``) closes the stream first, so its
+    complete streams are recorded with ``complete`` false.
     """
 
     def __init__(self, capture: HttpCapture, request_seq, response):
