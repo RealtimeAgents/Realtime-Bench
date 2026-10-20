@@ -1353,7 +1353,14 @@ class DefaultHarness(VisionAgentBase):
             for execution in inspection_executions:
                 if execution is not None:
                     self.tool_runtime.finish(execution, outcome="superseded_by_timeout")
-            raise
+            return {
+                "action": None,
+                "thinking": "",
+                "raw": "",
+                "latency": time.monotonic() - started,
+                "usage": None,
+                "stale": True,
+            }
         except Exception:  # noqa: BLE001, S110 - record() kept the final failure
             pass
         else:

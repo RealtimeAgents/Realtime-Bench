@@ -40,7 +40,6 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import RequestRetry
-from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.entity.model import classify_http_failure
@@ -535,8 +534,6 @@ class OpenAIRealtimeDriver:
                 detail=request.reason,
                 provider_metadata={"history_session_reconnected": True},
             )
-        except RetryCancelled:
-            raise
         except Exception as exc:  # noqa: BLE001 - provider session boundary
             return HistorySyncResult(
                 SyncDisposition.BROKEN,
