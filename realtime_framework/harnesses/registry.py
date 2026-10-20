@@ -21,7 +21,8 @@ def create_agent(config, log_dir=None, *, trace=UNTRACED):
 
 
 def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
-    """Apply the run's clock note, scenario prompt and clock mode before initialize()."""
+    """Apply the run's clock note, task category, scenario prompt and clock mode before
+    initialize()."""
     from realtime_framework.harnesses.default.prompts import budget_clock_prompt
     from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 
@@ -32,6 +33,8 @@ def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
     )
     # Role/rules vary by scenario family; the task-specific objective is injected separately.
     agent.system_prompt_override = system_prompt_for_category(category)
+    # The context policy's prompts (item 11) are keyed by it.
+    agent.task_category = category
     # Adapters use this before run_stream() starts to decide whether terminal provider usage is
     # allowed to delay a committed wall-clock action.
     agent._clock_mode = clock_mode

@@ -20,11 +20,7 @@ from PIL import Image
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import FrameGeometry, Observation
 from realtime_framework.entity.config import DecisionBudget
-from realtime_framework.harnesses.default.prompts import (
-    REALTIME_WEB_SYSTEM_PROMPT,
-    budget_clock_prompt,
-)
-from realtime_framework.harnesses.registry import create_agent
+from realtime_framework.harnesses.registry import configure_agent, create_agent
 from realtime_framework.sandbox.observation.interactables import canonical_result
 from realtime_framework.sandbox.observation.som import ToolRuntime
 
@@ -212,9 +208,7 @@ def test_luna_choice_parts(tmp_path):
         timeout=30.0,
         transport=httpx.MockTransport(answer),
     )
-    agent.streaming_note = budget_clock_prompt(1.0, None, "wall")
-    agent.system_prompt_override = REALTIME_WEB_SYSTEM_PROMPT
-    agent._clock_mode = "wall"
+    configure_agent(agent, fps=1.0, tokens_per_frame=None, clock_mode="wall", category="realtime")
     agent.bind_tool_runtime(
         ToolRuntime(
             tmp_path / "tool_calls.jsonl",

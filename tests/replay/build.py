@@ -16,9 +16,7 @@ from pathlib import Path
 from realtime_framework.entity.config import DecisionBudget, ModelConfig
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
-from realtime_framework.harnesses.default.prompts import budget_clock_prompt
-from realtime_framework.harnesses.default.prompts import system_prompt_for_category
-from realtime_framework.harnesses.registry import create_agent
+from realtime_framework.harnesses.registry import configure_agent, create_agent
 from realtime_framework.providers.preflight import check_episode
 from realtime_framework.sandbox.observation.som import ToolRuntime
 
@@ -126,10 +124,13 @@ def build_episode(
         raise RuntimeError(
             f"the repository .env sets {injected}; replay baselines use the defaults"
         )
-    # runner.py:1564-1568
-    agent.streaming_note = budget_clock_prompt(fps, tokens_per_frame, clock_mode)
-    agent.system_prompt_override = system_prompt_for_category(task.category)  # runner.py:1570
-    agent._clock_mode = clock_mode  # runner.py:1573; run_stream sets it again (runner.py:126)
+    configure_agent(  # runner.py:1564-1570; run_stream sets the clock mode again (runner.py:126)
+        agent,
+        fps=fps,
+        tokens_per_frame=tokens_per_frame,
+        clock_mode=clock_mode,
+        category=task.category,
+    )
 
     capabilities = agent.driver.capabilities  # runner.py:1601-1605
     text_observation = (
