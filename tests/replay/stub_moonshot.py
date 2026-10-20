@@ -144,7 +144,7 @@ def redirect_to_stub(driver, port: int) -> StubTransport:
 
     The driver builds one AsyncOpenAI client and reuses it once set (providers/litellm.py:589-604),
     and LiteLLM sends through a passed client instead of building its own
-    (litellm/llms/openai/openai.py:376-464). The copy keeps every option of the client the driver
+    (litellm/llms/openai/openai.py:381-472). The copy keeps every option of the client the driver
     built (openai/_client.py:1203-1289) and only replaces its HTTP client: the SDK's defaults
     (openai/_base_client.py:1464-1469) over this transport. An httpx client given a transport
     mounts no proxies from the environment (httpx/_client.py:1399), so every request goes through

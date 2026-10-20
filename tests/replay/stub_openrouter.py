@@ -150,9 +150,9 @@ class OpenRouterStub:
 
 def _events(reply: Reply, model: str, index: int, route: dict) -> list[dict]:
     """OpenRouter's stream: every chunk carries id, created, model and choices (LiteLLM's parser
-    raises KeyError without them, litellm/llms/openrouter/chat/transformation.py:277-290),
+    raises KeyError without them, litellm/llms/openrouter/chat/transformation.py:273-286),
     reasoning arrives in ``delta.reasoning`` (copied to reasoning_content at transformation.py:
-    274-276), and the usage, with the route metadata, follows the finish chunk with no choices.
+    270-272), and the usage, with the route metadata, follows the finish chunk with no choices.
     A reply without usage (``usage=None``) ends at the finish chunk."""
     head = {
         "id": f"gen-replay-{index:04d}",

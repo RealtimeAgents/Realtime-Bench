@@ -188,7 +188,7 @@ def test_long_scenario_finite_token_clock(tmp_path, monkeypatch):
     config, records = _run(tmp_path, monkeypatch, LONG_SCENARIO, tokens_per_frame=TOKENS_PER_FRAME)
     native = config.native_output_limit
     # The driver names max_completion_tokens (providers/litellm.py:1152, 563-565); LiteLLM's
-    # moonshot config sends it as max_tokens (litellm/llms/moonshot/chat/transformation.py:134-135).
+    # moonshot config sends it as max_tokens (litellm/llms/moonshot/chat/transformation.py:141-142).
     caps = [_body(r)["max_tokens"] for r in records]
     assert all("max_completion_tokens" not in _body(r) for r in records)
     assert caps == [min(native, (MAX_TICKS - k) * TOKENS_PER_FRAME) for k in range(len(records))]

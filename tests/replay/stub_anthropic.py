@@ -2,7 +2,7 @@
 
 The anthropic_messages API sends through LiteLLM's Anthropic provider on LiteLLM's own
 AsyncHTTPHandler (providers/litellm.py:605-610, 626-630), which posts to ``{api_base}/v1/messages``
-(litellm/main.py:2879-2892). Each request is answered with the next scripted reply as server-sent
+(litellm/main.py:2914-2927). Each request is answered with the next scripted reply as server-sent
 events in the order the Messages API streams them: message_start carrying the input usage, a
 thinking block when the step has reasoning, a text block when it has visible output,
 message_delta carrying the stop reason and the output usage, and message_stop. The driver takes
@@ -55,8 +55,8 @@ def replies(steps: list[Step]) -> list[Reply]:
     cache that an ephemeral breakpoint without a ttl creates. message_start also carries the
     placeholder output count the API sends before generation; message_delta carries the final
     output count, which includes thinking, and the thinking share when the step has reasoning.
-    The fields are the ones LiteLLM parses (litellm/types/llms/anthropic.py:557-562, 617-636;
-    litellm/llms/anthropic/chat/transformation.py:2257-2265, 2351-2363) and the driver merges.
+    The fields are the ones LiteLLM parses (litellm/types/llms/anthropic.py:559-564, 619-641;
+    litellm/llms/anthropic/chat/transformation.py:2330-2338, 2424-2436) and the driver merges.
     """
     out = []
     for k, step in enumerate(steps):
@@ -91,7 +91,7 @@ class AnthropicMessagesStub:
 
     @property
     def base_url(self) -> str:
-        """The API base without a path; LiteLLM appends /v1/messages (litellm/main.py:2890-2892)."""
+        """The API base without a path; LiteLLM appends /v1/messages (litellm/main.py:2925-2927)."""
         return f"http://127.0.0.1:{self._server.server_address[1]}"
 
     @property
