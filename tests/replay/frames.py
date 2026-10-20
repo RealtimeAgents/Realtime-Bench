@@ -261,9 +261,11 @@ class FrameSource:
             text_observation=text_observation,
         )
 
-    def capture(self, tick: float):
+    def capture(self, tick: float, at: float | None = None):
+        """``at`` is the capture time; by default frame n is stamped CLOCK_ORIGIN + n/fps."""
         self.frame += 1
-        clock = types.SimpleNamespace(time=lambda: CLOCK_ORIGIN + self.frame / self._fps)
+        stamp = CLOCK_ORIGIN + self.frame / self._fps if at is None else at
+        clock = types.SimpleNamespace(time=lambda: stamp)
         with mock.patch.object(capture_module, "time", clock):
             observation = self._capture.capture(tick)
         # GuestEnvironment.capture adds its measured capture time (sandbox/actions.py:203).

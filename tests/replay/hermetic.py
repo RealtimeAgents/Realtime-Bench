@@ -23,7 +23,15 @@ HISTORY_ENV = (
     "STREAM_DETAILED_HISTORY_TURNS",
     "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
 )
-for _name in FRAME_ENV + HISTORY_ENV:
+# The runner's grace, drain, freeze and watchdog bounds are read once, at import
+# (evaluation/runner.py:49-60).
+RUNNER_ENV = (
+    "STREAM_DEADLINE_GRACE_S",
+    "STREAM_ABANDONED_DRAIN_S",
+    "STREAM_OBSERVATION_FREEZE_N",
+    "STREAM_PROVIDER_WATCHDOG_S",
+)
+for _name in FRAME_ENV + HISTORY_ENV + RUNNER_ENV:
     os.environ.pop(_name, None)
 
 
