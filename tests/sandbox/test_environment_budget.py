@@ -132,9 +132,11 @@ def _spent_the_budget(elapsed: float) -> None:
     assert BUDGET - 0.05 <= elapsed < BUDGET + SLACK, elapsed
 
 
-def _invalid(env, reason: str) -> None:
+def _invalid(env, reason: str, operation: str) -> None:
+    """The run is invalid for ``reason``, and the detail names ``operation``'s exceeded budget."""
     assert env._invalid_run["category"] == "environment"
     assert env._invalid_run["reason"] == reason
+    assert f"{operation} took longer than {BUDGET:g} s" in env._invalid_run["detail"]
 
 
 def test_an_action_budget_extends_for_text_input_and_holds_as_the_guest_request_does():
@@ -167,7 +169,7 @@ def test_a_slow_action_fails_within_its_budget(budgets):
     with FakeGuest(action_delay=5) as guest:
         env = _environment(guest)
         agent, elapsed = _run(env)
-    _invalid(env, "action_execution_failed")
+    _invalid(env, "action_execution_failed", "click action")
     assert agent.statuses == ["invalid_run"]
     _spent_the_budget(elapsed)
 
@@ -182,7 +184,7 @@ def test_an_action_and_its_page_barrier_share_one_budget(budgets):
             agent, elapsed = _run(env)
         finally:
             close_port(fake.port)
-    _invalid(env, "action_execution_failed")
+    _invalid(env, "action_execution_failed", "click action")
     assert len(guest.actions) == 1
     _spent_the_budget(elapsed)
 
@@ -192,7 +194,7 @@ def test_a_slow_capture_fails_within_its_budget(budgets):
     with FakeGuest(screenshot_delay=5) as guest:
         env = _environment(guest)
         agent, elapsed = _run(env)
-    _invalid(env, "observation_capture_failed")
+    _invalid(env, "observation_capture_failed", "capture")
     assert agent.statuses == []
     _spent_the_budget(elapsed)
 
@@ -202,7 +204,7 @@ def test_a_state_read_flooded_with_events_fails_within_its_budget(budgets, game)
     with FakeGuest() as guest, FakeCDP(mode="flood") as fake:
         env = _environment(guest, stop_check=game(fake).episode_over)
         agent, elapsed = _run(env)
-    _invalid(env, "terminal_state_check_failed")
+    _invalid(env, "terminal_state_check_failed", "state read")
     assert agent.statuses == []
     _spent_the_budget(elapsed)
 
@@ -227,7 +229,7 @@ def test_a_state_read_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, 
         finally:
             release.set()
             holder.join(5)
-    _invalid(env, "terminal_state_check_failed")
+    _invalid(env, "terminal_state_check_failed", "state read")
     assert fake.commands == []
     _spent_the_budget(elapsed)
 
@@ -240,7 +242,7 @@ def test_a_clock_advance_with_a_slow_connect_fails_within_its_budget(budgets, ga
         monkeypatch.setattr(task, "evaluation_snapshot", None)
         env = _environment(guest, task)
         agent, elapsed = _run(env)
-    _invalid(env, "clock_advance_failed")
+    _invalid(env, "clock_advance_failed", "clock advance")
     assert env._stop_reason == "invalid_run"
     assert len(guest.actions) == 1
     assert fake.commands == []
@@ -254,8 +256,7 @@ def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget(budgets, 
     with FakeGuest() as guest, FakeCDP(mode="flood") as fake:
         env = _environment(guest, game(fake), stop_check=lambda: True)
         agent, elapsed = _run(env)
-    _invalid(env, "evaluation_snapshot_failed")
+    _invalid(env, "evaluation_snapshot_failed", "snapshot read")
     assert env._termination_snapshot_captured is False
-    assert "snapshot read took longer than 0.5 s" in env._termination_snapshot_error
     assert agent.statuses == []
     _spent_the_budget(elapsed)
