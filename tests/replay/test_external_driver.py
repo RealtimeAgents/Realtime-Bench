@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -24,18 +25,31 @@ import yaml
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.config import (
     configuration_sha256,
     effective_run_config,
     external_driver_identity,
+    harness_fingerprint,
 )
+from realtime_framework.evaluation.harbor_cli import describe_agent
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
     check_episode,
     check_token_budget,
 )
 
+from . import baseline
+from .build import build_episode
+from .fake_env import FakeClock, FakeEnvironment
 from .frames import ReplayTask
+from .loop import check_wall_clock_properties, commit_statuses, run_loop
+from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
+from .steps import run_steps
+from .stub import ChatCompletionsStub
+from .test_chat_completions import BASELINES, _check_history_changes, _check_rejection_feedback
+from .test_runner_loop import LONG_LATENCIES, LONG_MAX_MINUTES
 
 TEMPLATE = Path(__file__).with_name("external_template")
 TARGET = "rtb_ext.chat:ExternalChatDriver"
@@ -89,6 +103,164 @@ def fails(call, message, kind=ValueError):
         call()
     assert type(caught.value) is kind
     assert str(caught.value) == message
+
+
+# The acceptance: load, pass the pre-run checks and run a whole episode, the repository unchanged.
+
+
+def _check_trace(run_dir: Path, stub: ChatCompletionsStub) -> None:
+    """The driver's own requests reach the episode trace through the capture hooks."""
+    validate_episode_trace(run_dir / "episode_trace.jsonl")
+    text = (run_dir / "episode_trace.jsonl").read_text()
+    assert "replay-external-key" not in text
+    events = [json.loads(line) for line in text.splitlines()]
+    closed = events[-1]["payload"]
+    assert events[-1]["event"] == "AgentTraceClosed" and closed["error"] is None
+    sent = [e["payload"] for e in events if e["event"] == "ModelRequestSent"]
+    assert len(sent) == len(stub.requests) == len(LONG_SCENARIO)
+    for k, (request, received) in enumerate(zip(sent, stub.requests)):
+        assert request["channel"] == "rtb_ext.chat" and request["exact_wire"]
+        assert request["scope"]["decision"] == k and request["scope"]["attempt"] == 1
+        assert ["authorization", "<redacted>"] in request["headers"]
+        assert load_body(run_dir / "episode_blobs.pack", request["body"]) == received.body
+    responses = [e["payload"] for e in events if e["event"] == "ModelResponseReceived"]
+    assert [r["complete"] for r in responses] == [True] * len(LONG_SCENARIO)
+    attempts = [e["payload"]["outcome"] for e in events if e["event"] == "ModelAttemptFinished"]
+    assert attempts == ["ok"] * len(LONG_SCENARIO)
+
+
+def steps(records: list[dict]) -> list[dict]:
+    return [record for record in records if record["record"] == "step"]
+
+
+def _without_detail(messages: list[dict]) -> list[dict]:
+    """chat_completions strips the image detail its endpoints reject (providers/litellm.py)."""
+    messages = copy.deepcopy(messages)
+    for message in messages:
+        for part in message["content"] if isinstance(message["content"], list) else ():
+            part.get("image_url", {}).pop("detail", None)
+    return messages
+
+
+def test_external_driver_full_episode(external, tmp_path, capsys):
+    repository = catalog.PROJECT_ROOT
+    fingerprint = harness_fingerprint()
+    apis = dict(catalog.APIS)
+    presets = sorted(path.name for path in (repository / "configs" / "models").iterdir())
+
+    with ChatCompletionsStub(replies(LONG_SCENARIO)) as stub:
+        yaml_path = write_model(external.models, base_url=stub.base_url)
+        # Load, as every entry point's first catalog lookup does.
+        entry = catalog.get(MODEL_KEY)
+        assert entry.adapter_type == TARGET
+        agent = {"model_name": MODEL_KEY}
+        describe_agent(agent)  # what rtbench run -m ext-replay shows and passes on
+        assert agent["model_name"] == "replay/ext-replay"
+        assert agent["kwargs"]["catalog_model"] == MODEL_KEY
+
+        # The Harbor trial worker's dry run, which Harbor's resolve hashes.
+        settings = trial_settings(capsys, MODEL_KEY)
+        assert settings["model_config"]["adapter_type"] == TARGET
+        assert settings["credential_variable"] == KEY_ENV
+
+        # The runner's pre-run checks (evaluation/runner.py): effort, finite budget, then the
+        # episode rules, which build_episode applies before it builds the agent.
+        catalog.validate_reasoning_effort(MODEL_KEY, "low")
+        check_token_budget(entry.adapter_type, clock_mode="wall", tokens_per_frame=None)
+        config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort="low")
+        identity = run_config(config)
+        assert identity["model_config"]["adapter_type"] == TARGET
+        assert identity["context_policy"]["api"] == "chat_completions"
+        assert identity["external_driver"] == settings["external_driver"]
+
+        run_dir = tmp_path / "run"
+        episode = build_episode(
+            config, run_dir, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+        )
+        driver = type(episode.agent.driver)
+        assert driver.__module__ == "rtb_ext.chat"
+        assert Path(sys.modules[driver.__module__].__file__).is_relative_to(external.site)
+        try:
+            records = run_steps(episode, LONG_SCENARIO, stub)
+        finally:
+            invalid_run = episode.finish()
+
+    assert invalid_run is None
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert all(len(r["requests"]) == 1 for r in records)
+    assert {r["requests"][0]["path"] for r in records} == {"/v1/chat/completions"}
+    assert all(r["result"]["inspection"]["valid"] for r in records)
+    # The first fold (decision 20) and archive (decision 50) reach the driver's requests.
+    _check_history_changes(records)
+    _check_rejection_feedback(records)
+    _check_trace(run_dir, stub)
+
+    header = {"record": "header", "api": TARGET, "scenario": "long", "config": config.model_dump()}
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(run_dir)])
+    # The same agent and context-policy row with a registered encoder on the same replies: what
+    # the agent saw, did and was told, and its history, are identical, and so is each request but
+    # for the image detail. Only the encoder's own labels differ.
+    expected = baseline.read(BASELINES / "chat_completions-nonstream-long.jsonl")
+    labels = {"backend_route", "protocol_family", "history_sync"}
+    for old, new in zip(steps(expected), steps(actual), strict=True):
+        for name in ("observation", "commit", "action_history_entry", "token_usage"):
+            assert new[name] == old[name], (new["step"], name)
+        for name in ("action", "action_protocol", "raw", "thinking", "usage", "inspection"):
+            assert new["result"][name] == old["result"][name], (new["step"], name)
+        runtime = [
+            {key: value for key, value in record["result"]["realtime_runtime"].items()
+             if key not in labels}
+            for record in (old, new)
+        ]
+        assert runtime[1] == runtime[0], new["step"]
+        assert _without_detail(new["requests"][0]["body"]["messages"]) == (
+            old["requests"][0]["body"]["messages"]
+        )
+
+    path = BASELINES / "external_driver-long.jsonl"
+    if os.environ.get("REPLAY_RECORD") == "1":
+        baseline.write(path, actual)
+    else:
+        problems = baseline.compare(baseline.read(path), actual)
+        assert not problems, f"{len(problems)} difference(s) from {path.name}:\n" + "\n".join(
+            problems[:60]
+        )
+
+    # Nothing in the repository changed or names the driver.
+    assert harness_fingerprint() == fingerprint
+    assert catalog.APIS == apis
+    assert sorted(path.name for path in (repository / "configs" / "models").iterdir()) == presets
+    assert not yaml_path.is_relative_to(repository)
+    assert not external.site.is_relative_to(repository)
+
+
+def test_external_driver_through_run_stream(external, tmp_path):
+    """The same episode through the runner's own decision loop (evaluation/runner.py run_stream)
+    on the wall clock, against the fake environment of test_runner_loop.py."""
+    environments = []
+    with ChatCompletionsStub(
+        replies(LONG_SCENARIO), on_request=lambda index: environments[0].model_request(index)
+    ) as stub:
+        write_model(external.models, base_url=stub.base_url)
+        config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort="low")
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+        )
+        env = FakeEnvironment(
+            episode.frames,
+            FakeClock(),
+            fps=config.fps,
+            max_minutes=LONG_MAX_MINUTES,
+            reply_latencies=LONG_LATENCIES,
+            rejections={k: s.detail for k, s in enumerate(LONG_SCENARIO) if s.status == "rejected"},
+        )
+        environments.append(env)
+        run_loop(episode, env)
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    check_wall_clock_properties(env, "time_limit")
+    assert commit_statuses(env) == [
+        (k, step.status, step.detail) for k, step in enumerate(LONG_SCENARIO)
+    ]
 
 
 # Loading and the pre-run checks read the class's own declarations.
