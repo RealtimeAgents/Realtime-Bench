@@ -151,7 +151,7 @@ GAME_TITLE = "Replay game"
 BOARD_BOX = (360, 140, 1560, 1040)
 
 
-class ReplayGameTask:
+class ReplayGameTask(frames.ReplayTask):
     """The attributes the runner and BrowserSceneCapture read for a browser game."""
 
     task_id = "replay-game"

@@ -1,5 +1,7 @@
-"""Set up an agent the way evaluation/runner.py main() does, without containers or a task server.
+"""Set up an agent with the runner's set_up_agent, without containers or a task server.
 
+runner.main() and build_episode both call set_up_agent (evaluation/runner.py); in place of a
+BrowserSceneCapture on the container's browser, build_episode hands it the synthetic frames.
 The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
 frame budget B (None on the wall clock and in pause mode, runner.py:1409-1410), and ``max_ticks``
 is the episode length run_stream receives (runner.py:1775). The finite token clock changes the
@@ -12,14 +14,13 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 from realtime_framework.entity.config import DecisionBudget, ModelConfig
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
-from realtime_framework.harnesses.registry import configure_agent, create_agent
-from realtime_framework.providers.preflight import check_episode
-from realtime_framework.sandbox.observation.som import ToolRuntime
+from realtime_framework.harnesses.registry import create_agent
 
 from .frames import FrameSource
 from .hermetic import HISTORY_ENV
@@ -110,59 +111,49 @@ def build_episode(
     scene: dict | None = None,
 ) -> Episode:
     """``model_key`` stands for the catalog key the runner records as the model identity.
-    ``before_initialize(agent)`` runs just before initialize(), which may open a connection.
-    ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other than the form."""
-    fps = config.fps
-    check_episode(config, clock_mode=clock_mode, task=task, env_fps=fps)  # runner.py:1566
-    # runner.main() opens the episode trace, then hands the agent its write entry.
+    ``before_initialize(agent)`` runs on the new agent, before initialize() may open a
+    connection. ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other
+    than the form."""
+    fps = config.fps  # main() passes --fps as both rates (runner.py:1421)
+
+    def checked_create_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        # create_agent loads the repository .env (harnesses/registry.py:10 calls
+        # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
+        injected = sorted(name for name in HISTORY_ENV if name in os.environ)
+        if injected:
+            raise RuntimeError(
+                f"the repository .env sets {injected}; replay baselines use the defaults"
+            )
+        if before_initialize is not None:
+            before_initialize(agent)
+        return agent
+
+    # runner.main() opens the episode trace before it sets up the agent.
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
-    agent_trace = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
-    agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1569
-    # create_agent loads the repository .env (harnesses/registry.py:10 calls
-    # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
-    injected = sorted(name for name in HISTORY_ENV if name in os.environ)
-    if injected:
-        raise RuntimeError(
-            f"the repository .env sets {injected}; replay baselines use the defaults"
+    setup = runner.AgentSetup()
+    with mock.patch.object(runner, "create_agent", checked_create_agent):
+        runner.set_up_agent(
+            setup,
+            config,
+            task,
+            instruction,
+            clock_mode=clock_mode,
+            env_fps=fps,
+            tokens_per_frame=tokens_per_frame,
+            run_dir=run_dir,
+            episode_trace=trace,
+            model=model_key,
+            open_capture=lambda text_observation: FrameSource(
+                task, text_observation=text_observation, fps=fps, **(scene or {})
+            ),
         )
-    configure_agent(  # runner.py:1570-1576; run_stream sets the clock mode again (runner.py:128)
-        agent,
-        fps=fps,
-        tokens_per_frame=tokens_per_frame,
-        clock_mode=clock_mode,
-        category=task.category,
-    )
-
-    # runner.py:1604-1607
-    context_policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
-    text_observation = context_policy.observation != "som_screenshot"
-    frames = FrameSource(  # runner.py:1608-1615
-        task, text_observation=text_observation, fps=fps, **(scene or {})
-    )
-    tool_runtime = ToolRuntime(  # runner.py:1616-1622
-        run_dir / "tool_calls.jsonl",
-        task_id=task.task_id,
-        adapter=config.adapter_type,
-        model=model_key,
-        text_observation=text_observation,
-    )
-    agent.bind_tool_runtime(tool_runtime)  # runner.py:1623-1624
-
-    initial_observation = frames.capture(0)  # runner.py:1632
-    interactables = initial_observation.metadata.get("interactables") or {}
-    # The runner refuses to start without a bound, stable first frame (runner.py:1633-1641).
-    assert interactables.get("scene", {}).get("status") == "ok"
-    assert interactables.get("binding", {}).get("stable")
-    if before_initialize is not None:
-        before_initialize(agent)
-    agent.initialize(instruction, initial_observation)  # runner.py:1646
-    agent.discard_pending_observations()  # runner.py:1649
     return Episode(
-        agent=agent,
-        frames=frames,
+        agent=setup.agent,
+        frames=setup.scene_capture,
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
         max_ticks=max_ticks,
         trace=trace,
-        agent_trace=agent_trace,
+        agent_trace=setup.agent_trace,
     )
