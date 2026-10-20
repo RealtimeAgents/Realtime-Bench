@@ -24,6 +24,10 @@ leaderboard scores every task over the three runs (pass^k and pass@k).
 
 ## Submit to the leaderboard
 
+`rtbench upload` refuses the results of an
+[external driver](model_configuration.md#use-an-external-driver); contribute the driver as a model
+API first.
+
 1. **Get a submission token.** Email **realtime-agents@utlists.utexas.edu** with the model's name
    and your organization. Put the token we send you in `.env` as `RTBENCH_SUBMIT_TOKEN`.
 2. **Upload the three runs:**
