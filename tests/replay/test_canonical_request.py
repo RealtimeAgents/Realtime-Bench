@@ -15,7 +15,7 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
-from realtime_framework.harnesses.jev.context import decision_messages
+from realtime_framework.providers.decisions.history import decision_messages
 from realtime_framework.providers.legacy import chat_messages, session_frame_text
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 

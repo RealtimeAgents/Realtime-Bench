@@ -22,8 +22,8 @@ from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.request import build_request, system_block
-from realtime_framework.harnesses.jev.selection import ChoiceDecision
 from realtime_framework.providers.capture import REDACTED, SECRET_HEADERS
+from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
 from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient

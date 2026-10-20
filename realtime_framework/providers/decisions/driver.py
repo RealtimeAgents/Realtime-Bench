@@ -24,8 +24,8 @@ from realtime_framework.entity.model import (
     TransportFailureError,
     exception_chain,
 )
-from realtime_framework.harnesses.jev.context import decision_messages
-from realtime_framework.harnesses.jev.selection import SELECTION_POLICY, ChoiceDecision
+from realtime_framework.providers.decisions.history import decision_messages
+from realtime_framework.providers.decisions.selection import SELECTION_POLICY, ChoiceDecision
 
 
 class ChoiceDecisionDriver:
