@@ -1821,7 +1821,7 @@ def main():
             }
             _atomic_write_json(run_dir / "active-loop.json", active_loop)
             episode_trace.emit("ActiveLoopEnded", active_loop)
-        R._stop_screen_recording(run_dir, frames_dir, env_fps)
+        R._stop_screen_recording(run_dir, frames_dir, model_input_fps)
         _recorder_on = False
         # INFERENCE/EVAL BOUNDARY: run_stream freezes live scorer input at the latched terminal tick,
         # before it releases held keys or mouse buttons. Consume that exact snapshot here, before
@@ -1985,7 +1985,7 @@ def main():
         # The shared container remains available for subsequent runs.
         if _recorder_on:
             try:
-                R._stop_screen_recording(run_dir, frames_dir, env_fps)
+                R._stop_screen_recording(run_dir, frames_dir, model_input_fps)
             except Exception:
                 pass
         try:
