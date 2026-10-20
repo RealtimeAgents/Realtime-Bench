@@ -8,7 +8,10 @@ names the driver.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -320,3 +323,78 @@ def test_configuration_hash_of_registered_models(capsys):
     ).hexdigest()
 
 
+# External results are unofficial: the mark follows the YAML form to the upload check.
+
+
+def resolved_request(monkeypatch, tmp_path, key: str) -> dict:
+    """The request Harbor's environment resolves for a catalog key, running the trial worker's
+    dry run in this interpreter (evaluation/harbor.py ApptainerEnvironment.resolve)."""
+    from harbor.environments.base import ExecResult
+
+    from realtime_framework.evaluation import harbor
+    from realtime_framework.evaluation._trial import main
+
+    images = {kind: tmp_path / f"{kind}.sif" for kind in ("sandbox", "realtime")}
+    for image in images.values():
+        image.touch()
+    suite = {
+        "suite_id": "public", "suite_version": "1.0", "suite_hash": "0" * 64,
+        "harness_version": "1.0", "harness_hash": "1" * 64,
+        "images": {kind: str(path) for kind, path in images.items()},
+        "tasks": [{"task_id": WEB_TASK, "category": "realtime"}],
+    }
+    monkeypatch.setattr(harbor, "runtime", lambda root, python, suite_id: suite)
+
+    async def run(command, **options):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(command[3:])  # after "python -m realtime_framework.evaluation._trial"
+        return ExecResult(return_code=code, stdout=out.getvalue(), stderr="")
+
+    environment = object.__new__(harbor.ApptainerEnvironment)
+    environment.root, environment.python, environment.lane = catalog.PROJECT_ROOT, "python", 1
+    environment.task_id = WEB_TASK
+    environment._run = run
+    environment._runner_environment = lambda extra_env: {}
+    request = {
+        "model": key, "mode": "default", "catalog_model": key, "suite": "public", "fps": 1,
+        "duration_minutes": 5.0, "seed": 42, "clock": "wall", "stream": True,
+    }
+    return asyncio.run(environment.resolve(request))
+
+
+def submit(tmp_path, request: dict):
+    """rtbench upload's check of three jobs, one trial each, before any upload."""
+    from realtime_framework.evaluation.submission import check_runs
+
+    jobs = []
+    for run in (1, 2, 3):
+        trial = tmp_path / f"run{run}" / f"{WEB_TASK}__trial"
+        (trial / "agent").mkdir(parents=True)
+        (trial / "agent" / "request.json").write_text(json.dumps(request))
+        jobs.append(trial.parent)
+    return check_runs(jobs)
+
+
+def test_upload_refuses_external_driver_results(external, tmp_path, monkeypatch, capsys):
+    from realtime_framework.evaluation.submission import SubmissionError
+
+    write_model(external.models)
+    shutil.copy(catalog.PROJECT_ROOT / "configs" / "models" / "my-model.yaml", external.models)
+    identity = trial_settings(capsys, MODEL_KEY)["external_driver"]
+    request = resolved_request(monkeypatch, tmp_path, MODEL_KEY)
+    assert request["external_driver"] == identity
+    with pytest.raises(SubmissionError) as caught:
+        submit(tmp_path / "external", request)
+    assert str(caught.value) == (
+        f"{tmp_path / 'external' / 'run1'}: rtb_ext.chat:ExternalChatDriver is an external "
+        "driver, so its results are not official; drivers are registered by contributing them "
+        "to the repository"
+    )
+
+    # The same jobs of a registered model pass (their trial errors count as failures).
+    request = resolved_request(monkeypatch, tmp_path, "my-model")
+    assert "external_driver" not in request
+    reports = submit(tmp_path / "registered", request)
+    assert [report["outcomes"]["error"] for report in reports] == [1, 1, 1]
+    assert all("external_driver" not in report for report in reports)

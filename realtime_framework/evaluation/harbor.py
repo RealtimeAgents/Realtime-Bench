@@ -521,6 +521,8 @@ class ApptainerEnvironment(BaseEnvironment):
         launch = json.loads(resolved.stdout)
         from realtime_framework.evaluation.config import configuration_sha256
 
+        # Marks the results of an external driver as unofficial (evaluation/submission.py).
+        external = {"external_driver": launch["external_driver"]} if "external_driver" in launch else {}
         return {
             **request,
             "model": launch["model_config"]["model_name"],
@@ -528,6 +530,7 @@ class ApptainerEnvironment(BaseEnvironment):
             # Compare with the actual report so edits between resolution and execution
             # cannot silently evaluate a different configuration.
             "configuration_sha256": configuration_sha256(launch),
+            **external,
         }
 
     async def run_benchmark(self, request, extra_env=None):
@@ -825,6 +828,7 @@ def aggregate(job, *, official=False):
         "model": system.get("model"),
         "model_revision": system.get("model_revision"),
         "mode": system.get("mode"),
+        **({"external_driver": system["external_driver"]} if "external_driver" in system else {}),
         "integration_hash": hashlib.sha256(next(iter(systems)).encode()).hexdigest()
         if systems
         else None,
