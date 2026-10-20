@@ -1,5 +1,4 @@
 from __future__ import annotations
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 
 # Session
 """Model-session history helpers without token estimation or token-based eviction."""
@@ -114,8 +113,14 @@ from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import RuntimeTurnResult
 from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.request import CanonicalRequest
+from realtime_framework.entity.request import ContentBlock
+from realtime_framework.harnesses.default.request import ledger_block
 from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.sandbox.observation.som import without_observation_interactables
+
+# Builds the canonical request from the turns to send and the archived-action ledger block.
+RequestBuilder = Callable[[tuple[CanonicalTurn, ...], ContentBlock | None], CanonicalRequest]
 
 
 class RealtimeRuntime:
@@ -240,6 +245,9 @@ class RealtimeRuntime:
 
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
+
+    def ledger_block(self, ledger: str) -> ContentBlock | None:
+        return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
 
     def _record_archived_turns(self, turns: Iterable[CanonicalTurn]) -> int:
         indexes = [
@@ -389,7 +397,7 @@ class RealtimeRuntime:
         *,
         action_history: list[dict],
         epoch: int,
-        message_builder: Callable[[tuple[CanonicalTurn, ...]], tuple[dict, ...]] | None,
+        request_builder: RequestBuilder,
         decision: int,
     ) -> RuntimeTurnResult:
         if len(observations) != 1:
@@ -434,47 +442,38 @@ class RealtimeRuntime:
         for turn, refs in zip(incoming, input_refs):
             turn.provider_refs.update(refs or {})
 
-        if message_builder is not None:
-            compactions = 0
-            archived_count = 0
-            while True:
-                messages = list(message_builder(tuple(self._turns + incoming)))
-                executed_action_ledger = self._action_ledger(action_history)
-                if executed_action_ledger:
-                    messages.insert(
-                        1,
-                        {
-                            "role": "user",
-                            "content": ARCHIVED_ACTION_LEDGER_HEADER
-                            + "\n"
-                            + executed_action_ledger,
-                        },
-                    )
-                request = replace(request, messages=tuple(messages))
-                if not self.policy.pressure_archive:
-                    break
-                status = dict(await self.driver.request_context_status(request))
-                physical_metadata.setdefault("request_context_before", status)
-                physical_metadata.update(
-                    request_context=status,
-                    request_context_compactions=compactions,
-                    request_context_archived_turns=archived_count,
+        compactions = 0
+        archived_count = 0
+        while True:
+            executed_action_ledger = self._action_ledger(action_history)
+            canonical = request_builder(
+                tuple(self._turns + incoming), self.ledger_block(executed_action_ledger)
+            )
+            request = replace(request, canonical=canonical)
+            if not self.policy.pressure_archive:
+                break
+            status = dict(await self.driver.request_context_status(request))
+            physical_metadata.setdefault("request_context_before", status)
+            physical_metadata.update(
+                request_context=status,
+                request_context_compactions=compactions,
+                request_context_archived_turns=archived_count,
+            )
+            if not status.get("pressure"):
+                break
+            if self.capabilities.persistent_session:
+                raise RuntimeError(
+                    "Request exceeds physical context; driver must implement native context compaction"
                 )
-                if not status.get("pressure"):
-                    break
-                if self.capabilities.persistent_session:
-                    raise RuntimeError(
-                        "Request exceeds physical context; driver must implement native context compaction"
-                    )
-                if not self._turns:
-                    raise RuntimeError(
-                        "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
-                    )
-                archived = self._turns[: self.policy.turns.block]
-                del self._turns[: len(archived)]
-                self._record_archived_turns(archived)
-                compactions += 1
-                archived_count += len(archived)
+            if not self._turns:
+                raise RuntimeError(
+                    "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
+                )
+            archived = self._turns[: self.policy.turns.block]
+            del self._turns[: len(archived)]
+            self._record_archived_turns(archived)
+            compactions += 1
+            archived_count += len(archived)
 
         self._set_state(RuntimeState.GENERATING)
         provider_call_started_monotonic_ns = time.monotonic_ns()
@@ -544,8 +543,7 @@ class RealtimeRuntime:
         if not stale:
             incoming[-1].output = output.text
             incoming[-1].output_wall_ns = time.time_ns()
-            if output.reasoning_text and getattr(self.driver, "preserve_reasoning_history", False):
-                incoming[-1].provider_refs["reasoning_content"] = output.reasoning_text
+            incoming[-1].output_reasoning = output.reasoning_text
             incoming[-1].action_history_index = len(action_history)
             incoming[-1].provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
             self._turns.extend(incoming)
@@ -594,7 +592,7 @@ class RealtimeRuntime:
         *,
         action_history: list[dict],
         timeout: float | None,
-        message_builder: Callable[[tuple[CanonicalTurn, ...]], tuple[dict, ...]] | None = None,
+        request_builder: RequestBuilder,
         decision: int,
     ) -> RuntimeTurnResult:
         epoch = self.generation_epoch()
@@ -606,7 +604,7 @@ class RealtimeRuntime:
                     collector,
                     action_history=action_history,
                     epoch=epoch,
-                    message_builder=message_builder,
+                    request_builder=request_builder,
                     decision=decision,
                 ),
                 timeout=timeout,

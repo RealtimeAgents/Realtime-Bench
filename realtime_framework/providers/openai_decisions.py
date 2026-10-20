@@ -31,6 +31,7 @@ from realtime_framework.providers.context import (
     estimated_request_tokens,
     validate_context_reserve,
 )
+from realtime_framework.providers.legacy import chat_messages
 
 QUESTION_KEY = "next_action"
 
@@ -115,7 +116,9 @@ class OpenAIDecisionsClient:
         if self.config.context_window_tokens is None:
             return {"pressure": False, "counter": "unconfigured"}
         validate_context_reserve(self.config)
-        count = estimated_request_tokens(request.messages, self.config.context_image_tokens)
+        count = estimated_request_tokens(
+            chat_messages(request.canonical), self.config.context_image_tokens
+        )
         return context_status(self.config, count, "estimated_utf8_bytes_plus_image_allowance")
 
     def _wire_state(self, state):

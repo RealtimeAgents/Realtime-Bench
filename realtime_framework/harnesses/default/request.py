@@ -87,12 +87,14 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
     provider_message = (
         turn.provider_refs.get("assistant_message") if policy.verbatim_replay else None
     )
-    reasoning = (
-        (turn.provider_refs.get("reasoning_content") or "") if policy.reasoning_replay else ""
-    )
+    reasoning = turn.output_reasoning if policy.reasoning_replay else ""
     if provider_message is not None or turn.output or reasoning:
         output = _output(turn, reasoning=reasoning, provider_message=provider_message)
         items.append(RequestItem(output, Intent("model", "in_order")))
+    # Stateless transports rebuild from this canonical sequence on every request. Attach each
+    # action's actual execution result at its causal position, rather than appending a growing
+    # duplicate ledger after the newest observation. Older turns form a stable prefix after their
+    # SoM text is retired, until a block fold/archive changes it.
     if policy.feedback == "separate_message" and turn.execution_feedback:
         items.append(RequestItem(_feedback(turn), Intent("input", "in_order")))
     if policy.tool_call_replay is not None:

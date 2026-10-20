@@ -60,35 +60,6 @@ def compact_ledger_messages(messages) -> list[dict]:
     return result
 
 
-def observation_messages(system_instruction: str, turns) -> tuple[dict, ...]:
-    """Action-digest state: the executed action/feedback ledger plus the current observation.
-
-    Older screenshots, SoM and choices are not resent.
-    """
-    messages = [{"role": "system", "content": system_instruction}]
-    if not turns:
-        return tuple(messages)
-    history = []
-    for turn in turns[:-1]:
-        if turn.output or turn.execution_feedback:
-            history.append({
-                "observation_id": turn.observation.observation_id,
-                "action": turn.output,
-                "execution_feedback": turn.execution_feedback or "",
-            })
-    if history:
-        messages.append({"role": "user", "content": JEV_HISTORY_PREFIX
-                         + json.dumps(compact_repeated_records(history, ("observation_id",)),
-                                      ensure_ascii=False)})
-    latest = turns[-1]
-    # The harness omits live candidates and the composition vocabulary from the prompt; they
-    # are sent as native Choice criteria.
-    current = json.loads(latest.observation.prompt.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
-    messages.append({"role": "user", "content": JEV_CURRENT_PREFIX
-                     + json.dumps(current, ensure_ascii=False)})
-    return tuple(messages)
-
-
 def digest_messages(request) -> tuple[dict, ...]:
     """Action-digest state: the executed action/feedback ledger plus the current observation.
 
