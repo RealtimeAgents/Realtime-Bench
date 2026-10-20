@@ -29,7 +29,7 @@ from realtime_framework.providers.openai_realtime_session import (
 
 POLICY = phase1_context_policy().for_path("openai_realtime", {})
 TEXTS = POLICY.texts
-SYSTEM = system_block("system instruction")
+SYSTEM = system_block("system instruction", None)
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("gpt-realtime-2", "low", None)
 

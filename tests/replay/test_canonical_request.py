@@ -23,7 +23,7 @@ from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES
 POLICY = phase1_context_policy()
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("replay-vlm", "low", None)
-SYSTEM = system_block("SYSTEM")
+SYSTEM = system_block("SYSTEM", None)
 LEDGER = ledger_block('{"decision":1}', 1, None)
 
 

@@ -302,7 +302,7 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     driver.bind_trace(sink)
     canonical = build_request(
         phase1_context_policy().for_path(config.adapter_type, config.provider_options),
-        system_block("count me"),
+        system_block("count me", None),
         (),
         None,
         AnswerRequirements("text_json", "standard_vlm"),
@@ -431,7 +431,7 @@ def _request(config):
     )
     return build_request(
         phase1_context_policy().for_path(config.adapter_type, config.provider_options),
-        system_block("system"),
+        system_block("system", None),
         turns,
         ledger_block('{"decision": 0}', 1, None),
         AnswerRequirements("choice", "replay_choice", choice=choice),
