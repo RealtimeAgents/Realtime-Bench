@@ -789,12 +789,11 @@ class ToolRuntime:
             "image_mime_subtype": som.get("image_mime_subtype") if som else None,
         }
 
-    def resolve_action(self, action, execution: dict | None):
-        """Compile current-observation mark references into the canonical coordinate action."""
-        marks = execution.get("marks") if isinstance(execution, dict) else {}
-        resolved, trace = resolve_action_references(action, marks or {})
-        if isinstance(execution, dict):
-            execution["reference_resolution"] = trace
+    def resolve_action(self, action, marks: dict, execution: dict):
+        """Compile mark references against one frame's marks into the canonical coordinate
+        action, and keep the resolution for ``execution``'s trace row."""
+        resolved, trace = resolve_action_references(action, marks)
+        execution["reference_resolution"] = trace
         return resolved
 
     def finish(

@@ -838,6 +838,7 @@ from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
+from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.jev.observation import choice_observation
@@ -910,7 +911,8 @@ class _GenerationOutputCollector:
 
 
 def bind_observation(agent, observation, prompt, tick):
-    """Prepare one capture for the model and attach its read-only interactables."""
+    """Prepare one capture for the model, attach its read-only interactables and enter it in the
+    frame table."""
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
     observation.metadata = metadata
@@ -949,11 +951,19 @@ def bind_observation(agent, observation, prompt, tick):
         geometry=prepared.geometry.to_dict(),
         inspection=execution.get("proof") if execution else None,
     )
+    agent.frames.register(
+        value.observation_id,
+        observation.timestamp,
+        value.geometry,
+        execution["marks"] if execution else None,
+    )
     return value, execution
 
 
-def parse_grounded_action(agent, text, observation, execution):
-    """Parse one action from model output and ground its marks in the observation it used."""
+def parse_grounded_action(agent, text, frame, execution):
+    """Parse one action from model output and interpret it against a frame-table entry: the
+    frame's marks resolve its element references and its geometry binds its coordinates.
+    ``execution`` is the decision's inspection; its tool trace records the resolution."""
 
     def parse_and_ground(body):
         parsed = agent.interaction_profile.parse_action(agent, body)
@@ -961,13 +971,13 @@ def parse_grounded_action(agent, text, observation, execution):
             return None
         runtime = getattr(agent, "tool_runtime", None)
         if runtime is not None and execution is not None:
-            return runtime.resolve_action(parsed, execution)
+            return runtime.resolve_action(parsed, frame.marks, execution)
         return None if action_has_target_references(parsed) else parsed
 
     resolution = resolve_action_output(text, parse_and_ground)
     action_protocol = resolution.metadata()
     action = agent.interaction_profile.bind_action(
-        resolution.action, FrameGeometry.from_dict(observation.geometry)
+        resolution.action, FrameGeometry.from_dict(frame.geometry)
     )
     if execution is not None:
         action_protocol["grounding"] = execution.get("reference_resolution")
@@ -1045,6 +1055,7 @@ class DefaultHarness(VisionAgentBase):
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
         self._pending_feedback = ""
+        self.frames = FrameTable()
         self.interaction_profile = INTERACTION_PROFILES[
             self._context_policy.prompts[self.task_category]  # context policy item 11
         ]
@@ -1371,6 +1382,11 @@ class DefaultHarness(VisionAgentBase):
             pass
         else:
             self._attempt_finished(request, len(retry_reasons) + 1, runtime_result)
+            # The runtime takes exactly one observation per generation: the newest frame.
+            self.frames.record_sent(
+                self.frames.latest().frame,
+                runtime_result.provider_metadata["provider_call_started_wall_time_ns"] / 1e9,
+            )
             if retry_reasons:
                 runtime_result.provider_metadata.update(
                     {
@@ -1450,7 +1466,7 @@ class DefaultHarness(VisionAgentBase):
                 action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
             action, action_protocol = parse_grounded_action(
-                self, output.text, action_observation, newest_execution
+                self, output.text, self.frames.latest(), newest_execution
             )
         thinking = output.reasoning_text
         serialization = output.token_fields.get("action_serialization")
