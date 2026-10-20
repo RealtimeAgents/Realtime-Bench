@@ -90,8 +90,11 @@ A model that needs a new wire protocol gets a driver:
    the hooks in `realtime_framework/providers/capture.py`, so every request and response is
    recorded.
 2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
-   timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports and
-   which optional methods it implements; the pre-run checks (`providers/preflight.py`) read it.
+   timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
+   which optional methods it implements, and what it can render of the context policy: `roles`,
+   `feedback_placements`, `reasoning_replay`, `server_context` and, for function-call sessions,
+   `tool_call_replay`. The pre-run checks (`providers/preflight.py`) read it; an undeclared value
+   counts as unsupported, and a context policy the driver cannot render is refused.
    Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
    `model_defaults` (per-model ModelConfig defaults, usually `{}`). Function-call drivers send the
    function declarations the harness puts in `SessionSeed.answer`.
@@ -105,7 +108,7 @@ A model that needs a new wire protocol gets a driver:
 5. Register the driver class as one `"package.module:Class"` entry in `APIS`
    (`realtime_framework/providers/registry.py`) and reference it from a preset with
    `endpoint.api`.
-6. Add the API's own row to `phase1_context_policy()`
+6. Add the API's own row to `current_context_policy()`
    (`realtime_framework/entity/context_policy.py`); a registered API without one is refused when
    its context policy is resolved.
 
@@ -119,8 +122,11 @@ driver as a [model API](#add-a-model-api).
    `deployment` and `model_defaults` as class attributes. Set `finite_frame_budget`,
    `wall_clock_only` and `accepts_reasoning_effort` explicitly: their defaults claim that the
    driver reports complete usage on a finite token clock, runs on any clock and accepts every
-   reasoning effort. Each optional-method flag you set (`classifies_transport_errors`,
-   `connection_renewal`, `maps_output_cap`) needs its method. The driver runs under the
+   reasoning effort. Declare `roles` (the request roles you map, e.g.
+   `("instruction", "input", "model")`), `feedback_placements=("separate_message",)` and
+   `server_context="none"` for a stateless API. Each optional-method flag you set
+   (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
+   `maps_output_cap`) needs its method. The driver runs under the
    `chat_completions` context policy, which archives turns when a request exceeds the context
    window, so it also implements `request_context_status(request)`; a driver that declares no
    window returns `{"pressure": False, "counter": "unconfigured"}`.

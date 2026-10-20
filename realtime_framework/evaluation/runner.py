@@ -1302,7 +1302,7 @@ from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import UnsupportedTokenBudget
 from realtime_framework.providers.preflight import check_episode
 from realtime_framework.providers.preflight import check_token_budget
@@ -2387,7 +2387,7 @@ def set_up_agent(
     setup.stage = "tool_setup"
     # Choice models need focused fields and control state to enumerate actions,
     # including when they also receive screenshots (context policy item 12).
-    context_policy = phase1_context_policy().for_path(cfg.adapter_type, cfg.provider_options)
+    context_policy = current_context_policy().for_path(cfg.adapter_type, cfg.provider_options)
     text_observation = context_policy.observation != "som_screenshot"
     scene_capture = setup.scene_capture = open_capture(text_observation)
     setup.tool_runtime = ToolRuntime(

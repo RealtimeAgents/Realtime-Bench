@@ -832,7 +832,7 @@ def _retry_usage_status(usages):
     return "partial" if any(u is not None for u in usages) else "unavailable"
 from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollector
 from realtime_framework.harnesses.default.context import RealtimeRuntime
-from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
@@ -1004,7 +1004,7 @@ class DefaultHarness(VisionAgentBase):
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config, clock=self.clock)
         self.driver.bind_trace(self._trace)
-        self._context_policy = phase1_context_policy().for_path(
+        self._context_policy = current_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
         self._runtime = RealtimeRuntime(

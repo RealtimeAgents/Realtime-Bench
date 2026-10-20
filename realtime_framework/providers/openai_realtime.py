@@ -147,6 +147,9 @@ class OpenAIRealtimeDriver:
     capabilities = RealtimeCapabilities(
         protocol_family="openai_realtime",
         persistent_session=True,
+        roles=("instruction", "input", "model"),
+        feedback_placements=("frame_prefix",),
+        server_context="unknown",
         can_compact_history_in_place=True,
         terminal_output_usage=True,
         classifies_transport_errors=True,

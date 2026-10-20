@@ -61,6 +61,11 @@ class OpenAIDecisionsClient(DecisionEncoder):
         persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
+        # Decisions state has no roles (providers/decisions/history.py render_transcript).
+        labels_instead_of_roles=True,
+        feedback_placements=("separate_message",),
+        server_context="none",
+        max_choices=255,
         finite_frame_budget=False,
         wall_clock_only=True,
         accepts_reasoning_effort=False,
@@ -68,8 +73,6 @@ class OpenAIDecisionsClient(DecisionEncoder):
         request_size_estimation=True,
     )
     deployment = Deployment(family="vlm", provider="openrouter", key_env="OPENROUTER_API_KEY")
-    # Choices per question; the selection flow groups larger candidate sets.
-    max_choices = 255
     pin_route = True
     # Per-model catalog defaults (providers/registry.py).
     model_defaults: ClassVar[dict[str, dict]] = {
@@ -104,8 +107,10 @@ class OpenAIDecisionsClient(DecisionEncoder):
         criteria = question.get("criteria")
         if question.get("type") != "choice" or not isinstance(criteria, dict) or not criteria:
             raise ValueError("Decisions requires a nonempty choice question")
-        if len(criteria) > self.max_choices:
-            raise ValueError(f"Decisions accepts at most {self.max_choices} choices per call")
+        if len(criteria) > self.capabilities.max_choices:
+            raise ValueError(
+                f"Decisions accepts at most {self.capabilities.max_choices} choices per call"
+            )
         payload = {
             "model": self.config.model_name,
             "state": state,
