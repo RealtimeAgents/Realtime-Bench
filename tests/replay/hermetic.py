@@ -11,7 +11,7 @@ import socket
 import sys
 
 # Importing LiteLLM fetches its model cost map over the network unless this is set
-# (litellm/litellm_core_utils/get_model_cost_map.py:643). The replay model id is in neither the
+# (litellm/litellm_core_utils/get_model_cost_map.py:646). The replay model id is in neither the
 # bundled nor the remote map, so the choice changes no request.
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
 

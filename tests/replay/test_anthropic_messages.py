@@ -6,14 +6,14 @@ turns before they leave the process, and the baselines hold those wire messages 
 received them. On this wire:
 
 - consecutive user messages merge into one user turn
-  (litellm/litellm_core_utils/prompt_templates/factory.py:2400-2502). The execution feedback
+  (litellm/litellm_core_utils/prompt_templates/factory.py:2493-2595). The execution feedback
   shares a turn with the next frame, the archived-action ledger shares one with the oldest
   folded placeholder, and a step without output adds no assistant message
   (harnesses/default/request.py:91-93), so its frame, its feedback and the next frame share
   one turn;
-- string content becomes text blocks (factory.py:2478-2491, 2710-2728), a data URL becomes a
-  base64 image source (factory.py:2408-2438), and the system message moves to the top-level
-  ``system`` field (litellm/llms/anthropic/chat/transformation.py:1977-1986);
+- string content becomes text blocks (factory.py:2571-2584, 2798-2816), a data URL becomes a
+  base64 image source (factory.py:2501-2531), and the system message moves to the top-level
+  ``system`` field (litellm/llms/anthropic/chat/transformation.py:2052-2059);
 - thinking is never sent back: its context policy replays no reasoning
   (entity/context_policy.py:148, 169; harnesses/default/request.py:90).
 
@@ -72,7 +72,7 @@ def anthropic_config(base_url: str) -> ModelConfig:
 
     This is the only redirect: the deployment reads no base-URL variable
     (providers/litellm.py:1164-1172, 471-475), the driver always passes api_base, which LiteLLM
-    prefers to ANTHROPIC_API_BASE (providers/litellm.py:626-627; litellm/main.py:2879-2886), and
+    prefers to ANTHROPIC_API_BASE (providers/litellm.py:626-627; litellm/main.py:2914-2921), and
     to_model_config takes no api_base_url override (providers/registry.py:642-647).
     """
     effort = catalog.get(MODEL_KEY).defaults["reasoning_effort"]

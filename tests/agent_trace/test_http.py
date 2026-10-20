@@ -251,14 +251,14 @@ def test_generic_litellm_api_is_recorded_from_the_logger(tmp_path, monkeypatch):
 
 def test_connection_error_resend_is_a_second_request_in_the_same_attempt(tmp_path, monkeypatch):
     """LiteLLM's AsyncHTTPHandler resends once after RemoteProtocolError or ConnectError, on a
-    new client that carries the same hooks (http_handler.py:836-851).
+    new client that carries the same hooks (http_handler.py:851-866).
 
     httpx's own transport reports a connection closed without a response as RemoteProtocolError
     every time; aiohttp reports it as a read error or a connect error depending on timing. The
     hooks sit on the httpx client either way.
 
     LiteLLM closes the resend client as soon as the response headers arrive (http_handler.py:
-    850-851), so the streamed body sometimes fails with ReadError and the harness retries the
+    865-866), so the streamed body sometimes fails with ReadError and the harness retries the
     whole turn; the trace then holds that failure and a second attempt.
     """
     import litellm

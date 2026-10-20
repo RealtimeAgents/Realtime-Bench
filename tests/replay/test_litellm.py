@@ -67,16 +67,16 @@ FIRST_ARCHIVE, ARCHIVED = 50, 10
 
 # Inherited settings that change this API's requests, all read when a request is built or sent.
 CLEARED_PREFIXES = (
-    # LiteLLM's OpenAI handler reads OPENAI_ORGANIZATION (litellm/main.py:2594-2599); the client
+    # LiteLLM's OpenAI handler reads OPENAI_ORGANIZATION (litellm/main.py:2624-2629); the client
     # it builds turns OPENAI_ORG_ID, OPENAI_PROJECT_ID and OPENAI_CUSTOM_HEADERS into request
     # headers (openai/_client.py:842-869).
     "OPENAI_",
 )
 CLEARED = (
     "BENCHMARK_MODEL_REVISION",  # the bridge key's model_revision (providers/registry.py:612-613)
-    "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER",  # another OpenAI handler (litellm/main.py:2625)
+    "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER",  # another OpenAI handler (litellm/main.py:2660)
     # httpx in place of LiteLLM's aiohttp transport (litellm/llms/custom_httpx/http_handler.py:
-    # 1213-1242)
+    # 1230-1259)
     "DISABLE_AIOHTTP_TRANSPORT",
     "LITELLM_HTTP2",
     "STREAM_MIN_REQUEST_INTERVAL",  # a sleep before each request (providers/litellm.py:69-78, 914)
@@ -90,13 +90,13 @@ def litellm_environment(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     # The aiohttp transport looks up a proxy for each request, from the environment or the system
     # settings, unless the host is in NO_PROXY (litellm/llms/custom_httpx/aiohttp_transport.py:
-    # 411-412, 463-500).
+    # 414-415, 466-502).
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     import litellm
 
-    # Read when litellm is imported (litellm/__init__.py:263-264), possibly by an earlier test;
-    # when set it sends every openai/ request to the Responses API (litellm/main.py:1072-1075).
+    # Read when litellm is imported (litellm/__init__.py:268-269), possibly by an earlier test;
+    # when set it sends every openai/ request to the Responses API (litellm/main.py:1102-1104).
     monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", False)
     yield monkeypatch
     # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py:514-517).
