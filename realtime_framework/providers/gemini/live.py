@@ -565,13 +565,20 @@ class GeminiLiveDriver:
             # after any seeded history has been ingested. A realtime text trigger mixed with
             # synthetic silent audio can create a second user activity (including hallucinated
             # speech) and leave synchronous tools unfinished.
-            await session.send_client_content(
-                turns=self._content(frame.content),
-                turn_complete=True,
-            )
-            self._core.sent(frame.keys)
+            try:
+                await session.send_client_content(
+                    turns=self._content(frame.content),
+                    turn_complete=True,
+                )
+            except BaseException:
+                self._core.send_failed(frame.keys)
+                raise
             return {"observation_id": frame.observation_id}
-        await session.send_realtime_input(activity_start=self.types.ActivityStart())
+        try:
+            await session.send_realtime_input(activity_start=self.types.ActivityStart())
+        except BaseException:
+            self._core.send_failed(frame.keys)
+            raise
         self._activity_open = True
         try:
             if self._last_video_sent_at is not None:
@@ -600,8 +607,8 @@ class GeminiLiveDriver:
         except BaseException:
             # An incomplete activity cannot be resumed as canonical context.
             self._activity_open = True
+            self._core.send_failed(frame.keys)
             raise
-        self._core.sent(frame.keys)
         return {"observation_id": frame.observation_id}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
@@ -934,9 +941,13 @@ class GeminiLiveDriver:
                 # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
                 # prevents its acknowledgement from triggering another model generation while
                 # the current decision drains through authoritative terminal usage.
-                await self._before_go_away_deadline(
-                    session.send_tool_response(function_responses=function_responses),
-                )
+                try:
+                    await self._before_go_away_deadline(
+                        session.send_tool_response(function_responses=function_responses),
+                    )
+                except BaseException:
+                    self._core.acknowledgement_failed()
+                    raise
                 self._core.acknowledgement_sent()
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)

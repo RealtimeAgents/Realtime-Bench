@@ -16,11 +16,9 @@ from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.gemini.session import (
-    ACKNOWLEDGED,
     REPLAY_THOUGHT_SIGNATURE,
-    SENT,
-    UNKNOWN,
     Content,
+    Delivery,
     Part,
     SessionCore,
 )
@@ -118,8 +116,7 @@ def receive(core: SessionCore, message, now: float = 0.0):
 
 
 def start_turn(core: SessionCore, generation_id: str) -> None:
-    frame = core.observe(view([turn(0)]))
-    core.sent(frame.keys)
+    core.observe(view([turn(0)]))
     core.start_generation(generation_id)
 
 
@@ -140,7 +137,7 @@ def test_new_session_then_rebuild():
     first = connected(core)
     assert (first.mode, first.release_grace, first.seed) == ("new_session", False, ())
     assert core.connection == 1
-    assert core.delivery == {("setup",): ACKNOWLEDGED}
+    assert core.delivery == {("setup",): Delivery.CONFIRMED}
     assert not core.last_turn_clean  # nothing on the session yet: no handle to resume
 
     rebuild = plan(core, view([turn(k) for k in range(10)]))
@@ -155,8 +152,8 @@ def test_new_session_then_rebuild():
     core.connected(rebuild)
     assert core.connection == 2
     assert core.delivery == {
-        ("setup",): ACKNOWLEDGED,
-        **{("block", block_id): SENT for block_id in seeded},
+        ("setup",): Delivery.CONFIRMED,
+        **{("block", block_id): Delivery.SENT for block_id in seeded},
     }
     assert core.last_turn_clean and not core.renewal_required
 
@@ -225,19 +222,22 @@ def test_observation_and_acknowledgement_delivery():
     )
     assert frame.content == frame_content(1, "EXECUTION RESULT: ok\nframe 1")
     assert frame.keys == (("block", "d1.frame"), ("block", "d1.prefix"))
-    assert all(core.delivery[key] == UNKNOWN for key in frame.keys)
-    core.sent(frame.keys)
-    assert all(core.delivery[key] == SENT for key in frame.keys)
+    # Sent once handed to the connection; unknown when the send fails.
+    assert all(core.delivery[key] == Delivery.SENT for key in frame.keys)
+    core.send_failed(frame.keys)
+    assert all(core.delivery[key] == Delivery.UNKNOWN for key in frame.keys)
 
     core.start_generation("turn-0")
     core.calls_received([("call-0", "click")])
     core.calls_received([("call-1", "key")])
     # One queued acknowledgement answers every call still pending.
     assert core.acknowledging() == (("call-0", "click"), ("call-1", "key"))
-    assert core.delivery[("tool_response", "call-1")] == UNKNOWN
+    assert core.delivery[("tool_response", "call-1")] == Delivery.SENT
+    core.acknowledgement_failed()  # still pending: the next acknowledgement answers them again
+    assert core.delivery[("tool_response", "call-0")] == Delivery.UNKNOWN
+    assert core.acknowledging() == (("call-0", "click"), ("call-1", "key"))
     core.acknowledgement_sent()
-    assert core.delivery[("tool_response", "call-0")] == SENT
-    assert core.delivery[("tool_response", "call-1")] == SENT
+    assert core.delivery[("tool_response", "call-0")] == Delivery.SENT
     assert core.acknowledging() == ()
 
 
