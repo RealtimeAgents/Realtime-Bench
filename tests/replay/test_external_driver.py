@@ -285,10 +285,10 @@ def test_preflight_reads_the_external_declaration(external, capsys):
         UnsupportedTokenBudget,
     )
     fails(
-        lambda: check_episode(config, clock_mode="token", task=ReplayTask(), env_fps=1.0),
+        lambda: check_episode(config, clock_mode="token", task=ReplayTask()),
         f"The {TARGET} API requires a wall clock",
     )
-    check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=1.0)
+    check_episode(config, clock_mode="wall", task=ReplayTask())
 
     from realtime_framework.evaluation._trial import main
 

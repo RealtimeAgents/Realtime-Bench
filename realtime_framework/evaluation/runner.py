@@ -1641,7 +1641,6 @@ def main():
                 ctask,
                 task,
                 clock_mode=a.clock,
-                env_fps=env_fps,
                 tokens_per_frame=tokens_per_frame,
                 run_dir=run_dir,
                 episode_trace=episode_trace,
@@ -2301,7 +2300,6 @@ def set_up_agent(
     instruction: str,
     *,
     clock_mode: str,
-    env_fps: float,
     tokens_per_frame: int | None,
     run_dir: Path,
     episode_trace: EpisodeTrace,
@@ -2315,7 +2313,7 @@ def set_up_agent(
     form the model's context policy names. What this makes is recorded in ``setup``.
     """
     # Every pre-run rule on the model, clock and task, before any of them is built.
-    check_episode(cfg, clock_mode=clock_mode, task=ctask, env_fps=env_fps)
+    check_episode(cfg, clock_mode=clock_mode, task=ctask)
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
     agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace)

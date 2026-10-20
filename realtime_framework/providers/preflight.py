@@ -53,15 +53,6 @@ def check_wall_clock(driver, adapter_type, clock_mode) -> None:
         raise ValueError(f"The {adapter_type} API requires a wall clock")
 
 
-def validate_frame_rates(env_fps, model_input_fps) -> None:
-    """The loop observes at most one frame per environment tick, so the model's input rate must
-    equal the environment's until it samples frames on its own schedule."""
-    if env_fps != model_input_fps:
-        raise ValueError(
-            f"environment fps {env_fps:g} and model-input fps {model_input_fps:g} must be equal"
-        )
-
-
 def validate_model_interaction(adapter_type, *, clock_mode, fps, tokens_per_frame=None):
     """Validate API interaction requirements before starting an episode."""
     del fps, tokens_per_frame
@@ -139,6 +130,7 @@ def check_choice_task(driver, task) -> None:
 
 
 def check_fps(driver, config) -> None:
+    """A video cap bounds the model-input rate ``config.fps``; the environment may run faster."""
     capabilities = driver.capabilities
     if capabilities.max_video_fps is not None and float(config.fps) > capabilities.max_video_fps:
         raise ValueError(
@@ -159,20 +151,18 @@ def check_session_config(driver, config) -> None:
         )
 
 
-def check_episode(model_config, *, clock_mode, task, env_fps) -> None:
+def check_episode(model_config, *, clock_mode, task) -> None:
     """The runner's rules, applied once before it builds the agent.
 
-    Among themselves the rules keep the order in which they fired before: the clock check, the
-    equal environment and model-input frame rates, then the driver's constructor, then initialize
-    (the choice-task and frame-rate checks), then the session connect. All of them now precede
-    the driver's construction, so the initialize and connect rules are reported before a missing
-    API key, which the constructor reports. ``task`` is the registered task (its category and
-    task_id); ``env_fps`` is the rate the task clock and the loop run at.
+    Among themselves the rules keep the order in which they fired before: the clock check, then
+    the driver's constructor, then initialize (the choice-task and frame-rate checks), then the
+    session connect. All of them now precede the driver's construction, so the initialize and
+    connect rules are reported before a missing API key, which the constructor reports. ``task``
+    is the registered task (its category and task_id).
     """
     adapter_type = model_config.adapter_type
     driver = adapter_class(adapter_type)
     check_wall_clock(driver, adapter_type, clock_mode)
-    validate_frame_rates(env_fps, model_config.fps)
     check_config(driver, model_config)
     check_choice_task(driver, task)
     check_fps(driver, model_config)
