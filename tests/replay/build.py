@@ -1,12 +1,14 @@
 """Set up an agent the way evaluation/runner.py main() does, without containers or a task server.
 
-Only the wall clock is mirrored: chat_completions accepts no other (providers/registry.py:141-144,
-411-416). The finite token clock adds a per-decision budget (runner.py:864-887) and a different
-clock prompt (harnesses/default/prompts.py:177-201).
+The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
+frame budget B (None on the wall clock and in pause mode, runner.py:1401-1402), and ``max_ticks``
+is the episode length run_stream receives (runner.py:1773). The finite token clock changes the
+per-decision budget (runner.py:864-887) and the clock prompt (harnesses/default/prompts.py:177-201).
 """
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,25 +23,81 @@ from realtime_framework.sandbox.observation.som import ToolRuntime
 from .frames import FrameSource
 from .hermetic import HISTORY_ENV
 
-CLOCK_MODE = "wall"
-
 
 @dataclass
 class Episode:
     agent: object
     frames: FrameSource
-    budget: DecisionBudget
+    clock_mode: str
+    tokens_per_frame: int | None
+    max_ticks: int | None
+
+    def budget(self, t_k: int) -> DecisionBudget:
+        """The budget run_stream binds before the decision at clock position ``t_k``
+        (runner.py:851, 861-913). Without a finite token clock nothing bounds the decision except
+        the native limit, and an agent with unbounded output sends no provider cap."""
+        agent = self.agent
+        native_output_limit = getattr(getattr(agent, "config", None), "native_output_limit", None)
+        remaining_clock_tokens = None
+        if self.clock_mode == "token" and self.tokens_per_frame is not None:
+            remaining_clock_tokens = max(
+                0, math.floor((float(self.max_ticks) - float(t_k)) * self.tokens_per_frame + 1e-9)
+            )
+            # run_stream ends the episode here instead of deciding (runner.py:869-871).
+            assert remaining_clock_tokens > 0, "the scenario outlasts the token clock"
+        runtime_output_cap = (
+            native_output_limit
+            if remaining_clock_tokens is None
+            else remaining_clock_tokens
+            if native_output_limit is None
+            else min(native_output_limit, remaining_clock_tokens)
+        )
+        if remaining_clock_tokens is not None:
+            provider_output_token_cap = runtime_output_cap
+        else:
+            unbounded_output = bool(getattr(agent, "supports_unbounded_output", False))
+            provider_output_token_cap = None if unbounded_output else runtime_output_cap
+        transport_cap_mapper = getattr(agent, "transport_output_token_cap", None)
+        transport_output_cap = (
+            transport_cap_mapper(provider_output_token_cap)
+            if callable(transport_cap_mapper)
+            else provider_output_token_cap
+        )
+        if not (  # runner.py:894-905
+            transport_output_cap is None
+            or transport_output_cap == "inf"
+            or (
+                isinstance(transport_output_cap, int)
+                and not isinstance(transport_output_cap, bool)
+                and transport_output_cap > 0
+            )
+        ):
+            raise ValueError(
+                "adapter transport output cap must be None, a positive integer, or 'inf'"
+            )
+        return DecisionBudget(
+            runtime_output_tokens=runtime_output_cap,
+            provider_output_tokens=provider_output_token_cap,
+            transport_output_tokens=transport_output_cap,
+            clock_mode=self.clock_mode,
+        )
 
 
 def build_episode(
-    config: ModelConfig, run_dir: Path, *, task, instruction: str, model_key: str
+    config: ModelConfig,
+    run_dir: Path,
+    *,
+    task,
+    instruction: str,
+    model_key: str,
+    clock_mode: str = "wall",
+    tokens_per_frame: int | None = None,
+    max_ticks: int | None = None,
 ) -> Episode:
     """``model_key`` stands for the catalog key the runner records as the model identity."""
     fps = config.fps
-    # Pre-run API check (runner.py:1554-1559); tokens_per_frame is None on the wall clock
-    # (runner.py:1401-1402).
-    validate_model_interaction(
-        config.adapter_type, clock_mode=CLOCK_MODE, fps=fps, tokens_per_frame=None
+    validate_model_interaction(  # runner.py:1554-1559
+        config.adapter_type, clock_mode=clock_mode, fps=fps, tokens_per_frame=tokens_per_frame
     )
     agent = create_agent(config, log_dir=run_dir)  # runner.py:1560
     # create_agent loads the repository .env (harnesses/registry.py:11 calls
@@ -49,9 +107,10 @@ def build_episode(
         raise RuntimeError(
             f"the repository .env sets {injected}; replay baselines use the defaults"
         )
-    agent.streaming_note = budget_clock_prompt(fps, None, CLOCK_MODE)  # runner.py:1564-1568
+    # runner.py:1564-1568
+    agent.streaming_note = budget_clock_prompt(fps, tokens_per_frame, clock_mode)
     agent.system_prompt_override = system_prompt_for_category(task.category)  # runner.py:1570
-    agent._clock_mode = CLOCK_MODE  # runner.py:1573; run_stream sets it again (runner.py:126)
+    agent._clock_mode = clock_mode  # runner.py:1573; run_stream sets it again (runner.py:126)
 
     capabilities = agent.driver.capabilities  # runner.py:1601-1605
     text_observation = (
@@ -74,15 +133,10 @@ def build_episode(
     assert interactables.get("binding", {}).get("stable")
     agent.initialize(instruction, initial_observation)  # runner.py:1644
     agent.discard_pending_observations()  # runner.py:1647
-
-    # The per-decision budget (runner.py:861-913). Without a token clock nothing bounds the
-    # decision except the native limit; an agent with unbounded output sends no provider cap.
-    native_output_limit = agent.config.native_output_limit
-    provider_cap = None if agent.supports_unbounded_output else native_output_limit
-    budget = DecisionBudget(
-        runtime_output_tokens=native_output_limit,
-        provider_output_tokens=provider_cap,
-        transport_output_tokens=agent.transport_output_token_cap(provider_cap),
-        clock_mode=CLOCK_MODE,
+    return Episode(
+        agent=agent,
+        frames=frames,
+        clock_mode=clock_mode,
+        tokens_per_frame=tokens_per_frame,
+        max_ticks=max_ticks,
     )
-    return Episode(agent=agent, frames=frames, budget=budget)

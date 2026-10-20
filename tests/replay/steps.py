@@ -31,7 +31,7 @@ def run_steps(episode: Episode, steps: list[Step], stub: ChatCompletionsStub) ->
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
         first_request = len(stub.requests)
-        agent.configure_decision(episode.budget)
+        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py:851
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)
         agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry
