@@ -137,11 +137,12 @@ class VisionAgentBase(StreamingAgent):
         last["applied"] = status == "applied"
         last["result"] = status
 
-    def _system_instruction_text(self) -> str:
+    def _system_instruction_text(self, frame_reference_rules: str | None) -> str:
         return gui_system_prompt(
             self.task_instruction,
             scenario_prompt=getattr(self, "system_prompt_override", None),
             clock_prompt=self.streaming_note,
+            frame_reference_rules=frame_reference_rules,
         )
 
     @staticmethod
@@ -695,7 +696,9 @@ from dataclasses import dataclass as dataclass
 
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_ACTION_SPACE
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
+from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
@@ -714,16 +717,22 @@ class InteractionProfile:
     # Opens each frame's interactables (bind_observation); choice profiles replace the whole
     # frame text (harnesses/jev/observation.py).
     interactables_header: str = OBSERVATION_INTERACTABLES_HEADER
+    # How an action names its frame under streaming.
+    frame_reference_rules: str | None = None
 
     def system_instruction(self, agent) -> str:
+        frame_reference_rules = (
+            self.frame_reference_rules if agent.interaction_mode == "streaming" else None
+        )
         if self.action_space is None:
-            return agent._system_instruction_text()
+            return agent._system_instruction_text(frame_reference_rules)
         return "\n\n".join(
             filter(
                 None,
                 (
                     SCENARIO_ROLES[agent.task_category],
                     self.action_space,
+                    frame_reference_rules,
                     self.output_contract,
                     getattr(agent, "streaming_note", None),
                     f"TASK:\n{agent.task_instruction}",
@@ -745,13 +754,16 @@ class InteractionProfile:
 
 
 STANDARD_VLM_PROFILE = InteractionProfile(
-    "standard_vlm", interactables_header=FRAME_INTERACTABLES_HEADER
+    "standard_vlm",
+    interactables_header=FRAME_INTERACTABLES_HEADER,
+    frame_reference_rules=FRAME_REFERENCE_RULES,
 )
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
     action_space=FUNCTION_CALL_ACTION_SPACE,
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
+    frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
 )
 # The choice models' profiles.
 JEV_PROFILE = InteractionProfile(
@@ -1049,8 +1061,8 @@ class DefaultHarness(VisionAgentBase):
     interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
     # "turn_based" or "streaming", set with the run's settings before initialize(). Streaming
-    # draws each frame's number on its screenshot and interprets each action against the frame
-    # it names.
+    # draws each frame's number on its screenshot, asks every action for the frame it is based
+    # on, and interprets the action against that frame.
     interaction_mode = "turn_based"
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
@@ -1185,7 +1197,11 @@ class DefaultHarness(VisionAgentBase):
             action_channel=channel,
             format_profile=self.interaction_profile.name,
             function_declarations=(
-                tuple(gui_function_declarations()) if channel == "function_call" else ()
+                tuple(
+                    gui_function_declarations(frame_reference=self.interaction_mode == "streaming")
+                )
+                if channel == "function_call"
+                else ()
             ),
         )
 

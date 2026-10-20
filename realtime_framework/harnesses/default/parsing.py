@@ -897,7 +897,11 @@ class FunctionCallTurnCollector:
             text = ""
         else:
             try:
-                action = canonical_function_action(call.name, call.arguments)
+                action = canonical_function_action(
+                    call.name,
+                    call.arguments,
+                    frame_reference=self.agent.interaction_mode == "streaming",
+                )
             except ValueError as exc:
                 # Preserve the provider's complete, charged turn and let the common action parser
                 # apply its ordinary protocol-fallback WAIT. A malformed action is model behavior,
