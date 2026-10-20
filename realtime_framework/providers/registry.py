@@ -129,28 +129,29 @@ class ApiSpec:
     reasoning_effort: bool = True
 
 
-LITELLM_DRIVER = "realtime_framework.providers.litellm:LiteLLMDriver"
+_LITELLM = "realtime_framework.providers.litellm:"
 
 # The adapter_type of every ModelConfig is one of these keys. Adding a protocol means adding a
 # driver module and one row here; the harness selects behavior from driver capabilities.
 APIS = {
     "litellm": ApiSpec(
-        LITELLM_DRIVER, "vlm", "litellm", None,
+        _LITELLM + "DirectLiteLLMDriver", "vlm", "litellm", None,
         finite_frame_budget=False, wall_clock_only=True, litellm_provider="",
     ),
     "chat_completions": ApiSpec(
-        LITELLM_DRIVER, "vlm", "compatible", "OPENAI_API_KEY",
+        _LITELLM + "ChatCompletionsDriver", "vlm", "compatible", "OPENAI_API_KEY",
         finite_frame_budget=False, wall_clock_only=True,
     ),
     "openrouter": ApiSpec(
-        LITELLM_DRIVER, "vlm", "openrouter", "OPENROUTER_API_KEY", litellm_provider="openrouter"
+        _LITELLM + "OpenRouterDriver", "vlm", "openrouter", "OPENROUTER_API_KEY",
+        litellm_provider="openrouter",
     ),
     "anthropic_messages": ApiSpec(
-        LITELLM_DRIVER, "vlm", "anthropic", "ANTHROPIC_API_KEY", vendor="anthropic",
-        litellm_provider="anthropic",
+        _LITELLM + "AnthropicMessagesDriver", "vlm", "anthropic", "ANTHROPIC_API_KEY",
+        vendor="anthropic", litellm_provider="anthropic",
     ),
     "moonshot": ApiSpec(
-        LITELLM_DRIVER, "vlm", "moonshot", "MOONSHOT_API_KEY", vendor="moonshot",
+        _LITELLM + "MoonshotDriver", "vlm", "moonshot", "MOONSHOT_API_KEY", vendor="moonshot",
         litellm_provider="moonshot",
     ),
     "openai_realtime": ApiSpec(

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 # LiteLLM
-"""One driver for every HTTP model API, configured by a per-API wire policy.
+"""One driver for every HTTP chat API; each registered API is a subclass declaring its settings.
 
-LiteLLM supplies the provider transports. Each policy preserves the benchmark's request shaping
-and accounting rules for one registered API: pinned OpenRouter routes, explicit cache
-breakpoints, provider quirks, and provider-reported usage only. The pinned SDK can synthesize
-usage at stream completion; the driver observes raw provider payloads before LiteLLM transforms
-them, and only those counters reach the token clock.
+LiteLLM supplies the provider transports. Each subclass declares, for one registered API, its
+protocol (request and response shape), deployment (gateway, address, key, route) and compat flags
+(provider restrictions), preserving the benchmark's request shaping and accounting rules: pinned
+OpenRouter routes, explicit cache breakpoints, provider quirks, and provider-reported usage only.
+The pinned SDK can synthesize usage at stream completion; the driver observes raw provider
+payloads before LiteLLM transforms them, and only those counters reach the token clock.
 """
 
 import asyncio as asyncio
@@ -306,7 +307,7 @@ def _mark_cache_breakpoint(messages: list[dict]) -> None:
             break
 
 
-# Policies
+# Per-API declarations
 _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
     persistent_session=False,
@@ -315,111 +316,48 @@ _STREAMING_CHAT = RealtimeCapabilities(
 
 
 @dataclass(frozen=True)
-class WirePolicy:
-    """Everything that differs between the HTTP APIs served by LiteLLMDriver."""
+class ChatProtocol:
+    """How one API's requests are built and its responses parsed."""
 
-    capabilities: RealtimeCapabilities
-    gateway: str
     # LiteLLM provider prefix for model_name; None means model_name is already provider/model.
     sdk_provider: str | None
-    default_key_env: str | None
-    default_base_url: str | None = None
-    base_url_env: str | None = None
     # "httpx": LiteLLM's own handler; "openai": an AsyncOpenAI client; None: SDK default.
     client: str | None = "httpx"
     # None follows ModelConfig.chat_stream / chat_include_usage.
     stream: bool | None = True
     include_usage: bool | None = True
+    # "reasoning_effort": top-level parameter; "openrouter": extra_body.reasoning when a route is
+    # pinned, else top-level; "anthropic_thinking": Messages API thinking and output_config.
+    reasoning_param: str = "reasoning_effort"
+    usage: str = "raw"  # "raw" | "kimi" | "anthropic"
+    # Keep streamed tool-call deltas as visible text (complete responses always keep them).
+    surface_tool_calls: bool = False
+
+
+@dataclass(frozen=True)
+class ChatDeployment:
+    """Where one API's requests go: gateway, address, key and route."""
+
+    gateway: str
+    default_key_env: str | None
+    default_base_url: str | None = None
+    base_url_env: str | None = None
+    # OpenRouter session id, provider pin, attribution headers and response route checks.
+    pin_route: bool = False
+    require_api_key: bool = True
+
+
+@dataclass(frozen=True)
+class ChatCompat:
+    """Named restrictions and special requirements of one API."""
+
     # "model_prefix": Anthropic/Gemini models behind OpenRouter; "always": every request.
     cache_breakpoint: str | None = None
     strip_image_detail: bool = False
-    pin_openrouter_route: bool = False
     # Each request sends the decision cap, else the declared native limit, else omits the
     # parameter (provider default). APIs that require the parameter reject an undeclared limit.
     output_limit_param: str = "max_tokens"
     output_limit_required: bool = False
-    anthropic_thinking: bool = False
-    usage: str = "raw"  # "raw" | "kimi" | "anthropic"
-    preserve_reasoning_history: bool = False
-    surface_tool_calls: bool = False
-    assistant_turn_ref: bool = False
-    context_status: bool = False
-    require_api_key: bool = True
-
-
-POLICIES = {
-    "openrouter": WirePolicy(
-        capabilities=_STREAMING_CHAT,
-        gateway="openrouter",
-        sdk_provider="openrouter",
-        default_key_env="OPENROUTER_API_KEY",
-        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
-        base_url_env="OPENROUTER_BASE_URL",
-        cache_breakpoint="model_prefix",
-        pin_openrouter_route=True,
-    ),
-    "moonshot": WirePolicy(
-        capabilities=replace(
-            _STREAMING_CHAT,
-            protocol_family="moonshot_chat",
-        ),
-        gateway="kimi_compatible",
-        sdk_provider="moonshot",
-        default_key_env="MOONSHOT_API_KEY",
-        default_base_url=DEFAULT_MOONSHOT_BASE_URL,
-        base_url_env="MOONSHOT_BASE_URL",
-        client="openai",
-        strip_image_detail=True,
-        output_limit_param="max_completion_tokens",
-        usage="kimi",
-        preserve_reasoning_history=True,
-    ),
-    "anthropic_messages": WirePolicy(
-        capabilities=replace(_STREAMING_CHAT, protocol_family="anthropic_messages"),
-        gateway="anthropic",
-        sdk_provider="anthropic",
-        default_key_env="ANTHROPIC_API_KEY",
-        default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
-        include_usage=False,
-        cache_breakpoint="always",
-        output_limit_required=True,
-        anthropic_thinking=True,
-        usage="anthropic",
-    ),
-    "chat_completions": WirePolicy(
-        capabilities=replace(
-            _STREAMING_CHAT,
-            protocol_family="compatible_chat",
-            terminal_output_usage=False,
-        ),
-        gateway="openai_compatible",
-        sdk_provider="openai",
-        default_key_env="OPENAI_API_KEY",
-        client="openai",
-        stream=None,
-        include_usage=None,
-        strip_image_detail=True,
-        surface_tool_calls=True,
-        context_status=True,
-        require_api_key=False,
-    ),
-    "litellm": WirePolicy(
-        capabilities=replace(
-            _STREAMING_CHAT,
-            protocol_family="compatible_chat",
-            terminal_output_usage=False,
-        ),
-        gateway="litellm",
-        sdk_provider=None,
-        default_key_env=None,
-        client=None,
-        stream=False,
-        preserve_reasoning_history=True,
-        surface_tool_calls=True,
-        assistant_turn_ref=True,
-        require_api_key=False,
-    ),
-}
 
 
 class _AuditedSDKStream:
@@ -447,26 +385,33 @@ class LiteLLMDriver:
     """Stateless HTTP driver: canonical history is rendered into every request.
 
     Consequently there is no provider-side conversation to repair after a wall-clock early return.
-    The API key (ModelConfig.adapter_type) selects the wire policy.
+    Each registered API (ModelConfig.adapter_type) is a subclass declaring its capabilities,
+    protocol, deployment and compat flags.
     """
 
+    capabilities: RealtimeCapabilities
+    protocol: ChatProtocol
+    deployment: ChatDeployment
+    compat: ChatCompat
+    # Context policy items 6-8 as each API applied them (entity/context_policy.py now decides
+    # what is sent); tests/replay/test_context_policy.py pins the two to each other until
+    # step 4b removes these copies.
+    preserve_reasoning_history = False  # replay reasoning text in later requests
+    assistant_turn_ref = False  # keep the provider's raw assistant message for verbatim replay
+    pressure_archive = False  # archive turns when the request exceeds the context window
+
     def __init__(self, config):
-        if config.adapter_type not in POLICIES:
-            raise ValueError(f"LiteLLMDriver has no wire policy for {config.adapter_type!r}")
         self.config = config
-        self.policy = policy = POLICIES[config.adapter_type]
-        self.capabilities = policy.capabilities
-        self.gateway = policy.gateway
-        self.preserve_reasoning_history = policy.preserve_reasoning_history
-        if policy.output_limit_required and config.native_output_limit is None:
+        deployment = self.deployment
+        if self.compat.output_limit_required and config.native_output_limit is None:
             raise ValueError(
-                f"The {config.adapter_type} API requires {policy.output_limit_param}; declare "
-                "endpoint.native_output_limit in the model YAML"
+                f"The {config.adapter_type} API requires {self.compat.output_limit_param}; "
+                "declare endpoint.native_output_limit in the model YAML"
             )
-        if not policy.context_status:
+        if not self.pressure_archive:
             # The runtime records physical context checks only for drivers that perform them.
             self.request_context_status = None
-        if policy.gateway == "openai_compatible":
+        if deployment.gateway == "openai_compatible":
             if (
                 config.context_window_tokens is not None
                 and config.context_reserve_tokens >= config.context_window_tokens
@@ -476,8 +421,8 @@ class LiteLLMDriver:
         else:
             self.base_url = (
                 config.api_base_url
-                or (os.environ.get(policy.base_url_env) if policy.base_url_env else None)
-                or policy.default_base_url
+                or (os.environ.get(deployment.base_url_env) if deployment.base_url_env else None)
+                or deployment.default_base_url
             )
         self._sdk = self._load_sdk()
         self.api_key = self._resolve_key()
@@ -498,15 +443,15 @@ class LiteLLMDriver:
         return litellm
 
     def _resolve_key(self) -> str | None:
-        variable = self.config.api_key_env or self.policy.default_key_env
+        variable = self.config.api_key_env or self.deployment.default_key_env
         key = self.config.api_key or (os.environ.get(variable) if variable else None)
         if key:
             return key
-        if self.policy.require_api_key:
+        if self.deployment.require_api_key:
             raise RuntimeError(f"The {self.config.adapter_type} API needs {variable}")
-        if self.config.api_key_env and self.policy.gateway == "litellm":
+        if self.config.api_key_env and self.deployment.gateway == "litellm":
             raise ValueError(f"Credential variable {self.config.api_key_env!r} is empty or unset")
-        return "not-required" if self.policy.client == "openai" else None
+        return "not-required" if self.protocol.client == "openai" else None
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
@@ -543,24 +488,24 @@ class LiteLLMDriver:
         return self.config.native_output_limit
 
     def _stream_enabled(self) -> bool:
-        stream = self.policy.stream
+        stream = self.protocol.stream
         return self.config.chat_stream if stream is None else stream
 
     def _request_kwargs(self, request: GenerationRequest) -> dict:
-        policy = self.policy
+        protocol, compat = self.protocol, self.compat
         # A fresh list per call: the steps below edit it in place.
         messages = list(chat_messages(request.canonical))
-        if policy.strip_image_detail:
+        if compat.strip_image_detail:
             _strip_image_detail(messages)
-        if policy.cache_breakpoint == "always" or (
-            policy.cache_breakpoint == "model_prefix"
+        if compat.cache_breakpoint == "always" or (
+            compat.cache_breakpoint == "model_prefix"
             and self.config.model_name.startswith(("anthropic/", "google/"))
         ):
             # Anthropic and Gemini use explicit breakpoints; OpenAI uses implicit caching.
             _mark_cache_breakpoint(messages)
         stream = self._stream_enabled()
         kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
-        include_usage = policy.include_usage
+        include_usage = protocol.include_usage
         if include_usage is None:
             include_usage = self.config.chat_include_usage
         if stream and include_usage:
@@ -568,20 +513,21 @@ class LiteLLMDriver:
         # The recorded transport cap is the value sent; the request never substitutes another.
         limit = request.transport_output_token_cap
         if limit is not None:
-            kwargs[policy.output_limit_param] = int(limit)
+            kwargs[compat.output_limit_param] = int(limit)
         effort = self.config.reasoning_effort
-        extra_body = {"session_id": self._session_id} if policy.pin_openrouter_route else {}
+        pin_route = self.deployment.pin_route
+        extra_body = {"session_id": self._session_id} if pin_route else {}
         upstream = self.config.upstream_provider
-        if policy.pin_openrouter_route and upstream:
+        if pin_route and upstream:
             extra_body["provider"] = {
                 "order": [upstream],
                 "allow_fallbacks": False,
                 "require_parameters": True,
             }
-        if policy.anthropic_thinking:
+        if protocol.reasoning_param == "anthropic_thinking":
             kwargs.update(anthropic_thinking(effort))
         elif effort is not None:
-            if policy.pin_openrouter_route and upstream:
+            if protocol.reasoning_param == "openrouter" and upstream:
                 extra_body["reasoning"] = {"effort": effort, "exclude": False}
             else:
                 kwargs["reasoning_effort"] = effort
@@ -592,9 +538,9 @@ class LiteLLMDriver:
         return kwargs
 
     def _client(self):
-        if self._http is not None or self.policy.client is None:
+        if self._http is not None or self.protocol.client is None:
             return self._http
-        if self.policy.client == "openai":
+        if self.protocol.client == "openai":
             from openai import AsyncOpenAI as AsyncOpenAI
             from openai import DefaultAsyncHttpxClient as DefaultAsyncHttpxClient
 
@@ -616,10 +562,10 @@ class LiteLLMDriver:
         return self._http
 
     def _transport_kwargs(self) -> dict:
-        policy = self.policy
+        sdk_provider = self.protocol.sdk_provider
         model = self.config.model_name
         kwargs = {
-            "model": f"{policy.sdk_provider}/{model}" if policy.sdk_provider else model,
+            "model": f"{sdk_provider}/{model}" if sdk_provider else model,
             # The harness owns retries; never silently retry or fall back to another backend.
             "num_retries": 0,
             "max_retries": 0,
@@ -633,7 +579,7 @@ class LiteLLMDriver:
         client = self._client()
         if client is not None:
             kwargs["client"] = client
-        if policy.pin_openrouter_route:
+        if self.deployment.pin_route:
             kwargs["extra_headers"] = {
                 "X-OpenRouter-Metadata": "enabled",
                 "HTTP-Referer": os.environ.get(
@@ -644,22 +590,23 @@ class LiteLLMDriver:
         return kwargs
 
     def _backend_route(self) -> dict:
+        gateway = self.deployment.gateway
         route = {
-            "gateway": self.gateway,
+            "gateway": gateway,
             "base_url": self.base_url,
             "transport": "litellm",
             "transport_version": LITELLM_VERSION,
             "requested_model": self.config.model_name,
         }
-        if self.policy.pin_openrouter_route or self.gateway == "kimi_compatible":
-            pinned = self.policy.pin_openrouter_route
+        if self.deployment.pin_route or gateway == "kimi_compatible":
+            pinned = self.deployment.pin_route
             route.update(
                 configured_upstream_provider=self.config.upstream_provider,
                 allow_fallbacks=False if pinned else None,
                 require_parameters=True if pinned else None,
                 response_metadata=None,
             )
-        if self.policy.usage == "anthropic":
+        if self.protocol.usage == "anthropic":
             route.update(response_model=None, response_id=None)
         return route
 
@@ -716,7 +663,7 @@ class LiteLLMDriver:
         )
 
     def _observe_raw(self, audit: dict, chunk: dict) -> None:
-        if self.policy.usage == "anthropic":
+        if self.protocol.usage == "anthropic":
             kind = chunk.get("type")
             if kind == "message_start":
                 message = chunk.get("message") or {}
@@ -777,7 +724,7 @@ class LiteLLMDriver:
         sequence = 0
         response = generation.metadata["response"]
         audit = generation.metadata["raw_audit"]
-        anthropic = self.policy.usage == "anthropic"
+        anthropic = self.protocol.usage == "anthropic"
         emitted_usage_revision = 0
         calls: dict = {}
         try:
@@ -790,7 +737,7 @@ class LiteLLMDriver:
                 except StopAsyncIteration:
                     break
                 raw_type = type(event).__name__
-                if self.policy.pin_openrouter_route:
+                if self.deployment.pin_route:
                     self._check_route(generation, audit)
                 # Never expose LiteLLM's reconstructed/estimated usage as provider usage.
                 if not anthropic and audit["usage_revision"] != emitted_usage_revision:
@@ -808,7 +755,7 @@ class LiteLLMDriver:
                 if not choices:
                     continue
                 delta = choices[0].delta
-                if self.policy.surface_tool_calls:
+                if self.protocol.surface_tool_calls:
                     for call in getattr(delta, "tool_calls", None) or []:
                         saved = calls.setdefault(call.index, {"name": "", "arguments": ""})
                         function = getattr(call, "function", None)
@@ -908,19 +855,19 @@ class LiteLLMDriver:
         return "".join(values)
 
     def _normalize_usage(self, usage: dict) -> dict:
-        if self.policy.usage == "kimi":
+        if self.protocol.usage == "kimi":
             return kimi_usage(usage, str(self.base_url))
         return usage
 
     # ---- complete responses ----------------------------------------------------------------
 
     async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        if self.policy.gateway == "litellm" and request.clock_mode != "wall":
+        if self.deployment.gateway == "litellm" and request.clock_mode != "wall":
             raise ValueError("Direct LiteLLM models require wall-clock evaluation in default mode")
         await asyncio.to_thread(pace_request)
         raw = {}
         # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
-        logged = LoggerCapture(self) if self.policy.client is None else None
+        logged = LoggerCapture(self) if self.protocol.client is None else None
 
         def observe(details):
             if logged is not None:
@@ -950,7 +897,7 @@ class LiteLLMDriver:
             "message": message,
             "backend_route": self._backend_route(),
         }
-        if self.policy.assistant_turn_ref:
+        if self.assistant_turn_ref:
             metadata["completed_turn_refs"] = {"assistant_message": message}
         return GenerationHandle(request.generation_id, opaque=response, metadata=metadata)
 
@@ -1123,3 +1070,81 @@ class LiteLLMDriver:
             count = estimated_request_tokens(messages, self.config.context_image_tokens)
             source = "estimated_utf8_bytes_plus_image_allowance"
         return context_status(self.config, count, source)
+
+
+# Registered chat APIs
+class OpenRouterDriver(LiteLLMDriver):
+    capabilities = _STREAMING_CHAT
+    protocol = ChatProtocol(sdk_provider="openrouter", reasoning_param="openrouter")
+    deployment = ChatDeployment(
+        gateway="openrouter",
+        default_key_env="OPENROUTER_API_KEY",
+        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
+        base_url_env="OPENROUTER_BASE_URL",
+        pin_route=True,
+    )
+    compat = ChatCompat(cache_breakpoint="model_prefix")
+
+
+class MoonshotDriver(LiteLLMDriver):
+    capabilities = replace(_STREAMING_CHAT, protocol_family="moonshot_chat")
+    protocol = ChatProtocol(sdk_provider="moonshot", client="openai", usage="kimi")
+    deployment = ChatDeployment(
+        gateway="kimi_compatible",
+        default_key_env="MOONSHOT_API_KEY",
+        default_base_url=DEFAULT_MOONSHOT_BASE_URL,
+        base_url_env="MOONSHOT_BASE_URL",
+    )
+    compat = ChatCompat(strip_image_detail=True, output_limit_param="max_completion_tokens")
+    preserve_reasoning_history = True
+
+
+class AnthropicMessagesDriver(LiteLLMDriver):
+    capabilities = replace(_STREAMING_CHAT, protocol_family="anthropic_messages")
+    protocol = ChatProtocol(
+        sdk_provider="anthropic",
+        include_usage=False,
+        reasoning_param="anthropic_thinking",
+        usage="anthropic",
+    )
+    deployment = ChatDeployment(
+        gateway="anthropic",
+        default_key_env="ANTHROPIC_API_KEY",
+        default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
+    )
+    compat = ChatCompat(cache_breakpoint="always", output_limit_required=True)
+
+
+class ChatCompletionsDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="compatible_chat",
+        terminal_output_usage=False,
+    )
+    protocol = ChatProtocol(
+        sdk_provider="openai",
+        client="openai",
+        stream=None,
+        include_usage=None,
+        surface_tool_calls=True,
+    )
+    deployment = ChatDeployment(
+        gateway="openai_compatible",
+        default_key_env="OPENAI_API_KEY",
+        require_api_key=False,
+    )
+    compat = ChatCompat(strip_image_detail=True)
+    pressure_archive = True
+
+
+class DirectLiteLLMDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="compatible_chat",
+        terminal_output_usage=False,
+    )
+    protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
+    deployment = ChatDeployment(gateway="litellm", default_key_env=None, require_api_key=False)
+    compat = ChatCompat()
+    preserve_reasoning_history = True
+    assistant_turn_ref = True
