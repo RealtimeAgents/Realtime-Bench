@@ -428,6 +428,11 @@ def _probe_runner(request: dict) -> dict:
             (run,) = json.loads(expected.read_text())["runs"]
             record["expected_runtime_config_hash"] = run["runtime_config_hash"]
         record.update(state.get("loop", {}))
+        if "loop" in state and "runtime_config" in record:
+            record["frame_rates"] = {  # as the task clock and ModelConfig received them
+                "env_fps": record["task"]["task_clock"]["fps"],
+                "model_input_fps": record["runtime_config"]["model_config"]["fps"],
+            }
         results.setdefault(model, {})[task] = record
     return {**process, "models": results}
 

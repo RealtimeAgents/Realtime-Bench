@@ -114,7 +114,7 @@ def build_episode(
     ``before_initialize(agent)`` runs just before initialize(), which may open a connection.
     ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other than the form."""
     fps = config.fps
-    check_episode(config, clock_mode=clock_mode, task=task)  # runner.py:1560
+    check_episode(config, clock_mode=clock_mode, task=task, env_fps=fps)  # runner.py:1565
     # runner.main() opens the episode trace, then hands the agent its write entry.
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
     agent_trace = AgentTraceSink(trace, run_dir / "episode_blobs.pack")

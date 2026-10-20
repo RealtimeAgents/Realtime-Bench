@@ -1417,6 +1417,9 @@ def main():
     protocol = a.protocol or ("wall-clock" if a.clock == "wall" else "time-aware-token-v1")
     if not 0 < a.fps < float("inf") or not 0 < a.max_minutes < float("inf"):
         p.error("--fps and --max-minutes must be finite and positive")
+    # --fps sets the environment's frame rate (task clock, ticks, loop, recording, scored world
+    # time) and the model's input rate (ModelConfig.fps).
+    env_fps = model_input_fps = a.fps
     if protocol == "time-aware-token-v1":
         if a.clock != "token":
             p.error("time-aware-token-v1 requires --clock token")
@@ -1467,7 +1470,7 @@ def main():
             "requested_model": requested_model_identity,
             "clock_mode": a.clock,
             "mode": a.mode,
-            "fps": a.fps,
+            "fps": env_fps,
             "tokens_per_frame": tokens_per_frame,
             "reasoning_effort": reasoning_effort,
             "max_minutes": a.max_minutes,
@@ -1531,7 +1534,7 @@ def main():
         ctask = custom_tasks.get(a.task)
         ctask.configure_seed(a.seed)
         task = ctask.description()
-        ctask.configure_clock(a.clock, a.fps, tokens_per_frame)
+        ctask.configure_clock(a.clock, env_fps, tokens_per_frame)
         url = ctask.provision()
         if url:
             R.open_local_url_in_container(url, debug_port=getattr(ctask, "dbg_port", None))
@@ -1546,7 +1549,7 @@ def main():
         if catalog.has(a.model):
             cfg = catalog.to_model_config(
                 a.model,
-                fps=a.fps,
+                fps=model_input_fps,
                 reasoning_effort=reasoning_effort,
             )
         else:
@@ -1555,17 +1558,17 @@ def main():
             cfg = ModelConfig(
                 adapter_type=a.adapter,
                 model_name=a.model,
-                fps=a.fps,
+                fps=model_input_fps,
                 reasoning_effort=reasoning_effort,
             )
         # Every pre-run rule on the model, clock and task, before any of them is built.
-        check_episode(cfg, clock_mode=a.clock, task=ctask)
+        check_episode(cfg, clock_mode=a.clock, task=ctask, env_fps=env_fps)
         # The agent borrows the episode trace's write entry; the runner still opens and closes it.
         agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
         agent = create_agent(cfg, log_dir=run_dir, trace=agent_trace)
         configure_agent(
             agent,
-            fps=a.fps,
+            fps=env_fps,
             tokens_per_frame=tokens_per_frame,
             clock_mode=a.clock,
             category=getattr(ctask, "category", None),
@@ -1663,7 +1666,7 @@ def main():
         runtime_config = effective_run_config(
             seed=a.seed,
             model_config=cfg,
-            fps=a.fps,
+            fps=env_fps,
             mode=a.mode,
             max_minutes=a.max_minutes,
             protocol=protocol,
@@ -1735,7 +1738,7 @@ def main():
         is_game = (getattr(ctask, "category", None) == "browser_game") if ctask else False
         env = GuestEnvironment(
             guest,
-            a.fps,
+            env_fps,
             deadline,
             frames_dir=frames_dir,
             honor_fail=(not is_game),
@@ -1768,8 +1771,8 @@ def main():
             timeline = run_stream(
                 agent,
                 env,
-                delta_s=1.0 / a.fps,
-                max_ticks=a.max_minutes * 60 * a.fps,
+                delta_s=1.0 / env_fps,
+                max_ticks=a.max_minutes * 60 * env_fps,
                 log=lambda m: print(m, flush=True),
                 think_budget_s=think_budget,
                 per_move_cap_s=per_move_cap,
@@ -1796,7 +1799,7 @@ def main():
             }
             _atomic_write_json(run_dir / "active-loop.json", active_loop)
             episode_trace.emit("ActiveLoopEnded", active_loop)
-        R._stop_screen_recording(run_dir, frames_dir, a.fps)
+        R._stop_screen_recording(run_dir, frames_dir, env_fps)
         _recorder_on = False
         # INFERENCE/EVAL BOUNDARY: run_stream freezes live scorer input at the latched terminal tick,
         # before it releases held keys or mouse buttons. Consume that exact snapshot here, before
@@ -1852,7 +1855,7 @@ def main():
                 cap=a.max_minutes,
                 protocol=protocol,
                 harness_hash=harness_hash,
-                fps=a.fps,
+                fps=env_fps,
                 runtime_config=runtime_config,
                 runtime_config_hash=runtime_config_hash,
                 snapshot=frozen_snapshot,
@@ -1959,7 +1962,7 @@ def main():
         # The shared container remains available for subsequent runs.
         if _recorder_on:
             try:
-                R._stop_screen_recording(run_dir, frames_dir, a.fps)
+                R._stop_screen_recording(run_dir, frames_dir, env_fps)
             except Exception:
                 pass
         try:
@@ -2057,7 +2060,7 @@ def main():
         if invalid_run is not None
         else (latched or ("setup_error" if env is None else "unknown"))
     )
-    world_time_s = env.tick_index() / a.fps if env is not None else None
+    world_time_s = env.tick_index() / env_fps if env is not None else None
     try:
         run_metrics = summarize_run_metrics(
             run_dir / "action_lifecycle.jsonl",
@@ -2065,7 +2068,7 @@ def main():
             solved=solved,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
-            fps=a.fps,
+            fps=env_fps,
             world_time_s=world_time_s,
             horizon_s=a.max_minutes * 60,
         )
@@ -2085,7 +2088,7 @@ def main():
             solved=None,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
-            fps=a.fps,
+            fps=env_fps,
             world_time_s=None,
             horizon_s=a.max_minutes * 60,
             validate_decision_count=False,
@@ -2104,7 +2107,7 @@ def main():
         cap=a.max_minutes,
         protocol=protocol,
         harness_hash=harness_hash,
-        fps=a.fps,
+        fps=env_fps,
         runtime_config_hash=runtime_config_hash,
     )
     summ = {
@@ -2163,7 +2166,7 @@ def main():
         else 0,
         "output_clock_policy": OUTPUT_CLOCK_POLICY,
         "tokens_per_world_second": (
-            tokens_per_frame * a.fps
+            tokens_per_frame * env_fps
             if a.clock == "token" and tokens_per_frame is not None
             else None
         ),

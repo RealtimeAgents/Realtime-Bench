@@ -138,7 +138,7 @@ class ModelConfig(BaseModel):
     # requests omit the completion limit and the provider default applies.
     native_output_limit: Optional[int] = Field(default=None, gt=0)
     native_output_limit_source: Optional[Literal["endpoint", "litellm"]] = None
-    fps: float = 1.0
+    fps: float = 1.0  # model-input frame rate; equal to the environment's (runner.py --fps)
     # Retain the effective contract in runtime identity, but never send a value.
     temperature_policy: Literal["provider_default"] = "provider_default"
     temperature: None = None
