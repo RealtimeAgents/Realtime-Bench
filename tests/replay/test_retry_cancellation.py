@@ -2,12 +2,13 @@
 
 When run_stream's bounded wait expires it keeps the generate worker in ``abandoned`` and calls the
 agent's abort (evaluation/runner.py:337-345). DefaultHarness.abort reaches only the runtime
-(harnesses/default/harness.py:1683-1686), which bumps the generation epoch and schedules a
+(harnesses/default/harness.py:1689-1692), which bumps the generation epoch and schedules a
 cleanup that closes the driver and clears ``_connected`` (harnesses/default/context.py:662-687).
-Nothing reaches the retry loop in stream_generate (harness.py:1284-1340): its backoff is a plain
-``time.sleep`` and every attempt calls run_turn, which reads the epoch afresh (context.py:640).
-The next attempt therefore reconnects in _ensure_ready (context.py:394-417), is current, and
-keeps its turn (context.py:577-590) and its action-history entry (harness.py:1443-1460).
+Nothing reaches the retry executor stream_generate runs (harness.py:1338-1345): its backoff is a
+plain ``time.sleep`` (entity/model.py:457) and every attempt calls run_turn, which reads the epoch
+afresh (context.py:640). The next attempt therefore reconnects in _ensure_ready
+(context.py:394-417), is current, and keeps its turn (context.py:577-590) and its action-history
+entry (harness.py:1449-1466).
 
 Each test pins that behaviour as it is today: after the abort, the worker sends one more request,
 gets a reply that is not stale, and adds a turn and an action that nobody committed.
@@ -19,9 +20,9 @@ import json
 import threading
 import time
 
+import realtime_framework.entity.model as model_module
 from realtime_framework.entity.model import TRANSIENT, TransportFailure
 from realtime_framework.evaluation import runner
-from realtime_framework.harnesses.default import harness as harness_module
 
 from .build import build_episode
 from .fake_env import FakeClock, FakeEnvironment, Hang
@@ -51,8 +52,8 @@ UNAVAILABLE = Failure(503, {"error": {"message": "upstream down", "code": 503}})
 
 
 class _GatedSleep:
-    """Stands in for the harness's time module. The retry backoff (harness.py:1338) records its
-    delay, sets ``entered`` and returns only once the test sets ``release``."""
+    """Stands in for the retry executor's time module. The backoff (entity/model.py:457) records
+    its delay, sets ``entered`` and returns only once the test sets ``release``."""
 
     def __init__(self):
         self.calls = []
@@ -165,7 +166,7 @@ def test_abort_during_backoff_still_sends_the_retry_today(openrouter_env, tmp_pa
     harness sleeps its backoff. The runner aborts the agent during that sleep. When the sleep
     ends the loop sends the same request again, on the abort's epoch, and keeps the reply."""
     sleeps = _GatedSleep()
-    openrouter_env.setattr(harness_module, "time", sleeps)
+    openrouter_env.setattr(model_module, "time", sleeps)
     with OpenRouterStub([UNAVAILABLE, *replies([STEP])], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
         episode = build_episode(
@@ -211,7 +212,7 @@ def test_abort_mid_request_is_classified_transient_and_retried_today(tmp_path, m
     client closes it; the abort's driver.close() does (providers/litellm.py:1033-1044). The
     failure arrives before any output, is classified TRANSIENT, and the loop retries it."""
     sleeps = _RecordedSleep()
-    monkeypatch.setattr(harness_module, "time", sleeps)
+    monkeypatch.setattr(model_module, "time", sleeps)
     arrived = threading.Event()
 
     def hold_first(index):
@@ -276,7 +277,7 @@ def test_runner_timeout_leaves_a_worker_that_retries_after_the_episode_today(tmp
     drain, after the evaluation snapshot, and its reply becomes a turn and an action."""
     monkeypatch.setattr(runner, "DEADLINE_GRACE_S", 0.0)
     sleeps = _GatedSleep()
-    monkeypatch.setattr(harness_module, "time", sleeps)
+    monkeypatch.setattr(model_module, "time", sleeps)
     env_box = []
     with ChatCompletionsStub(
         replies([STEP]), on_request=lambda index: env_box[0].model_request(index)
@@ -333,7 +334,7 @@ def test_session_abort_during_backoff_reconnects_today(tmp_path, monkeypatch):
     backoff. The runner aborts during that sleep. The next attempt finds _connected cleared,
     opens a second WebSocket through connect() (context.py:408-417) and runs a new response."""
     sleeps = _GatedSleep()
-    monkeypatch.setattr(harness_module, "time", sleeps)
+    monkeypatch.setattr(model_module, "time", sleeps)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
         episode = build_episode(
             realtime_config(stub.base_url),
