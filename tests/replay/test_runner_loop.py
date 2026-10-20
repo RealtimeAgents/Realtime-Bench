@@ -10,6 +10,7 @@ compared with tests/replay/baselines/.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,7 @@ from unittest import mock
 import pytest
 
 from realtime_framework.evaluation import runner
+from realtime_framework.evaluation.reporting import episode_outcome, summarize_run_metrics
 from realtime_framework.harnesses.default.harness import DefaultHarness
 
 from . import baseline
@@ -276,7 +278,7 @@ def test_short_case_baseline(short_run):
 
 
 # An exception that escapes the decision loop still ends the episode through _finalize
-# (runner.py:1224-1234): the snapshot is frozen, the stop reason latched and the run invalid.
+# (runner.py:1226-1236): the snapshot is frozen, the stop reason latched and the run invalid.
 # These are property tests; an escaped exception's traceback names files and lines.
 
 
@@ -316,13 +318,13 @@ def test_environment_exception_is_finalized(tmp_path):
         "reason": "clock_advance_failed",
         "detail": "page clock did not advance",
     }
-    # The wait comes before the commit (runner.py:626, 692), so decision 1 is never committed.
+    # The wait comes before the commit (runner.py:628, 694), so decision 1 is never committed.
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
     _check_finalized(run, at=1.5, raised="RuntimeError: page clock did not advance")
 
 
 def test_agent_exception_is_finalized(tmp_path):
-    """The agent raises as decision 1 binds its budget at 1.0 s (runner.py:951), before anything
+    """The agent raises as decision 1 binds its budget at 1.0 s (runner.py:953), before anything
     is latched: the runner invalidates the run itself."""
     configure_decision = DefaultHarness.configure_decision
     budgets = []
@@ -346,3 +348,68 @@ def test_agent_exception_is_finalized(tmp_path):
     assert invalid["detail"].rstrip().endswith("RuntimeError: budget rejected")
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
     _check_finalized(run, at=1.0, raised="RuntimeError: budget rejected")
+
+
+# After run_stream returns, main() still saves the artifact, drains abandoned workers, closes the
+# agent and evaluates before it writes the summary (runner.py:1798-1928).
+TEARDOWN_S = 2.0
+
+
+@pytest.mark.parametrize(
+    ("reason", "solved", "outcome"),
+    [("deadline_expired", False, "fail"), ("task_success", True, "pass")],
+)
+def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, outcome):
+    """The task ends the episode when the third action lands at 2.5 s, and teardown runs on past
+    the 3.75 s deadline. The report reads the termination record: unsolved is a fail, not a
+    timeout, and solved took 2.5 s of the horizon, without the teardown."""
+    run = _run(
+        tmp_path,
+        [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
+        [0.5, 0.5, 0.5],
+        stream=True,
+        max_minutes=SHORT_MAX_MINUTES,
+        stop_check=_decided_after(3, reason),
+    )
+    run.env.clock.advance(TEARDOWN_S)
+    assert run.env.past_deadline()
+    termination = run.env._termination
+    assert termination == {
+        "stop_reason": reason,
+        "end_s": 2.5,
+        "snapshot_s": 2.5,
+        "snapshot_delay_s": 0.0,
+    }
+    # The fields of run_summary.json that main() takes from the loop (runner.py:2054-2061).
+    summary = {
+        "invalid_run": None,
+        "solved": solved,
+        "stop_reason": run.env._stop_reason,
+        "termination": termination,
+        "world_time_s": termination["end_s"],
+        "max_minutes": SHORT_MAX_MINUTES,
+    }
+    assert episode_outcome(summary)["outcome"] == outcome
+    # The clock read after teardown is past the horizon; the outcome never reads a clock.
+    late = {**summary, "world_time_s": run.env.tick_index() / run.env.fps}
+    assert late["world_time_s"] >= SHORT_MAX_MINUTES * 60
+    assert episode_outcome(late)["outcome"] == outcome
+    lifecycle = tmp_path / "action_lifecycle.jsonl"
+    lifecycle.write_text(
+        "".join(
+            json.dumps(call["record"]) + "\n"
+            for call in run.env.calls
+            if call["call"] == "env.record_lifecycle"
+        )
+    )
+    metrics = summarize_run_metrics(
+        lifecycle,
+        total_decisions=len(run.timeline),
+        solved=solved,
+        clock_mode="wall",
+        tokens_per_frame=None,
+        fps=run.env.fps,
+        termination=termination,
+        horizon_s=SHORT_MAX_MINUTES * 60,
+    )
+    assert metrics["normalized_time_to_success"] == (round(2.5 / 3.75, 9) if solved else None)

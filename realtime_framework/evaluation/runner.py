@@ -29,8 +29,10 @@ Runtime invariants:
     skipped_budget | not_applied_time_limit | not_applied_tick_limit | terminal |
     not_applied_terminal | rejected | terminal_ignored | wait | none | invalid_run} and calls
     adapter.commit_action(status).
-  * Latched outcome: the stop reason is frozen on env at loop exit so
-    post-loop cleanup crossing the deadline can't rewrite a real environment terminal state into time_limit.
+  * Latched outcome: the stop reason and the termination record (its end time by rule and the
+    snapshot's time) are frozen on env at loop exit, also when the loop raises, so post-loop cleanup
+    crossing the deadline can't rewrite a real environment terminal state into time_limit or
+    lengthen the episode.
 """
 import hashlib as hashlib, math as math, threading as threading, time as time, traceback as traceback
 
@@ -2045,9 +2047,10 @@ def main():
         if invalid_run is not None
         else ("scored" if benchmark_cell_eligible else "experimental")
     )
-    # Stop reason is LATCHED by the runner at loop exit (env._stop_reason), so cleanup that crosses
-    # the deadline can't rewrite a real environment terminal state into time_limit. Any invalid run
-    # reports "invalid_run"; "setup_error" if we never reached the loop.
+    # The stop reason and the end time are LATCHED by the runner at loop exit (env._stop_reason,
+    # env._termination), so cleanup that crosses the deadline rewrites neither a real environment
+    # terminal state into time_limit nor the episode's length. Any invalid run reports
+    # "invalid_run"; "setup_error" if we never reached the loop.
     latched = getattr(env, "_stop_reason", None) if env is not None else None
     termination = getattr(env, "_termination", None) if env is not None else None
     stop_reason = (
@@ -2055,7 +2058,7 @@ def main():
         if invalid_run is not None
         else (latched or ("setup_error" if env is None else "unknown"))
     )
-    world_time_s = env.tick_index() / env_fps if env is not None else None
+    world_time_s = termination["end_s"] if termination is not None else None
     try:
         run_metrics = summarize_run_metrics(
             run_dir / "action_lifecycle.jsonl",
@@ -2064,7 +2067,7 @@ def main():
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
             fps=env_fps,
-            world_time_s=world_time_s,
+            termination=termination,
             horizon_s=a.max_minutes * 60,
         )
     except Exception:
@@ -2084,7 +2087,7 @@ def main():
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
             fps=env_fps,
-            world_time_s=None,
+            termination=None,
             horizon_s=a.max_minutes * 60,
             validate_decision_count=False,
         )
@@ -2418,7 +2421,7 @@ def _write_emergency_setup_summary(error: str):
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
         fps=float(arg("--fps", "1.0")),
-        world_time_s=None,
+        termination=None,
         horizon_s=cap_minutes * 60,
     )
     cost_accounting = summarize_cost(None)
