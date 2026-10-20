@@ -393,6 +393,7 @@ class LiteLLMDriver:
     protocol: ChatProtocol
     deployment: ChatDeployment
     compat: ChatCompat
+    model_defaults = {}
     # Context policy items 6-8 as each API applied them (entity/context_policy.py now decides
     # what is sent); tests/replay/test_context_policy.py pins the two to each other until
     # step 4b removes these copies.

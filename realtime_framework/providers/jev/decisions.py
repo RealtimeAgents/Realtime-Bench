@@ -16,3 +16,4 @@ class JevDecisionsClient(OpenAIDecisionsClient):
     max_choices = 255
     # Requests carry no provider routing block; responses still validate the TypeSafe route.
     pin_route = False
+    model_defaults = {"typesafe/jev-1.13": {"upstream_provider": "typesafe"}}

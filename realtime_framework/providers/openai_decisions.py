@@ -58,6 +58,16 @@ class OpenAIDecisionsClient(DecisionEncoder):
     # Choices per question; the selection flow groups larger candidate sets.
     max_choices = 255
     pin_route = True
+    # Per-model catalog defaults (providers/registry.py).
+    model_defaults = {
+        "openai/gpt-6-luna-decisions": {
+            # OpenRouter's published window. A 768 px screenshot measured 337 input tokens; the
+            # reserve covers one question's criteria (at most 255 candidates) and instructions.
+            "context_window_tokens": 1050000,
+            "context_image_tokens": 512,
+            "context_reserve_tokens": 32768,
+        },
+    }
 
     def __init__(self, config):
         self.config = config

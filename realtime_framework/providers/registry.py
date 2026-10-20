@@ -39,56 +39,26 @@ def load_project_secrets(path: Path = DEFAULT_SECRETS_FILE) -> bool:
     return True
 
 
-# Model profiles
-"""Per-model settings no external source supplies, independent of user connection YAMLs.
+# Catalog policy
+"""Leaderboard status of catalog cells, independent of user connection YAMLs.
 
-As in Harbor's LiteLLM agents, nothing here restates what LiteLLM's bundled model map knows: the
-native output limit comes from that map (see litellm_output_limit), and reasoning_effort is the
-connection YAML's value, passed through for the driver or provider to accept or reject. Entries
-only carry wire protocol options, experimental-system status and measured context accounting.
-Pricing is not inferred here; unreported cost remains unknown.
+Per-model settings no external source supplies (wire protocol presets, routes, measured context
+accounting) are declared by each API's driver class as ``model_defaults``. As in Harbor's LiteLLM
+agents, nothing restates what LiteLLM's bundled model map knows: the native output limit comes
+from that map (see litellm_output_limit), and reasoning_effort is the connection YAML's value,
+passed through for the driver or provider to accept or reject. Pricing is not inferred here;
+unreported cost remains unknown.
 """
 
-_LIVE_TOOL_TRANSCRIPT = {
-    "tool_behavior": "non_blocking",
-    "completion_signal": "turn_complete",
-    "input_transport": "client_content",
-    "tool_response_scheduling": "silent",
-    "history_format": "tool_transcript",
-}
-
-MODEL_PROFILES = {
-    ("gemini_live", "gemini-3.1-flash-live-preview"): {
-        "defaults": {"provider_options": _LIVE_TOOL_TRANSCRIPT},
-    },
-    ("gemini_live", "gemini-3.8-live"): {
-        "defaults": {"provider_options": _LIVE_TOOL_TRANSCRIPT},
-    },
-    ("gemini_live", "gemini-3.8-live-extended-thinking"): {
-        "defaults": {
-            "provider_options": {
-                **_LIVE_TOOL_TRANSCRIPT,
-                "completion_signal": "interaction_idle",
-                "tool_response_scheduling": "omit",
-            },
-        },
-    },
+CATALOG_POLICY = {
     # JEV is a text-only choice model, and its scores are not pooled with the screenshot
     # leaderboard.
     ("jev_decisions", "typesafe/jev-1.13"): {
-        "defaults": {"upstream_provider": "typesafe"},
         "benchmark_eligible": False,
         "comparison_scope": "experimental_system",
     },
+    # Candidate enumeration and composition are a system-level policy.
     ("openai_decisions", "openai/gpt-6-luna-decisions"): {
-        "defaults": {
-            # OpenRouter's published window. A 768 px screenshot measured 337 input tokens; the
-            # reserve covers one question's criteria (at most 255 candidates) and instructions.
-            "context_window_tokens": 1050000,
-            "context_image_tokens": 512,
-            "context_reserve_tokens": 32768,
-        },
-        # Candidate enumeration and composition are a system-level policy.
         "benchmark_eligible": False,
         "comparison_scope": "experimental_system",
     },
@@ -341,7 +311,9 @@ def load_definitions(directory):
         definition.update(key=key)
         api = settings.get("api", "chat_completions")
         spec = APIS[api]
-        profile = deepcopy(MODEL_PROFILES.get((api, settings["model"]), {}))
+        model_defaults = adapter_class(api).model_defaults.get(settings["model"])
+        profile = {} if model_defaults is None else {"defaults": deepcopy(model_defaults)}
+        profile.update(CATALOG_POLICY.get((api, settings["model"]), {}))
         definition.update(
             adapter_type=api,
             family=spec.family,
@@ -421,7 +393,7 @@ def validate_model_interaction(adapter_type, *, clock_mode, fps, tokens_per_fram
 """Load model connection YAMLs and resolve internal API capabilities.
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
-catalog identifier. Wire policies live in MODEL_PROFILES above; users configure
+catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
 connections and reasoning effort. No optional model SDK is imported by this loader.
 """
 

@@ -1,0 +1,143 @@
+"""The effective configuration of every catalog model must not change when the API registry and
+the driver declarations are reorganized.
+
+effective_config_3831f39.json was recorded on commit 3831f39, before the change (the exports on
+77145b9 and 9ada3b0 are byte-identical), by running this file as a script from the root of that
+tree:
+
+    .venv/bin/python tests/capabilities/test_effective_config.py OUT
+
+The export uses only functions that exist before and after the change. It covers, per catalog key,
+the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the
+API-level lookups, and the effective run configuration and its hash (evaluation/config.py:596-739
+there) on the wall clock, a finite token clock and pause mode, or the error that configuration
+raises.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+import sys
+from pathlib import Path
+
+SNAPSHOT = Path(__file__).with_name("effective_config_3831f39.json")
+# Keys the reorganization moves out of the export (none yet: Gemini's history_format stays in
+# provider_options until step 4b).
+MOVED: frozenset[str] = frozenset()
+# Variables the catalog, to_model_config or effective_run_config read (providers/registry.py:506-
+# 515, 629-655; evaluation/config.py:423-445, 664). The export runs without them.
+ENVIRONMENT = (
+    "BENCHMARK_MODEL",
+    "BENCHMARK_BASE_URL",
+    "BENCHMARK_MODEL_REVISION",
+    "BENCHMARK_LITELLM_KEY_ENV",
+    "BENCHMARK_LITELLM_MODEL",
+    "BENCHMARK_LITELLM_API_BASE",
+    "BENCHMARK_CONTEXT_WINDOW_TOKENS",
+    "BENCHMARK_CONTEXT_COUNTER",
+    "BENCHMARK_CONTEXT_IMAGE_TOKENS",
+    "BENCHMARK_CONTEXT_RESERVE_TOKENS",
+    "STREAM_CHAT_API_KEY_ENV",
+    "STREAM_CHAT_STREAM",
+    "STREAM_CHAT_INCLUDE_USAGE",
+    "REALTIMEBENCH_PYTHON",
+)
+CONTAINER_RUNTIME = {"runtime": "apptainer", "network": "host", "images": {}, "image_provenance": {}}
+RUNS = (("wall", None, "wall-clock"), ("token", 64, "time-aware-token-v1"),
+        ("token", None, "time-aware-token-v1"))
+
+
+def export() -> dict:
+    """Effective configuration of every catalog key; the caller clears the variables above."""
+    import realtime_framework.providers.registry as catalog
+    import realtime_framework.sandbox.apptainer as apptainer
+    from realtime_framework.evaluation.config import config_fingerprint, effective_run_config
+
+    # Image identities hash the host's SIF files; they are outside this change.
+    apptainer.runtime_identity = lambda: CONTAINER_RUNTIME
+    catalog._catalog_entries.cache_clear()
+    result = {}
+    for key in sorted(catalog.CATALOG):
+        entry = catalog.get(key)
+        spec = {
+            field.name: getattr(entry, field.name)
+            for field in dataclasses.fields(entry)
+            if field.name != "python_env"  # the interpreter path
+        }
+        effort = entry.defaults["reasoning_effort"]
+        model_config = catalog.to_model_config(key, fps=1.0, reasoning_effort=effort)
+        runs = {}
+        for clock_mode, tokens_per_frame, protocol in RUNS:
+            name = f"{clock_mode}/{tokens_per_frame}"
+            try:
+                config = effective_run_config(
+                    model_config=model_config, fps=1.0, max_minutes=5.0, protocol=protocol,
+                    think_budget_s=None, per_move_cap_s=None, mode="default",
+                    clock_mode=clock_mode, tokens_per_frame=tokens_per_frame,
+                )
+            except ValueError as exc:
+                runs[name] = {"error": [type(exc).__name__, str(exc)]}
+                continue
+            runs[name] = {"config": config, "hash": config_fingerprint(config)}
+        result[key] = {
+            "entry": spec,
+            "model_config": model_config.model_dump(),
+            "vendor": catalog.vendor(key),
+            "benchmark_eligible": catalog.benchmark_eligible(key),
+            "api_reasoning_efforts": catalog.api_reasoning_efforts(entry.adapter_type),
+            "litellm_output_limit": catalog.litellm_output_limit(
+                entry.adapter_type, entry.model_name
+            ),
+            "runs": runs,
+        }
+    result["<keys>"] = {
+        "all": catalog.keys(),
+        "streaming": catalog.keys(family="streaming"),
+        "vlm": catalog.keys(family="vlm"),
+        "openrouter": catalog.keys(provider="openrouter"),
+    }
+    catalog._catalog_entries.cache_clear()
+    return json.loads(json.dumps(result, default=list))
+
+
+def _differences(before, after, path="") -> list[str]:
+    if isinstance(before, dict) and isinstance(after, dict):
+        out = []
+        for key in sorted(set(before) | set(after)):
+            where = f"{path}.{key}" if path else key
+            if key in MOVED:
+                continue
+            if key not in after:
+                out.append(f"{where}: missing after")
+            elif key not in before:
+                out.append(f"{where}: new after")
+            else:
+                out += _differences(before[key], after[key], where)
+        return out
+    return [] if before == after else [f"{path}: {before!r} != {after!r}"]
+
+
+def test_effective_configuration_unchanged(monkeypatch):
+    for name in ENVIRONMENT:
+        monkeypatch.delenv(name, raising=False)
+    from realtime_framework.evaluation.config import _RUNTIME_ENV_KEYS
+
+    for name in _RUNTIME_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    import realtime_framework.sandbox.apptainer as apptainer
+
+    monkeypatch.setattr(apptainer, "runtime_identity", apptainer.runtime_identity)
+    before = json.loads(SNAPSHOT.read_text())
+    problems = _differences(before, export())
+    assert not problems, f"{len(problems)} difference(s):\n" + "\n".join(problems[:40])
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, os.getcwd())
+    from realtime_framework.evaluation.config import _RUNTIME_ENV_KEYS
+
+    for name in (*ENVIRONMENT, *_RUNTIME_ENV_KEYS):
+        os.environ.pop(name, None)
+    Path(sys.argv[1]).write_text(json.dumps(export(), indent=1, sort_keys=True) + "\n")
