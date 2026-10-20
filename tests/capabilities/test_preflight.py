@@ -2,7 +2,7 @@
 
 One test per condition, asserting the exact message each check produced before the checks were
 collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0). The runner's own
-rules run in check_episode (evaluation/runner.py:1566); its argparse checks and those of
+rules run in check_episode (evaluation/runner.py:2242); its argparse checks and those of
 identity_main and the Harbor trial worker are exercised through their main functions, which fail
 before any container or network is used.
 """
@@ -29,7 +29,7 @@ GAME, WEB = "gomoku", "rt_waitlist_fit"
 
 @pytest.fixture(autouse=True)
 def environment():
-    """The entry points write os.environ (runner.py:1405-1406; _trial.py:101-102)."""
+    """The entry points write os.environ (runner.py:1403-1404; _trial.py:101-102)."""
     saved = dict(os.environ)
     os.environ.pop("ALLOW_EXPERIMENTAL_MODEL", None)
     yield
@@ -38,7 +38,7 @@ def environment():
 
 
 def preset(key, **overrides):
-    """What the runner builds for a catalog key (runner.py:1550-1555)."""
+    """What the runner builds for a catalog key (runner.py:1548-1553)."""
     entry = catalog.get(key)
     return catalog.to_model_config(
         key, **{"fps": 1.0, "reasoning_effort": entry.defaults["reasoning_effort"], **overrides}
@@ -46,7 +46,7 @@ def preset(key, **overrides):
 
 
 def episode(model_config, *, clock_mode="wall", task=WEB):
-    # The runner's --fps sets both rates (runner.py:1423).
+    # The runner's --fps sets both rates (runner.py:1421).
     check_episode(
         model_config, clock_mode=clock_mode, task=tasks.get(task), env_fps=model_config.fps
     )
@@ -157,7 +157,7 @@ def test_finite_budget_identity(capsys):
 def test_finite_budget_unknown_adapter_is_not_a_usage_error():
     """A raw model id without --adapter, on the runner's default token clock.
 
-    The lookup error is raised as before, not turned into a usage error (runner.py:1455-1462).
+    The lookup error is raised as before, not turned into a usage error (runner.py:1453-1460).
     """
     fails(
         lambda: check_token_budget(None, clock_mode="token", tokens_per_frame=256),

@@ -1,10 +1,10 @@
 """Drive the real run_stream with an agent from build_episode against a FakeEnvironment.
 
-run_stream gets the arguments main() passes on the wall clock (evaluation/runner.py:1771-1782).
+run_stream gets the arguments main() passes on the wall clock (evaluation/runner.py:1710-1721).
 Its own time.time() reads (runner.py:365-367, 382-415, 571, 756, 774) are pointed at the fake
 clock, so action timestamps, frame ages and the deadline all read one clock. After the loop the
-abandoned workers are drained (runner.py:1875-1880) and the agent is closed (runner.py:1881-1888),
-in main()'s order. main() would also call the agent's start_episode (runner.py:1752-1754), which
+abandoned workers are drained (runner.py:1814-1819) and the agent is closed (runner.py:1820-1827),
+in main()'s order. main() would also call the agent's start_episode (runner.py:1691-1693), which
 no agent defines.
 
 Any agent build_episode returns can be driven, given a stub that calls ``env.model_request`` as
@@ -40,7 +40,7 @@ EXECUTED = {"applied", "wait", "rejected"}
 
 
 class RecordingTrace:
-    """Stands in for EpisodeTrace (runner.py:1466) and keeps each payload as EpisodeTrace
+    """Stands in for EpisodeTrace (runner.py:1464) and keeps each payload as EpisodeTrace
     serializes it (evaluation/reporting.py:2028-2040)."""
 
     def __init__(self, env: FakeEnvironment):

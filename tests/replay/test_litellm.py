@@ -4,7 +4,7 @@ The model is set up the way a ``--model provider/model-id`` run does it: the Har
 puts the endpoint into BENCHMARK_LITELLM_* (evaluation/harbor.py:443-479;
 evaluation/_trial.py:111-128), the catalog's bridge key ``litellm-vlm`` reads them when the
 catalog loads (providers/registry.py:500-505), and the runner builds the config from that key
-(evaluation/runner.py:1432-1441, 1550-1555).
+(evaluation/runner.py:1430-1439, 1548-1553).
 
 What this API's driver class (providers/litellm.py:1202-1221) and context policy
 (entity/context_policy.py:166-167) change against chat_completions:
@@ -46,7 +46,7 @@ from .steps import run_steps
 from .stub_litellm import LiteLLMStub
 
 BASELINE = Path(__file__).parent / "baselines" / "litellm-nonstream-long.jsonl"
-MODEL_KEY = "litellm-vlm"  # the runner records the catalog key as the model (runner.py:1246-1254)
+MODEL_KEY = "litellm-vlm"  # the runner records the catalog key as the model (runner.py:1244-1252)
 LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:140-154)
 API_KEY_ENV = "REPLAY_LITELLM_API_KEY"
 API_KEY = "replay-dummy-key"
@@ -107,7 +107,7 @@ def litellm_vlm_config(monkeypatch, base_url: str):
     # The bridge key reads BENCHMARK_LITELLM_* when the catalog first loads, and the catalog is
     # cached (providers/registry.py:500-505, 514-517).
     catalog._catalog_entries.cache_clear()
-    catalog.validate_reasoning_effort(MODEL_KEY, REASONING_EFFORT)  # runner.py:1435-1441
+    catalog.validate_reasoning_effort(MODEL_KEY, REASONING_EFFORT)  # runner.py:1433-1439
     return catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort=REASONING_EFFORT)
 
 

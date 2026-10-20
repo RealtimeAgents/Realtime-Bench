@@ -2,7 +2,7 @@
 
 run_stream (evaluation/runner.py:102-1180) needs capture, execute, tick_index, done and
 wait_until_tick, and reads the optional time_remaining and past_deadline hooks
-(runner.py:15-18). On the wall clock main() hands it a GuestEnvironment (runner.py:1739-1751,
+(runner.py:15-18). On the wall clock main() hands it a GuestEnvironment (runner.py:1678-1690,
 sandbox/actions.py:112-967). This class follows GuestEnvironment's wall-clock branch call for
 call, but reads a FakeClock the test controls instead of time.time(), serves the frames of
 frames.py, and executes nothing: each call is appended to ``calls`` in order, tagged with the
@@ -56,7 +56,7 @@ class FakeEnvironment:
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
     into "rejected" (runner.py:533-537). ``failures`` maps a decision to an environment fault,
     which invalidates the run (runner.py:538-541). ``stop_check(env)`` stands for the task's
-    episode_over (runner.py:1745): a true value ends the episode, a string names the reason
+    episode_over (runner.py:1684): a true value ends the episode, a string names the reason
     (actions.py:952-959). ``reply_latencies[i]`` is the fake time request i takes.
     """
 
@@ -77,7 +77,7 @@ class FakeEnvironment:
         self.fps = fps
         self.max_minutes = max_minutes
         self.d = 1.0 / fps  # actions.py:130
-        # main() starts the wall clock and sets the deadline from it (runner.py:1731-1735);
+        # main() starts the wall clock and sets the deadline from it (runner.py:1670-1674);
         # GuestEnvironment measures ticks from that start (actions.py:131).
         self.t0 = clock.now
         self.deadline = self.t0 + max_minutes * 60

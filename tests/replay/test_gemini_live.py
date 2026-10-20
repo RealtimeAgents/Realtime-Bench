@@ -12,7 +12,7 @@ arrival order, plus each decision's parsed action, usage and commit.
 Scripts:
 - the long scenario for the two maintained presets (live.py:70-76, 162-177), which differ in
   the completion signal and the tool acknowledgement;
-- the driver defaults, reached by a model id without a preset (evaluation/runner.py:1557-1564):
+- the driver defaults, reached by a model id without a preset (evaluation/runner.py:1555-1562):
   realtime_input observations and native_tools history (live.py:55-67);
 - a resume that the server rejects, which falls back to replaying the history
   (live.py:1252-1284).
@@ -46,8 +46,8 @@ API_KEY = "replay-dummy-key"
 
 # The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py:146-154,
 # providers/preflight.py:139-144): B is --tokens-per-frame (entity/config.py:33,
-# evaluation/runner.py:1354-1359) and the episode has --max-minutes 5 * 60 * fps ticks
-# (runner.py:1367, 1775). The catalog's native limit for these models is LiteLLM's 65536
+# evaluation/runner.py:1352-1357) and the episode has --max-minutes 5 * 60 * fps ticks
+# (runner.py:1365, 1714). The catalog's native limit for these models is LiteLLM's 65536
 # (providers/registry.py:140-166), so the runtime cap min(65536, (N - t_k) * B) (runner.py:863-889)
 # falls below it from t_k = 45 on and is 61696 at the last decision.
 FPS = 1.0
@@ -219,7 +219,7 @@ def live_env(monkeypatch):
 
 
 def catalog_config(key: str) -> ModelConfig:
-    """What the runner builds for a catalog key (runner.py:1435-1442, 1550-1555). Its
+    """What the runner builds for a catalog key (runner.py:1433-1440, 1548-1553). Its
     api_base_url stays None; the stub is reached through GOOGLE_GEMINI_BASE_URL."""
     effort = catalog.get(key).defaults["reasoning_effort"]
     return catalog.to_model_config(key, fps=FPS, reasoning_effort=effort)
@@ -493,7 +493,7 @@ def test_driver_default_short(live_env, tmp_path):
     (live.py:1242-1284), in the native_tools format with the thought-signature sentinel
     (live.py:37-41, 485-490)."""
     preset = DRIVER_DEFAULT
-    config = ModelConfig(  # runner.py:1445, 1557-1564 for --adapter gemini_live --model <id>
+    config = ModelConfig(  # runner.py:1443, 1555-1562 for --adapter gemini_live --model <id>
         adapter_type="gemini_live", model_name=preset.model, fps=FPS, reasoning_effort="low"
     )
     turns = [

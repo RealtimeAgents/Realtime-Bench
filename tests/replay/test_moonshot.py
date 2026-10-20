@@ -3,7 +3,7 @@
 Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it the
 run is compared with tests/replay/baselines/.
 
-The ModelConfig is the catalog's (runner.py:1433-1439, 1550-1555) and keeps the official base URL
+The ModelConfig is the catalog's (runner.py:1431-1437, 1548-1553) and keeps the official base URL
 (configs/models/kimi-k3.yaml:5), so the driver normalizes Kimi usage (providers/litellm.py:122-152,
 906-908); stub_moonshot.redirect_to_stub sends the requests to the local stub. The long scenario
 runs on a finite frame budget B, the short snapshot in pause mode (B unlimited).
@@ -35,7 +35,7 @@ FPS = 1.0
 DUMMY_KEY = "sk-replay-moonshot-dummy"
 ENDPOINT = DEFAULT_MOONSHOT_BASE_URL + "/chat/completions"
 
-# run_stream receives max_ticks = max_minutes * 60 * fps (runner.py:1775): a one-minute episode.
+# run_stream receives max_ticks = max_minutes * 60 * fps (runner.py:1714): a one-minute episode.
 MAX_TICKS = 60
 # Decision k observes tick k (steps.py). On the finite clock its cap is
 # min(native, floor((MAX_TICKS - k) * B)) (runner.py:863-886). kimi-k3's native limit is 1048576
@@ -55,12 +55,12 @@ PAUSE_SCENARIO = LONG_SCENARIO[:5]
 def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame):
     monkeypatch.setenv("MOONSHOT_API_KEY", DUMMY_KEY)
     entry = catalog.get(MODEL_KEY)
-    config = catalog.to_model_config(  # runner.py:1433-1439, 1550-1555
+    config = catalog.to_model_config(  # runner.py:1431-1437, 1548-1553
         MODEL_KEY, fps=FPS, reasoning_effort=entry.defaults["reasoning_effort"]
     )
     assert config.api_base_url == DEFAULT_MOONSHOT_BASE_URL
     if tokens_per_frame is not None:
-        # runner.py:1455-1462
+        # runner.py:1453-1460
         assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
     with KimiStub(kimi_replies(steps)) as stub:
         episode = build_episode(
