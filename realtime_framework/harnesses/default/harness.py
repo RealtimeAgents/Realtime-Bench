@@ -739,10 +739,60 @@ FUNCTION_CALL_PROFILE = InteractionProfile(
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
 )
-# Driver capabilities.action_channel -> how the harness asks for and collects one action.
-ACTION_CHANNEL_PROFILES = {
-    "text_json": STANDARD_VLM_PROFILE,
-    "function_call": FUNCTION_CALL_PROFILE,
+# The choice models' profiles.
+JEV_PROFILE = InteractionProfile(
+    "jev_decisions",
+    action_space="Select one of the current observation's candidate actions.",
+    output_contract=(
+        "Return a typed Choice. You receive the current full interactables SoM and its "
+        "action-bound mark legend, without screenshots. Choose only executable candidates. "
+        "Typing choices contain observed literals, field suggestions, and calendar dates "
+        "in or adjacent to observed months, filtered by explicit field constraints. "
+        "Compose text lets you build other input through successive choices of exact words, "
+        "characters, or Unicode code points, then finish to type it. Spaces and casing are explicit. "
+        "You receive the current browser accessibility tree, visible control content, "
+        "and JEV-specific appearance descriptors. Hidden application state is unavailable."
+    ),
+    frame_prompt="Choose the next action from the current observation.",
+)
+
+MULTIMODAL_CHOICE_PROFILE = InteractionProfile(
+    "multimodal_decisions",
+    action_space=JEV_PROFILE.action_space,
+    output_contract=(
+        "Return a typed Choice from the current observation's executable candidates. "
+        "You receive its screenshot, full interactables SoM, action-bound mark legend, "
+        "accessibility tree and visible control state. Hidden application state is unavailable. "
+        "Typing choices contain observed literals and field suggestions. Compose text builds "
+        "other input through successive choices of words, characters or Unicode code points, "
+        "then finishes to type it. Spaces and casing are explicit."
+    ),
+    frame_prompt=JEV_PROFILE.frame_prompt,
+)
+
+MULTIMODAL_GAME_CHOICE_PROFILE = InteractionProfile(
+    "multimodal_game_decisions",
+    action_space=MULTIMODAL_CHOICE_PROFILE.action_space,
+    output_contract=(
+        MULTIMODAL_CHOICE_PROFILE.output_contract
+        + " In games, declared keys offer taps and short holds, including simultaneous pairs. "
+        "Holds persist for their stated duration; later actions do not cancel them. "
+        "Grid choices name visible board positions without judging move legality. "
+        "Pointer composition chooses coordinates before executing one action. "
+        "mouse_down stays pressed until mouse_up; use move between them for a drag."
+    ),
+    frame_prompt=MULTIMODAL_CHOICE_PROFILE.frame_prompt,
+)
+# Context policy item 11 names the profile for each task category.
+INTERACTION_PROFILES = {
+    profile.name: profile
+    for profile in (
+        STANDARD_VLM_PROFILE,
+        FUNCTION_CALL_PROFILE,
+        JEV_PROFILE,
+        MULTIMODAL_CHOICE_PROFILE,
+        MULTIMODAL_GAME_CHOICE_PROFILE,
+    )
 }
 
 
@@ -752,6 +802,7 @@ ACTION_CHANNEL_PROFILES = {
 import time as time
 import uuid as uuid
 from copy import deepcopy as deepcopy
+from dataclasses import replace as replace
 
 from realtime_framework.harnesses.default.parsing import resolve_action_output
 from realtime_framework.entity.model import GenerationOutput
@@ -788,6 +839,7 @@ from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
+from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import action_has_target_references
 from realtime_framework.entity.actions import gui_function_declarations
@@ -923,10 +975,11 @@ class DefaultHarness(VisionAgentBase):
     """Common frame, context, action, and audit behavior for every catalog model.
 
     The registered driver for ModelConfig.adapter_type supplies the protocol; its capabilities
-    select history transport, the action channel, and interruption behavior.
+    select history transport, the action channel, and interruption behavior. The context policy
+    selects the interaction profile (item 11) and the observation form (item 12).
     """
 
-    interaction_profile: InteractionProfile = STANDARD_VLM_PROFILE
+    interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
 
     def __init__(self, config, log_dir=None, *, trace):
@@ -947,7 +1000,6 @@ class DefaultHarness(VisionAgentBase):
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config)
         self.driver.bind_trace(self._trace)
-        self.interaction_profile = ACTION_CHANNEL_PROFILES[self.driver.capabilities.action_channel]
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
@@ -986,6 +1038,9 @@ class DefaultHarness(VisionAgentBase):
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
         self._pending_feedback = ""
+        self.interaction_profile = INTERACTION_PROFILES[
+            self._context_policy.prompts[self.task_category]  # context policy item 11
+        ]
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.
         self._system_block = system_block(fixed)
@@ -1035,6 +1090,17 @@ class DefaultHarness(VisionAgentBase):
                     except Exception:  # noqa: BLE001, S110 - preserve the preparation failure
                         pass
             raise
+        # (ChoiceRequirements, SelectionMaterial) of this decision's observation, for the request.
+        self._choice = None
+        if self._context_policy.observation != "som_screenshot":  # context policy item 12
+            for value, execution in zip(prepared_values, inspections):
+                self._choice = choice_observation(
+                    self.task_instruction,
+                    value,
+                    execution,
+                    frame_prompt=self.interaction_profile.frame_prompt,
+                    game=self.task_category == "browser_game",
+                )
         return prepared_values, inspections
 
     def _answer_requirements(self) -> AnswerRequirements:
@@ -1048,8 +1114,14 @@ class DefaultHarness(VisionAgentBase):
         )
 
     def _build_request(self, turns, ledger, call) -> CanonicalRequest:
+        answer, selection = self._answer, None
+        if self._choice is not None:
+            # The one observation this decision prepared (the runtime takes exactly one per
+            # generation); its candidates are the answer options.
+            choice, selection = self._choice
+            answer = replace(answer, choice=choice)
         return build_request(
-            self._context_policy, self._system_block, turns, ledger, self._answer, call
+            self._context_policy, self._system_block, turns, ledger, answer, call, selection
         )
 
     @staticmethod
