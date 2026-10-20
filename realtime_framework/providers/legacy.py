@@ -22,10 +22,10 @@ def session_frame_text(observation) -> str:
 
 
 def chat_messages(request) -> tuple[dict, ...]:
-    """The OpenAI-format message list the chat and Decision encoders read.
+    """The OpenAI-format message list the chat encoders read; Luna's size estimate counts it too.
 
-    Every ledger is a user message at index 1, whatever its intended role; Luna's transcript drops
-    the roles itself. Live tool exchanges have no message form here.
+    Every ledger is a user message at index 1, whatever its intended role. Live tool exchanges
+    have no message form here.
     """
     messages = []
     prefix = ""

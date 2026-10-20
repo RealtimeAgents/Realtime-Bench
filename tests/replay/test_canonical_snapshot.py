@@ -233,7 +233,7 @@ def test_luna_choice_parts(tmp_path):
     driver_start = agent.driver.start_generation
 
     async def remember_state(request):
-        used.append(agent.driver.observation)
+        used.append(agent._choice_state)
         return await driver_start(request)
 
     agent.driver.start_generation = remember_state
@@ -248,7 +248,7 @@ def test_luna_choice_parts(tmp_path):
     finally:
         agent.close()
     assert not script
-    # The choice parts equal the observation state the selection flow actually used.
+    # The choice parts equal the observation state the agent prepared.
     for request, state in zip(requests, used, strict=True):
         choice, selection = request.answer.choice, request.selection
         assert [key for key, _ in choice.candidates] == list(state["candidates"])

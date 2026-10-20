@@ -2,12 +2,11 @@
 
 Text-only clients receive structured control state; multimodal clients additionally receive
 its marked screenshot. Candidate and text-composition policies are shared by both. History is
-replayed canonically, like every other model, unless the client declares an action digest.
+replayed canonically, like every other model, unless the context policy gives an action digest.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 from dataclasses import replace
 
@@ -31,7 +30,6 @@ from realtime_framework.harnesses.jev.prompts import (
     MULTIMODAL_GAME_CHOICE_PROFILE,
 )
 from realtime_framework.providers.decisions.driver import ChoiceDecisionDriver
-from realtime_framework.providers.decisions.history import decision_messages
 from realtime_framework.providers.decisions.questions import (
     GAME_INSTRUCTIONS,
     GUI_INSTRUCTIONS,
@@ -46,14 +44,13 @@ class JevHarness(DefaultHarness):
     interaction_profile = JEV_PROFILE
 
     def _setup_backend(self):
-        self._observation_states = {}
         client = adapter_class(self.config.adapter_type)(self.config)
         self.interaction_profile = (
             MULTIMODAL_CHOICE_PROFILE
             if client.capabilities.observation_modality == "screenshot"
             else JEV_PROFILE
         )
-        self.driver = ChoiceDecisionDriver(client, self._observation_states)
+        self.driver = ChoiceDecisionDriver(client)
         self.driver.bind_trace(self._trace)
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
@@ -87,8 +84,6 @@ class JevHarness(DefaultHarness):
 
     def _prepare_observations(self, observations, tick, feedback=""):
         prepared, executions = super()._prepare_observations(observations, tick, feedback)
-        # Only the current observation's candidates are executable.
-        self._observation_states.clear()
         for observation, execution in zip(prepared, executions):
             delivered = (execution or {}).get("delivered") or {}
             marks = (execution or {}).get("marks") or {}
@@ -117,7 +112,8 @@ class JevHarness(DefaultHarness):
                 "text_composition": text_composition,
                 "candidates": candidates,
             }
-            self._observation_states[observation.observation_id] = state
+            # Only the current observation's candidates are executable.
+            self._choice_state = state
             # Candidates and the composition inventory are current-only Choice criteria and stay
             # in the decision audit; retained history keeps the observation state.
             visible = {
@@ -128,26 +124,13 @@ class JevHarness(DefaultHarness):
                 self.interaction_profile.frame_prompt + OBSERVATION_INTERACTABLES_HEADER
                 + json.dumps(visible, ensure_ascii=False)
             )
-            capabilities = self.driver.capabilities
-            # Canonical messages already carry each retained screenshot.
-            if (
-                capabilities.observation_modality == "screenshot"
-                and capabilities.history_replay == "action_digest"
-            ):
-                encoded = base64.b64encode(observation.image_bytes).decode("ascii")
-                state["images"] = [{
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{observation.mime_type};base64,{encoded}",
-                        "detail": observation.image_detail,
-                    },
-                }]
         return prepared, executions
 
     def _build_request(self, turns, ledger, call):
-        # The one observation this decision prepared; its candidates are the answer options and
-        # the rest of its state is material for the selection flow only.
-        (state,) = self._observation_states.values()
+        # The one observation this decision prepared (the runtime takes exactly one per
+        # generation); its candidates are the answer options and the rest of its state is
+        # material for the selection flow only.
+        state = self._choice_state
         choice = ChoiceRequirements(
             instructions=GAME_INSTRUCTIONS if state["game_choices"] else GUI_INSTRUCTIONS,
             candidates=tuple(
@@ -171,14 +154,3 @@ class JevHarness(DefaultHarness):
             call,
             selection,
         )
-
-    @staticmethod
-    def _request_messages(request) -> tuple[dict, ...]:
-        from realtime_framework.providers.decisions.history import render_digest
-        from realtime_framework.providers.decisions.selection import SHADOW, shadow_check
-
-        old = decision_messages(request)
-        if request.history_form == "action_digest":
-            shadow_check("summary", list(old) == render_digest(request, compact_ledger=False))
-            SHADOW["summaries"] += 1
-        return old

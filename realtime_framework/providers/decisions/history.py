@@ -1,16 +1,12 @@
-"""JEV-only lossless history serialization; never controls candidate eligibility."""
+"""Decisions state from the canonical request: Luna's transcript of the retained turns and JEV's
+lossless action digest. Labels and headers come from the policy on the request; nothing here
+controls candidate eligibility.
+"""
 from __future__ import annotations
 
 import base64
 import json
 
-from realtime_framework.entity.context_policy import (
-    JEV_CURRENT_PREFIX,
-    JEV_HISTORY_PREFIX,
-    JEV_LEDGER_HEADER,
-)
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.providers.legacy import chat_messages
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 
@@ -40,64 +36,6 @@ def compact_repeated_records(records: list[dict], varying: tuple[str, ...]) -> l
             output.append({**common, "repeat_count": end - index, "occurrences": occurrences})
         index = end
     return output
-
-
-def compact_ledger_messages(messages) -> list[dict]:
-    """Compact the shared ledger only in JEV request states, without mutating it."""
-    result = []
-    prefix = ARCHIVED_ACTION_LEDGER_HEADER + "\n"
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, str) and content.startswith(prefix):
-            records = [json.loads(line) for line in content[len(prefix):].splitlines() if line]
-            records = compact_repeated_records(records, ("decision", "observed_at_tick"))
-            content = (
-                JEV_LEDGER_HEADER + "\n"
-                + "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True,
-                                      separators=(",", ":")) for r in records)
-            )
-            message = {**message, "content": content}
-        result.append(message)
-    return result
-
-
-def digest_messages(request) -> tuple[dict, ...]:
-    """Action-digest state: the executed action/feedback ledger plus the current observation.
-
-    Older screenshots, SoM and choices are not resent.
-    """
-    messages = []
-    history = []
-    for item in request.items:
-        block = item.block
-        if block.kind == "system_instruction":
-            messages.append({"role": "system", "content": block.text})
-        elif block.kind == "action_ledger":
-            messages.append(
-                {"role": "user", "content": ARCHIVED_ACTION_LEDGER_HEADER + "\n" + block.text}
-            )
-        elif block.kind == "model_output":
-            history.append({"observation_id": block.based_on, "action": block.text})
-        elif block.kind == "execution_feedback":
-            history[-1]["execution_feedback"] = block.text
-        elif block.kind == "frame":
-            if history:
-                compacted = compact_repeated_records(history, ("observation_id",))
-                messages.append({"role": "user", "content": JEV_HISTORY_PREFIX
-                                 + json.dumps(compacted, ensure_ascii=False)})
-            # The harness omits live candidates and the composition vocabulary from the prompt;
-            # they are sent as native Choice criteria.
-            current = json.loads(block.text.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
-            messages.append({"role": "user", "content": JEV_CURRENT_PREFIX
-                             + json.dumps(current, ensure_ascii=False)})
-    return tuple(messages)
-
-
-def decision_messages(request) -> tuple[dict, ...]:
-    """The message list ChoiceDecision reads: canonical turns or the action digest."""
-    if request.history_form == "action_digest":
-        return digest_messages(request)
-    return chat_messages(request)
 
 
 # JEV message roles of the neutral item roles.
