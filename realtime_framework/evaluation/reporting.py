@@ -621,7 +621,7 @@ def summarize_run_metrics(
     clock_mode: str,
     tokens_per_frame: int | None,
     fps: float,
-    world_time_s,
+    termination: dict | None,
     horizon_s: float,
     validate_decision_count: bool = True,
 ) -> dict:
@@ -705,11 +705,11 @@ def summarize_run_metrics(
                 parse_error_reasons[str(protocol.get("protocol_failure") or "unspecified")] += 1
 
     task_success_rate = float(solved) if isinstance(solved, bool) else None
-    success_time = _number(world_time_s)
     horizon = _number(horizon_s)
+    # A solved run always has a termination record: only a finalized loop is scored.
     normalized_time_to_success = (
-        success_time / horizon
-        if solved is True and success_time is not None and horizon not in {None, 0}
+        termination["end_s"] / horizon
+        if solved is True and horizon not in {None, 0}
         else None
     )
 
@@ -753,7 +753,7 @@ def summarize_run_metrics(
         "action_parse_error_definition": "action_protocol.valid_action == false",
         "normalized_time_to_success": _rounded(normalized_time_to_success),
         "normalized_time_to_success_definition": (
-            "world_time_s/(max_minutes*60), defined only when solved == true"
+            "termination.end_s/(max_minutes*60), defined only when solved == true"
         ),
         "provider_ttft_s": _distribution(
             ttfts,
@@ -782,20 +782,19 @@ from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import validate_episode_trace
 
-# Every episode has exactly one outcome; only pass scores 1. An unsolved episode that reached the
-# scored horizon (max_minutes, 5 by default) is a timeout; any earlier, task-specific end is a fail.
-# The scorer input is frozen at the horizon, so a solved episode always passes.
+# Every episode has exactly one outcome; only pass scores 1. An unsolved episode the scored horizon
+# (max_minutes, 5 by default) stopped is a timeout; any task-specific end is a fail, however long
+# teardown ran after it. The scorer input is frozen at the horizon, so a solved episode always
+# passes.
 OUTCOMES = ("pass", "fail", "timeout", "error")
 HORIZON_STOP_REASONS = frozenset({"time_limit", "tick_limit"})
 
 
 def _reached_horizon(summary: dict) -> bool:
-    """Whether the episode ran the whole scored horizon, whatever the task reported at its end."""
-    if summary.get("stop_reason") in HORIZON_STOP_REASONS:
-        return True
-    world, minutes = summary.get("world_time_s"), summary.get("max_minutes")
-    numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (world, minutes))
-    return numbers and world >= 60 * minutes
+    """Whether the horizon stopped the episode, by the stop reason the loop latched. main() copies
+    ``stop_reason`` from the latch the termination record holds; summaries written before the
+    record have the field too."""
+    return summary.get("stop_reason") in HORIZON_STOP_REASONS
 
 
 def episode_outcome(summary: dict) -> dict:
