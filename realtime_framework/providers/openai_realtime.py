@@ -56,6 +56,8 @@ from realtime_framework.providers.openai_realtime_session import history_frames
 
 logger = logging.getLogger(__name__)
 _CLIENT_ID_MAX_LENGTH = 32
+# What the trace links to an item create as its answers; the first is its acknowledgement. The
+# session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
 
 
@@ -291,11 +293,8 @@ class OpenAIRealtimeDriver:
         core = self._session.core
         for operation in operations:
             core.sending(operation)
-            try:
-                await asyncio.to_thread(self._send, operation)
-            except Exception:
-                core.send_failed(operation)
-                raise
+            await asyncio.to_thread(self._send, operation)
+            core.sent(operation)
 
     @staticmethod
     async def _wait_for_item_edits(session: _Session) -> None:
