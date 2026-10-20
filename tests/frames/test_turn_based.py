@@ -27,7 +27,7 @@ def test_each_decision_sends_and_uses_the_newest_frame(tmp_path):
                 seen.append(frame)
                 assert frame.frame == k + 1
                 assert frame.observation_id == observation.metadata["observation_id"]
-                assert frame.captured_unix_s == observation.timestamp
+                assert frame.captured_at == observation.timestamp
                 assert frame.send_status == "sent"
                 assert isinstance(frame.sent_unix_s, float)
                 assert result["action"].coordinate_transform == frame.geometry

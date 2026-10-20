@@ -24,7 +24,7 @@ def test_frames_are_numbered_from_one_in_preparation_order():
     second = table.register("obs-2", 101.0, GEOMETRY, None)
     assert (first.frame, second.frame) == (1, 2)
     assert table.latest() is second
-    assert (second.observation_id, second.captured_unix_s, second.marks) == ("obs-2", 101.0, None)
+    assert (second.observation_id, second.captured_at, second.marks) == ("obs-2", 101.0, None)
 
 
 def test_a_frame_keeps_its_own_marks_and_geometry_after_newer_frames():
@@ -50,7 +50,7 @@ def test_locate_finds_any_sent_frame_by_number():
     table = FrameTable()
     records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, _marks(n)) for n in (1, 2, 3)]
     for record in records:
-        table.record_sent(record.frame, record.captured_unix_s + 0.1)
+        table.record_sent(record.frame, record.captured_at + 0.1)
     assert [table.locate(n) for n in (1, 2, 3)] == [(record, None) for record in records]
 
 
@@ -69,7 +69,7 @@ def test_age_counts_the_frames_sent_since_and_the_seconds_since_capture():
     table = FrameTable()
     records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, None) for n in (1, 2, 3, 4)]
     for record in records[:3]:
-        table.record_sent(record.frame, record.captured_unix_s + 0.1)
+        table.record_sent(record.frame, record.captured_at + 0.1)
     # Frame 4 is prepared but not sent yet: it does not count.
     assert table.age(records[0], 104.5) == {"age_frames": 2, "age_s": 3.5}
     assert table.age(records[2], 104.5) == {"age_frames": 0, "age_s": 1.5}
