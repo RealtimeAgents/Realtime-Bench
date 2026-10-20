@@ -44,7 +44,9 @@ ENVIRONMENT = (
     "STREAM_CHAT_INCLUDE_USAGE",
     "REALTIMEBENCH_PYTHON",
 )
-CONTAINER_RUNTIME = {"runtime": "apptainer", "network": "host", "images": {}, "image_provenance": {}}
+CONTAINER_RUNTIME = {
+    "runtime": "apptainer", "network": "host", "images": {}, "image_provenance": {},
+}
 RUNS = (("wall", None, "wall-clock"), ("token", 64, "time-aware-token-v1"),
         ("token", None, "time-aware-token-v1"))
 
@@ -52,8 +54,8 @@ RUNS = (("wall", None, "wall-clock"), ("token", 64, "time-aware-token-v1"),
 def export() -> dict:
     """Effective configuration of every catalog key; the caller clears the variables above."""
     import realtime_framework.providers.registry as catalog
-    import realtime_framework.sandbox.apptainer as apptainer
     from realtime_framework.evaluation.config import config_fingerprint, effective_run_config
+    from realtime_framework.sandbox import apptainer
 
     # Image identities hash the host's SIF files; they are outside this change.
     apptainer.runtime_identity = lambda: CONTAINER_RUNTIME
@@ -126,8 +128,9 @@ def test_effective_configuration_unchanged(monkeypatch):
 
     for name in _RUNTIME_ENV_KEYS:
         monkeypatch.delenv(name, raising=False)
-    import realtime_framework.sandbox.apptainer as apptainer
+    from realtime_framework.sandbox import apptainer
 
+    # export() replaces the image identity; restore it after the test.
     monkeypatch.setattr(apptainer, "runtime_identity", apptainer.runtime_identity)
     before = json.loads(SNAPSHOT.read_text())
     problems = _differences(before, export())
