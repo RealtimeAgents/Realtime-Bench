@@ -3,5 +3,6 @@ endpoint:
   model: deepseek/deepseek-v4.1-flash
   api_key_env: OPENROUTER_API_KEY
   upstream_provider: together
+  # LiteLLM 1.104.1's map value (1.105+ lists 943718), kept across upgrades; not from Together.
   native_output_limit: 393216
 reasoning_effort: low
