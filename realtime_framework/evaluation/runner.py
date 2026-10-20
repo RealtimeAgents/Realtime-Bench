@@ -2321,7 +2321,7 @@ def set_up_agent(
     agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace)
     configure_agent(
         agent,
-        fps=env_fps,
+        fps=cfg.fps,
         tokens_per_frame=tokens_per_frame,
         clock_mode=clock_mode,
         category=getattr(ctask, "category", None),
