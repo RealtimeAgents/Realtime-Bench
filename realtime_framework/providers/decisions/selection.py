@@ -324,7 +324,7 @@ class ChoiceDecision:
                 raise
             except Exception as exc:
                 retry += 1
-                failure = self.client.classify_transport_error(exc)
+                failure = self.client.classify_question_error(exc)
                 delay = TRANSPORT_RETRY.delay_s(retry, key, failure)
                 self._attempt_finished(
                     retry,

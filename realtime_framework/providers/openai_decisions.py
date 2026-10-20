@@ -1,7 +1,8 @@
 """OpenAI Decisions models through OpenRouter's Decisions transport.
 
 Only wire encoding, route validation, context estimation, failure classification and native
-usage live here. Candidate actions come with the canonical request; the questions, their state,
+usage live here; the registered class adds them to DecisionEncoder, which makes it a complete
+driver. Candidate actions come with the canonical request; the questions, their state,
 composition and retries belong to the selection flow (providers/decisions).
 """
 
@@ -30,6 +31,7 @@ from realtime_framework.providers.context import (
     estimated_request_tokens,
     validate_context_reserve,
 )
+from realtime_framework.providers.decisions.driver import DecisionEncoder
 from realtime_framework.providers.legacy import chat_messages
 
 QUESTION_KEY = "next_action"
@@ -46,14 +48,14 @@ class DecisionsRefusalError(RuntimeError):
     """The upstream model declined to answer the question."""
 
 
-class OpenAIDecisionsClient:
+class OpenAIDecisionsClient(DecisionEncoder):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_decisions",
         persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
     )
-    # Choices per question; the harness groups larger candidate sets.
+    # Choices per question; the selection flow groups larger candidate sets.
     max_choices = 255
     pin_route = True
 
@@ -127,8 +129,8 @@ class OpenAIDecisionsClient:
         return context_status(self.config, count, "estimated_utf8_bytes_plus_image_allowance")
 
     @staticmethod
-    def classify_transport_error(exc: BaseException) -> TransportFailure:
-        """Classify one failed question for the harness's shared retry policy."""
+    def classify_question_error(exc: BaseException) -> TransportFailure:
+        """Classify one failed question for the selection flow's shared retry policy."""
         for current in exception_chain(exc):
             if isinstance(current, DecisionsRefusalError):
                 return TransportFailure(REFUSED)
