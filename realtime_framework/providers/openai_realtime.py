@@ -18,6 +18,7 @@ from openai import APITimeoutError as APITimeoutError
 from openai import OpenAI as OpenAI
 from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.providers.registry import load_project_secrets
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
@@ -160,8 +161,9 @@ class OpenAIRealtimeDriver:
     )
     model_defaults: ClassVar[dict[str, dict]] = {}
 
-    def __init__(self, config):
+    def __init__(self, config, *, clock=None):
         self.config = config
+        self.clock = clock or SystemClock()
         load_project_secrets()
         key = config.api_key or os.environ.get(config.api_key_env or "OPENAI_API_KEY")
         if not key:
@@ -347,7 +349,8 @@ class OpenAIRealtimeDriver:
         # The session the connect resumes: the newest retained frame, or none at all.
         frames = [] if request.history is None else history_frames(request.history.items)[1]
         key = f"{frames[-1].id if frames else 'empty'}:connect"
-        await RequestRetry(key, self.classify_transport_error, record).run_async(send)
+        retry = RequestRetry(key, self.classify_transport_error, record, clock=self.clock)
+        await retry.run_async(send)
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
         self._session = _Session(

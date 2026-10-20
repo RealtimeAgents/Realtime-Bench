@@ -18,7 +18,6 @@ import json as json
 import os as os
 import re as re
 import threading as threading
-import time as time
 import uuid as uuid
 from collections.abc import Iterator as Iterator
 from dataclasses import dataclass as dataclass
@@ -28,6 +27,7 @@ from importlib.metadata import version as version
 from typing import ClassVar as ClassVar
 from urllib.parse import urlsplit as urlsplit
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.events import TextDelta
@@ -66,16 +66,16 @@ _END = object()
 
 
 # Helpers
-def pace_request() -> None:
+def pace_request(clock) -> None:
     """Apply the optional process-wide minimum interval between provider requests."""
     interval = float(os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0"))
     if interval <= 0:
         return
     with _REQUEST_GATE:
-        wait = _LAST_REQUEST_AT[0] + interval - time.time()
+        wait = _LAST_REQUEST_AT[0] + interval - clock.time()
         if wait > 0:
-            time.sleep(wait)
-        _LAST_REQUEST_AT[0] = time.time()
+            clock.sleep(wait)
+        _LAST_REQUEST_AT[0] = clock.time()
 
 
 def _next_or_end(iterator: Iterator):
@@ -462,8 +462,9 @@ class LiteLLMDriver:
     assistant_turn_ref = False  # keep the provider's raw assistant message for verbatim replay
     pressure_archive = False  # archive turns when the request exceeds the context window
 
-    def __init__(self, config):
+    def __init__(self, config, *, clock=None):
         self.config = config
+        self.clock = clock or SystemClock()
         deployment = self.deployment
         if deployment.gateway == "openai_compatible":
             self.base_url = validate_endpoint(config.api_base_url)
@@ -664,7 +665,7 @@ class LiteLLMDriver:
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if not self._stream_enabled():
             return await self._start_complete_response(request)
-        await asyncio.to_thread(pace_request)
+        await asyncio.to_thread(pace_request, self.clock)
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
         response = await self._sdk.acompletion(**kwargs)
@@ -877,7 +878,7 @@ class LiteLLMDriver:
             )
         finally:
             try:
-                await asyncio.wait_for(response.aclose(), timeout=1.0)
+                await self.clock.wait_for(response.aclose(), 1.0)
             finally:
                 with self._lock:
                     self._responses.pop(id(response), None)
@@ -911,7 +912,7 @@ class LiteLLMDriver:
     # ---- complete responses ----------------------------------------------------------------
 
     async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        await asyncio.to_thread(pace_request)
+        await asyncio.to_thread(pace_request, self.clock)
         raw = {}
         # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
         logged = LoggerCapture(self) if self.protocol.client is None else None
@@ -1048,7 +1049,7 @@ class LiteLLMDriver:
 
         if getattr(GLOBAL_LOGGING_WORKER, "_bound_loop", None) is asyncio.get_running_loop():
             try:
-                await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(), timeout=1.0)
+                await self.clock.wait_for(GLOBAL_LOGGING_WORKER.stop(), 1.0)
             except Exception:  # noqa: BLE001, S110 - logging cleanup must not mask shutdown
                 pass
 

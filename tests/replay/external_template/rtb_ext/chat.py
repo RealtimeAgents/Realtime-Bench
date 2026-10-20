@@ -1,7 +1,7 @@
 """An OpenAI-compatible chat driver: one complete response per request.
 
-It uses only the framework's public contracts (entity/ and providers/capture.py) and is registered
-nowhere; a model YAML selects it with ``endpoint.api: rtb_ext.chat:ExternalChatDriver``.
+It uses only the framework's public contracts (entity/, clock.py and providers/capture.py) and is
+registered nowhere; a model YAML selects it with ``endpoint.api: rtb_ext.chat:ExternalChatDriver``.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from typing import ClassVar
 
 import httpx
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.events import (
     GenerationBoundary,
     ProviderHistoryState,
@@ -78,8 +79,9 @@ class ExternalChatDriver:
     )
     model_defaults: ClassVar[dict[str, dict]] = {}
 
-    def __init__(self, config):
+    def __init__(self, config, *, clock=None):
         self.config = config
+        self.clock = clock or SystemClock()
         self._key = os.environ.get(config.api_key_env) if config.api_key_env else None
         self._trace = None
         self._client = None

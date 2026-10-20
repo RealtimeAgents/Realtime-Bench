@@ -8,8 +8,8 @@ their winners compared in a further Choice. All calls belong to the same wall-cl
 from __future__ import annotations
 
 import json
-import time
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import (
     ChoiceContextLimitError,
     RequestRetry,
@@ -43,9 +43,10 @@ class ChoiceDecision:
     selection material, and the history from its blocks, rendered as Decisions state.
     """
 
-    def __init__(self, client, request, *, trace):
+    def __init__(self, client, request, *, trace, clock=None):
         self.client = client
         self.trace = trace
+        self.clock = clock or SystemClock()
         self.choice = request.answer.choice
         self.selection = request.selection
         self.digest = request.history_form == "action_digest"
@@ -176,7 +177,7 @@ class ChoiceDecision:
                     "instructions": instructions + (GROUP_NOTE if len(group) < len(remaining) else ""),
                     "criteria": {key: candidates[key]["description"] for key in group},
                 }
-                started = time.monotonic()
+                started = self.clock.monotonic()
                 question_scope = {
                     "choice_phase": phase,
                     "round": round_index,
@@ -195,7 +196,7 @@ class ChoiceDecision:
                             "phase": phase,
                             "round": round_index,
                             "candidates": list(group),
-                            "latency_s": time.monotonic() - started,
+                            "latency_s": self.clock.monotonic() - started,
                         }
                     )
                     self._history_changed("choice_candidate_split", self.context_splits[-1])
@@ -213,7 +214,7 @@ class ChoiceDecision:
                         "group": group_index,
                         "question": question,
                         "response": reply.response,
-                        "latency_s": time.monotonic() - started,
+                        "latency_s": self.clock.monotonic() - started,
                         **({"text_state": dict(text_state)} if text_state is not None else {}),
                     }
                 )
@@ -306,7 +307,7 @@ class ChoiceDecision:
                 else None
             ),
             "usage": reply.usage if reply is not None else None,
-            "latency_s": time.monotonic() - started,
+            "latency_s": self.clock.monotonic() - started,
         }
         with self._attempt_scope(transport_attempt):
             self.trace.capture(TraceEvent.MODEL_ATTEMPT_FINISHED, payload)
@@ -317,7 +318,7 @@ class ChoiceDecision:
 
         async def send(attempt):
             nonlocal started
-            started = time.monotonic()
+            started = self.clock.monotonic()
             try:
                 with self._attempt_scope(attempt):
                     reply = await self.client.decide(state, question)
@@ -357,7 +358,7 @@ class ChoiceDecision:
             )
 
         key = f"{self.selection.observation_id}:{len(self.calls)}"
-        return await RequestRetry(key, classify, record).run_async(send)
+        return await RequestRetry(key, classify, record, clock=self.clock).run_async(send)
 
     async def _compose_text(self):
         inventory = self.selection.text_composition
@@ -365,7 +366,7 @@ class ChoiceDecision:
             raise ValueError("JEV text composition requires a focused observation-bound input")
         candidates = composition_candidates(inventory)
         draft, edits = "", []
-        started = time.monotonic()
+        started = self.clock.monotonic()
         # No forced completion, repetition guard or answer repair. The runtime/harness
         # deadline bounds this generation, exactly as it bounds a generative model's output.
         while True:
@@ -416,5 +417,5 @@ class ChoiceDecision:
                     "draft": draft,
                     "edits": edits,
                     "candidate_count": len(candidates),
-                    "latency_s": time.monotonic() - started,
+                    "latency_s": self.clock.monotonic() - started,
                 }

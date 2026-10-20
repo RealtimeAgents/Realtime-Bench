@@ -233,7 +233,7 @@ class _Sleeps:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, cancel, seconds):
+    def __call__(self, clock, cancel, seconds):
         self.calls.append(seconds)
 
 

@@ -25,7 +25,6 @@ import base64
 import contextlib
 import json
 import os
-import types
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,9 +32,9 @@ from pathlib import Path
 import pytest
 
 import realtime_framework.providers.registry as catalog
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.providers.gemini import live as live_module
 
 from . import baseline
 from .build import Episode, build_episode
@@ -310,9 +309,10 @@ def run_episode(
     tmp_path: Path,
     *,
     setup_closes: dict[str, tuple[int, str]] | None = None,
+    before_initialize=None,
 ) -> tuple[list[dict], list[dict], LiveStub]:
     """Run one script against the stub; returns the baseline records, the raw results and the
-    stopped stub."""
+    stopped stub. ``before_initialize`` goes to build_episode."""
     with LiveStub(
         turns,
         cert_dir=tmp_path / "tls",
@@ -333,6 +333,7 @@ def run_episode(
             clock_mode="token",
             tokens_per_frame=TOKENS_PER_FRAME,
             max_ticks=MAX_TICKS,
+            before_initialize=before_initialize,
         )
         try:
             stub.wait_until_idle()
@@ -524,24 +525,21 @@ def test_driver_default_short(live_env, tmp_path):
             assert all("thoughtSignature" not in part for part in parts[1:])
 
 
-class _FakeClockAsyncio:
-    """live.py's asyncio with its sleeps and its loop's time (live.py:591, 701-712) on a fake
-    clock that only those sleeps advance; everything else is asyncio itself."""
+class _SleepRecordingClock(SystemClock):
+    """The driver's clock, whose async sleeps (live.py:530, 633-646) only advance its monotonic
+    time and are recorded; everything else is real time."""
 
     def __init__(self):
         self.now = 0.0
         self.sleeps: list[float] = []
 
-    async def sleep(self, delay):
-        self.sleeps.append(delay)
-        self.now += delay
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep_async(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
         await asyncio.sleep(0)
-
-    def get_running_loop(self):
-        return types.SimpleNamespace(time=lambda: self.now)
-
-    def __getattr__(self, name):
-        return getattr(asyncio, name)
 
 
 def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
@@ -549,8 +547,7 @@ def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
     at least one model-input frame interval (live.py:700-710): 4 s at 0.25 fps. Each video is
     followed by the 1 s ingestion wait (live.py:711-712), so the wait before the next video is
     the other 3 s."""
-    clock = _FakeClockAsyncio()
-    live_env.setattr(live_module, "asyncio", clock)
+    clock = _SleepRecordingClock()
     preset = DRIVER_DEFAULT
     config = ModelConfig(
         adapter_type="gemini_live", model_name=preset.model, fps=0.25, reasoning_effort="low"
@@ -558,7 +555,15 @@ def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
     scenario = [Step(CLICK_NAME), Step(CLICK_AGREE), Step(CLICK_NAME)]
     turns = [turn_script(k, step, preset) for k, step in enumerate(scenario)]
     records, results, stub = run_episode(
-        "realtime-input-spacing", config, preset.model, scenario, turns, preset, live_env, tmp_path
+        "realtime-input-spacing",
+        config,
+        preset.model,
+        scenario,
+        turns,
+        preset,
+        live_env,
+        tmp_path,
+        before_initialize=lambda agent: setattr(agent.driver, "clock", clock),
     )
     check_session(stub, results)
     for record in records[2:-1]:

@@ -71,12 +71,12 @@ class _GatedBackoff:
         self.release = threading.Event()
         self._wait = model_module._backoff
 
-    def __call__(self, cancel, seconds):
+    def __call__(self, clock, cancel, seconds):
         self.calls.append(seconds)
         self.entered.set()
         if not self.release.wait(WAIT_S):
             raise AssertionError("the test never released the backoff")
-        self._wait(cancel, seconds)
+        self._wait(clock, cancel, seconds)
 
 
 def _generate_in_worker(agent, observation, k=0):
@@ -397,7 +397,7 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
     (context.py:665-671), so attempt 2 first recovers it (context.py:402-412). The abort lands
     during that recovery; the attempt then stops before it sends its observation or its request
     (context.py:482-484)."""
-    openrouter_env.setattr(model_module, "_backoff", lambda cancel, seconds: None)
+    openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
         episode = build_episode(
@@ -441,7 +441,7 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
     (context.py:402-412; providers/openai_realtime.py:661-671). The abort lands before connect()
     opens it. connect()'s own attempts run under the decision's retry_cancellation
     (providers/openai_realtime.py:435-454), so no WebSocket opens and no response runs."""
-    monkeypatch.setattr(model_module, "_backoff", lambda cancel, seconds: None)
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
         episode = _session_episode(stub, tmp_path)
         agent = episode.agent

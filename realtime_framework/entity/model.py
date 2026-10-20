@@ -434,6 +434,9 @@ import contextvars
 import threading
 from collections.abc import Callable
 
+from realtime_framework.clock import Clock
+from realtime_framework.clock import SystemClock
+
 
 class RetryCancelled(BaseException):
     """The generation a request unit belongs to was abandoned before the unit was sent again.
@@ -460,8 +463,8 @@ def retry_cancellation(cancel: threading.Event):
         _RETRY_CANCEL.reset(token)
 
 
-def _backoff(cancel: threading.Event, delay: float) -> None:
-    cancel.wait(delay)
+def _backoff(clock: Clock, cancel: threading.Event, delay: float) -> None:
+    clock.wait(cancel, delay)
 
 
 @dataclass(frozen=True)
@@ -476,12 +479,14 @@ class RequestRetry:
     failure before any wait; delay is None when the request is not sent again, and the exception
     then propagates unless ``record`` raises its own. Once the context's retry_cancellation is
     set, the backoff ends, no attempt starts, and RetryCancelled passes enclosing units unrecorded.
+    The backoff waits on ``clock``.
     """
 
     key: str  # the request unit's stable jitter key
     classify: Callable[[BaseException], TransportFailure | None]
     record: Callable[[int, BaseException, TransportFailure, float | None], None]
     replayable: Callable[[BaseException], bool] = lambda exc: True
+    clock: Clock = field(default_factory=SystemClock)
 
     def run(self, send):
         cancel = _RETRY_CANCEL.get()
@@ -493,7 +498,7 @@ class RequestRetry:
                 delay = self._failed(attempt, exc)
                 if delay is None:
                     raise
-            _backoff(cancel, delay)
+            _backoff(self.clock, cancel, delay)
             attempt += 1
         raise RetryCancelled(f"generation abandoned before attempt {attempt}")
 
@@ -507,7 +512,7 @@ class RequestRetry:
                 delay = self._failed(attempt, exc)
                 if delay is None:
                     raise
-            await asyncio.to_thread(_backoff, cancel, delay)
+            await asyncio.to_thread(_backoff, self.clock, cancel, delay)
             attempt += 1
         raise RetryCancelled(f"generation abandoned before attempt {attempt}")
 
