@@ -549,9 +549,18 @@ def runtime_dependencies() -> list[dict]:
     ]
 
 
+def _entries_sha256(entries: list[tuple[bytes, bytes]]) -> str:
+    """SHA-256 over (name, content) pairs, each part prefixed with its length."""
+    digest = hashlib.sha256()
+    for name, content in entries:
+        for part in (name, content):
+            digest.update(len(part).to_bytes(8, "big"))
+            digest.update(part)
+    return digest.hexdigest()
+
+
 def harness_fingerprint() -> str:
     """Hash framework sources and locked runtime dependencies that can affect model I/O or actions."""
-    digest = hashlib.sha256()
     entries = [
         (path.relative_to(identity_ROOT).as_posix().encode(), _normalized_bytes(path))
         for path in _source_paths()
@@ -562,11 +571,51 @@ def harness_fingerprint() -> str:
             json.dumps(runtime_dependencies(), sort_keys=True, separators=(",", ":")).encode(),
         )
     )
-    for name, content in entries:
-        for part in (name, content):
-            digest.update(len(part).to_bytes(8, "big"))
-            digest.update(part)
-    return digest.hexdigest()
+    return _entries_sha256(entries)
+
+
+def external_driver_identity(target: str) -> dict:
+    """The code an external driver ("package.module:Class") runs, which harness_fingerprint does
+    not cover: the module and class the model YAML names, and a digest of the sources of the
+    module's top-level package (or of the module alone, outside a package). Paths are relative
+    to the directory holding the package, so its install location is not part of the digest.
+    The record also names the context-policy row the driver gets (EXTERNAL_DRIVER_ROW)."""
+    from importlib import import_module
+
+    module_name, _, class_name = target.partition(":")
+    top = import_module(module_name.partition(".")[0])
+    entries = []
+    for location in map(Path, getattr(top, "__path__", None) or [top.__file__]):
+        entries += [
+            (path.relative_to(location.parent).as_posix().encode(), _normalized_bytes(path))
+            for path in (location.rglob("*") if location.is_dir() else [location])
+            if path.is_file()
+            and path.suffix in _SOURCE_SUFFIXES
+            and "__pycache__" not in path.parts
+        ]
+    return {
+        "module": module_name,
+        "class": class_name,
+        "source_sha256": _entries_sha256(sorted(entries)),
+        "context_policy_row": phase1_context_policy().for_path(target, {}).api,
+    }
+
+
+def configuration_sha256(launch: dict) -> str:
+    """Hash of the model configuration a Harbor trial resolved (the trial worker's settings).
+
+    Harbor's verify and aggregate and the upload compare it between resolution and the run and
+    across runs; an external driver's code identity is part of it.
+    """
+    configuration = {
+        "model_config": launch["model_config"],
+        "model_revision": launch.get("model_revision"),
+    }
+    if "external_driver" in launch:
+        configuration["external_driver"] = launch["external_driver"]
+    return hashlib.sha256(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def harness_lock() -> tuple[str, str]:
@@ -697,7 +746,7 @@ def effective_run_config(
         "environment_overrides": environment,
     }
     from realtime_framework.providers.litellm import LiteLLMDriver
-    from realtime_framework.providers.registry import adapter_class
+    from realtime_framework.providers.registry import adapter_class, is_external_driver
 
     driver = adapter_class(adapter_type)
     if issubclass(driver, LiteLLMDriver):
@@ -719,6 +768,8 @@ def effective_run_config(
             "parameter": driver.compat.output_limit_param,
             "uncapped_value": model_config.get("native_output_limit") or "provider_default",
         }
+    if is_external_driver(adapter_type):
+        config["external_driver"] = external_driver_identity(adapter_type)
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:
