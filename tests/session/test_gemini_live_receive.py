@@ -14,10 +14,17 @@ from types import SimpleNamespace
 from google.genai import live as genai_live
 from google.genai import types
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.entity.model import ConnectRequest, GenerationRequest, SessionSeed
+from realtime_framework.entity.model import (
+    ConnectRequest,
+    GenerationRequest,
+    HistorySyncRequest,
+    SessionSeed,
+    SyncDisposition,
+)
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
@@ -39,13 +46,16 @@ class FakeSocket:
 
 
 class FakeLive:
-    """client.aio.live: each connect opens a session on the next socket."""
+    """client.aio.live: each connect opens a session on the next socket, and is logged with the
+    handle its setup resumes."""
 
-    def __init__(self, scripts: list[list[dict]]):
+    def __init__(self, scripts: list[list[dict]], log: list):
         self.sockets = [FakeSocket(frames) for frames in scripts]
         self._next = iter(self.sockets)
+        self._log = log
 
     def connect(self, *, model, config):
+        self._log.append(("connect", config.session_resumption.handle))
         session = genai_live.AsyncSession(
             api_client=SimpleNamespace(vertexai=False),
             websocket=next(self._next),
@@ -58,24 +68,73 @@ async def _yield(value):
     yield value
 
 
+class RecordingClock(SystemClock):
+    """Real time, except that the driver's sleeps are logged instead of taken."""
+
+    def __init__(self, log: list):
+        self._log = log
+
+    async def sleep_async(self, seconds: float) -> None:
+        self._log.append(("sleep", seconds))
+        await asyncio.sleep(0)
+
+
+class Rig:
+    """A GeminiLiveDriver for ``model`` on scripted connections; ``log`` holds its connects and
+    sleeps in order."""
+
+    def __init__(self, monkeypatch, model: str, scripts: list[list[dict]]):
+        self.log: list = []
+        config = ModelConfig(
+            adapter_type="gemini_live",
+            model_name=model,
+            api_key="replay-dummy-key",
+            **live.GeminiLiveDriver.model_defaults[model],
+        )
+        self.driver = live.GeminiLiveDriver(config, clock=RecordingClock(self.log))
+        self.live = FakeLive(scripts, self.log)
+        self.driver.client = SimpleNamespace(aio=SimpleNamespace(live=self.live))
+        answer = AnswerRequirements(
+            "function_call", "standard_vlm", tuple(gui_function_declarations())
+        )
+        self.seed = SessionSeed("system instruction", model, None, 1.0, answer)
+        policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
+        call = CallParameters(model, config.reasoning_effort, None)
+        self.history = build_request(
+            policy, system_block(self.seed.system_instruction, None), (), None, answer, call
+        )
+
+    async def connect(self) -> None:
+        await self.driver.connect(ConnectRequest(seed=self.seed))
+
+    async def start(self, generation_id: str):
+        request = GenerationRequest(generation_id, None, "inf", "wall", canonical=self.history)
+        return await self.driver.start_generation(request)
+
+
+def stamps(events) -> list[tuple]:
+    return [
+        (type(event).__name__, event.connection, event.generation, event.generation_id)
+        for event in events
+    ]
+
+
+async def drain(events) -> list:
+    return [event async for event in events]
+
+
 USAGE = {"usageMetadata": {"promptTokenCount": 20, "responseTokenCount": 3, "totalTokenCount": 23}}
 IDLE = {"serverContent": {"interactionStatus": "IDLE"}, **USAGE}
+TURN_COMPLETE = {"serverContent": {"turnComplete": True}, **USAGE}
 
 
 def test_receive_loop_stamps_connection_and_generation(monkeypatch):
     """Two generations on one connection, one on the next: every event carries the connection
     it arrived on and the generation whose reply it belongs to. The bare turnComplete of a spoken
     filler ends google-genai's receive iterator; the loop reads on to IDLE."""
-    monkeypatch.setattr(live, "_SESSION_RELEASE_GRACE_S", 0.0)
-    model = "gemini-3.8-live-extended-thinking"
-    config = ModelConfig(
-        adapter_type="gemini_live",
-        model_name=model,
-        api_key="replay-dummy-key",
-        **live.GeminiLiveDriver.model_defaults[model],
-    )
-    driver = live.GeminiLiveDriver(config)
-    connections = FakeLive(
+    rig = Rig(
+        monkeypatch,
+        "gemini-3.8-live-extended-thinking",
         [
             [
                 {"toolCall": {"functionCalls": [{"id": "call-0", "name": "wait", "args": {}}]}},
@@ -84,32 +143,19 @@ def test_receive_loop_stamps_connection_and_generation(monkeypatch):
                 IDLE,
             ],
             [IDLE],
-        ]
+        ],
     )
-    driver.client = SimpleNamespace(aio=SimpleNamespace(live=connections))
-    answer = AnswerRequirements("function_call", "standard_vlm", tuple(gui_function_declarations()))
-    seed = SessionSeed("system instruction", model, None, 1.0, answer)
-    policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
-    call = CallParameters(model, config.reasoning_effort, None)
-    system = system_block(seed.system_instruction, None)
-    canonical = build_request(policy, system, (), None, answer, call)
 
     async def run() -> list[list[tuple]]:
-        stamps = []
-        await driver.connect(ConnectRequest(seed=seed))
+        replies = []
+        await rig.connect()
         for k in range(3):
             if k == 2:
-                await driver.connect(ConnectRequest(seed=seed))
-            request = GenerationRequest(f"turn-{k}", None, "inf", "wall", canonical=canonical)
-            generation = await driver.start_generation(request)
-            stamps.append(
-                [
-                    (type(event).__name__, event.connection, event.generation, event.generation_id)
-                    async for event in driver.events(generation)
-                ]
-            )
-        await driver.close()
-        return stamps
+                await rig.connect()
+            generation = await rig.start(f"turn-{k}")
+            replies.append(stamps(await drain(rig.driver.events(generation))))
+        await rig.driver.close()
+        return replies
 
     turn_0, turn_1, turn_2 = asyncio.run(run())
     assert turn_0 == [
@@ -125,7 +171,43 @@ def test_receive_loop_stamps_connection_and_generation(monkeypatch):
         ("UsageSnapshot", 2, 1, "turn-2"),
         ("GenerationBoundary", 2, 1, "turn-2"),
     ]
-    first, second = connections.sockets
+    first, second = rig.live.sockets
     assert first.frames == [] and second.frames == []
     assert [next(iter(message)) for message in first.sent] == ["tool_response"]
     assert second.sent == []
+
+
+def test_resume_waits_for_the_session_release(monkeypatch):
+    """A goAway renewal resumes on a new connection. Closing the old one and the server
+    releasing its session are not atomic, so the resume's setup waits the release grace."""
+    rig = Rig(
+        monkeypatch,
+        "gemini-3.8-live",
+        [
+            [
+                {"sessionResumptionUpdate": {"newHandle": "handle-0", "resumable": True}},
+                {"goAway": {"timeLeft": "30s"}},
+                TURN_COMPLETE,
+            ],
+            [],
+        ],
+    )
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        await drain(rig.driver.events(generation))
+        request = HistorySyncRequest(rig.seed, "go_away", rig.history, generation)
+        return await rig.driver.sync_history(request)
+
+    result = asyncio.run(run())
+    assert (result.disposition, result.detail) == (
+        SyncDisposition.EXACT,
+        "resumed clean Gemini Live session: go_away",
+    )
+    assert result.provider_metadata["session_replacement_grace_s"] == live._SESSION_RELEASE_GRACE_S
+    assert rig.log == [
+        ("connect", None),
+        ("sleep", live._SESSION_RELEASE_GRACE_S),
+        ("connect", "handle-0"),
+    ]

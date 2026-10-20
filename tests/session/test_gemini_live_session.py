@@ -99,10 +99,17 @@ def server_content(**fields) -> types.LiveServerMessage:
     return message({"serverContent": fields})
 
 
+def plan(core: SessionCore, history=None, resume_handle=None):
+    """Close the open connection, as the driver does first, and plan the next one."""
+    replacing = core.connection is not None
+    core.closed()
+    return core.connect(history, resume_handle, replacing=replacing)
+
+
 def connected(core: SessionCore, history=None, resume_handle=None):
-    plan = core.connect(history, resume_handle)
-    core.connected(plan)
-    return plan
+    connect = plan(core, history, resume_handle)
+    core.connected(connect)
+    return connect
 
 
 def receive(core: SessionCore, message, now: float = 0.0):
@@ -136,7 +143,7 @@ def test_new_session_then_rebuild():
     assert core.delivery == {("setup",): ACKNOWLEDGED}
     assert not core.last_turn_clean  # nothing on the session yet: no handle to resume
 
-    rebuild = core.connect(view([turn(k) for k in range(10)]), None)
+    rebuild = plan(core, view([turn(k) for k in range(10)]))
     assert core.connection is None  # the open connection is closed first
     assert (rebuild.mode, rebuild.release_grace) == ("canonical_history_replay", True)
     # Each turn is its frame, its calls and their receipts; twelve contents per message at most.
@@ -162,8 +169,8 @@ def test_seed_replays_the_history_view():
         turn(0),
         turn(1, calls=("click", "key"), feedback="EXECUTION RESULT: ok", text_after="done"),
     ]
-    plan = core.connect(view(turns, ledger='{"decision": 0}'), None)
-    (contents,) = plan.seed
+    connect = plan(core, view(turns, ledger='{"decision": 0}'))
+    (contents,) = connect.seed
     ledger, frame_0, calls_0, receipts_0, frame_1, calls_1, receipts_1, after_1 = contents
     texts = current_context_policy().for_path("gemini_live", {}).texts
     assert ledger == Content("user", (Part(text=texts.ledger_header + '\n{"decision": 0}'),))
@@ -190,12 +197,12 @@ def test_seed_replays_the_history_view():
     )
     assert [part.function_response["id"] for part in receipts_1.parts] == ["call-1-0", "call-1-1"]
     assert after_1 == Content("model", (Part(text="done"),))
-    assert plan.seeded == ("ledger", "d0.frame", "d0.tools", "d1.prefix", "d1.frame", "d1.tools")
+    assert connect.seeded == ("ledger", "d0.frame", "d0.tools", "d1.prefix", "d1.frame", "d1.tools")
 
 
 def test_seed_replays_tool_rounds_as_a_transcript():
-    plan = session_core().connect(view([turn(0)], history_format="tool_transcript"), None)
-    (contents,) = plan.seed
+    connect = plan(session_core(), view([turn(0)], history_format="tool_transcript"))
+    (contents,) = connect.seed
     frame, transcript = contents
     assert frame == frame_content(0)
     assert transcript.role == "model" and len(transcript.parts) == 1
@@ -272,7 +279,7 @@ def test_go_away_resumes_after_a_clean_turn():
         is None
     )
 
-    resume = core.connect(None, "handle-0")
+    resume = plan(core, resume_handle="handle-0")
     assert (resume.mode, resume.resume_handle, resume.seed, resume.release_grace) == (
         "session_resumption",
         "handle-0",
@@ -290,12 +297,12 @@ def test_resume_failure_rebuilds():
     connected(core)
     clean_turn(core, "turn-0", "handle-0", go_away())
 
-    core.connect(None, "handle-0")
+    plan(core, resume_handle="handle-0")
     # The resume was refused: connected() never comes. The renewal is still owed.
     assert core.connection is None and core.renewal_required
     assert core.resume_handle == "handle-0"
 
-    rebuild = core.connect(view([turn(0)]), None)
+    rebuild = plan(core, view([turn(0)]))
     # No open connection is left to replace, but a replayed history still waits for the release.
     assert rebuild.release_grace and rebuild.mode == "canonical_history_replay"
     assert core.resume_handle is None

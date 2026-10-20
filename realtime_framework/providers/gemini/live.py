@@ -384,7 +384,8 @@ class GeminiLiveDriver:
             )
         return self.types.Part(text=part.text)
 
-    async def _close_current(self) -> None:
+    async def _close_current(self) -> bool:
+        """Close the open connection, if any; returns whether there was one."""
         cm, self._cm = self._cm, None
         self._session = None
         self._received = None
@@ -399,13 +400,14 @@ class GeminiLiveDriver:
                 )
             except Exception:  # noqa: BLE001, S110 - best-effort SDK cleanup
                 pass
+        return cm is not None
 
     async def connect(self, request: ConnectRequest) -> None:
         await self._connect_once(request)
 
     async def _connect_once(self, request: ConnectRequest) -> None:
-        connect = self._core.connect(request.history, request.resume_handle)
-        await self._close_current()
+        replacing = await self._close_current()
+        connect = self._core.connect(request.history, request.resume_handle, replacing=replacing)
         if connect.release_grace:
             # Closing the local WebSocket and releasing the server-side Live session are not one
             # atomic operation. Apply the grace period to every reconnect/history replay, including
