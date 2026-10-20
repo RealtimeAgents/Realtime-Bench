@@ -1,8 +1,8 @@
 """Pre-run checks: every rule that rejects a run configuration before an episode starts.
 
 Each rule reads only the registered driver class's declarations (capabilities, deployment,
-compat flags, option tables) and the configuration. Every entry point keeps the rules and the
-order it applied before the checks were collected here:
+compat flags, option tables) and the configuration. Every entry point keeps the rules it applied
+before the checks were collected here:
 
 - runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
   check_token_budget;
@@ -10,7 +10,10 @@ order it applied before the checks were collected here:
 - the runner, once, before it builds the agent: check_episode.
 
 Construction-time failures (credentials, SDK pin, endpoint URL, Decisions route) stay in the
-drivers.
+drivers, so they now come after every check_episode rule. When a run has two faults, the first
+one reported can therefore differ from before: the choice-task, frame-rate and Gemini session
+checks used to fire in initialize or at the session connect, after the constructor had looked
+for the API key, and are now reported ahead of a missing key.
 """
 
 from __future__ import annotations
@@ -159,10 +162,12 @@ def check_session_config(driver, config) -> None:
 def check_episode(model_config, *, clock_mode, task, env_fps) -> None:
     """The runner's rules, applied once before it builds the agent.
 
-    The order is the order in which these conditions fired before: the clock check, the equal
-    environment and model-input frame rates, then the driver's constructor, then initialize (the
-    choice-task and frame-rate checks), then the session connect. ``task`` is the registered task
-    (its category and task_id); ``env_fps`` is the rate the task clock and the loop run at.
+    Among themselves the rules keep the order in which they fired before: the clock check, the
+    equal environment and model-input frame rates, then the driver's constructor, then initialize
+    (the choice-task and frame-rate checks), then the session connect. All of them now precede
+    the driver's construction, so the initialize and connect rules are reported before a missing
+    API key, which the constructor reports. ``task`` is the registered task (its category and
+    task_id); ``env_fps`` is the rate the task clock and the loop run at.
     """
     adapter_type = model_config.adapter_type
     driver = adapter_class(adapter_type)
