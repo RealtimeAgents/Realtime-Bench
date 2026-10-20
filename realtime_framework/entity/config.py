@@ -117,6 +117,25 @@ class EnvironmentConfig(BaseModel):
     display_number: int = SANDBOX_DISPLAY_NUMBER
 
 
+@dataclass(frozen=True)
+class EnvironmentBudgetConfig:
+    """Overall time budget in seconds of each environment operation (sandbox/budget.py).
+
+    The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in
+    evaluation/runner.py. Running past a budget fails the operation and invalidates the run.
+    """
+
+    # Execute one action; extended for text input and holds as the guest's request timeout is
+    # (sandbox/guest.py action_timeout).
+    action_s: float = 10.0
+    capture_s: float = 120.0  # capture one observation; the CDP call default
+    state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
+    clock_advance_s: float = 120.0  # advance or render one token-clock step; the CDP call default
+    # Read the scored snapshot at the freeze. Other single state reads time out at 8 s; a web task's
+    # snapshot is two such reads (state and evaluation).
+    snapshot_read_s: float = 8.0
+
+
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -209,20 +228,3 @@ class RunnerTimingConfig:
     @classmethod
     def from_environ(cls, environ=os.environ) -> RunnerTimingConfig:
         return cls(**_environ_fields(cls.ENVIRONMENT, environ))
-
-
-@dataclass(frozen=True)
-class EnvironmentBudgetConfig:
-    """Overall time budget in seconds of each environment operation (sandbox/actions.py).
-
-    An operation's lock waits, connects and receives share its budget; running past it fails the
-    operation and invalidates the run.
-    """
-
-    # Execute one action; extended for text input and holds as the guest's request timeout is
-    # (sandbox/guest.py action_timeout).
-    action_s: float = 10.0
-    capture_s: float = 120.0  # capture one observation; the CDP call default
-    state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
-    clock_advance_s: float = 120.0  # advance or render one token-clock step; the CDP call default
-    snapshot_read_s: float = 8.0  # read the scored snapshot at the freeze; as other one-shot reads

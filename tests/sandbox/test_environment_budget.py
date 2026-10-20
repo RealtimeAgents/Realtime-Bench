@@ -36,7 +36,7 @@ CLICK = Action(ActionType.CLICK, {"x": 10, "y": 10})
 
 
 class ScriptedAgent:
-    """The adapter calls run_stream makes (runner.py:908-919, 435), one fixed action each decision."""
+    """What run_stream calls on an adapter (runner.py:973-984, 473-478); always the same action."""
 
     def __init__(self, action: Action):
         self.action = action
@@ -69,7 +69,11 @@ class BarrierTask(Task):
         _token_clock(self)
 
     def begin_gui_action(self) -> dict:
-        return {"input_event_sequence": 0, "business_action_started": 0, "business_action_completed": 0}
+        return {
+            "input_event_sequence": 0,
+            "business_action_started": 0,
+            "business_action_completed": 0,
+        }
 
     def complete_gui_action(self, snapshot: dict) -> dict:
         return cdp_wait_realtime_action_barrier(self.port, "/game", snapshot)
