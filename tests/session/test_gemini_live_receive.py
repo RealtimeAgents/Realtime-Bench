@@ -9,10 +9,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from types import SimpleNamespace
 
+from google.genai import errors as genai_errors
 from google.genai import live as genai_live
 from google.genai import types
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import gui_function_declarations
@@ -29,17 +33,29 @@ from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
 
+HANG = object()  # script step: the server sends nothing more
+
 
 class FakeSocket:
-    """What google-genai's AsyncSession reads and writes: scripted server frames, in order."""
+    """What google-genai's AsyncSession reads and writes: scripted server frames, in order. A
+    step can also be an exception the read raises, or HANG."""
 
-    def __init__(self, frames: list[dict]):
-        self.frames = [json.dumps(frame) for frame in frames]
+    def __init__(self, frames: list):
+        self.frames = [
+            frame if frame is HANG or isinstance(frame, BaseException) else json.dumps(frame)
+            for frame in frames
+        ]
         self.sent: list[dict] = []
 
     async def recv(self, decode=None):
         assert self.frames, "the driver read past the script"
-        return self.frames.pop(0)
+        frame = self.frames[0]
+        if frame is HANG:
+            await asyncio.Event().wait()
+        self.frames.pop(0)
+        if isinstance(frame, BaseException):
+            raise frame
+        return frame
 
     async def send(self, message):
         self.sent.append(json.loads(message))
@@ -211,3 +227,76 @@ def test_resume_waits_for_the_session_release(monkeypatch):
         ("sleep", live._SESSION_RELEASE_GRACE_S),
         ("connect", "handle-0"),
     ]
+
+
+def server_closed(code: int, reason: str) -> ConnectionClosedError:
+    return ConnectionClosedError(Close(code, reason), None)
+
+
+def test_a_failed_read_leaves_the_connection_unusable(monkeypatch):
+    """A read that fails ends the connection's receiver: the generation reading it raises the
+    failure, and so does every later generation on that connection, with the same exception."""
+    rig = Rig(monkeypatch, "gemini-3.8-live", [[server_closed(1011, "Internal error.")]])
+
+    async def run():
+        failures = []
+        await rig.connect()
+        for k in range(2):
+            generation = await rig.start(f"turn-{k}")
+            try:
+                await drain(rig.driver.events(generation))
+            except Exception as exc:  # noqa: BLE001 - the failure under test
+                failures.append(exc)
+        return failures
+
+    first, second = asyncio.run(run())
+    assert isinstance(first, genai_errors.APIError) and first.code == 1011
+    assert second is first
+    # The failure keeps the close code the transport classification reads.
+    assert rig.driver.classify_transport_error(second).retryable
+
+
+def test_a_cancelled_read_leaves_the_connection_unusable(monkeypatch):
+    rig = Rig(monkeypatch, "gemini-3.8-live", [[HANG]])
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        reading = asyncio.ensure_future(drain(rig.driver.events(generation)))
+        await asyncio.sleep(0)
+        reading.cancel()
+        try:
+            await reading
+        except asyncio.CancelledError:
+            pass
+        generation = await rig.start("turn-1")
+        try:
+            await drain(rig.driver.events(generation))
+        except RuntimeError as exc:
+            return exc
+
+    failure = asyncio.run(run())
+    assert str(failure) == "Gemini Live connection 1: a read was cancelled"
+    assert isinstance(failure.__cause__, asyncio.CancelledError)
+
+
+def test_an_orphan_message_is_logged_and_skipped(monkeypatch, caplog):
+    """With no generation's reply in flight on the connection, a message is an orphan: the
+    receiver logs it and reads on, here into the server's close."""
+    rig = Rig(
+        monkeypatch, "gemini-3.8-live", [[TURN_COMPLETE, server_closed(1011, "Internal error.")]]
+    )
+
+    async def run():
+        await rig.connect()
+        events = rig.driver.events(await rig.start("turn-0"))
+        rig.driver._core.replies.clear()  # as if that reply had ended before this read
+        try:
+            await drain(events)
+        except genai_errors.APIError as exc:
+            return exc
+
+    with caplog.at_level(logging.DEBUG, logger=live.__name__):
+        failure = asyncio.run(run())
+    assert failure.code == 1011
+    assert "Gemini Live connection 1: no generation takes LiveServerMessage" in caplog.messages
