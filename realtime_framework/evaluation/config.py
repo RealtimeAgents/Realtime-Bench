@@ -788,6 +788,9 @@ def effective_run_config(
         }
     if is_external_driver(adapter_type):
         config["external_driver"] = external_driver_identity(adapter_type)
+    if interaction_mode == "streaming":
+        # validate_model_interaction admits only a live API that declares streaming.
+        config["streaming"] = dict(driver.streaming_settings)
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:

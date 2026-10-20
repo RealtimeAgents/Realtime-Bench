@@ -287,6 +287,38 @@ def test_a_job_reports_its_mode(tmp_path, recorded, reported):
     assert report["interaction_mode"] == reported
 
 
+def test_a_streaming_run_records_the_live_api_settings(streaming_gemini, monkeypatch):
+    """OpenAI Realtime's retained frames and Gemini Live's compression thresholds apply only to
+    streaming, so only a streaming run's configuration (and its hash) records them."""
+    from realtime_framework.evaluation.config import effective_run_config
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver
+    from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
+
+    capabilities = replace(
+        OpenAIRealtimeDriver.capabilities,
+        interaction_modes=frozenset({"turn_based", "streaming"}),
+    )
+    monkeypatch.setattr(OpenAIRealtimeDriver, "capabilities", capabilities)
+
+    def run_config(key, interaction_mode):
+        effort = catalog.get(key).defaults["reasoning_effort"]
+        return effective_run_config(
+            model_config=catalog.to_model_config(key, fps=1.0, reasoning_effort=effort),
+            fps=1.0, max_minutes=5.0, protocol="wall-clock", think_budget_s=None,
+            per_move_cap_s=None, mode="default", clock_mode="wall",
+            interaction_mode=interaction_mode,
+        )
+
+    openai = run_config("gpt-realtime-2", "streaming")["streaming"]
+    assert openai == OpenAIRealtimeDriver.streaming_settings
+    gemini = run_config(GEMINI, "streaming")["streaming"]
+    assert gemini == GeminiLiveDriver.streaming_settings
+    # SlidingWindow.target_tokens must be below ContextWindowCompressionConfig.trigger_tokens.
+    assert 0 < gemini["compression_target_tokens"] < gemini["compression_trigger_tokens"]
+    for key in ("gpt-realtime-2", GEMINI):
+        assert "streaming" not in run_config(key, "turn_based")
+
+
 def test_a_leaderboard_submission_is_turn_based(tmp_path):
     """rtbench upload's check of three jobs (evaluation/submission.py check_runs); each one's
     trial has no report, which counts as a failed task. Streaming results go to a separate
