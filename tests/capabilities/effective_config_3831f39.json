@@ -3142,8 +3142,8 @@
      "completion_signal": "turn_complete",
      "history_format": "tool_transcript",
      "input_transport": "client_content",
-     "tool_behavior": "non_blocking",
-     "tool_response_scheduling": "silent"
+     "tool_behavior": "blocking",
+     "tool_response_scheduling": "omit"
     },
     "reasoning_effort": "low",
     "temperature": null,
@@ -3190,8 +3190,8 @@
     "completion_signal": "turn_complete",
     "history_format": "tool_transcript",
     "input_transport": "client_content",
-    "tool_behavior": "non_blocking",
-    "tool_response_scheduling": "silent"
+    "tool_behavior": "blocking",
+    "tool_response_scheduling": "omit"
    },
    "reasoning_effort": "low",
    "temperature": null,
@@ -3288,8 +3288,8 @@
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
        "input_transport": "client_content",
-       "tool_behavior": "non_blocking",
-       "tool_response_scheduling": "silent"
+       "tool_behavior": "blocking",
+       "tool_response_scheduling": "omit"
       },
       "reasoning_effort": "low",
       "temperature": null,
@@ -3316,7 +3316,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0a5435a13c1410f69392963e10d434262a0f82d3c676e074fcfd54c97bfd5929"
+    "hash": "c3e9c8bacb157e48a1ea0390a69691641392c98b0c642f0a32b017dc181ad166"
    },
    "token/None": {
     "config": {
@@ -3407,8 +3407,8 @@
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
        "input_transport": "client_content",
-       "tool_behavior": "non_blocking",
-       "tool_response_scheduling": "silent"
+       "tool_behavior": "blocking",
+       "tool_response_scheduling": "omit"
       },
       "reasoning_effort": "low",
       "temperature": null,
@@ -3435,7 +3435,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7de7af1d1b9a8fa0712823f4aaec831530ad00e1a7cffc49b40f7e8985318c09"
+    "hash": "35a07274d72b95697c2e3a5d0f429ad2cf5d8c5bb9fa6e4729c9b13604694e15"
    },
    "wall/None": {
     "config": {
@@ -3526,8 +3526,8 @@
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
        "input_transport": "client_content",
-       "tool_behavior": "non_blocking",
-       "tool_response_scheduling": "silent"
+       "tool_behavior": "blocking",
+       "tool_response_scheduling": "omit"
       },
       "reasoning_effort": "low",
       "temperature": null,
@@ -3554,7 +3554,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1a0195511b4ab48aed1be1d79eee8b758bf23a4f17ae693304c2b69b01d04c68"
+    "hash": "12ca1eca2bc2c5aa080c7753c9814617d9d7458c6df3d7cfe01f85e9e3434032"
    }
   },
   "vendor": "google"

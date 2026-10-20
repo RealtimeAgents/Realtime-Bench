@@ -30,6 +30,7 @@ from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import adapter_class
 
 _GEMINI_EXTENDED_THINKING = "gemini-3.8-live-extended-thinking"
+_GEMINI_FLASH_LIVE = "gemini-3.1-flash-live-preview"
 
 
 class UnsupportedTokenBudget(ValueError):
@@ -101,6 +102,10 @@ def _check_live_model_contract(config) -> None:
     ):
         raise ValueError("Silent Gemini tool responses require non-blocking tools")
     model_name = str(config.model_name).rsplit("/", 1)[-1]
+    if model_name == _GEMINI_FLASH_LIVE and options["tool_behavior"] != "blocking":
+        raise ValueError(
+            f"{_GEMINI_FLASH_LIVE} calls functions synchronously only; use tool_behavior=blocking"
+        )
     if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
         raise ValueError(
             "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"

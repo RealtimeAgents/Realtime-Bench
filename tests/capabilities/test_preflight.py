@@ -266,6 +266,12 @@ EXTENDED = "gemini-3.8-live-extended-thinking"
             "Silent Gemini tool responses require non-blocking tools",
         ),
         (
+            gemini(model_name="gemini-3.1-flash-live-preview",
+                   provider_options={"tool_behavior": "non_blocking"}),
+            "gemini-3.1-flash-live-preview calls functions synchronously only; "
+            "use tool_behavior=blocking",
+        ),
+        (
             preset("gemini-3.8-live", reasoning_effort="low"),
             "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed",
         ),
@@ -291,8 +297,8 @@ EXTENDED = "gemini-3.8-live-extended-thinking"
             ),
         ),
     ],
-    ids=["silent-blocking", "3.8-live-effort", "extended-effort", "extended-options",
-         "extended-silent"],
+    ids=["silent-blocking", "3.1-non-blocking", "3.8-live-effort", "extended-effort",
+         "extended-options", "extended-silent"],
 )
 def test_gemini_model_contract(config, message):
     fails(lambda: episode(config), message)
