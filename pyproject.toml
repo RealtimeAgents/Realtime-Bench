@@ -7,7 +7,7 @@ dependencies = [
     "harbor==0.23.0",
     # Validated together: raw provider usage auditing and native Realtime serialization.
     "openai[realtime]==2.54.0",
-    "litellm==1.104.1",
+    "litellm==1.106.1",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "pillow>=10.0",
