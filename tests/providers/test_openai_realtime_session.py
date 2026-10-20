@@ -283,7 +283,7 @@ def test_repair_replaces_the_output_items_of_a_cut_response(output):
     """After a cancelled or incomplete response the server's output items are deleted and the
     collected output, if any, follows as one assistant item. None of it is waited for."""
     core = opened([turn(0, "a0")])
-    core.receive(done("srv_extra"))  # an item the core never planned is not recorded
+    assert not core.receive(done("srv_extra"))  # an item the core never planned is not recorded
     core.frames["d0.frame"].assistant_item_ids = ["srv_1", "srv_2"]
     operations = core.repair(view([turn(0, output)]), ["srv_1", "srv_2"])
     expected = [("delete", "srv_1", None, False), ("delete", "srv_2", None, False)]
@@ -320,9 +320,10 @@ def test_response_events_join_their_generation(status):
     # A failed response leaves the frame without output items; a turn retry rebuilds it.
     expected = [] if status == "failed" else ["srv_1"]
     assert core.frames["d1.frame"].assistant_item_ids == expected
-    # After response.done no response is in progress.
-    core.receive(server(type="response.output_text.delta", response_id="resp_1", delta="late"))
+    # After response.done no response is in progress, so no state takes a late event.
+    assert not core.receive(server(type="response.output_text.delta", delta="late"))
     assert len(generation.events) == 4
+    assert (generation.number, core.start_generation("d1.frame").number) == (1, 2)
 
 
 @pytest.mark.parametrize(

@@ -2,8 +2,8 @@
 loses neither the response's events nor the edit's acknowledgements.
 
 The driver reaches a local WebSocket stub (tests/agent_trace/stubs.py) through the OpenAI SDK.
-The stub holds the second response after its first delta and sends the rest only as the edit
-arrives: the delete's acknowledgement is followed by a delta, the create's by the last delta and
+The stub can hold a response after its first delta and send the rest only as an edit arrives:
+the delete's acknowledgement is followed by a delta, the create's by the last delta and
 response.done. Two readers on the connection would race for these messages, and websockets
 refuses a second concurrent recv outright.
 """
@@ -29,11 +29,12 @@ from tests.agent_trace.stubs import WsStub
 
 from .test_openai_realtime_session import ANSWER, turn, view
 
+SEED = SessionSeed("system instruction", "gpt-realtime-replay", None, 1.0, ANSWER)
 USAGE = {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}
 
 
-def _server():
-    """Answer like the Realtime API. The second response stops after its first delta; the edit's
+def _server(held: int | None = None):
+    """Answer like the Realtime API. Response ``held`` stops after its first delta; an edit's
     delete and create each bring more of it after their acknowledgement."""
     responses: list[str] = []
 
@@ -62,9 +63,9 @@ def _server():
                 {"type": "response.created", "response": {"id": responses[-1]}},
                 {"type": "response.output_item.added", "response_id": responses[-1], "item": item},
             ]
-            if len(responses) == 1:
-                return [*started, text('{"action": "wait"}'), *end()]
-            return [*started, text('{"action"')]
+            if len(responses) == held:
+                return [*started, text('{"action"')]
+            return [*started, text('{"action": "wait"}'), *end()]
         if kind == "conversation.item.delete":
             deleted = {"type": "conversation.item.deleted", "item_id": message["item_id"]}
             return [deleted, text(': "wait"')]
@@ -81,27 +82,44 @@ def _server():
     return handle
 
 
-async def _scenario(driver: OpenAIRealtimeDriver):
+def _driver(stub: WsStub) -> OpenAIRealtimeDriver:
+    driver = OpenAIRealtimeDriver(
+        ModelConfig(
+            adapter_type="openai_realtime",
+            model_name="gpt-realtime-replay",
+            api_base_url=f"http://127.0.0.1:{stub.port}/v1",
+            api_key="sk-receive-stub",
+        )
+    )
+    assert driver.client.base_url.host == "127.0.0.1"
+    driver.bind_trace(UNTRACED)
+    return driver
+
+
+async def _generate(driver: OpenAIRealtimeDriver, turns):
+    """Send the newest turn's observation and start the response to it; its event stream."""
+    history = view(turns)
+    await driver.send_observation(turns[-1].observation, history)
+    request = GenerationRequest(f"turn-{len(turns)}", None, "inf", "wall", canonical=history)
+    return driver.events(await driver.start_generation(request))
+
+
+def _text(events) -> str:
+    return "".join(e.text for e in events if isinstance(e, TextDelta))
+
+
+async def _edit_during_response(driver: OpenAIRealtimeDriver):
     """Two decisions; the first screenshot folds in place during the second response."""
-    seed = SessionSeed("system instruction", "gpt-realtime-replay", None, 1.0, ANSWER)
-    await driver.connect(ConnectRequest(seed=seed))
+    await driver.connect(ConnectRequest(seed=SEED))
     turns = [turn(0)]
-
-    async def generate(k: int):
-        history = view(turns)
-        await driver.send_observation(turns[-1].observation, history)
-        request = GenerationRequest(f"turn-{k}", None, "inf", "wall", canonical=history)
-        return driver.events(await driver.start_generation(request))
-
     try:
-        first = [event async for event in await generate(0)]
-        turns[0].output = "".join(e.text for e in first if isinstance(e, TextDelta))
+        turns[0].output = _text([event async for event in await _generate(driver, turns)])
         turns.append(turn(1))
-        stream = await generate(1)
+        stream = await _generate(driver, turns)
         received = [await anext(stream), await anext(stream)]
         turns[0].fold_visual()
         edit = asyncio.create_task(
-            driver.sync_history(HistorySyncRequest(seed, "history_block_compaction", view(turns)))
+            driver.sync_history(HistorySyncRequest(SEED, "history_block_compaction", view(turns)))
         )
         received += [event async for event in stream]
         return received, await edit, driver._session.core
@@ -110,18 +128,8 @@ async def _scenario(driver: OpenAIRealtimeDriver):
 
 
 def test_an_edit_during_a_response_keeps_both():
-    with WsStub(_server()) as stub:
-        driver = OpenAIRealtimeDriver(
-            ModelConfig(
-                adapter_type="openai_realtime",
-                model_name="gpt-realtime-replay",
-                api_base_url=f"http://127.0.0.1:{stub.port}/v1",
-                api_key="sk-receive-stub",
-            )
-        )
-        assert driver.client.base_url.host == "127.0.0.1"
-        driver.bind_trace(UNTRACED)
-        received, sync, core = asyncio.run(_scenario(driver))
+    with WsStub(_server(held=2)) as stub:
+        received, sync, core = asyncio.run(_edit_during_response(_driver(stub)))
     (connection,) = stub.connections
 
     # The response: every delta, its usage and its end, in order.
@@ -133,7 +141,7 @@ def test_an_edit_during_a_response_keeps_both():
         UsageSnapshot,
         GenerationBoundary,
     ]
-    assert "".join(e.text for e in received if isinstance(e, TextDelta)) == '{"action": "wait"}'
+    assert _text(received) == '{"action": "wait"}'
     assert (received[0].kind, received[-1].kind) == ("started", "turn_complete")
     assert received[-2].usage["output_tokens"] == 5
 
@@ -147,3 +155,31 @@ def test_an_edit_during_a_response_keeps_both():
     assert set(core.delivery.values()) == {Delivery.CONFIRMED}
     # The response's output item joins the frame it answered, whichever of the two ended first.
     assert core.frames["d1.frame"].assistant_item_ids == ["srv_item_2"]
+
+
+async def _two_connections(driver: OpenAIRealtimeDriver):
+    """Two responses on one connection, then a rebuild on a second and one response there."""
+    await driver.connect(ConnectRequest(seed=SEED))
+    turns, responses = [], []
+    try:
+        for k in range(3):
+            if k == 2:
+                await driver.connect(ConnectRequest(seed=SEED, history=view(turns)))
+            turns.append(turn(k))
+            responses.append([event async for event in await _generate(driver, turns)])
+            turns[-1].output = _text(responses[-1])
+        return responses
+    finally:
+        await driver.close()
+
+
+def test_events_carry_their_connection_and_generation():
+    with WsStub(_server()) as stub:
+        responses = asyncio.run(_two_connections(_driver(stub)))
+    assert len(stub.connections) == 2
+    assert [{(e.connection, e.generation) for e in events} for events in responses] == [
+        {(1, 1)},
+        {(1, 2)},
+        {(2, 1)},
+    ]
+    assert all(len(events) == 4 for events in responses)  # started, text, usage, turn_complete

@@ -19,6 +19,10 @@ class ProviderEvent:
     generation_id: str
     sequence: int
     raw_type: str = ""
+    # For a driver that numbers them: the connection the event arrived on, and which generation
+    # on that connection it belongs to.
+    connection: int | None = field(default=None, kw_only=True)
+    generation: int | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
