@@ -32,6 +32,7 @@ from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agen
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.capture import REDACTED, header_kept
+from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
@@ -492,10 +493,18 @@ def test_decisions_retry_records_each_transport_attempt(tmp_path, monkeypatch):
     assert attempts[1]["answer"]["choice"] == "a" and attempts[1]["usage"]["output_tokens"] == 1
 
 
-def test_decisions_context_limit_splits_the_candidates(tmp_path, monkeypatch):
-    _, events, stub = _decide(
-        OpenAIDecisionsClient, "openai/gpt-6-luna-decisions", "openai", [413], tmp_path, monkeypatch
-    )
+@pytest.mark.parametrize(
+    "client_type, model, provider, status",
+    [
+        (OpenAIDecisionsClient, "openai/gpt-6-luna-decisions", "openai", 413),
+        (JevDecisionsClient, "typesafe/jev-1.13", "typesafe", 400),
+    ],
+    ids=["luna", "jev"],
+)
+def test_decisions_context_limit_splits_the_candidates(
+    client_type, model, provider, status, tmp_path, monkeypatch
+):
+    _, events, stub = _decide(client_type, model, provider, [status], tmp_path, monkeypatch)
     attempts = _payloads(events, "ModelAttemptFinished")
     # All three are rejected, each half is asked alone, then the two winners meet.
     assert [a["outcome"] for a in attempts] == ["context_limit", "ok", "ok", "ok"]
@@ -508,19 +517,41 @@ def test_decisions_context_limit_splits_the_candidates(tmp_path, monkeypatch):
     assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 4
 
 
-def test_decisions_digest_overflow_reduces_the_history(tmp_path, monkeypatch):
-    _, events, stub = _decide(
-        JevDecisionsClient, "typesafe/jev-1.13", "typesafe", [400, 400], tmp_path, monkeypatch
+def test_jev_estimates_the_digest_it_sends(monkeypatch):
+    """The runtime archives against JEV's estimate (harnesses/default/context.py _run_turn): the
+    digest every question sends, not the chat rendering Luna's estimate counts."""
+    monkeypatch.setenv("REPLAY_TRACE_KEY", KEY)
+    config = ModelConfig(
+        adapter_type="jev_decisions",
+        model_name="typesafe/jev-1.13",
+        api_key_env="REPLAY_TRACE_KEY",
+        upstream_provider="typesafe",
     )
-    changes = _payloads(events, "HistoryChanged")
-    assert [c["kind"] for c in changes] == ["choice_candidate_split", "choice_history_reduction"]
-    reduction = changes[1]
-    assert reduction["policy_item"] == "decision_history"
-    assert reduction["policy_version"] == CONTEXT_POLICY_VERSION
-    assert reduction["choice"] == {"phase": "gui_action", "removed_messages": 1, "remaining": 3}
-    attempts = _payloads(events, "ModelAttemptFinished")
-    assert [a["outcome"] for a in attempts] == ["context_limit", "context_limit", "ok", "ok", "ok"]
-    assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 5
+    request = GenerationRequest("turn-0", None, None, "wall", canonical=_request(config))
+    digest = render_digest(request.canonical)
+    size = len(json.dumps(digest, ensure_ascii=False).encode())
+
+    def status(window, reserve):
+        client = JevDecisionsClient(
+            config.model_copy(
+                update={"context_window_tokens": window, "context_reserve_tokens": reserve}
+            )
+        )
+        try:
+            return asyncio.run(client.request_context_status(request))
+        finally:
+            asyncio.run(client.close())
+
+    assert status(size + 100, 100) == {
+        "input_tokens": size,
+        "native_limit": size + 100,
+        "reserve_tokens": 100,
+        "soft_limit": size,
+        "pressure": False,
+        "counter": "estimated_utf8_bytes_plus_image_allowance",
+    }
+    assert status(size + 99, 100)["pressure"] is True
+    assert status(None, 100) == {"pressure": False, "counter": "unconfigured"}
 
 
 # ---- Headers --------------------------------------------------------------------------------

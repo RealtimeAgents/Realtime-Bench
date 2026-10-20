@@ -333,15 +333,15 @@ def test_preflight_reads_the_external_declaration(external, capsys):
             (
                 "'rtb_ext.broken:NotAnEncoder' is not a model encoder: missing connect, "
                 "send_observation, start_generation, events, interrupt, sync_history, close, "
-                "bind_trace, request_context_status"
+                "bind_trace"
             ),
         ),
-        # The chat_completions context policy archives under pressure.
+        # The template declares request_size_estimation: the runtime estimates every request.
         (
             "rtb_ext.broken:NoContextStatus",
             (
-                "'rtb_ext.broken:NoContextStatus' is not a model encoder: missing "
-                "request_context_status"
+                "'rtb_ext.broken:NoContextStatus' declares request_size_estimation but has no "
+                "request_context_status()"
             ),
         ),
         (
@@ -431,11 +431,9 @@ def test_external_endpoint_rejected(external, api, endpoint, message):
 
 
 def test_registered_drivers_meet_the_contract():
-    """External drivers are checked against the contract every registered driver meets, each
-    under its own context-policy row."""
-    policy = current_context_policy()
+    """External drivers are checked against the contract every registered driver meets."""
     for api, target in catalog.APIS.items():
-        catalog._check_driver(target, catalog.adapter_class(api), policy.for_path(api, {}))
+        catalog._check_driver(target, catalog.adapter_class(api))
 
 
 def test_context_policy_of_an_external_driver():

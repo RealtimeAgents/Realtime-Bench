@@ -360,7 +360,7 @@ def policy_check(config, **values):
         ),
         (
             "jev-1.13",
-            {"decision_history": DecisionHistory("turns", "raise")},
+            {"decision_history": DecisionHistory("turns")},
             "The jev_decisions API cannot replay history as turns",
         ),
         (
@@ -399,11 +399,13 @@ def test_kimi_k3_runs_only_under_its_preset():
 
 
 def test_context_window_needs_a_request_estimate():
-    # Luna estimates its requests against its window; JEV declares no estimate.
+    # Luna and JEV estimate their requests against their declared windows; OpenRouter
+    # declares no estimate.
     policy_check(preset("gpt-6-luna-decisions"))()
+    policy_check(preset("jev-1.13"))()
     fails(
-        policy_check(preset("jev-1.13", context_window_tokens=32768), pressure_archive=True),
-        "The jev_decisions API declares a context window but no estimate of its requests",
+        policy_check(preset("claude-opus-5", context_window_tokens=200000)),
+        "The openrouter API declares a context window but no estimate of its requests",
     )
 
 

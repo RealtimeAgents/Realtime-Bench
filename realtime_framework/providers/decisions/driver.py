@@ -103,7 +103,6 @@ class DecisionEncoder:
                 "jev_selected_candidate_audit": data["selected_candidate_audit"],
                 "jev_selection_policy": SELECTION_POLICY,
                 "jev_context_splits": data["context_splits"],
-                "jev_history_reductions": data["history_reductions"],
                 "jev_text_composition": data["text_composition"],
                 "jev_pointer_composition": data["pointer_composition"],
                 "jev_key_composition": data["key_composition"],

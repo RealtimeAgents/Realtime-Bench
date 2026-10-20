@@ -372,7 +372,6 @@ _STREAMING_CHAT = RealtimeCapabilities(
     server_context="none",
     terminal_output_usage=True,
     classifies_transport_errors=True,
-    request_size_estimation=True,
     maps_output_cap=True,
 )
 
@@ -455,9 +454,6 @@ class LiteLLMDriver:
     deployment: ChatDeployment
     compat: ChatCompat
     model_defaults: ClassVar[dict[str, dict]] = {}
-    # Context policy item 8 as each API applied it (entity/context_policy.py decides what is
-    # sent); tests/replay/test_context_policy.py pins the two to each other.
-    pressure_archive = False  # archive turns when the request exceeds the context window
 
     def __init__(self, config, *, clock=None):
         self.config = config
@@ -1181,6 +1177,8 @@ class ChatCompletionsDriver(LiteLLMDriver):
         terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
+        # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
+        request_size_estimation=True,
     )
     protocol = ChatProtocol(
         sdk_provider="openai",
@@ -1197,7 +1195,6 @@ class ChatCompletionsDriver(LiteLLMDriver):
         require_api_key=False,
     )
     compat = ChatCompat(strip_image_detail=True)
-    pressure_archive = True
 
 
 class DirectLiteLLMDriver(LiteLLMDriver):

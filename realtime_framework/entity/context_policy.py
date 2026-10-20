@@ -7,10 +7,9 @@ Version 1 copied what each code path did before the policy existed; every later 
 one item (see CONTEXT_POLICY_VERSION). Changing any value changes the model-visible content, so it
 bumps the version. The values count in the effective run config and therefore in its hash. Every
 item is read from here: retention, feedback placement, the ledger role, reasoning and verbatim
-replay, pressure archiving, the Decision history form and overflow, the tool-call replay format,
-the prompts (item 11) and the observation form (item 12); the encoders take their fixed texts
-(item 5) from here, and ContextPolicy.for_path takes Gemini's tool-call replay format from its
-model preset.
+replay, pressure archiving, the Decision history form, the tool-call replay format, the prompts
+(item 11) and the observation form (item 12); the encoders take their fixed texts (item 5) from
+here, and ContextPolicy.for_path takes Gemini's tool-call replay format from its model preset.
 
 An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
 then its own. The pre-run checks hold each row against what the API declares
@@ -34,7 +33,10 @@ from realtime_framework.entity.records import _jsonable
 #    instruction (a system item), and Decisions state places it by position and header.
 # 4: the fold placeholder says only what it removed; it claimed that the step's reasoning and
 #    action remain.
-CONTEXT_POLICY_VERSION = 4
+# 5: one pressure-archive rule for every API that declares a request estimate; JEV estimates
+#    its digest against its declared window instead of dropping history for a rejected
+#    one-option question.
+CONTEXT_POLICY_VERSION = 5
 
 # Fixed model-visible texts the encoders write (item 5).
 JEV_LEDGER_HEADER = (
@@ -66,8 +68,6 @@ class Retention:
 @dataclass(frozen=True)
 class DecisionHistory:
     form: Literal["turns", "action_digest"]
-    # What a Decision question does when the server rejects even one option for context.
-    overflow: Literal["raise", "drop_oldest_half"]
 
 
 @dataclass(frozen=True)
@@ -114,8 +114,11 @@ class PathPolicy:
     # 7 send the provider's own assistant message back; off: the reply is rebuilt from the model
     # output, and no encoder can do otherwise
     verbatim_replay: bool
-    pressure_archive: bool  # 8 archive more turns when the request exceeds the context
-    decision_history: DecisionHistory | None  # 9 Decision history form and overflow
+    # 8 before each request, archive the oldest turns while it exceeds the declared context
+    # window; it applies where the API declares an estimate of its requests
+    # (RealtimeCapabilities.request_size_estimation)
+    pressure_archive: bool
+    decision_history: DecisionHistory | None  # 9 Decision history form
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
     # 11 task category -> InteractionProfile.name; None: the category is rejected
     prompts: Mapping[str, str | None]
@@ -170,7 +173,7 @@ STANDARD = {
     "ledger_role": "input",
     "reasoning_replay": False,
     "verbatim_replay": False,
-    "pressure_archive": False,
+    "pressure_archive": True,
     "decision_history": None,
     "tool_call_replay": None,
     "prompts": _TEXT_JSON_PROMPTS,
@@ -203,7 +206,7 @@ def current_context_policy() -> ContextPolicy:
 
     paths = (
         path("litellm"),
-        path("chat_completions", pressure_archive=True),
+        path("chat_completions"),
         path("openrouter"),
         path("anthropic_messages"),
         path("moonshot", "kimi_k3"),
@@ -216,8 +219,7 @@ def current_context_policy() -> ContextPolicy:
         ),
         path(
             "openai_decisions",
-            pressure_archive=True,
-            decision_history=DecisionHistory("turns", "raise"),
+            decision_history=DecisionHistory("turns"),
             prompts={
                 "realtime": "multimodal_decisions",
                 "browser_game": "multimodal_game_decisions",
@@ -227,7 +229,7 @@ def current_context_policy() -> ContextPolicy:
         path(
             "jev_decisions",
             feedback="digest",
-            decision_history=DecisionHistory("action_digest", "drop_oldest_half"),
+            decision_history=DecisionHistory("action_digest"),
             prompts={"realtime": "jev_decisions", "browser_game": None},
             observation="observation_json_text",
         ),

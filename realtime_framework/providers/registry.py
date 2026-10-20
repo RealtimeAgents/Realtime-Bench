@@ -321,7 +321,6 @@ Only the selected implementation is imported, so optional SDKs never affect othe
 
 from importlib import import_module as import_module
 
-from realtime_framework.entity.context_policy import PathPolicy, current_context_policy
 from realtime_framework.entity.model import Deployment, ModelClient, RealtimeCapabilities
 
 # RealtimeDriver's methods, plus bind_trace, which the harness calls on every driver it builds.
@@ -341,7 +340,7 @@ _DRIVER_DECLARATIONS = (
     ("model_defaults", dict),
 )
 # Capability flags whose method the harness or runtime calls. The runtime calls
-# request_context_status whenever the context policy archives under pressure (_check_driver).
+# request_context_status before each request of an API that declares request_size_estimation.
 _DECLARED_METHODS = {
     "classifies_transport_errors": "classify_transport_error",
     "connection_renewal": "connection_renewal_reason",
@@ -368,8 +367,7 @@ def _driver_class(target: str) -> type:
 
 
 def _external_class(target: str) -> type:
-    """Import an external driver from the current environment and check it under the
-    context-policy row it gets."""
+    """Import an external driver from the current environment and check its declarations."""
     module_name, _, class_name = target.partition(":")
     try:
         module = import_module(module_name)
@@ -382,17 +380,14 @@ def _external_class(target: str) -> type:
     driver = getattr(module, class_name)
     if not isinstance(driver, type):
         raise ValueError(f"{target!r} is not a class")  # noqa: TRY004
-    _check_driver(target, driver, current_context_policy().for_path(target, {}))
+    _check_driver(target, driver)
     return driver
 
 
-def _check_driver(target: str, driver: type, policy: PathPolicy) -> None:
-    """Check that a driver class has what the catalog, the pre-run checks, the harness and,
-    under ``policy``, the runtime read from it; registered drivers meet the same contract."""
-    methods = _DRIVER_METHODS
-    if policy.pressure_archive:  # the runtime counts every request against the context window
-        methods += ("request_context_status",)
-    missing = [name for name in methods if not callable(getattr(driver, name, None))]
+def _check_driver(target: str, driver: type) -> None:
+    """Check that a driver class has what the catalog, the pre-run checks, the harness and the
+    runtime read from it; registered drivers meet the same contract."""
+    missing = [name for name in _DRIVER_METHODS if not callable(getattr(driver, name, None))]
     if missing:
         raise ValueError(f"{target!r} is not a model encoder: missing {', '.join(missing)}")
     for name, kind in _DRIVER_DECLARATIONS:
