@@ -1,13 +1,12 @@
-"""Choice harness: enumerate actions and select through a stateless ChoiceClient.
+"""Choice harness: enumerate actions and select through the registered Decisions encoder.
 
 Text-only clients receive structured control state; multimodal clients additionally receive
 its marked screenshot. Candidate and text-composition policies are shared by both. History is
-replayed canonically, like every other model, unless the client declares an action digest.
+replayed canonically, like every other model, unless the context policy gives an action digest.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 from dataclasses import replace
 
@@ -21,19 +20,19 @@ from realtime_framework.harnesses.default.prompts import (
 )
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.jev.candidates import CANDIDATE_POLICY, observation_candidates
-from realtime_framework.harnesses.jev.composition import TEXT_COMPOSITION_POLICY
-from realtime_framework.harnesses.jev.context import decision_messages
-from realtime_framework.harnesses.jev.driver import ChoiceDecisionDriver
 from realtime_framework.harnesses.jev.game_candidates import (
     GAME_CANDIDATE_POLICY,
     add_game_candidates,
 )
 from realtime_framework.harnesses.jev.prompts import (
-    GAME_INSTRUCTIONS,
-    GUI_INSTRUCTIONS,
     JEV_PROFILE,
     MULTIMODAL_CHOICE_PROFILE,
     MULTIMODAL_GAME_CHOICE_PROFILE,
+)
+from realtime_framework.providers.decisions.questions import (
+    GAME_INSTRUCTIONS,
+    GUI_INSTRUCTIONS,
+    TEXT_COMPOSITION_POLICY,
 )
 from realtime_framework.providers.registry import adapter_class
 from realtime_framework.sandbox.observation.interactables import format_interactables
@@ -44,15 +43,13 @@ class JevHarness(DefaultHarness):
     interaction_profile = JEV_PROFILE
 
     def _setup_backend(self):
-        self._observation_states = {}
-        client = adapter_class(self.config.adapter_type)(self.config)
+        self.driver = adapter_class(self.config.adapter_type)(self.config)
+        self.driver.bind_trace(self._trace)
         self.interaction_profile = (
             MULTIMODAL_CHOICE_PROFILE
-            if client.capabilities.observation_modality == "screenshot"
+            if self.driver.capabilities.observation_modality == "screenshot"
             else JEV_PROFILE
         )
-        self.driver = ChoiceDecisionDriver(client, self._observation_states)
-        self.driver.bind_trace(self._trace)
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
@@ -85,8 +82,6 @@ class JevHarness(DefaultHarness):
 
     def _prepare_observations(self, observations, tick, feedback=""):
         prepared, executions = super()._prepare_observations(observations, tick, feedback)
-        # Only the current observation's candidates are executable.
-        self._observation_states.clear()
         for observation, execution in zip(prepared, executions):
             delivered = (execution or {}).get("delivered") or {}
             marks = (execution or {}).get("marks") or {}
@@ -115,7 +110,8 @@ class JevHarness(DefaultHarness):
                 "text_composition": text_composition,
                 "candidates": candidates,
             }
-            self._observation_states[observation.observation_id] = state
+            # Only the current observation's candidates are executable.
+            self._choice_state = state
             # Candidates and the composition inventory are current-only Choice criteria and stay
             # in the decision audit; retained history keeps the observation state.
             visible = {
@@ -126,26 +122,13 @@ class JevHarness(DefaultHarness):
                 self.interaction_profile.frame_prompt + OBSERVATION_INTERACTABLES_HEADER
                 + json.dumps(visible, ensure_ascii=False)
             )
-            capabilities = self.driver.capabilities
-            # Canonical messages already carry each retained screenshot.
-            if (
-                capabilities.observation_modality == "screenshot"
-                and capabilities.history_replay == "action_digest"
-            ):
-                encoded = base64.b64encode(observation.image_bytes).decode("ascii")
-                state["images"] = [{
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{observation.mime_type};base64,{encoded}",
-                        "detail": observation.image_detail,
-                    },
-                }]
         return prepared, executions
 
     def _build_request(self, turns, ledger, call):
-        # The one observation this decision prepared; its candidates are the answer options and
-        # the rest of its state is material for the selection flow only.
-        (state,) = self._observation_states.values()
+        # The one observation this decision prepared (the runtime takes exactly one per
+        # generation); its candidates are the answer options and the rest of its state is
+        # material for the selection flow only.
+        state = self._choice_state
         choice = ChoiceRequirements(
             instructions=GAME_INSTRUCTIONS if state["game_choices"] else GUI_INSTRUCTIONS,
             candidates=tuple(
@@ -169,7 +152,3 @@ class JevHarness(DefaultHarness):
             call,
             selection,
         )
-
-    @staticmethod
-    def _request_messages(request) -> tuple[dict, ...]:
-        return decision_messages(request)

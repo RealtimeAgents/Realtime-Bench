@@ -1,21 +1,20 @@
 """OpenAI Decisions models through OpenRouter's Decisions transport.
 
 Only wire encoding, route validation, context estimation, failure classification and native
-usage live here. Candidate actions, composition, history and retry policies belong to the harness.
+usage live here; the registered class adds them to DecisionEncoder, which makes it a complete
+driver. Candidate actions come with the canonical request; the questions, their state,
+composition and retries belong to the selection flow (providers/decisions).
 """
 
 from __future__ import annotations
 
-import json
 import math
 import os
 
 import httpx
 
-from realtime_framework.entity.context_policy import LUNA_ACTION_LABEL, LUNA_OBSERVATION_LABEL
 from realtime_framework.entity.model import (
     FATAL,
-    FOLDED_VISUAL_PLACEHOLDER,
     REFUSED,
     TRANSIENT,
     ChoiceContextLimitError,
@@ -32,6 +31,7 @@ from realtime_framework.providers.context import (
     estimated_request_tokens,
     validate_context_reserve,
 )
+from realtime_framework.providers.decisions.driver import DecisionEncoder
 from realtime_framework.providers.legacy import chat_messages
 
 QUESTION_KEY = "next_action"
@@ -48,14 +48,14 @@ class DecisionsRefusalError(RuntimeError):
     """The upstream model declined to answer the question."""
 
 
-class OpenAIDecisionsClient:
+class OpenAIDecisionsClient(DecisionEncoder):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_decisions",
         persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
     )
-    # Choices per question; the harness groups larger candidate sets.
+    # Choices per question; the selection flow groups larger candidate sets.
     max_choices = 255
     pin_route = True
 
@@ -84,7 +84,7 @@ class OpenAIDecisionsClient:
             raise ValueError(f"Decisions accepts at most {self.max_choices} choices per call")
         payload = {
             "model": self.config.model_name,
-            "state": self._wire_state(state),
+            "state": state,
             "questions": {QUESTION_KEY: question},
         }
         if self.pin_route:
@@ -121,59 +121,16 @@ class OpenAIDecisionsClient:
         if self.config.context_window_tokens is None:
             return {"pressure": False, "counter": "unconfigured"}
         validate_context_reserve(self.config)
+        # Counts the request's chat-message rendering, not the transcript sent; the pressure
+        # archive points were calibrated on this count.
         count = estimated_request_tokens(
             chat_messages(request.canonical), self.config.context_image_tokens
         )
         return context_status(self.config, count, "estimated_utf8_bytes_plus_image_allowance")
 
-    def _wire_state(self, state):
-        if self.capabilities.history_replay == "canonical":
-            return self._wire_transcript(state)
-        images = state.get("images", [])
-        if not images:
-            return state
-        if self.capabilities.observation_modality != "screenshot":
-            raise ValueError("This Decisions model does not accept images")
-        # Image parts must be at the top level of OpenRouter's state array.
-        context = {key: value for key, value in state.items() if key != "images"}
-        return [json.dumps(context, ensure_ascii=False), *images]
-
     @staticmethod
-    def _wire_transcript(state):
-        """Render canonical messages in their order, with each image at its causal position.
-
-        Decisions state has no roles, and image parts must be top-level entries of the state array.
-        The canonical order keeps older turns a stable prefix for prompt caching; only the current
-        question's state follows the newest observation. Observations and chosen actions carry
-        plain labels: role-tagged turns make OpenAI refuse many-option questions more often.
-        """
-        entries, text = [], []
-        for message in state["history"]:
-            content = message.get("content")
-            if message["role"] == "assistant":
-                text.append(LUNA_ACTION_LABEL + content)
-            elif isinstance(content, list) or content == FOLDED_VISUAL_PLACEHOLDER:
-                parts = content if isinstance(content, list) else [{"text": content}]
-                text.append(LUNA_OBSERVATION_LABEL + "".join(
-                    part.get("text") or "" for part in parts if part.get("type") != "image_url"
-                ))
-                images = [part for part in parts if part.get("type") == "image_url"]
-                if images:
-                    entries.append("\n".join(text))
-                    entries.extend(images)
-                    text = []
-            else:
-                text.append(content)
-        extra = {key: value for key, value in state.items() if key != "history"}
-        if extra:
-            text.append(json.dumps(extra, ensure_ascii=False))
-        if text:
-            entries.append("\n".join(text))
-        return entries
-
-    @staticmethod
-    def classify_transport_error(exc: BaseException) -> TransportFailure:
-        """Classify one failed question for the harness's shared retry policy."""
+    def classify_question_error(exc: BaseException) -> TransportFailure:
+        """Classify one failed question for the selection flow's shared retry policy."""
         for current in exception_chain(exc):
             if isinstance(current, DecisionsRefusalError):
                 return TransportFailure(REFUSED)

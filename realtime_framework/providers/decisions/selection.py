@@ -17,37 +17,42 @@ from realtime_framework.entity.model import (
     TransportFailureError,
 )
 from realtime_framework.entity.records import TraceEvent, current_trace_scope, trace_scope
-from realtime_framework.harnesses.jev.composition import (
-    TEXT_COMPOSITION_POLICY,
-    composition_candidates,
-    unicode_candidates,
+from realtime_framework.providers.decisions.history import (
+    render_digest,
+    render_transcript,
+    transcript_state,
 )
-from realtime_framework.harnesses.jev.context import compact_ledger_messages
-from realtime_framework.harnesses.jev.game_candidates import (
-    POINTER_COMPOSITION_POLICY,
-    coordinate_choices,
-)
-from realtime_framework.harnesses.jev.prompts import (
+from realtime_framework.providers.decisions.questions import (
     COMPOSE_INSTRUCTIONS,
-    GAME_INSTRUCTIONS,
     GROUP_NOTE,
-    GUI_INSTRUCTIONS,
+    POINTER_COMPOSITION_POLICY,
+    TEXT_COMPOSITION_POLICY,
     UNICODE_INSTRUCTIONS,
+    composition_candidates,
+    coordinate_choices,
+    unicode_candidates,
 )
 
 SELECTION_POLICY = "exhaustive_groups_255_provider_split_then_winners_pointer_v6"
 
 
 class ChoiceDecision:
-    """Resolve one observation's candidates into one executable action, with a full trace."""
+    """Resolve one observation's candidates into one executable action, with a full trace.
 
-    def __init__(self, client, observation_state, messages, *, trace):
+    Everything comes from the canonical request: the candidates and the root question's
+    instructions from its answer requirements, the material of the follow-up questions from its
+    selection material, and the history from its blocks, rendered as Decisions state.
+    """
+
+    def __init__(self, client, request, *, trace):
         self.client = client
         self.trace = trace
-        self.observation = observation_state
+        self.choice = request.answer.choice
+        self.selection = request.selection
+        self.digest = request.history_form == "action_digest"
         # Canonical replay is already bounded by the runtime's retention and context checks.
-        self.canonical = client.capabilities.history_replay == "canonical"
-        self.history = list(messages) if self.canonical else compact_ledger_messages(messages)
+        self.overflow = request.policy.decision_history.overflow
+        self.history = render_digest(request) if self.digest else render_transcript(request)
         self.calls = []
         self.retries = []
         self.context_splits = []
@@ -55,11 +60,13 @@ class ChoiceDecision:
         self.usage = {"input_tokens": 0, "output_tokens": 0}
 
     async def run(self) -> dict:
-        candidates = self.observation["candidates"]
+        candidates = {
+            key: {"description": c.description, "action": c.action, "audit": c.audit}
+            for key, c in self.choice.candidates
+        }
         if not candidates:
             raise ValueError("JEV requires at least one candidate action")
-        instructions = GAME_INSTRUCTIONS if self.observation.get("game_choices") else GUI_INSTRUCTIONS
-        choice = await self._choose(candidates, instructions, phase="gui_action")
+        choice = await self._choose(candidates, self.choice.instructions, phase="gui_action")
         # The deciding action-choice call; composition calls that follow stay in jev_calls.
         decisive = self.calls[-1]
         action = candidates[choice]["action"]
@@ -87,12 +94,12 @@ class ChoiceDecision:
             "selected_candidate_audit": candidates[choice].get("audit"),
             "context_splits": self.context_splits,
             "history_reductions": self.history_reductions,
-            "observation_id": self.observation["observation_id"],
+            "observation_id": self.selection.observation_id,
             "retries": self.retries,
             "text_composition": composition,
             "pointer_composition": pointer_composition,
             "key_composition": key_composition,
-            "candidate_policy": self.observation.get("candidate_policy"),
+            "candidate_policy": self.choice.candidate_policy,
         }
 
     async def _compose_hold(self, spec):
@@ -228,18 +235,23 @@ class ChoiceDecision:
         and instructions are never removed; every reduction is recorded. Canonical history is
         never reduced here: the runtime archives it before the request.
         """
-        history = list(self.history)
+        history = self.history
         while True:
-            state = {"history": history}
-            if self.observation.get("images"):
-                state["images"] = self.observation["images"]
-            if text_state is not None:
-                state["text_composition"] = text_state
+            if self.digest:
+                state = {"history": history}
+                if text_state is not None:
+                    state["text_composition"] = text_state
+            else:
+                extra = {} if text_state is None else {"text_composition": text_state}
+                state = transcript_state(history, extra)
             try:
                 return await self._decide_with_retries(state, question, phase=phase)
             except ChoiceContextLimitError:
+                # Context policy item 9: only a digest is reduced, and only for one option.
+                if self.overflow == "raise" or len(question["criteria"]) > 1:
+                    raise
                 droppable = len(history) - 2
-                if self.canonical or len(question["criteria"]) > 1 or droppable <= 0:
+                if droppable <= 0:
                     raise
                 removed = max(1, droppable // 2)
                 history = [history[0], *history[1 + removed :]]
@@ -300,7 +312,7 @@ class ChoiceDecision:
 
     async def _decide_with_retries(self, state, question, *, phase):
         """One question under the shared transport retry policy; each attempt is recorded."""
-        key = f"{self.observation['observation_id']}:{len(self.calls)}"
+        key = f"{self.selection.observation_id}:{len(self.calls)}"
         retry = 0
         while True:
             started = time.monotonic()
@@ -312,7 +324,7 @@ class ChoiceDecision:
                 raise
             except Exception as exc:
                 retry += 1
-                failure = self.client.classify_transport_error(exc)
+                failure = self.client.classify_question_error(exc)
                 delay = TRANSPORT_RETRY.delay_s(retry, key, failure)
                 self._attempt_finished(
                     retry,
@@ -342,8 +354,8 @@ class ChoiceDecision:
                 return reply
 
     async def _compose_text(self):
-        inventory = self.observation.get("text_composition")
-        if not inventory or not self.observation.get("focused_input"):
+        inventory = self.selection.text_composition
+        if not inventory or not self.selection.focused_input:
             raise ValueError("JEV text composition requires a focused observation-bound input")
         candidates = composition_candidates(inventory)
         draft, edits = "", []
@@ -354,7 +366,7 @@ class ChoiceDecision:
             state = {
                 "draft": draft,
                 "step": len(edits),
-                "focused_input": self.observation["focused_input"],
+                "focused_input": self.selection.focused_input,
             }
             choice = await self._choose(
                 candidates, COMPOSE_INSTRUCTIONS, phase="text_edit", text_state=state

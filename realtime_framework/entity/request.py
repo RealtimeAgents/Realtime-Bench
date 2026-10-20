@@ -8,10 +8,13 @@ decided when the request is generated, from the context policy, and travel on th
 Encoders only map that intent onto their protocol.
 """
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, fields
+from typing import TYPE_CHECKING, Literal
 
 from realtime_framework.entity.records import _jsonable
+
+if TYPE_CHECKING:  # entity.context_policy imports entity.model, which imports this module
+    from realtime_framework.entity.context_policy import PathPolicy
 
 BlockKind = Literal[
     "system_instruction",
@@ -129,8 +132,9 @@ class CallParameters:
 
 @dataclass(frozen=True)
 class CanonicalRequest:
-    policy_version: int
-    api: str
+    # The context policy the request was generated under; encoders read its fixed texts and
+    # Decision overflow handling from here.
+    policy: PathPolicy
     history_form: Literal["turns", "action_digest"]
     items: tuple[RequestItem, ...]  # in the order they are sent
     answer: AnswerRequirements
@@ -138,5 +142,9 @@ class CanonicalRequest:
     selection: SelectionMaterial | None = None
 
     def to_record(self) -> dict:
-        """A JSON form for audit records; image bytes become their length and SHA-256."""
-        return _jsonable(self)
+        """A JSON form for audit records; image bytes become their length and SHA-256.
+
+        The policy is named by version and API; the effective run config records its values.
+        """
+        values = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "policy"}
+        return {"policy_version": self.policy.version, "api": self.policy.api, **_jsonable(values)}

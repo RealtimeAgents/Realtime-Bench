@@ -1,7 +1,8 @@
-"""Present a stateless ChoiceClient to the realtime runtime as one generation per decision.
+"""Present a stateless Decisions protocol to the realtime runtime as one generation per decision.
 
-The harness binds each observation's structured state (candidates, focused input, composition
-inventory) by observation_id; the client receives Choice questions over text and optional images.
+The canonical request of each decision carries the current observation's candidates, the material
+of its follow-up questions and the history; the protocol receives Choice questions over the
+history rendered as Decisions state.
 """
 
 from __future__ import annotations
@@ -24,26 +25,19 @@ from realtime_framework.entity.model import (
     TransportFailureError,
     exception_chain,
 )
-from realtime_framework.harnesses.jev.context import decision_messages
-from realtime_framework.harnesses.jev.selection import SELECTION_POLICY, ChoiceDecision
+from realtime_framework.providers.decisions.selection import SELECTION_POLICY, ChoiceDecision
+
+# The logged history labels predate the context policy's names for the two forms.
+HISTORY_REPLAY_LABELS = {"turns": "canonical", "action_digest": "action_digest"}
 
 
-class ChoiceDecisionDriver:
-    def __init__(self, client, observation_states: dict[str, dict]):
-        self.client = client
-        self.capabilities = client.capabilities
-        self.observation_states = observation_states
-        self.observation = None
-        if self.capabilities.history_replay != "canonical":
-            # A digest is not the canonical request, so the runtime cannot measure or archive it.
-            self.request_context_status = None
+class DecisionEncoder:
+    """The RealtimeDriver half of a Decisions encoder.
 
-    async def request_context_status(self, request):
-        return await self.client.request_context_status(request)
-
-    def bind_trace(self, trace) -> None:
-        self._trace = trace
-        self.client.bind_trace(trace)
+    A registered Decision API subclasses it with its protocol (``decide``,
+    ``classify_question_error``, ``max_choices``, ``bind_trace``, ``close``), capabilities and
+    deployment, so the registered class is the complete driver.
+    """
 
     async def connect(self, request):
         return None
@@ -57,21 +51,13 @@ class ChoiceDecisionDriver:
         return TransportFailure(FATAL)
 
     async def send_observation(self, observation):
-        state = self.observation_states.get(observation.observation_id)
-        if state is None or state["observation_id"] != observation.observation_id:
-            raise ValueError("Action choices belong to a different observation")
-        self.observation = state
         return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):
         if request.clock_mode != "wall":
             raise ValueError("Choice Decisions supports wall clock only")
-        if self.observation is None:
-            raise RuntimeError("Choice Decisions requires a current observation")
-        messages = decision_messages(request.canonical)
-        metadata = await ChoiceDecision(
-            self.client, self.observation, messages, trace=self._trace
-        ).run()
+        metadata = await ChoiceDecision(self, request.canonical, trace=self._trace).run()
+        metadata["history_form"] = request.canonical.history_form
         return GenerationHandle(request.generation_id, metadata=metadata)
 
     async def events(self, generation):
@@ -105,8 +91,8 @@ class ChoiceDecisionDriver:
                     else "ax_tree_plus_interactables_text"
                 ),
                 "choice_protocol_family": self.capabilities.protocol_family,
-                "choice_history_replay": self.capabilities.history_replay,
-                "choice_max_choices": self.client.max_choices,
+                "choice_history_replay": HISTORY_REPLAY_LABELS[data["history_form"]],
+                "choice_max_choices": self.max_choices,
                 "jev_transport_retries": data["retries"],
                 "jev_calls": data["jev_calls"],
                 "jev_candidate_count": data["candidate_count"],
@@ -132,6 +118,3 @@ class ChoiceDecisionDriver:
             ProviderHistoryState.EXACT,
             detail="stateless request uses canonical retained history",
         )
-
-    async def close(self):
-        await self.client.close()
