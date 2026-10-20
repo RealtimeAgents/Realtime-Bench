@@ -49,6 +49,8 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.clock import token_record
+from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
+from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.observation.som import valid_inspection_proof
 
 RUNNER_TIMING = RunnerTimingConfig.from_environ()  # read once, at import
@@ -814,7 +816,9 @@ def run_stream(
         snapshot_s = None
         if callable(snapshotter):
             try:
-                setattr(env, "_termination_snapshot", snapshotter())
+                with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s):
+                    snapshot = snapshotter()
+                setattr(env, "_termination_snapshot", snapshot)
                 setattr(env, "_termination_snapshot_captured", True)
                 setattr(env, "_termination_snapshot_error", None)
                 snapshot_s = finalized_s
