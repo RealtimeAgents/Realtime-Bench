@@ -20,10 +20,12 @@ Scripts:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import json
 import os
+import types
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +35,7 @@ import pytest
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
+from realtime_framework.providers.gemini import live as live_module
 
 from . import baseline
 from .build import Episode, build_episode
@@ -519,6 +522,49 @@ def test_driver_default_short(live_env, tmp_path):
         for parts in calls:
             assert parts[0]["thoughtSignature"] == "skip_thought_signature_validator"
             assert all("thoughtSignature" not in part for part in parts[1:])
+
+
+class _FakeClockAsyncio:
+    """live.py's asyncio with its sleeps and its loop's time (live.py:591, 701-712) on a fake
+    clock that only those sleeps advance; everything else is asyncio itself."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    async def sleep(self, delay):
+        self.sleeps.append(delay)
+        self.now += delay
+        await asyncio.sleep(0)
+
+    def get_running_loop(self):
+        return types.SimpleNamespace(time=lambda: self.now)
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+
+def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
+    """On the realtime_input transport (the driver defaults) one video frame follows the last by
+    at least one model-input frame interval (live.py:700-710): 4 s at 0.25 fps. Each video is
+    followed by the 1 s ingestion wait (live.py:711-712), so the wait before the next video is
+    the other 3 s."""
+    clock = _FakeClockAsyncio()
+    live_env.setattr(live_module, "asyncio", clock)
+    preset = DRIVER_DEFAULT
+    config = ModelConfig(
+        adapter_type="gemini_live", model_name=preset.model, fps=0.25, reasoning_effort="low"
+    )
+    scenario = [Step(CLICK_NAME), Step(CLICK_AGREE), Step(CLICK_NAME)]
+    turns = [turn_script(k, step, preset) for k, step in enumerate(scenario)]
+    records, results, stub = run_episode(
+        "realtime-input-spacing", config, preset.model, scenario, turns, preset, live_env, tmp_path
+    )
+    check_session(stub, results)
+    for record in records[2:-1]:
+        sent = [next(iter(message)) for message in client_messages(record, "realtime_input")]
+        assert sent == list(REALTIME_INPUT_ORDER)
+    assert clock.sleeps == [1.0, 3.0, 1.0, 3.0, 1.0]
 
 
 def test_resume_failure_short(live_env, tmp_path):
