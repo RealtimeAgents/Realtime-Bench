@@ -150,3 +150,62 @@ class ModelConfig(BaseModel):
     # this provider, disables fallbacks, and requires support for every requested parameter.
     # Keeping it in ModelConfig makes the route part of the effective runtime-config hash.
     upstream_provider: Optional[str] = None
+
+
+# Settings read from the environment. Each field names its variable and parser; an unset variable
+# keeps the field default. The module that uses a group reads it once, at its import, so the
+# process environment at that moment decides the value (the runtime-config hash reads the same
+# variables again when it is computed: evaluation/config.py:629-631, 664).
+from typing import ClassVar as ClassVar
+
+
+def _environ_fields(fields: dict, environ) -> dict:
+    return {
+        field: parse(environ[variable])
+        for field, (variable, parse) in fields.items()
+        if variable in environ
+    }
+
+
+def _at_least_two(value: str) -> int:
+    return max(2, int(value))
+
+
+@dataclass(frozen=True)
+class FrameEncodingConfig:
+    """How every model's screenshots are encoded (sandbox/observation/capture.py)."""
+
+    max_dimension: int = DEFAULT_FRAME_MAX_DIM  # longest side; larger frames are scaled down
+    jpeg_quality: int = 85  # JPEG quality of a scaled frame
+    image_detail: str = "auto"  # image detail sent with each screenshot
+
+    ENVIRONMENT: ClassVar[dict] = {
+        "max_dimension": ("FRAME_MAX_DIM", int),
+        "jpeg_quality": ("FRAME_JPEG_QUALITY", int),
+        "image_detail": ("FRAME_IMAGE_DETAIL", str),
+    }
+
+    @classmethod
+    def from_environ(cls, environ=os.environ) -> FrameEncodingConfig:
+        return cls(**_environ_fields(cls.ENVIRONMENT, environ))
+
+
+@dataclass(frozen=True)
+class RunnerTimingConfig:
+    """Operational bounds of the decision loop (evaluation/runner.py)."""
+
+    deadline_grace_s: float = 2.0  # settle margin added to the wall-clock bound
+    abandoned_drain_s: float = 30.0  # wait for per-move workers a timeout abandoned
+    observation_freeze_n: int = 3  # identical observations that make a frozen stream, at least 2
+    provider_watchdog_s: float = 300.0  # token-clock provider watchdog; off when <= 0
+
+    ENVIRONMENT: ClassVar[dict] = {
+        "deadline_grace_s": ("STREAM_DEADLINE_GRACE_S", float),
+        "abandoned_drain_s": ("STREAM_ABANDONED_DRAIN_S", float),
+        "observation_freeze_n": ("STREAM_OBSERVATION_FREEZE_N", _at_least_two),
+        "provider_watchdog_s": ("STREAM_PROVIDER_WATCHDOG_S", float),
+    }
+
+    @classmethod
+    def from_environ(cls, environ=os.environ) -> RunnerTimingConfig:
+        return cls(**_environ_fields(cls.ENVIRONMENT, environ))

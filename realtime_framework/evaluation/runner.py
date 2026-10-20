@@ -32,32 +32,34 @@ Runtime invariants:
   * Latched outcome: the stop reason is frozen on env at loop exit so
     post-loop cleanup crossing the deadline can't rewrite a real environment terminal state into time_limit.
 """
-import hashlib as hashlib, math as math, os as os, threading as threading, time as time, traceback as traceback
+import hashlib as hashlib, math as math, threading as threading, time as time, traceback as traceback
 
 from realtime_framework.evaluation.config import DEFAULT_MODE
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.config import DecisionBudget
+from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.clock import token_record
 from realtime_framework.sandbox.observation.som import valid_inspection_proof
 
+RUNNER_TIMING = RunnerTimingConfig.from_environ()  # read once, at import
 # Small settle margin added to the wall-clock bound so a well-behaved call that is about to return
 # at the deadline can finish; per-move compute caps receive no grace period.
-DEADLINE_GRACE_S = float(os.environ.get("STREAM_DEADLINE_GRACE_S", "2.0"))
+DEADLINE_GRACE_S = RUNNER_TIMING.deadline_grace_s
 # Bound on waiting out per-move workers a timeout abandoned, before teardown/exit (_drain_abandoned).
 # Sized for one native generate to finish returning, not for a wedged call to recover.
-ABANDONED_DRAIN_S = float(os.environ.get("STREAM_ABANDONED_DRAIN_S", "30.0"))
+ABANDONED_DRAIN_S = RUNNER_TIMING.abandoned_drain_s
 # A stream is frozen only when all three producer-owned identity signals repeat while real time
 # advances.  Screenshot equality by itself is valid for menus/static scenes, and equal tick values
 # can occur when capture is faster than the environment clock, so neither is sufficient alone.
-OBSERVATION_FREEZE_N = max(2, int(os.environ.get("STREAM_OBSERVATION_FREEZE_N", "3")))
+OBSERVATION_FREEZE_N = RUNNER_TIMING.observation_freeze_n
 # A token-clock call has no wall-clock scoring deadline by design, but it still needs an operational
 # watchdog so a dead provider cannot hang a lane forever. Hitting this bound invalidates the run;
 # it is never treated as model failure or converted into simulated time.
-PROVIDER_WATCHDOG_S = float(os.environ.get("STREAM_PROVIDER_WATCHDOG_S", "300"))
+PROVIDER_WATCHDOG_S = RUNNER_TIMING.provider_watchdog_s
 
 
 class ObservationStreamWatchdog:
