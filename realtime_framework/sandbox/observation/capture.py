@@ -309,21 +309,17 @@ class BrowserSceneCapture:
 
 # Frames
 """Shared screenshot encoding policy for VLM and native multimodal adapters."""
-import os as os
-
-from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
+from realtime_framework.entity.config import FrameEncodingConfig
 
 
-FRAME_SEND_MAX_DIM = int(os.environ.get("FRAME_MAX_DIM", str(DEFAULT_FRAME_MAX_DIM)))
-FRAME_JPEG_QUALITY = int(os.environ.get("FRAME_JPEG_QUALITY", "85"))
-FRAME_IMAGE_DETAIL = os.environ.get("FRAME_IMAGE_DETAIL", "auto")
+FRAME_ENCODING = FrameEncodingConfig.from_environ()  # read once, at import
 
 
 def prepare_for_model(png_bytes: bytes):
     """Prepare a chat-VLM frame and retain its exact coordinate transform."""
     return prepare_frame(
         png_bytes,
-        max_dimension=FRAME_SEND_MAX_DIM,
-        jpeg_quality=FRAME_JPEG_QUALITY,
-        detail=FRAME_IMAGE_DETAIL,
+        max_dimension=FRAME_ENCODING.max_dimension,
+        jpeg_quality=FRAME_ENCODING.jpeg_quality,
+        detail=FRAME_ENCODING.image_detail,
     )

@@ -90,9 +90,9 @@ def _import_values() -> dict:
 
     return {
         "frame_encoding": {
-            "max_dimension": capture.FRAME_SEND_MAX_DIM,
-            "jpeg_quality": capture.FRAME_JPEG_QUALITY,
-            "image_detail": capture.FRAME_IMAGE_DETAIL,
+            "max_dimension": capture.FRAME_ENCODING.max_dimension,
+            "jpeg_quality": capture.FRAME_ENCODING.jpeg_quality,
+            "image_detail": capture.FRAME_ENCODING.image_detail,
         },
         "runner_timing": {
             "deadline_grace_s": runner.DEADLINE_GRACE_S,

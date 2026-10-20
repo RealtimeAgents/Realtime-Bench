@@ -14,7 +14,7 @@ import sys
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
 
 # Environment settings that change what the model receives. Baselines use the code defaults.
-# Frame encoding is read once, at import (sandbox/observation/capture.py:317-319).
+# Frame encoding is read once, at import (FRAME_ENCODING in sandbox/observation/capture.py).
 FRAME_ENV = ("FRAME_MAX_DIM", "FRAME_JPEG_QUALITY", "FRAME_IMAGE_DETAIL")
 # Screenshot folding and history archiving are read on every request (entity/config.py:41-90).
 HISTORY_ENV = (
@@ -24,7 +24,7 @@ HISTORY_ENV = (
     "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
 )
 # The runner's grace, drain, freeze and watchdog bounds are read once, at import
-# (evaluation/runner.py:49-60).
+# (RUNNER_TIMING in evaluation/runner.py).
 RUNNER_ENV = (
     "STREAM_DEADLINE_GRACE_S",
     "STREAM_ABANDONED_DRAIN_S",
