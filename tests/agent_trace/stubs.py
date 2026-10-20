@@ -32,6 +32,7 @@ class Answer:
     status: int
     body: bytes
     content_type: str = "application/json"
+    headers: tuple[tuple[str, str], ...] = ()  # sent after Content-Type and Content-Length
 
 
 DROP = "drop"  # close the connection without answering
@@ -77,6 +78,8 @@ class HttpStub:
                 self.send_response(answer.status)
                 self.send_header("Content-Type", answer.content_type)
                 self.send_header("Content-Length", str(len(answer.body)))
+                for name, value in answer.headers:
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(answer.body)
 
