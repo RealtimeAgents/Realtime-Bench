@@ -13,9 +13,11 @@ caught when the operation ends: an operation that ends after its deadline fails.
 pass no budget; the clients read the current operation's deadline here.
 """
 
-import time as time
 from contextlib import contextmanager as contextmanager
 from contextvars import ContextVar as ContextVar
+
+from realtime_framework.clock import Clock as Clock
+from realtime_framework.clock import SystemClock as SystemClock
 
 
 class BudgetExceeded(TimeoutError):
@@ -29,14 +31,19 @@ _OPERATION: ContextVar[Deadline | None] = ContextVar("environment_operation", de
 class Deadline:
     """One absolute deadline shared by every wait of a call, never later than its operation's.
 
-    ``seconds=None`` leaves only the operation's deadline, if any.
+    ``seconds=None`` leaves only the operation's deadline, if any. ``clock`` defaults to the
+    operation's clock, or the system clock outside an operation.
     """
 
-    def __init__(self, seconds: float | None, what: str):
-        self.at = None if seconds is None else time.monotonic() + seconds
+    def __init__(self, seconds: float | None, what: str, clock: Clock | None = None):
+        self.operation = _OPERATION.get()
+        # Both deadlines must be read on one clock to be compared.
+        self.clock = clock or (
+            self.operation.clock if self.operation is not None else SystemClock()
+        )
+        self.at = None if seconds is None else self.clock.monotonic() + seconds
         self.message = None if seconds is None else f"{what} took longer than {seconds:g} s"
         self.expired = False
-        self.operation = _OPERATION.get()
         if self.operation is not None and (self.at is None or self.operation.at <= self.at):
             self.at, self.message = self.operation.at, self.operation.message
         else:
@@ -46,7 +53,7 @@ class Deadline:
         """Seconds left before the deadline; raise once it has passed."""
         if self.at is None:
             return None
-        left = self.at - time.monotonic()
+        left = self.at - self.clock.monotonic()
         if left <= 0:
             raise self.exceeded()
         return left
@@ -59,18 +66,18 @@ class Deadline:
 
     def overrun(self) -> bool:
         """Whether a wait ran out of this deadline or it has passed."""
-        return self.expired or (self.at is not None and time.monotonic() >= self.at)
+        return self.expired or (self.at is not None and self.clock.monotonic() >= self.at)
 
 
 @contextmanager
-def operation_budget(name: str, seconds: float):
-    """Run one environment operation within ``seconds``; running past them fails it.
+def operation_budget(name: str, seconds: float, clock: Clock | None = None):
+    """Run one environment operation within ``seconds`` of ``clock``; running past them fails it.
 
     Task code may catch a call's timeout and return nothing (``cdp_eval``) or raise its own error
     (a game's ``episode_over``), so an operation that ends after its deadline fails with the
     overrun as its cause, whether it returns or raises.
     """
-    deadline = Deadline(seconds, name)
+    deadline = Deadline(seconds, name, clock)
     token = _OPERATION.set(deadline)
     try:
         yield

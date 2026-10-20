@@ -8,10 +8,10 @@ import math as math
 import shlex as shlex
 import string as string
 import threading as threading
-import time as time
 import traceback as traceback
 from pathlib import Path as Path
 
+from realtime_framework.clock import episode_clocks
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.actions import Observation
@@ -129,22 +129,29 @@ class GuestEnvironment:
         action_audit_path=None,
         clock_mode="token",
         wall_start_time=None,
+        clocks=None,
     ):
         self.g = guest
         # One environment tick, from the task clock the task and its service advance by.
-        self.d = 1.0 / task.clock_snapshot()["fps"]
-        self.t0 = time.time() if wall_start_time is None else float(wall_start_time)
+        fps = task.clock_snapshot()["fps"]
+        self.d = 1.0 / fps
+        # Wall-clock time, deadlines, waits and key releases read the semantic clock; under the
+        # token clock it is the FrameClock that holds the logical tick. Records read the
+        # operational clock.
+        self.clocks = clocks or episode_clocks(clock_mode, fps)
+        self.t0 = (
+            self.clocks.operational.time() if wall_start_time is None else float(wall_start_time)
+        )
         self.deadline = deadline
         self.clock_mode = clock_mode
         self.task = task
-        self._logical_tick = 0
         self._episode_horizon_tick = None
         # Token-clock holds are leases on individual keys. This lets a movement hold survive later
         # actions and lets overlapping chords extend shared keys without an early keyUp.
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
-        # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (time.time())}.
+        # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
         self._wall_holds = {}
         self._wall_lock = threading.RLock()
         self._wall_timer = None
@@ -181,6 +188,15 @@ class GuestEnvironment:
             raise ValueError("episode horizon must be a non-negative finite tick")
         self._episode_horizon_tick = value
 
+    @property
+    def _logical_tick(self):
+        """The token clock's tick (frames advanced), kept by the semantic FrameClock."""
+        return self.clocks.semantic.frame
+
+    @_logical_tick.setter
+    def _logical_tick(self, value):
+        self.clocks.semantic.frame = value
+
     def tick_index(self):
         if self.clock_mode == "token":
             return self._logical_tick
@@ -190,20 +206,24 @@ class GuestEnvironment:
         """Return the current clock in frames without quantizing wall time."""
         if self.clock_mode == "token":
             return self._logical_tick
-        return max(0.0, (time.time() - self.t0) / self.d)
+        return max(0.0, (self.clocks.semantic.time() - self.t0) / self.d)
 
     def capture(self):
-        started = time.time()
-        with operation_budget("capture", ENVIRONMENT_BUDGET.capture_s):
+        started = self.clocks.operational.time()
+        with operation_budget(
+            "capture", ENVIRONMENT_BUDGET.capture_s, clock=self.clocks.operational
+        ):
             obs = (
                 self.scene_capture.capture(self.tick_index())
                 if self.scene_capture is not None
-                else Observation(self.g.screenshot(), time.time(), self.tick_index())
+                else Observation(
+                    self.g.screenshot(), self.clocks.operational.time(), self.tick_index()
+                )
             )
         ensure_observation_geometry(obs)
         if self.clock_mode == "token":
-            obs.timestamp = self._logical_tick * self.d
-        finished = time.time()
+            obs.timestamp = self.clocks.semantic.monotonic()
+        finished = self.clocks.operational.time()
         self.capture_latencies.append(finished - started)
         self.capture_times.append(getattr(obs, "timestamp", finished))
         obs.metadata["capture_latency_s"] = round(finished - started, 6)
@@ -234,7 +254,11 @@ class GuestEnvironment:
                         continue
                 repeat_events, repeats_sent = self._pending_repeat_events(step)
                 try:
-                    with operation_budget("clock advance", ENVIRONMENT_BUDGET.clock_advance_s):
+                    with operation_budget(
+                        "clock advance",
+                        ENVIRONMENT_BUDGET.clock_advance_s,
+                        clock=self.clocks.operational,
+                    ):
                         if repeat_events:
                             self.task.advance_clock(step, key_events=repeat_events)
                         else:
@@ -255,8 +279,9 @@ class GuestEnvironment:
                 if self.done():
                     break
             return
-        while self.tick_index() < target and time.time() < self.deadline:
-            time.sleep(0.03)
+        clock = self.clocks.semantic
+        while self.tick_index() < target and clock.time() < self.deadline:
+            clock.sleep(0.03)
 
     def render_current_frame(self):
         """Publish action-visible pixels without advancing the token clock."""
@@ -266,7 +291,9 @@ class GuestEnvironment:
         if not callable(renderer):
             return None
         try:
-            with operation_budget("frame render", ENVIRONMENT_BUDGET.clock_advance_s):
+            with operation_budget(
+                "frame render", ENVIRONMENT_BUDGET.clock_advance_s, clock=self.clocks.operational
+            ):
                 return renderer()
         except Exception as exc:
             self._invalid_run = {
@@ -277,10 +304,10 @@ class GuestEnvironment:
             raise
 
     def time_remaining(self):
-        return None if self.clock_mode == "token" else self.deadline - time.time()
+        return None if self.clock_mode == "token" else self.deadline - self.clocks.semantic.time()
 
     def past_deadline(self):
-        return False if self.clock_mode == "token" else time.time() >= self.deadline
+        return False if self.clock_mode == "token" else self.clocks.semantic.time() >= self.deadline
 
     @staticmethod
     def _key_identity(key):
@@ -405,7 +432,7 @@ class GuestEnvironment:
 
     def _active_hold_snapshot(self):
         if self.clock_mode != "token":
-            now = time.time()
+            now = self.clocks.semantic.time()
             with self._wall_lock:
                 return [
                     {
@@ -642,7 +669,7 @@ class GuestEnvironment:
             self._wall_timer = None
             if self._wall_closed:
                 return
-            now = time.time()
+            now = self.clocks.semantic.time()
             expired = [
                 identity
                 for identity, item in self._wall_holds.items()
@@ -677,12 +704,10 @@ class GuestEnvironment:
             self._wall_timer = None
         if self._wall_closed or not self._wall_holds:
             return
+        clock = self.clocks.semantic
         earliest = min(item["expires_at"] for item in self._wall_holds.values())
-        delay = max(float(min_delay), earliest - time.time())
-        timer = threading.Timer(delay, self._wall_release_due)
-        timer.daemon = True
-        self._wall_timer = timer
-        timer.start()
+        delay = max(float(min_delay), earliest - clock.time())
+        self._wall_timer = clock.timer(delay, self._wall_release_due)
 
     def _ensure_wall_autorepeat(self):
         """Pin the wall display's auto-repeat to the values the token clock emulates (once).
@@ -718,7 +743,7 @@ class GuestEnvironment:
             return None
         with self._wall_lock:
             autorepeat = self._ensure_wall_autorepeat()
-            now = time.time()
+            now = self.clocks.semantic.time()
             new_parts = [
                 (identity, wire) for identity, wire in parts if identity not in self._wall_holds
             ]
@@ -851,8 +876,8 @@ class GuestEnvironment:
                     if self.clock_mode == "token":
                         self.wait_until_tick(self._logical_tick + duration / self.d)
                     else:
-                        remaining = max(0.0, self.deadline - time.time())
-                        time.sleep(min(duration, remaining))
+                        remaining = max(0.0, self.deadline - self.clocks.semantic.time())
+                        self.clocks.semantic.sleep(min(duration, remaining))
                 elapsed = round(
                     max(0.0, (self.clock_position() - started_at) * self.d),
                     9,
@@ -894,7 +919,9 @@ class GuestEnvironment:
                 self.actions += 1
                 return "applied"
             budget = action_timeout(action, ENVIRONMENT_BUDGET.action_s)
-            with operation_budget(f"{action_type.value} action", budget):
+            with operation_budget(
+                f"{action_type.value} action", budget, clock=self.clocks.operational
+            ):
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
                     ActionType.KEY,
@@ -959,11 +986,15 @@ class GuestEnvironment:
     def done(self):
         if getattr(self, "_invalid_run", None):
             return True
-        if self._done or (self.clock_mode != "token" and time.time() >= self.deadline):
+        if self._done or (
+            self.clock_mode != "token" and self.clocks.semantic.time() >= self.deadline
+        ):
             return True
         if self.stop_check is not None:
             try:
-                with operation_budget("state read", ENVIRONMENT_BUDGET.state_read_s):
+                with operation_budget(
+                    "state read", ENVIRONMENT_BUDGET.state_read_s, clock=self.clocks.operational
+                ):
                     terminal = self.stop_check()
                 if terminal:
                     self._episode_over = True

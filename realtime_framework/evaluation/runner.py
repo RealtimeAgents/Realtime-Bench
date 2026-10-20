@@ -1291,6 +1291,7 @@ sys.path.insert(0, str(ROOT))
 
 import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
+from realtime_framework.clock import episode_clocks
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
@@ -1620,6 +1621,7 @@ def main():
     harness_hash = harness_fingerprint()
     runtime_config = None
     runtime_config_hash = None
+    clocks = episode_clocks(a.clock, env_fps)
     t0 = time.time()
     run_stage = "environment_setup"
     try:
@@ -1673,6 +1675,7 @@ def main():
                     container=R.CONTAINER_NAME,
                     desktop_size=(env_config.screen_width, env_config.screen_height),
                     text_observation=text_observation,
+                    clock=clocks.operational,
                 ),
             )
         finally:
@@ -1779,6 +1782,7 @@ def main():
             action_audit_path=run_dir / "action_lifecycle.jsonl",
             clock_mode=a.clock,
             wall_start_time=wall_start_time,
+            clocks=clocks,
         )
         start_episode = getattr(agent, "start_episode", None)
         if callable(start_episode):

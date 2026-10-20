@@ -2,10 +2,10 @@
 
 The runner builds every observation with BrowserSceneCapture.capture (evaluation/runner.py:1576,
 2297; sandbox/actions.py:190-203). Here that class runs unchanged with its probe override
-(sandbox/observation/capture.py:100, 144-145), a guest that returns synthetic PNGs, and a fixed
-clock in place of the time.time() that stamps each capture (capture.py:267). Observation ids,
-screenshot hashes, frame geometry and the canonical interactables therefore come from
-production code, built from inputs that are a pure function of the frame index.
+(sandbox/observation/capture.py:100, 144-145), a guest that returns synthetic PNGs, and a clock
+that reads a fixed stamp for each capture (capture.py:272). Observation ids, screenshot hashes,
+frame geometry and the canonical interactables therefore come from production code, built from
+inputs that are a pure function of the frame index.
 
 The probe returns what the CDP extractor returns for a screenshot model (scene, binding,
 controls, canvases, metrics: sandbox/browser/cdp_interactables.py:424-440, 470-484, 569-583;
@@ -21,13 +21,10 @@ import contextlib
 import hashlib
 import io
 import json
-import types
-from unittest import mock
 
 from PIL import Image, ImageDraw
 
 from realtime_framework.sandbox.browser.ax import capture_ax_frames
-from realtime_framework.sandbox.observation import capture as capture_module
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 
 from . import baseline
@@ -416,6 +413,15 @@ class _Guest:
         return data
 
 
+class _StampClock:
+    """The clock BrowserSceneCapture stamps a capture with: the time FrameSource set for it."""
+
+    stamp = 0.0
+
+    def time(self) -> float:
+        return self.stamp
+
+
 class FrameSource:
     """Each capture() returns the next synthetic frame; frame 0 is the runner's initial capture.
 
@@ -431,12 +437,14 @@ class FrameSource:
         self.frame = -1
         self._fps = fps
         self.screenshot = screenshot
+        self._clock = _StampClock()
         self._capture = BrowserSceneCapture(
             _Guest(self),
             task,
             probe=lambda payload: probe(self.frame, text_observation=text_observation),
             desktop_size=DESKTOP_SIZE,
             text_observation=text_observation,
+            clock=self._clock,
         )
 
     def ensure_page_focus(self) -> bool:
@@ -446,10 +454,8 @@ class FrameSource:
     def capture(self, tick: float, at: float | None = None):
         """``at`` is the capture time; by default frame n is stamped CLOCK_ORIGIN + n/fps."""
         self.frame += 1
-        stamp = CLOCK_ORIGIN + self.frame / self._fps if at is None else at
-        clock = types.SimpleNamespace(time=lambda: stamp)
-        with mock.patch.object(capture_module, "time", clock):
-            observation = self._capture.capture(tick)
+        self._clock.stamp = CLOCK_ORIGIN + self.frame / self._fps if at is None else at
+        observation = self._capture.capture(tick)
         # GuestEnvironment.capture adds its measured capture time (sandbox/actions.py:203).
         observation.metadata["capture_latency_s"] = 0.0
         return observation
