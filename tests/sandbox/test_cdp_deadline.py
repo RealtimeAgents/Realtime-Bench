@@ -1,8 +1,9 @@
 """A CDP call has one deadline for the lock, the connect and every reply (sandbox/browser/cdp.py).
 
-Each test drives the real PersistentCDPClient against FakeCDP. Before, the lock wait and the
-connect were not timed and every message that was not the reply restarted the receive timeout, so
-the flood and lock cases below never returned.
+Each test drives the real PersistentCDPClient against FakeCDP. Before, the lock wait was not timed,
+the target lookup and the handshake had their own 3 s and 5 s caps outside the call's timeout, and
+every message that was not the reply restarted the receive timeout, so the flood case below never
+returned.
 """
 
 from __future__ import annotations
