@@ -45,7 +45,6 @@ _HISTORY_CONTENTS_PER_MESSAGE = 12
 _SESSION_RELEASE_GRACE_S = 2.0
 _GO_AWAY_CLOSE_MARGIN_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
-_EXTENDED_THINKING_MODEL = "gemini-3.8-live-extended-thinking"
 
 
 # Wire options carried in ModelConfig.provider_options: (default, allowed values). Gemini 3.8
@@ -94,18 +93,16 @@ def classify_live_message(direction: str, message: dict):
 
 
 def live_options(config) -> dict:
-    """Resolve and validate Gemini Live options with their documented defaults."""
-    options = dict(getattr(config, "provider_options", None) or {})
-    unknown = set(options) - set(LIVE_OPTIONS)
-    if unknown:
-        raise ValueError(f"Unknown Gemini Live provider_options: {sorted(unknown)}")
-    resolved = {}
-    for name, (default, allowed) in LIVE_OPTIONS.items():
-        value = options.get(name, default)
-        if value not in allowed:
-            raise ValueError(f"Gemini Live {name} must be one of {list(allowed)}, got {value!r}")
-        resolved[name] = value
-    return resolved
+    """Resolve Gemini Live options with their documented defaults.
+
+    The values are validated before the run (providers/preflight.py).
+    """
+    options = config.provider_options
+    return {name: options.get(name, default) for name, (default, _) in LIVE_OPTIONS.items()}
+
+
+# reasoning_effort values the session setup maps (GeminiLiveDriver._thinking_config).
+LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "high")
 
 
 class GoAwayDeadlineExceeded(RuntimeError):
@@ -185,7 +182,6 @@ class GeminiLiveDriver:
         from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
         self.options = live_options(config)
-        self._validate_model_contract(config)
         if config.api_key:
             keys = [config.api_key]
         elif config.api_key_env and config.api_key_env != "GEMINI_API_KEY":
@@ -224,34 +220,6 @@ class GeminiLiveDriver:
         self._connect_metadata: dict = {}
         self._go_away_deadline: float | None = None
         self._last_turn_clean = False
-
-    @staticmethod
-    def _validate_model_contract(config) -> None:
-        """Reject setup combinations that violate the selected Live model's API contract."""
-        options = live_options(config)
-        if (
-            options["tool_response_scheduling"] == "silent"
-            and options["tool_behavior"] != "non_blocking"
-        ):
-            raise ValueError("Silent Gemini tool responses require non-blocking tools")
-        model_name = str(config.model_name).rsplit("/", 1)[-1]
-        if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
-            raise ValueError(
-                "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"
-            )
-        if model_name != _EXTENDED_THINKING_MODEL:
-            return
-        invalid = []
-        if config.reasoning_effort not in {"low", "medium", "high"}:
-            invalid.append("reasoning_effort must be low, medium, or high")
-        if options["tool_behavior"] != "non_blocking":
-            invalid.append("tool_behavior must be non_blocking")
-        if options["completion_signal"] != "interaction_idle":
-            invalid.append("completion_signal must be interaction_idle")
-        if options["tool_response_scheduling"] == "silent":
-            invalid.append("function scheduling is unsupported; use tool_response_scheduling=omit")
-        if invalid:
-            raise ValueError(f"{_EXTENDED_THINKING_MODEL} requires " + "; ".join(invalid))
 
     def _client_for_slot(self, index: int):
         client = self._clients.get(index)
@@ -381,14 +349,7 @@ class GeminiLiveDriver:
             "medium": self.types.ThinkingLevel.MEDIUM,
             "high": self.types.ThinkingLevel.HIGH,
         }
-        try:
-            level = levels[effort]
-        except KeyError as exc:
-            raise ValueError(
-                "Gemini Live reasoning_effort must be one of "
-                "none, fixed, minimal, low, medium, or high"
-            ) from exc
-        return self.types.ThinkingConfig(thinking_level=level)
+        return self.types.ThinkingConfig(thinking_level=levels[effort])
 
     def _function_declarations(self, seed):
         behavior = self.options["tool_behavior"]

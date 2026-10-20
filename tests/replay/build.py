@@ -19,7 +19,7 @@ from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.prompts import budget_clock_prompt
 from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 from realtime_framework.harnesses.registry import create_agent
-from realtime_framework.providers.registry import validate_model_interaction
+from realtime_framework.providers.preflight import check_episode
 from realtime_framework.sandbox.observation.som import ToolRuntime
 
 from .frames import FrameSource
@@ -114,13 +114,11 @@ def build_episode(
     ``before_initialize(agent)`` runs just before initialize(), which may open a connection.
     ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other than the form."""
     fps = config.fps
-    validate_model_interaction(  # runner.py:1554-1559
-        config.adapter_type, clock_mode=clock_mode, fps=fps, tokens_per_frame=tokens_per_frame
-    )
+    check_episode(config, clock_mode=clock_mode, task=task)  # runner.py:1560
     # runner.main() opens the episode trace, then hands the agent its write entry.
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
     agent_trace = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
-    agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1560
+    agent = create_agent(config, log_dir=run_dir, trace=agent_trace)  # runner.py:1563
     # create_agent loads the repository .env (harnesses/registry.py:11 calls
     # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
     injected = sorted(name for name in HISTORY_ENV if name in os.environ)

@@ -155,7 +155,7 @@ def main(argv=None):
     # Import after resolving environment-backed endpoint/model settings.
     import realtime_framework.evaluation.config as _yaml
     import realtime_framework.providers.registry as catalog
-    from realtime_framework.providers.registry import validate_model_interaction
+    from realtime_framework.providers.preflight import validate_model_interaction
 
     try:
         entry = catalog.get(key)
