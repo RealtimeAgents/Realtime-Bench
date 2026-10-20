@@ -12,6 +12,7 @@ import os
 
 import httpx
 
+from realtime_framework.entity.context_policy import LUNA_ACTION_LABEL, LUNA_OBSERVATION_LABEL
 from realtime_framework.entity.model import (
     FATAL,
     FOLDED_VISUAL_PLACEHOLDER,
@@ -30,6 +31,7 @@ from realtime_framework.providers.context import (
     estimated_request_tokens,
     validate_context_reserve,
 )
+from realtime_framework.providers.legacy import chat_messages
 
 QUESTION_KEY = "next_action"
 
@@ -114,7 +116,9 @@ class OpenAIDecisionsClient:
         if self.config.context_window_tokens is None:
             return {"pressure": False, "counter": "unconfigured"}
         validate_context_reserve(self.config)
-        count = estimated_request_tokens(request.messages, self.config.context_image_tokens)
+        count = estimated_request_tokens(
+            chat_messages(request.canonical), self.config.context_image_tokens
+        )
         return context_status(self.config, count, "estimated_utf8_bytes_plus_image_allowance")
 
     def _wire_state(self, state):
@@ -142,10 +146,10 @@ class OpenAIDecisionsClient:
         for message in state["history"]:
             content = message.get("content")
             if message["role"] == "assistant":
-                text.append("Chosen action: " + content)
+                text.append(LUNA_ACTION_LABEL + content)
             elif isinstance(content, list) or content == FOLDED_VISUAL_PLACEHOLDER:
                 parts = content if isinstance(content, list) else [{"text": content}]
-                text.append("Observation: " + "".join(
+                text.append(LUNA_OBSERVATION_LABEL + "".join(
                     part.get("text") or "" for part in parts if part.get("type") != "image_url"
                 ))
                 images = [part for part in parts if part.get("type") == "image_url"]

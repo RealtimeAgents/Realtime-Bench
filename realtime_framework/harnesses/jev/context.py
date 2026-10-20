@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import json
 
+from realtime_framework.entity.context_policy import (
+    JEV_CURRENT_PREFIX,
+    JEV_HISTORY_PREFIX,
+    JEV_LEDGER_HEADER,
+)
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
+from realtime_framework.providers.legacy import chat_messages
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 
@@ -45,8 +51,7 @@ def compact_ledger_messages(messages) -> list[dict]:
             records = [json.loads(line) for line in content[len(prefix):].splitlines() if line]
             records = compact_repeated_records(records, ("decision", "observed_at_tick"))
             content = (
-                "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and "
-                "occurrences preserve every action; start/step/count expands exact indices):\n"
+                JEV_LEDGER_HEADER + "\n"
                 + "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True,
                                       separators=(",", ":")) for r in records)
             )
@@ -55,30 +60,40 @@ def compact_ledger_messages(messages) -> list[dict]:
     return result
 
 
-def observation_messages(system_instruction: str, turns) -> tuple[dict, ...]:
+def digest_messages(request) -> tuple[dict, ...]:
     """Action-digest state: the executed action/feedback ledger plus the current observation.
 
     Older screenshots, SoM and choices are not resent.
     """
-    messages = [{"role": "system", "content": system_instruction}]
-    if not turns:
-        return tuple(messages)
+    messages = []
     history = []
-    for turn in turns[:-1]:
-        if turn.output or turn.execution_feedback:
-            history.append({
-                "observation_id": turn.observation.observation_id,
-                "action": turn.output,
-                "execution_feedback": turn.execution_feedback or "",
-            })
-    if history:
-        messages.append({"role": "user", "content": "Recent action and feedback history: "
-                         + json.dumps(compact_repeated_records(history, ("observation_id",)),
-                                      ensure_ascii=False)})
-    latest = turns[-1]
-    # The harness omits live candidates and the composition vocabulary from the prompt; they
-    # are sent as native Choice criteria.
-    current = json.loads(latest.observation.prompt.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
-    messages.append({"role": "user", "content": "Current observation: "
-                     + json.dumps(current, ensure_ascii=False)})
+    for item in request.items:
+        block = item.block
+        if block.kind == "system_instruction":
+            messages.append({"role": "system", "content": block.text})
+        elif block.kind == "action_ledger":
+            messages.append(
+                {"role": "user", "content": ARCHIVED_ACTION_LEDGER_HEADER + "\n" + block.text}
+            )
+        elif block.kind == "model_output":
+            history.append({"observation_id": block.based_on, "action": block.text})
+        elif block.kind == "execution_feedback":
+            history[-1]["execution_feedback"] = block.text
+        elif block.kind == "frame":
+            if history:
+                compacted = compact_repeated_records(history, ("observation_id",))
+                messages.append({"role": "user", "content": JEV_HISTORY_PREFIX
+                                 + json.dumps(compacted, ensure_ascii=False)})
+            # The harness omits live candidates and the composition vocabulary from the prompt;
+            # they are sent as native Choice criteria.
+            current = json.loads(block.text.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
+            messages.append({"role": "user", "content": JEV_CURRENT_PREFIX
+                             + json.dumps(current, ensure_ascii=False)})
     return tuple(messages)
+
+
+def decision_messages(request) -> tuple[dict, ...]:
+    """The message list ChoiceDecision reads: canonical turns or the action digest."""
+    if request.history_form == "action_digest":
+        return digest_messages(request)
+    return chat_messages(request)

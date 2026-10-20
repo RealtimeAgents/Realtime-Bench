@@ -32,13 +32,9 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
-
-_QUEUED_TOOL_RESPONSE = {
-    "status": "queued_not_executed",
-    "instruction": (
-        "End this turn silently. Await the next observation for the actual execution result."
-    ),
-}
+from realtime_framework.entity.context_policy import GEMINI_QUEUED_TOOL_RESPONSE
+from realtime_framework.entity.context_policy import GEMINI_TOOL_HISTORY_HEADER
+from realtime_framework.providers.legacy import session_frame_text
 
 # Gemini 3 requires a thought signature when a manually reconstructed history contains a model
 # function-call part. Live tool-call messages do not expose the original signature because bidi
@@ -368,7 +364,11 @@ class GeminiLiveDriver:
             observation = turn.observation
             parts = [
                 self.types.Part(
-                    text=(FOLDED_VISUAL_PLACEHOLDER if turn.visual_folded else observation.prompt)
+                    text=(
+                        FOLDED_VISUAL_PLACEHOLDER
+                        if turn.visual_folded
+                        else session_frame_text(observation)
+                    )
                 )
             ]
             if not turn.visual_folded:
@@ -410,8 +410,8 @@ class GeminiLiveDriver:
                         role="model",
                         parts=[
                             self.types.Part(
-                                text="Historical GUI tool exchanges, already acknowledged "
-                                "(current actions must use native functions):\n"
+                                text=GEMINI_TOOL_HISTORY_HEADER
+                                + "\n"
                                 + json.dumps(native_exchanges, ensure_ascii=False),
                             )
                         ],
@@ -464,7 +464,7 @@ class GeminiLiveDriver:
                     stored_response = responses_by_id.get(call_id, {})
                     response = stored_response.get("response")
                     if not isinstance(response, dict):
-                        response = dict(_QUEUED_TOOL_RESPONSE)
+                        response = dict(GEMINI_QUEUED_TOOL_RESPONSE)
                     response_options = self._tool_response_options()
                     response_options.update(
                         {
@@ -548,7 +548,7 @@ class GeminiLiveDriver:
                                     function_response=self.types.FunctionResponse(
                                         id=call_id,
                                         name=name,
-                                        response=dict(_QUEUED_TOOL_RESPONSE),
+                                        response=dict(GEMINI_QUEUED_TOOL_RESPONSE),
                                         **self._tool_response_options(),
                                     )
                                 )
@@ -727,7 +727,7 @@ class GeminiLiveDriver:
                 turns=self.types.Content(
                     role="user",
                     parts=[
-                        self.types.Part(text=observation.prompt),
+                        self.types.Part(text=session_frame_text(observation)),
                         self.types.Part(
                             inline_data=self.types.Blob(
                                 data=observation.image_bytes,
@@ -754,7 +754,7 @@ class GeminiLiveDriver:
             self._last_video_sent_at = loop.time()
             # Let media ingestion catch up before the corresponding SoM text arrives.
             await asyncio.sleep(1.0)
-            await session.send_realtime_input(text=observation.prompt)
+            await session.send_realtime_input(text=session_frame_text(observation))
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.
             await session.send_realtime_input(
@@ -1159,7 +1159,7 @@ class GeminiLiveDriver:
                     self.types.FunctionResponse(
                         id=call.id,
                         name=call.name,
-                        response=dict(_QUEUED_TOOL_RESPONSE),
+                        response=dict(GEMINI_QUEUED_TOOL_RESPONSE),
                         **self._tool_response_options(),
                     )
                     for call in calls

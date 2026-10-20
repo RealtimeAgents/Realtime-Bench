@@ -1,5 +1,4 @@
 from __future__ import annotations
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 
 # Session
 """Model-session history helpers without token estimation or token-based eviction."""
@@ -8,8 +7,6 @@ import json as json
 import threading as threading
 
 from realtime_framework.harnesses.default.prompts import ACTION_RESULT_NOTES
-from realtime_framework.entity.config import effective_detailed_history_policy
-from realtime_framework.entity.config import effective_visual_fold_policy
 
 
 def _mark_oldest_active_visuals(turns: list[dict], count: int) -> int:
@@ -24,9 +21,8 @@ def _mark_oldest_active_visuals(turns: list[dict], count: int) -> int:
     return marked
 
 
-def apply_active_visual_budget(turns: list[dict]) -> int:
+def apply_active_visual_budget(turns: list[dict], budget: int, block_size: int) -> int:
     """Fold old screenshots in blocks without making any text-retention decision."""
-    budget, block_size = effective_visual_fold_policy()
     active = sum(not turn.get("visual_folded") for turn in turns)
     folded = 0
     while active > budget:
@@ -100,6 +96,7 @@ from collections.abc import Callable as Callable
 from collections.abc import Iterable as Iterable
 from dataclasses import replace as replace
 
+from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.model import CanonicalTurn
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.events import GenerationBoundary
@@ -116,7 +113,14 @@ from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import RuntimeTurnResult
 from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.request import CanonicalRequest
+from realtime_framework.entity.request import ContentBlock
+from realtime_framework.harnesses.default.request import ledger_block
+from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.sandbox.observation.som import without_observation_interactables
+
+# Builds the canonical request from the turns to send and the archived-action ledger block.
+RequestBuilder = Callable[[tuple[CanonicalTurn, ...], ContentBlock | None], CanonicalRequest]
 
 
 class RealtimeRuntime:
@@ -127,11 +131,12 @@ class RealtimeRuntime:
     driver follow the same generation state machine.
     """
 
-    def __init__(self, driver: RealtimeDriver):
+    def __init__(self, driver: RealtimeDriver, policy: PathPolicy):
         if not isinstance(driver, RealtimeDriver):
             raise TypeError("realtime driver does not implement the required protocol")
         self.driver = driver
         self.capabilities = driver.capabilities
+        self.policy = policy
         self._state = RuntimeState.NEW
         self._state_lock = threading.RLock()
         self._epoch = 0
@@ -140,6 +145,7 @@ class RealtimeRuntime:
         self._seed: SessionSeed | None = None
         self._turns: list[CanonicalTurn] = []
         self._archived_action_count = 0
+        self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
         self._buffer = CatchupBuffer()
         self._cleanup_future: concurrent.futures.Future | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -235,9 +241,13 @@ class RealtimeRuntime:
     def record_execution_feedback(self, feedback: str) -> None:
         if self._turns:
             self._turns[-1].execution_feedback = feedback
+            self._turns[-1].feedback_wall_ns = time.time_ns()
 
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
+
+    def ledger_block(self, ledger: str) -> ContentBlock | None:
+        return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
 
     def _record_archived_turns(self, turns: Iterable[CanonicalTurn]) -> int:
         indexes = [
@@ -246,6 +256,8 @@ class RealtimeRuntime:
         before = self._archived_action_count
         if indexes:
             self._archived_action_count = max(before, max(indexes) + 1)
+        if self._archived_action_count > before:
+            self._ledger_wall_ns = time.time_ns()
         return self._archived_action_count - before
 
     def _retained(
@@ -260,7 +272,7 @@ class RealtimeRuntime:
     ]:
         existing = list(turns)
         additions = list(incoming)
-        window, block_size = effective_detailed_history_policy()
+        window, block_size = self.policy.turns.keep, self.policy.turns.block
         archive_count = 0
         while len(existing) - archive_count + len(additions) > window:
             removable = len(existing) - archive_count
@@ -273,7 +285,7 @@ class RealtimeRuntime:
         candidates = existing + additions
         previously_folded = {id(turn): turn.visual_folded for turn in candidates}
         records = [turn.retention_record() for turn in candidates]
-        apply_active_visual_budget(records)
+        apply_active_visual_budget(records, self.policy.visuals.keep, self.policy.visuals.block)
         folded_visuals = 0
         for turn, record in zip(candidates, records):
             if record.get("visual_folded"):
@@ -385,13 +397,14 @@ class RealtimeRuntime:
         *,
         action_history: list[dict],
         epoch: int,
-        message_builder: Callable[[tuple[CanonicalTurn, ...]], tuple[dict, ...]] | None,
+        request_builder: RequestBuilder,
+        decision: int,
     ) -> RuntimeTurnResult:
         if len(observations) != 1:
             raise ValueError("each generation accepts exactly one observation")
         executed_action_ledger = self._action_ledger(action_history)
         await self._ensure_ready(executed_action_ledger)
-        incoming = [CanonicalTurn(observation=value) for value in observations]
+        incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
         retained, incoming, removed_turns, retention = self._retained(self._turns, incoming)
         self._turns[:] = retained
         executed_action_ledger = self._action_ledger(action_history)
@@ -429,49 +442,38 @@ class RealtimeRuntime:
         for turn, refs in zip(incoming, input_refs):
             turn.provider_refs.update(refs or {})
 
-        if message_builder is not None:
-            inspect_request = getattr(self.driver, "request_context_status", None)
-            compactions = 0
-            archived_count = 0
-            while True:
-                messages = list(message_builder(tuple(self._turns + incoming)))
-                executed_action_ledger = self._action_ledger(action_history)
-                if executed_action_ledger:
-                    messages.insert(
-                        1,
-                        {
-                            "role": "user",
-                            "content": ARCHIVED_ACTION_LEDGER_HEADER
-                            + "\n"
-                            + executed_action_ledger,
-                        },
-                    )
-                request = replace(request, messages=tuple(messages))
-                if not callable(inspect_request):
-                    break
-                status = dict(await inspect_request(request))
-                physical_metadata.setdefault("request_context_before", status)
-                physical_metadata.update(
-                    request_context=status,
-                    request_context_compactions=compactions,
-                    request_context_archived_turns=archived_count,
+        compactions = 0
+        archived_count = 0
+        while True:
+            executed_action_ledger = self._action_ledger(action_history)
+            canonical = request_builder(
+                tuple(self._turns + incoming), self.ledger_block(executed_action_ledger)
+            )
+            request = replace(request, canonical=canonical)
+            if not self.policy.pressure_archive:
+                break
+            status = dict(await self.driver.request_context_status(request))
+            physical_metadata.setdefault("request_context_before", status)
+            physical_metadata.update(
+                request_context=status,
+                request_context_compactions=compactions,
+                request_context_archived_turns=archived_count,
+            )
+            if not status.get("pressure"):
+                break
+            if self.capabilities.persistent_session:
+                raise RuntimeError(
+                    "Request exceeds physical context; driver must implement native context compaction"
                 )
-                if not status.get("pressure"):
-                    break
-                if self.capabilities.persistent_session:
-                    raise RuntimeError(
-                        "Request exceeds physical context; driver must implement native context compaction"
-                    )
-                if not self._turns:
-                    raise RuntimeError(
-                        "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
-                    )
-                _, block_size = effective_detailed_history_policy()
-                archived = self._turns[:block_size]
-                del self._turns[: len(archived)]
-                self._record_archived_turns(archived)
-                compactions += 1
-                archived_count += len(archived)
+            if not self._turns:
+                raise RuntimeError(
+                    "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
+                )
+            archived = self._turns[: self.policy.turns.block]
+            del self._turns[: len(archived)]
+            self._record_archived_turns(archived)
+            compactions += 1
+            archived_count += len(archived)
 
         self._set_state(RuntimeState.GENERATING)
         provider_call_started_monotonic_ns = time.monotonic_ns()
@@ -503,13 +505,13 @@ class RealtimeRuntime:
         provider_metadata.update(
             {
                 "history_som_retained_blocks": sum(
-                    without_observation_interactables(turn.observation.prompt)
-                    != turn.observation.prompt
+                    without_observation_interactables(session_frame_text(turn.observation))
+                    != session_frame_text(turn.observation)
                     for turn in self._turns
                 ),
                 "history_som_current_blocks": sum(
-                    without_observation_interactables(turn.observation.prompt)
-                    != turn.observation.prompt
+                    without_observation_interactables(session_frame_text(turn.observation))
+                    != session_frame_text(turn.observation)
                     for turn in incoming
                 ),
             }
@@ -540,8 +542,8 @@ class RealtimeRuntime:
         output = collector.finish()
         if not stale:
             incoming[-1].output = output.text
-            if output.reasoning_text and getattr(self.driver, "preserve_reasoning_history", False):
-                incoming[-1].provider_refs["reasoning_content"] = output.reasoning_text
+            incoming[-1].output_wall_ns = time.time_ns()
+            incoming[-1].output_reasoning = output.reasoning_text
             incoming[-1].action_history_index = len(action_history)
             incoming[-1].provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
             self._turns.extend(incoming)
@@ -590,7 +592,8 @@ class RealtimeRuntime:
         *,
         action_history: list[dict],
         timeout: float | None,
-        message_builder: Callable[[tuple[CanonicalTurn, ...]], tuple[dict, ...]] | None = None,
+        request_builder: RequestBuilder,
+        decision: int,
     ) -> RuntimeTurnResult:
         epoch = self.generation_epoch()
         try:
@@ -601,7 +604,8 @@ class RealtimeRuntime:
                     collector,
                     action_history=action_history,
                     epoch=epoch,
-                    message_builder=message_builder,
+                    request_builder=request_builder,
+                    decision=decision,
                 ),
                 timeout=timeout,
             )

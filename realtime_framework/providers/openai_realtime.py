@@ -31,6 +31,7 @@ from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
+from realtime_framework.providers.legacy import session_frame_text
 from realtime_framework.providers.litellm import iterate_blocking
 from realtime_framework.providers.litellm import object_dict
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
@@ -154,7 +155,7 @@ class OpenAIRealtimeDriver:
         content = [
             {
                 "type": "input_text",
-                "text": FOLDED_VISUAL_PLACEHOLDER if folded else observation.prompt,
+                "text": FOLDED_VISUAL_PLACEHOLDER if folded else session_frame_text(observation),
             }
         ]
         if not folded:
@@ -310,11 +311,14 @@ class OpenAIRealtimeDriver:
             turn.provider_refs["user_item_id"] = user_id
             turn.provider_refs["assistant_item_ids"] = [assistant_id] if assistant_id else []
             turn.provider_refs["provider_visual_folded"] = turn.visual_folded
-            turn.provider_refs["provider_observation_prompt"] = turn.observation.prompt
+            turn.provider_refs["provider_observation_prompt"] = session_frame_text(turn.observation)
 
     async def send_observation(self, observation: ProviderObservation) -> dict:
         item_id = await asyncio.to_thread(self._user_item, observation)
-        return {"user_item_id": item_id, "provider_observation_prompt": observation.prompt}
+        return {
+            "user_item_id": item_id,
+            "provider_observation_prompt": session_frame_text(observation),
+        }
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._conn is None:
@@ -582,7 +586,8 @@ class OpenAIRealtimeDriver:
                 user_id = str(turn.provider_refs["user_item_id"])
                 provider_folded = bool(turn.provider_refs.get("provider_visual_folded", False))
                 prompt_changed = (
-                    turn.provider_refs.get("provider_observation_prompt") != turn.observation.prompt
+                    turn.provider_refs.get("provider_observation_prompt")
+                    != session_frame_text(turn.observation)
                 )
                 if prompt_changed or (turn.visual_folded and not provider_folded):
                     delete_event_id = self._new_client_id("delete")
@@ -625,7 +630,7 @@ class OpenAIRealtimeDriver:
         for turn, replacement_id in observation_updates:
             turn.provider_refs["user_item_id"] = replacement_id
             turn.provider_refs["provider_visual_folded"] = turn.visual_folded
-            turn.provider_refs["provider_observation_prompt"] = turn.observation.prompt
+            turn.provider_refs["provider_observation_prompt"] = session_frame_text(turn.observation)
         return HistorySyncResult(
             SyncDisposition.EXACT,
             ProviderHistoryState.EXACT,

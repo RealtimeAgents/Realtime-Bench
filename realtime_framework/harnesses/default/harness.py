@@ -747,7 +747,6 @@ ACTION_CHANNEL_PROFILES = {
 # Default harness
 """The benchmark-facing harness for every registered model API, composed with its driver."""
 
-import base64 as base64
 import time as time
 import uuid as uuid
 from copy import deepcopy as deepcopy
@@ -776,13 +775,19 @@ def _retry_usage_status(usages):
     return "partial" if any(u is not None for u in usages) else "unavailable"
 from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollector
 from realtime_framework.harnesses.default.context import RealtimeRuntime
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.entity.context_policy import phase1_context_policy
+from realtime_framework.entity.request import AnswerRequirements
+from realtime_framework.entity.request import CallParameters
+from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
+from realtime_framework.harnesses.default.request import build_request
+from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import action_has_target_references
+from realtime_framework.entity.actions import gui_function_declarations
+from realtime_framework.providers.legacy import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 
 
@@ -935,7 +940,10 @@ class DefaultHarness(VisionAgentBase):
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config)
         self.interaction_profile = ACTION_CHANNEL_PROFILES[self.driver.capabilities.action_channel]
-        self._runtime = RealtimeRuntime(self.driver)
+        self._context_policy = phase1_context_policy().for_path(
+            self.config.adapter_type, self.config.provider_options
+        )
+        self._runtime = RealtimeRuntime(self.driver, self._context_policy)
 
     def _record_provider_usage(self, result, observation, tick):
         """Audit harness-visible generations, including providers with inline usage."""
@@ -980,6 +988,9 @@ class DefaultHarness(VisionAgentBase):
             )
         self._pending_feedback = ""
         fixed = self.interaction_profile.system_instruction(self)
+        # Its inputs are set before initialize() and never change during the episode.
+        self._system_block = system_block(fixed)
+        self._answer = self._answer_requirements()
         self._runtime.start(
             SessionSeed(
                 system_instruction=fixed,
@@ -1008,9 +1019,9 @@ class DefaultHarness(VisionAgentBase):
         try:
             for index, observation in enumerate(observations):
                 prompt = self.interaction_profile.frame_prompt
-                if index == 0 and feedback and self.driver.capabilities.persistent_session:
-                    prompt = feedback + "\n" + prompt
                 prepared, execution = bind_observation(self, observation, prompt, tick)
+                if index == 0 and feedback and self._context_policy.feedback == "frame_prefix":
+                    prepared.feedback_prefix = feedback
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
@@ -1026,69 +1037,25 @@ class DefaultHarness(VisionAgentBase):
             raise
         return prepared_values, inspections
 
-    def _messages(self, turns) -> tuple[dict, ...]:
-        messages = [
-            {
-                "role": "system",
-                "content": self.interaction_profile.system_instruction(self),
-            }
-        ]
-        for turn in turns:
-            observation = turn.observation
-            if turn.visual_folded:
-                messages.append({"role": "user", "content": FOLDED_VISUAL_PLACEHOLDER})
-            else:
-                encoded = base64.b64encode(observation.image_bytes).decode("ascii")
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": observation.prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{observation.mime_type};base64,{encoded}",
-                                    "detail": observation.image_detail,
-                                },
-                            },
-                        ],
-                    }
-                )
-            reasoning = (
-                turn.provider_refs.get("reasoning_content")
-                if getattr(self.driver, "preserve_reasoning_history", False)
-                else None
-            )
-            if turn.provider_refs.get("assistant_message") is not None:
-                messages.append(deepcopy(turn.provider_refs["assistant_message"]))
-            elif turn.output or reasoning:
-                assistant_message = {"role": "assistant", "content": turn.output}
-                if reasoning:
-                    assistant_message["reasoning_content"] = reasoning
-                messages.append(assistant_message)
-            # Stateless transports rebuild from this canonical sequence on every request. Attach
-            # each action's actual execution result at its causal position, rather than appending a
-            # growing duplicate ledger after the newest observation. Older turns form a stable
-            # prefix after their SoM text is retired, until a block fold/archive changes it.
-            if not self.driver.capabilities.persistent_session and turn.execution_feedback:
-                messages.append({"role": "user", "content": turn.execution_feedback})
-        return tuple(messages)
-
-    def _messages_for_audit(self, turns) -> tuple[dict, ...]:
-        messages = list(self._messages(turns))
-        ledger = executed_action_ledger(
-            self.action_history,
-            limit=self._runtime.archived_action_count,
+    def _answer_requirements(self) -> AnswerRequirements:
+        channel = self.driver.capabilities.action_channel
+        return AnswerRequirements(
+            action_channel=channel,
+            format_profile=self.interaction_profile.name,
+            function_declarations=(
+                tuple(gui_function_declarations()) if channel == "function_call" else ()
+            ),
         )
-        if ledger:
-            messages.insert(
-                1,
-                {
-                    "role": "user",
-                    "content": ARCHIVED_ACTION_LEDGER_HEADER + "\n" + ledger,
-                },
-            )
-        return tuple(messages)
+
+    def _build_request(self, turns, ledger, call) -> CanonicalRequest:
+        return build_request(
+            self._context_policy, self._system_block, turns, ledger, self._answer, call
+        )
+
+    @staticmethod
+    def _request_messages(request) -> tuple[dict, ...]:
+        """The message list the trajectory summarizes for this harness."""
+        return chat_messages(request)
 
     def _invalid_observation_result(self, proof, latency=0.0):
         protocol = {
@@ -1205,6 +1172,11 @@ class DefaultHarness(VisionAgentBase):
             clock_mode=getattr(self, "_clock_mode", "token"),
             timeout_s=None,
         )
+        call = CallParameters(
+            model=self.config.model_name,
+            reasoning_effort=self.config.reasoning_effort,
+            output_token_cap=provider_cap,
+        )
 
         def run_once(active_collector):
             return self._runtime.run_turn(
@@ -1213,7 +1185,8 @@ class DefaultHarness(VisionAgentBase):
                 active_collector,
                 action_history=self.action_history,
                 timeout=None,
-                message_builder=self._messages,
+                request_builder=lambda turns, ledger: self._build_request(turns, ledger, call),
+                decision=tick,
             )
 
         collector_type = (
@@ -1456,6 +1429,14 @@ class DefaultHarness(VisionAgentBase):
             if provider_ttft_s is not None
             else None
         )
+        # The retained history after this decision, rendered as a request would carry it.
+        audit_ledger = executed_action_ledger(
+            self.action_history,
+            limit=self._runtime.archived_action_count,
+        )
+        audit_request = self._build_request(
+            self._runtime.turns, self._runtime.ledger_block(audit_ledger), call
+        )
         log_entry = {
             "type": "decision_discarded" if runtime_result.stale else "decision",
             "tick": tick,
@@ -1479,7 +1460,7 @@ class DefaultHarness(VisionAgentBase):
             "action_protocol": action_protocol,
             "inspection": newest_proof,
             "input_prompt": self._prompt_text_summary(
-                list(self._messages_for_audit(self._runtime.turns))
+                list(self._request_messages(audit_request))
             ),
             "usage": output.usage,
             "realtime_runtime": runtime_metadata,

@@ -24,6 +24,7 @@ from realtime_framework.entity.model import (
     TransportFailureError,
     exception_chain,
 )
+from realtime_framework.harnesses.jev.context import decision_messages
 from realtime_framework.harnesses.jev.selection import SELECTION_POLICY, ChoiceDecision
 
 
@@ -63,7 +64,8 @@ class ChoiceDecisionDriver:
             raise ValueError("Choice Decisions supports wall clock only")
         if self.observation is None:
             raise RuntimeError("Choice Decisions requires a current observation")
-        metadata = await ChoiceDecision(self.client, self.observation, request.messages).run()
+        messages = decision_messages(request.canonical)
+        metadata = await ChoiceDecision(self.client, self.observation, messages).run()
         return GenerationHandle(request.generation_id, metadata=metadata)
 
     async def events(self, generation):
