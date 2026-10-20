@@ -120,9 +120,22 @@ class ContextPolicy:
     paths: Mapping[str, PathPolicy]  # one per registered API
 
     def for_path(self, adapter_type: str, provider_options: Mapping) -> PathPolicy:
-        """Resolve one API's policy for a model config, before any driver exists; an external
-        driver gets EXTERNAL_DRIVER_ROW."""
-        path = self.paths[adapter_type if adapter_type in self.paths else EXTERNAL_DRIVER_ROW]
+        """Resolve one API's policy for a model config, before any driver exists.
+
+        A registered API has its own row; an external driver gets EXTERNAL_DRIVER_ROW. Registered
+        names contain no colon and external ones are "package.module:Class"
+        (providers/registry.py), so a name with no row and no colon is a registered API whose row
+        is missing.
+        """
+        if adapter_type in self.paths:
+            path = self.paths[adapter_type]
+        elif ":" in adapter_type:
+            path = self.paths[EXTERNAL_DRIVER_ROW]
+        else:
+            raise ValueError(
+                f"API {adapter_type!r} has no context-policy row; add one in "
+                "phase1_context_policy() (realtime_framework/entity/context_policy.py)"
+            )
         if path.tool_call_replay is None:
             return path
         # Gemini Live takes the format from its maintained model preset (gemini/live.py
