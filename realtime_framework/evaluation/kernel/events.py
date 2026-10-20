@@ -187,8 +187,11 @@ class OutcomeCommitted:
 
 @dataclass(frozen=True)
 class SnapshotFrozen:
-    """The scorer's snapshot was taken, at the time the kernel handles this event."""
+    """The scorer's snapshot was taken; the shell's clocks read ``at`` and ``ops_at`` when the
+    read returned. The shell may run other commands before the kernel handles this event."""
 
+    at: float
+    ops_at: float
     error: str | None = None
 
     @property

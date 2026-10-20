@@ -214,7 +214,7 @@ class Kernel:
             if event.error:
                 self.invalidate("environment", "evaluation_snapshot_failed", event.error)
             else:
-                self._snapshot = (self.semantic, self.ops)
+                self._snapshot = (event.at, event.ops_at)
         elif not isinstance(event, AgentRecord):
             self.policy.on_event(event)
 
