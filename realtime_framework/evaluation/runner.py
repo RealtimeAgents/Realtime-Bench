@@ -174,7 +174,7 @@ def run_stream(
                     {
                         "category": "harness",
                         "reason": "episode_trace_write_failed",
-                        "detail": failure[:2000],
+                        "detail": failure[-2000:],
                     },
                 )
             log(f"[invalid-run] harness:episode_trace_write_failed — {failure}")
@@ -198,7 +198,8 @@ def run_stream(
         if getattr(env, "_invalid_run", None) is None:
             value = {"category": category, "reason": reason}
             if detail:
-                value["detail"] = str(detail)[:2000]
+                # The end of a traceback names the exception.
+                value["detail"] = str(detail)[-2000:]
             setattr(env, "_invalid_run", value)
             log(f"[invalid-run] {category}:{reason}" + (f" — {detail}" if detail else ""))
             _emit(TraceEvent.RUN_INVALIDATED, value)
@@ -1252,6 +1253,8 @@ def run_stream(
     except Exception:
         failure = traceback.format_exc()
         log(f"[default] decision loop raised:\n{failure}")
+        # The whole traceback, for the summary's error; the invalid-run detail keeps its end.
+        setattr(env, "_loop_error", failure)
         _invalidate("runner", "run_exception", failure)
     _finalize()
     return timeline
@@ -1806,6 +1809,7 @@ def main():
                 tokens_per_frame=tokens_per_frame,
                 trace=episode_trace,
             )
+            error = getattr(env, "_loop_error", None)
         finally:
             # The agent's run window is recorded even when the loop ends in an error.
             # Physical diagnostic only; the token-clock horizon is simulated and does not bound wall time.

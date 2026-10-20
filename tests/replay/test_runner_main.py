@@ -194,3 +194,45 @@ def test_main_reports_the_termination_the_loop_latched(tmp_path, reason, solved,
     assert summary["normalized_time_to_success"] == (
         round(END_S / HORIZON_S, 9) if solved else None
     )
+
+
+# Two functions in turn: a traceback folds a run of identical frames into one line.
+def _raise_deep(depth):
+    if depth == 0:
+        raise RuntimeError("budget rejected")
+    return _raise_deeper(depth - 1)
+
+
+def _raise_deeper(depth):
+    return _raise_deep(depth)
+
+
+class FailingAgent(FakeAgent):
+    """Binding its budget raises from deep in a call stack, as an SDK's can: the traceback runs
+    far past the invalid-run detail's 2000 characters and names the exception last."""
+
+    def configure_decision(self, budget):
+        _raise_deep(40)
+
+
+def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path):
+    """The first decision raises after the loop's first end check: the run is invalid, its detail
+    ends with the exception and the summary's error holds the whole traceback."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "deadline_expired", False)
+    summary = run_main(tmp_path, task, FailingAgent(clock), clock, guest)
+
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
+    error = summary["error"]
+    assert error.startswith("Traceback (most recent call last):") and len(error) > 2000
+    assert error.rstrip().endswith("RuntimeError: budget rejected")
+    assert invalid["detail"] == error[-2000:]
+    assert summary["outcome"] == "error"
+    assert summary["termination"] == {
+        "stop_reason": "invalid_run",
+        "end_s": QUERY_S,
+        "snapshot_s": QUERY_S + SNAPSHOT_S,
+        "snapshot_delay_s": SNAPSHOT_S,
+    }
