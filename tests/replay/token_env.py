@@ -30,13 +30,23 @@ class _Guest:
 
 
 class TokenEnvironment(GuestEnvironment):
-    """``task`` is the task the agent was set up with; ``max_minutes`` sets the horizon."""
+    """``task`` is the task the agent was set up with; ``max_minutes`` sets the horizon.
+    ``stop_check()`` stands for the task's episode_over, which main() passes (runner.py:1767)."""
 
-    def __init__(self, frames: FrameSource, task: ClockTask, *, max_minutes: float):
+    def __init__(
+        self, frames: FrameSource, task: ClockTask, *, max_minutes: float, stop_check=None
+    ):
         self.calls: list[dict] = []
         self.decision = -1  # run_stream captures once per decision (runner.py:846)
         self.finalizing = False
-        super().__init__(_Guest(self), None, task, scene_capture=frames, clock_mode="token")
+        super().__init__(
+            _Guest(self),
+            None,
+            task,
+            stop_check=stop_check,
+            scene_capture=frames,
+            clock_mode="token",
+        )
         self.fps = task.clock_snapshot()["fps"]
         self.max_minutes = max_minutes
         # run_stream's own time.time() reads (loop.py); token time never moves it.
