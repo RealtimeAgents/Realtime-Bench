@@ -544,9 +544,10 @@ class RequestRetry:
         return delay
 
 
+# Says only what the fold removed: whether this step's reply and feedback are still there differs
+# by path and by step.
 FOLDED_VISUAL_PLACEHOLDER = (
-    "[Earlier screenshot and its interactables were folded from active visual context. "
-    "The corresponding assistant reasoning and action remain in the conversation.]"
+    "[Earlier screenshot and its interactables were folded from active visual context.]"
 )
 
 ARCHIVED_ACTION_LEDGER_HEADER = (

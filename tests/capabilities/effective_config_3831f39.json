@@ -143,7 +143,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -162,7 +162,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -236,7 +236,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d0999c9f7d6c08be04ba2f959640568bf11ebca5bf4b633c444108ab6b03fad2"
+    "hash": "d915b1c159a985c73ebe27d978ea055bbc3d40540455b09203dacc495c8fa2c7"
    },
    "token/None": {
     "config": {
@@ -265,7 +265,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -284,7 +284,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -358,7 +358,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a08ed8dda23c2f837ff137952297ee39f79c40d110ec1af8d60f2dbd6e4fd0ba"
+    "hash": "8c56d9b86a8c66de7157fd680923fdb47adcf050bfcdbb6e5ff4060dce426cea"
    },
    "wall/None": {
     "config": {
@@ -387,7 +387,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -406,7 +406,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -480,7 +480,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e91bffbf890df016730e13c16280689f3f4e24ea255830ed9182af36d5da9f8a"
+    "hash": "b4659f755b180edffca66a49b8f12820c9ebaa6632ef2aa3892ec3ec8673c3a2"
    }
   },
   "vendor": "anthropic"
@@ -581,7 +581,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -600,7 +600,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -674,7 +674,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a536fe320cedfc5598b0d521479c41b9df531aa3062424a302d2b20ab953be17"
+    "hash": "ecf2144452b0124beecec0ecb8dbe49c2dc5dea4654aa4a5c8157268399136c8"
    },
    "token/None": {
     "config": {
@@ -703,7 +703,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -722,7 +722,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -796,7 +796,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "89fa3f48ee960a0e6342426e52664eed8ae178a356a19725ab2ae52c4fcb1d33"
+    "hash": "82e5faf54b0f35f828fbdf21dc8e1240de25d4717ad9611510daeffbaba296dd"
    },
    "wall/None": {
     "config": {
@@ -825,7 +825,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -844,7 +844,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -918,7 +918,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f326312fd889fa4fa603682aaf0fedd441fd615aef4bf37c693d4915f0d80126"
+    "hash": "b1331dfb2b88661a50706ca4a68c07907ed0d56927d05da5a1744a5ed5f455bf"
    }
   },
   "vendor": "anthropic"
@@ -1018,7 +1018,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1037,7 +1037,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1111,7 +1111,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0ce99051baf262b1cfab3af74402215cc832eee6bb7469926361c8695e9d0d44"
+    "hash": "cf7b55cff9b10a13b65b7c1f10d71af815a0e9688227834e2a5a5c3f394e33b6"
    },
    "token/None": {
     "config": {
@@ -1140,7 +1140,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1159,7 +1159,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1233,7 +1233,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "41fc3e8d5eab92b4b14fea9e993e166a00c3ddc5dab9af64c041c2ac94e184a9"
+    "hash": "0d4394a371046464f4fe91c49686200359d77ee85bc8d105bf9db623b6441471"
    },
    "wall/None": {
     "config": {
@@ -1262,7 +1262,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1281,7 +1281,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1355,7 +1355,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4fdf90a9047755a2a429c35146b119ae70cfdbe1976b79a6c4b23018744bb127"
+    "hash": "714259eac66bb0d91a893243fc3a3a74e029be7cd53eeeef4246ec80292ac7b8"
    }
   },
   "vendor": "anthropic"
@@ -1456,7 +1456,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1475,7 +1475,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1549,7 +1549,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3857f56c3259545bdabdb0bd1cd0156a03445adf8a13ba9ac503dce66c018681"
+    "hash": "e944a183fa884a261c964f055c572695a9a06ecdaedc9f958bcb78a158bef9a7"
    },
    "token/None": {
     "config": {
@@ -1578,7 +1578,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1597,7 +1597,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1671,7 +1671,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "af85cf7c9a16440fdec995c8f34cf922c260821636ce57a6c2cabe0bed1b38de"
+    "hash": "8e6c72c8efab979fa24b2d4a831f67374d9b9a1d46f92c2b6cded3ab972da4f7"
    },
    "wall/None": {
     "config": {
@@ -1700,7 +1700,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1719,7 +1719,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1793,7 +1793,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "411248dfa9c3f19e9d3be69aa30ff84dbad88529bc60669defb5b67027c3e421"
+    "hash": "a67924cc4f55169e762609a2f64e50ea1d84cf9890e1b886824b14b1636cd497"
    }
   },
   "vendor": "deepseek"
@@ -1894,7 +1894,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -1913,7 +1913,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -1987,7 +1987,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "750c943a97d3fe8ef7d18338ba9a002d66f38b86a1a7a9de5eddc9b034bdab32"
+    "hash": "ee75a8d25a3770f004db02512922c0d335f26cc62d77075fe13209f07716a1ac"
    },
    "token/None": {
     "config": {
@@ -2016,7 +2016,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2035,7 +2035,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2109,7 +2109,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1510416d7718f58b65a6cf7b211de694d07095f974b60e341097a48196414246"
+    "hash": "9c4768d5b1b97234f52611c5d89494052cc2a9ea0d438a49645c26befde70876"
    },
    "wall/None": {
     "config": {
@@ -2138,7 +2138,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2157,7 +2157,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2231,7 +2231,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3490af0191621ff39de04905ca1e244cdacd96932925ac0e285f6d2c9b0b962a"
+    "hash": "58246dda53513b509e14fb33b9f388c4961affdbe5737f9f1e13ae782ffac4e5"
    }
   },
   "vendor": "google"
@@ -2344,7 +2344,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2363,7 +2363,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2434,7 +2434,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "92894c8d23a4bdea2be28e2959b4a39bced169a2d903e84c833e6743058719b4"
+    "hash": "79fa30cd37650cd8f6708daeffcb093a677b16a5b66b2a9cd226a853fa67a06c"
    },
    "token/None": {
     "config": {
@@ -2463,7 +2463,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2482,7 +2482,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2553,7 +2553,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f6ad7c8c2d50aff360a58abd0cbe47475e58ab0bac2376b1b86a679a72e75de3"
+    "hash": "36ae4f4e678dc45a9a34baf903e893a4d2b6f5379bf3d7cb9416d56225632b92"
    },
    "wall/None": {
     "config": {
@@ -2582,7 +2582,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2601,7 +2601,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2672,7 +2672,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e22a9eda5dc765d6a38c71c7f49f0b6af0e206a0efa43341d512fcfd9b2bec92"
+    "hash": "9b78c7c0d3ac707cbe540462776e7547ebd0b8776d52c277a6f8694b3e376f67"
    }
   },
   "vendor": "google"
@@ -2785,7 +2785,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2804,7 +2804,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2875,7 +2875,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5ccac81a69dd3f9c743b059097331fb766f185dccca9a36b3eb6e9613f2141ca"
+    "hash": "52e64f2cc731705077e7076b28c3f4f60fb7d0cb4760e6f095c3b2413196e751"
    },
    "token/None": {
     "config": {
@@ -2904,7 +2904,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -2923,7 +2923,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -2994,7 +2994,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8ff0cf470a549701da42b8c06412a90e5a906b561e0496c78b223a21e89aa02a"
+    "hash": "ca2b9e3ae0b6570f961c9d021a07d28f4259c9c9e02fb4cfa3bc1bed599566bc"
    },
    "wall/None": {
     "config": {
@@ -3023,7 +3023,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3042,7 +3042,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3113,7 +3113,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f9eb46bb86a820b6e04e8f91de576d27930195737c093d6bca1a2708fd8ee701"
+    "hash": "8e72392bca9e516a6c80ac534825f7587d3e29c8c8261e1f86008f385725f4e9"
    }
   },
   "vendor": "google"
@@ -3226,7 +3226,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3245,7 +3245,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3316,7 +3316,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9cc5da48d949d361aa4177a8f2a955b40b348ea150e61e7d884e55c1c4a1f541"
+    "hash": "5ef5ec3bc6a367b2aec66ebbae57bc5fc1908231bd79eba259eb859ea1cc56db"
    },
    "token/None": {
     "config": {
@@ -3345,7 +3345,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3364,7 +3364,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3435,7 +3435,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cc677e73d4804f9f455a952ba2b82f3d7dd519ebfb55a7b9163a1b1a78fe589b"
+    "hash": "b954023f3a3298221f5c156dc425bccd326b091acb510379ff8124282526de44"
    },
    "wall/None": {
     "config": {
@@ -3464,7 +3464,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3483,7 +3483,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3554,7 +3554,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a00ee03d33bccf821a8f71312e529491da430f7556d70bbb21c2c6f2933476c6"
+    "hash": "4f8ba551f3cfba6ede7478b1b1cef5ff25fb7d5c64e035bcd81a104eaf103a65"
    }
   },
   "vendor": "google"
@@ -3655,7 +3655,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3674,7 +3674,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3748,7 +3748,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3ce1c3ce8b998fbae5e354ebf99ccf317ecb265717ea2bab8a01bab1e4b45dac"
+    "hash": "f5e97a134f4a00dcdd2be86536ba0df7fb7765fe29a3df2dce4e4ec4ef12edaf"
    },
    "token/None": {
     "config": {
@@ -3777,7 +3777,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3796,7 +3796,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3870,7 +3870,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7ef4788ab062da11f6bdc922c817628420fd7a29895767c3d3d2876f01efa7ac"
+    "hash": "d350eb7daf5d58a0e6cb56cb2b2d934104a696296c7313261b9bca9b6ddf1c57"
    },
    "wall/None": {
     "config": {
@@ -3899,7 +3899,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -3918,7 +3918,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -3992,7 +3992,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e14d4856e1e12c9bd14e3ce7cce25d38509b48e92b7999cc68344ec69777e758"
+    "hash": "7993402eb29fddcc6ed04a33a37c279980b06bb931e3672c6a68349ccc09f510"
    }
   },
   "vendor": "openai"
@@ -4093,7 +4093,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4112,7 +4112,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4186,7 +4186,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1f7a3792afdabbe45e1f9cf88d758745721253a70c6b1b5d1c5ec114865bb5cb"
+    "hash": "ef6576ecfce950b95bd03dc86142d0e1e58a7c78ae8610f37bd56cbbf6bde488"
    },
    "token/None": {
     "config": {
@@ -4215,7 +4215,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4234,7 +4234,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4308,7 +4308,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bf6e99f207de9f7fcee473e3a20f041b1c3434214f108a272cd7d5f06672a8f5"
+    "hash": "e98e2fa1a4aab98b96ef87496ef6959e9ec1928d3572be5fe7f59bc8961af07f"
    },
    "wall/None": {
     "config": {
@@ -4337,7 +4337,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4356,7 +4356,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4430,7 +4430,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c083cf2e3547a55f733ed41c7dfd729dbf040bb02e47ed55706508a49da5ad2b"
+    "hash": "40f923109ecfa1be418d7a520566cff15855c24052c35253c5b573d98dffd97d"
    }
   },
   "vendor": "openai"
@@ -4533,7 +4533,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4552,7 +4552,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4617,7 +4617,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "45123b4d2db64b3c1a8244fbd3604f74ed5edccaa0075b6ea7174acb9e1a13cd"
+    "hash": "329c39f0a8d0e84d6ce5f8681e6f60aeeec39e0dc1e9ae094db607be7b96cc4b"
    }
   },
   "vendor": "openai"
@@ -4717,7 +4717,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4736,7 +4736,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4801,7 +4801,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e228b1d7997d5ac88f8d145027ff190226c3a477414dc24eb8b99fbd2ffc3879"
+    "hash": "0f257cbdbc617ae5968150ab6a36ec37a547b722c25fe8327a6f66edef422999"
    },
    "token/None": {
     "config": {
@@ -4830,7 +4830,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4849,7 +4849,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -4914,7 +4914,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "25eb7ff993a905d070eef3673c5b26fadfa13f769128c5064b0c0cdd282424a3"
+    "hash": "e54365ef235967454f44fb57858d8b5d420c0cbd50250a92acd2915c5fd5b47c"
    },
    "wall/None": {
     "config": {
@@ -4943,7 +4943,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -4962,7 +4962,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5027,7 +5027,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ae1fe5fe02a180de4232ab796e96eb3eeff0274ad3fd8868c70f428ba38c290b"
+    "hash": "ea9224f565bd4b694899f5b1b8e0cd9362f9bc07b7d94f41b6cded4fb206af0c"
    }
   },
   "vendor": "openai"
@@ -5127,7 +5127,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -5146,7 +5146,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5211,7 +5211,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "aeb2280b96272d204b7bafd9cf63695e13d54b1debc9bc70f5782cd138925784"
+    "hash": "b76c7e2d0e082055706202fa817f38749ba1537c0233eda5d1b87ad60ddf4625"
    }
   },
   "vendor": "typesafe"
@@ -5311,7 +5311,7 @@
       },
       "reasoning_replay": true,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -5330,7 +5330,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5404,7 +5404,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8dc6cd8a43700c1e15b7ce24af5ddd3b72b01001c2e204e4c5cb92b7ec0191ee"
+    "hash": "28af057b6d344673d443ac7105eca40187db01e874cfc8eed293e2ac18115b4c"
    },
    "token/None": {
     "config": {
@@ -5433,7 +5433,7 @@
       },
       "reasoning_replay": true,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -5452,7 +5452,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5526,7 +5526,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ba6f1b883685a81c989668f718dfc849d96b209f50c3b3e719d77f670379460d"
+    "hash": "d7ae21b0b1ebb302ebba0f6d668c1437d7cb7e42f72d2fcd736d2ff87817c4a5"
    },
    "wall/None": {
     "config": {
@@ -5555,7 +5555,7 @@
       },
       "reasoning_replay": true,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -5574,7 +5574,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5648,7 +5648,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "dc9b636b64ba8630df31e4e0c5ec92a116c2f8ad6f3fbf081f99d14e4a90a4b2"
+    "hash": "c0822db12967bbd63dc375e533946cb7e65dca6c3b1d01b88c3f8a6817d9052e"
    }
   },
   "vendor": "moonshot"
@@ -5759,7 +5759,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -5778,7 +5778,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -5852,7 +5852,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ab9fa99dfc1ad1e2f5798b51a8481b9f42cce3d25fc374083139547402a658d0"
+    "hash": "cdcdd93340c0a38aa78ff0f25611c9d33345abb022561f08dd7ded7efe083ab0"
    }
   },
   "vendor": "litellm"
@@ -5966,7 +5966,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -5985,7 +5985,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -6059,7 +6059,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a5c96a1b75826379662f0658145a4a89d883af71562e363f38b7ed09ca9687b0"
+    "hash": "3f0b08f73c8a34ecab2f90f92eae5f6ff5a550b22db9901af3940ff308c98468"
    }
   },
   "vendor": "compatible"
@@ -6170,7 +6170,7 @@
       },
       "reasoning_replay": false,
       "texts": {
-       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context. The corresponding assistant reasoning and action remain in the conversation.]",
+       "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
         "instruction": "End this turn silently. Await the next observation for the actual execution result.",
         "status": "queued_not_executed"
@@ -6189,7 +6189,7 @@
        "keep": 50
       },
       "verbatim_replay": false,
-      "version": 3,
+      "version": 4,
       "visuals": {
        "block": 10,
        "keep": 20
@@ -6263,7 +6263,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5489831f7800662f7eb3401f17dd005889aabcd592a87d78dad0be329616a057"
+    "hash": "318b7318eb237690d50b130e82a1a84dd7527b15d144442a8ff2a9a887602dcb"
    }
   },
   "vendor": "compatible"
