@@ -30,7 +30,9 @@ from realtime_framework.entity.records import _jsonable
 
 # 2: generic LiteLLM rebuilds its replies from the model output and replays no reasoning; Kimi
 #    K3 keeps its reasoning through its preset.
-CONTEXT_POLICY_VERSION = 2
+# 3: the action ledger is an input wherever there are roles; OpenAI Realtime sent it as an
+#    instruction (a system item), and Decisions state places it by position and header.
+CONTEXT_POLICY_VERSION = 3
 
 # Fixed model-visible texts the encoders write (item 5).
 JEV_LEDGER_HEADER = (
@@ -102,7 +104,9 @@ class PathPolicy:
     visuals: Retention  # 1 screenshot retention
     turns: Retention  # 2 turn retention; archived actions form the ledger
     feedback: Literal["separate_message", "frame_prefix", "digest"]  # 3 execution feedback
-    ledger_role: Literal["instruction", "input", "none"]  # 4 role of the archived-action ledger
+    # 4 role of the archived-action ledger; an encoder without roles places it by position and
+    # header (RealtimeCapabilities.labels_instead_of_roles)
+    ledger_role: Literal["instruction", "input"]
     texts: FixedTexts  # 5 placeholder and fixed texts
     reasoning_replay: bool  # 6 send past reasoning back
     # 7 send the provider's own assistant message back; off: the reply is rebuilt from the model
@@ -201,7 +205,7 @@ def current_context_policy() -> ContextPolicy:
         path("openrouter"),
         path("anthropic_messages"),
         path("moonshot", "kimi_k3"),
-        path("openai_realtime", feedback="frame_prefix", ledger_role="instruction"),
+        path("openai_realtime", feedback="frame_prefix"),
         path(
             "gemini_live",
             feedback="frame_prefix",
@@ -210,7 +214,6 @@ def current_context_policy() -> ContextPolicy:
         ),
         path(
             "openai_decisions",
-            ledger_role="none",
             pressure_archive=True,
             decision_history=DecisionHistory("turns", "raise"),
             prompts={
