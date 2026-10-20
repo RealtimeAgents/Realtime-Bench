@@ -117,6 +117,19 @@ FUNCTION_CALL_FRAME_PROMPT = (
     "calling its function. Do not speak."
 )
 
+# Streaming only: each action names the frame it is based on.
+FRAME_REFERENCE_RULES = """FRAME REFERENCE
+Screenshots arrive continuously; each shows its number in a FRAME label in its top-left corner.
+Every action must name the screenshot it is based on in "frame", for example
+{"action": "click", "target": "P1", "frame": 12}. Its P/R marks and coordinates are read from that
+screenshot, even after newer ones arrive. An action without the number of a screenshot you
+received is not executed."""
+FUNCTION_CALL_FRAME_REFERENCE_RULES = """FRAME REFERENCE
+Screenshots arrive continuously; each shows its number in a FRAME label in its top-left corner.
+Every GUI function call must pass the number of the screenshot it is based on as its frame
+argument. Its P/R marks and coordinates are read from that screenshot, even after newer ones
+arrive. A call without the number of a screenshot you received is not executed."""
+
 GAME_ROLE = """You are playing a live browser game. Use only the visible game controls and keep acting
 toward the TASK goal. Do not open a terminal, editor, source code, developer tools, or test harness,
 do not reload the page, and do not modify the game. Prefer hold_key with a short duration
@@ -138,7 +151,11 @@ REALTIME_WEB_SYSTEM_PROMPT = _scenario_prompt(REALTIME_WEB_ROLE, STREAM_OUTPUT_C
 
 
 def gui_system_prompt(
-    task_instruction: str, *, scenario_prompt: str | None = None, clock_prompt: str | None = None
+    task_instruction: str,
+    *,
+    scenario_prompt: str | None = None,
+    clock_prompt: str | None = None,
+    frame_reference_rules: str | None = None,
 ) -> str:
     """Compose identical episode instructions for screenshot VLM and streaming models."""
     return "\n\n".join(
@@ -146,6 +163,7 @@ def gui_system_prompt(
             None,
             (
                 scenario_prompt or REALTIME_WEB_SYSTEM_PROMPT,
+                frame_reference_rules,
                 clock_prompt,
                 f"TASK:\n{task_instruction}",
             ),
