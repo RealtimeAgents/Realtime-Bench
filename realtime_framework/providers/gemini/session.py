@@ -9,22 +9,31 @@ resumes or rebuilds, which tool calls to acknowledge, which connection and gener
 message belongs to and whether that generation's output ends with it. Nothing in it awaits, so
 each call is one transition, in the order of the session.
 
-Each connection keeps what the client delivered on it, by key: ``("setup",)``, ``("block", <history
-block id>)`` and ``("tool_response", <call id>)``. A write is unknown from its start until it
-returns, then sent; the setup is the only message the server acknowledges (setupComplete).
+The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
+<history block id>)`` and ``("tool_response", <call id>)``, each sent once handed to the
+connection, confirmed when the server acknowledges it (only the setup is: setupComplete) and
+unknown when its send failed. A resumed session also holds what the server restored from the
+handle, which this record does not list. Nothing reads it yet; the phase-2 split of the EXACT
+session state puts it in the event log.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from realtime_framework.entity.request import CanonicalRequest, FrameImage
 
-SENT = "sent"
-ACKNOWLEDGED = "acknowledged"
-UNKNOWN = "unknown"
+
+class Delivery(str, Enum):
+    """What is known about one write, as for OpenAI Realtime (openai_realtime_session.py)."""
+
+    SENT = "sent"
+    CONFIRMED = "confirmed"
+    UNKNOWN = "unknown"  # the send failed, so the server may or may not have it
+
 
 # Keep initial-history WebSocket messages small. HistoryConfig deliberately allows several
 # client-content messages terminated by one turn_complete=True boundary.
@@ -123,15 +132,10 @@ def history_batches(history: list[Content], limit: int = HISTORY_CONTENTS_PER_ME
 
 
 def interaction_status(message) -> str | None:
-    # The current SDK exposes status on server_content. Accept the top-level spelling too so
-    # the driver remains compatible with the wire shape documented for tool-call messages.
-    status = getattr(message, "interaction_status", None)
-    if status is None:
-        status = getattr(getattr(message, "server_content", None), "interaction_status", None)
-    status = getattr(status, "value", status)
+    status = getattr(getattr(message, "server_content", None), "interaction_status", None)
     if status is None:
         return None
-    return str(status).rsplit(".", 1)[-1].upper()
+    return str(getattr(status, "value", status)).rsplit(".", 1)[-1].upper()
 
 
 @dataclass(frozen=True)
@@ -161,10 +165,18 @@ class Connect:
 
 @dataclass(frozen=True)
 class Received:
-    """One server message, as the core applied it."""
+    """One server message, as the core applied it.
 
-    connection: int  # the connection it arrived on
-    generation: int  # the generation on that connection whose reply was being read
+    ``generation`` is the local generation in flight on the connection when the message was
+    read, not proof that the message belongs to its reply. The receiver reads only while a
+    generation asks for a message, so a message that arrived after one reply ended and before
+    the next generation started is read, and numbered, as part of the next. Attributing messages
+    by arrival is left to streaming, which reads as messages arrive: one read between a reply's
+    end and the next generation's start then belongs to no generation, an orphan here.
+    """
+
+    connection: int  # the connection it was read from
+    generation: int  # the generation in flight on that connection when it was read
     generation_id: str  # that generation's request id
     message: Any
     status: str | None  # interaction_status
@@ -185,9 +197,14 @@ class _Generation:
 class SessionCore:
     """The Live session as this client wrote it, across the connections that carry it.
 
+    Connections are numbered from 1 as they are set up, generations from 1 on each connection.
+    The numbers a message gets say which generation was in flight when it was read; they do not
+    establish that it belongs to that reply (see Received).
+
     Closing a connection clears what belonged to it; the session state stays until the next
     connection replaces it. A reply still being read from a closed connection keeps its
-    generation, and is otherwise applied like any other message.
+    generation and still ends where it ends, but no longer changes the session: no resumption
+    handle, goAway or clean boundary is taken from it.
     """
 
     def __init__(self, options: dict):
@@ -203,7 +220,7 @@ class SessionCore:
         self._connections = 0  # connections set up so far
         self._generations = 0  # generations started on the open connection
         self.connection: int | None = None  # the open connection's number, from 1
-        self.delivery: dict[tuple, str] = {}  # what the client delivered on it
+        self.delivery: dict[tuple, Delivery] = {}  # what the client wrote on it
         self.candidate_resume_handle: str | None = None  # latest resumption update of this turn
         # (id, name) of the tool calls received and not yet acknowledged.
         self.pending_calls: list[tuple] = []
@@ -334,8 +351,8 @@ class SessionCore:
         self._connections += 1
         self._generations = 0
         self.connection = self._connections
-        self.delivery = {("setup",): ACKNOWLEDGED}
-        self.delivery.update((("block", block_id), SENT) for block_id in connect.seeded)
+        self.delivery = {("setup",): Delivery.CONFIRMED}
+        self.sending(("block", block_id) for block_id in connect.seeded)
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -356,12 +373,13 @@ class SessionCore:
     # ---- writes ----------------------------------------------------------------------------
 
     def sending(self, keys) -> None:
+        """Record writes as handed to the connection, before any answer can arrive."""
         for key in keys:
-            self.delivery[key] = UNKNOWN
+            self.delivery[key] = Delivery.SENT
 
-    def sent(self, keys) -> None:
+    def send_failed(self, keys) -> None:
         for key in keys:
-            self.delivery[key] = SENT
+            self.delivery[key] = Delivery.UNKNOWN
 
     def observe(self, history: CanonicalRequest) -> Observation:
         """Plan the history view's newest frame, after its feedback, as one input, and record it
@@ -395,8 +413,10 @@ class SessionCore:
         return pending
 
     def acknowledgement_sent(self) -> None:
-        self.sent(("tool_response", call_id) for call_id, _ in self.pending_calls)
         self.pending_calls.clear()
+
+    def acknowledgement_failed(self) -> None:
+        self.send_failed(("tool_response", call_id) for call_id, _ in self.pending_calls)
 
     # ---- reads -----------------------------------------------------------------------------
 
@@ -404,9 +424,24 @@ class SessionCore:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 
-    def received(self, connection: int, message, now: float) -> Received:
+    def generation_failed(self, connection: int) -> None:
+        """The reply on ``connection`` failed after the core applied its messages: if that is the
+        open connection, its session has no clean boundary to resume from."""
+        if connection == self.connection:
+            self.last_turn_clean = False
+            self.resume_handle = None
+
+    def reader_failed(self, connection: int) -> None:
+        """The connection's reader failed: no reply is read on it any more."""
+        self.replies.pop(connection, None)
+
+    def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
-        monotonic clock)."""
+        monotonic clock). With no generation's reply being read on that connection the message is
+        an orphan: nothing takes it, and it changes nothing (None)."""
+        generation = self.replies.get(connection)
+        if generation is None:
+            return None
         server = getattr(message, "server_content", None)
         status = interaction_status(message)
         if self._completion_signal == "interaction_idle":
@@ -414,11 +449,14 @@ class SessionCore:
         else:
             complete = bool(server is not None and getattr(server, "turn_complete", False))
         interrupted = bool(server is not None and getattr(server, "interrupted", False))
-        generation = self.replies[connection]
         generation.interrupted = generation.interrupted or interrupted
-        control = self._control(message, clean=complete and not generation.interrupted, now=now)
-        if complete:
-            self.last_turn_clean = not generation.interrupted
+        if connection == self.connection:
+            control = self._control(message, clean=complete and not generation.interrupted, now=now)
+            if complete:
+                self.last_turn_clean = not generation.interrupted
+        else:
+            # Read from a closed connection: the session is no longer there to change.
+            control = {}
         # IDLE ends the interaction whichever completion signal is configured; under turn_complete
         # it ends it without completing it.
         ends = complete or status == "IDLE"

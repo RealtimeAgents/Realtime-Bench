@@ -4,9 +4,11 @@ from __future__ import annotations
 """Gemini Live protocol driver for the shared realtime runtime."""
 
 import asyncio as asyncio
+import logging as logging
 import os as os
 from typing import ClassVar as ClassVar
 
+from realtime_framework.clock import Clock
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
@@ -35,7 +37,10 @@ from realtime_framework.providers.capture import async_ws_connection
 from realtime_framework.providers.gemini.session import Connect
 from realtime_framework.providers.gemini.session import Content
 from realtime_framework.providers.gemini.session import Part
+from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
+
+logger = logging.getLogger(__name__)
 
 _SESSION_RELEASE_GRACE_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
@@ -102,6 +107,72 @@ LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "hi
 
 class GoAwayDeadlineExceeded(RuntimeError):
     """An incomplete native turn must remain invalid, even without visible output."""
+
+
+class _Receiver:
+    """The one reader of a connection once it is set up: each server message, applied to the
+    session core, which stamps it with the connection and the generation whose reply was being
+    read. The setup's acknowledgement (setupComplete), the only one Gemini Live sends, is read by
+    google-genai inside its connect, before the receiver exists.
+
+    google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
+    IDLE, so the receiver opens the next one and spans every generation on the connection.
+    Extended Thinking uses ``turn_complete`` for intermediate spoken fillers; the core decides
+    where a generation ends. It reads only when a generation asks for a message.
+
+    A read that fails or is cancelled leaves the connection unusable: every later read raises the
+    failure again. A cancelled read is kept as a RuntimeError caused by the cancellation, so that
+    a later caller is not reported as cancelled itself.
+    """
+
+    def __init__(self, session, number: int, core: SessionCore, clock: Clock):
+        self.number = number
+        self.failure: BaseException | None = None
+        self._session = session
+        self._core = core
+        self._clock = clock
+        self._messages = None  # the SDK's current receive() iterator
+        self._opened_empty = False  # it has given no message yet
+
+    async def next(self) -> Received:
+        if self.failure is None:
+            try:
+                return await self._read()
+            except asyncio.CancelledError as exc:
+                self.failure = RuntimeError(
+                    f"Gemini Live connection {self.number}: a read was cancelled"
+                )
+                self.failure.__cause__ = exc
+                self._core.reader_failed(self.number)
+                raise
+            except Exception as exc:
+                self.failure = exc
+        self._core.reader_failed(self.number)
+        raise self.failure
+
+    async def _read(self) -> Received:
+        while True:
+            if self._messages is None:
+                self._messages = self._session.receive().__aiter__()
+                self._opened_empty = True
+            try:
+                message = await anext(self._messages)
+            except StopAsyncIteration:
+                if self._opened_empty:
+                    raise RuntimeError(
+                        f"Gemini Live connection {self.number}: receive() ended without a message"
+                    ) from None
+                self._messages = None
+                continue
+            self._opened_empty = False
+            received = self._core.received(self.number, message, self._clock.monotonic())
+            if received is not None:
+                return received
+            logger.debug(
+                "Gemini Live connection %d: no generation takes %s",
+                self.number,
+                type(message).__name__,
+            )
 
 
 class GeminiLiveDriver:
@@ -190,7 +261,7 @@ class GeminiLiveDriver:
         self.client = self._client_for_slot(self._api_key_index)
         self._cm = None
         self._session = None
-        self._received = None  # the open connection's receive loop
+        self._receiver: _Receiver | None = None  # the open connection's reader
         self._core = SessionCore(self.options)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
@@ -388,7 +459,7 @@ class GeminiLiveDriver:
         """Close the open connection, if any; returns whether there was one."""
         cm, self._cm = self._cm, None
         self._session = None
-        self._received = None
+        self._receiver = None
         self._activity_open = False
         self._last_video_sent_at = None
         self._core.closed()
@@ -440,7 +511,7 @@ class GeminiLiveDriver:
         self._activity_open = False
         self._last_video_sent_at = None
         self._core.connected(connect)
-        self._received = self._receive_loop(session, self._core.connection)
+        self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
         self._connect_metadata = {
             "session_connect_mode": connect.mode,
             "session_resume_handle_used": connect.resume_handle is not None,
@@ -496,13 +567,20 @@ class GeminiLiveDriver:
             # after any seeded history has been ingested. A realtime text trigger mixed with
             # synthetic silent audio can create a second user activity (including hallucinated
             # speech) and leave synchronous tools unfinished.
-            await session.send_client_content(
-                turns=self._content(frame.content),
-                turn_complete=True,
-            )
-            self._core.sent(frame.keys)
+            try:
+                await session.send_client_content(
+                    turns=self._content(frame.content),
+                    turn_complete=True,
+                )
+            except BaseException:
+                self._core.send_failed(frame.keys)
+                raise
             return {"observation_id": frame.observation_id}
-        await session.send_realtime_input(activity_start=self.types.ActivityStart())
+        try:
+            await session.send_realtime_input(activity_start=self.types.ActivityStart())
+        except BaseException:
+            self._core.send_failed(frame.keys)
+            raise
         self._activity_open = True
         try:
             if self._last_video_sent_at is not None:
@@ -531,8 +609,8 @@ class GeminiLiveDriver:
         except BaseException:
             # An incomplete activity cannot be resumed as canonical context.
             self._activity_open = True
+            self._core.send_failed(frame.keys)
             raise
-        self._core.sent(frame.keys)
         return {"observation_id": frame.observation_id}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
@@ -732,28 +810,25 @@ class GeminiLiveDriver:
         text = getattr(transcript, "text", None)
         return [text] if text else []
 
-    async def _receive_loop(self, session, connection: int):
-        """The one reader of a connection: each server message, applied to the core, which stamps
-        it with the connection and the generation whose reply was being received.
-
-        google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
-        IDLE, so the loop opens the next one and spans every generation on the connection. Extended
-        Thinking uses ``turn_complete`` for intermediate spoken fillers; the core decides where a
-        generation ends. The loop reads only when the generation in flight asks for a message.
-        """
-        while True:
-            async for message in session.receive():
-                yield self._core.received(connection, message, self.clock.monotonic())
-
     async def events(self, generation: GenerationHandle):
-        session, messages = self._session, self._received
+        session, receiver = self._session, self._receiver
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        try:
+            async for event in self._events(generation, session, receiver):
+                yield event
+        except Exception:
+            # The core applied each message as it was read; a reply that then failed here is not
+            # a clean boundary to resume from.
+            self._core.generation_failed(receiver.number)
+            raise
+
+    async def _events(self, generation: GenerationHandle, session, receiver: _Receiver):
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0
         while True:
-            received = await self._before_go_away_deadline(anext(messages))
+            received = await self._before_go_away_deadline(receiver.next())
             message = received.message
             numbers = {"connection": received.connection, "generation": received.generation}
             raw_type = type(message).__name__
@@ -868,9 +943,13 @@ class GeminiLiveDriver:
                 # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
                 # prevents its acknowledgement from triggering another model generation while
                 # the current decision drains through authoritative terminal usage.
-                await self._before_go_away_deadline(
-                    session.send_tool_response(function_responses=function_responses),
-                )
+                try:
+                    await self._before_go_away_deadline(
+                        session.send_tool_response(function_responses=function_responses),
+                    )
+                except BaseException:
+                    self._core.acknowledgement_failed()
+                    raise
                 self._core.acknowledgement_sent()
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)
