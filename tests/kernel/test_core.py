@@ -245,7 +245,7 @@ def test_the_first_invalidation_is_latched_and_ends_the_episode():
 
 
 def _finish(kernel, now: float) -> list:
-    kernel.post(SnapshotFrozen())
+    kernel.post(SnapshotFrozen(now, now))
     return kernel.step(now)
 
 
@@ -276,8 +276,9 @@ def test_termination_records_the_rule_time_and_the_snapshot_time():
     kernel.step(12.0, 40.0)
     kernel.end("environment", 11.0, reason="target_reached")
     kernel._flush()
-    kernel.post(SnapshotFrozen())
-    kernel.step(12.0, 41.5)
+    # The shell took the snapshot at 41.5 s and ran a commit before the kernel stepped again.
+    kernel.post(SnapshotFrozen(12.0, 41.5))
+    kernel.step(12.0, 41.75)
     termination = kernel.termination
     assert (termination.ended_at, termination.snapshot_at) == (11.0, 12.0)
     assert (termination.ops_ended_at, termination.ops_snapshot_at) == (40.0, 41.5)
@@ -300,7 +301,7 @@ def test_a_failed_snapshot_invalidates_and_has_no_time():
     kernel, _ = _kernel()
     kernel.end("deadline", 300.0)
     kernel._flush()
-    kernel.post(SnapshotFrozen(error="state read failed"))
+    kernel.post(SnapshotFrozen(300.2, 300.2, error="state read failed"))
     kernel.step(300.2)
     assert kernel.termination.stop_reason == "invalid_run"
     assert kernel.termination.invalid.reason == "evaluation_snapshot_failed"
