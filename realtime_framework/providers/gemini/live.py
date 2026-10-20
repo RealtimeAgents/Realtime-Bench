@@ -34,6 +34,7 @@ from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.context_policy import GEMINI_QUEUED_TOOL_RESPONSE
 from realtime_framework.entity.context_policy import GEMINI_TOOL_HISTORY_HEADER
+from realtime_framework.providers.capture import async_ws_connection
 from realtime_framework.providers.legacy import session_frame_text
 
 # Gemini 3 requires a thought signature when a manually reconstructed history contains a model
@@ -63,6 +64,23 @@ LIVE_OPTIONS = {
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
+
+
+_RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
+
+
+def classify_live_message(direction: str, message: dict):
+    """Name a Gemini Live message for the agent trace; only setup is acknowledged.
+
+    client_content, realtime_input and tool_response have no acknowledgement in the protocol, so
+    they stay sent. goAway, sessionResumptionUpdate and voice activity come unsolicited.
+    """
+    kind = next(iter(message), "")
+    if direction == "client":
+        return kind, [("setup",)] if kind == "setup" else [], None
+    if "setupComplete" in message:
+        return kind, [("setup",)], "unsolicited"
+    return kind, [], "response" if _RESPONSE_MESSAGES & set(message) else "unsolicited"
 
 
 def live_options(config) -> dict:
@@ -128,6 +146,7 @@ class GeminiLiveDriver:
             raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer")
         self._api_key_requested_slot = requested_slot
         self._api_key_index = (requested_slot - 1) % len(self._api_keys)
+        self._ws_connection = async_ws_connection(self, "gemini_live.ws", classify_live_message)
         self.client = self._client_for_slot(self._api_key_index)
         self._cm = None
         self._session = None
@@ -171,14 +190,16 @@ class GeminiLiveDriver:
     def _client_for_slot(self, index: int):
         client = self._clients.get(index)
         if client is None:
-            options = (
-                {"http_options": {"base_url": self.config.api_base_url}}
-                if self.config.api_base_url
-                else {}
-            )
-            client = self._client_type(api_key=self._api_keys[index], **options)
+            # google-genai passes create_connection only to the WebSocket connect.
+            http_options = {"async_client_args": {"create_connection": self._ws_connection}}
+            if self.config.api_base_url:
+                http_options["base_url"] = self.config.api_base_url
+            client = self._client_type(api_key=self._api_keys[index], http_options=http_options)
             self._clients[index] = client
         return client
+
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
 
     @staticmethod
     def _exception_chain(exc: BaseException):

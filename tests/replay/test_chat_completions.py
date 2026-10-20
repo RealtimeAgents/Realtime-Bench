@@ -6,6 +6,7 @@ run is compared with tests/replay/baselines/.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -14,6 +15,8 @@ import pytest
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation.agent_trace import load_body
 
 from . import baseline
 from .build import build_episode
@@ -101,6 +104,45 @@ def _check_rejection_feedback(records: list[dict]) -> None:
         assert feedback[0].startswith("EXECUTION RESULT: ") and "status=rejected." in feedback[0]
 
 
+def _check_agent_trace(run_dir: Path, stub: ChatCompletionsStub, records: list[dict]) -> None:
+    """The agent's records: one request per stub request, exactly as received, and the history
+    changes at the first fold (decision 20, the 21st step) and the first archive (decision 50)."""
+    validate_episode_trace(run_dir / "episode_trace.jsonl")
+    events = [
+        json.loads(line) for line in (run_dir / "episode_trace.jsonl").read_text().splitlines()
+    ]
+    assert events[-1]["event"] == "AgentTraceClosed"
+    closed = events[-1]["payload"]
+    assert closed["written"] == closed["captures"] and closed["error"] is None
+    sent = [e["payload"] for e in events if e["event"] == "ModelRequestSent"]
+    assert len(sent) == len(stub.requests)
+    for k, (request, received) in enumerate(zip(sent, stub.requests)):
+        assert request["channel"] == "litellm.openai_sdk" and request["exact_wire"]
+        assert request["scope"]["decision"] == k and request["scope"]["attempt"] == 1
+        assert load_body(run_dir / "episode_blobs.pack", request["body"]) == received.body
+    attempts = [e["payload"] for e in events if e["event"] == "ModelAttemptFinished"]
+    assert [a["outcome"] for a in attempts] == ["ok"] * len(records)
+
+    def turns(k: int, kind: str, policy_item: str) -> list[str]:
+        (change,) = [
+            e["payload"]
+            for e in events
+            if e["event"] == "HistoryChanged"
+            and e["payload"]["scope"]["decision"] == k
+            and e["payload"]["kind"] == kind
+        ]
+        assert change["policy_item"] == policy_item and change["trigger"] == "policy"
+        return [turn["observation_id"] for turn in change["turns"]]
+
+    observation_ids = [r["observation"]["observation_id"] for r in records]
+    assert turns(FIRST_FOLD, "visual_fold", "visuals") == observation_ids[:FOLDED]
+    assert turns(FIRST_ARCHIVE, "archive", "turns") == observation_ids[:ARCHIVED]
+    first_changes = {
+        e["payload"]["scope"]["decision"] for e in events if e["event"] == "HistoryChanged"
+    }
+    assert min(first_changes) == FIRST_FOLD
+
+
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
 def test_long_scenario(stream, tmp_path):
     with ChatCompletionsStub(replies(LONG_SCENARIO)) as stub:
@@ -111,13 +153,15 @@ def test_long_scenario(stream, tmp_path):
         try:
             records = run_steps(episode, LONG_SCENARIO, stub)
         finally:
-            episode.agent.close()
+            invalid_run = episode.finish()
     assert stub.unscripted == 0, "the agent sent requests beyond the script"
     assert stub.unused_replies == 0, "scripted replies were left unused"
     assert all(len(r["requests"]) == 1 for r in records)
     assert all(r["result"]["inspection"]["valid"] for r in records)
     _check_history_changes(records)
     _check_rejection_feedback(records)
+    assert invalid_run is None
+    _check_agent_trace(tmp_path, stub, records)
 
     header = {
         "record": "header",
