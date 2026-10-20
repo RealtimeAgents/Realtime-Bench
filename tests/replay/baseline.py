@@ -35,16 +35,25 @@ REAL_TIME_FIELDS = frozenset(
         "provider_stream_started_monotonic_ns",
         # ToolRuntime.inspect (sandbox/observation/som.py:677, 713, 728)
         "tool_execution_latency_s",
-        # the retry backoff the harness sleeps for real (harnesses/default/harness.py:1248-1253,
-        # 1270-1271), jittered by the uuid4 generation id (entity/model.py:332-336)
+        # DefaultHarness retry sleeps, jittered by the random generation id
+        # (harnesses/default/harness.py:1251-1253, 1270, 1281; entity/model.py:333-336)
         "transport_reconnect_backoff_s",
     }
 )
 RANDOM_IDS = (
     ("generation", re.compile(r"turn-\d+-[0-9a-f]{12}")),  # uuid4: harness.py:1202
     ("inspection", re.compile(r"inspect-\d{6}-[0-9a-f]{8}")),  # uuid4: som.py:660
-    ("stub", re.compile(r"http://127\.0\.0\.1:\d+")),  # the stub's OS-assigned port
+    ("stub", re.compile(r"(?:http|ws)://127\.0\.0\.1:\d+")),  # the stub's OS-assigned port
     ("session", re.compile(r"rtb-[0-9a-f]{32}")),  # uuid4 per driver: providers/litellm.py:483
+    # OpenAI Realtime client ids "rtb_<kind>_" + uuid4 hex (providers/openai_realtime.py:119-126;
+    # kinds at 153, 183, 203, 557, 564, 570, 588, 593)
+    ("rtb_user", re.compile(r"rtb_user_[0-9a-f]+")),
+    ("rtb_assistant", re.compile(r"rtb_assistant_[0-9a-f]+")),
+    ("rtb_ledger", re.compile(r"rtb_ledger_[0-9a-f]+")),
+    ("rtb_create", re.compile(r"rtb_create_[0-9a-f]+")),
+    ("rtb_delete", re.compile(r"rtb_delete_[0-9a-f]+")),
+    # output item ids of the Realtime stub (tests/replay/ws_openai_realtime.py:423)
+    ("server_item", re.compile(r"item_srv_\d+")),
 )
 DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # harness.py:1050
 
