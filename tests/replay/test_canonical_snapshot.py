@@ -22,10 +22,9 @@ from realtime_framework.entity.actions import FrameGeometry, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.harnesses.registry import configure_agent, create_agent
 from realtime_framework.sandbox.observation.interactables import canonical_result
-from realtime_framework.sandbox.observation.som import ToolRuntime
 
 from . import baseline
-from .build import build_episode
+from .build import ToolRuntime, build_episode
 from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
 from .steps import run_steps
@@ -51,7 +50,9 @@ def capture_requests(agent) -> list:
 
 
 def snapshot(requests) -> list[dict]:
-    """Each distinct block once, then per request the ordered (block, intent) list."""
+    """Each distinct block once, then per request the ordered (block, intent) list. A block is
+    keyed by its normalized form, which holds images by their pixel digests."""
+    normalize = baseline.Normalizer()
     records, stored = [], set()
     for index, request in enumerate(requests):
         record = request.to_record()
@@ -60,14 +61,15 @@ def snapshot(requests) -> list[dict]:
             block = item["block"]
             if block["time"]["wall_ns"] is not None:  # the agent's wall clock
                 block["time"]["wall_ns"] = WALL_TIME
+            block = normalize(block)
             text = json.dumps(block, sort_keys=True, ensure_ascii=False)
             key = hashlib.sha256(text.encode()).hexdigest()[:16]
             if key not in stored:
                 stored.add(key)
                 records.append({"record": "block", "key": key, "block": block})
             items.append({"block": key, "intent": item["intent"]})
-        records.append({"record": "request", "index": index, **record, "items": items})
-    return baseline.Normalizer()(records)
+        records.append(normalize({"record": "request", "index": index, **record, "items": items}))
+    return records
 
 
 def check(name: str, records: list[dict]) -> None:

@@ -426,9 +426,9 @@ class WireNormalizer(baseline.Normalizer):
 
     google-genai sends bytes as URL-safe base64 (google/genai/_common.py:579, 699-729). The driver
     sends bytes in three blobs: a content part's inlineData (providers/gemini/live.py:445-451)
-    and realtime_input's video and audio (live.py:704-709, 716-718). Each blob's data
-    becomes the SHA-256 of its decoded bytes; its other keys, and everything outside the blobs,
-    are normalized as for the chat payloads.
+    and realtime_input's video and audio (live.py:704-709, 716-718). An image blob's data
+    becomes its pixel digest, an audio blob's the SHA-256 of its decoded bytes; their other keys,
+    and everything outside the blobs, are normalized as for the chat payloads.
     """
 
     BLOBS = frozenset({"inlineData", "video", "audio"})
@@ -436,5 +436,9 @@ class WireNormalizer(baseline.Normalizer):
     def __call__(self, value, key: str | None = None):
         if key in self.BLOBS:
             data = base64.b64decode(value["data"], altchars=b"-_", validate=True)
-            value = {**value, "data": "sha256:" + hashlib.sha256(data).hexdigest()}
+            if value["mime_type"].startswith("image/"):
+                digest = baseline.image_digest(data)
+            else:
+                digest = "sha256:" + hashlib.sha256(data).hexdigest()
+            value = {**value, "data": digest}
         return super().__call__(value, key)
