@@ -361,7 +361,8 @@ def test_receive_loop_stamps_connection_and_generation(monkeypatch):
     seed = SessionSeed("system instruction", model, None, 1.0, answer)
     policy = phase1_context_policy().for_path(config.adapter_type, config.provider_options)
     call = CallParameters(model, config.reasoning_effort, None)
-    canonical = build_request(policy, system_block(seed.system_instruction), (), None, answer, call)
+    system = system_block(seed.system_instruction, None)
+    canonical = build_request(policy, system, (), None, answer, call)
 
     async def run() -> list[list[tuple]]:
         stamps = []
