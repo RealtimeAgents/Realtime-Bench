@@ -125,7 +125,7 @@ driver as a [model API](#add-a-model-api).
 
 Run it with `-m <name>`. Every lookup of the catalog imports the class and checks these
 declarations, so a broken driver stops every run until its preset is fixed or removed. The run
-configuration records the module, the class, a digest of the package's source files and the
+configuration records the module, the class, a digest of every file in the package and the
 context policy row (`chat_completions`), so results from different driver code are never mixed.
 
 `tests/replay/external_template/rtb_ext/chat.py` is a complete example of a stateless chat
