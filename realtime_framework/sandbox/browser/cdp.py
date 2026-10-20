@@ -18,9 +18,11 @@ from typing import Any as Any
 
 from websockets.sync.client import connect as connect
 
+from realtime_framework.sandbox.budget import Deadline as Deadline
 
-def page_targets(port: int) -> list[dict]:
-    with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/json", timeout=3) as response:
+
+def page_targets(port: int, timeout: float = 3) -> list[dict]:
+    with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/json", timeout=timeout) as response:
         values = json.load(response)
     return [
         value
@@ -41,8 +43,8 @@ class PersistentCDPClient:
         self._events: deque[dict] = deque()
         self._lock = threading.RLock()
 
-    def _select_target(self) -> dict:
-        targets = page_targets(self.port)
+    def _select_target(self, deadline: Deadline) -> dict:
+        targets = page_targets(self.port, timeout=min(3, deadline.remaining()))
         if self.target_id:
             target = next(
                 (value for value in targets if str(value.get("id") or "") == self.target_id),
@@ -61,26 +63,40 @@ class PersistentCDPClient:
             raise RuntimeError(f"CDP port {self.port} has no page target")
         return targets[0]
 
-    def _ensure_connected(self) -> None:
+    def _ensure_connected(self, deadline: Deadline) -> None:
         if self._socket is not None:
             return
-        target = self._select_target()
+        target = self._select_target(deadline)
         self.target_id = str(target.get("id") or "") or self.target_id
         self._socket = connect(
             target["webSocketDebuggerUrl"],
-            open_timeout=5,
+            open_timeout=min(5, deadline.remaining()),
             close_timeout=2,
             max_size=None,
         )
         self._events.clear()
 
-    def _recv(self, timeout: float) -> dict:
+    def _recv(self, deadline: Deadline) -> dict:
         if self._socket is None:
             raise RuntimeError("CDP WebSocket is not connected")
-        value = json.loads(self._socket.recv(timeout=timeout))
+        try:
+            raw = self._socket.recv(timeout=deadline.remaining())
+        except TimeoutError:
+            raise deadline.exceeded() from None
+        value = json.loads(raw)
         if not isinstance(value, dict):
             raise RuntimeError("CDP returned a non-object message")
         return value
+
+    @contextmanager
+    def _locked(self, deadline: Deadline):
+        """Hold the session lock; waiting for it spends the call's deadline."""
+        if not self._lock.acquire(timeout=deadline.remaining()):
+            raise deadline.exceeded()
+        try:
+            yield
+        finally:
+            self._lock.release()
 
     def call(
         self,
@@ -90,8 +106,10 @@ class PersistentCDPClient:
         timeout: float = 120,
         session_id: str | None = None,
     ) -> dict:
-        with self._lock:
-            self._ensure_connected()
+        """Send one command and return its reply; ``timeout`` bounds the whole call."""
+        deadline = Deadline(timeout, f"CDP {method}")
+        with self._locked(deadline):
+            self._ensure_connected(deadline)
             self._message_id += 1
             message_id = self._message_id
             assert self._socket is not None
@@ -107,7 +125,7 @@ class PersistentCDPClient:
                     )
                 )
                 while True:
-                    message = self._recv(timeout)
+                    message = self._recv(deadline)
                     if message.get("id") == message_id:
                         return message
                     self._events.append(message)
@@ -116,15 +134,16 @@ class PersistentCDPClient:
                 raise
 
     def wait_event(self, method: str, *, timeout: float = 120) -> dict:
-        with self._lock:
+        deadline = Deadline(timeout, f"CDP wait for {method}")
+        with self._locked(deadline):
             for index, event in enumerate(self._events):
                 if event.get("method") == method:
                     del self._events[index]
                     return event
-            self._ensure_connected()
+            self._ensure_connected(deadline)
             try:
                 while True:
-                    event = self._recv(timeout)
+                    event = self._recv(deadline)
                     if event.get("method") == method:
                         return event
                     self._events.append(event)
