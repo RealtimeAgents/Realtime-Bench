@@ -38,6 +38,9 @@ REAL_TIME_FIELDS = frozenset(
         # DefaultHarness retry sleeps, jittered by the random generation id
         # (harnesses/default/harness.py:1251-1253, 1270, 1281; entity/model.py:333-336)
         "transport_reconnect_backoff_s",
+        # ChoiceDecision's candidate splits, question calls and text composition
+        # (harnesses/jev/selection.py:182, 199, 325)
+        "latency_s",
     }
 )
 RANDOM_IDS = (
