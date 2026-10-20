@@ -805,6 +805,16 @@ class GeminiLiveDriver:
         session, receiver = self._session, self._receiver
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        try:
+            async for event in self._events(generation, session, receiver):
+                yield event
+        except Exception:
+            # The core applied each message as it was read; a reply that then failed here is not
+            # a clean boundary to resume from.
+            self._core.generation_failed(receiver.number)
+            raise
+
+    async def _events(self, generation: GenerationHandle, session, receiver: _Receiver):
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0

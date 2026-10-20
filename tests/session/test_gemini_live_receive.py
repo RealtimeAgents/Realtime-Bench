@@ -332,3 +332,45 @@ def test_a_receive_that_ends_without_a_message_fails(monkeypatch):
     assert not thread.is_alive(), "the receiver kept reopening an empty receive()"
     (failure,) = outcome
     assert str(failure) == "Gemini Live connection 1: receive() ended without a message"
+
+
+def test_a_failed_reply_does_not_resume(monkeypatch):
+    """The core promotes the resumption handle when it reads the clean completion; the driver
+    then rejects that message's usage. The failed reply is not a boundary to resume from, so the
+    goAway renewal rebuilds instead."""
+    bad_usage = {
+        "promptTokenCount": 20,
+        "responseTokenCount": 3,
+        "totalTokenCount": 23,
+        "responseTokensDetails": [{"modality": "AUDIO", "tokenCount": 5}],
+    }
+    rig = Rig(
+        monkeypatch,
+        "gemini-3.8-live",
+        [
+            [
+                {"sessionResumptionUpdate": {"newHandle": "handle-0", "resumable": True}},
+                {"goAway": {"timeLeft": "30s"}},
+                {"serverContent": {"turnComplete": True}, "usageMetadata": bad_usage},
+            ],
+            [],
+        ],
+    )
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        try:
+            await drain(rig.driver.events(generation))
+        except RuntimeError as exc:
+            assert "AUDIO token detail exceeds" in str(exc)
+        assert rig.driver.connection_renewal_reason() == "go_away"
+        request = HistorySyncRequest(rig.seed, "go_away", rig.history)
+        return await rig.driver.sync_history(request)
+
+    result = asyncio.run(run())
+    assert result.disposition == SyncDisposition.REBUILT
+    assert [entry for entry in rig.log if entry[0] == "connect"] == [
+        ("connect", None),
+        ("connect", None),
+    ]
