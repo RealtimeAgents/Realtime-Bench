@@ -6,7 +6,11 @@ from realtime_framework.providers.registry import load_project_secrets
 
 def create_agent(config, log_dir=None, *, trace=UNTRACED):
     """``trace`` is the agent's write entry into the episode trace: the runner passes its
-    AgentTraceSink; an agent built without one (a test or a tool) records nothing."""
+    AgentTraceSink; an agent built without one (a test or a tool) records nothing.
+
+    The configuration rules run before this, in providers/preflight.py check_episode, and
+    configure_agent must run before initialize(), which selects the prompts by task category.
+    """
     load_project_secrets()
     from realtime_framework.harnesses.default.harness import DefaultHarness
 
@@ -28,6 +32,6 @@ def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
     agent.system_prompt_override = system_prompt_for_category(category)
     # The context policy's prompts (item 11) are keyed by it.
     agent.task_category = category
-    # Adapters use this before run_stream() starts to decide whether terminal provider usage is
-    # allowed to delay a committed wall-clock action.
+    # Copied into every GenerationRequest.clock_mode; no driver reads it any more (the wall-clock
+    # rules are pre-run checks, providers/preflight.py).
     agent._clock_mode = clock_mode

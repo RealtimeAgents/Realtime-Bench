@@ -81,7 +81,8 @@ from functools import lru_cache
 _LITELLM = "realtime_framework.providers.litellm:"
 
 # The adapter_type of a ModelConfig is one of these keys, each naming its driver class
-# ("package.module:Class"), imported only when the API is selected, or an external driver (below).
+# ("package.module:Class"), imported when the API is first looked up (loading the catalog looks
+# up every API a model YAML names), or an external driver (below).
 # The class declares the API's capabilities, deployment and per-model defaults; adding a protocol
 # means adding a driver module and one row here.
 APIS = {
@@ -122,10 +123,11 @@ def api_reasoning_efforts(api: str) -> list[str]:
 
 @lru_cache(maxsize=1)
 def _litellm_model_map() -> dict:
-    """LiteLLM's bundled model map, read from the pinned package without importing it.
+    """LiteLLM's bundled model map, read from the pinned package's own file.
 
-    Importing litellm may fetch a newer map over the network; the bundled file keeps a run's
-    limits fixed by the locked LiteLLM version.
+    Locating that file imports litellm (importlib.resources imports the package), and the import
+    fetches a newer map over the network unless LITELLM_LOCAL_MODEL_COST_MAP is set. The limits
+    read here come from the bundled file either way, so they stay fixed by the locked version.
     """
     import json
     from importlib.resources import files
@@ -407,8 +409,9 @@ def _check_driver(target: str, driver: type, policy: PathPolicy) -> None:
 Every file in configs/models uses the same endpoint schema. Its filename is the
 catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
 connections and reasoning effort. The loader imports the driver module of each API it reads,
-an external driver's included; the LiteLLM and Gemini SDKs are imported only when a driver is
-constructed.
+an external driver's included, with what those modules import (the OpenAI SDK, websockets and
+Pillow among them), and reading LiteLLM's model map imports litellm (_litellm_model_map). The
+Gemini SDK is imported only when its driver is constructed.
 """
 
 import difflib as difflib

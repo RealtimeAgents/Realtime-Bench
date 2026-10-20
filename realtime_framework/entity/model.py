@@ -58,8 +58,8 @@ class RealtimeCapabilities:
     terminal_output_usage: bool = True
     # How the model submits a GUI action: one JSON action in visible text, exactly one call
     # to the canonical GUI functions (entity.actions.gui_function_declarations), or one choice
-    # among harness-enumerated candidate actions. The harness selects its output contract,
-    # collector and observation encoding from this value, never from a provider name.
+    # among harness-enumerated candidate actions. The harness selects its output contract and
+    # collector from this value; the observation encoding is context policy item 12.
     action_channel: Literal["text_json", "function_call", "choice"] = "text_json"
     # What one observation carries to the model: the screenshot, or (for models without image
     # input) text only — the accessibility tree plus rendered control state and appearance.
