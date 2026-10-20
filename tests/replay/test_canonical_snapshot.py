@@ -205,7 +205,7 @@ def test_luna_choice_parts(tmp_path):
         "gpt-6-luna-decisions", fps=1.0, reasoning_effort="fixed"
     ).model_copy(update={"api_key": "stub-key", "api_base_url": "http://127.0.0.1:9/api/alpha"})
     agent = create_agent(config, log_dir=tmp_path)
-    client = agent.driver.client
+    client = agent.driver
     client.client = httpx.AsyncClient(
         base_url=client.client.base_url,
         headers=client.client.headers,

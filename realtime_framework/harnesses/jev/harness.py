@@ -1,4 +1,4 @@
-"""Choice harness: enumerate actions and select through a stateless ChoiceClient.
+"""Choice harness: enumerate actions and select through the registered Decisions encoder.
 
 Text-only clients receive structured control state; multimodal clients additionally receive
 its marked screenshot. Candidate and text-composition policies are shared by both. History is
@@ -29,7 +29,6 @@ from realtime_framework.harnesses.jev.prompts import (
     MULTIMODAL_CHOICE_PROFILE,
     MULTIMODAL_GAME_CHOICE_PROFILE,
 )
-from realtime_framework.providers.decisions.driver import ChoiceDecisionDriver
 from realtime_framework.providers.decisions.questions import (
     GAME_INSTRUCTIONS,
     GUI_INSTRUCTIONS,
@@ -44,14 +43,13 @@ class JevHarness(DefaultHarness):
     interaction_profile = JEV_PROFILE
 
     def _setup_backend(self):
-        client = adapter_class(self.config.adapter_type)(self.config)
+        self.driver = adapter_class(self.config.adapter_type)(self.config)
+        self.driver.bind_trace(self._trace)
         self.interaction_profile = (
             MULTIMODAL_CHOICE_PROFILE
-            if client.capabilities.observation_modality == "screenshot"
+            if self.driver.capabilities.observation_modality == "screenshot"
             else JEV_PROFILE
         )
-        self.driver = ChoiceDecisionDriver(client)
-        self.driver.bind_trace(self._trace)
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )

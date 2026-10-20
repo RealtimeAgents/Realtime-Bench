@@ -262,15 +262,16 @@ class ChoiceClient(Protocol):
     """A stateless choice-model API (action_channel="choice"): one question per call.
 
     The client owns only transport: authentication, failure classification
-    (classify_transport_error), context-limit detection and response validation. Questions,
-    candidates, history and retries belong to the harness. With canonical history replay,
-    ``request_context_status(request)`` reports physical context pressure for the runtime.
+    (classify_question_error), context-limit detection and response validation. Questions, their
+    state, candidates, history and retries belong to the selection flow (providers/decisions).
+    With canonical history replay, ``request_context_status(request)`` reports physical context
+    pressure for the runtime.
     """
 
     capabilities: RealtimeCapabilities
     max_choices: int
 
-    async def decide(self, state: dict[str, Any], question: dict[str, Any]) -> ChoiceReply:
+    async def decide(self, state: dict[str, Any] | list, question: dict[str, Any]) -> ChoiceReply:
         """Raise ChoiceContextLimitError when state plus question exceed the context."""
 
     async def close(self) -> None: ...
