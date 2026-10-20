@@ -14,9 +14,10 @@ from realtime_framework.entity.model import (
     ProviderObservation,
 )
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.harnesses.default.context import session_frame_text
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.decisions.history import render_digest
-from realtime_framework.providers.legacy import chat_messages, session_frame_text
+from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 POLICY = phase1_context_policy()
