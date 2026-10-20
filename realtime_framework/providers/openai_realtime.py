@@ -16,6 +16,7 @@ from openai import APIConnectionError as APIConnectionError
 from openai import APITimeoutError as APITimeoutError
 from openai import OpenAI as OpenAI
 from websockets.exceptions import ConnectionClosed as ConnectionClosed
+from websockets.exceptions import ConnectionClosedOK as ConnectionClosedOK
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.providers.registry import load_project_secrets
@@ -106,13 +107,14 @@ class _Session:
     def __init__(self, number: int, conn, core: RealtimeSessionCore):
         self.number = number
         self.core = core
-        self._events = iter(conn)
+        self._conn = conn
         self._read: asyncio.Task | None = None
-        self.closed = False
+        # How the connection ended: closed normally (by either side), or a failed read.
+        self.closed: ConnectionClosedOK | None = None
         self.failure: Exception | None = None
 
     async def receive_until(self, ready) -> None:
-        """Receive until ``ready()`` holds or the server closes the connection. A failed read
+        """Receive until ``ready()`` holds or the connection closes normally. A failed read
         raises in every waiter, once it has taken what was received before."""
         while not ready():
             if self.failure is not None:
@@ -126,13 +128,13 @@ class _Session:
 
     async def _receive(self) -> None:
         try:
-            event = await asyncio.to_thread(next, self._events, None)
+            event = await asyncio.to_thread(self._conn.recv)
+        except ConnectionClosedOK as closed:
+            self.closed = closed
         except Exception as exc:  # noqa: BLE001 - every waiter raises it
             self.failure = exc
         else:
-            if event is None:
-                self.closed = True
-            elif not self.core.receive(event):
+            if not self.core.receive(event):
                 logger.debug(
                     "OpenAI Realtime connection %d: no state takes %s",
                     self.number,
@@ -297,10 +299,11 @@ class OpenAIRealtimeDriver:
 
     @staticmethod
     async def _wait_for_item_edits(session: _Session) -> None:
-        """Wait until the server has answered the pending in-place edit."""
+        """Wait until the server has answered the pending in-place edit; a connection that closes
+        first fails it with that close."""
         await session.receive_until(lambda: session.core.edit_answered)
         if not session.core.edit_answered:
-            raise RuntimeError("OpenAI Realtime session closed during a history edit")
+            raise session.closed
 
     async def _close_current(self) -> None:
         cm, self._cm = self._cm, None
@@ -414,7 +417,7 @@ class OpenAIRealtimeDriver:
         while True:
             await session.receive_until(lambda: pending)
             if not pending:
-                return  # the server closed the connection
+                return  # the connection closed normally
             event = pending.popleft()
             event_type = getattr(event, "type", "")
             if event_type == "response.created":
