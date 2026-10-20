@@ -7,13 +7,12 @@ their winners compared in a further Choice. All calls belong to the same wall-cl
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 
 from realtime_framework.entity.model import (
-    TRANSPORT_RETRY,
     ChoiceContextLimitError,
+    RequestRetry,
     TransportFailureError,
 )
 from realtime_framework.entity.records import TraceEvent, current_trace_scope, trace_scope
@@ -314,46 +313,51 @@ class ChoiceDecision:
 
     async def _decide_with_retries(self, state, question, *, phase):
         """One question under the shared transport retry policy; each attempt is recorded."""
-        key = f"{self.selection.observation_id}:{len(self.calls)}"
-        retry = 0
-        while True:
+        started = None
+
+        async def send(attempt):
+            nonlocal started
             started = time.monotonic()
             try:
-                with self._attempt_scope(retry + 1):
+                with self._attempt_scope(attempt):
                     reply = await self.client.decide(state, question)
             except ChoiceContextLimitError as exc:
-                self._attempt_finished(retry + 1, started, question, "context_limit", error=exc)
+                self._attempt_finished(attempt, started, question, "context_limit", error=exc)
                 raise
-            except Exception as exc:
-                retry += 1
-                failure = self.client.classify_question_error(exc)
-                delay = TRANSPORT_RETRY.delay_s(retry, key, failure)
-                self._attempt_finished(
-                    retry,
-                    started,
-                    question,
-                    "failed" if delay is None else "retry",
-                    error=exc,
-                    failure=failure,
-                    delay=delay,
-                )
-                if delay is None:
-                    # Name the question so an error report shows which step failed.
-                    cause = RuntimeError(f"{phase} question {len(self.calls)}: {exc!r}")
-                    raise TransportFailureError(failure, cause, retry - 1) from exc
-                self.retries.append(
-                    {
-                        "call": len(self.calls),
-                        "phase": phase,
-                        "kind": failure.kind,
-                        "delay_s": delay,
-                        "detail": repr(exc)[:300],
-                    }
-                )
-                await asyncio.sleep(delay)
-            else:
-                self._attempt_finished(retry + 1, started, question, "ok", reply=reply)
-                return reply
+            self._attempt_finished(attempt, started, question, "ok", reply=reply)
+            return reply
+
+        def classify(exc):
+            if isinstance(exc, ChoiceContextLimitError):
+                return None
+            return self.client.classify_question_error(exc)
+
+        def record(attempt, exc, failure, delay):
+            self._attempt_finished(
+                attempt,
+                started,
+                question,
+                "failed" if delay is None else "retry",
+                error=exc,
+                failure=failure,
+                delay=delay,
+            )
+            if delay is None:
+                # Name the question so an error report shows which step failed.
+                cause = RuntimeError(f"{phase} question {len(self.calls)}: {exc!r}")
+                raise TransportFailureError(failure, cause, attempt - 1) from exc
+            self.retries.append(
+                {
+                    "call": len(self.calls),
+                    "phase": phase,
+                    "kind": failure.kind,
+                    "delay_s": delay,
+                    "detail": repr(exc)[:300],
+                }
+            )
+
+        key = f"{self.selection.observation_id}:{len(self.calls)}"
+        return await RequestRetry(key, classify, record).run_async(send)
 
     async def _compose_text(self):
         inventory = self.selection.text_composition

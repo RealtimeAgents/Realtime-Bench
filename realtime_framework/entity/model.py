@@ -426,22 +426,25 @@ def classify_http_failure(status: int, detail: str = "", retry_after_s=None) -> 
     return TransportFailure(FATAL)
 
 
+import asyncio
 import time
 from collections.abc import Callable
 
 
 @dataclass(frozen=True)
 class RequestRetry:
-    """Run one request unit under TRANSPORT_RETRY: a stateless turn.
+    """Run one request unit under TRANSPORT_RETRY: a stateless turn or a Decision question.
 
     ``send(attempt)`` makes one 1-based attempt. A failed attempt is classified, recorded and, if
-    the policy allows, sent again after its delay. ``replayable`` is False once the failed attempt
-    received model output. ``record(attempt, exc, failure, delay)`` sees every failure before any
-    wait; delay is None when the request is not sent again, and the exception then propagates.
+    the policy allows, sent again after its delay. ``classify`` returns None for an exception that
+    is not a transport failure; it propagates unrecorded. ``replayable`` is False once the failed
+    attempt received model output. ``record(attempt, exc, failure, delay)`` sees every classified
+    failure before any wait; delay is None when the request is not sent again, and the exception
+    then propagates unless ``record`` raises its own.
     """
 
     key: str  # the request unit's stable jitter key
-    classify: Callable[[BaseException], TransportFailure]
+    classify: Callable[[BaseException], TransportFailure | None]
     record: Callable[[int, BaseException, TransportFailure, float | None], None]
     replayable: Callable[[BaseException], bool] = lambda exc: True
 
@@ -457,8 +460,22 @@ class RequestRetry:
             time.sleep(delay)
             attempt += 1
 
+    async def run_async(self, send):
+        attempt = 1
+        while True:
+            try:
+                return await send(attempt)
+            except Exception as exc:
+                delay = self._failed(attempt, exc)
+                if delay is None:
+                    raise
+            await asyncio.sleep(delay)
+            attempt += 1
+
     def _failed(self, attempt: int, exc: Exception) -> float | None:
         failure = self.classify(exc)
+        if failure is None:
+            return None
         replayable = self.replayable(exc)
         delay = TRANSPORT_RETRY.delay_s(attempt, self.key, failure) if replayable else None
         self.record(attempt, exc, failure, delay)
