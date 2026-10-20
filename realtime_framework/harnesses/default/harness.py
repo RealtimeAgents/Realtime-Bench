@@ -739,10 +739,60 @@ FUNCTION_CALL_PROFILE = InteractionProfile(
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
 )
-# Driver capabilities.action_channel -> how the harness asks for and collects one action.
-ACTION_CHANNEL_PROFILES = {
-    "text_json": STANDARD_VLM_PROFILE,
-    "function_call": FUNCTION_CALL_PROFILE,
+# The choice models' profiles.
+JEV_PROFILE = InteractionProfile(
+    "jev_decisions",
+    action_space="Select one of the current observation's candidate actions.",
+    output_contract=(
+        "Return a typed Choice. You receive the current full interactables SoM and its "
+        "action-bound mark legend, without screenshots. Choose only executable candidates. "
+        "Typing choices contain observed literals, field suggestions, and calendar dates "
+        "in or adjacent to observed months, filtered by explicit field constraints. "
+        "Compose text lets you build other input through successive choices of exact words, "
+        "characters, or Unicode code points, then finish to type it. Spaces and casing are explicit. "
+        "You receive the current browser accessibility tree, visible control content, "
+        "and JEV-specific appearance descriptors. Hidden application state is unavailable."
+    ),
+    frame_prompt="Choose the next action from the current observation.",
+)
+
+MULTIMODAL_CHOICE_PROFILE = InteractionProfile(
+    "multimodal_decisions",
+    action_space=JEV_PROFILE.action_space,
+    output_contract=(
+        "Return a typed Choice from the current observation's executable candidates. "
+        "You receive its screenshot, full interactables SoM, action-bound mark legend, "
+        "accessibility tree and visible control state. Hidden application state is unavailable. "
+        "Typing choices contain observed literals and field suggestions. Compose text builds "
+        "other input through successive choices of words, characters or Unicode code points, "
+        "then finishes to type it. Spaces and casing are explicit."
+    ),
+    frame_prompt=JEV_PROFILE.frame_prompt,
+)
+
+MULTIMODAL_GAME_CHOICE_PROFILE = InteractionProfile(
+    "multimodal_game_decisions",
+    action_space=MULTIMODAL_CHOICE_PROFILE.action_space,
+    output_contract=(
+        MULTIMODAL_CHOICE_PROFILE.output_contract
+        + " In games, declared keys offer taps and short holds, including simultaneous pairs. "
+        "Holds persist for their stated duration; later actions do not cancel them. "
+        "Grid choices name visible board positions without judging move legality. "
+        "Pointer composition chooses coordinates before executing one action. "
+        "mouse_down stays pressed until mouse_up; use move between them for a drag."
+    ),
+    frame_prompt=MULTIMODAL_CHOICE_PROFILE.frame_prompt,
+)
+# Context policy item 11 names the profile for each task category.
+INTERACTION_PROFILES = {
+    profile.name: profile
+    for profile in (
+        STANDARD_VLM_PROFILE,
+        FUNCTION_CALL_PROFILE,
+        JEV_PROFILE,
+        MULTIMODAL_CHOICE_PROFILE,
+        MULTIMODAL_GAME_CHOICE_PROFILE,
+    )
 }
 
 
@@ -926,7 +976,7 @@ class DefaultHarness(VisionAgentBase):
     select history transport, the action channel, and interruption behavior.
     """
 
-    interaction_profile: InteractionProfile = STANDARD_VLM_PROFILE
+    interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
 
     def __init__(self, config, log_dir=None, *, trace):
@@ -947,7 +997,6 @@ class DefaultHarness(VisionAgentBase):
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config)
         self.driver.bind_trace(self._trace)
-        self.interaction_profile = ACTION_CHANNEL_PROFILES[self.driver.capabilities.action_channel]
         self._context_policy = phase1_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options
         )
@@ -986,6 +1035,9 @@ class DefaultHarness(VisionAgentBase):
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
         self._pending_feedback = ""
+        self.interaction_profile = INTERACTION_PROFILES[
+            self._context_policy.prompts[self.task_category]  # context policy item 11
+        ]
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.
         self._system_block = system_block(fixed)
