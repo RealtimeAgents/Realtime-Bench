@@ -1,11 +1,13 @@
 """One receiver per OpenAI Realtime connection: an in-place edit made while a response streams
 loses neither the response's events nor the edit's acknowledgements.
 
-The driver reaches a local WebSocket stub (tests/agent_trace/stubs.py) through the OpenAI SDK.
-The stub can hold a response after its first delta and send the rest only as an edit arrives:
-the delete's acknowledgement is followed by a delta, the create's by the last delta and
-response.done. Two readers on the connection would race for these messages, and websockets
-refuses a second concurrent recv outright.
+Most tests reach a local WebSocket stub (tests/agent_trace/stubs.py) through the OpenAI SDK. The
+stub can hold a response after its first delta and send the rest only as an edit arrives: the
+delete's acknowledgement is followed by a delta, the create's by the last delta and
+response.done. Before the session core split the edit wait and the response each read the
+connection, and websockets refused the second concurrent recv. The tests at the end drive the
+receiver on a fake connection, which counts the reads in flight: one read for every waiter, a
+clean close, a failed read.
 """
 
 from __future__ import annotations
@@ -22,12 +24,14 @@ from websockets.frames import Close
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.events import (
     GenerationBoundary,
+    ProviderError,
     ProviderHistoryState,
     TextDelta,
     UsageSnapshot,
 )
 from realtime_framework.entity.model import (
     ConnectRequest,
+    GenerationHandle,
     GenerationRequest,
     HistorySyncRequest,
     SessionSeed,
@@ -38,7 +42,16 @@ from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver, _
 from realtime_framework.providers.openai_realtime_session import Delivery
 from tests.agent_trace.stubs import WsStub
 
-from .test_openai_realtime_session import ANSWER, deleted, opened, turn, view
+from .test_openai_realtime_session import (
+    ANSWER,
+    deleted,
+    done,
+    error,
+    opened,
+    response_events,
+    turn,
+    view,
+)
 
 SEED = SessionSeed("system instruction", "gpt-realtime-replay", None, 1.0, ANSWER)
 USAGE = {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}
@@ -127,6 +140,11 @@ def _text(events) -> str:
     return "".join(e.text for e in events if isinstance(e, TextDelta))
 
 
+def _within(coroutine, timeout: float = 30.0):
+    """Run the coroutine, failing instead of hanging if it never ends."""
+    return asyncio.run(asyncio.wait_for(coroutine, timeout))
+
+
 async def _edit_during_response(driver: OpenAIRealtimeDriver):
     """Two decisions; the first screenshot folds in place during the second response."""
     await driver.connect(ConnectRequest(seed=SEED))
@@ -148,7 +166,7 @@ async def _edit_during_response(driver: OpenAIRealtimeDriver):
 
 def test_an_edit_during_a_response_keeps_both():
     with WsStub(_server(held=2)) as stub:
-        received, sync, core = asyncio.run(_edit_during_response(_driver(stub)))
+        received, sync, core = _within(_edit_during_response(_driver(stub)))
     (connection,) = stub.connections
 
     # The response: every delta, its usage and its end, in order.
@@ -194,7 +212,7 @@ async def _two_connections(driver: OpenAIRealtimeDriver):
 
 def test_events_carry_their_connection_and_generation():
     with WsStub(_server()) as stub:
-        responses = asyncio.run(_two_connections(_driver(stub)))
+        responses = _within(_two_connections(_driver(stub)))
     assert len(stub.connections) == 2
     assert [{(e.connection, e.generation) for e in events} for events in responses] == [
         {(1, 1)},
@@ -222,7 +240,7 @@ def test_connection_numbers_follow_the_trace_after_a_refused_handshake():
     with WsStub(_server(), reject=1) as stub:
         driver = _driver(stub)
         driver.bind_trace(trace)
-        responses = asyncio.run(_two_connections(driver))
+        responses = _within(_two_connections(driver))
     assert stub.rejected == 1 and len(stub.connections) == 2
     assert [{(e.connection, e.generation) for e in events} for events in responses] == [
         {(2, 1)},
@@ -248,7 +266,7 @@ async def _interrupted(driver: OpenAIRealtimeDriver):
 
 def test_interrupt_cancels_the_response_by_its_id():
     with WsStub(_server(held=1)) as stub:
-        received, result = asyncio.run(_interrupted(_driver(stub)))
+        received, result = _within(_interrupted(_driver(stub)))
     (connection,) = stub.connections
     cancel = json.loads(connection.received[-1])
     assert cancel["type"] == "response.cancel" and cancel["response_id"] == "resp_1"
@@ -279,7 +297,7 @@ async def _repaired(driver: OpenAIRealtimeDriver):
 
 def test_an_incomplete_response_is_replaced_by_its_collected_output():
     with WsStub(_server(status="incomplete")) as stub:
-        received, sync, core = asyncio.run(_repaired(_driver(stub)))
+        received, sync, core = _within(_repaired(_driver(stub)))
     (connection,) = stub.connections
     assert (received[-1].kind, received[-1].history_state) == (
         "interrupted",
@@ -341,11 +359,6 @@ def _waiting_edit():
     return core, generation, batch
 
 
-def _within(coroutine, timeout: float = 10.0):
-    """Run the coroutine, failing instead of hanging if it never ends."""
-    return asyncio.run(asyncio.wait_for(coroutine, timeout))
-
-
 def test_a_clean_close_during_an_edit_fails_it_with_that_close():
     """The edit's fallback records the close itself, as it did before the session core split
     (which read with conn.recv())."""
@@ -357,3 +370,120 @@ def test_a_clean_close_during_an_edit_fails_it_with_that_close():
     with pytest.raises(ConnectionClosedOK) as raised:
         _within(OpenAIRealtimeDriver._wait_for_item_edits(session))
     assert raised.value is closed
+
+
+async def _waiting(connection: _FakeConnection) -> None:
+    """Return once a read is in, with time for a second one to start if anything would."""
+    for _ in range(500):
+        if connection.in_flight:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.2)
+
+
+def test_two_waiters_share_one_read():
+    """An edit and a response both wait before anything arrives. One recv serves both, and each
+    gets its own events."""
+
+    async def scenario():
+        connection = _FakeConnection()
+        core, generation, batch = _waiting_edit()
+        session = _Session(1, connection, core)
+        edit = asyncio.create_task(OpenAIRealtimeDriver._wait_for_item_edits(session))
+        response = asyncio.create_task(session.receive_until(lambda: len(generation.events) == 4))
+        await _waiting(connection)
+        assert connection.in_flight == 1
+        delete, create = batch.operations
+        created, added, text, finished = response_events()
+        for event in (
+            deleted(delete.item_id),
+            created,
+            added,
+            done(create.item_id),
+            text,
+            finished,
+        ):
+            connection.queue.put(event)
+        await asyncio.gather(edit, response)
+        return connection, core, generation, batch
+
+    connection, core, generation, batch = _within(scenario())
+    assert connection.most_in_flight == 1
+    assert core.finish_edit() is batch
+    assert [event.type for event in generation.events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.output_text.delta",
+        "response.done",
+    ]
+
+
+def test_a_failed_read_raises_in_every_waiter():
+    failure = ConnectionError("read failed")
+
+    async def scenario():
+        connection = _FakeConnection()
+        core, generation, _ = _waiting_edit()
+        session = _Session(1, connection, core)
+        edit = asyncio.create_task(OpenAIRealtimeDriver._wait_for_item_edits(session))
+        response = asyncio.create_task(session.receive_until(lambda: generation.events))
+        await _waiting(connection)
+        connection.queue.put(failure)
+        raised = await asyncio.gather(edit, response, return_exceptions=True)
+        # A waiter that comes later raises it too, without reading again.
+        try:
+            await session.receive_until(lambda: generation.events)
+        except ConnectionError as later:
+            raised.append(later)
+        return raised
+
+    assert all(raised is failure for raised in _within(scenario()))
+
+
+def _offline_driver() -> OpenAIRealtimeDriver:
+    driver = OpenAIRealtimeDriver(
+        ModelConfig(
+            adapter_type="openai_realtime",
+            model_name="gpt-realtime-replay",
+            api_base_url="http://127.0.0.1:9/v1",  # never connected to
+            api_key="sk-receive-stub",
+        )
+    )
+    driver.bind_trace(UNTRACED)
+    return driver
+
+
+def test_events_end_when_the_connection_closes():
+    """A clean close ends the response's events; an error on the way is reported with the
+    connection and generation numbers."""
+    connection = _FakeConnection()
+    core = opened([turn(0)])
+    generation = core.start_generation("d0.frame")
+    session = _Session(3, connection, core)
+    created, *_ = response_events()
+    for event in (created, error(None), _clean_close()):
+        connection.queue.put(event)
+    handle = GenerationHandle("turn-0", opaque=(session, generation))
+
+    async def collect():
+        return [event async for event in _offline_driver().events(handle)]
+
+    events = _within(collect())
+    assert [type(event) for event in events] == [GenerationBoundary, ProviderError]
+    assert events[1].fatal
+    assert {(event.connection, event.generation) for event in events} == {(3, 1)}
+
+
+def test_an_operation_whose_send_fails_is_unknown():
+    driver = _offline_driver()
+    core = opened([turn(0, "a0")])
+    observation = core.observe(view([turn(0, "a0"), turn(1)]))
+    driver._session = _Session(1, _FakeConnection(), core)
+
+    def send(operation):
+        raise ConnectionError("send failed")
+
+    driver._send = send
+    with pytest.raises(ConnectionError):
+        _within(driver._send_all([observation]))
+    assert core.delivery[observation.key] == Delivery.UNKNOWN
