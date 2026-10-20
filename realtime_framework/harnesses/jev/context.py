@@ -9,6 +9,7 @@ from realtime_framework.entity.context_policy import (
     JEV_LEDGER_HEADER,
 )
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
+from realtime_framework.providers.legacy import chat_messages
 from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 
@@ -86,3 +87,42 @@ def observation_messages(system_instruction: str, turns) -> tuple[dict, ...]:
     messages.append({"role": "user", "content": JEV_CURRENT_PREFIX
                      + json.dumps(current, ensure_ascii=False)})
     return tuple(messages)
+
+
+def digest_messages(request) -> tuple[dict, ...]:
+    """Action-digest state: the executed action/feedback ledger plus the current observation.
+
+    Older screenshots, SoM and choices are not resent.
+    """
+    messages = []
+    history = []
+    for item in request.items:
+        block = item.block
+        if block.kind == "system_instruction":
+            messages.append({"role": "system", "content": block.text})
+        elif block.kind == "action_ledger":
+            messages.append(
+                {"role": "user", "content": ARCHIVED_ACTION_LEDGER_HEADER + "\n" + block.text}
+            )
+        elif block.kind == "model_output":
+            history.append({"observation_id": block.based_on, "action": block.text})
+        elif block.kind == "execution_feedback":
+            history[-1]["execution_feedback"] = block.text
+        elif block.kind == "frame":
+            if history:
+                compacted = compact_repeated_records(history, ("observation_id",))
+                messages.append({"role": "user", "content": JEV_HISTORY_PREFIX
+                                 + json.dumps(compacted, ensure_ascii=False)})
+            # The harness omits live candidates and the composition vocabulary from the prompt;
+            # they are sent as native Choice criteria.
+            current = json.loads(block.text.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
+            messages.append({"role": "user", "content": JEV_CURRENT_PREFIX
+                             + json.dumps(current, ensure_ascii=False)})
+    return tuple(messages)
+
+
+def decision_messages(request) -> tuple[dict, ...]:
+    """The message list ChoiceDecision reads: canonical turns or the action digest."""
+    if request.history_form == "action_digest":
+        return digest_messages(request)
+    return chat_messages(request)
