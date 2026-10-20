@@ -223,17 +223,17 @@ CASES = [
         env={"stop_check": lambda env: env.clock.now >= env.t0 + 2.25},
     ),
     # Decision 3's reply never comes. The bounded wait expires, the agent is aborted and the
-    # decision is skipped (runner.py:337-345, 395-411, 523). The abort closes the held request;
-    # the abandoned worker then sends it again (harnesses/default/harness.py:1284-1340) and gets
-    # the fourth reply while it is drained.
+    # decision is skipped (runner.py:337-345, 395-411, 523). The abort closes the held request
+    # and ends the decision's epoch, so the abandoned worker does not send it again
+    # (harnesses/default/harness.py:1159, 1350; entity/model.py:479-491).
     Case(
         "bounded_call_timeout",
-        [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT), Step(CLICK_AGREE)],
-        [0.5, 0.5, 0.5, Hang(BOUNDED_WAIT_S), 0.0],
+        [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
+        [0.5, 0.5, 0.5, Hang(BOUNDED_WAIT_S)],
         ["applied", "applied", "applied", "skipped_timeout"],
         ["click", "type", "click"],
         "time_limit",
-        requests=5,
+        requests=4,
         held=(True,),
     ),
     # A fault that is not the guest refusing the action invalidates the run (runner.py:538-541).

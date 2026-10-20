@@ -817,7 +817,9 @@ from realtime_framework.providers.registry import adapter_class
 from realtime_framework.entity.events import EmptyInterruptedToolTurnError
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import RequestRetry
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import retry_cancellation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import trace_scope
 
@@ -1153,6 +1155,8 @@ class DefaultHarness(VisionAgentBase):
 
     def stream_generate(self, tick=0):
         self._trace_decision = tick
+        # The runner abandons this decision by aborting its epoch: its retries stop there.
+        epoch, abandoned = self._runtime.epoch_scope()
         observations = self._runtime.drain_observations()
         if not observations:
             return {
@@ -1263,6 +1267,7 @@ class DefaultHarness(VisionAgentBase):
                 timeout=None,
                 request_builder=lambda turns, ledger: self._build_request(turns, ledger, call),
                 decision=tick,
+                epoch=epoch,
             )
 
         collector_type = (
@@ -1342,7 +1347,13 @@ class DefaultHarness(VisionAgentBase):
             replayable=lambda exc: not received_output(exc),
         )
         try:
-            runtime_result = retry.run(send)
+            with retry_cancellation(abandoned):
+                runtime_result = retry.run(send)
+        except RetryCancelled:
+            for execution in inspection_executions:
+                if execution is not None:
+                    self.tool_runtime.finish(execution, outcome="superseded_by_timeout")
+            raise
         except Exception:  # noqa: BLE001, S110 - record() kept the final failure
             pass
         else:
