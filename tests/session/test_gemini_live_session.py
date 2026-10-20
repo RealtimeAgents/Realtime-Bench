@@ -370,7 +370,7 @@ def test_idle_ends_a_turn_complete_interaction_uncleanly():
 def test_reply_read_after_close_keeps_its_generation():
     """An abort closes the connection while its reply is still being read. What its reader
     drains keeps that connection and generation, even once the next connection has started a
-    generation of its own."""
+    generation of its own, and leaves the session alone."""
     core = session_core()
     connected(core)
     start_turn(core, "turn-0")
@@ -384,10 +384,18 @@ def test_reply_read_after_close_keeps_its_generation():
     connected(core, view([turn(0)]))
     assert core.connection == 2 and not core.renewal_required
     start_turn(core, "turn-1")
+    receive(core, update("handle-2"))  # connection 2's turn is in progress
 
+    for message in (update("handle-1"), go_away("5s")):
+        stale = core.received(1, message, 0.0)
+        assert (stale.connection, stale.generation, stale.generation_id) == (1, 1, "turn-0")
+        assert stale.control == {}
     stale = core.received(1, server_content(turnComplete=True), 0.0)
-    assert (stale.connection, stale.generation, stale.generation_id) == (1, 1, "turn-0")
     assert stale.complete and stale.ends
+    # Connection 1's clean completion does not promote connection 2's candidate mid-turn.
+    assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-2")
+    assert not core.renewal_required and core.go_away_deadline is None
+    assert not core.last_turn_clean
     current = receive(core, server_content(turnComplete=True))
     assert (current.connection, current.generation, current.generation_id) == (2, 1, "turn-1")
     assert current.complete and core.replies == {}

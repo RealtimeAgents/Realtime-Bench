@@ -187,7 +187,8 @@ class SessionCore:
 
     Closing a connection clears what belonged to it; the session state stays until the next
     connection replaces it. A reply still being read from a closed connection keeps its
-    generation, and is otherwise applied like any other message.
+    generation and still ends where it ends, but no longer changes the session: no resumption
+    handle, goAway or clean boundary is taken from it.
     """
 
     def __init__(self, options: dict):
@@ -430,9 +431,13 @@ class SessionCore:
             complete = bool(server is not None and getattr(server, "turn_complete", False))
         interrupted = bool(server is not None and getattr(server, "interrupted", False))
         generation.interrupted = generation.interrupted or interrupted
-        control = self._control(message, clean=complete and not generation.interrupted, now=now)
-        if complete:
-            self.last_turn_clean = not generation.interrupted
+        if connection == self.connection:
+            control = self._control(message, clean=complete and not generation.interrupted, now=now)
+            if complete:
+                self.last_turn_clean = not generation.interrupted
+        else:
+            # Read from a closed connection: the session is no longer there to change.
+            control = {}
         # IDLE ends the interaction whichever completion signal is configured; under turn_complete
         # it ends it without completing it.
         ends = complete or status == "IDLE"
