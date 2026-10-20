@@ -2082,7 +2082,7 @@ def main():
             solved=solved,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
-            fps=env_fps,
+            fps=model_input_fps,
             termination=termination,
             horizon_s=a.max_minutes * 60,
         )
@@ -2102,7 +2102,7 @@ def main():
             solved=None,
             clock_mode=a.clock,
             tokens_per_frame=tokens_per_frame,
-            fps=env_fps,
+            fps=model_input_fps,
             termination=None,
             horizon_s=a.max_minutes * 60,
             validate_decision_count=False,
@@ -2181,7 +2181,7 @@ def main():
         else 0,
         "output_clock_policy": OUTPUT_CLOCK_POLICY,
         "tokens_per_world_second": (
-            tokens_per_frame * env_fps
+            tokens_per_frame * model_input_fps
             if a.clock == "token" and tokens_per_frame is not None
             else None
         ),
