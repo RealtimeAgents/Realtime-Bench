@@ -16,7 +16,12 @@ from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
+from realtime_framework.entity.config import EnvironmentBudgetConfig
+from realtime_framework.sandbox.budget import operation_budget
+from realtime_framework.sandbox.guest import action_timeout
 from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
+
+ENVIRONMENT_BUDGET = EnvironmentBudgetConfig()
 
 # A tapped key (KEY action under the token clock) stays down for this many seconds so that one
 # rendered frame observes it: one 60 Hz rAF at any environment fps.
@@ -189,11 +194,12 @@ class GuestEnvironment:
 
     def capture(self):
         started = time.time()
-        obs = (
-            self.scene_capture.capture(self.tick_index())
-            if self.scene_capture is not None
-            else Observation(self.g.screenshot(), time.time(), self.tick_index())
-        )
+        with operation_budget("capture", ENVIRONMENT_BUDGET.capture_s):
+            obs = (
+                self.scene_capture.capture(self.tick_index())
+                if self.scene_capture is not None
+                else Observation(self.g.screenshot(), time.time(), self.tick_index())
+            )
         ensure_observation_geometry(obs)
         if self.clock_mode == "token":
             obs.timestamp = self._logical_tick * self.d
@@ -228,10 +234,11 @@ class GuestEnvironment:
                         continue
                 repeat_events, repeats_sent = self._pending_repeat_events(step)
                 try:
-                    if repeat_events:
-                        self.task.advance_clock(step, key_events=repeat_events)
-                    else:
-                        self.task.advance_clock(step)
+                    with operation_budget("clock advance", ENVIRONMENT_BUDGET.clock_advance_s):
+                        if repeat_events:
+                            self.task.advance_clock(step, key_events=repeat_events)
+                        else:
+                            self.task.advance_clock(step)
                 except Exception as exc:
                     self._invalid_run = {
                         "category": "environment",
@@ -259,7 +266,8 @@ class GuestEnvironment:
         if not callable(renderer):
             return None
         try:
-            return renderer()
+            with operation_budget("frame render", ENVIRONMENT_BUDGET.clock_advance_s):
+                return renderer()
         except Exception as exc:
             self._invalid_run = {
                 "category": "environment",
@@ -885,38 +893,42 @@ class GuestEnvironment:
                 self._last_execution_result = self._execute_clock_key(action)
                 self.actions += 1
                 return "applied"
-            # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
-            focus_restored = action_type in (
-                ActionType.KEY,
-                ActionType.HOLD_KEY,
-                ActionType.TYPE,
-            ) and self._ensure_page_focus()
-            begin_barrier = getattr(self.task, "begin_gui_action", None)
-            complete_barrier = getattr(self.task, "complete_gui_action", None)
-            barrier_snapshot = (
-                begin_barrier() if callable(begin_barrier) and callable(complete_barrier) else None
-            )
-            result = None
-            if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
-                # Keys xdotool cannot name and zero-length holds fall through to the guest, which
-                # validates them (HTTP 400 for unsupported names).
-                result = self._execute_wall_hold(action)
-            if result is None:
-                result = self.g.execute_action(action)
-                if self.clock_mode != "token" and action_type in (
+            budget = action_timeout(action, ENVIRONMENT_BUDGET.action_s)
+            with operation_budget(f"{action_type.value} action", budget):
+                # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
+                focus_restored = action_type in (
                     ActionType.KEY,
                     ActionType.HOLD_KEY,
-                ):
-                    restored = self._restore_wall_holds(action)
-                    if restored:
-                        if not isinstance(result, dict):
-                            result = {"guest_result": result}
-                        result["restored_wall_holds"] = restored
-            if barrier_snapshot is not None:
-                barrier_result = complete_barrier(barrier_snapshot)
-                if not isinstance(result, dict):
-                    result = {"guest_result": result}
-                result["business_action_barrier"] = barrier_result
+                    ActionType.TYPE,
+                ) and self._ensure_page_focus()
+                begin_barrier = getattr(self.task, "begin_gui_action", None)
+                complete_barrier = getattr(self.task, "complete_gui_action", None)
+                barrier_snapshot = (
+                    begin_barrier()
+                    if callable(begin_barrier) and callable(complete_barrier)
+                    else None
+                )
+                result = None
+                if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
+                    # Keys xdotool cannot name and zero-length holds fall through to the guest,
+                    # which validates them (HTTP 400 for unsupported names).
+                    result = self._execute_wall_hold(action)
+                if result is None:
+                    result = self.g.execute_action(action)
+                    if self.clock_mode != "token" and action_type in (
+                        ActionType.KEY,
+                        ActionType.HOLD_KEY,
+                    ):
+                        restored = self._restore_wall_holds(action)
+                        if restored:
+                            if not isinstance(result, dict):
+                                result = {"guest_result": result}
+                            result["restored_wall_holds"] = restored
+                if barrier_snapshot is not None:
+                    barrier_result = complete_barrier(barrier_snapshot)
+                    if not isinstance(result, dict):
+                        result = {"guest_result": result}
+                    result["business_action_barrier"] = barrier_result
             if focus_restored:
                 if not isinstance(result, dict):
                     result = {"guest_result": result}
@@ -951,7 +963,8 @@ class GuestEnvironment:
             return True
         if self.stop_check is not None:
             try:
-                terminal = self.stop_check()
+                with operation_budget("state read", ENVIRONMENT_BUDGET.state_read_s):
+                    terminal = self.stop_check()
                 if terminal:
                     self._episode_over = True
                     if isinstance(terminal, str):
