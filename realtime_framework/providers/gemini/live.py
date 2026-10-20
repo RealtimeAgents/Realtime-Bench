@@ -51,7 +51,8 @@ LIVE_PROTOCOL_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
     "input_transport": ("realtime_input", ("realtime_input", "client_content")),
-    # when_idle and omit both send no scheduling field; omit names that choice for Extended Thinking.
+    # when_idle and omit both send no scheduling field; omit names that choice for the models
+    # without function scheduling (3.1 Flash Live, 3.8 Extended Thinking).
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
 }
 # Context policy item 10: how past tool calls are replayed into a rebuilt session. It stays in
@@ -146,8 +147,15 @@ class GeminiLiveDriver:
         litellm_provider="gemini",
     )
     model_defaults: ClassVar[dict[str, dict]] = {
+        # 3.1 Flash Live has no asynchronous function calling: a call blocks until its
+        # response, and response scheduling does not apply.
         "gemini-3.1-flash-live-preview": {
-            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
+            "provider_options": {
+                **_CLIENT_CONTENT_TOOLS,
+                "tool_behavior": "blocking",
+                "tool_response_scheduling": "omit",
+                **_TOOL_TRANSCRIPT,
+            },
         },
         "gemini-3.8-live": {
             "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
