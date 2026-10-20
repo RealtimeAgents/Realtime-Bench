@@ -174,7 +174,7 @@ def run_stream(
                     {
                         "category": "harness",
                         "reason": "episode_trace_write_failed",
-                        "detail": failure[:2000],
+                        "detail": failure[-2000:],
                     },
                 )
             log(f"[invalid-run] harness:episode_trace_write_failed — {failure}")
@@ -198,7 +198,8 @@ def run_stream(
         if getattr(env, "_invalid_run", None) is None:
             value = {"category": category, "reason": reason}
             if detail:
-                value["detail"] = str(detail)[:2000]
+                # The end of a traceback names the exception.
+                value["detail"] = str(detail)[-2000:]
             setattr(env, "_invalid_run", value)
             log(f"[invalid-run] {category}:{reason}" + (f" — {detail}" if detail else ""))
             _emit(TraceEvent.RUN_INVALIDATED, value)
@@ -819,9 +820,9 @@ def run_stream(
                 with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s):
                     snapshot = snapshotter()
                 setattr(env, "_termination_snapshot", snapshot)
+                snapshot_s = _world_s()
                 setattr(env, "_termination_snapshot_captured", True)
                 setattr(env, "_termination_snapshot_error", None)
-                snapshot_s = finalized_s
             except Exception:
                 failure = traceback.format_exc()
                 setattr(env, "_termination_snapshot_error", failure)
@@ -854,13 +855,16 @@ def run_stream(
 
     def _termination(reason, finalized_s, snapshot_s):
         """What the report reads about the end: the stop reason, the end time its rule gives
-        and when the scored snapshot was frozen (None without one), in world seconds. An end the
-        loop first sees while finalizing ends at ``finalized_s``."""
+        and when the read of the scored snapshot returned (None without one), in world seconds.
+        An end the loop first sees while finalizing ends at ``finalized_s``."""
         if reason in {"time_limit", "tick_limit"}:
             end_s = max_ticks * delta_s
-        else:
-            signal = reason if reason in {"invalid_run", "think_budget"} else "environment"
-            end_s = end_signals.get(signal, finalized_s)
+        elif reason in {"invalid_run", "think_budget"}:
+            end_s = end_signals.get(reason, finalized_s)
+        elif getattr(env, "_episode_over", False):  # the task's own reason
+            end_s = end_signals.get("environment", finalized_s)
+        else:  # agent_done, agent_fail and completed have no end signal
+            end_s = finalized_s
         return {
             "stop_reason": reason,
             "end_s": round(end_s, 9),
@@ -1252,6 +1256,8 @@ def run_stream(
     except Exception:
         failure = traceback.format_exc()
         log(f"[default] decision loop raised:\n{failure}")
+        # The whole traceback, for the summary's error; the invalid-run detail keeps its end.
+        setattr(env, "_loop_error", failure)
         _invalidate("runner", "run_exception", failure)
     _finalize()
     return timeline
@@ -1806,6 +1812,7 @@ def main():
                 tokens_per_frame=tokens_per_frame,
                 trace=episode_trace,
             )
+            error = getattr(env, "_loop_error", None)
         finally:
             # The agent's run window is recorded even when the loop ends in an error.
             # Physical diagnostic only; the token-clock horizon is simulated and does not bound wall time.

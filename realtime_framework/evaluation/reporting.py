@@ -789,19 +789,31 @@ from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import validate_episode_trace
 
-# Every episode has exactly one outcome; only pass scores 1. An unsolved episode the scored horizon
-# (max_minutes, 5 by default) stopped is a timeout; any task-specific end is a fail, however long
-# teardown ran after it. The scorer input is frozen at the horizon, so a solved episode always
-# passes.
+# Every episode has exactly one outcome; only pass scores 1. An unsolved episode that reached the
+# scored horizon (max_minutes, 5 by default) is a timeout, whatever the task reported at its end;
+# any earlier, task-specific end is a fail. The end time is the termination record's, latched
+# before teardown, so teardown never turns a fail into a timeout. The scorer input is frozen at
+# the horizon, so a solved episode always passes.
 OUTCOMES = ("pass", "fail", "timeout", "error")
 HORIZON_STOP_REASONS = frozenset({"time_limit", "tick_limit"})
 
 
 def _reached_horizon(summary: dict) -> bool:
-    """Whether the horizon stopped the episode, by the stop reason the loop latched. main() copies
-    ``stop_reason`` from the latch the termination record holds; summaries written before the
-    record have the field too."""
-    return summary.get("stop_reason") in HORIZON_STOP_REASONS
+    """Whether the episode ran the whole scored horizon: the horizon stopped it, or it ended at
+    or after the horizon whatever the task reported. Summaries written before the termination
+    record are judged by their stop reason and world_time_s, as they were when written."""
+    termination = summary.get("termination")
+    if termination is None:
+        if summary.get("stop_reason") in HORIZON_STOP_REASONS:
+            return True
+        world, minutes = summary.get("world_time_s"), summary.get("max_minutes")
+        numbers = all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in (world, minutes)
+        )
+        return numbers and world >= 60 * minutes
+    # The record keeps nine decimals (evaluation/runner.py _termination).
+    horizon_s = round(60 * summary["max_minutes"], 9)
+    return termination["stop_reason"] in HORIZON_STOP_REASONS or termination["end_s"] >= horizon_s
 
 
 def episode_outcome(summary: dict) -> dict:
