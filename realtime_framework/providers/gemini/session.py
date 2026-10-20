@@ -165,10 +165,18 @@ class Connect:
 
 @dataclass(frozen=True)
 class Received:
-    """One server message, as the core applied it."""
+    """One server message, as the core applied it.
 
-    connection: int  # the connection it arrived on
-    generation: int  # the generation on that connection whose reply was being read
+    ``generation`` is the local generation in flight on the connection when the message was
+    read, not proof that the message belongs to its reply. The receiver reads only while a
+    generation asks for a message, so a message that arrived after one reply ended and before
+    the next generation started is read, and numbered, as part of the next. Attributing messages
+    by arrival is left to streaming, which reads as messages arrive: one read between a reply's
+    end and the next generation's start then belongs to no generation, an orphan here.
+    """
+
+    connection: int  # the connection it was read from
+    generation: int  # the generation in flight on that connection when it was read
     generation_id: str  # that generation's request id
     message: Any
     status: str | None  # interaction_status
@@ -188,6 +196,10 @@ class _Generation:
 
 class SessionCore:
     """The Live session as this client wrote it, across the connections that carry it.
+
+    Connections are numbered from 1 as they are set up, generations from 1 on each connection.
+    The numbers a message gets say which generation was in flight when it was read; they do not
+    establish that it belongs to that reply (see Received).
 
     Closing a connection clears what belonged to it; the session state stays until the next
     connection replaces it. A reply still being read from a closed connection keeps its
