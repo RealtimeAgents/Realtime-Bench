@@ -2,13 +2,21 @@
 
 An action is interpreted against one frame's entry: its SoM marks resolve the action's element
 references and its geometry maps the action's image coordinates to the desktop. The entry stays
-when the provider context folds or drops the frame. A turn-based action is interpreted against the
-newest frame.
+when the provider context folds or drops the frame. A streaming action names the frame it is based
+on; a turn-based action is interpreted against the newest frame.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+# A streaming action whose frame cannot be found is rejected, not executed (phase2.md, 动作的定位依据).
+INVALID_GROUNDING_FRAME = "invalid_grounding_frame"
+# Why: the action names no frame, names it with something other than an integer, or names a
+# frame that was never sent.
+MISSING_FRAME = "missing_frame"
+INVALID_FRAME_SYNTAX = "invalid_frame_syntax"
+FRAME_NOT_IN_TABLE = "frame_not_in_table"
 
 
 @dataclass
@@ -26,6 +34,7 @@ class FrameRecord:
 class FrameTable:
     def __init__(self) -> None:
         self._frames: dict[int, FrameRecord] = {}
+        self._newest_sent = 0
 
     def register(
         self, observation_id: str, captured_unix_s: float, geometry: dict, marks: dict | None
@@ -40,6 +49,26 @@ class FrameTable:
         record = self._frames[frame]
         record.send_status = "sent"
         record.sent_unix_s = sent_unix_s
+        self._newest_sent = frame
 
     def latest(self) -> FrameRecord | None:
         return self._frames.get(len(self._frames))
+
+    def locate(self, reference: object) -> tuple[FrameRecord | None, str | None]:
+        """The sent frame an action's frame field names, or None and why it cannot be found."""
+        if reference is None:
+            return None, MISSING_FRAME
+        if type(reference) is not int:
+            return None, INVALID_FRAME_SYNTAX
+        record = self._frames.get(reference)
+        if record is None or record.send_status != "sent":
+            return None, FRAME_NOT_IN_TABLE
+        return record, None
+
+    def age(self, record: FrameRecord, at_unix_s: float) -> dict:
+        """How old a frame is when an action based on it arrives: the frames sent after it, and
+        the seconds since its capture."""
+        return {
+            "age_frames": self._newest_sent - record.frame,
+            "age_s": at_unix_s - record.captured_unix_s,
+        }
