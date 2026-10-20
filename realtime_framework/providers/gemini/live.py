@@ -129,7 +129,8 @@ class _Receiver:
         self._session = session
         self._core = core
         self._clock = clock
-        self._messages = None
+        self._messages = None  # the SDK's current receive() iterator
+        self._opened_empty = False  # it has given no message yet
 
     async def next(self) -> Received:
         if self.failure is not None:
@@ -138,11 +139,18 @@ class _Receiver:
             while True:
                 if self._messages is None:
                     self._messages = self._session.receive().__aiter__()
+                    self._opened_empty = True
                 try:
                     message = await anext(self._messages)
                 except StopAsyncIteration:
+                    if self._opened_empty:
+                        raise RuntimeError(
+                            f"Gemini Live connection {self.number}: receive() ended without a"
+                            " message"
+                        ) from None
                     self._messages = None
                     continue
+                self._opened_empty = False
                 received = self._core.received(self.number, message, self._clock.monotonic())
                 if received is not None:
                     return received

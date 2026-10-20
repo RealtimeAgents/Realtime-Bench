@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 from types import SimpleNamespace
 
 from google.genai import errors as genai_errors
@@ -69,10 +70,11 @@ class FakeLive:
         self.sockets = [FakeSocket(frames) for frames in scripts]
         self._next = iter(self.sockets)
         self._log = log
+        self.session_type = genai_live.AsyncSession
 
     def connect(self, *, model, config):
         self._log.append(("connect", config.session_resumption.handle))
-        session = genai_live.AsyncSession(
+        session = self.session_type(
             api_client=SimpleNamespace(vertexai=False),
             websocket=next(self._next),
             setup_complete=types.LiveServerSetupComplete(),
@@ -300,3 +302,31 @@ def test_an_orphan_message_is_logged_and_skipped(monkeypatch, caplog):
         failure = asyncio.run(run())
     assert failure.code == 1011
     assert "Gemini Live connection 1: no generation takes LiveServerMessage" in caplog.messages
+
+
+def test_a_receive_that_ends_without_a_message_fails(monkeypatch):
+    """google-genai's receive() ends only after a message. An iterator that ends without one
+    fails the read instead of being reopened forever, which would hold the event loop."""
+
+    class EmptyReceive(genai_live.AsyncSession):
+        async def receive(self):
+            return
+            yield
+
+    rig = Rig(monkeypatch, "gemini-3.8-live", [[]])
+    rig.live.session_type = EmptyReceive
+    outcome = []
+
+    async def run():
+        await rig.connect()
+        try:
+            await drain(rig.driver.events(await rig.start("turn-0")))
+        except RuntimeError as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=asyncio.run, args=(run(),), daemon=True)
+    thread.start()
+    thread.join(10)
+    assert not thread.is_alive(), "the receiver kept reopening an empty receive()"
+    (failure,) = outcome
+    assert str(failure) == "Gemini Live connection 1: receive() ended without a message"
