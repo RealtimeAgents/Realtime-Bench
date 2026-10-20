@@ -110,8 +110,10 @@ class GoAwayDeadlineExceeded(RuntimeError):
 
 
 class _Receiver:
-    """The one reader of a connection: each server message, applied to the session core, which
-    stamps it with the connection and the generation whose reply was being read.
+    """The one reader of a connection once it is set up: each server message, applied to the
+    session core, which stamps it with the connection and the generation whose reply was being
+    read. The setup's acknowledgement (setupComplete), the only one Gemini Live sends, is read by
+    google-genai inside its connect, before the receiver exists.
 
     google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
     IDLE, so the receiver opens the next one and spans every generation on the connection.
