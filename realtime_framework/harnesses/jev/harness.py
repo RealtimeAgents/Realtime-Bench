@@ -19,7 +19,7 @@ from realtime_framework.harnesses.default.prompts import (
 )
 from realtime_framework.harnesses.jev.candidates import CANDIDATE_POLICY, observation_candidates
 from realtime_framework.harnesses.jev.composition import TEXT_COMPOSITION_POLICY
-from realtime_framework.harnesses.jev.context import observation_messages
+from realtime_framework.harnesses.jev.context import decision_messages
 from realtime_framework.harnesses.jev.driver import ChoiceDecisionDriver
 from realtime_framework.harnesses.jev.game_candidates import (
     GAME_CANDIDATE_POLICY,
@@ -136,7 +136,6 @@ class JevHarness(DefaultHarness):
                 }]
         return prepared, executions
 
-    def _messages(self, turns):
-        if self.driver.capabilities.history_replay == "canonical":
-            return super()._messages(turns)
-        return observation_messages(self.interaction_profile.system_instruction(self), turns)
+    @staticmethod
+    def _request_messages(request) -> tuple[dict, ...]:
+        return decision_messages(request)

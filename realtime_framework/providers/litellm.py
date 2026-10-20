@@ -48,6 +48,7 @@ from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
 from realtime_framework.providers.context import validate_context_reserve
+from realtime_framework.providers.legacy import chat_messages
 
 LITELLM_VERSION = "1.104.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -541,7 +542,8 @@ class LiteLLMDriver:
 
     def _request_kwargs(self, request: GenerationRequest) -> dict:
         policy = self.policy
-        messages = copy.deepcopy(list(request.messages))
+        # A fresh list per call: the steps below edit it in place.
+        messages = list(chat_messages(request.canonical))
         if policy.strip_image_detail:
             _strip_image_detail(messages)
         if policy.cache_breakpoint == "always" or (

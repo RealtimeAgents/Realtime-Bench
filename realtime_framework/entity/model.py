@@ -19,6 +19,7 @@ from typing import Protocol as Protocol
 from typing import runtime_checkable as runtime_checkable
 
 from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.request import CanonicalRequest
 
 
 class RuntimeState(str, Enum):
@@ -103,6 +104,8 @@ class CanonicalTurn:
     provider_refs: dict[str, Any] = field(default_factory=dict)
     # The runner's decision index; a retry rebuilds the turn with the same index.
     decision: int = field(kw_only=True)
+    # Always stored; the context policy decides whether a request replays it.
+    output_reasoning: str = ""
     output_wall_ns: int | None = None
     feedback_wall_ns: int | None = None
 
@@ -156,8 +159,9 @@ class GenerationRequest:
     provider_output_token_cap: int | None
     transport_output_token_cap: int | str | None
     clock_mode: Literal["token", "wall"]
-    messages: tuple[dict, ...] = ()
     timeout_s: float | None = None
+    # Filled by the runtime from the retained history before each provider call.
+    canonical: CanonicalRequest | None = None
 
 
 @dataclass
