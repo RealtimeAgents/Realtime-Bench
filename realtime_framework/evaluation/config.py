@@ -799,6 +799,7 @@ def identity_main(argv=None) -> int:
     parser.add_argument("--task", required=True)
     parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
     parser.add_argument("--fps", type=float, required=True)
+    parser.add_argument("--model-input-fps", type=float, help="default: --fps")
     parser.add_argument("--max-minutes", type=float, required=True)
     parser.add_argument("--protocol", required=True)
     parser.add_argument("--think-budget-s", type=float)
@@ -842,7 +843,7 @@ def identity_main(argv=None) -> int:
         parser.error(str(exc))
     config = catalog.to_model_config(
         args.model,
-        fps=args.fps,
+        fps=args.fps if args.model_input_fps is None else args.model_input_fps,
         reasoning_effort=reasoning_effort,
     )
     effective = effective_run_config(
