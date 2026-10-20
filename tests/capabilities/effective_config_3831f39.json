@@ -182,6 +182,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -236,7 +237,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5ac3602b5f8d1ee792b0a37fb2d57ee209f4032695046da8e46a004a2d733f07"
+    "hash": "12c288669fb7943c6c4f2128ceef222418f325a83c5b0322c82fd254fc49da89"
    },
    "token/None": {
     "config": {
@@ -304,6 +305,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -358,7 +360,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cdd74490a6f391cf78acee142c5d19598cdfc99aa4d0e56dc19e1878bb35b0d4"
+    "hash": "15ac11c833291a1b988c5f1e09e4be4a74976c32d18d8404f605280a4d3d489a"
    },
    "wall/None": {
     "config": {
@@ -426,6 +428,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -480,7 +483,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2bdc1a003a3b5688b2782e94a8807fe8a5d5a5d5033d1f5f8712fe51750c6574"
+    "hash": "576014456676a24e2a4192622e2038d74af96702cdc50806d827f75b17ea0bd2"
    }
   },
   "vendor": "anthropic"
@@ -620,6 +623,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -674,7 +678,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "da87d94c8fa06b9146d5fc7a13593e4443641ca5d1131ccdd04523f32bba8a62"
+    "hash": "88201e5ab5e2c64350ce631dd78f364a107694946e0a0ab5c370177030af1460"
    },
    "token/None": {
     "config": {
@@ -742,6 +746,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -796,7 +801,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "25fa900efa0cba8c0836569d7a8118963f52017090cf39ff7b3cb0de776670d8"
+    "hash": "bfc3a2bbef704c69f42c75e8ab8a5bfb80e84cb5e100c85be9a9ef40ebbdf571"
    },
    "wall/None": {
     "config": {
@@ -864,6 +869,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -918,7 +924,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9baa08e87c0ed9453f7973c8129a5aecee2e7b3e1eedfee83f5209d406b03437"
+    "hash": "5104c93baed2f15791509e49cad69c797eef2e3bab46edfe4867d2218739843f"
    }
   },
   "vendor": "anthropic"
@@ -1057,6 +1063,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1111,7 +1118,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bdf2c4a604155358be2712f2f7b2131f19b9d3f69167a810d88e3039eafccf88"
+    "hash": "cb2460c20158c80a94655ffb2c2f91694025495da64c909e4e617918d0b6c648"
    },
    "token/None": {
     "config": {
@@ -1179,6 +1186,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1233,7 +1241,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "184159f29aa313bb3ec6acbf505db10ddf27fd92fd1f08f0238cee5aee97a90a"
+    "hash": "eeaddcb68c665f6886844ac7f5aacde0f7eb461e9a22d68025a32065e3605eb7"
    },
    "wall/None": {
     "config": {
@@ -1301,6 +1309,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1355,7 +1364,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cdf727d7ab14f0f2c0d61c02b6aaa261c93dcebb3454450452b526354f8ec091"
+    "hash": "546ab066360e3e081597bd2efd1831e68a4e8b220e70886b729265d6034bd421"
    }
   },
   "vendor": "anthropic"
@@ -1495,6 +1504,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1549,7 +1559,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b1beb040ccfe576ec5a5e5da8cb76af7d0d63865db4d2026073b18702fdca995"
+    "hash": "a97e0c0e9d7b0641dacd83681cb5820763e91f31ac387b634db924ffbd957291"
    },
    "token/None": {
     "config": {
@@ -1617,6 +1627,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1671,7 +1682,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1ac0cdb8371c8b7d3e7e9d4ed13fcd024c88783d39e8670a32d33b6e6d91f590"
+    "hash": "bb33c665989cd7f14121b6c5728f1f7fcf06dbe22d008a576d989fbc012fbacb"
    },
    "wall/None": {
     "config": {
@@ -1739,6 +1750,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1793,7 +1805,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cd59f76c58f740d21a604b676c141c7f07da1685dbcf177200f81e94218a4f3f"
+    "hash": "f03763356c81e0028f6e931adae2ab45e4f7d77601dfe9f0ee83aac80d08743a"
    }
   },
   "vendor": "deepseek"
@@ -1933,6 +1945,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -1987,7 +2000,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2cf8b3ce19eeb81c4bc66c4161eccaf5fd41c09ff33e755c8ec5d8b79f189d8d"
+    "hash": "01d2ad067f794d570d87660e5ab2d0c294833e9c8ae6baa63412ad683a82c933"
    },
    "token/None": {
     "config": {
@@ -2055,6 +2068,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2109,7 +2123,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2b9dc975bca078348ae8b5069d07f718fd9d6d7d6370a6af3e987d1f8ce5b18f"
+    "hash": "3527301ebeb0eac4c0cb0aa1cd72b2aed6bf664dccd4966f949d7ac4ba2dd131"
    },
    "wall/None": {
     "config": {
@@ -2177,6 +2191,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2231,7 +2246,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "96c511f2483f821d4c8944537c8b10cb5d93569d0d1746d3eb64a94ab6649cc3"
+    "hash": "e1064a6e5bdc30863e415ff2194e70cd29f5952701c9232b0667ba0559159252"
    }
   },
   "vendor": "google"
@@ -2383,6 +2398,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2434,7 +2450,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "00a28734c72fbafd868a6906e6b190a47719a2ae9ce7e22e84f4fadd630c51b3"
+    "hash": "fa0467ba3c2897fd7a85ffc5c646a0a0a4e2bb808f9db474624e0684ae56d8cc"
    },
    "token/None": {
     "config": {
@@ -2502,6 +2518,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2553,7 +2570,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "57d903234a24b503fd5eea9eae0db7c2e7476754a60e59076e31bffc5751c7d3"
+    "hash": "7922068b6c7b10b1037971f57f5fd8ccacc936c469574be46fbbe434997f570a"
    },
    "wall/None": {
     "config": {
@@ -2621,6 +2638,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2672,7 +2690,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d11f65a9e7d7698ba05fa672dfc5097413e67bace29a2633b993ce98b8e73869"
+    "hash": "96c3aa5b31fe5978736e58a09196b42eafa8e6acda8a065a046c4a8ef52065b4"
    }
   },
   "vendor": "google"
@@ -2824,6 +2842,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2875,7 +2894,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "820716aa0a3c4b6c740e5e0595b1cfbc6ad4566e1bceff1aa7d29cd805a29e08"
+    "hash": "057e4e8dd01b2c39ae965697132133e699a0936fe25d7d4e2784644eed47b36e"
    },
    "token/None": {
     "config": {
@@ -2943,6 +2962,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -2994,7 +3014,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fb8c55253c87c840dd3c3fba597ea3f030fbcf90c9f5f8822530a1cd7bdc5721"
+    "hash": "b1342a6bc95d0e850660be13b3a6f67665d400242fa192a5a7f7db952bed9b0b"
    },
    "wall/None": {
     "config": {
@@ -3062,6 +3082,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3113,7 +3134,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bb10558422a06501ec285556ef3e24f41d5f99013d8848de28b24777049d22e3"
+    "hash": "a9b3929ec645d351c50829edd7fea5b1d15d1516d11dd5c6844da584c41f5a48"
    }
   },
   "vendor": "google"
@@ -3265,6 +3286,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3316,7 +3338,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c3e9c8bacb157e48a1ea0390a69691641392c98b0c642f0a32b017dc181ad166"
+    "hash": "4e2740e99b8b99e0702d024c7292b1e0333a835acf311015daa07e46cdd6200e"
    },
    "token/None": {
     "config": {
@@ -3384,6 +3406,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3435,7 +3458,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "35a07274d72b95697c2e3a5d0f429ad2cf5d8c5bb9fa6e4729c9b13604694e15"
+    "hash": "7ab808c2df8dcd7753798c7eee6233ee9f9d0e027f7eab7aa1d74fbab4957216"
    },
    "wall/None": {
     "config": {
@@ -3503,6 +3526,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3554,7 +3578,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "12ca1eca2bc2c5aa080c7753c9814617d9d7458c6df3d7cfe01f85e9e3434032"
+    "hash": "9a91e709ad77450ae3cf8492ec6ccd0409b01b1ed8adc86ca3c96bfecd22a411"
    }
   },
   "vendor": "google"
@@ -3694,6 +3718,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3748,7 +3773,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fedbd66e426e28cbeb5ccacd7880f8b11390bc85c1198e435d77b0bea49f22f6"
+    "hash": "7b35f017b93e96dc5dceac6812ce54b4e935d402ea92d6616be0b7b4d0532a2e"
    },
    "token/None": {
     "config": {
@@ -3816,6 +3841,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3870,7 +3896,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "97b21bf6dfcde91ab40a8e68568ae22f1e4697f5954c3e5d0adca2ab0eb22185"
+    "hash": "03b4ce35bafb7780448447d97d85ce559f6ce3f10135e07cf1064c39a68362ba"
    },
    "wall/None": {
     "config": {
@@ -3938,6 +3964,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -3992,7 +4019,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c3cbcc2e98323da0ee484b39a61c6515f1a1dc5379e33ec354a27f3d1c4ca197"
+    "hash": "7f7dde30167c0049ba2d64dd9a45165496a67e513c2a4754a66b5dc081c2a084"
    }
   },
   "vendor": "openai"
@@ -4132,6 +4159,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -4186,7 +4214,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "25e80ce6d2be373e71cbd8fd7d5852a0d53ed9b1a1a6a7289bdd3a12e8329380"
+    "hash": "76846705844c4b94664949daf7d0ad08ff61c47f789aa5e03d76393408834c80"
    },
    "token/None": {
     "config": {
@@ -4254,6 +4282,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -4308,7 +4337,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "533eab4d7ad1926bfb22c5aabbae2818a227a883947f774fbfcaa638a2f3bdfe"
+    "hash": "88f0d4a9dbd999039cd22c1755a3f6ff362ecebacf7978d72acf3eeee384b2ec"
    },
    "wall/None": {
     "config": {
@@ -4376,6 +4405,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -4430,7 +4460,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "55476f86530ec8866f2420a3be9e0c0801a7e488e0f99d54d61ead894e2058dd"
+    "hash": "ab6b678fc0ba451c72f6bbbd6dea4b474191fe9b74806bffcd86c1fced3101df"
    }
   },
   "vendor": "openai"
@@ -4571,6 +4601,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -4616,7 +4647,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4b4a59b9c2e1b365c6b8a55ab6221a2f16f38c1b0d93682dc0760a01a33619bb"
+    "hash": "0e6cf91569ad5137c6e28a1b0c673c9dfd4c838b2d3c5abe7e2c06f8f56251b6"
    }
   },
   "vendor": "openai"
@@ -4755,6 +4786,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -4800,7 +4832,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "02ca1a608e11f28ff26d23b00b3791dfbeb8a7e17f24496d1aa655b87c238f12"
+    "hash": "214d41ef63f633faf9638dbc7f8fbd4c0bc4351298f55916d6c8c1611b778783"
    },
    "token/None": {
     "config": {
@@ -4868,6 +4900,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -4913,7 +4946,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "147e6adbcb1d0b979ef310033e50f296e635c5f1be746aa912d89cb3f1a6bf0f"
+    "hash": "2575eade3e0b75ecd7f61e943cf3d2af74805d4c2942306a53a9733a2aa4e7b0"
    },
    "wall/None": {
     "config": {
@@ -4981,6 +5014,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -5026,7 +5060,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2cfcab9cef30f4ae32db171f1a41e016a04015df901f74fe0abb6aadf8892e9b"
+    "hash": "4b549c2f6440c30e17bf399bd46d83eca1c4413d977da987f08dbba1ae293df5"
    }
   },
   "vendor": "openai"
@@ -5166,6 +5200,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -5211,7 +5246,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d1d0c2ed8705d17f7317dd632c3f2e20cd024af8d72925607a0569c509716b93"
+    "hash": "a8f50067a0160c6bffe97667b983f5ef7357078c1891f3e064ff6476748587c6"
    }
   },
   "vendor": "typesafe"
@@ -5350,6 +5385,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -5404,7 +5440,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "828cd11e30626bf820358d6e65211312061717b5e0a6ddb953dae154ce1f2a60"
+    "hash": "38a0b23773c9ace6d371e05bacd8d64da02cf4a4cafe5d742b6d2d5af22be859"
    },
    "token/None": {
     "config": {
@@ -5472,6 +5508,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -5526,7 +5563,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3331ab9c28ad3dbb32ae36e126e8778b813ca62fa516e358f1013a85704be1dd"
+    "hash": "22987375a799c3a3dae8d226fe03335c326aae8202eefba532d0564b3ddd8128"
    },
    "wall/None": {
     "config": {
@@ -5594,6 +5631,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -5648,7 +5686,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "85edde321e9ee03ab616a6fee1671efc1a9a367263fca48b836beee2628edcde"
+    "hash": "70b206ac1b2a5c15c110f70f2f6c19e466e1630b73b40db81d675f0f8fb0b2d2"
    }
   },
   "vendor": "moonshot"
@@ -5798,6 +5836,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -5852,7 +5891,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ad31adc7590cf442ed1128652c2ad8ce0333ba533a7c73498c076fea7a8e6d69"
+    "hash": "554aacc41893bd6fb9a2f0bffcb8ac7b80558b04c35126de6711c2072715a13c"
    }
   },
   "vendor": "litellm"
@@ -6005,6 +6044,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -6059,7 +6099,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a118fc26a42e3765d5990d0ebe206441075d92c9b54b818507893b7cf8d10e03"
+    "hash": "2c00208183c6affb69a4fe65c9fcbba55f496529dacd903d08faafe1704b3e78"
    }
   },
   "vendor": "compatible"
@@ -6209,6 +6249,7 @@
      "interactables_protocol": "environment_injected_each_observation",
      "interactables_representation": "observation_bound_hybrid_som_coordinate_with_region_center_v2",
      "interactables_schema": "inspect_interactables.v1",
+     "interaction_mode": "turn_based",
      "max_minutes": 5.0,
      "minimum_active_visuals_after_fold": 11,
      "minimum_detailed_turns_after_drop": 41,
@@ -6263,7 +6304,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9f4279383349b753dcf3c8e805eb2326673d4859bb8c451469264f41c5d0d8c3"
+    "hash": "86c8b1e6a8a41fb82d2787b76c56edd243a06b7e27460bb6effbfec3351678df"
    }
   },
   "vendor": "compatible"

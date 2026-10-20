@@ -156,6 +156,7 @@ def build_episode(
             task,
             instruction,
             clock_mode=clock_mode,
+            interaction_mode="turn_based",
             tokens_per_frame=tokens_per_frame,
             run_dir=run_dir,
             episode_trace=trace,

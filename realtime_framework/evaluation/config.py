@@ -664,6 +664,7 @@ def effective_run_config(
     tokens_per_frame: int | None = None,
     seed: int = DEFAULT_TASK_SEED,
     execution_feedback: bool | None = None,
+    interaction_mode: str = "turn_based",
 ) -> dict:
     """Capture non-secret effective settings that materially change a run."""
     if hasattr(model_config, "model_dump"):
@@ -674,6 +675,7 @@ def effective_run_config(
         model_config.get("adapter_type"),
         clock_mode=clock_mode,
         model_input_fps=model_config["fps"],
+        interaction_mode=interaction_mode,
         tokens_per_frame=tokens_per_frame,
     )
     if protocol == "time-aware-token-v1":
@@ -734,6 +736,7 @@ def effective_run_config(
         "think_budget_s": think_budget_s,
         "per_move_cap_s": per_move_cap_s,
         "clock_mode": clock_mode,
+        "interaction_mode": interaction_mode,
         "tokens_per_frame": tokens_per_frame,
         "token_clock_timing_policy": (
             "fixed_action_at_observation_then_one_frame_per_decision"
@@ -811,6 +814,9 @@ def identity_main(argv=None) -> int:
     parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
     parser.add_argument("--fps", type=float, required=True)
     parser.add_argument("--model-input-fps", type=float, help="default: --fps")
+    parser.add_argument(
+        "--interaction-mode", choices=("turn_based", "streaming"), default="turn_based"
+    )
     parser.add_argument("--max-minutes", type=float, required=True)
     parser.add_argument("--protocol", required=True)
     parser.add_argument("--think-budget-s", type=float)
@@ -868,6 +874,7 @@ def identity_main(argv=None) -> int:
         per_move_cap_s=per_move_cap,
         clock_mode=args.clock,
         tokens_per_frame=tokens_per_frame,
+        interaction_mode=args.interaction_mode,
     )
     print(config_fingerprint(effective))
     return 0
