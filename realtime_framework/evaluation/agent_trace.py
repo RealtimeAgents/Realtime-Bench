@@ -378,7 +378,9 @@ def close_agent_trace(sink: AgentTraceSink, invalid_run, *, timeout=AGENT_TRACE_
         return invalid_run or {
             "category": "harness",
             "reason": "agent_trace_write_failed",
-            "detail": summary["error"][:2000],
+            # The end of the traceback, which names the exception; the whole text is in
+            # AgentTraceClosed.
+            "detail": summary["error"][-2000:],
         }
     if summary["pending_at_timeout"] is not None:
         return invalid_run or {
