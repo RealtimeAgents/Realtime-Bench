@@ -10,12 +10,20 @@ decision it belongs to, as FakeEnvironment does, so loop.records reads both.
 
 from __future__ import annotations
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.sandbox.actions import GuestEnvironment
 
 from .baseline import action_record
 from .clock_task import ClockTask
-from .fake_env import FakeClock
-from .frames import FrameSource
+from .frames import CLOCK_ORIGIN, FrameSource
+
+
+class _RunnerClock(SystemClock):
+    """run_stream's clock (loop.py) on the token clock: it waits in real time, and the times it
+    records stay at CLOCK_ORIGIN, since token time never moves them."""
+
+    def time(self) -> float:
+        return CLOCK_ORIGIN
 
 
 class _Guest:
@@ -49,8 +57,7 @@ class TokenEnvironment(GuestEnvironment):
         )
         self.fps = task.clock_snapshot()["fps"]
         self.max_minutes = max_minutes
-        # run_stream's own time.time() reads (loop.py); token time never moves it.
-        self.clock = FakeClock()
+        self.clock = _RunnerClock()
         task.on_event = self._task_event
 
     def log(self, call: str, **fields) -> None:

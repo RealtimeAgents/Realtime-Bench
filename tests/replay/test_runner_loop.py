@@ -1,11 +1,13 @@
 """Replay baselines for run_stream's own decision loop on the wall clock.
 
 The real run_stream (evaluation/runner.py:102-1180) drives the chat_completions agent from
-build_episode against FakeEnvironment (fake_env.py). Each baseline records, decision by decision,
-the runner's calls into the environment, its trace events, the commit statuses the agent receives,
-the action lifecycle records and the runner log, then the stop reason and the agent's history.
-Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it each run is
-compared with tests/replay/baselines/.
+build_episode against FakeEnvironment (fake_env.py), all on one fake clock (tests/fake_clock.py):
+it moves only when the runner, its workers, the agent's event loop and the stub all wait, so each
+episode runs the same way every time. Each baseline records, decision by decision, the runner's
+calls into the environment, its trace events, the commit statuses the agent receives, the action
+lifecycle records and the runner log, then the stop reason and the agent's history. Record with
+``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it each run is compared with
+tests/replay/baselines/.
 """
 
 from __future__ import annotations
@@ -22,10 +24,11 @@ from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.reporting import episode_outcome, summarize_run_metrics
 from realtime_framework.harnesses.default.harness import DefaultHarness
 
+from ..fake_clock import FakeClock
 from . import baseline
 from .build import build_episode
-from .fake_env import FakeClock, FakeEnvironment, Hang
-from .frames import ReplayTask
+from .fake_env import FakeEnvironment, Hang
+from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import REAL_TIME_FIELDS, check_wall_clock_properties, commit_statuses, records, run_loop
 from .scenario import CLICK_AGREE, CLICK_NAME, CLICK_SUBMIT, LONG_SCENARIO, TASK_INSTRUCTION
 from .scenario import replies
@@ -62,10 +65,14 @@ class Run:
 
 
 def _run(tmp_path, steps: list[Step], latencies: list, *, stream: bool, max_minutes, **env_options):
+    clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     env_box = []
-    with ChatCompletionsStub(
-        replies(steps), on_request=lambda index: env_box[0].model_request(index)
-    ) as stub:
+    with (
+        ChatCompletionsStub(
+            replies(steps), on_request=lambda index: env_box[0].model_request(index), clock=clock
+        ) as stub,
+        clock.participant(),
+    ):
         config = chat_completions_config(stub.base_url, stream=stream)
         episode = build_episode(
             config,
@@ -74,10 +81,11 @@ def _run(tmp_path, steps: list[Step], latencies: list, *, stream: bool, max_minu
             instruction=TASK_INSTRUCTION,
             model_key=MODEL_KEY,
             clock_mode="wall",
+            clock=clock,
         )
         env = FakeEnvironment(
             episode.frames,
-            FakeClock(),
+            clock,
             fps=config.fps,
             max_minutes=max_minutes,
             reply_latencies=latencies,
@@ -220,7 +228,7 @@ CASES = [
         ["applied", "applied", "not_applied_terminal"],
         ["click", "type"],
         "game_decided",
-        env={"stop_check": lambda env: env.clock.now >= env.t0 + 2.25},
+        env={"stop_check": lambda env: env.clock.time() >= env.t0 + 2.25},
     ),
     # Decision 3's reply never comes. The bounded wait expires, the agent is aborted and the
     # decision is skipped (runner.py:337-345, 395-411, 523). The abort closes the held request
@@ -371,7 +379,8 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
         max_minutes=SHORT_MAX_MINUTES,
         stop_check=_decided_after(3, reason),
     )
-    run.env.clock.advance(TEARDOWN_S)
+    with run.env.clock.participant():
+        run.env.clock.sleep(TEARDOWN_S)
     assert run.env.past_deadline()
     termination = run.env._termination
     assert termination == {

@@ -361,7 +361,9 @@ def _probe_runner(request: dict) -> dict:
     def run_stream(adapter, env, **loop):
         _attribute(state["attribution"], state["start"], "runner", claimed=state["claimed"])
         state["loop"] = {
-            "run_stream": {key: loop[key] for key in loop if key not in {"log", "trace"}},
+            "run_stream": {
+                key: loop[key] for key in loop if key not in {"log", "trace", "clock"}
+            },
             "guest_environment": {"tick_seconds": env.d, "clock_mode": env.clock_mode},
             "clock_prompt": adapter.streaming_note,
             "settings_at_agent_setup": state["settings_at_agent_setup"],

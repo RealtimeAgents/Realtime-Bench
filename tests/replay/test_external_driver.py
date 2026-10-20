@@ -40,10 +40,11 @@ from realtime_framework.providers.preflight import (
     check_token_budget,
 )
 
+from ..fake_clock import FakeClock
 from . import baseline
 from .build import build_episode
-from .fake_env import FakeClock, FakeEnvironment
-from .frames import ReplayTask
+from .fake_env import FakeEnvironment
+from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import check_wall_clock_properties, commit_statuses, run_loop
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
 from .steps import run_steps
@@ -236,19 +237,30 @@ def test_external_driver_full_episode(external, tmp_path, capsys):
 
 def test_external_driver_through_run_stream(external, tmp_path):
     """The same episode through the runner's own decision loop (evaluation/runner.py run_stream)
-    on the wall clock, against the fake environment of test_runner_loop.py."""
+    on the wall clock, against the fake environment of test_runner_loop.py on its fake clock."""
+    clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     environments = []
-    with ChatCompletionsStub(
-        replies(LONG_SCENARIO), on_request=lambda index: environments[0].model_request(index)
-    ) as stub:
+    with (
+        ChatCompletionsStub(
+            replies(LONG_SCENARIO),
+            on_request=lambda index: environments[0].model_request(index),
+            clock=clock,
+        ) as stub,
+        clock.participant(),
+    ):
         write_model(external.models, base_url=stub.base_url)
         config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort="low")
         episode = build_episode(
-            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+            config,
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=MODEL_KEY,
+            clock=clock,
         )
         env = FakeEnvironment(
             episode.frames,
-            FakeClock(),
+            clock,
             fps=config.fps,
             max_minutes=LONG_MAX_MINUTES,
             reply_latencies=LONG_LATENCIES,

@@ -14,7 +14,6 @@ import contextlib
 import json
 import os
 import sys
-import time
 import types
 from unittest import mock
 
@@ -40,8 +39,8 @@ SNAPSHOT_AT_S = FINALIZED_S + SNAPSHOT_S  # when evaluation_snapshot() returned
 
 
 class FakeClock(SystemClock):
-    """The episode clocks and the time module of runner.py: time() reads the fake clock and
-    sleep() advances it; anything else is the real clock or module."""
+    """The episode clocks: time() reads the fake clock and sleep() advances it; anything else is
+    the system clock."""
 
     def __init__(self, now):
         self.now = now
@@ -51,9 +50,6 @@ class FakeClock(SystemClock):
 
     def sleep(self, seconds):
         self.now += seconds
-
-    def __getattr__(self, name):
-        return getattr(time, name)
 
 
 class FakeGuest:
@@ -157,7 +153,6 @@ def run_main(tmp_path, task, agent, clock, guest) -> dict:
         mock.patch.object(sys, "argv", argv),
         # main() writes SANDBOX_GRAPHICS_MODE and SCREEN_RECORDING_ENCODER into os.environ.
         mock.patch.dict(os.environ),
-        mock.patch.object(runner, "time", clock),
         mock.patch.object(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock)),
         mock.patch.object(runner, "R", DESKTOP),
         mock.patch.object(runner, "GuestClient", lambda **_: guest),

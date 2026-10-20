@@ -4,13 +4,13 @@ run_stream (evaluation/runner.py:102-1180) needs capture, execute, tick_index, d
 wait_until_tick, and reads the optional time_remaining and past_deadline hooks
 (runner.py:15-18). On the wall clock main() hands it a GuestEnvironment (runner.py:1678-1690,
 sandbox/actions.py:112-967). This class follows GuestEnvironment's wall-clock branch call for
-call, but reads a FakeClock the test controls instead of time.time(), serves the frames of
-frames.py, and executes nothing: each call is appended to ``calls`` in order, tagged with the
-decision it belongs to.
+call on the episode's fake clock (tests/fake_clock.py), serves the frames of frames.py, and
+executes nothing: each call is appended to ``calls`` in order, tagged with the decision it belongs
+to.
 
 Model latency is scripted here too, since it is wall time: a stub calls ``model_request(index)``
-as its ``on_request`` hook before it answers request ``index``, the fake clock moves on by that
-request's scripted seconds, and a Hang tells the stub to hold the request.
+as its ``on_request`` hook before it answers request ``index`` and sleeps that request's scripted
+seconds on the clock, and a Hang tells the stub to hold the request.
 """
 
 from __future__ import annotations
@@ -22,20 +22,7 @@ from dataclasses import dataclass
 from realtime_framework.entity.actions import ActionType
 
 from .baseline import action_record
-from .frames import CLOCK_ORIGIN, FrameSource
-
-
-class FakeClock:
-    """The wall clock of one episode, in Unix seconds. It moves only when told to."""
-
-    def __init__(self, origin: float = CLOCK_ORIGIN):
-        self.now = origin
-
-    def time(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
+from .frames import FrameSource
 
 
 @dataclass(frozen=True)
@@ -44,14 +31,14 @@ class Hang:
     connection, which the agent's abort does: runner.py:339-344 calls
     harnesses/default/harness.py:1683-1686, whose runtime closes the driver
     (harnesses/default/context.py:662-687), and the driver closes its HTTP client
-    (providers/litellm.py:1033-1044). ``seconds`` is the fake time that passes before the runner
-    gives up; its bounded wait itself is real time (runner.py:337)."""
+    (providers/litellm.py:1033-1044). ``seconds`` is the fake time the runner's bounded wait
+    (runner.py:337) lets pass before it gives up; the clock gets there by itself."""
 
     seconds: float
 
 
 class FakeEnvironment:
-    """GuestEnvironment's wall-clock behavior on a FakeClock. ``fps`` is the environment's rate.
+    """GuestEnvironment's wall-clock behavior on a fake clock. ``fps`` is the environment's rate.
 
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
     into "rejected" (runner.py:571-575). ``failures`` maps a decision to an environment fault,
@@ -70,7 +57,7 @@ class FakeEnvironment:
     def __init__(
         self,
         frames: FrameSource,
-        clock: FakeClock,
+        clock,
         *,
         fps: float,
         max_minutes: float,
@@ -88,7 +75,7 @@ class FakeEnvironment:
         self.d = 1.0 / fps  # actions.py:130
         # main() starts the wall clock and sets the deadline from it (runner.py:1670-1674);
         # GuestEnvironment measures ticks from that start (actions.py:131).
-        self.t0 = clock.now
+        self.t0 = clock.time()
         self.deadline = self.t0 + max_minutes * 60
         self.reply_latencies = list(reply_latencies)
         self.rejections = dict(rejections or {})
@@ -112,16 +99,16 @@ class FakeEnvironment:
     # ---- clock (actions.py:179-188, 214-252, 271-275) ----
 
     def clock_position(self) -> float:
-        return max(0.0, (self.clock.now - self.t0) / self.d)
+        return max(0.0, (self.clock.time() - self.t0) / self.d)
 
     def tick_index(self) -> int:
         return int(self.clock_position())
 
     def time_remaining(self) -> float:
-        return self.deadline - self.clock.now
+        return self.deadline - self.clock.time()
 
     def past_deadline(self) -> bool:
-        return self.clock.now >= self.deadline
+        return self.clock.time() >= self.deadline
 
     def wait_until_tick(self, target) -> None:
         """GuestEnvironment polls until tick_index() reaches ``target`` or the deadline passes
@@ -129,7 +116,7 @@ class FakeEnvironment:
         next whole tick. The fake lands on the tick exactly, without the 30 ms polling step: on
         the first clock reading whose tick_index() reaches it, which for a tick that is not a
         whole number of seconds can lie a few ulps past t0 + tick * d."""
-        before = self.clock.now
+        before = self.clock.time()
         if self.decision in self.advance_failures:
             message = self.advance_failures[self.decision]
             self._invalid_run = {
@@ -139,11 +126,12 @@ class FakeEnvironment:
             }
             self.log("env.wait_until_tick", target=target, failed=message)
             raise RuntimeError(message)
-        if self.tick_index() < target and self.clock.now < self.deadline:
-            self.clock.now = min(self.t0 + math.ceil(target) * self.d, self.deadline)
-            while self.tick_index() < target and self.clock.now < self.deadline:
-                self.clock.now = math.nextafter(self.clock.now, math.inf)
-        self.log("env.wait_until_tick", target=target, from_time=before, to_time=self.clock.now)
+        if self.tick_index() < target and before < self.deadline:
+            self.clock.sleep(min(self.t0 + math.ceil(target) * self.d, self.deadline) - before)
+            while self.tick_index() < target and self.clock.time() < self.deadline:
+                now = self.clock.time()
+                self.clock.sleep(math.nextafter(now, math.inf) - now)
+        self.log("env.wait_until_tick", target=target, from_time=before, to_time=self.clock.time())
 
     # ---- observation ----
 
@@ -151,11 +139,11 @@ class FakeEnvironment:
         """actions.py:190-212. BrowserSceneCapture already sets the frame geometry and frames.py
         a zero capture latency, which GuestEnvironment would measure."""
         self.decision += 1
-        observation = self.frames.capture(self.tick_index(), at=self.clock.now)
+        observation = self.frames.capture(self.tick_index(), at=self.clock.time())
         self.log(
             "env.capture",
             tick=observation.tick_number,
-            time=self.clock.now,
+            time=self.clock.time(),
             observation_id=observation.metadata["observation_id"],
         )
         return observation
@@ -166,7 +154,7 @@ class FakeEnvironment:
         """Why the episode is over now, or None; with the task's answer."""
         if getattr(self, "_invalid_run", None):
             return "invalid_run", None
-        if self.clock.now >= self.deadline:
+        if self.clock.time() >= self.deadline:
             return "deadline", None
         if self.stop_check is not None:
             terminal = self.stop_check(self)
@@ -191,7 +179,7 @@ class FakeEnvironment:
     def execute(self, action):
         execution = {
             "action": action_record(action),
-            "time": self.clock.now,
+            "time": self.clock.time(),
             "position": self.clock_position(),
             # Set when the action arrives after the episode is over, whether or not the runner
             # has asked done() since.
@@ -204,7 +192,7 @@ class FakeEnvironment:
             duration = float(action.parameters.get("duration", 0.0))
             started_at = self.clock_position()
             if duration > 0:
-                self.clock.advance(min(duration, max(0.0, self.deadline - self.clock.now)))
+                self.clock.sleep(min(duration, max(0.0, self.deadline - self.clock.time())))
             elapsed = round(max(0.0, (self.clock_position() - started_at) * self.d), 9)
             self._last_execution_result = {
                 "duration_simulated_seconds": elapsed,
@@ -247,7 +235,7 @@ class FakeEnvironment:
     def _evaluation_snapshot(self) -> dict:
         self.finalizing = True
         self.log("task.evaluation_snapshot")
-        self.clock.advance(self.snapshot_seconds)
+        self.clock.sleep(self.snapshot_seconds)
         return {
             "kind": "replay_form",
             "applied_actions": sum(e["status"] == "applied" for e in self.executions),
@@ -257,9 +245,10 @@ class FakeEnvironment:
     # ---- model latency ----
 
     def model_request(self, index: int) -> bool:
-        """Stub hook: request ``index`` takes its scripted fake time before it is answered.
-        True asks the stub to hold the request (Hang). A request beyond the script takes no
-        time, so the stub's own refusal of it (stub.py) fails the decision at once."""
+        """Stub hook, on the stub's thread: request ``index`` takes its scripted fake time before
+        it is answered. True asks the stub to hold the request (Hang). A request beyond the
+        script takes no time, so the stub's own refusal of it (stub.py) fails the decision at
+        once."""
         if index >= len(self.reply_latencies):
             self.log("model.request", request=index, seconds=None, hang=False)
             return False
@@ -267,5 +256,6 @@ class FakeEnvironment:
         hang = isinstance(latency, Hang)
         seconds = latency.seconds if hang else latency
         self.log("model.request", request=index, seconds=seconds, hang=hang)
-        self.clock.advance(seconds)
+        if not hang:
+            self.clock.sleep(seconds)
         return hang
