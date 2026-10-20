@@ -177,8 +177,16 @@ def _realtime_server():
             response_id, item_id = f"resp_{state['responses']}", f"srv_item_{state['responses']}"
             return [
                 {"type": "response.created", "response": {"id": response_id}},
-                {"type": "response.output_item.added", "item": {"id": item_id}},
-                {"type": "response.output_text.delta", "delta": '{"action": "wait"}'},
+                {
+                    "type": "response.output_item.added",
+                    "response_id": response_id,
+                    "item": {"id": item_id},
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "response_id": response_id,
+                    "delta": '{"action": "wait"}',
+                },
                 {
                     "type": "response.done",
                     "response": {
