@@ -345,13 +345,10 @@ class RealtimeRuntime:
             result = await self.driver.sync_history(
                 HistorySyncRequest(
                     seed=seed,
-                    turns=tuple(self._turns),
-                    executed_action_ledger=ledger,
                     reason=reason,
                     history=self.history_view(request_builder, ledger),
                     current_generation=current_generation,
                     force_rebuild=force_rebuild,
-                    removed_turns=removed_turns,
                 )
             )
         except Exception as exc:
@@ -408,12 +405,7 @@ class RealtimeRuntime:
             raise RuntimeError("realtime runtime has not been started")
         self._set_state(RuntimeState.CONNECTING)
         await self.driver.connect(
-            ConnectRequest(
-                seed=seed,
-                turns=tuple(self._turns),
-                executed_action_ledger=ledger,
-                history=self.history_view(request_builder, ledger),
-            )
+            ConnectRequest(seed=seed, history=self.history_view(request_builder, ledger))
         )
         self._record_reconnect()
         self._connected = True

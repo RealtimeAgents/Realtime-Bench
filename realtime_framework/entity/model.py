@@ -152,8 +152,6 @@ class CanonicalTurn:
 @dataclass(frozen=True)
 class ConnectRequest:
     seed: SessionSeed
-    turns: tuple[CanonicalTurn, ...] = ()
-    executed_action_ledger: str = ""
     resume_handle: Any = None
     # The retained history as the request builder renders it; None opens an empty session.
     history: CanonicalRequest | None = None
@@ -186,14 +184,11 @@ class InterruptResult:
 @dataclass(frozen=True)
 class HistorySyncRequest:
     seed: SessionSeed
-    turns: tuple[CanonicalTurn, ...]
-    executed_action_ledger: str
     reason: str
-    # The same history as turns and ledger, as the request builder renders it.
+    # The retained turns and the archived-action ledger, as the request builder renders them.
     history: CanonicalRequest
     current_generation: GenerationHandle | None = None
     force_rebuild: bool = False
-    removed_turns: tuple[CanonicalTurn, ...] = ()
 
 
 @dataclass(frozen=True)
