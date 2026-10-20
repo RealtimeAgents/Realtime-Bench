@@ -1206,6 +1206,7 @@ sys.path.insert(0, str(ROOT))
 
 import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
+from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
@@ -1558,19 +1559,13 @@ def main():
             tokens_per_frame=tokens_per_frame,
         )
         agent = create_agent(cfg, log_dir=run_dir)
-        from realtime_framework.harnesses.default.prompts import budget_clock_prompt
-        from realtime_framework.harnesses.default.prompts import system_prompt_for_category
-
-        agent.streaming_note = budget_clock_prompt(
-            a.fps,
-            tokens_per_frame,
-            a.clock,
+        configure_agent(
+            agent,
+            fps=a.fps,
+            tokens_per_frame=tokens_per_frame,
+            clock_mode=a.clock,
+            category=getattr(ctask, "category", None),
         )
-        # Role/rules vary by scenario family; the task-specific objective is injected separately.
-        agent.system_prompt_override = system_prompt_for_category(getattr(ctask, "category", None))
-        # Adapters use this before run_stream() starts to decide whether terminal provider usage is
-        # allowed to delay a committed wall-clock action.
-        agent._clock_mode = a.clock
         run_stage = "environment_setup"
 
         # Prepare a valid provisional episode/frame for adapter initialization. Wall-clock tasks are restarted once more after initialize(), below, so none of
