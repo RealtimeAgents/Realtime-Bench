@@ -3,8 +3,9 @@
 The chat_completions API reaches it through LiteLLM's OpenAI provider with an AsyncOpenAI client
 (providers/litellm.py:1176-1199, 592-604), which posts to ``{base_url}/chat/completions``. Each
 request is answered with the next scripted reply: a JSON body when the request sets
-``stream: false``, otherwise server-sent events ending in a usage chunk and ``[DONE]``. Every raw
-request body is kept in arrival order.
+``stream: false``, otherwise server-sent events ending in a usage chunk and ``[DONE]``; a Failure
+is answered with its HTTP status, headers and JSON error body. Every raw request body is kept in
+arrival order.
 
 Given a fake clock (tests/fake_clock.py), the stub serves on one of the clock's threads, so a
 reply's scripted latency is a sleep on that clock, and it waits on the clock for a held request's
@@ -31,6 +32,15 @@ class Reply:
     content: str
     usage: dict
     reasoning: str = ""  # sent as reasoning_content, as OpenAI-compatible reasoning servers do
+
+
+@dataclass(frozen=True)
+class Failure:
+    """An HTTP error answered before any output is streamed."""
+
+    status: int
+    body: dict
+    headers: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,6 +122,10 @@ class ChatCompletionsStub:
                     # an extra request fails its decision at once instead of being retried.
                     self._send(400, "application/json", _error("request beyond the script"))
                     return
+                if isinstance(reply, Failure):
+                    payload = json.dumps(reply.body).encode()
+                    self._send(reply.status, "application/json", payload, reply.headers)
+                    return
                 request = json.loads(body)
                 index = len(stub.requests)
                 if request.get("stream"):  # a non-streaming body carries no "stream" field
@@ -129,8 +143,10 @@ class ChatCompletionsStub:
                 self.close_connection = True
                 return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
 
-            def _send(self, status: int, content_type: str, payload: bytes):
+            def _send(self, status: int, content_type: str, payload: bytes, headers=()):
                 self.send_response(status)
+                for name, value in headers:
+                    self.send_header(name, value)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()

@@ -79,8 +79,15 @@ def _fds_ready(fds: dict[int, int]) -> bool:
 
 
 def wait_delivered(sock) -> None:
-    """Busy until the peer's kernel holds every byte written to ``sock``."""
+    """Busy until the peer's kernel holds every byte written to ``sock``, or the peer has closed
+    the connection and never will (a client that gave up on a late reply)."""
     while _unacknowledged(sock.fileno()) > 0:
+        if _fds_ready({sock.fileno(): selectors.EVENT_READ}):
+            try:
+                if not sock.recv(1, socket.MSG_PEEK):
+                    return
+            except OSError:
+                return
         time.sleep(0.0001)
 
 
