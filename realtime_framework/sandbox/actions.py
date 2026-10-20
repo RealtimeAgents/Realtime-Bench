@@ -115,19 +115,19 @@ class GuestEnvironment:
     def __init__(
         self,
         guest,
-        fps,
         deadline,
+        task,
         frames_dir=None,
         honor_fail=True,
         stop_check=None,
         scene_capture=None,
         action_audit_path=None,
         clock_mode="token",
-        task=None,
         wall_start_time=None,
     ):
         self.g = guest
-        self.d = 1.0 / fps
+        # One environment tick, from the task clock the task and its service advance by.
+        self.d = 1.0 / task.clock_snapshot()["fps"]
         self.t0 = time.time() if wall_start_time is None else float(wall_start_time)
         self.deadline = deadline
         self.clock_mode = clock_mode
