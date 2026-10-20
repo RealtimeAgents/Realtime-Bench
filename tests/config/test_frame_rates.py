@@ -102,6 +102,58 @@ def test_model_input_rate_above_the_cap_is_refused(runner_cells):
     assert cell["error"] == f"ValueError: {CAP_MESSAGE}"
 
 
+def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch):
+    """A run error in the decision loop reaches main()'s cleanup, which stops the screen
+    recording (evaluation/runner.py:1929-1934). With no recording to copy out, the video is
+    composed from the frames captured once per decision, played at the model-input rate
+    (sandbox/desktop.py:231-285). main() runs in this interpreter with the export probe's stand-ins
+    for the container, the guest, the scene capture, the agent and the task server
+    (evaluation/effective_config.py:228-300, 335-345)."""
+    import sys
+    import types
+
+    from realtime_framework.evaluation import effective_config as probe
+    from realtime_framework.evaluation import reporting, runner
+    from realtime_framework.sandbox import desktop
+
+    for name in ("build_image_if_needed", "start_container", "_start_screensaver_keepalive"):
+        monkeypatch.setattr(desktop, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(desktop, "_start_screen_recording", lambda run_dir=None: True)
+
+    def missing_recording(*args, **kwargs):
+        raise FileNotFoundError("no container")
+
+    monkeypatch.setattr(desktop, "subprocess", types.SimpleNamespace(run=missing_recording))
+    videos = []
+    monkeypatch.setattr(
+        desktop, "make_video", lambda frames_dir, output_path, fps: videos.append(fps)
+    )
+    monkeypatch.setattr(reporting, "finalize_video", lambda run_dir: None)
+    clock = types.SimpleNamespace(time=runner.time.time, sleep=lambda seconds: None)
+    monkeypatch.setattr(runner, "time", clock)
+    monkeypatch.setattr(runner, "GuestClient", probe._Guest)
+    monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
+    monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))
+    registered = tasks.get
+    monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
+
+    def run_stream(adapter, env, **loop):
+        raise RuntimeError("decision loop failed")
+
+    monkeypatch.setattr(runner, "run_stream", run_stream)
+    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
+        monkeypatch.setenv(name, "cpu")  # main() sets both
+    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--fps", "2"]
+    argv += ["--model-input-fps", "1", "--results-dir", str(tmp_path), "--run-id", "run"]
+    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    with pytest.raises(SystemExit):  # an invalid run is not a scored result
+        runner.main()
+    summary = json.loads((tmp_path / "run" / "run_summary.json").read_text())
+    assert summary["error"].strip().endswith("RuntimeError: decision loop failed")
+    assert (summary["fps"], summary["model_input_fps"]) == (2.0, 1.0)
+    assert videos == [1.0]
+
+
 PLAN = """\
 suite: public
 models:
