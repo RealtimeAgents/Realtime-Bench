@@ -97,9 +97,8 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
     messages, history = [], []
     for item in request.items:
         block = item.block
-        role = JEV_ROLES.get(item.intent.role)
         if block.kind == "system_instruction":
-            messages.append({"role": role, "content": block.text})
+            messages.append({"role": JEV_ROLES[item.intent.role], "content": block.text})
         elif block.kind == "action_ledger":
             if compact_ledger:
                 records = [json.loads(line) for line in block.text.splitlines() if line]
@@ -110,7 +109,7 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
                 )
             else:
                 content = texts.ledger_header + "\n" + block.text
-            messages.append({"role": role, "content": content})
+            messages.append({"role": JEV_ROLES[item.intent.role], "content": content})
         elif block.kind == "model_output":
             history.append({"observation_id": block.based_on, "action": block.text})
         elif block.kind == "execution_feedback":
@@ -130,7 +129,7 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
             current = json.loads(block.text.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
             messages.append(
                 {
-                    "role": role,
+                    "role": JEV_ROLES[item.intent.role],
                     "content": texts.jev_current_prefix + json.dumps(current, ensure_ascii=False),
                 }
             )
