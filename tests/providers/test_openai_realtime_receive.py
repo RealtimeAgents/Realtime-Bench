@@ -495,3 +495,16 @@ def test_an_operation_whose_send_fails_is_unknown():
     with pytest.raises(ConnectionError):
         _within(driver._send_all([observation]))
     assert core.delivery[observation.key] == Delivery.UNKNOWN
+
+
+def test_a_closed_session_reports_it_is_not_connected():
+    """Once abort() closed the connection, an abandoned worker that goes on is told so."""
+    driver = _offline_driver()
+    history = view([turn(0)])
+    request = GenerationRequest("turn-0", None, "inf", "wall", canonical=history)
+    for step in (
+        driver.send_observation(turn(0).observation, history),
+        driver.start_generation(request),
+    ):
+        with pytest.raises(RuntimeError, match="^OpenAI Realtime session is not connected$"):
+            _within(step)
