@@ -8,6 +8,7 @@ import math as math
 import os as os
 import time as time
 from dataclasses import dataclass, field
+from typing import ClassVar as ClassVar
 
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
@@ -158,7 +159,7 @@ class GeminiLiveDriver:
         vendor="google",
         litellm_provider="gemini",
     )
-    model_defaults = {
+    model_defaults: ClassVar[dict[str, dict]] = {
         "gemini-3.1-flash-live-preview": {
             "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
         },
