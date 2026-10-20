@@ -8,8 +8,6 @@ import json as json
 import threading as threading
 
 from realtime_framework.harnesses.default.prompts import ACTION_RESULT_NOTES
-from realtime_framework.entity.config import effective_detailed_history_policy
-from realtime_framework.entity.config import effective_visual_fold_policy
 
 
 def _mark_oldest_active_visuals(turns: list[dict], count: int) -> int:
@@ -24,9 +22,8 @@ def _mark_oldest_active_visuals(turns: list[dict], count: int) -> int:
     return marked
 
 
-def apply_active_visual_budget(turns: list[dict]) -> int:
+def apply_active_visual_budget(turns: list[dict], budget: int, block_size: int) -> int:
     """Fold old screenshots in blocks without making any text-retention decision."""
-    budget, block_size = effective_visual_fold_policy()
     active = sum(not turn.get("visual_folded") for turn in turns)
     folded = 0
     while active > budget:
@@ -100,6 +97,7 @@ from collections.abc import Callable as Callable
 from collections.abc import Iterable as Iterable
 from dataclasses import replace as replace
 
+from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.model import CanonicalTurn
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.events import GenerationBoundary
@@ -127,11 +125,12 @@ class RealtimeRuntime:
     driver follow the same generation state machine.
     """
 
-    def __init__(self, driver: RealtimeDriver):
+    def __init__(self, driver: RealtimeDriver, policy: PathPolicy):
         if not isinstance(driver, RealtimeDriver):
             raise TypeError("realtime driver does not implement the required protocol")
         self.driver = driver
         self.capabilities = driver.capabilities
+        self.policy = policy
         self._state = RuntimeState.NEW
         self._state_lock = threading.RLock()
         self._epoch = 0
@@ -260,7 +259,7 @@ class RealtimeRuntime:
     ]:
         existing = list(turns)
         additions = list(incoming)
-        window, block_size = effective_detailed_history_policy()
+        window, block_size = self.policy.turns.keep, self.policy.turns.block
         archive_count = 0
         while len(existing) - archive_count + len(additions) > window:
             removable = len(existing) - archive_count
@@ -273,7 +272,7 @@ class RealtimeRuntime:
         candidates = existing + additions
         previously_folded = {id(turn): turn.visual_folded for turn in candidates}
         records = [turn.retention_record() for turn in candidates]
-        apply_active_visual_budget(records)
+        apply_active_visual_budget(records, self.policy.visuals.keep, self.policy.visuals.block)
         folded_visuals = 0
         for turn, record in zip(candidates, records):
             if record.get("visual_folded"):
@@ -430,7 +429,6 @@ class RealtimeRuntime:
             turn.provider_refs.update(refs or {})
 
         if message_builder is not None:
-            inspect_request = getattr(self.driver, "request_context_status", None)
             compactions = 0
             archived_count = 0
             while True:
@@ -447,9 +445,9 @@ class RealtimeRuntime:
                         },
                     )
                 request = replace(request, messages=tuple(messages))
-                if not callable(inspect_request):
+                if not self.policy.pressure_archive:
                     break
-                status = dict(await inspect_request(request))
+                status = dict(await self.driver.request_context_status(request))
                 physical_metadata.setdefault("request_context_before", status)
                 physical_metadata.update(
                     request_context=status,
@@ -466,8 +464,7 @@ class RealtimeRuntime:
                     raise RuntimeError(
                         "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
                     )
-                _, block_size = effective_detailed_history_policy()
-                archived = self._turns[:block_size]
+                archived = self._turns[: self.policy.turns.block]
                 del self._turns[: len(archived)]
                 self._record_archived_turns(archived)
                 compactions += 1

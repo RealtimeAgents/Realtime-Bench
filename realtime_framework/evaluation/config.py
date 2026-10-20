@@ -400,8 +400,7 @@ import os as os
 from pathlib import Path as Path
 
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
-from realtime_framework.entity.config import effective_detailed_history_policy
-from realtime_framework.entity.config import effective_visual_fold_policy
+from realtime_framework.entity.context_policy import phase1_context_policy
 from realtime_framework.providers.registry import validate_model_interaction
 from realtime_framework.entity.actions import SOM_REPRESENTATION_VERSION
 from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
@@ -631,9 +630,14 @@ def effective_run_config(
     }
     from realtime_framework.sandbox.apptainer import runtime_identity
 
-    visual_budget, visual_fold_block_size = effective_visual_fold_policy()
-    detailed_turns, detailed_drop_block_size = effective_detailed_history_policy()
     adapter_type = model_config.get("adapter_type")
+    context_policy = phase1_context_policy().for_path(
+        adapter_type, model_config["provider_options"]
+    )
+    visual_budget = context_policy.visuals.keep
+    visual_fold_block_size = context_policy.visuals.block
+    detailed_turns = context_policy.turns.keep
+    detailed_drop_block_size = context_policy.turns.block
     config = {
         "version": 47,
         "seed": task_seed(seed),
@@ -659,6 +663,8 @@ def effective_run_config(
         "detailed_history_drop_block_size": detailed_drop_block_size,
         "minimum_detailed_turns_after_drop": detailed_turns - detailed_drop_block_size + 1,
         "archived_history_policy": "actual_action_jsonl_v1",
+        # Every context-policy item and its version, as this model API applies them.
+        "context_policy": context_policy.to_record(),
         # entity.model.TRANSPORT_RETRY, identical for every model API.
         "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
         "frame_max_dimension": int(os.environ.get("FRAME_MAX_DIM", str(DEFAULT_FRAME_MAX_DIM))),
