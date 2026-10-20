@@ -60,7 +60,7 @@ LIVE_PROTOCOL_OPTIONS = {
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
 }
 # Context policy item 10: how past tool calls are replayed into a rebuilt session. It stays in
-# provider_options, where the ContextPolicy and this driver read it, until step 4b.
+# provider_options, where ContextPolicy.for_path reads it and this driver records it.
 LIVE_HISTORY_OPTIONS = {
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
