@@ -224,6 +224,9 @@ def main(argv=None):
         "credential_variable": resolved_model.api_key_env or entry.key_env,
         "model_revision": resolved_model.model_revision,
     }
+    if catalog.is_external_driver(entry.adapter_type):
+        # The driver's code, part of the configuration hash (evaluation/config.py).
+        settings["external_driver"] = _yaml.external_driver_identity(entry.adapter_type)
     if args.dry_run:
         print(json.dumps(settings, indent=2))
         return 0

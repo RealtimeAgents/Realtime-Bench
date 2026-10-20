@@ -36,6 +36,20 @@ class SubmissionError(RuntimeError):
     pass
 
 
+def check_registered_driver(job: Path, report: dict) -> None:
+    """Only drivers registered under a name in the repository produce official results.
+
+    A model YAML that names an external driver (``endpoint.api: package.module:Class``) marks
+    each run with the driver's code identity; the driver class has no say in it.
+    """
+    driver = report.get("external_driver")
+    if driver is not None:
+        raise SubmissionError(
+            f"{job}: {driver['module']}:{driver['class']} is an external driver, so its results "
+            "are not official; drivers are registered by contributing them to the repository"
+        )
+
+
 def check_runs(jobs: list[Path]) -> list[dict]:
     """Return one report per job, or explain why the jobs are not a leaderboard submission."""
     if len(jobs) != RUNS or len({job.resolve() for job in jobs}) != RUNS:
@@ -46,6 +60,7 @@ def check_runs(jobs: list[Path]) -> list[dict]:
             report = aggregate(job)
         except (OSError, ValueError, KeyError) as exc:
             raise SubmissionError(f"{job}: {exc}") from exc
+        check_registered_driver(job, report)
         if not report["complete"]:
             raise SubmissionError(f"{job}: {report['scored']}/{report['expected']} tasks have a trial")
         for field, value in REQUIRED.items():

@@ -519,19 +519,18 @@ class ApptainerEnvironment(BaseEnvironment):
         if resolved.return_code:
             raise ValueError(f"Cannot resolve model configuration: {resolved.stderr.strip()}")
         launch = json.loads(resolved.stdout)
-        configuration = {
-            "model_config": launch["model_config"],
-            "model_revision": launch.get("model_revision"),
-        }
+        from realtime_framework.evaluation.config import configuration_sha256
+
+        # Marks the results of an external driver as unofficial (evaluation/submission.py).
+        external = {"external_driver": launch["external_driver"]} if "external_driver" in launch else {}
         return {
             **request,
             "model": launch["model_config"]["model_name"],
             "model_revision": launch.get("model_revision"),
             # Compare with the actual report so edits between resolution and execution
             # cannot silently evaluate a different configuration.
-            "configuration_sha256": hashlib.sha256(
-                json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
+            "configuration_sha256": configuration_sha256(launch),
+            **external,
         }
 
     async def run_benchmark(self, request, extra_env=None):
@@ -829,6 +828,7 @@ def aggregate(job, *, official=False):
         "model": system.get("model"),
         "model_revision": system.get("model_revision"),
         "mode": system.get("mode"),
+        **({"external_driver": system["external_driver"]} if "external_driver" in system else {}),
         "integration_hash": hashlib.sha256(next(iter(systems)).encode()).hexdigest()
         if systems
         else None,

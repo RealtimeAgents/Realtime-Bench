@@ -5,11 +5,11 @@ from __future__ import annotations
 
 The phase-1 values copy what each code path did before the policy existed; changing any value
 changes the model-visible content, so it bumps the version. The values count in the effective run
-config and therefore in its hash. Retention, feedback placement, reasoning and verbatim replay,
-pressure archiving, the Decision history form and overflow and the tool-call replay format are
-read from here, and the encoders take their fixed texts from here. The ledger role, prompts and
-observation form are recorded and pinned by tests until the encoders and the Decision agent read
-them (phase 1 steps 4 and 6).
+config and therefore in its hash. Every item is read from here: retention, feedback placement,
+the ledger role, reasoning and verbatim replay, pressure archiving, the Decision history form
+and overflow, the tool-call replay format, the prompts (item 11) and the observation form
+(item 12); the encoders take their fixed texts (item 5) from here, and ContextPolicy.for_path
+takes Gemini's tool-call replay format from its model preset.
 """
 
 from collections.abc import Mapping
@@ -110,14 +110,19 @@ class PathPolicy:
         return _jsonable(self)
 
 
+# The row an external driver ("package.module:Class") uses: the plain stateless chat values.
+EXTERNAL_DRIVER_ROW = "chat_completions"
+
+
 @dataclass(frozen=True)
 class ContextPolicy:
     version: int
     paths: Mapping[str, PathPolicy]  # one per registered API
 
     def for_path(self, adapter_type: str, provider_options: Mapping) -> PathPolicy:
-        """Resolve one API's policy for a model config, before any driver exists."""
-        path = self.paths[adapter_type]
+        """Resolve one API's policy for a model config, before any driver exists; an external
+        driver gets EXTERNAL_DRIVER_ROW."""
+        path = self.paths[adapter_type if adapter_type in self.paths else EXTERNAL_DRIVER_ROW]
         if path.tool_call_replay is None:
             return path
         # Gemini Live takes the format from its maintained model preset (gemini/live.py
