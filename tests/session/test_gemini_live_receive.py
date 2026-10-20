@@ -569,3 +569,46 @@ def test_a_cancelled_tool_call_fails_the_reply(monkeypatch):
             return exc
 
     assert str(asyncio.run(run())) == "Gemini cancelled a queued GUI function call"
+
+
+GO_AWAY_AFTER_A_CLEAN_TURN = [
+    {"sessionResumptionUpdate": {"newHandle": "handle-0", "resumable": True}},
+    {"goAway": {"timeLeft": "30s"}},
+    TURN_COMPLETE,
+]
+
+
+def test_input_waits_for_the_renewal_a_go_away_asks_for(monkeypatch):
+    rig = Rig(monkeypatch, "gemini-3.8-live", [GO_AWAY_AFTER_A_CLEAN_TURN])
+
+    async def run():
+        await rig.connect()
+        await drain(rig.driver.events(await rig.start("turn-0")))
+        try:
+            await rig.driver.send_observation(None, rig.view([frame_turn(1)]))
+        except RuntimeError as exc:
+            return exc
+
+    failure = asyncio.run(run())
+    assert str(failure) == "Gemini Live requires canonical history synchronization before input"
+    assert rig.live.sockets[0].sent == []  # nothing of the observation was written
+
+
+def test_an_interrupted_session_is_not_resumed(monkeypatch):
+    """On the realtime_input transport an interrupt opens a new activity on the same connection;
+    the session it leaves has no clean boundary, so the goAway renewal rebuilds."""
+    rig = Rig(monkeypatch, "replay-gemini-live", [GO_AWAY_AFTER_A_CLEAN_TURN, []])
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        await drain(rig.driver.events(generation))
+        await rig.driver.interrupt(generation)
+        request = HistorySyncRequest(rig.seed, "go_away", rig.history, generation)
+        return await rig.driver.sync_history(request)
+
+    assert asyncio.run(run()).disposition == SyncDisposition.REBUILT
+    assert [entry for entry in rig.log if entry[0] == "connect"] == [
+        ("connect", None),
+        ("connect", None),
+    ]
