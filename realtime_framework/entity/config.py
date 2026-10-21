@@ -125,9 +125,10 @@ class EnvironmentBudgetConfig:
     evaluation/runner.py. Running past a budget fails the operation and invalidates the run.
     """
 
-    # Execute one action; extended for text input and holds as the guest's request timeout is
-    # (sandbox/guest.py action_timeout).
-    action_s: float = 10.0
+    # Execute one action, everything from the page focus to the page's action barrier. Extended for
+    # text input and holds as the guest's request timeout is (sandbox/guest.py action_timeout). A
+    # key action under the token clock is timed per key event instead.
+    action_s: float = 20.0
     # Send one key event, a press or a release, under the token clock; a tap's frame between its
     # press and its release is a clock advance. The guest's request timeout for a key.
     key_event_s: float = 10.0
