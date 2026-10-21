@@ -26,6 +26,8 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
+import ssl
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,7 @@ from websockets.exceptions import ConnectionClosedError
 import realtime_framework.entity.model as model_module
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
+from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import ConnectRequest
@@ -527,6 +530,41 @@ def test_network_fault_retries_connect(fault, monkeypatch):
     assert len(waits) == 3
     assert raised.value.failure == TransportFailure(TRANSIENT, exhausted=True)
     assert raised.value.retries == 3
+
+
+def _while_handling(error: Exception, handled: Exception) -> Exception:
+    """``error`` as raised while ``handled`` was being handled."""
+    try:
+        try:
+            raise handled
+        except type(handled):
+            raise error
+    except type(error) as raised:
+        return raised
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (ConnectionRefusedError("refused"), TRANSIENT),
+        (ConnectionResetError("reset"), TRANSIENT),
+        (socket.gaierror("lookup"), TRANSIENT),
+        (ssl.SSLError("tls"), TRANSIENT),
+        (TimeoutError("timed out"), TRANSIENT),
+        (EOFError("ended before the upgrade response"), TRANSIENT),
+        (PermissionError("permission"), FATAL),
+        (FileNotFoundError("missing"), FATAL),
+        (_while_handling(ValueError("bug"), FileNotFoundError("missing")), FATAL),
+        (_while_handling(KeyError("bug"), OSError("local")), FATAL),
+    ],
+    ids=lambda value: type(value).__name__ if isinstance(value, BaseException) else value,
+)
+def test_only_a_network_failure_below_http_is_transient(error, kind):
+    """classify_transport_error takes a connection that failed below HTTP as transient: refused
+    or reset (ConnectionError), a failed name lookup, TLS, a timeout, and one that ended before
+    the upgrade response (EOFError). A local OSError, and an error raised while handling one,
+    is fatal, as it was before any OSError was taken as transient."""
+    assert OpenAIRealtimeDriver.classify_transport_error(error).kind == kind
 
 
 def test_session_edit_error_rebuilds(tmp_path):
