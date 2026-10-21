@@ -334,6 +334,8 @@ class SessionCore:
         # Since the connection was planned: the latest handle the server called resumable, else
         # the one the connection resumes. Streaming resumes with it.
         self.latest_resume_handle: str | None = None
+        # Streaming: what the session holds is not known (unresumable) until the next connection.
+        self.held_unknown = False
         self.renewal_required = False  # a goAway asked for a new connection
         # Streaming: the execution feedback a seed or a trigger has handed to a connection of the
         # session, over the episode, the text handed by block id; a trigger's counts from when
@@ -500,6 +502,7 @@ class SessionCore:
         self._set([("setup",)], Delivery.CONFIRMED)
         self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
+        self.held_unknown = False
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -517,7 +520,8 @@ class SessionCore:
         resumable, whatever was sent or read after it, so the session it restores may lack input
         or output the history has, or hold output the history lacks."""
         if self.streaming:
-            return self.latest_resume_handle if reason == "go_away" and not force_rebuild else None
+            resumes = reason == "go_away" and not force_rebuild and not self.held_unknown
+            return self.latest_resume_handle if resumes else None
         if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
             return self.resume_handle
         return None
@@ -692,8 +696,9 @@ class SessionCore:
 
     def unresumable(self) -> None:
         """What the session holds is not known any more (an abort closed its connection, a
-        trigger did not go out whole): no handle resumes it, and the next connection rebuilds it
-        from the history."""
+        trigger did not go out whole): no handle resumes it, not even one the server sends on its
+        connection after this, and the next connection rebuilds it from the history."""
+        self.held_unknown = True
         self.latest_resume_handle = None
         self.resume_handle = None
 
