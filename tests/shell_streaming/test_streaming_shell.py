@@ -166,6 +166,44 @@ def test_a_snapshot_waits_for_a_slow_capture_alongside_the_action():
     assert termination == Termination("time_limit", "deadline", 3.0, 32.5, 3.0, 32.5, None)
 
 
+def test_a_snapshot_waits_for_a_long_hold_within_the_holds_own_budget():
+    """4.8: a hold's budget is its duration and 5 s (sandbox/guest.py action_timeout), past a
+    capture's; the snapshot waits for the 150 s hold executing at the deadline."""
+    hold = Action(ActionType.HOLD_KEY, {"key": "space", "duration": 150.0})
+
+    def long_hold(env, clock):
+        env.durations[("execute", 1)] = 150.0
+
+    termination, env, _ = _episode(3.0, [Reply(1.6, (Call(0.9, hold, "h0"),))], env_setup=long_hold)
+    assert env.intervals[-2:] == [("execute", 1.775, 151.775), ("snapshot", 151.775, 152.275)]
+    assert termination == Termination("time_limit", "deadline", 3.0, 152.275, 3.0, 152.275, None)
+
+
+def test_the_snapshot_reads_in_its_own_budget_after_waiting_for_the_action():
+    """The read's budget is 16 s (ENVIRONMENT_BUDGET.snapshot_read_s); the wait for the 19 s click
+    before it is not part of it."""
+
+    def slow_click(env, clock):
+        env.durations[("execute", 1)] = 19.0
+
+    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_click)
+    assert env.intervals[-1] == ("snapshot", 20.775, 21.275)
+    assert termination == Termination("time_limit", "deadline", 3.0, 21.275, 3.0, 21.275, None)
+
+
+def test_a_command_the_shell_fails_to_hand_out_is_a_run_exception(monkeypatch):
+    """The capture lane raises when the shell hands it the capture; the kernel gets the
+    run_exception before the failed capture's answer, so the run is invalid for the shell."""
+
+    def capture(self, captured):
+        raise RuntimeError("the capture lane broke")
+
+    monkeypatch.setattr(EnvLanes, "capture", capture)
+    termination, env, _ = _episode(3.0, [])
+    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
+    assert "the capture lane broke" in env._loop_error
+
+
 def test_a_snapshot_the_action_keeps_waiting_past_its_budget_fails():
     """4.8's bound, N32: the larger of the click's budget, 20 s, and a capture's, 120 s; this click
     runs 130 s. The snapshot gives up 120 s after the deadline, and the run is invalid."""
