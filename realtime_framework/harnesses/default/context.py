@@ -289,12 +289,14 @@ class RealtimeRuntime:
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
 
-    def ledger_block(self, ledger: str) -> ContentBlock | None:
+    def ledger_block(self, ledger: str, omitted: int | None = None) -> ContentBlock | None:
         """The ledger as requests carry it: ``ledger`` holds one line per archived action, and
-        the omitted earliest ones give way to a note that counts them."""
-        if self._omitted_action_count:
-            kept = ledger.split("\n")[self._omitted_action_count :]
-            note = self.policy.texts.ledger_omission.format(count=self._omitted_action_count)
+        the ``omitted`` earliest ones (by default the ones left out so far) give way to a note
+        that counts them."""
+        omitted = self._omitted_action_count if omitted is None else omitted
+        if omitted:
+            kept = ledger.split("\n")[omitted:]
+            note = self.policy.texts.ledger_omission.format(count=omitted)
             ledger = "\n".join([note, *kept])
         return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
 
@@ -549,6 +551,7 @@ class RealtimeRuntime:
 
         compactions = 0
         archived_count = 0
+        omitted_blocks = 0
         while True:
             executed_action_ledger = self._action_ledger(action_history)
             canonical = request_builder(
@@ -571,13 +574,23 @@ class RealtimeRuntime:
             self._stop_if_abandoned(cancel, "its pressure archive")
             if not self._turns:
                 # Every turn is archived: leave out the earliest archived actions, a block at a
-                # time, before the request is given up.
-                if self._omit_archived_actions(status):
-                    continue
-                raise RequestExceedsContext(
-                    "Task instructions and current observation exceed context capacity with every "
-                    "archived action omitted; use a larger endpoint window"
+                # time, before the request is given up. Once one block was not enough, a count
+                # with every archived action left out tells whether more blocks can help.
+                hopeless = (
+                    omitted_blocks == 1
+                    and self._omitted_action_count < self._archived_action_count
+                    and not await self._fits_with_every_action_omitted(
+                        request, request_builder, incoming, executed_action_ledger
+                    )
                 )
+                self._stop_if_abandoned(cancel, "its pressure archive")
+                if hopeless or not self._omit_archived_actions(status):
+                    raise RequestExceedsContext(
+                        "Task instructions and current observation exceed context capacity with "
+                        "every archived action omitted; use a larger endpoint window"
+                    )
+                omitted_blocks += 1
+                continue
             archived = self._turns[: self.policy.turns.block]
             del self._turns[: len(archived)]
             archived_actions = self._record_archived_turns(archived)
@@ -871,6 +884,16 @@ class RealtimeRuntime:
             ledger=self._ledger_change(archived_actions),
             request_context=status,
         )
+
+    async def _fits_with_every_action_omitted(
+        self, request, request_builder, incoming, ledger
+    ) -> bool:
+        """Count the request as it would go with every archived action left out, leaving the
+        history as it is."""
+        block = self.ledger_block(ledger, omitted=self._archived_action_count)
+        canonical = request_builder(tuple(self._turns + incoming), block)
+        status = await self.driver.request_context_status(replace(request, canonical=canonical))
+        return not status.get("pressure")
 
     def _omit_archived_actions(self, status) -> int:
         """Leave the next block of the earliest archived actions out of the ledger; returns how

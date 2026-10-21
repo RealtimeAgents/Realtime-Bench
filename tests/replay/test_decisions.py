@@ -30,6 +30,7 @@ from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
 from realtime_framework.providers.decisions.questions import GROUP_NOTE
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
+from realtime_framework.providers.jev.decisions import JevDecisionsClient
 
 from . import baseline, baseline_decisions
 from . import scenario_decisions as script
@@ -466,10 +467,21 @@ def test_history_overflow_two_blocks(tmp_path):
     _settle("history_overflow_two_blocks", header, records, tmp_path)
 
 
-def test_history_overflow_exhausted(tmp_path):
+def test_history_overflow_exhausted(tmp_path, monkeypatch):
     """A request still over the window once every turn is archived and every archived action
     omitted is not sent: the decision is invalid, a provider failure of its own name, and the
-    episode ends (harnesses/default/context.py _run_turn)."""
+    episode ends (harnesses/default/context.py _run_turn). Once one block of actions is not
+    enough, one count with all 24 left out shows that no block can help, so decision 24 counts
+    its request six times: as it came, after each of three archived blocks, after the omitted
+    block, and with every action omitted."""
+    counts = []
+    sized = JevDecisionsClient.request_context_status
+
+    async def counted(self, request):
+        counts.append(request.canonical.items[-1].block.observation_id)
+        return await sized(self, request)
+
+    monkeypatch.setattr(JevDecisionsClient, "request_context_status", counted)
     header, records = _play_terms(script.TERMS_EXHAUSTED, ARCHIVE_WINDOWS["exhausted"], tmp_path)
     *_, failed = records
     assert failed["step"] == script.TERMS_ARCHIVE_DECISION and failed["requests"] == []
@@ -480,7 +492,8 @@ def test_history_overflow_exhausted(tmp_path):
         "capacity with every archived action omitted; use a larger endpoint window')"
     )
     omissions = _pressure_archives(tmp_path, "ledger_omission")
-    assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20, 24]
+    assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10]
+    assert counts.count(failed["observation"]["observation_id"]) == 6
     assert failed["commit"] is None and failed["action_history_entry"] is None
     (attempt,) = [
         e["payload"]
