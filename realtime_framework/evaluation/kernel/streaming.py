@@ -507,7 +507,7 @@ class StreamingPolicy:
             self._latest = frame
             self._failed_pushes, self._rebuilt = 0, False
             # The first reply waits for the first frame; later ones follow each other.
-            if self.generation is None and not self._restart:
+            if self.generation is None:
                 self._start_reply()
         elif not stale:
             self._failed_pushes += 1
@@ -537,7 +537,7 @@ class StreamingPolicy:
     def _session_stuck(self, reason: str, invalid_reason: str, detail: str) -> None:
         """The session takes no frames: give its reply up, so that the next one rebuilds it. The
         run is invalid once a rebuilt session takes none either, or with no reply to give up."""
-        if self._rebuilt or (self.generation is None and not self._restart):
+        if self._rebuilt or self.generation is None:
             return self.kernel.invalidate("provider", invalid_reason, detail)
         self._rebuilt = True
         self._stuck(reason)
