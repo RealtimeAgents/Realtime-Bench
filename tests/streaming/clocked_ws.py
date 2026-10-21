@@ -195,10 +195,11 @@ class _Connection:
     def serve(self) -> None:
         server = self.server
         try:
-            if not self._handshake():
+            path = self._handshake()
+            if path is None:
                 return
             with server._lock:
-                self.number = server.cursor.open(server._now())
+                self.number = server.cursor.open(server._now(), path)
                 self._claim()
             if self.number is None:
                 self._fail()
@@ -210,19 +211,20 @@ class _Connection:
         finally:
             self.sock.close()
 
-    def _handshake(self) -> bool:
+    def _handshake(self) -> str | None:
+        """Accept the upgrade; its request path, or None when the connection ended before it."""
         protocol = self.protocol
         events = []
         while not events:
             if not self._read():
-                return False
+                return None
             events = protocol.events_received()
         (request,) = events
         protocol.send_response(protocol.accept(request))
         self._send()
         with self.server._lock:
             self.server.paths.append(request.path)
-        return True
+        return request.path
 
     def _converse(self) -> None:
         server, cursor = self.server, self.server.cursor

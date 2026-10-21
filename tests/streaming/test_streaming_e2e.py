@@ -176,7 +176,7 @@ def realtime_cassette(frame_2_at: float = 1.0) -> list[dict]:
         "id": "resp_1", "status": "completed", "output": [{"id": "item_1"}], "usage": usage,
     }  # fmt: skip
     return [
-        _record("open", at=0.0),
+        _record("open", {"path": "/v1/realtime?model=gpt-realtime-2"}, 0.0),
         _record("s2c", {"type": "session.created", "session": {}}),
         _record("c2s", {"type": "session.update", "session": session}, 0.0),
         _record("s2c", {"type": "session.updated", "session": {}}),

@@ -29,6 +29,7 @@ from tests.replay.ws_gemini_live import WireNormalizer
 
 from . import ws_cassette
 from .clocked_ws import CassetteServer, clocked_connection
+from .e2e import LIVE_PATH
 from .openai_session import driver_for, frame_png, run_on_fake_clock, run_turns
 
 REPLY_TEXTS = ('{"action": "wait"}', '{"action": "click", "x": 1, "y": 2}')
@@ -228,7 +229,7 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_its_cursor_follows(
     assert records[4]["msg"] == received[1]
 
     cursor = ws_cassette.Cursor(records, WireNormalizer())
-    cursor.open(0.0)
+    cursor.open(0.0, LIVE_PATH)
     cursor.receive(1, sent[0], 0.0)
     released = cursor.release(1, 1e9)
     cursor.receive(1, sent[1], 0.0)
