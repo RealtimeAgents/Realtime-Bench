@@ -296,10 +296,11 @@ runtime:
 
 
 def test_a_run_plan_carries_both_rates_to_the_runner(tmp_path):
-    """``rtbench run -c PLAN``: the plan's runtime becomes the Harbor agent's options
-    (evaluation/harbor_cli.py:209-235), the trial's identity and command
-    (evaluation/harbor.py:445-520), the trial's plan and model config (evaluation/_trial.py), and
-    the runner's arguments, which reach its decision loop."""
+    """``rtbench run -c PLAN`` as the effective-config export follows it: the plan's runtime
+    becomes the Harbor agent's options (evaluation/harbor_cli.py plan_job), the export's copies of
+    the trial's identity and runner arguments (evaluation/effective_config.py), the trial's plan
+    and model config (evaluation/_trial.py), and the runner's arguments, which reach its decision
+    loop. test_a_harbor_trial_carries_both_rates_to_the_runner runs Harbor's own copies."""
     plan = tmp_path / "split.yaml"
     plan.write_text(PLAN)
     entry = f"harbor:{plan}"
@@ -322,6 +323,98 @@ def test_a_run_plan_carries_both_rates_to_the_runner(tmp_path):
     assert cell["frame_rates"] == {"env_fps": 2.0, "model_input_fps": 1.0}
     assert cell["run_stream"]["frame_ticks"] == 2.0
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
+
+
+@pytest.fixture
+def environment():
+    """_trial.main writes os.environ (evaluation/_trial.py)."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+def test_a_harbor_trial_carries_both_rates_to_the_runner(environment, tmp_path, monkeypatch):
+    """``rtbench run -c PLAN`` through Harbor's environment: it fixes the trial's identity
+    (ApptainerEnvironment.resolve), writes it as the verifier's task.json and launches the trial
+    worker (run_benchmark), which execs the runner (evaluation/_trial.py main). The worker runs in
+    this interpreter, as in tests/replay/test_external_driver.py resolved_request; the exec is
+    captured."""
+    import asyncio
+    import contextlib
+    import io
+
+    from harbor.environments.base import ExecResult
+
+    from realtime_framework.evaluation import _trial, harbor, harbor_cli
+
+    plan = tmp_path / "split.yaml"
+    plan.write_text(PLAN)
+    # suite_dataset links task folders under temp/; the job only needs the selected names.
+    monkeypatch.setattr(
+        harbor_cli, "suite_dataset", lambda suite, selected: {"path": suite, "task_names": selected}
+    )
+    (agent,) = harbor_cli.plan_job(plan)["agents"]
+    options = harbor.RealtimeBenchOptions(**agent["kwargs"])
+    # RealtimeBenchAgent.run: a preset named only by -m becomes the catalog model.
+    request = {"model": GEMINI, "mode": "default", **options.model_dump(), "catalog_model": GEMINI}
+
+    images = {kind: tmp_path / f"{kind}.sif" for kind in ("sandbox", "realtime")}
+    for variable, image in zip(("SANDBOX_IMAGE", "RT_SUITE_IMAGE"), images.values()):
+        image.touch()
+        monkeypatch.setenv(variable, str(image))
+    suite = {
+        "suite_id": "public", "suite_version": "1.0", "suite_hash": "0" * 64,
+        "harness_version": "1.0", "harness_hash": "1" * 64,
+        "images": {kind: str(path) for kind, path in images.items()},
+        "tasks": [{"task_id": WEB, "category": "realtime"}],
+    }  # fmt: skip
+    monkeypatch.setattr(harbor, "runtime", lambda root, python, suite_id: suite)
+    # The worker allocates its run directory under its ROOT, and execs from there.
+    suite_path = tasks.suite_path
+    monkeypatch.setattr(
+        tasks, "suite_path", lambda root, name: suite_path(catalog.PROJECT_ROOT, name)
+    )
+    monkeypatch.setattr(_trial, "ROOT", tmp_path / "trial-root")
+    monkeypatch.chdir(os.getcwd())
+    monkeypatch.setattr(_trial.shutil, "which", lambda name: "/usr/bin/" + name)
+
+    class Exec(Exception):
+        pass
+
+    def execve(path, argv, env):
+        raise Exec(argv)
+
+    monkeypatch.setattr(_trial.os, "execve", execve)
+    runner_argv = []
+
+    async def run(command, **options):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                code = _trial.main(command[3:])  # after "python -m ...evaluation._trial"
+            except Exec as exc:
+                runner_argv.append(exc.args[0])
+                code = 0
+        return ExecResult(return_code=code, stdout=out.getvalue(), stderr="")
+
+    trial = object.__new__(harbor.ApptainerEnvironment)
+    trial.root, trial.python, trial.lane = catalog.PROJECT_ROOT, "python", 1
+    trial.task_id = WEB
+    trial.staging = (tmp_path / "staging").resolve()
+    for folder in ("workspace", "tests", "logs/agent", "logs/artifacts"):
+        (trial.staging / folder).mkdir(parents=True)
+    trial._launched = False
+    trial._run = run
+    trial._runner_environment = lambda extra_env: {}
+    resolved = asyncio.run(trial.resolve(request))
+    assert (resolved["task"]["fps"], resolved["task"]["model_input_fps"]) == (2.0, 1.0)
+    asyncio.run(trial.run_benchmark(resolved))
+    task = json.loads((trial.staging / "tests" / "task.json").read_text())
+    assert (task["fps"], task["model_input_fps"]) == (2.0, 1.0)
+    (argv,) = runner_argv
+    assert argv[argv.index("--fps") + 1] == "2.0"
+    assert argv[argv.index("--model-input-fps") + 1] == "1.0"
 
 
 def test_ak_fps_on_a_run_plan_without_a_model_input_rate_sets_both(tmp_path, monkeypatch):
