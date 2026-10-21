@@ -21,6 +21,7 @@ from google.genai import types
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.events import FunctionCall
 from realtime_framework.entity.model import (
     ConnectRequest,
     GenerationRequest,
@@ -31,7 +32,11 @@ from realtime_framework.entity.model import (
 from realtime_framework.entity.records import UNTRACED
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import system_block
-from realtime_framework.harnesses.streaming.history import history_view
+from realtime_framework.harnesses.streaming.history import (
+    feedback_block,
+    history_view,
+    output_block,
+)
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.gemini.session import Delivery
 from tests.session.test_gemini_live_receive import RecordingClock, server_closed
@@ -50,12 +55,18 @@ class FedSocket:
         self.trace_connection_id = f"gemini_live.ws-{number}"
         self.sent: list[dict] = []
         self._frames: asyncio.Queue = asyncio.Queue()
+        self._answers: list[tuple] = []  # (kind, frames), in the order they are due
 
     def feed(self, *frames) -> None:
         for frame in frames:
             self._frames.put_nowait(
                 frame if isinstance(frame, BaseException) else json.dumps(frame)
             )
+
+    def answer(self, kind, *frames) -> None:
+        """Feed ``frames`` as soon as the client sends a message that is ``kind`` (wire()), as a
+        server answers it, before the send returns."""
+        self._answers.append((kind, frames))
 
     async def recv(self, decode=None):
         frame = await self._frames.get()
@@ -64,7 +75,13 @@ class FedSocket:
         return frame
 
     async def send(self, message):
-        self.sent.append(json.loads(message))
+        message = json.loads(message)
+        self.sent.append(message)
+        if self._answers and wire(message) == self._answers[0][0]:
+            self.feed(*self._answers.pop(0)[1])
+        # A write gives the loop its turns, as a real socket's does: a reader then takes what
+        # came meanwhile.
+        await settle()
 
 
 class FedLive:
@@ -150,7 +167,12 @@ async def settle() -> None:
 
 
 async def drain(events) -> list:
-    return [event async for event in events]
+    """Every event of a reply; one that never ends fails within a few seconds."""
+
+    async def read():
+        return [event async for event in events]
+
+    return await asyncio.wait_for(read(), 5)
 
 
 def update(handle: str | None) -> dict:
@@ -305,6 +327,68 @@ def test_a_pushed_frame_goes_on_the_video_stream_then_its_text_and_starts_no_rep
     assert rig.log == []  # no wait
     assert delivery == Delivery.SENT
     assert refused == "Gemini Live requires canonical history synchronization before input"
+
+
+def wire(message: dict):
+    """A client message as what it is: the realtime input's one field (a text with its text),
+    or the message's kind."""
+    [(kind, body)] = message.items()
+    if kind != "realtime_input":
+        return kind
+    [(field, value)] = body.items()
+    return ("text", value) if field == "text" else field
+
+
+ACTIVITY = ["activityStart", "audio", "activityEnd"]
+
+
+def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
+    """request_reply starts the reply's generation, then sends one activity: the feedback the
+    session does not hold yet, and the silent audio an activity must hold. The reply's first
+    message, right after its activity, is that reply's; the next trigger carries only the
+    feedback that came since."""
+    rig = Rig()
+    blocks = [pushed(1)]
+    triggers = []
+
+    async def reply(generation_id: str, *messages):
+        """One reply, which the server starts as soon as its activity ends; what request_reply
+        sent goes to ``triggers``."""
+        request = GenerationRequest(generation_id, None, "inf", "wall", canonical=rig.view(blocks))
+        rig.socket.answer("activityEnd", *messages, TURN_COMPLETE)
+        before = len(rig.socket.sent)
+        generation = await rig.driver.request_reply(request)
+        triggers.append(rig.socket.sent[before:])
+        return generation, await drain(rig.driver.events(generation))
+
+    async def run():
+        await rig.connect()
+        await rig.driver.push_frame(None, rig.view(blocks))
+        first = await reply("turn-0", call("call-0"))
+        for decision, feedback in ((1, "EXECUTION RESULT: ok"), (2, "EXECUTION RESULT: missed")):
+            blocks.extend(
+                [
+                    output_block(decision, "click P1", "obs-1", None),
+                    feedback_block(decision, None, feedback, None),
+                ]
+            )
+            await reply(f"turn-{decision}")
+        delivery = rig.driver._core.delivery[("block", "d2.feedback")]
+        await rig.driver.close()
+        return first, delivery
+
+    (generation, events), delivery = asyncio.run(run())
+    call_event = next(event for event in events if isinstance(event, FunctionCall))
+    assert (call_event.generation_id, call_event.call_id) == ("turn-0", "call-0")
+    assert generation.metadata["video_ingestion_wait_ms"] == 0
+    assert generation.metadata["gemini_live_input_transport"] == "realtime_input"
+    assert [[wire(message) for message in trigger] for trigger in triggers] == [
+        ACTIVITY,
+        ["activityStart", ("text", "EXECUTION RESULT: ok"), "audio", "activityEnd"],
+        ["activityStart", ("text", "EXECUTION RESULT: missed"), "audio", "activityEnd"],
+    ]
+    assert delivery == Delivery.SENT
+    assert rig.log == []
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
