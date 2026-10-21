@@ -29,7 +29,14 @@ from . import baseline
 from .build import build_episode
 from .fake_env import FakeEnvironment, Hang
 from .frames import CLOCK_ORIGIN, ReplayTask
-from .loop import REAL_TIME_FIELDS, check_wall_clock_properties, commit_statuses, records, run_loop
+from .loop import (
+    REAL_TIME_FIELDS,
+    check_wall_clock_properties,
+    commit_statuses,
+    records,
+    resolved,
+    run_loop,
+)
 from .scenario import CLICK_AGREE, CLICK_NAME, CLICK_SUBMIT, LONG_SCENARIO, TASK_INSTRUCTION
 from .scenario import replies
 from .steps import Step
@@ -476,3 +483,62 @@ def test_snapshot_time_is_when_its_read_returns(tmp_path):
         "snapshot_delay_s": 1.5,
     }
     assert run.env._termination_snapshot["environment_tick"] == 4
+
+
+def _failing_on_the_second_call(method):
+    calls = []
+
+    def failing(agent, *args):
+        calls.append(args)
+        if len(calls) == 2:
+            raise RuntimeError(f"{method.__name__} failed")
+        return method(agent, *args)
+
+    return failing
+
+
+def test_a_generation_that_raises_invalidates_the_run(tmp_path):
+    """Decision 1's generation raises on the shell's worker, in the middle of the agent's turn
+    (shell.py _generate): its result is a provider failure that leaves the decision without an
+    action, and the run is invalid with the provider's generation_error
+    (episode_records.result_invalid)."""
+    failing = _failing_on_the_second_call(DefaultHarness._generate)
+    with mock.patch.object(DefaultHarness, "_generate", failing):
+        run = _run(tmp_path, [Step(CLICK_NAME)], [0.5], stream=True, max_minutes=SHORT_MAX_MINUTES)
+    invalid = run.env._invalid_run
+    assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")
+    assert invalid["detail"].rstrip().endswith("RuntimeError: _generate failed")
+    completed = [
+        call["payload"]
+        for call in run.env.calls
+        if call["call"] == "trace" and call["event"] == "InferenceCompleted"
+    ]
+    assert [(p["decision"], p["error"], p["invalid_reason"]) for p in completed] == [
+        (0, False, None),
+        (1, True, "generation_error"),
+    ]
+    assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
+    check_wall_clock_properties(run.env, "invalid_run")
+
+
+def test_a_failed_trajectory_write_invalidates_the_run(tmp_path):
+    """Writing decision 1's trajectory row fails (episode_records.finalize_decision_audit): the
+    result is unusable, the run is invalid with harness:trajectory_write_failed, and decision 1's
+    proposed action is resolved as invalid_run without being executed."""
+    failing = _failing_on_the_second_call(DefaultHarness.finalize_decision_audit)
+    with mock.patch.object(DefaultHarness, "finalize_decision_audit", failing):
+        run = _run(
+            tmp_path,
+            [Step(CLICK_NAME), TYPE_ADA],
+            [0.5, 0.5],
+            stream=True,
+            max_minutes=SHORT_MAX_MINUTES,
+        )
+    invalid = run.env._invalid_run
+    assert (invalid["category"], invalid["reason"]) == ("harness", "trajectory_write_failed")
+    assert invalid["detail"].rstrip().endswith("RuntimeError: finalize_decision_audit failed")
+    logged = [call["line"] for call in run.env.calls if call["call"] == "runner.log"]
+    assert any(line.startswith("[default] trajectory audit write failed:") for line in logged)
+    assert [p["status"] for p in resolved(run.env).values()] == ["applied", "invalid_run"]
+    assert [e["action"]["action_type"] for e in run.env.executions] == ["click"]
+    check_wall_clock_properties(run.env, "invalid_run")
