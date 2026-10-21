@@ -784,6 +784,8 @@ class _Shell:
         )
         # The clock's count is the result's own: an agent that holds its result adds its usage
         # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
+        # A legacy turn's result that names none has none, though its usage grew as it generated:
+        # the agents create_agent makes name theirs (harnesses/registry.py).
         episode_records.account_tokens(r, held.remaining, self.env)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:

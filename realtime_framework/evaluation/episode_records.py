@@ -18,6 +18,8 @@ wrote: ``annotate_result`` (the observation id the inspection proof is checked a
 ``r`` over any failure already there, so it takes precedence. The kernel's shell measures
 ``frame_usage`` after ``account_tokens``: an agent that holds its result adds its usage only as it
 accepts it, after the clock's count is needed, and the shell measures the frame's usage again then.
+So the shell's count never falls back on ``frame_usage``: a legacy turn's result that names no
+count has none there.
 
 What the kernel's GenerationResult takes from a settled ``r``: ``action`` is ``r["action"]``, a
 DONE or FAIL as it came; ``output_tokens`` the count before the allowance clamped it, which the
