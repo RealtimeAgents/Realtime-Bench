@@ -21,6 +21,7 @@ from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.providers.gemini.live import classify_live_message
+from realtime_framework.providers.openai_realtime import classify_realtime_message
 from tests.agent_trace.stubs import WsStub
 from tests.fake_clock import FakeClock
 from tests.replay import baseline
@@ -161,9 +162,15 @@ def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
         ws_cassette.from_trace(tmp_path)
 
 
-def _gemini_trace(run_dir, messages) -> None:
-    """A Gemini Live session's messages, ``(direction, message)``, captured as the driver's
-    recording connection captures them (providers/capture.py:266-275, gemini/live.py:271)."""
+_CLASSIFY = {
+    "gemini_live.ws": classify_live_message,
+    "openai_realtime.ws": classify_realtime_message,
+}
+
+
+def _live_trace(run_dir, messages, channel="gemini_live.ws") -> None:
+    """A live session's messages, ``(direction, message)``, captured as the drivers' recording
+    connections capture them (providers/capture.py _session_capture), on their channel."""
     clock = SystemClock()
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette", clock=clock)
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
@@ -171,23 +178,25 @@ def _gemini_trace(run_dir, messages) -> None:
     for direction, message in messages:
         sink.capture(
             TraceEvent.SESSION_MESSAGE,
-            {
-                "channel": "gemini_live.ws",
-                "connection_id": "gemini_live.ws-1",
-                "direction": direction,
-            },
+            {"channel": channel, "connection_id": f"{channel}-1", "direction": direction},
             body=json.dumps(message),
-            classify=classify_live_message,
+            classify=_CLASSIFY[channel],
         )
     assert close_agent_trace(sink, None) is None
     trace.close()
 
 
-def test_a_gemini_session_with_audio_in_a_reply_converts_and_replays(tmp_path):
+def test_a_gemini_session_with_audio_in_a_reply_converts_and_its_cursor_follows(tmp_path):
     """M1: the client's frames become pixel digests; the server's messages keep their bytes, the
-    audio of a reply included, so a replay sends them back as google-genai parses them. The
+    audio of a reply included, so a replay would send them back as google-genai parses them. The
     shapes are the wire's: the client's snake_case blobs (tests/replay/baselines/gemini_live-*),
-    the server's camelCase ones in standard base64 (tests/replay/test_gemini_live.py:185-187)."""
+    the server's camelCase ones in standard base64 (tests/replay/test_gemini_live.py
+    turn_script).
+
+    Only the cursor follows the recording here: the Gemini driver does not replay through
+    CassetteServer yet. google-genai connects over wss whatever the URL says (its
+    BaseApiClient._websocket_base_url), and the driver's
+    connection is an asyncio one, which clocked_connection does not wrap."""
     frame = base64.urlsafe_b64encode(frame_png(1)).decode()
     audio = base64.b64encode(bytes(range(256)) * 4).decode()  # standard base64, with "+" and "/"
     sent = [
@@ -204,7 +213,7 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_replays(tmp_path):
             }
         },
     ]
-    _gemini_trace(
+    _live_trace(
         tmp_path,
         [
             ("client", sent[0]),
@@ -264,11 +273,30 @@ def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path)
 def test_a_retried_run_converts_its_last_attempt_only(tmp_path):
     """A retried run appends its attempt to the same trace (evaluation/reporting.py EpisodeTrace);
     the cassette is the last one's."""
-    _record_session(tmp_path)
-    _record_session(tmp_path)
+    for model in ("models/first", "models/last"):
+        _live_trace(tmp_path, [("client", {"setup": {"model": model}})])
     records = ws_cassette.from_trace(tmp_path)
-    assert [r["dir"] for r in records].count("open") == 1
-    assert [r["dir"] for r in records].count("c2s") == 6  # one session's, as listed above
+    assert [r["msg"] for r in records] == [None, {"setup": {"model": "models/last"}}]
+
+
+def test_a_server_message_names_the_clients_ids_as_the_client_messages_do(tmp_path):
+    """One mapping for both directions: the server acknowledges the client's second item first,
+    and the acknowledgement has that item's placeholder."""
+    _live_trace(
+        tmp_path,
+        [
+            ("client", {"type": "conversation.item.create", "item": {"id": "rtb_user_aa"}}),
+            ("client", {"type": "conversation.item.create", "item": {"id": "rtb_user_bb"}}),
+            ("server", {"type": "conversation.item.added", "item": {"id": "rtb_user_bb"}}),
+        ],
+        channel="openai_realtime.ws",
+    )
+    records = ws_cassette.from_trace(tmp_path)
+    assert [r["msg"]["item"]["id"] for r in records[1:]] == [
+        "<rtb_user-1>",
+        "<rtb_user-2>",
+        "<rtb_user-2>",
+    ]
 
 
 def test_a_server_messages_time_counts_from_the_episode_origin(tmp_path):

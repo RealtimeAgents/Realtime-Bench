@@ -154,6 +154,24 @@ def test_records_left_unused_are_reported_at_the_end():
     assert _replay(records, client) == ["conn 2: 1 record(s) left unused, from record 2 (open)"]
 
 
+def test_the_server_knows_a_pushed_frames_and_a_cancels_event_ids():
+    """The server's default normalizer is ws_cassette.RealtimeNormalizer: these event ids are this
+    session's random ones, which the recording has as placeholders."""
+    records = [
+        _record("open", at=0.0),
+        _record("c2s", {"type": "conversation.item.create", "event_id": "<rtb_push-1>"}, 0.0),
+        _record("c2s", {"type": "response.cancel", "event_id": "<rtb_cancel-1>"}, 0.0),
+    ]
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        _send(ws, {"type": "conversation.item.create", "event_id": "rtb_push_9f8e"})
+        _send(ws, {"type": "response.cancel", "event_id": "rtb_cancel_0a1b"})
+        ws.close()
+
+    assert _replay(records, client) == []
+
+
 def test_a_message_sent_at_another_time_than_the_scripts_is_a_problem():
     records = [_record("open", at=0.0), _record("c2s", {"type": "hello"}, 1.0)]
 
