@@ -2103,7 +2103,13 @@ class DefaultHarness(VisionAgentBase):
             self._runtime.abort()
 
     def close(self):
+        """Cancel the generations that have not ended, and discard the event kernel's: one the
+        episode ended on gets no AcceptResult or DiscardResult after Termination."""
+        with self._generations_lock:
+            unsettled = [g.number for g in self._generations if g.number is not None]
         self._cancel()
+        for number in unsettled:
+            self.discard(number)
         try:
             with trace_scope(phase="close"):
                 self._runtime.close()
