@@ -1010,6 +1010,27 @@ class GuestEnvironment:
                 return True
         return False
 
+    def check_end(self):
+        """Ask the task whether the episode is over, for the kernel's shell: ``(ended, reason)``.
+
+        Unlike done(), no deadline is compared and ``_invalid_run`` is neither read nor written: a
+        failed read raises, and the kernel counts it (evaluation/shell.py). An end is latched in
+        ``_episode_over`` and ``_terminal_reason`` as done() latches it.
+        """
+        if self.stop_check is None:
+            return False, None
+        with operation_budget(
+            "state read", ENVIRONMENT_BUDGET.state_read_s, clock=self.clocks.operational
+        ):
+            terminal = self.stop_check()
+        if not terminal:
+            return False, None
+        self._episode_over = True
+        reason = terminal if isinstance(terminal, str) else None
+        if reason is not None:
+            self._terminal_reason = reason
+        return True, reason
+
 
 # Ports
 """Lane-local task port allocation for concurrent sandboxes on one host."""
