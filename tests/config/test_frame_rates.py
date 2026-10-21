@@ -121,17 +121,22 @@ def test_model_input_rate_above_the_cap_is_refused(runner_cells):
     assert cell["error"] == f"ValueError: {CAP_MESSAGE}"
 
 
-def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch):
-    """A run error in the decision loop reaches main()'s cleanup, which stops the screen
-    recording (evaluation/runner.py:1929-1934). With no recording to copy out, the video is
-    composed from the frames captured once per decision, played at the model-input rate
-    (sandbox/desktop.py:231-285). main() runs in this interpreter with the export probe's stand-ins
-    for the container, the guest, the scene capture, the agent and the task server
-    (evaluation/effective_config.py:228-300, 335-345)."""
+WALL_2_1 = ["--clock", "wall", "--fps", "2", "--model-input-fps", "1"]
+TOKEN_60_1 = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
+TOKEN_60_1 += ["--fps", "60", "--model-input-fps", "1"]
+
+
+def _main_in_process(monkeypatch, tmp_path, argv, run_stream) -> list:
+    """Set up runner.main() to run in this interpreter on ``argv`` with ``run_stream`` as its
+    decision loop and the export probe's stand-ins for the container, the guest, the scene
+    capture, the agent and the task server (evaluation/effective_config.py _Guest, _Scene, _Agent,
+    _Task). There is no screen recording to copy out, so main() composes the video from the
+    frames captured once per decision (sandbox/desktop.py _stop_screen_recording); the returned
+    list collects the rates it is played at. The run writes under ``tmp_path / "run"``."""
     import sys
     import types
 
-    from realtime_framework.clock import Clocks, SystemClock
+    from realtime_framework.clock import Clocks, FrameClock, SystemClock
     from realtime_framework.evaluation import effective_config as probe
     from realtime_framework.evaluation import reporting, runner
     from realtime_framework.sandbox import desktop
@@ -157,28 +162,122 @@ def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch)
             pass
 
     clock = NoSleeps()
-    monkeypatch.setattr(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock))
+
+    def clocks(clock_mode, fps):
+        """As clock.episode_clocks, with no setup waits."""
+        return Clocks(FrameClock(fps) if clock_mode == "token" else clock, clock)
+
+    monkeypatch.setattr(runner, "episode_clocks", clocks)
     monkeypatch.setattr(runner, "GuestClient", probe._Guest)
     monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
     monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))
     registered = tasks.get
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
+    monkeypatch.setattr(runner, "run_stream", run_stream)
+    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
+        monkeypatch.setenv(name, "cpu")  # main() sets both
+    argv = [*argv, "--results-dir", str(tmp_path), "--run-id", "run"]
+    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    return videos
+
+
+def _run_summary(tmp_path) -> dict:
+    return json.loads((tmp_path / "run" / "run_summary.json").read_text())
+
+
+def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch):
+    """A run error in the decision loop reaches main()'s cleanup, which stops the screen
+    recording; the composed video plays at the model-input rate."""
+    from realtime_framework.evaluation import runner
 
     def run_stream(adapter, env, **loop):
         raise RuntimeError("decision loop failed")
 
-    monkeypatch.setattr(runner, "run_stream", run_stream)
-    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
-        monkeypatch.setenv(name, "cpu")  # main() sets both
-    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--fps", "2"]
-    argv += ["--model-input-fps", "1", "--results-dir", str(tmp_path), "--run-id", "run"]
-    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1]
+    videos = _main_in_process(monkeypatch, tmp_path, argv, run_stream)
     with pytest.raises(SystemExit):  # an invalid run is not a scored result
         runner.main()
-    summary = json.loads((tmp_path / "run" / "run_summary.json").read_text())
+    summary = _run_summary(tmp_path)
     assert summary["error"].strip().endswith("RuntimeError: decision loop failed")
     assert (summary["fps"], summary["model_input_fps"]) == (2.0, 1.0)
     assert videos == [1.0]
+
+
+def test_fallback_recording_after_a_finished_loop_plays_at_the_model_input_rate(
+    tmp_path, monkeypatch
+):
+    """When the decision loop returns, main() stops the screen recording right after it, not in
+    its cleanup; that video too plays at the model-input rate."""
+    from realtime_framework.evaluation import runner
+
+    argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1]
+    videos = _main_in_process(monkeypatch, tmp_path, argv, lambda adapter, env, **loop: [])
+    with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
+        runner.main()
+    assert _run_summary(tmp_path)["error"] is None
+    assert videos == [1.0]
+
+
+def test_a_token_run_summary_charges_b_per_model_input_frame(tmp_path, monkeypatch):
+    """60/1 with B=100: one decision of 50 tokens is half a model-input frame, 0.5 s, 30 ticks.
+    The run summary's kappa and simulated latency are per model-input frame."""
+    from realtime_framework.evaluation import runner
+
+    def run_stream(adapter, env, **loop):
+        env.record_lifecycle({"decision": 0, "clock_output_tokens": 50})
+        env._termination_snapshot_captured = True
+        env._termination_snapshot = {"kind": "realtime", "state": {"generation": 0}}
+        d_ticks = 50 / 100 * loop["frame_ticks"]
+        return [(0, 0, d_ticks, d_ticks, None)]
+
+    argv = ["--model", GEMINI, "--task", WEB, *TOKEN_60_1]
+    videos = _main_in_process(monkeypatch, tmp_path, argv, run_stream)
+    runner.main()
+    summary = _run_summary(tmp_path)
+    assert summary["invalid_run"] is None
+    assert (summary["fps"], summary["model_input_fps"]) == (60.0, 1.0)
+    assert summary["tokens_per_world_second"] == 100
+    assert summary["avg_delta_ticks"] == 30.0
+    latency = summary["decision_simulated_latency_s"]
+    assert (latency["sample_count"], latency["mean"]) == (1, 0.5)
+    assert videos == [1.0]
+
+
+def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, monkeypatch):
+    """At 30/7 a model-input frame is 30/7 environment ticks, which main() hands run_stream as
+    it is; the ratios of runner_cells are whole. Claude has no video cap, unlike Gemini Live."""
+    from realtime_framework.evaluation import runner
+
+    loops = []
+
+    def run_stream(adapter, env, **loop):
+        loops.append(loop)
+        return []
+
+    token = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
+    argv = ["--model", "claude-opus-5", "--task", WEB, *token, "--fps", "30"]
+    _main_in_process(monkeypatch, tmp_path, [*argv, "--model-input-fps", "7"], run_stream)
+    with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
+        runner.main()
+    (loop,) = loops
+    assert (loop["delta_s"], loop["frame_ticks"], loop["max_ticks"]) == (1 / 30, 30 / 7, 9000.0)
+
+
+def test_a_setup_failure_summary_records_both_rates(tmp_path, monkeypatch):
+    """A setup error main() raises reaches the entry point's emergency summary
+    (runner._write_emergency_setup_summary), which reads the two rates off the command line."""
+    import sys
+
+    from realtime_framework.evaluation import runner
+
+    argv = ["--model", GEMINI, "--task", WEB, *TOKEN_60_1]
+    argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
+    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    runner._write_emergency_setup_summary("RuntimeError: guest not ready")
+    summary = _run_summary(tmp_path)
+    assert (summary["stop_reason"], summary["run_status"]) == ("setup_error", "invalid")
+    assert (summary["fps"], summary["model_input_fps"]) == (60.0, 1.0)
+    assert (summary["clock_mode"], summary["tokens_per_frame"]) == ("token", 100)
 
 
 PLAN = """\
