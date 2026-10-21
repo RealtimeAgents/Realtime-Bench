@@ -8,13 +8,15 @@ runner's timing, STREAM_* variables included, from the config it is given.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation import shell
 from realtime_framework.evaluation.kernel.core import Kernel
 
-from .world import CLICK, Agent, Reply, World, run
+from .world import CLICK, Agent, Environment, Reply, World, run
 
 
 @pytest.fixture
@@ -139,6 +141,45 @@ def test_a_token_result_back_before_the_watchdog_is_taken_though_settling_it_cro
         tokens_per_frame=tokens_per_frame,
         timing=timing,
         agent_type=_SlowTrajectory,
+    )
+    assert episode.invalid is None
+    assert episode.statuses()[0] == "applied"
+
+
+def test_a_token_result_is_held_back_only_by_an_operational_bound():
+    """The first decision's 1000 tokens move the world to tick 10; the next call comes back
+    0.5 s in, far before its 7 s watchdog. The watchdog is operational, so the hand-back is
+    timed in operational seconds, not in ticks, which are past 7 by then."""
+    replies = [
+        Reply(0.0, CLICK, output_tokens=1000),
+        Reply(0.5, CLICK, output_tokens=100),
+        Reply(0.0, CLICK, output_tokens=100),
+    ]
+    timing = RunnerTimingConfig(provider_watchdog_s=7.0)
+    episode = run("token", 12.0, replies, tokens_per_frame=100, timing=timing)
+    assert episode.invalid is None
+    assert episode.statuses()[:2] == ["applied", "applied"]
+
+
+class _TicksOnTheShellsThreadOnly(Environment):
+    """The environment runs everything on the shell's thread (ShellEnvironment): its tick reading
+    raises on a worker."""
+
+    def tick_index(self) -> float:
+        if threading.current_thread().name.startswith("generation-"):
+            raise RuntimeError("tick_index on a worker")
+        return super().tick_index()
+
+
+@pytest.mark.parametrize("tokens_per_frame", [100, None], ids=["token", "paused"])
+def test_a_worker_hands_its_result_back_without_reading_the_environment(tokens_per_frame):
+    replies = [Reply(0.25, CLICK, output_tokens=100)] * 3
+    episode = run(
+        "token",
+        2.0,
+        replies,
+        tokens_per_frame=tokens_per_frame,
+        env_type=_TicksOnTheShellsThreadOnly,
     )
     assert episode.invalid is None
     assert episode.statuses()[0] == "applied"

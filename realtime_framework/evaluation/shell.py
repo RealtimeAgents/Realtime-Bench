@@ -665,8 +665,13 @@ class _Shell:
             held.result = episode_records.generation_error(latency, failure)
             self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
         finally:
-            semantic, ops = self._read()
-            held.returned_at = ops if self.token else semantic
+            # The reading on the bound's clock, taken from the clock itself: the environment is
+            # the shell thread's (ShellEnvironment).
+            held.returned_at = (
+                self.clocks.operational.monotonic() - self._origin
+                if self.token
+                else self.clocks.semantic.time() - self.env.t0
+            )
             self._returned.append(held)
             held.done.set()
             self._wake.set()
