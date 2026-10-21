@@ -264,7 +264,10 @@ def load_definitions(directory):
     ]:
         if not isinstance(value, dict):
             raise ValueError(f"{filename}: model definition must be a mapping")  # noqa: TRY004
-        if set(value) - {"endpoint", "reasoning_effort", "context_preset"} or "endpoint" not in value:
+        if (
+            set(value) - {"endpoint", "reasoning_effort", "context_preset"}
+            or "endpoint" not in value
+        ):
             raise ValueError(
                 f"{filename}: use an endpoint block, plus optional reasoning_effort and "
                 "context_preset"
@@ -415,10 +418,10 @@ def _check_driver(target: str, driver: type) -> None:
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
 catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
-connections, reasoning effort and the context-policy preset. The loader imports the driver module of each API it reads,
-an external driver's included, with what those modules import (the OpenAI SDK, websockets and
-Pillow among them), and reading LiteLLM's model map imports litellm (_litellm_model_map). The
-Gemini SDK is imported only when its driver is constructed.
+connections, reasoning effort and the context-policy preset. The loader imports the driver
+module of each API it reads, an external driver's included, with what those modules import (the
+OpenAI SDK, websockets and Pillow among them), and reading LiteLLM's model map imports litellm
+(_litellm_model_map). The Gemini SDK is imported only when its driver is constructed.
 """
 
 import difflib as difflib
