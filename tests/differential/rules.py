@@ -329,6 +329,32 @@ def _x4(script: Script, p: Projection, notes: dict) -> None:
                 record[name] = whole
 
 
+def _kf2(script: Script, p: Projection, notes: dict) -> None:
+    """Token clock: a horizon within 1e-9 above a whole tick is that tick to the kernel
+    (kernel/turns.py TurnConfig); today's loop runs to the float main() computes (runner.py main,
+    max_minutes * 60 * env_fps). There an action landing on that tick is applied and checked
+    after, the loop captures once more, and the episode completes instead of reaching the tick
+    limit."""
+    horizon = script.duration_s / 60 * 60 * script.env_fps
+    whole = round(horizon)
+    if _wall(script) or not 0 < horizon - whole <= 1e-9:
+        return
+    for d in p.decisions.values():
+        resolved = d["resolved"]
+        if resolved is None or resolved["status"] != "applied":
+            continue
+        if earlier(resolved["environment_tick"], whole):
+            continue
+        for record in (resolved, d["commit"], d["outcome"]):
+            record["status"] = "not_applied_tick_limit"
+        d["applied"], d["executed"], d["boundary"] = False, [], None
+        p.episode["checks"].remove(whole)  # the check after the execution
+    p.episode["captures"] = [c for c in p.episode["captures"] if earlier(c["tick"], whole)]
+    termination = p.episode["termination"]
+    if termination["stop_reason"] == "completed":
+        termination["stop_reason"] = "tick_limit"
+
+
 def _x1(script: Script, p: Projection, notes: dict) -> None:
     """A wait is time the kernel lets pass, not an action the environment executes
     (turns.py:455-456); its record has no active holds or mouse buttons (turns.py:528-535)."""
@@ -858,6 +884,7 @@ def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
 
 RULES = (
     Rule("X4", "ticks and frame positions agree within 1e-9", _x4),
+    Rule("KF2", "a horizon within 1e-9 above a whole tick is that tick", _kf2),
     Rule("X1", "a wait is not executed by the environment; its record has no holds", _x1),
     Rule("X12", "the third failed state read in a row invalidates the run", _x12),
     Rule("K-b", "the wall clock checks the end every 1/env_fps s", _kb),
