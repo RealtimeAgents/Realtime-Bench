@@ -6,14 +6,14 @@ keeps it (runner.py run_stream) and phase2.md where it changes it (事件内核;
 The first end signal ends the episode at once: it freezes the snapshot, writes off and interrupts
 the generation in flight, and stops every timer; the decision in hand is settled with the skip
 order and reported; a late result is discarded. At one instant an end beats a completion, which
-beats a start. The state is read at most once a frame, and once more after every action: on the
-wall clock by the check due every 1/env_fps s, during generations too, on the token clock after
-each step; the loop top and the check before landing read only a frame not read yet.
+beats a start. The state is read once more after every executed action and otherwise not twice
+at one reading: on the token clock after each step, the loop top and the check before landing
+reading only a tick not read yet; on the wall clock once a frame by the check due every
+1/env_fps s, during generations too, and by the loop top, and before landing at a new reading.
 """
 
 from __future__ import annotations
 
-import math
 import random
 from collections import Counter
 from dataclasses import asdict
@@ -101,22 +101,16 @@ def _past_the_deadline(sim: Simulation) -> list:
     ]
 
 
-def _frame(sim: Simulation, semantic: float) -> float:
-    """The frame a read reads: the token clock's position, or the wall clock's environment
-    frame."""
-    return semantic if sim.token else math.floor(semantic * sim.config.env_fps + 1e-9)
-
-
-def _reads_by_frame(sim: Simulation) -> Counter:
-    """How many times each frame was read, besides the reads after an action; a tap's reads are
-    reads of the frames it steps to."""
-    frames = Counter(
-        _frame(sim, semantic)
+def _reads_by_reading(sim: Simulation) -> Counter:
+    """How many times the state was read at each semantic reading, besides the reads after an
+    action: on the token clock a reading is a tick, which a tap's reads also read."""
+    readings = Counter(
+        semantic
         for (semantic, _), after in zip(sim.checks, sim.after_action, strict=True)
         if not after
     )
-    frames.update(sim.tap_checks)
-    return frames
+    readings.update(sim.tap_checks)
+    return readings
 
 
 def _check_invariants(sim: Simulation) -> None:
@@ -135,9 +129,9 @@ def _check_invariants(sim: Simulation) -> None:
     assert [command for command in commands[ended:] if isinstance(command, banned)] == []
     # Nor from the wall deadline on, though an answer filed before it may be handled after it.
     assert _past_the_deadline(sim) == []
-    # The state is read at most once a frame, and once more after every action that did not end
-    # the episode.
-    assert set(_reads_by_frame(sim).values()) <= {1}
+    # The state is read at most once a reading, and once more after every action that did not
+    # end the episode.
+    assert set(_reads_by_reading(sim).values()) <= {1}
     landed = [
         entry
         for entry in sim.entries("ActionResolved")
@@ -283,29 +277,31 @@ def test_a_wall_wait_across_the_deadline_ends_at_the_deadline():
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.terminal_after_action) == ("wait", True)
     assert (outcome.action_clock_position, outcome.frame_age_s) == (0.5, 0.5)
-    # A WAIT is no environment call; frame 0, read at the loop top, is not read again before it,
-    # and no end check is asked after the deadline.
+    # A WAIT is no environment call; the state is read before it, at 0.5 s, as before any action
+    # (runner.py _land_action), and no end check is asked after the deadline.
     assert sim.executed == []
-    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
+    assert sim.checks == [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0), (2.0, 2.0)]
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.0, 3.0, 3.0, None)
 
 
 def test_a_wall_wait_ends_at_the_deadline_however_late_the_deadline_is_handled():
-    """A 3 s WAIT starts at 1.75 s with the deadline at 3.5 s; the check due at 3 s runs until
-    3.75 s, and only then is the deadline handled. The WAIT ran until the deadline, 1.75 s, as
-    today's sleep(min(duration, remaining)), not until the deadline was handled."""
+    """Checks take 0.75 s. A 3 s WAIT starts at 2.5 s, after the check before it, with the deadline
+    at 3.5 s; the check due at 3 s is asked at 3.25 s and runs until 4 s, and only then is the
+    deadline handled. The WAIT ran until the deadline, 1 s, as today's sleep(min(duration,
+    remaining)), not until the deadline was handled."""
     world = World(replies=[Reply(latency=0.75, action=Action.wait(3.0)), Reply(9.0)], check_s=0.75)
     sim = _run(_wall(3.5), world)
     (resolved,) = sim.entries("ActionResolved")
-    assert resolved.semantic == 3.75
+    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (1.75, 1.75), (2.5, 2.5), (3.25, 3.25)]
+    assert resolved.semantic == 4.0
     assert resolved.data["action_clock_position"] == 1.75
     assert resolved.data["execution_result"] == {
-        "duration_simulated_seconds": 1.75,
+        "duration_simulated_seconds": 1.0,
         "requested_duration_simulated_seconds": 3.0,
         "truncated_by_episode_horizon": False,
         "truncated_by_terminal_condition": False,
     }
-    assert sim.termination == Termination("time_limit", "deadline", 3.5, 3.75, 3.75, 3.75, None)
+    assert sim.termination == Termination("time_limit", "deadline", 3.5, 4.0, 4.0, 4.0, None)
 
 
 def test_a_wall_wait_the_tasks_end_cuts_short_lasts_until_the_end_is_dated():
@@ -553,10 +549,10 @@ def test_a_wall_generation_spanning_several_frames_drops_them():
     (runner.py _apply)."""
     sim = _run(_wall(5.0), World(replies=[Reply(latency=2.5, action=CLICK), Reply(latency=10.0)]))
     assert sim.executed == [(0, 2.5, CLICK)]
-    # Loop top; every second; after execution, frame 2 having been read at 2 s; at 3 s the
-    # periodic check (set before the move), and the loop top reads no more; 4 s; the deadline
-    # beats the check due at 5 s.
-    assert _semantics(sim) == [0, 1, 2, 2.5, 3, 4]
+    # Loop top; every second; before and after execution; at 3 s the periodic check (set before
+    # the move), and the loop top, at that reading, reads no more; 4 s; the deadline beats the
+    # check due at 5 s.
+    assert _semantics(sim) == [0, 1, 2, 2.5, 2.5, 3, 4]
     (outcome,) = sim.outcomes
     assert (outcome.action_clock_position, outcome.next_observation_tick) == (2.5, 3)
     assert (outcome.dropped_intermediate_frames, outcome.frame_age_s) == (2, 2.5)
@@ -852,9 +848,9 @@ def test_the_deadline_during_a_synchronous_execution_waits_for_it():
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
     assert (outcome.action_clock_position, outcome.frame_age_s) == (2.5, 2.5)
-    # No check before execution, frame 2 having been read at 2 s, and none after it: the episode
-    # was already over when the shell returned.
-    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
+    # The check before execution, and none after it: the episode was already over when the shell
+    # returned.
+    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (2.5, 2.5)]
     assert sim.snapshots == [(3.5, 3.5)]
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.5, 3.5, None)
 

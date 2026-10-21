@@ -36,11 +36,12 @@ LATENCY_S = 0.5  # the decision's generation
 SNAPSHOT_S = 0.5  # one call of the task's evaluation_snapshot()
 CLOSE_S = HORIZON_S  # one agent.close()
 
-# The kernel asks the task at most once a frame and once after every action (kernel/turns.py
-# _check_end): before the decision and after the click lands, but not before the click is
-# dispatched, since this frame was read. The one after the landing reports the end, which is when
-# it was asked; the snapshot is frozen once it returned.
-END_S = QUERY_S + LATENCY_S
+# The kernel asks the task at the loop top once a frame, right before an action lands when the
+# clock has moved on since the last read, and once after every action (kernel/turns.py
+# _read_already): before the decision, before the click is dispatched and after it. The one
+# after the click reports the end, which is when it was asked; the snapshot is frozen once it
+# returned.
+END_S = QUERY_S + LATENCY_S + QUERY_S
 FINALIZED_S = END_S + QUERY_S
 SNAPSHOT_AT_S = FINALIZED_S + SNAPSHOT_S  # when evaluation_snapshot() returned
 

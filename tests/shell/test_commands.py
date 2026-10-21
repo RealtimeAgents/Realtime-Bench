@@ -47,24 +47,28 @@ def test_a_token_delay_is_recorded_in_input_frames_and_timed_in_environment_tick
 
 def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     """Three decisions of 0.5 s each at 1 fps, then the 3 s deadline. The environment is asked
-    whether the episode ended once each frame, by the periodic check on the frame grid, and right
-    after every execution; a frame read already is not asked again at the loop top or before an
-    action. A wait is the kernel's own timer and never reaches the environment; the hold's keys
-    are released by the environment's timer at the time the kernel gave."""
+    whether the episode ended by the periodic check once each frame, at the loop top only in a
+    frame not read yet, right before an action unless it was asked at that same reading, and
+    right after every execution.
+    A wait is the kernel's own timer and never reaches the environment; the hold's keys are
+    released by the environment's timer at the time the kernel gave."""
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5, HOLD), Reply(0.5, WAIT)])
     env, agent = episode.env, episode.agent
     assert _calls(episode) == [
-        ("check_end", 0.0),  # the loop top, the first read of frame 0
+        ("check_end", 0.0),  # the loop top
         ("capture", 0.0),
+        ("check_end", 0.5),  # before execution
         ("execute", 0.5),
         ("check_end", 0.5),  # after execution
-        ("check_end", 1.0),  # the periodic check; the loop top reads frame 1 no more
+        ("check_end", 1.0),  # the periodic check; the loop top in frame 1 reads no more
         ("capture", 1.0),
+        ("check_end", 1.5),
         ("execute", 1.5),
         ("check_end", 1.5),
         ("check_end", 2.0),
         ("capture", 2.0),
-        ("wall_release", 2.75),  # the wait from 2.5 s, in frame 2, read already
+        ("check_end", 2.5),  # before the wait
+        ("wall_release", 2.75),
         ("snapshot", 3.0),
         ("release_inputs", 3.0),
     ]
@@ -111,6 +115,15 @@ def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     assert agent._clock_mode == "wall"
     assert env.horizon is None
     assert episode.trace.checkpoints == 3
+
+
+def test_a_frames_check_and_the_loop_top_after_it_read_the_frame_once():
+    """Reads take 1 ms of the fake clock; the times are when each read ends. The periodic check
+    reads frames 1 and 2 when they begin, and the loop top a millisecond later, in the same
+    frame, reads no more; the check before an action reads, the clock having moved on since."""
+    episode = run("wall", 3.0, [Reply(0.5), Reply(0.5), Reply(0.5)], World(check_s=0.001))
+    checks = [round(time, 3) for call, time, _ in episode.env.calls if call == "check_end"]
+    assert checks == [0.001, 0.502, 0.503, 1.001, 1.502, 1.503, 2.001, 2.502, 2.503]
 
 
 def test_a_token_episode_advances_releases_and_renders_through_the_environment():
@@ -191,10 +204,9 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
 
 
 def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
-    """The runner times an action's resolution when it lands, before any check right before
+    """The runner times an action's resolution when it lands, before the check right before
     execution (runner.py _apply). With end checks of 125 ms the frame age and the resolution
-    time still agree, for an executed action and for a wait the kernel lets pass. Both land in
-    a frame read already, so nothing is read between landing and execution."""
+    time still agree, for an executed action and for a wait the kernel lets pass."""
     episode = run("wall", 4.0, [Reply(0.5), Reply(0.5, Action.wait(1.0))], World(check_s=0.125))
     env = episode.env
     assert episode.statuses() == ["applied", "wait"]
@@ -204,7 +216,7 @@ def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
         age = record["action_resolved_unix_s"] - record["observation_timestamp"]
         assert round(age, 6) == record["frame_age_at_action_s"] == 0.5
     (executed,) = [time for call, time, _ in env.calls if call == "execute"]
-    assert resolved[0] - env.t0 == executed  # frame 0 was read at the loop top
+    assert resolved[0] - env.t0 == executed - 0.125  # before the check right before execution
 
 
 class _SlowTrajectory(Agent):

@@ -9,10 +9,14 @@ stay inside the generation, as today: a Decision call asks all its questions the
 interrupted between them, and Gemini Live acknowledges tool calls there; the kernel only numbers
 their records and discards a result that comes back after an abort.
 
-The state is read at most once a frame, and once more after every action: the token clock reads
-the frame each step of a move comes to, the wall clock each environment frame when it begins;
-the loop top and the check before landing read only a frame not read yet. A tap's own reads, in
-the environment, are the reads of the frames it steps to.
+The state is read once more after every action the environment executed, a refused one
+excepted, and otherwise not twice over the same thing (TurnPolicy._read_already). The token
+clock reads the tick each step of a move comes to, and the loop top and the check before landing
+read only a tick not read yet; a tap's own reads, in the environment, are the reads of the ticks
+it steps to. On the wall clock the periodic check, during generations too, and the loop top read
+only an environment frame not read yet, the periodic check the frame it is handled in; the check
+before landing reads unless the state was read at that same reading, as real time moves on
+within a frame.
 
 The three clocks differ in five places: the bound on one call, the action time, whether the clock
 moves to the action time before landing, the finite-B allowance, and the frame age. Frame times use
@@ -197,7 +201,7 @@ class TurnPolicy:
         self.leases: dict[str, float] = {}
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
         self._failed_reads = 0  # state reads failed in a row
-        self._read_frame: float | None = None  # the frame of the last state read (_frame)
+        self._read_at: float | None = None  # the semantic reading of the last state read
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
@@ -480,7 +484,7 @@ class TurnPolicy:
         if status is not None:
             return self._resolve(status)
         self.phase = _Phase.PRE_CHECK
-        self._check_end(self._pre_checked)
+        self._check_end(self._pre_checked, before_landing=True)
 
     def _skipped(self) -> str | None:
         """The skip order before execution (runner.py _land_action), or None to go on."""
@@ -525,7 +529,7 @@ class TurnPolicy:
         # stopped at. One that saw the end ends the episode there, by the task's reason; no
         # check follows.
         if event.end_checks:
-            self._read_frame = self._frame()
+            self._read_at = kernel.semantic
         for ended, reason, error in event.end_checks:
             if self._count_read(error):
                 break
@@ -737,15 +741,17 @@ class TurnPolicy:
 
     # ---- end checks -------------------------------------------------------------------------
 
-    def _check_end(self, then: Callable | None, *, after_action: bool = False) -> None:
-        """Ask whether the episode is over; ``then`` runs when it is not. The state is read at
-        most once a frame, besides once after every action: a frame read already is not asked
-        again, and ``then`` runs at once."""
+    def _check_end(
+        self, then: Callable | None, *, after_action: bool = False, before_landing: bool = False
+    ) -> None:
+        """Ask whether the episode is over; ``then`` runs when it is not. A check right after an
+        action always reads; any other is not asked when it would read what was read already
+        (_read_already), and ``then`` runs at once."""
         if then is not None and self._past_deadline():
             return
-        if not after_action and self._read_frame == self._frame():
+        if not after_action and self._read_already(before_landing=before_landing):
             return None if then is None else then()
-        self._read_frame = self._frame()
+        self._read_at = self.kernel.semantic
         request = self.kernel.request()
         if then is not None:
             self._awaited = (request, then)
@@ -863,10 +869,19 @@ class TurnPolicy:
         cut at a horizon off the tick grid stops a float short of it."""
         return self._tick() >= self.config.max_ticks - 1e-9
 
-    def _frame(self) -> float:
-        """The frame a state read reads: on the token clock the position, which every step of a
-        move makes a new frame; on the wall clock the environment frame."""
-        return self.kernel.semantic if self.token else self._tick()
+    def _read_already(self, *, before_landing: bool) -> bool:
+        """Whether a state read now would read what the last one read. On the token clock that is
+        the same position, which every step of a move makes new. On the wall clock it is the same
+        environment frame, except right before landing, where it must be the same reading: real
+        time moves on within a frame, and an end since keeps the action from landing, as the
+        runner reads right before it executes (runner.py _land_action). Without ``or
+        before_landing`` the check before landing too reads once a frame."""
+        last = self._read_at
+        if last is None:
+            return False
+        if self.token or before_landing:
+            return last == self.kernel.semantic
+        return _floor(last * self.config.env_fps) == self._tick()
 
     def _tick(self) -> float:
         """The environment tick: the token clock itself, or whole wall frames since the origin."""
