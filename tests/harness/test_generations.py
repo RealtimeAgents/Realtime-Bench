@@ -291,6 +291,54 @@ def test_a_done_is_reported_as_the_wait_it_ran(tmp_path):
     assert agent._runtime.turns[0].execution_feedback == feedback
 
 
+def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
+    """Chat, whose feedback follows each reply. Decision 1's request is still out when its move
+    runs over the per-move cap: the kernel aborts the generation, reports skipped_timeout and
+    discards it. Decision 0 keeps its action record and its feedback; the note on decision 1
+    has no turn to follow, so decision 2's frame opens with it."""
+    arrived = threading.Event()
+
+    def hold_second(index):
+        if index == 1:
+            arrived.set()
+            return True
+        return False
+
+    steps = [LONG_SCENARIO[0], LONG_SCENARIO[2]]
+    with ChatCompletionsStub(replies(steps), on_request=hold_second) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            agent.commit(_outcome(0, "applied"))
+            record = dict(agent.action_history[0])
+            feedback = agent._runtime.turns[0].execution_feedback
+            box, done = _in_worker(lambda: _generate(episode, 2, 1))
+            assert arrived.wait(WAIT_S), "decision 1 sent no request"
+            agent.abort(2)
+            skipped = _joined(box, done)
+            agent.commit(_outcome(1, "skipped_timeout"))
+            agent.discard(2)
+            _generate(episode, 3, 2)
+            agent.accept(3)
+        finally:
+            episode.finish()
+    assert skipped.cancelled and stub.held == [True]
+    assert agent.action_history[0] == record and record["result"] == "applied"
+    first, last = agent._runtime.turns
+    assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
+    note = (
+        "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
+        + ACTION_RESULT_NOTES["skipped_timeout"]
+    )
+    assert last.observation.feedback_prefix == note
+    messages = json.loads(stub.requests[2].body)["messages"]
+    replied = [m["content"] for m in messages].index(CLICK_NAME)
+    assert messages[replied + 1] == {"role": "user", "content": feedback}
+    assert messages[-1]["content"][0]["text"].startswith(note + "\n")
+
+
 def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
     """OpenAI Realtime, whose feedback opens the next frame. Decision 1's move runs over the
     per-move cap: the kernel aborts and discards its generation, and reports skipped_timeout for
