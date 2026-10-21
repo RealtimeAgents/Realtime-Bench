@@ -17,6 +17,7 @@ import time
 from dataclasses import replace
 
 import pytest
+import requests
 
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
@@ -539,6 +540,28 @@ def test_a_call_s_own_shorter_timeout_applies_inside_an_operation():
         env.capture()
         assert clock.monotonic() == 8.0
     assert getattr(env, "_invalid_run", None) is None
+
+
+def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refusal():
+    """The guest answered, so the environment works and was only slow (user decision 35). The
+    refusal is raised as GuestClient raises a 4xx (sandbox/guest.py execute_action)."""
+    clock = FakeClock()
+    response = requests.Response()
+    response.status_code = 400
+
+    class LateRefusal(_ClockGuest):
+        def execute_action(self, action: Action) -> dict:
+            self.actions.append(action.action_type)
+            clock.sleep(25.0)
+            raise requests.HTTPError("400 guest rejected the action", response=response)
+
+    env, _ = _timed(clock, LateRefusal())
+    with clock.participant():
+        assert env.execute(CLICK) == "failed"
+        assert clock.monotonic() == 25.0
+    assert env._last_rejected_by_guest is True
+    assert getattr(env, "_invalid_run", None) is None
+    assert "guest rejected the action" in env._last_exec_error
 
 
 def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_10_s():
