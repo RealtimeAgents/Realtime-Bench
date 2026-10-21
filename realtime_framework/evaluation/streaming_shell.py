@@ -17,8 +17,10 @@ environment or for the session (phase2.md, native streaming).
   hands the capture lane a second capture.
 - At the end the snapshot is taken on a thread of its own, next after the action executing and
   ahead of the reads waiting for the gate, as the turn-based shell takes it right after the action
-  on its one thread (4.8). It waits for that action at most the action's budget; an action still
-  running then fails the snapshot, and the run is invalid. It is read in its own budget.
+  on its one thread (4.8). It holds the gate alone, so it also waits for a capture that runs
+  alongside that action: at most the larger of the action's budget and a capture's (N32). An
+  operation still running then fails the snapshot, and the run is invalid. It is read in its own
+  budget.
 
 Wall clock only: ``semantic`` is ``clocks.semantic.time() - env.t0``, and the two clocks are one.
 
@@ -376,10 +378,14 @@ class _StreamingShell:
         error = None
         if snapshotter is not None:
             turn, executing = self.lanes.freeze_turn()
+            # The action, and a capture alongside it (N32).
             wait = (
                 None
                 if executing is None
-                else action_timeout(executing.action, ENVIRONMENT_BUDGET.action_s)
+                else max(
+                    action_timeout(executing.action, ENVIRONMENT_BUDGET.action_s),
+                    ENVIRONMENT_BUDGET.capture_s,
+                )
             )
             try:
                 snapshot = self.lanes.gate.call(

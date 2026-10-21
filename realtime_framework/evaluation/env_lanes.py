@@ -24,9 +24,10 @@ streaming). An end check, the snapshot and the release of the inputs hold it alo
 A lane takes its place in the gate's line when it is given the command, so the environment runs
 the kernel's commands in the order the kernel sent them, also those it sent in one step to two
 lanes. One kind goes out of turn: while an action holds the gate, a capture goes past what waits to
-hold it alone, which waits for that action anyway. What waits to hold the gate alone so waits at
-most for the action and one capture, and frames keep coming meanwhile. Waiting for the gate is a
-wait on the clock, so a fake clock moves on while an operation that holds it waits.
+hold it alone, which waits for that action anyway. What waits to hold the gate alone so waits for
+the action and for the captures that run alongside it, each within its own budget, and frames
+keep coming meanwhile. Waiting for the gate is a wait on the clock, so a fake clock moves on while
+an operation that holds it waits.
 
 Like the turn-based shell, the gate compares ``_invalid_run`` before and after each operation and
 posts what the environment latched itself before the operation's answer; it posts each record
@@ -52,7 +53,8 @@ so an end check does not wait behind them for the gate; the gate holds it alone 
 At the end the snapshot waits for the action executing to finish (stream-plan 4.8) and goes
 right after it: ``freeze_turn`` gives it the place in the gate's line next after that action,
 ahead of the others that were waiting, as the turn-based shell takes it right after the action on
-its one thread. Its wait is bounded by whoever takes it, with the action's budget.
+its one thread. Its wait is bounded by whoever takes it: the streaming shell's bound is the larger
+of the action's budget and a capture's, for a capture alongside the action (N32).
 """
 
 from __future__ import annotations
