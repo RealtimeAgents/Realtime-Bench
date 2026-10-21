@@ -689,19 +689,8 @@ def test_a_key_whose_release_failed_stays_held_and_the_cleanup_releases_it_again
     assert env._held_keys == {}
 
 
-@pytest.mark.parametrize(
-    ("release", "error", "seconds"),
-    [
-        pytest.param(
-            lambda clock: _sandbox_call(clock, 60.0),
-            "key release took longer than 10 s",
-            10.0,
-            id="slow",
-        ),
-        pytest.param(lambda clock: 1 / 0, "division by zero", 0.0, id="failing"),
-    ],
-)
-def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, error, seconds):
+@pytest.mark.parametrize("slow", [True, False], ids=["slow", "failing"])
+def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(slow):
     """release_inputs runs once run_stream has latched the outcome, and the runner only logs its
     failure (evaluation/runner.py _finalize); main() would still take an invalid run latched here
     for the run's."""
@@ -710,10 +699,18 @@ def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, e
     env, task = _timed(clock, guest)
     env.execute(Action.hold_key("a", 5.0))
     env.execute(Action(ActionType.MOUSE_DOWN, {"button": "left"}))
-    task.clock_key_event = lambda *args, **kwargs: release(clock)
+    budget = actions.ENVIRONMENT_BUDGET.key_event_s
+
+    def clock_key_event(*args, **kwargs):
+        if not slow:
+            raise RuntimeError("the page is gone")
+        _sandbox_call(clock, 60.0)
+
+    task.clock_key_event = clock_key_event
+    error = f"key release took longer than {budget:g} s" if slow else "the page is gone"
     with clock.participant():
         with pytest.raises(Exception, match=error):
             env.release_inputs()
-        assert clock.monotonic() == seconds
+        assert clock.monotonic() == (budget if slow else 0.0)
     assert getattr(env, "_invalid_run", None) is None
     assert guest.actions == [ActionType.MOUSE_DOWN, ActionType.MOUSE_UP]
