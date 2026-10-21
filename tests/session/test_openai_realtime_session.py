@@ -1265,6 +1265,30 @@ def test_a_fold_while_a_reply_streams_loses_no_event():
     assert reply.output_item_ids == ["srv_1"]
 
 
+def test_an_error_about_a_reply_request_goes_to_that_reply_alone():
+    """A native-streaming reply's response.create names its client event. The server's error
+    about it goes to that reply alone, fails no fold waiting for its confirmations, and takes the
+    reply out of those waiting for their response.created, so the next reply takes the next."""
+    live = Live(stream("F"), frames=5)
+    core = live.core
+    first = live.reply(end=False)
+    view = streaming_view(stream("FF"), frames=1)
+    live.deliver(core.push(view))
+    answers = live.send(core.queue_edit(view).operations)
+    second = core.start_reply()
+    refused = error(second.request_event_id)
+    live.arrive([refused])
+    assert list(second.events) == [refused]
+    assert refused not in first.events
+    assert not core.edit_answered
+    live.arrive(answers)
+    core.finish_edit()
+    third = core.start_reply()
+    live.arrive([server(type="response.created", response={"id": "resp_3"})])
+    assert (second.response_id, third.response_id) == (None, "resp_3")
+    assert core.replying
+
+
 def test_the_streaming_reader_records_when_events_came_off_the_wire():
     """4.17: native streaming's reader hands each event over with the time it read it. A pushed
     block was acknowledged at its first acknowledgement; the actions parsed from a reply's

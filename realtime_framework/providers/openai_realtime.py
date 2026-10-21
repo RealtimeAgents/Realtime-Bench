@@ -535,11 +535,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         response = {"max_output_tokens": request.transport_output_token_cap}
         if self.config.reasoning_effort is not None:
             response["reasoning"] = {"effort": self.config.reasoning_effort}
-        await asyncio.to_thread(
-            self._wire,
-            session._conn.response.create,
-            response=response,
-        )
+        kwargs = {"response": response}
+        if core_generation.request_event_id is not None:
+            kwargs["event_id"] = core_generation.request_event_id
+        await asyncio.to_thread(self._wire, session._conn.response.create, **kwargs)
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def push_frame(self, observation: ProviderObservation, history) -> None:
@@ -593,10 +592,14 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         """Native streaming: ask for a reply on the session as it is, after pushing what the
         streaming history view ``request.canonical`` holds that the session lacks: the feedback
         accepted since the newest frame, and that frame when push_frame has not pushed it yet,
-        which then only waits for its confirmation. Its events come as a turn's do. It holds
-        the session as push_frame's writes do, so the reply goes to the session it pushed to."""
+        which then only waits for its confirmation. Its events come as a turn's do. A connection
+        carries one reply at a time: asked for before the one in progress ended, it raises and
+        writes nothing. It holds the session as push_frame's writes do, so the reply goes to the
+        session it pushed to."""
         async with self._session_lock():
             session = self._connected_session()
+            if session.core.replying:
+                raise RuntimeError("OpenAI Realtime reply already in progress")
             await self._send_all(session, session.core.push(request.canonical))
             return await self._create_response(session, session.core.start_reply(), request)
 

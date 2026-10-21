@@ -61,12 +61,15 @@ DIRECTIONS = ("open", "c2s", "s2c", "close")
 
 
 class RealtimeNormalizer(baseline.Normalizer):
-    """baseline.Normalizer, and two of our OpenAI Realtime ids the replay baselines never meet: the
-    event ids of a pushed frame (providers/openai_realtime_session.py RealtimeSessionCore._push)
-    and of a cancel (providers/openai_realtime.py OpenAIRealtimeDriver.interrupt)."""
+    """baseline.Normalizer, and three of our OpenAI Realtime ids the replay baselines never meet:
+    the event ids of a pushed frame (providers/openai_realtime_session.py
+    RealtimeSessionCore._push), of a native-streaming reply's response.create
+    (RealtimeSessionCore.start_reply) and of a cancel (providers/openai_realtime.py
+    OpenAIRealtimeDriver.interrupt)."""
 
     IDS = (
         ("rtb_push", re.compile(r"rtb_push_[0-9a-f]+")),
+        ("rtb_reply", re.compile(r"rtb_reply_[0-9a-f]+")),
         ("rtb_cancel", re.compile(r"rtb_cancel_[0-9a-f]+")),
     )
 
