@@ -24,6 +24,7 @@ import pytest
 
 import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
+from realtime_framework.entity.context_policy import LEDGER_OMISSION
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
@@ -419,14 +420,14 @@ def test_jev_large_observation(tmp_path):
 ARCHIVE_WINDOWS = {"two_blocks": (40000, 3000), "exhausted": (32000, 4000)}
 
 
-def _pressure_archives(run_dir: Path) -> list[dict]:
+def _pressure_archives(run_dir: Path, kind: str = "pressure_archive") -> list[dict]:
     events = [
         json.loads(line) for line in (run_dir / "episode_trace.jsonl").read_text().splitlines()
     ]
     return [
         e["payload"]
         for e in events
-        if e["event"] == "HistoryChanged" and e["payload"]["kind"] == "pressure_archive"
+        if e["event"] == "HistoryChanged" and e["payload"]["kind"] == kind
     ]
 
 
@@ -466,18 +467,20 @@ def test_history_overflow_two_blocks(tmp_path):
 
 
 def test_history_overflow_exhausted(tmp_path):
-    """A request still over the window once every turn is archived is not sent: the decision is
-    invalid, for its context rather than its provider, and the episode ends
-    (harnesses/default/context.py _run_turn)."""
+    """A request still over the window once every turn is archived and every archived action
+    omitted is not sent: the decision is invalid, for its context rather than its provider, and
+    the episode ends (harnesses/default/context.py _run_turn)."""
     header, records = _play_terms(script.TERMS_EXHAUSTED, ARCHIVE_WINDOWS["exhausted"], tmp_path)
     *_, failed = records
     assert failed["step"] == script.TERMS_ARCHIVE_DECISION and failed["requests"] == []
     assert failed["result"]["invalid_category"] == "harness"
     assert failed["result"]["invalid_reason"] == "context_exceeded_before_request"
     assert failed["result"]["invalid_detail"] == (
-        "RequestExceedsContext('Task instructions, execution ledger and current observation "
-        "exceed context capacity; use a larger endpoint window')"
+        "RequestExceedsContext('Task instructions and current observation exceed context "
+        "capacity with every archived action omitted; use a larger endpoint window')"
     )
+    omissions = _pressure_archives(tmp_path, "ledger_omission")
+    assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20, 24]
     assert failed["commit"] is None and failed["action_history_entry"] is None
     (attempt,) = [
         e["payload"]
@@ -490,3 +493,42 @@ def test_history_overflow_exhausted(tmp_path):
     assert [change["ledger"]["archived_actions_after"] for change in changes] == [10, 20, 24]
     assert {change["scope"]["decision"] for change in changes} == {script.TERMS_ARCHIVE_DECISION}
     _settle("history_overflow_exhausted", header, records, tmp_path)
+
+
+# The review's JEV window: from decision 15 the runtime archives turns to fit, from decision 24
+# none is left, and from decision 28 the ledger alone outgrows it, since each archived action adds
+# its record to the ledger and takes less than twice that from the digest.
+LEDGER_WINDOW = (10024, 1024)
+
+
+def test_history_overflow_ledger(tmp_path):
+    """With every turn archived and the request still over the window, the earliest archived
+    actions give way to a note, ten at a time, and the episode goes on (context policy version
+    7). Before it, decision 28 was invalid without a request."""
+    header, records = _play(
+        "jev_decisions",
+        script.LEDGER_OVERFLOW,
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        update=dict(zip(("context_window_tokens", "context_reserve_tokens"), LEDGER_WINDOW)),
+    )
+    assert not any(r["result"].get("invalid_reason") for r in records)
+    assert not any(_runtime(r)["request_context"]["pressure"] for r in records)
+    omissions = _pressure_archives(tmp_path, "ledger_omission")
+    assert [o["scope"]["decision"] for o in omissions] == list(script.LEDGER_OMISSIONS)
+    assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20]
+    assert all(o["request_context"]["pressure"] for o in omissions)
+
+    def ledger(k: int) -> list[str]:
+        return _bodies(records[k])[0]["state"]["history"][1]["content"].split("\n")
+
+    first = script.LEDGER_OMISSIONS[0]
+    assert all(line.startswith("{") for line in ledger(first - 1)[1:])
+    for k in range(first, len(records)):
+        header_line, note, *kept = ledger(k)
+        omitted = 10 * sum(k >= decision for decision in script.LEDGER_OMISSIONS)
+        assert header_line.startswith(JEV_LEDGER_HEADER)
+        assert note == LEDGER_OMISSION.format(count=omitted)
+        assert kept and all(line.startswith("{") for line in kept)
+    _settle("history_overflow_ledger", header, records, tmp_path)

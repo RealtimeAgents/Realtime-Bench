@@ -5,8 +5,9 @@ from __future__ import annotations
 
 Version 1 copied what each code path did before the policy existed; every later version makes
 one change (see CONTEXT_POLICY_VERSION), to one item, except version 2, which changed generic
-LiteLLM's reasoning and verbatim replay (items 6 and 7) together. A change that alters what some
-model is shown bumps the version; moving a preset from an API row to the model that needs it
+LiteLLM's reasoning and verbatim replay (items 6 and 7) together, and version 7, whose
+pressure-archive rule (item 8) writes a fixed text of its own (item 5). A change that alters what
+some model is shown bumps the version; moving a preset from an API row to the model that needs it
 alters nothing shown and keeps it. The values count in the effective run config and therefore in
 its hash. Every item is read from here: retention, feedback placement, the ledger role, reasoning
 and verbatim replay, pressure archiving, the Decision history form, the tool-call replay format,
@@ -44,9 +45,12 @@ from realtime_framework.entity.records import _jsonable
 #    one-option question.
 # 6: text-JSON prompts: "All generated output tokens count." only under a finite B, and frame
 #    texts that stay true on older frames.
-CONTEXT_POLICY_VERSION = 6
+# 7: a request still over the window with every turn archived leaves out the earliest archived
+#    actions, a note in their place, instead of invalidating the decision.
+CONTEXT_POLICY_VERSION = 7
 
 # Fixed model-visible texts the encoders write (item 5).
+LEDGER_OMISSION = "[{count} earlier archived actions were omitted to fit the context window.]"
 JEV_LEDGER_HEADER = (
     "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and "
     "occurrences preserve every action; start/step/count expands exact indices):"
@@ -82,6 +86,7 @@ class DecisionHistory:
 class FixedTexts:
     folded_visual: str
     ledger_header: str
+    ledger_omission: str  # the ledger's first line once actions were left out; {count} of them
     jev_ledger_header: str
     jev_history_prefix: str
     jev_current_prefix: str
@@ -94,6 +99,7 @@ class FixedTexts:
 FIXED_TEXTS = FixedTexts(
     folded_visual=FOLDED_VISUAL_PLACEHOLDER,
     ledger_header=ARCHIVED_ACTION_LEDGER_HEADER,
+    ledger_omission=LEDGER_OMISSION,
     jev_ledger_header=JEV_LEDGER_HEADER,
     jev_history_prefix=JEV_HISTORY_PREFIX,
     jev_current_prefix=JEV_CURRENT_PREFIX,
@@ -123,8 +129,8 @@ class PathPolicy:
     # output, and no encoder can do otherwise
     verbatim_replay: bool
     # 8 before each request, archive the oldest turns while it exceeds the declared context
-    # window; it applies where the API declares an estimate of its requests
-    # (RealtimeCapabilities.request_size_estimation)
+    # window, then, with no turn left, leave out the earliest archived actions; it applies where
+    # the API declares an estimate of its requests (RealtimeCapabilities.request_size_estimation)
     pressure_archive: bool
     decision_history: DecisionHistory | None  # 9 Decision history form
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls

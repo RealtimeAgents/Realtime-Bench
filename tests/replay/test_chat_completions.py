@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.context_policy import LEDGER_OMISSION
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.records import validate_episode_trace
@@ -174,6 +175,73 @@ def test_long_scenario(stream, tmp_path):
     }
     actual = baseline.Normalizer()([header, *records, *baseline.trajectory(tmp_path)])
     path = BASELINES / f"chat_completions-{'stream' if stream else 'nonstream'}-long.jsonl"
+    if os.environ.get("REPLAY_RECORD") == "1":
+        baseline.write(path, actual)
+        return
+    problems = baseline.compare(baseline.read(path), actual)
+    assert not problems, f"{len(problems)} difference(s) from {path.name}:\n" + "\n".join(
+        problems[:60]
+    )
+
+
+# (context_window_tokens, context_reserve_tokens) that hold the system text and the current frame
+# with its image allowance (providers/context.py estimated_request_tokens), plus few archived
+# actions: from decision 1 the runtime archives every earlier turn to fit, and from decision 16
+# the ledger alone outgrows the window.
+LEDGER_WINDOW = (16096, 4096)
+LEDGER_OMISSIONS = (16, 26, 36, 46, 56)  # the decisions that leave out the next ten actions
+
+
+def test_history_overflow_ledger(tmp_path):
+    """As for JEV (test_decisions.py test_history_overflow_ledger): with every turn archived and
+    the request still over the window, the ledger message leaves out its earliest actions, ten at
+    a time, behind a note, and every decision sends its request. Before context policy version
+    7, decision 16 was invalid without a request."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO)) as stub:
+        config = chat_completions_config(stub.base_url, stream=False).model_copy(
+            update=dict(zip(("context_window_tokens", "context_reserve_tokens"), LEDGER_WINDOW))
+        )
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+        )
+        try:
+            records = run_steps(episode, LONG_SCENARIO, stub)
+        finally:
+            invalid_run = episode.finish()
+    assert invalid_run is None
+    assert all(len(r["requests"]) == 1 for r in records)
+    assert not any(r["result"].get("invalid_reason") for r in records)
+    runtimes = [r["result"]["realtime_runtime"] for r in records]
+    assert [runtime["history_detailed_turns"] for runtime in runtimes] == [0] * len(records)
+    assert not any(runtime["request_context"]["pressure"] for runtime in runtimes)
+    trace = (tmp_path / "episode_trace.jsonl").read_text()
+    events = [json.loads(line) for line in trace.splitlines()]
+    omissions = [
+        e["payload"]
+        for e in events
+        if e["event"] == "HistoryChanged" and e["payload"]["kind"] == "ledger_omission"
+    ]
+    assert [o["scope"]["decision"] for o in omissions] == list(LEDGER_OMISSIONS)
+    assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20, 30, 40, 50]
+    first = LEDGER_OMISSIONS[0]
+    header_line, *lines = _messages(records[first - 1])[1]["content"].split("\n")
+    assert header_line == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == first - 1
+    for k in range(first, len(records)):
+        header_line, note, *kept = _messages(records[k])[1]["content"].split("\n")
+        omitted = 10 * sum(k >= decision for decision in LEDGER_OMISSIONS)
+        assert header_line == ARCHIVED_ACTION_LEDGER_HEADER
+        assert note == LEDGER_OMISSION.format(count=omitted)
+        assert len(kept) == k - omitted and all(line.startswith("{") for line in kept)
+
+    header = {
+        "record": "header",
+        "api": "chat_completions",
+        "stream": False,
+        "scenario": "history_overflow_ledger",
+        "config": config.model_dump(),
+    }
+    actual = baseline.Normalizer()([header, *records, *baseline.trajectory(tmp_path)])
+    path = BASELINES / "chat_completions-nonstream-history_overflow_ledger.jsonl"
     if os.environ.get("REPLAY_RECORD") == "1":
         baseline.write(path, actual)
         return
