@@ -62,6 +62,11 @@ class SessionLifecycle:
     operation (a goAway deadline, a close) ends with the operation, and an abort's close ends the
     operation.
 
+    Whether the session can take the next generation is its state. What became of each content
+    the encoder wrote, sent or confirmed, its session core records, and the encoder writes each
+    change to the trace (_record_delivery). What the provider keeps beside them is not known:
+    the capability server_context says so.
+
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
     is one, and ``interrupt(generation)``; ``capabilities``, with
@@ -271,6 +276,19 @@ class SessionLifecycle:
         self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
+
+    def _record_delivery(self, state: str, contents, connection: str | None) -> None:
+        """What became of contents the session core wrote on the trace's ``connection``: sent,
+        confirmed by the server, or unknown once their write failed. Each content is its key in
+        the core's delivery record and the history block it carries, if one."""
+        self._trace.capture(
+            TraceEvent.SESSION_DELIVERY,
+            {
+                "state": state,
+                "connection": connection,
+                "contents": [{"key": list(key), "block": block} for key, block in contents],
+            },
+        )
 
     def _record_wait(self, wait: str, seconds: float, until: float | None = None) -> None:
         """``until`` is the end of a wait bounded by a deadline, on the operational clock; a

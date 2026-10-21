@@ -651,7 +651,9 @@ class _FakeConnectionManager:
             return lambda **arguments: log.append((number, kind, arguments))
 
         return SimpleNamespace(
-            _connection=SimpleNamespace(trace_connection_number=number),
+            _connection=SimpleNamespace(
+                trace_connection_number=number, trace_connection_id=f"openai_realtime.ws-{number}"
+            ),
             session=SimpleNamespace(update=client_event("session.update")),
             conversation=SimpleNamespace(
                 item=SimpleNamespace(

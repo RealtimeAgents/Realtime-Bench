@@ -281,6 +281,23 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
     assert error["acknowledges"] == [deletes[-1]["capture_seq"]]
     assert error["ack_outcome"] == "error"
 
+    # What became of each item the session core wrote, by connection: turn 0's frame was sent,
+    # then confirmed (conversation.item.done); the delete the server refused stays sent; the
+    # rebuild's items, the history and then turn 2's frame, are confirmed on the new connection.
+    deliveries: dict[tuple, list] = {}
+    for delivery in (e["payload"] for e in events if e["event"] == "SessionDelivery"):
+        for content in delivery["contents"]:
+            states = deliveries.setdefault((delivery["connection"], tuple(content["key"])), [])
+            states.append((delivery["state"], content["block"]))
+    refused = json.loads(load_body(pack, deletes[-1]["body"]))["item_id"]
+    assert deliveries[(first, ("delete", refused))] == [("sent", None)]
+    created = [key for connection, key in deliveries if connection == first and key[0] == "create"]
+    assert deliveries[(first, created[0])] == [("sent", "d0.frame"), ("confirmed", "d0.frame")]
+    assert [states[-1] for (c, _), states in deliveries.items() if c == rebuilt] == [
+        ("confirmed", block)
+        for block in ("d0.frame", "d0.output", "d1.frame", "d1.output", "d2.frame")
+    ]
+
     changes = [e["payload"] for e in events if e["event"] == "HistoryChanged"]
     assert [(c["scope"]["decision"], c["kind"]) for c in changes] == [
         (1, "visual_fold"),
@@ -373,7 +390,7 @@ def test_gemini_live_session(tmp_path, monkeypatch):
         events = _run(driver, tmp_path, turns=2)
 
     pack = tmp_path / "episode_blobs.pack"
-    first, _, refused, replayed = _check_frames(events, stub, "gemini_live.ws", pack)
+    first, resumed, refused, replayed = _check_frames(events, stub, "gemini_live.ws", pack)
     messages = _messages(events, first)
     (setup,) = _by_type(messages, "client", "setup")
     (complete,) = _by_type(messages, "server", "setupComplete")
@@ -410,3 +427,19 @@ def test_gemini_live_session(tmp_path, monkeypatch):
     frames = [turn["parts"][0]["text"] for turn in history["turns"] if turn["role"] == "user"]
     assert frames == [PROMPT.format(k=0), PROMPT.format(k=1)]
     assert len(seeded["body"]["spans"]) == 2  # the two screenshots, stored in the pack
+
+    # Of what the client wrote, only the setup is confirmed (setupComplete), on each connection
+    # that came up; the refused resumption never did. Everything else is sent: the seed, each
+    # frame and each tool response.
+    deliveries = [e["payload"] for e in events if e["event"] == "SessionDelivery"]
+    confirmed = [d for d in deliveries if d["state"] == "confirmed"]
+    assert [d["connection"] for d in confirmed] == [first, resumed, replayed]
+    assert all(d["contents"] == [{"key": ["setup"], "block": "system"}] for d in confirmed)
+    assert {d["state"] for d in deliveries} == {"confirmed", "sent"}
+    seed = next(d for d in deliveries if d["connection"] == replayed and d["state"] == "sent")
+    assert [c["block"] for c in seed["contents"]] == [
+        "d0.frame",
+        "d0.tools",
+        "d1.frame",
+        "d1.tools",
+    ]

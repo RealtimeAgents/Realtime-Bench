@@ -117,15 +117,19 @@ A model that needs a new wire protocol gets a driver:
    (`realtime_framework/providers/session_lifecycle.py`) for these: it implements them, with
    `connect`, `sync_history` and `close`, over your `_connect`, `_sync_history`,
    `_close_current` and `interrupt`; it reads `self.clock`, writes its records to the trace
-   `bind_trace` gave you, kept as `self._trace`, and `_wait` records a wait and takes it. Build
-   HTTP clients with the hooks in `realtime_framework/providers/capture.py`, so every request and
-   response is recorded.
+   `bind_trace` gave you, kept as `self._trace`, and `_wait` records a wait and takes it. Record
+   what became of each content you write (sent, confirmed or refused by the server, or unknown
+   after a failed write) with `_record_delivery`. Build HTTP clients with the hooks in
+   `realtime_framework/providers/capture.py`, so every request and response is recorded.
 2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
    timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
    which optional methods it implements, and what it can render of the context policy: `roles`,
    `feedback_placements`, `reasoning_replay`, `server_context` and, for function-call sessions,
-   `tool_call_replay`. The pre-run checks (`providers/preflight.py`) read it; an undeclared value
-   counts as unsupported, and a context policy the driver cannot render is refused.
+   `tool_call_replay`. `server_context` is `"unknown"` when the provider keeps items of the
+   session the client never sees (reasoning, thoughts, audio), `"none"` when it keeps nothing
+   beside what the client sent; the run identity records it, and no run is refused for it. The
+   pre-run checks (`providers/preflight.py`) read the rest; an undeclared value counts as
+   unsupported, and a context policy the driver cannot render is refused.
    Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
    `model_defaults` (per-model ModelConfig defaults, usually `{}`). Function-call drivers send the
    function declarations the harness puts in `SessionSeed.answer`.

@@ -81,6 +81,9 @@ class FakeLive:
 
     def __init__(self, scripts: list[list[dict]], log: list):
         self.sockets = [FakeSocket(frames) for frames in scripts]
+        for number, socket in enumerate(self.sockets, 1):
+            # As providers/capture.py numbers the connections it opens.
+            socket.trace_connection_id = f"gemini_live.ws-{number}"
         self._next = iter(self.sockets)
         self._log = log
         self.session_type = genai_live.AsyncSession

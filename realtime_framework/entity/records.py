@@ -45,6 +45,7 @@ class TraceEvent(str, Enum):
     SESSION_MESSAGE = "SessionMessage"
     SESSION_STATE_CHANGED = "SessionStateChanged"
     SESSION_WAIT = "SessionWait"
+    SESSION_DELIVERY = "SessionDelivery"
     AGENT_TRACE_CLOSED = "AgentTraceClosed"
 
 

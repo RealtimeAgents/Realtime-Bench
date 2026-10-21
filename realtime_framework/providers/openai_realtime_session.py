@@ -5,14 +5,15 @@ assistant items after it and the execution-feedback item after those, and the ar
 ledger item; in native streaming, an item for each block of the streaming history view, a frame,
 a reply's output or an execution feedback, in the order the agent accepted them, feedback placed
 in front of a frame going into the frame's item. From a history view it plans the item creates
-and deletes that bring the server there, and it records what became of each one: unknown while it
-is written, sent once the write returned, acknowledged once the server confirmed it. Each server
-event the driver reads is handed to ``receive``, in the order the connection delivered it, which
-passes it to the state it belongs to: an acknowledgement or error settles the in-place edit
-waiting for it, an error about a block native streaming pushed refuses that block alone, a
-response event joins its generation. Sending and receiving are the driver's; it reads only while
-something waits for an event, so what arrives after the last wait reaches the core with the next
-read.
+and deletes that bring the server there, and it records what became of each one, which the
+driver writes to the event log: unknown while it is written, sent once the write returned,
+acknowledged once the server confirmed it, refused if the server answered a native-streaming
+push with an error. Each server event the driver reads is handed to ``receive``, in the order the
+connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
+settles the in-place edit waiting for it, an error about a block native streaming pushed refuses
+that block alone, a response event joins its generation. Sending and receiving are the driver's;
+it reads only while something waits for an event, so what arrives after the last wait reaches the
+core with the next read.
 """
 
 from __future__ import annotations
@@ -35,8 +36,10 @@ _CREATE_ACKS = {"conversation.item.created", "conversation.item.done"}
 
 @dataclass(frozen=True)
 class Create:
-    """One planned conversation.item.create of a message item. In-place edits anchor it and name
-    its client event, so the server's acknowledgement or error can be matched to it."""
+    """One planned conversation.item.create of a message item, and the history block it carries
+    (a frame's item carries the feedback prefixed to the frame as well). In-place edits anchor
+    it and name its client event, so the server's acknowledgement or error can be matched to
+    it."""
 
     item_id: str
     role: str
@@ -44,6 +47,7 @@ class Create:
     image: FrameImage | None = None
     previous_item_id: str | None = None
     event_id: str | None = None
+    block: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -52,10 +56,11 @@ class Create:
 
 @dataclass(frozen=True)
 class Delete:
-    """One planned conversation.item.delete."""
+    """One planned conversation.item.delete; the item's create named its block."""
 
     item_id: str
     event_id: str | None = None
+    block = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -76,6 +81,10 @@ class Delivery(str, Enum):
     ACKNOWLEDGED = "acknowledged"
     UNKNOWN = "unknown"
     REFUSED = "refused"
+
+
+def _unrecorded(state: str, contents: list[tuple]) -> None:
+    pass
 
 
 @dataclass
@@ -204,27 +213,35 @@ class Generation:
 class RealtimeSessionCore:
     """One connection's conversation: what it holds, the operations that change it, their fate.
 
-    ``new_id(kind)`` names each planned client item and client event. The mirror takes in a plan
-    as it is made, before the driver sends it (an in-place edit only once it is acknowledged), so
-    after a failed send it is ahead of the server; the session is not used again then, as the
-    runtime reconnects or rebuilds (harnesses/default/context.py). A pushed block the server
-    refuses leaves the mirror, and the session goes on without it: native-streaming edits leave
-    it out of the views they plan from.
+    ``new_id(kind)`` names each planned client item and client event. ``on_delivery(state,
+    contents)`` hears each change in what became of operations: "sent", "confirmed", "refused"
+    (a push) or "unknown" (a failed write), with each operation's key and block. The mirror
+    takes in a plan as it is made, before the driver sends it (an in-place edit only once it is
+    acknowledged), so after a failed send it is ahead of the server; the session is not used
+    again then, as the runtime reconnects or rebuilds (harnesses/default/context.py). A pushed
+    block the server refuses leaves the mirror, and the session goes on without it:
+    native-streaming edits leave it out of the views they plan from.
     """
 
-    def __init__(self, new_id: Callable[[str], str]):
+    def __init__(
+        self,
+        new_id: Callable[[str], str],
+        on_delivery: Callable[[str, list[tuple]], None] = _unrecorded,
+    ):
         self._new_id = new_id
+        self._on_delivery = on_delivery
         # The conversation as the driver last wrote it, which each history view is diffed
         # against: every frame block id with its items (in native streaming, every frame and
         # feedback block id), and the archived-action ledger item.
         self.frames: dict[str, SentFrame] = {}
         self.ledger_item_id: str | None = None
         self.ledger_text = ""
-        # Every operation handed to the connection, by Operation.key.
+        # Every operation handed to the connection, by Operation.key, and the block it carries.
         self.delivery: dict[tuple[str, str], Delivery] = {}
         # When native streaming's reader received the first event that confirmed each operation,
         # by Operation.key, on the driver's clock.
         self.acknowledged_at: dict[tuple[str, str], float] = {}
+        self._blocks: dict[tuple[str, str], str | None] = {}
         # Every block native streaming pushed, by the client event of its create.
         self.pushes: dict[str, Push] = {}
         # The items of each reply native streaming requested, by the output block it becomes.
@@ -260,13 +277,19 @@ class RealtimeSessionCore:
             frame.item.block.image,
             previous_item_id,
             event_id,
+            frame.id,
         )
 
     def _output_create(self, output: RequestItem | None) -> Create | None:
         """The assistant item of a model output, if there is one."""
         if output is None:
             return None
-        return Create(self._new_id("assistant"), ROLES[output.intent.role], output.block.text)
+        return Create(
+            self._new_id("assistant"),
+            ROLES[output.intent.role],
+            output.block.text,
+            block=output.block.id,
+        )
 
     def _feedback_create(self, frame: ViewFrame) -> Create | None:
         """The item of the execution feedback on a frame's action, if the frame has one."""
@@ -276,6 +299,7 @@ class RealtimeSessionCore:
             self._new_id("feedback"),
             ROLES[frame.feedback.intent.role],
             frame.feedback.block.text,
+            block=frame.feedback.block.id,
         )
 
     def _ledger_create(
@@ -294,6 +318,7 @@ class RealtimeSessionCore:
             None,
             previous_item_id,
             event_id,
+            ledger.block.id,
         )
 
     def replay(self, history: CanonicalRequest | None) -> list[Create]:
@@ -484,11 +509,17 @@ class RealtimeSessionCore:
     def sending(self, operation: Operation) -> None:
         """Record an operation whose write starts, before any answer to it can arrive."""
         self.delivery[operation.key] = Delivery.UNKNOWN
+        self._blocks[operation.key] = operation.block
 
     def sent(self, operation: Operation) -> None:
         # While another waiter reads, the acknowledgement can arrive before the write returns.
         if self.delivery[operation.key] is Delivery.UNKNOWN:
             self.delivery[operation.key] = Delivery.SENT
+            self._on_delivery("sent", [(operation.key, operation.block)])
+
+    def send_failed(self, operation: Operation) -> None:
+        """The write failed: the operation stays unknown."""
+        self._on_delivery("unknown", [(operation.key, operation.block)])
 
     def settled(self, operation: Operation) -> bool:
         """Whether the server acknowledged an operation, or refused it as a push."""
@@ -617,7 +648,9 @@ class RealtimeSessionCore:
             if push is not None:
                 # The server did not make the block's item.
                 push.error = error
-                self.delivery[("create", push.item_id)] = Delivery.REFUSED
+                key = ("create", push.item_id)
+                self.delivery[key] = Delivery.REFUSED
+                self._on_delivery("refused", [(key, push.block_id)])
                 del self.frames[push.block_id]
                 return True
             edit = self._edit
@@ -673,7 +706,9 @@ class RealtimeSessionCore:
         self._unconfirmed.discard(key)
         if key not in self.delivery:
             return False
-        self.delivery[key] = Delivery.ACKNOWLEDGED
+        if self.delivery[key] is not Delivery.ACKNOWLEDGED:
+            self.delivery[key] = Delivery.ACKNOWLEDGED
+            self._on_delivery("confirmed", [(key, self._blocks[key])])
         return True
 
     def _response_of(self, kind: str, event) -> Generation | None:
