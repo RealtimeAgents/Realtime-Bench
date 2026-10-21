@@ -861,6 +861,7 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
+from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
@@ -1046,6 +1047,11 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s):
     if execution is not None:
         action_protocol["grounding"] = execution.get("reference_resolution")
     return action, action_protocol
+
+
+def _action_text(action: Action) -> str:
+    """An action as the action record and the feedback name it."""
+    return action.action_type.value + (f" {action.parameters}" if action.parameters else "")
 
 
 @dataclass
@@ -1732,9 +1738,7 @@ class DefaultHarness(VisionAgentBase):
         if action is None:  # a rejected streaming action
             executed = "none"
         else:
-            executed = action.action_type.value + (
-                f" {action.parameters}" if action.parameters else ""
-            )
+            executed = _action_text(action)
         generation.staged = _Staged(
             feedback,
             inspection_executions,
@@ -1895,20 +1899,27 @@ class DefaultHarness(VisionAgentBase):
         the discarded generation's frame carried."""
         index = self._decision_actions.get(outcome.decision)
         entry = None if index is None else self.action_history[index]
-        feedback = self._report(entry, outcome.status, outcome.detail)
+        # The loop has no terminal actions: the kernel ran a done or fail as this wait.
+        unsupported = outcome.protocol_failure == "unsupported_terminal_action"
+        feedback = self._report(
+            entry, outcome.status, outcome.detail, outcome.action if unsupported else None
+        )
         if entry is None:
             self._pending_feedback = "\n".join(filter(None, (self._pending_feedback, feedback)))
         else:
             self._pending_feedback = feedback
             self._runtime.record_execution_feedback(feedback, outcome.decision)
 
-    def _report(self, entry: dict | None, status: str, detail: str) -> str:
-        """Mark an action record with its outcome, and return the outcome's feedback."""
+    def _report(self, entry: dict | None, status: str, detail: str, replacement=None) -> str:
+        """Mark an action record with its outcome, and return the outcome's feedback.
+        ``replacement`` is the wait the kernel ran in place of a done or fail."""
         last = entry or {}
         parse_failed = bool(last.get("parse_failed"))
         requested = "invalid_action" if parse_failed else (last.get("executed") or "none")
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
+        if replacement is not None and status in landed_statuses:
+            executed = _action_text(replacement)
         if entry is not None:
             entry["applied"] = status == "applied"
             entry["result"] = status
@@ -1923,6 +1934,8 @@ class DefaultHarness(VisionAgentBase):
         )
         if note:
             feedback += " " + note
+        if replacement is not None:
+            feedback += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
         return feedback
 
     def _attempt_scope(self, generation, request, attempt):

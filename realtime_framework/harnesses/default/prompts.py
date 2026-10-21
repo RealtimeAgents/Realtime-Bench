@@ -248,6 +248,10 @@ INVALID_ACTION_FEEDBACK = (
     "NOTE: your previous response was not exactly one valid action, so WAIT was executed. "
     "Output one actual action with its arguments and nothing else."
 )
+UNSUPPORTED_TERMINAL_ACTION_FEEDBACK = (
+    "NOTE: your previous action was done or fail, which are not available actions, so WAIT was "
+    "executed. The environment determines when the episode ends."
+)
 
 ACTION_RESULT_NOTES = {
     "none": INVALID_ACTION_FEEDBACK,

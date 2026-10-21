@@ -9,8 +9,12 @@ import json
 import threading
 
 import realtime_framework.providers.registry as catalog
+from realtime_framework.entity.actions import Action
 from realtime_framework.evaluation.kernel.events import Outcome
-from realtime_framework.harnesses.default.prompts import ACTION_RESULT_NOTES
+from realtime_framework.harnesses.default.prompts import (
+    ACTION_RESULT_NOTES,
+    UNSUPPORTED_TERMINAL_ACTION_FEEDBACK,
+)
 from tests.replay import scenario_decisions
 from tests.replay.build import build_episode
 from tests.replay.frames import ReplayTask
@@ -21,6 +25,7 @@ from tests.replay.scenario import (
     TASK_INSTRUCTION,
     replies,
 )
+from tests.replay.steps import Step
 from tests.replay.stub import ChatCompletionsStub
 from tests.replay.stub_decisions import DecisionsStub
 from tests.replay.test_chat_completions import MODEL_KEY as CHAT_MODEL_KEY
@@ -222,6 +227,35 @@ def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
     messages = json.loads(stub.requests[1].body)["messages"]
     replied = [m["content"] for m in messages].index(CLICK_NAME)
     assert messages[replied + 1] == {"role": "user", "content": feedback}
+
+
+def test_a_done_is_reported_as_the_wait_it_ran(tmp_path):
+    """The model answers done, which the loop does not support: the kernel runs a wait in its
+    place and reports it (kernel/turns.py _accept). The record and the feedback name the wait as
+    what ran and the done as what was asked, and a note says why."""
+    with ChatCompletionsStub(replies([Step('{"action": "done"}')])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            agent.commit(
+                _outcome(
+                    0,
+                    "wait",
+                    action=Action.wait(),
+                    protocol_failure="unsupported_terminal_action",
+                )
+            )
+        finally:
+            episode.finish()
+    (record,) = agent.action_history
+    assert (record["requested"], record["executed"], record["result"]) == ("done", "wait", "wait")
+    feedback = (
+        "EXECUTION RESULT: actual=wait; requested=done; status=wait. "
+        + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
+    )
+    assert agent._runtime.turns[0].execution_feedback == feedback
 
 
 def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
