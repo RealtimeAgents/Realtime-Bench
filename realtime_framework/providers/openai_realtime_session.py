@@ -68,11 +68,13 @@ class Delivery(str, Enum):
     """What is known about one planned operation, in the Gemini Live core's terms
     (providers/gemini/session.py): unknown from the start of its write until the write returns,
     sent after that, acknowledged once the server confirmed it. A write that fails leaves it
-    unknown: the server may or may not have it."""
+    unknown: the server may or may not have it. A native-streaming push the server answered with
+    an error naming its client event is refused: the server does not have it."""
 
     SENT = "sent"
     ACKNOWLEDGED = "acknowledged"
     UNKNOWN = "unknown"
+    REFUSED = "refused"
 
 
 @dataclass
@@ -450,6 +452,10 @@ class RealtimeSessionCore:
         if self.delivery[operation.key] is Delivery.UNKNOWN:
             self.delivery[operation.key] = Delivery.SENT
 
+    def settled(self, operation: Operation) -> bool:
+        """Whether the server answered an operation: acknowledged it, or refused a push."""
+        return self.delivery.get(operation.key) in (Delivery.ACKNOWLEDGED, Delivery.REFUSED)
+
     @property
     def edit_answered(self) -> bool:
         """Whether the server confirmed every operation of the pending edit, or failed it."""
@@ -568,6 +574,7 @@ class RealtimeSessionCore:
             if push is not None:
                 # The server did not make the block's item.
                 push.error = error
+                self.delivery[("create", push.item_id)] = Delivery.REFUSED
                 del self.frames[push.block_id]
                 return True
             edit = self._edit

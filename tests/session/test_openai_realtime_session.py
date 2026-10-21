@@ -817,6 +817,23 @@ def test_an_error_about_a_push_refuses_that_block_alone():
     ]
 
 
+def test_a_push_is_settled_once_acknowledged_or_refused():
+    """A pushed block's delivery ends acknowledged, or refused once the server's error names its
+    client event, as the server then does not have it; either way the push is settled."""
+    core = streamed(stream("F"))
+    acknowledged = core.push(streaming_view(stream("FF")))
+    refused = core.push(streaming_view(stream("FFF")))
+    sent(core, [acknowledged, refused])
+    assert not core.settled(acknowledged) and not core.settled(refused)
+    core.receive(done(acknowledged.item_id))
+    core.receive(error(refused.event_id))
+    assert (core.delivery[acknowledged.key], core.delivery[refused.key]) == (
+        Delivery.ACKNOWLEDGED,
+        Delivery.REFUSED,
+    )
+    assert core.settled(acknowledged) and core.settled(refused)
+
+
 def test_a_block_refused_again_after_a_rebuild_is_refused_alone():
     """A rebuilt session replays every block the view holds, a frame the old connection refused
     too. Its frames and feedback are planned as pushes, under client events, so the server
