@@ -31,6 +31,8 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     HistorySyncRequest,
     ProviderObservation,
+    RequestRetry,
+    RuntimeState,
     SessionSeed,
     SyncDisposition,
 )
@@ -77,7 +79,8 @@ class FakeSocket:
 
 class FakeLive:
     """client.aio.live: each connect opens a session on the next socket, and is logged with the
-    handle its setup resumes."""
+    handle its setup resumes. A ``refusal`` set is what the next connect's setup raises instead,
+    on no socket."""
 
     def __init__(self, scripts: list[list[dict]], log: list):
         self.sockets = [FakeSocket(frames) for frames in scripts]
@@ -87,9 +90,13 @@ class FakeLive:
         self._next = iter(self.sockets)
         self._log = log
         self.session_type = genai_live.AsyncSession
+        self.refusal: BaseException | None = None
 
     def connect(self, *, model, config):
         self._log.append(("connect", config.session_resumption.handle))
+        if self.refusal is not None:
+            refusal, self.refusal = self.refusal, None
+            return contextlib.asynccontextmanager(lambda: _refuse(refusal))()
         session = self.session_type(
             api_client=SimpleNamespace(vertexai=False),
             websocket=next(self._next),
@@ -100,6 +107,11 @@ class FakeLive:
 
 async def _yield(value):
     yield value
+
+
+async def _refuse(exc: BaseException):
+    raise exc
+    yield  # an async generator, as google-genai's connect is
 
 
 class RecordingClock(SystemClock):
@@ -268,6 +280,38 @@ def test_resume_waits_for_the_session_release():
 
 def server_closed(code: int, reason: str) -> ConnectionClosedError:
     return ConnectionClosedError(Close(code, reason), None)
+
+
+def test_a_rebuild_raises_a_transient_close_of_its_connect_as_it_is_for_the_turn_to_retry():
+    """A rebuild whose connect the server closes with 1011 raises that close as it is, not a
+    BROKEN result whose detail no retry could classify: the turn's retry finds it retryable, and
+    readying the session again connects anew."""
+    rig = Rig("gemini-3.8-live", [[], []])
+    failures = []
+    retry = RequestRetry(
+        "turn-1",
+        rig.driver.classify_transport_error,
+        lambda attempt, exc, failure, delay: failures.append((exc, delay is not None)),
+        lambda attempt, exc: None,
+        clock=rig.driver.clock,
+    )
+
+    async def run():
+        await rig.connect()
+        rig.driver.mark_dirty()
+        rig.live.refusal = server_closed(1011, "Internal error.")
+        await retry.run_async(
+            lambda attempt: rig.driver.ensure_ready(rig.seed, rig.history, lambda *_, **__: None)
+        )
+        state = rig.driver.state
+        await rig.driver.close()
+        return state
+
+    assert asyncio.run(run()) == RuntimeState.READY
+    [(failure, retried)] = failures
+    assert isinstance(failure, ConnectionClosedError) and failure.rcvd.code == 1011
+    assert retried
+    assert [entry for entry in rig.log if entry[0] == "connect"] == [("connect", None)] * 3
 
 
 def test_a_failed_read_leaves_the_connection_unusable():
