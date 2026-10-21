@@ -372,7 +372,6 @@ TERMS_ARCHIVE = WEB_LONG[:26]
 TERMS_EXHAUSTED = [*WEB_LONG[:TERMS_ARCHIVE_DECISION], decision()]
 TERMS_OMISSION = WEB_LONG[:28]
 
-# The long script under a window its ledger outgrows (test_decisions.py LEDGER_WINDOW), up to
+# The long script under a window its ledger outgrows (test_decisions.py LEDGER_RUNS), up to
 # decision 38: decision 39's frame lists 240 names, which no window this small holds.
 LEDGER_OVERFLOW = WEB_LONG[:39]
-LEDGER_OMISSIONS = (28, 34)  # the decisions that leave out the next ten archived actions

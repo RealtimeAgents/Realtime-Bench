@@ -546,59 +546,72 @@ def test_history_overflow_exhausted(tmp_path, monkeypatch):
     _settle("history_overflow_exhausted", header, records, tmp_path)
 
 
-# The review's JEV window: from decision 15 the runtime archives turns to fit, from decision 24
-# none is left, and from decision 28 the ledger alone outgrows it, since each archived action adds
-# its record to the ledger and takes less than twice that from the digest.
-LEDGER_WINDOW = (10024, 1024)
+# (window, reserve) that the long script's ledger outgrows, and the decisions that then leave out
+# the next ten archived actions. JEV's is the review's: from decision 15 the runtime archives turns
+# to fit, from decision 24 none is left, and from decision 28 the ledger alone outgrows it, since
+# each archived action adds its record to the ledger and takes less than twice that from the
+# digest. Luna's holds the system text and the current frame and few archived actions, so from
+# decision 1 every earlier turn is archived.
+LEDGER_RUNS = {
+    "jev_decisions": ((10024, 1024), (28, 34)),
+    "openai_decisions": ((13000, 4000), (25, 31)),
+}
 
 
-def test_history_overflow_ledger(tmp_path):
+def _ledger_lines(api: str, body: dict) -> tuple[str, list[str]]:
+    """The ledger's header, and its note and records: JEV's own message, or the lines after the
+    header in Luna's first transcript entry, up to the transcript that follows them."""
+    if api == "jev_decisions":
+        header, *lines = body["state"]["history"][1]["content"].split("\n")
+        return header, lines
+    lines = body["state"][0].partition(ARCHIVED_ACTION_LEDGER_HEADER + "\n")[2].split("\n")
+    count = next(i for i, line in enumerate(lines) if not line.startswith(("{", "[")))
+    return ARCHIVED_ACTION_LEDGER_HEADER, lines[:count]
+
+
+@pytest.mark.parametrize("api", list(APIS))
+def test_history_overflow_ledger(api, tmp_path):
     """With every turn archived and the request still over the window, the earliest archived
     actions give way to a note, ten at a time, and the episode goes on (context policy item 8).
-    Without the note, decision 28 was invalid without a request."""
+    Without the note, JEV's decision 28 was invalid without a request."""
+    window, omitting = LEDGER_RUNS[api]
     header, records = _play(
-        "jev_decisions",
+        api,
         script.LEDGER_OVERFLOW,
         tmp_path,
         task=ReplayTask(),
         instruction=TASK_INSTRUCTION,
-        update=dict(zip(("context_window_tokens", "context_reserve_tokens"), LEDGER_WINDOW)),
+        update=dict(zip(("context_window_tokens", "context_reserve_tokens"), window)),
     )
     assert not any(r["result"].get("invalid_reason") for r in records)
     assert not any(_runtime(r)["request_context"]["pressure"] for r in records)
     omissions = _pressure_archives(tmp_path, "ledger_omission")
-    assert [o["scope"]["decision"] for o in omissions] == list(script.LEDGER_OMISSIONS)
+    assert [o["scope"]["decision"] for o in omissions] == list(omitting)
     assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20]
     assert all(o["request_context"]["pressure"] for o in omissions)
-    first = script.LEDGER_OMISSIONS[0]
+    first = omitting[0]
+    omitted = [10 * sum(k >= decision for decision in omitting) for k in range(len(records))]
     # Each step records how many actions the ledger leaves out, once any is.
     totals = [_runtime(r).get("history_omitted_actions_total") for r in records]
-    assert totals == [None] * first + [
-        10 * sum(k >= decision for decision in script.LEDGER_OMISSIONS)
-        for k in range(first, len(records))
-    ]
+    assert totals == [n or None for n in omitted]
     omitted_now = [_runtime(r).get("request_context_omitted_actions") for r in records]
-    assert {k: n for k, n in enumerate(omitted_now) if n} == dict.fromkeys(
-        script.LEDGER_OMISSIONS, 10
-    )
+    assert {k: n for k, n in enumerate(omitted_now) if n} == dict.fromkeys(omitting, 10)
     prepared = [
         e["payload"]["history"]["omitted_actions_total"]
         for e in _trace_events(tmp_path)
         if e["event"] == "GenerationPrepared"
     ]
-    assert prepared == [total or 0 for total in totals]
-
-    def ledger(k: int) -> list[str]:
-        return _bodies(records[k])[0]["state"]["history"][1]["content"].split("\n")
-
-    header_line, *kept = ledger(first - 1)
-    assert header_line == FIXED_TEXTS.jev_ledger_header
-    assert all(line.startswith("{") for line in kept)
+    assert prepared == omitted
+    header_line, kept = _ledger_lines(api, _bodies(records[first - 1])[0])
+    assert kept and all(line.startswith("{") for line in kept)
+    if api == "jev_decisions":
+        assert header_line == FIXED_TEXTS.jev_ledger_header
     for k in range(first, len(records)):
-        header_line, note, *kept = ledger(k)
-        omitted = 10 * sum(k >= decision for decision in script.LEDGER_OMISSIONS)
-        # The header no longer says that every action is kept.
-        assert header_line == FIXED_TEXTS.jev_ledger_header_omitted
-        assert note == LEDGER_OMISSION.format(count=omitted)
+        header_line, (note, *kept) = _ledger_lines(api, _bodies(records[k])[0])
+        if api == "jev_decisions":  # the header no longer says that every action is kept
+            assert header_line == FIXED_TEXTS.jev_ledger_header_omitted
+        assert note == LEDGER_OMISSION.format(count=omitted[k])
         assert kept and all(line.startswith("{") for line in kept)
+        # The earliest actions are the ones left out; decisions count from 1 in the ledger.
+        assert _first_decision(kept[0]) == omitted[k] + 1
     _settle("history_overflow_ledger", header, records, tmp_path)
