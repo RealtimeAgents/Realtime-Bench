@@ -698,6 +698,82 @@ def test_a_wait_whose_own_step_fails_is_a_failed_action(replies, fault, reason, 
     assert termination.invalid == Invalidated("environment", reason, "renderer crashed")
 
 
+TRACE_LOST = Invalidated("harness", "episode_trace_write_failed", "disk full")
+
+
+@pytest.mark.parametrize(
+    ("config", "replies", "world", "resolved", "advances", "ended_at"),
+    [
+        # n = 640, tau = 2.5: the run ends during the step to 2, which then lands the click
+        # nowhere.
+        (
+            _token(10),
+            [Reply(action=CLICK, output_tokens=640)],
+            {"at": 0.75},
+            [("invalid_run", False)],
+            [1, 1],
+            2,
+        ),
+        # n = 256, tau = 1: the run ends during the wait's step to 2, which cuts it short there.
+        (
+            _token(10),
+            [Reply(action=Action.wait(2.5), output_tokens=256)],
+            {"at": 0.75},
+            [("wait", True)],
+            [1, 1],
+            2,
+        ),
+        # n = 384, tau = 1.5: the click is resolved, and the run ends during the pace step to 2.
+        (
+            _token(10),
+            [Reply(action=CLICK, output_tokens=384)],
+            {"at": 1.25},
+            [("applied", False)],
+            [1, 0.5, 0.5],
+            2,
+        ),
+        # T = 2 + 1/512: decision 0 lands at 1.5 and frame 2 leaves no whole token, so the clock
+        # moves to the horizon, and the run ends during that step.
+        (
+            _token(2 + 1 / 512),
+            [_idle(1.5)],
+            {"at": 1.75},
+            [("none", False)],
+            [1, 0.5, 0.5, 1 / 512],
+            2 + 1 / 512,
+        ),
+        # A 0.5 s hold at 0: its key is released at 0.5, in the pace move, and the run ends while
+        # the release, 0.5 s long, is out.
+        (
+            _token(10),
+            [Reply(action=Action.hold_key("a", 0.5), output_tokens=0), _idle(1)],
+            {"at": 0.75, "release_s": 0.5},
+            [("applied", False)],
+            [0.5],
+            0.5,
+        ),
+    ],
+    ids=["approach", "wait", "pace", "horizon", "release"],
+)
+def test_a_move_the_run_ends_during_settles_on_its_steps_answer(
+    config, replies, world, resolved, advances, ended_at
+):
+    # Every token-clock step costs 0.5 s, and another thread invalidates the run meanwhile. The
+    # end is handled first; the decision in hand settles once the step or release that was out
+    # answers, as an execution does (kernel/core.py), and the episode then finishes.
+    at = world.pop("at")
+    sim = _run(config, *replies, advance_s=0.5, invalidations=((at, TRACE_LOST),), **world)
+    assert [
+        (e.data["status"], e.data["terminal_after_action"]) for e in sim.entries("ActionResolved")
+    ] == resolved
+    assert [outcome.status for outcome in sim.outcomes] == [status for status, _ in resolved]
+    assert sim.advances == pytest.approx(advances)
+    termination = sim.termination
+    assert (termination.stop_reason, termination.cause) == ("invalid_run", "invalid")
+    assert termination.ended_at == pytest.approx(ended_at)
+    assert termination.invalid == TRACE_LOST
+
+
 def test_a_wait_whose_own_step_fails_settles_on_that_answer_though_the_run_ended_meanwhile():
     # The wait from 1 steps to 2; the step to 3, the third advance, takes 0.5 s and fails, and
     # meanwhile another thread invalidates the run. The end leaves the wait to settle on its
