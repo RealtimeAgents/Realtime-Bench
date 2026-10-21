@@ -19,7 +19,9 @@ from realtime_framework.providers.gemini.session import (
     REPLAY_THOUGHT_SIGNATURE,
     Content,
     Delivery,
+    Orphan,
     Part,
+    Received,
     SessionCore,
 )
 
@@ -115,6 +117,11 @@ def connected(core: SessionCore, history=None, resume_handle=None):
 def receive(core: SessionCore, message, now: float = 0.0):
     """A message on the open connection."""
     return core.received(core.connection, message, now)
+
+
+def arrive(core: SessionCore, message, now: float = 0.0):
+    """A message on the open connection, read as it arrives."""
+    return core.arrived(core.connection, message, now)
 
 
 def start_turn(core: SessionCore, generation_id: str) -> None:
@@ -439,3 +446,79 @@ def test_an_orphan_message_changes_nothing():
     for orphan in (update("handle-1"), go_away(), server_content(turnComplete=True)):
         assert receive(core, orphan) is None
     assert state() == before
+
+
+def test_a_reply_message_arrives_as_received():
+    """While a generation's reply is being read, arrived() applies a message as received() does."""
+    core = session_core()
+    connected(core)
+    start_turn(core, "turn-0")
+    received = arrive(core, update("handle-0"))
+    assert isinstance(received, Received)
+    assert (received.connection, received.generation, received.generation_id) == (1, 1, "turn-0")
+    assert arrive(core, server_content(turnComplete=True)).ends
+    assert core.resume_handle == "handle-0" and core.replies == {}
+
+
+def test_an_orphan_go_away_asks_for_a_new_connection():
+    """Between replies, a goAway read as it arrives asks for a new connection, by the server's
+    deadline, as it does in a reply."""
+    core = session_core()
+    connected(core)
+    clean_turn(core, "turn-0", "handle-0")
+    orphan = arrive(core, go_away("30s"), now=100.0)
+    assert isinstance(orphan, Orphan)
+    assert (orphan.connection, orphan.control) == (1, GO_AWAY_RECONNECT)
+    assert core.renewal_required and core.go_away_deadline == 128.0
+    # Nothing was sent since turn-0 completed cleanly: the renewal resumes with its handle.
+    assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) == (
+        "handle-0"
+    )
+
+
+def test_an_orphan_resumption_update_is_promoted_at_a_clean_boundary():
+    """An orphan's handle is the session's while nothing has been sent since a clean completion
+    or a seed. Once an observation is sent it is only the candidate."""
+    core = session_core()
+    connected(core)
+    clean_turn(core, "turn-0", "handle-0")
+    assert arrive(core, update("handle-1")).control == {}
+    assert core.resume_handle == "handle-1"
+    arrive(core, update(None))  # not resumable from here on: the boundary's handle stays
+    assert (core.resume_handle, core.candidate_resume_handle) == ("handle-1", None)
+
+    core.observe(view([turn(1)]))
+    arrive(core, update("handle-2"))
+    assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-2")
+
+    seeded = session_core()
+    connected(seeded, view([turn(0)]))
+    arrive(seeded, update("handle-0"))
+    assert seeded.resume_handle == "handle-0"
+    fresh = session_core()
+    connected(fresh)
+    arrive(fresh, update("handle-0"))  # nothing on the session yet: no handle to resume
+    assert (fresh.resume_handle, fresh.candidate_resume_handle) == (None, "handle-0")
+
+
+def test_an_interrupt_ends_the_clean_boundary():
+    """An interrupt is an input: a handle that arrives after it is not the clean boundary's."""
+    core = session_core()
+    connected(core)
+    clean_turn(core, "turn-0", "handle-0")
+    core.interrupt_sent()
+    arrive(core, update("handle-1"))
+    assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-1")
+    assert not core.last_turn_clean
+
+
+def test_an_orphan_from_a_closed_connection_changes_nothing():
+    core = session_core()
+    connected(core)
+    clean_turn(core, "turn-0", "handle-0")
+    connected(core, view([turn(0)]))
+    for message in (update("handle-1"), go_away()):
+        orphan = core.arrived(1, message, 0.0)
+        assert (orphan.connection, orphan.control) == (1, {})
+    assert (core.resume_handle, core.candidate_resume_handle) == (None, None)
+    assert not core.renewal_required and core.go_away_deadline is None

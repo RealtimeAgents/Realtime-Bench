@@ -172,7 +172,7 @@ class Received:
     generation asks for a message, so a message that arrived after one reply ended and before
     the next generation started is read, and numbered, as part of the next. Attributing messages
     by arrival is left to streaming, which reads as messages arrive: one read between a reply's
-    end and the next generation's start then belongs to no generation, an orphan here.
+    end and the next generation's start then belongs to no generation, an Orphan.
     """
 
     connection: int  # the connection it was read from
@@ -185,6 +185,19 @@ class Received:
     complete: bool  # the interaction completes here, by the configured completion signal
     ends: bool  # the generation's output ends with this message
     control: dict  # what a goAway asks of the turn: reconnect after it
+
+
+@dataclass(frozen=True)
+class Orphan:
+    """One server message that no generation's reply takes, as the core applied it (arrived).
+
+    Its goAway and resumption update still change the session, as in a reply; read from a closed
+    connection, it changes nothing.
+    """
+
+    connection: int  # the connection it was read from
+    message: Any
+    control: dict  # what a goAway asks of the session: reconnect after it
 
 
 @dataclass
@@ -401,6 +414,9 @@ class SessionCore:
         return observation
 
     def interrupt_sent(self) -> None:
+        """The interrupt is an input: no handle resumes the session until a turn completes
+        cleanly."""
+        self.last_turn_clean = False
         self.resume_handle = None
 
     def calls_received(self, calls: list[tuple]) -> None:
@@ -438,7 +454,7 @@ class SessionCore:
     def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
         monotonic clock). With no generation's reply being read on that connection the message is
-        an orphan: nothing takes it, and it changes nothing (None)."""
+        an orphan: nothing takes it, and it changes nothing (None; see arrived)."""
         generation = self.replies.get(connection)
         if generation is None:
             return None
@@ -474,6 +490,22 @@ class SessionCore:
             ends,
             control,
         )
+
+    def arrived(self, connection: int, message, now: float) -> Received | Orphan:
+        """Apply one server message as a reader that reads every message as it arrives does
+        (streaming): as received() does while a generation's reply is being read on
+        ``connection``, else as an orphan. An orphan's goAway asks for a new connection, and its
+        resumption update is promoted when the session is at a clean boundary: no observation or
+        interrupt sent since the last clean completion, seed or resume."""
+        received = self.received(connection, message, now)
+        if received is not None:
+            return received
+        control = (
+            self._control(message, clean=self.last_turn_clean, now=now)
+            if connection == self.connection
+            else {}
+        )
+        return Orphan(connection, message, control)
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
         update = getattr(message, "session_resumption_update", None)
