@@ -3,9 +3,9 @@
 runner.main() takes it as --interaction-mode, records it in the run identity (the episode start,
 run_config.json and its hash, the expected summary and the run summary) and passes it to the
 pre-run checks (providers/preflight.py check_interaction_mode). Run plans, the Harbor agent's
-options, each trial's task.json and the trial worker carry it to the runner. No registered driver
-declares streaming yet, so a streaming run of a catalog model is refused before the agent is
-built; the tests that need one let Gemini Live declare it.
+options, each trial's task.json and the trial worker carry it to the runner. Both live drivers
+declare streaming (OpenAI Realtime, Gemini Live), and a streaming run of either runs on the
+native-streaming agent; any other API, or the token clock, refuses it before the agent is built.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import types
-from dataclasses import replace
 
 import pytest
 
@@ -22,7 +21,6 @@ from realtime_framework.evaluation.effective_config import _runner_entry, export
 
 GEMINI = "gemini-3.8-live"
 WEB, GAME = "rt_waitlist_fit", "gh_timed_chess"
-UNSUPPORTED = "The gemini_live API does not support streaming"
 
 
 @pytest.fixture(scope="module")
@@ -60,8 +58,17 @@ def test_the_runner_records_turn_based_by_default(runner_cells):
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
-def test_the_runner_refuses_streaming(runner_cells):
-    assert runner_cells[GAME]["error"] == f"ValueError: {UNSUPPORTED}"
+def test_the_runner_records_streaming(runner_cells):
+    """Gemini Live declares streaming: the run records it, with the driver's streaming settings,
+    and the report expects the same hash."""
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver
+
+    cell = runner_cells[GAME]
+    assert cell["error"] is None
+    assert cell["run"]["interaction_mode"] == "streaming"
+    assert cell["runtime_config"]["interaction_mode"] == "streaming"
+    assert cell["runtime_config"]["streaming"] == GeminiLiveDriver.streaming_settings
+    assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
 def run_main(tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="wall") -> dict:
@@ -127,34 +134,35 @@ def test_the_run_summary_records_the_mode(tmp_path, monkeypatch):
     assert "streaming" not in summary
 
 
-def test_a_refused_streaming_run_records_the_mode(tmp_path, monkeypatch):
-    """Without --report-root, which refuses it earlier (reporting.prepare_episode_report), the
-    runner's own check refuses the run before it builds the agent (providers/preflight.py
-    check_episode), so no live session is opened."""
-    agents = []
-    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming", agents=agents)
-    assert summary["error"].strip().endswith(f"ValueError: {UNSUPPORTED}")
-    assert agents == []
+def test_a_streaming_run_summary_records_the_mode(tmp_path, monkeypatch):
+    """The run's summary, of a loop that failed before any frame went in."""
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming")
+    assert summary["error"].strip().endswith("RuntimeError: decision loop failed")
     assert summary["interaction_mode"] == "streaming"
-    # Refused before its configuration was resolved, it pushed no frame.
-    assert summary["streaming"]["context_control"] is None
+    assert summary["runtime_config"]["interaction_mode"] == "streaming"
+    assert summary["streaming"]["context_control"] == "approximate"
     assert summary["streaming"]["frames"]["pushed"] == 0
 
 
-def test_the_runner_refuses_streaming_on_its_default_clock(streaming_gemini, tmp_path, monkeypatch):
+def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch):
     """Without --clock the runner runs the token clock (runner.py main), on which streaming is
-    refused before the agent is built, where a driver declares it too."""
+    refused. Without --report-root, which refuses it earlier (reporting.prepare_episode_report),
+    the runner's own check refuses the run before it builds the agent (providers/preflight.py
+    check_episode), so no live session is opened. A summary refused before its configuration was
+    resolved has no context control."""
     agents = []
     summary = run_main(
         tmp_path, monkeypatch, "--interaction-mode", "streaming", agents=agents, clock_mode=None
     )
     assert summary["error"].strip().endswith("ValueError: Streaming requires a wall clock")
     assert (summary["clock_mode"], agents) == ("token", [])
+    assert summary["streaming"]["context_control"] is None
+    assert summary["streaming"]["frames"]["pushed"] == 0
 
 
 @pytest.mark.parametrize("interaction_mode", ["turn_based", "streaming"])
 def test_the_runner_builds_the_agent_and_runs_the_loop_of_its_mode(
-    streaming_gemini, tmp_path, monkeypatch, interaction_mode
+    tmp_path, monkeypatch, interaction_mode
 ):
     """runner.set_up_agent builds the agent of the run's mode (harnesses/registry.py
     create_agent) and main() runs the loop in it (runner.py run_stream)."""
@@ -209,7 +217,7 @@ def test_a_streaming_episode_runs_on_the_streaming_shell(monkeypatch):
         streaming("token")
 
 
-def test_a_streaming_run_keeps_the_hash_it_expected(streaming_gemini, tmp_path, monkeypatch):
+def test_a_streaming_run_keeps_the_hash_it_expected(tmp_path, monkeypatch):
     """Where a driver declares streaming, the runner's run configuration hashes to the one
     reporting.prepare_episode_report expected before the run, the model YAML's streaming settings
     included: either side leaving the mode or the settings out would fail the run's report."""
@@ -305,17 +313,6 @@ def test_a_run_plan_carries_the_mode_to_the_runner(tmp_path):
 
 
 @pytest.fixture
-def streaming_gemini(monkeypatch):
-    """Gemini Live declaring native streaming, as it will once its streaming agent exists."""
-    from realtime_framework.providers.gemini.live import GeminiLiveDriver
-
-    capabilities = replace(
-        GeminiLiveDriver.capabilities, interaction_modes=frozenset({"turn_based", "streaming"})
-    )
-    monkeypatch.setattr(GeminiLiveDriver, "capabilities", capabilities)
-
-
-@pytest.fixture
 def environment():
     """_trial.main writes os.environ (evaluation/_trial.py:107-108)."""
     saved = dict(os.environ)
@@ -325,7 +322,7 @@ def environment():
 
 
 def test_each_step_passes_streaming_on(
-    streaming_gemini, environment, monkeypatch, tmp_path, capsys
+    environment, monkeypatch, tmp_path, capsys
 ):
     """The same steps in this interpreter, where a driver can declare streaming: the value each
     step receives is the one it hands on, not its default."""
@@ -453,7 +450,7 @@ def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
     return root
 
 
-def test_only_a_streaming_report_has_a_streaming_section(streaming_gemini, tmp_path, monkeypatch):
+def test_only_a_streaming_report_has_a_streaming_section(tmp_path, monkeypatch):
     """reporting.report carries each task's streaming section (reporting.summarize_streaming) and
     sums a streaming group's counts; a turn-based group and its tasks have none."""
     from realtime_framework.evaluation.reporting import report
@@ -479,7 +476,7 @@ def test_only_a_streaming_report_has_a_streaming_section(streaming_gemini, tmp_p
 
 
 def test_a_streaming_run_summary_without_its_section_is_not_scored(
-    streaming_gemini, tmp_path, monkeypatch
+    tmp_path, monkeypatch
 ):
     from realtime_framework.evaluation.reporting import report
 
@@ -493,7 +490,7 @@ def test_a_streaming_run_summary_without_its_section_is_not_scored(
 
 @pytest.mark.parametrize("interaction_mode", ["turn_based", "streaming"])
 def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
-    streaming_gemini, environment, tmp_path, monkeypatch, capsys, interaction_mode
+    environment, tmp_path, monkeypatch, capsys, interaction_mode
 ):
     """A Harbor trial after its run: the request's options become the trial worker's command and
     settings, which the report's integration reads (wall_clock_launch.json); the runner's expected
@@ -574,18 +571,12 @@ def test_a_job_reports_its_mode(tmp_path, recorded, reported):
     assert report["interaction_mode"] == reported
 
 
-def test_a_streaming_run_records_the_live_api_settings(streaming_gemini, monkeypatch):
+def test_a_streaming_run_records_the_live_api_settings():
     """OpenAI Realtime's retained frames and Gemini Live's compression thresholds apply only to
     streaming, so only a streaming run's configuration (and its hash) records them."""
     from realtime_framework.evaluation.config import effective_run_config
     from realtime_framework.providers.gemini.live import GeminiLiveDriver
     from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
-
-    capabilities = replace(
-        OpenAIRealtimeDriver.capabilities,
-        interaction_modes=frozenset({"turn_based", "streaming"}),
-    )
-    monkeypatch.setattr(OpenAIRealtimeDriver, "capabilities", capabilities)
 
     def run_config(key, interaction_mode):
         effort = catalog.get(key).defaults["reasoning_effort"]
@@ -607,7 +598,7 @@ def test_a_streaming_run_records_the_live_api_settings(streaming_gemini, monkeyp
 
 
 def test_a_model_yaml_sets_the_streaming_settings(
-    streaming_gemini, monkeypatch, tmp_path
+    monkeypatch, tmp_path
 ):
     """A model YAML's streaming settings replace the driver's they name. A streaming run records
     them; a turn-based run's configuration, its model configuration included, is the one without

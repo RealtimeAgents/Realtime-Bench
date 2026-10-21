@@ -216,6 +216,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         terminal_output_usage=True,
         classifies_transport_errors=True,
         maps_output_cap=True,
+        interaction_modes=frozenset({"turn_based", "streaming"}),
     )
     deployment = Deployment(
         family="streaming",

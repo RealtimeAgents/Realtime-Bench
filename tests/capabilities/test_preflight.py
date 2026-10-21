@@ -567,18 +567,17 @@ NOT_LIVE = (
 STREAMING_CLOCK = "Streaming requires a wall clock"
 
 
-@pytest.fixture
-def streaming_gemini(monkeypatch):
-    """Gemini Live declaring native streaming, as it will once its streaming agent exists; no
-    driver declares it yet."""
-    from dataclasses import replace
+def undeclared(monkeypatch, api: str) -> None:
+    """The live ``api``'s driver without streaming among its interaction modes. Both live drivers
+    declare it, so the rule that refuses a live API without it is held to one this way."""
+    driver = catalog.adapter_class(api)
+    capabilities = replace(driver.capabilities, interaction_modes=frozenset({"turn_based"}))
+    monkeypatch.setattr(driver, "capabilities", capabilities)
 
-    from realtime_framework.providers.gemini.live import GeminiLiveDriver
 
-    capabilities = replace(
-        GeminiLiveDriver.capabilities, interaction_modes=frozenset({"turn_based", "streaming"})
-    )
-    monkeypatch.setattr(GeminiLiveDriver, "capabilities", capabilities)
+def test_the_live_apis_declare_streaming():
+    for api in ("openai_realtime", "gemini_live"):
+        assert "streaming" in catalog.adapter_class(api).capabilities.interaction_modes
 
 
 def test_streaming_needs_a_live_api():
@@ -611,8 +610,10 @@ def test_streaming_plan_names_a_mode(tmp_path):
     )
 
 
-def test_streaming_trial(capsys):
+def test_streaming_trial(monkeypatch, capsys):
     from realtime_framework.evaluation._trial import main
+
+    undeclared(monkeypatch, "gemini_live")
 
     usage_error(
         capsys,
@@ -622,8 +623,10 @@ def test_streaming_trial(capsys):
     )
 
 
-def test_streaming_identity():
+def test_streaming_identity(monkeypatch):
     from realtime_framework.evaluation.config import identity_main
+
+    undeclared(monkeypatch, "gemini_live")
 
     fails(
         lambda: identity_main(["--model", "gemini-live", "--task", WEB, "--fps", "1",
@@ -643,14 +646,15 @@ def test_the_live_apis_are_the_persistent_sessions():
 @pytest.mark.parametrize(
     "key, api", [("gpt-realtime-2", "openai_realtime"), ("gemini-live", "gemini_live")]
 )
-def test_streaming_needs_the_driver_to_declare_it(key, api):
+def test_streaming_needs_the_driver_to_declare_it(monkeypatch, key, api):
+    undeclared(monkeypatch, api)
     fails(
         lambda: episode(preset(key), interaction_mode="streaming"),
         f"The {api} API does not support streaming",
     )
 
 
-def test_streaming_needs_the_wall_clock(streaming_gemini):
+def test_streaming_needs_the_wall_clock():
     fails(
         lambda: episode(preset("gemini-live"), clock_mode="token", interaction_mode="streaming"),
         STREAMING_CLOCK,
@@ -658,7 +662,7 @@ def test_streaming_needs_the_wall_clock(streaming_gemini):
 
 
 @pytest.mark.parametrize("tokens_per_frame", ["64", "unlimited"], ids=["token", "pause"])
-def test_streaming_needs_the_wall_clock_plan(streaming_gemini, tmp_path, tokens_per_frame):
+def test_streaming_needs_the_wall_clock_plan(tmp_path, tokens_per_frame):
     fails(
         plan(tmp_path, "models: [gemini-live]\nruntime: {clock_mode: token, tokens_per_frame: "
                        f"{tokens_per_frame}, interaction_mode: streaming}}\n"),
@@ -666,7 +670,7 @@ def test_streaming_needs_the_wall_clock_plan(streaming_gemini, tmp_path, tokens_
     )
 
 
-def test_streaming_needs_the_wall_clock_trial(streaming_gemini, capsys):
+def test_streaming_needs_the_wall_clock_trial(capsys):
     from realtime_framework.evaluation._trial import main
 
     usage_error(
@@ -677,7 +681,7 @@ def test_streaming_needs_the_wall_clock_trial(streaming_gemini, capsys):
     )
 
 
-def test_streaming_frame_rate_cap(streaming_gemini):
+def test_streaming_frame_rate_cap():
     """The run plans and the Harbor trial worker apply the cap to a streaming run too; on a turn-
     based run only the runner does (check_fps)."""
     cap = "gemini_live supports at most 1 fps; requested 2"
@@ -693,7 +697,7 @@ def test_streaming_frame_rate_cap(streaming_gemini):
     episode(preset("gemini-live"), interaction_mode="streaming")
 
 
-def test_streaming_frame_rate_cap_plan(streaming_gemini, tmp_path):
+def test_streaming_frame_rate_cap_plan(tmp_path):
     """The plan's model-input rate defaults to its environment rate."""
     fails(
         plan(tmp_path, "models: [gemini-live]\nruntime: {clock_mode: wall, fps: 2, "
@@ -717,7 +721,7 @@ STREAMING_CAP = "gemini_live supports at most 1 fps; requested 2"
     ],
     ids=["not-live", "pause-clock", "frame-rate-cap"],
 )
-def test_streaming_rules_trial(streaming_gemini, capsys, argv, message):
+def test_streaming_rules_trial(capsys, argv, message):
     from realtime_framework.evaluation._trial import main
 
     usage_error(
@@ -742,7 +746,7 @@ def test_streaming_rules_trial(streaming_gemini, capsys, argv, message):
     ],
     ids=["not-live", "token-clock", "pause-clock", "default-clock", "frame-rate-cap"],
 )
-def test_streaming_rules_identity(streaming_gemini, argv, message):
+def test_streaming_rules_identity(argv, message):
     from realtime_framework.evaluation.config import identity_main
 
     fails(
@@ -761,7 +765,9 @@ def test_streaming_rules_identity(streaming_gemini, argv, message):
     ],
     ids=["undeclared", "token-clock", "pause-clock"],
 )
-def test_streaming_rules_run_config(streaming_gemini, key, clock_mode, tokens_per_frame, message):
+def test_streaming_rules_run_config(monkeypatch, key, clock_mode, tokens_per_frame, message):
+    if key == "gpt-realtime-2":
+        undeclared(monkeypatch, "openai_realtime")
     fails(
         lambda: effective_run_config(
             model_config=preset(key), fps=1.0, max_minutes=5.0, protocol="wall-clock",
@@ -772,7 +778,8 @@ def test_streaming_rules_run_config(streaming_gemini, key, clock_mode, tokens_pe
     )
 
 
-def test_streaming_undeclared_plan(tmp_path):
+def test_streaming_undeclared_plan(monkeypatch, tmp_path):
+    undeclared(monkeypatch, "gemini_live")
     fails(
         plan(tmp_path, "models: [gemini-live]\nruntime: {clock_mode: wall, "
                        "interaction_mode: streaming}\n"),
@@ -969,7 +976,10 @@ def test_declared_methods_exist():
         assert capabilities.request_size_estimation == callable(
             getattr(driver, "request_context_status", None)
         ), api
-        assert capabilities.interaction_modes == {"turn_based"}
+        live = api in {"openai_realtime", "gemini_live"}
+        assert capabilities.interaction_modes == (
+            {"turn_based", "streaming"} if live else {"turn_based"}
+        ), api
 
 
 def test_context_status_needs_its_declaration():
