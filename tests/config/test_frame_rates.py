@@ -298,6 +298,105 @@ def test_harbor_verify_compares_the_model_input_rate():
         verify(report, task, request)
 
 
+def test_the_identity_a_local_report_expects_has_both_rates(tmp_path):
+    """runner.main() with --report-root records the identity its report expects before the run
+    (reporting.prepare_episode_report), from the arguments main() parsed."""
+    import argparse
+
+    from realtime_framework.evaluation.reporting import prepare_episode_report
+
+    args = argparse.Namespace(
+        model=GEMINI, task=WEB, fps=2.0, model_input_fps=1.0, interaction_mode="turn_based",
+        reasoning_effort=catalog.get(GEMINI).defaults["reasoning_effort"], max_minutes=5.0,
+        mode="default", clock="wall", protocol="wall-clock", seed=42,
+        tokens_per_frame="unlimited", think_budget_s=None, per_move_cap_s=None,
+        results_dir=str(tmp_path),
+    )  # fmt: skip
+    prepare_episode_report(args)
+    (run,) = json.loads((tmp_path / "summary.json").read_text())["runs"]
+    assert (run["fps"], run["model_input_fps"]) == (2.0, 1.0)
+
+
+def test_a_run_summary_check_compares_the_model_input_rate(tmp_path):
+    """reporting.summary_ok, as tests/config/test_interaction_mode.py checks the mode."""
+    from realtime_framework.evaluation.reporting import summary_ok
+
+    path = tmp_path / "run_summary.json"
+    path.write_text(json.dumps({"stop_reason": "terminal", "fps": 2.0, "model_input_fps": 1.0}))
+    assert summary_ok(path, expected_fps=2.0, expected_model_input_fps=1.0)
+    assert not summary_ok(path, expected_fps=2.0, expected_model_input_fps=2.0)
+
+
+def test_a_local_report_checks_each_run_for_both_rates(tmp_path, monkeypatch):
+    """reporting.report hands each run summary's check the two rates the run expected."""
+    from realtime_framework.evaluation import reporting
+
+    checks = []
+    monkeypatch.setattr(
+        reporting, "summary_ok", lambda path, **expected: checks.append(expected) or False
+    )
+    cell = tmp_path / GEMINI
+    (cell / WEB).mkdir(parents=True)
+    expected = {"task_id": WEB, "fps": 2.0, "model_input_fps": 1.0}
+    (cell / "summary.json").write_text(json.dumps({"runs": [expected]}))
+    (cell / WEB / "run_summary.json").write_text(json.dumps({"stop_reason": "terminal"}))
+    (group,) = reporting.report(tmp_path)["groups"]
+    assert (group["fps"], group["model_input_fps"]) == (2.0, 1.0)
+    (check,) = checks
+    assert (check["expected_fps"], check["expected_model_input_fps"]) == (2.0, 1.0)
+
+
+def test_a_reevaluation_compares_the_model_input_rate(tmp_path, monkeypatch):
+    """reevaluate --replace-summary refuses a run summary whose identity is not the saved
+    artifact's (reporting.reevaluate_main); the re-evaluation itself is stubbed."""
+    import sys
+
+    from realtime_framework.evaluation import reporting
+
+    identity = {"suite_id": "public", "task_id": WEB, "fps": 2.0, "model_input_fps": 1.0}
+    evaluation = {"resolved": True, "evaluation_version": 1}
+    monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (evaluation, identity))
+    monkeypatch.setattr(sys, "argv", ["reevaluate", str(tmp_path), "--replace-summary"])
+    summary = tmp_path / "run_summary.json"
+    summary.write_text(json.dumps({**identity, "model_input_fps": 2.0, "stop_reason": "terminal"}))
+    with pytest.raises(RuntimeError, match="identity mismatch for model_input_fps"):
+        reporting.reevaluate_main()
+    summary.write_text(json.dumps({**identity, "stop_reason": "terminal"}))
+    reporting.reevaluate_main()
+    assert json.loads(summary.read_text())["solved"] is True
+
+
+def test_identity_main_hashes_the_model_input_rate(capsys):
+    """identity_main prints the runtime-config hash runner.main() records for the same rates;
+    --model-input-fps defaults to --fps."""
+    from realtime_framework.evaluation.config import (
+        config_fingerprint,
+        effective_run_config,
+        identity_main,
+    )
+
+    def printed(*rates):
+        argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--protocol", "wall-clock"]
+        assert identity_main([*argv, "--max-minutes", "5", "--seed", "42", *rates]) == 0
+        return capsys.readouterr().out.strip()
+
+    split = config_fingerprint(
+        effective_run_config(
+            model_config=gemini_config(1.0),
+            fps=2.0,
+            max_minutes=5.0,
+            protocol="wall-clock",
+            think_budget_s=None,
+            per_move_cap_s=None,
+            mode="default",
+            clock_mode="wall",
+            seed=42,
+        )
+    )
+    assert printed("--fps", "2", "--model-input-fps", "1") == split
+    assert printed("--fps", "2") != split
+
+
 def _job(path, request):
     trial = path / f"{WEB}__trial" / "agent"
     trial.mkdir(parents=True)
