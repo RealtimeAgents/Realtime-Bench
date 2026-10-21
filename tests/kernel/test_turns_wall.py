@@ -503,6 +503,35 @@ def test_an_end_found_by_the_check_after_execution_keeps_the_action_applied():
     _assert_nothing_after_the_end(sim)
 
 
+def test_an_action_back_just_before_the_deadline_lands_only_after_the_shell_accepted_it():
+    # T = 3. The click is back at 2.995 s and accepting it takes 10 ms. The action lands at the
+    # reading after the accept, 3.005 s, past the deadline, so it is not applied: nothing lands
+    # after the deadline (phase2.md, 时间和结束判定; runner.py _land_action reads the clock right
+    # before it executes).
+    world = World(replies=[Reply(2.995, CLICK), Reply(9.0)], accept_s=0.01)
+    sim = _episode(_wall(3.0), world)
+    assert sim.accepted == [1]
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == ["not_applied_time_limit"]
+    assert _ended(sim)[:3] == ("time_limit", "deadline", 3.0)
+
+
+def test_the_check_before_landing_is_asked_once_the_shell_accepted_the_result():
+    # At 60 fps the task ends at 3 s. The click is back at 2.995 s, in frame 179, read at
+    # 179/60 s, and accepting it takes 10 ms. The check before landing is asked at the reading
+    # after the accept, in frame 180, and dates the end there: the click is not applied.
+    world = World(
+        replies=[Reply(2.995, CLICK), Reply(9.0)],
+        accept_s=0.01,
+        ends_at=3.0,
+        end_reason="target_reached",
+    )
+    sim = _episode(_wall(10.0, env_fps=60.0, input_fps=60.0), world)
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == ["not_applied_terminal"]
+    assert _ended(sim)[:3] == ("target_reached", "environment", pytest.approx(3.005))
+
+
 def test_an_action_whose_check_after_it_answers_past_the_deadline_is_not_paced():
     # T = 3. The click back at 2.5 s executes until 2.8 s; the check after it, asked then, answers
     # "not over" at 3.3 s and is handled first, filed at its asking. Tick 3 is the horizon, so

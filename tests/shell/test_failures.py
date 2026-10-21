@@ -55,10 +55,10 @@ def _finalized(episode, at: float) -> None:
 
 
 def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes():
-    """The agent's accept raises at 0.5 s. The result lands in frame 0, read already, so the
-    execution follows the accept in the same batch of commands and runs: the decision is settled
-    as applied with the episode over and reported, the snapshot is frozen, and the whole
-    traceback is the summary's error."""
+    """The agent's accept raises at 0.5 s. On the wall clock the action lands only at the reading
+    after the accept, and the run_exception is there first, at that same reading: the decision is
+    settled as invalid_run and reported with nothing executed, the snapshot is frozen, and the
+    whole traceback is the summary's error."""
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], agent_type=_RaisingAccept)
     _finalized(episode, 0.5)
     assert episode.invalid["category"] == "runner"
@@ -68,8 +68,8 @@ def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes()
     assert "accept broke" in episode.env._loop_error
     raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
     assert len(raised) == 1
-    assert episode.statuses() == ["applied"]
-    assert episode.agent.outcomes[0].terminal_after_action is True
+    assert episode.statuses() == ["invalid_run"]
+    assert "execute" not in [call for call, _, _ in episode.env.calls]
     assert episode.env.lifecycle[0]["model_latency_s"] == 0.5  # the result it accepted
 
 

@@ -85,6 +85,37 @@ class _SlowTrajectory(Agent):
         self.clock.sleep(0.01)
 
 
+class _SlowAccept(Agent):
+    """Accepting a result takes 10 ms."""
+
+    def accept(self, generation: int) -> None:
+        super().accept(generation)
+        self.clock.sleep(0.01)
+
+
+def test_an_action_accepted_across_the_deadline_does_not_land():
+    """The result comes back 5 ms before the 3 s deadline and accepting it ends 5 ms after it.
+    The action lands at the reading after the accept, past the deadline, so it is not executed:
+    nothing lands after the deadline (phase2.md, 时间和结束判定)."""
+    episode = run("wall", 3.0, [Reply(2.995)], agent_type=_SlowAccept)
+    assert episode.agent.calls[0] == ("accept", 1)
+    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+    assert episode.statuses() == ["not_applied_time_limit"]
+    assert episode.env._termination["stop_reason"] == "time_limit"
+
+
+def test_the_check_before_landing_is_asked_once_the_result_is_accepted():
+    """At 60 fps the task ends at 3 s; the result comes back at 2.995 s, in a frame read at
+    179/60 s, and accepting it takes 10 ms. The check before landing is asked after the accept
+    and dates the end at its asking, 3.005 s: the action is not executed."""
+    world = World(ends_at=3.0, end_reason="won")
+    episode = run("wall", 10.0, [Reply(2.995)], world, fps=60.0, agent_type=_SlowAccept)
+    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+    assert episode.statuses() == ["not_applied_terminal"]
+    assert episode.env._termination["stop_reason"] == "won"
+    assert episode.env._termination["end_s"] == pytest.approx(3.005)
+
+
 def test_a_result_settled_across_the_deadline_does_not_land():
     """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after it;
     the kernel gets it at the reading taken after the settling. The deadline came first, and

@@ -236,14 +236,17 @@ class _SlowAccept(Agent):
 
 
 def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_accepting_it_took_time():
-    """The kernel lands the result at 0.5 s and the agent takes 0.125 s to accept it before the
-    landing is recorded: the record's resolution time is still the landing's reading, which
-    its frame age counts from."""
+    """The result is back at 0.5 s and the agent takes 0.125 s to accept it. The action lands
+    at the reading after the accept, 0.625 s (kernel/turns.py _accept), and is executed then;
+    the record's resolution time is that landing's reading, which its frame age counts from.
+    The action time stays where the result was handled."""
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=_SlowAccept)
+    assert [time for call, time, _ in episode.env.calls if call == "execute"] == [0.625, 1.625]
+    assert [o.action_clock_position for o in episode.agent.outcomes] == [0.5, 1.5]
     for record in episode.env.lifecycle:
-        assert record["frame_age_at_action_s"] == 0.5
+        assert record["frame_age_at_action_s"] == 0.625
         age = record["action_resolved_unix_s"] - record["observation_timestamp"]
-        assert round(age, 6) == 0.5
+        assert round(age, 6) == 0.625
 
 
 def test_a_token_action_is_timed_when_the_clock_got_to_it():
