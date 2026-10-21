@@ -1742,7 +1742,7 @@ class DefaultHarness(VisionAgentBase):
                 "transport_retry_usage": retry_usages,
                 "transport_retry_usage_status": _retry_usage_status(retry_usages),
             }
-            return {
+            result = {
                 "action": None,
                 "thinking": "",
                 "raw": "",
@@ -1754,7 +1754,11 @@ class DefaultHarness(VisionAgentBase):
                 "invalid_reason": failure_reason,
                 "invalid_detail": failure_detail,
                 "_trajectory_entry": log_entry,
-            }, False
+            }
+            if isinstance(final_error, RequestExceedsContext):
+                # Its token record (evaluation/clock.py token_record) says why it has no usage.
+                result["provider_usage_missing_reason"] = "request_not_sent"
+            return result, False
 
         output = runtime_result.output
         action_observation = prepared[-1]
