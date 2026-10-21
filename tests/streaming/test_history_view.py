@@ -239,7 +239,7 @@ def test_under_frame_prefix_the_feedback_since_the_frame_before_opens_the_next_f
         ("f1.frame", "in_order", None),
         ("d0.output", "in_order", None),
         ("d1.output", "in_order", None),
-        ("f2.prefix", "frame_prefix", "f2.frame"),
+        ("d0.a1.prefix", "frame_prefix", "f2.frame"),
         ("f2.frame", "in_order", None),
     ]
     prefix = view.items[4]
@@ -247,15 +247,27 @@ def test_under_frame_prefix_the_feedback_since_the_frame_before_opens_the_next_f
     assert prefix.intent == Intent("input", "frame_prefix")
 
 
-def test_under_frame_prefix_feedback_after_the_newest_frame_waits_for_the_next_one():
+def test_under_frame_prefix_the_feedback_since_the_newest_frame_waits_at_the_end():
+    """The waiting prefix keeps its id while it gains lines and once the next frame takes it."""
     history = History().play("FRB")
-    assert _ids(_view(history.blocks, policy=PREFIX)) == [
-        "system",
-        "f1.frame",
-        "d0.output",
+    waiting = _view(history.blocks, policy=PREFIX)
+    assert _layout(waiting)[1:] == [
+        ("f1.frame", "in_order", None),
+        ("d0.output", "in_order", None),
+        ("d0.a1.prefix", "frame_prefix", None),
     ]
+    assert waiting.items[-1].block.text == "applied 0"
+    history.play("RB")
+    grown = _view(history.blocks, policy=PREFIX).items[-1].block
+    assert (grown.id, grown.attached_to) == ("d0.a1.prefix", None)
+    assert grown.text == "applied 0\napplied 1"
     history.play("F")
-    assert "f2.prefix" in _ids(_view(history.blocks, policy=PREFIX))
+    taken = _view(history.blocks, policy=PREFIX)
+    assert _layout(taken)[-2:] == [
+        ("d0.a1.prefix", "frame_prefix", "f2.frame"),
+        ("f2.frame", "in_order", None),
+    ]
+    assert taken.items[-2].block.text == "applied 0\napplied 1"
 
 
 def test_the_prefix_block_is_the_turn_based_one():
@@ -286,14 +298,17 @@ def test_under_frame_prefix_a_folded_frame_loses_its_prefix_as_a_turn_based_fold
 
 
 def test_both_session_cores_read_the_prefix_with_its_frame():
-    view = _view(History().play("FRBF").blocks, policy=PREFIX)
+    """OpenAI Realtime puts a prefix in front of its frame's user item and leaves the one
+    waiting for the next frame alone; Gemini Live's turn-based reader finds each by frame."""
+    view = _view(History().play("FRBFRB").blocks, policy=PREFIX)
     _, frames = history_frames(view.items)
     assert [(frame.id, frame.prefix) for frame in frames] == [
         ("f1.frame", ""),
         ("f2.frame", "applied 0"),
     ]
     assert {key: block.id for key, block in _frame_prefixes(view).items()} == {
-        "f2.frame": "f2.prefix"
+        "f2.frame": "d0.a1.prefix",
+        None: "d1.a1.prefix",
     }
 
 
@@ -313,8 +328,9 @@ def _script(rng: random.Random, length: int) -> str:
     return "".join(steps)
 
 
-def _prefixes(accepted) -> dict[str, str]:
-    """Each frame's prefix text by its definition: the feedback accepted since the frame before."""
+def _prefixes(accepted) -> dict[str | None, str]:
+    """Each frame's prefix text by its definition: the feedback accepted since the frame before;
+    under None, the feedback since the newest frame."""
     prefixes, since = {}, []
     for block in accepted:
         if block.kind == "execution_feedback":
@@ -323,6 +339,8 @@ def _prefixes(accepted) -> dict[str, str]:
             if since:
                 prefixes[block.id] = "\n".join(since)
             since = []
+    if since:
+        prefixes[None] = "\n".join(since)
     return prefixes
 
 
@@ -348,7 +366,7 @@ def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed, poli
             ]
         else:
             # Frames and outputs keep their order; each prefix comes just before its frame,
-            # which has not folded.
+            # which has not folded, and the one waiting for the next frame comes last.
             prefixes = {b.attached_to: b.text for b in blocks if b.kind == "execution_feedback"}
             assert [b.id for b in blocks if b.kind != "execution_feedback"] == [
                 b.id for b in others
@@ -356,16 +374,22 @@ def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed, poli
             for before, after in pairwise(blocks):
                 if before.kind == "execution_feedback":
                     assert (after.id, after.folded) == (before.attached_to, False)
-            unfolded = {frame.id for frame in frames if not frame.folded}
+            if blocks and blocks[-1].kind == "execution_feedback":
+                assert blocks[-1].attached_to is None
+            kept = {frame.id for frame in frames if not frame.folded} | {None}
             expected = _prefixes(accepted)
-            assert prefixes == {key: expected[key] for key in expected if key in unfolded}
-        # A block changes once, when its frame leaves the newest ones; with it goes its prefix.
+            assert prefixes == {key: expected[key] for key in expected if key in kept}
+        # A block changes once, when its frame leaves the newest ones, and with it goes its
+        # prefix; a prefix waiting for the next frame only gains lines until that frame takes it.
         retired = {frame.id for frame in frames if frame.folded}
         now = {block.id: block for block in blocks}
         for block_id, before in previous.items():
             after = now.get(block_id)
             if after is None:
                 assert before.kind == "execution_feedback" and before.attached_to in retired
+            elif before.kind == "execution_feedback" and before.attached_to is None:
+                assert after.text.startswith(before.text)
+                assert after.attached_to is None or after.attached_to not in previous
             else:
                 assert after == before or (not before.folded and block_id in retired)
         previous = now
