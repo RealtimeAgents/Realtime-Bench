@@ -34,6 +34,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
 )
+from realtime_framework.entity.records import UNTRACED
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
@@ -122,6 +123,7 @@ class Rig:
             **live.GeminiLiveDriver.model_defaults.get(model, {}),
         )
         self.driver = live.GeminiLiveDriver(config, clock=RecordingClock(self.log))
+        self.driver.bind_trace(UNTRACED)
         self.live = FakeLive(scripts, self.log)
         self.driver.client = SimpleNamespace(aio=SimpleNamespace(live=self.live))
         answer = AnswerRequirements(

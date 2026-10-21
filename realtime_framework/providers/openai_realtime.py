@@ -355,6 +355,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             )
             if delay is None:
                 raise TransportFailureError(failure, exc, attempt - 1) from exc
+            # RequestRetry waits the delay on self.clock once this returns.
+            self._record_wait("connect_backoff", delay)
 
         # The session the connect resumes: the newest retained frame, or none at all.
         frames = [] if request.history is None else history_frames(request.history.items)[1]
