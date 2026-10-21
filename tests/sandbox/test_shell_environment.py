@@ -361,12 +361,12 @@ class _SlowFocus:
         pytest.param(0.01, 0.01, 0.01, id="a-hold-shorter-than-a-tap-keeps-its-length"),
     ],
 )
-def test_a_wall_hold_lasts_to_the_kernel_s_release_time_and_at_least_a_tap(
+def test_a_wall_hold_lasts_to_the_kernel_s_release_time_or_a_short_while_more(
     duration, release_at, held_s
 ):
-    """The press waits for the page focus. A release time that has passed by then, or comes less
-    than a tap later, still leaves the key down as long as a tap (TAP_HOLD_S), or the hold if it
-    is shorter; the execution result says how long, next to the duration asked for."""
+    """The press waits for the page focus. A release time that has passed by then, or comes
+    sooner, still leaves the key down min(duration, TAP_HOLD_S) more, 1/60 s or the whole hold if
+    it is shorter; the execution result says how long, next to the duration asked for."""
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
     with clock.participant():
