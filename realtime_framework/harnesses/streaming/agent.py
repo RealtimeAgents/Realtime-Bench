@@ -15,7 +15,9 @@ A reply starts on the view. Each function call is parsed as its message is read,
 it names, and posted to the kernel with the time its message came off the wire, in semantic
 seconds from the episode's origin; one whose frame cannot be found arrives refused. One that is no
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
-the reply ended. An accepted reply's output joins the view; a discarded one adds nothing.
+the reply ended. An accepted reply's output joins the view; a discarded one adds nothing. Each
+outcome the kernel commits joins it as its execution feedback (feedback.py), where the policy
+places it.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ from realtime_framework.entity.request import (
     CanonicalRequest,
     ContentBlock,
 )
+from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import ActionArrived
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
@@ -58,7 +61,9 @@ from realtime_framework.harnesses.default.harness import (
     parse_grounded_action,
 )
 from realtime_framework.harnesses.default.request import system_block
+from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
 from realtime_framework.harnesses.streaming.history import (
+    feedback_block,
     frame_block,
     history_view,
     output_block,
@@ -112,6 +117,8 @@ class NativeStreamingAgent(VisionAgentBase):
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
+        # What each action asked for (action_text), by its outcome's (decision, call id).
+        self._requested: dict[tuple[int, str], str] = {}
         super().__init__(config, log_dir, trace=trace)
 
     def _setup_backend(self):
@@ -322,6 +329,10 @@ class NativeStreamingAgent(VisionAgentBase):
                 reference["age_s"],
                 reference["age_frames"],
             )
+        with self._lock:
+            self._requested[(reply.decision, call_id)] = (
+                "none" if action is None else action_text(action)
+            )
         self._post(arrival)
 
     def accept(self, generation: int) -> None:
@@ -340,6 +351,26 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             reply = self._replies.pop(generation)
         self._log_reply(reply, "reply_discarded")
+
+    def commit(self, outcome: Outcome) -> None:
+        """Commit: the outcome's feedback joins the view, on the action its call handed over, or
+        on the reply when it came to no action."""
+        with self._lock:
+            requested = self._requested.pop((outcome.decision, outcome.call_id), "none")
+            feedback = execution_feedback(outcome, requested)
+            self._blocks.append(
+                feedback_block(outcome.decision, outcome.call_id, feedback, self.clock.time_ns())
+            )
+        self.action_history.append(
+            {
+                "decision": outcome.decision,
+                "call_id": outcome.call_id,
+                "requested": requested,
+                "executed": action_text(outcome.action) if outcome.action else "none",
+                "result": outcome.status,
+                "detail": outcome.detail,
+            }
+        )
 
     def _log_reply(self, reply: _Reply, kind: str) -> None:
         self._log_entry(
