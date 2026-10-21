@@ -31,6 +31,11 @@ class FrameRecord:
     # "prepared" until its request or session push went out, then "sent".
     send_status: str = "prepared"
     sent_unix_s: float | None = None
+    # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
+    # confirmation arrived (OpenAI Realtime's conversation.item.created); "unknown" where the
+    # protocol confirms no frame (Gemini Live). None until the driver says which.
+    ack_status: str | None = None
+    acked_unix_s: float | None = None
 
 
 class FrameTable:
@@ -56,6 +61,16 @@ class FrameTable:
             record.send_status = "sent"
             record.sent_unix_s = sent_unix_s
             self._newest_sent = frame
+
+    def record_acked(self, frame: int, acked_unix_s: float) -> None:
+        with self._lock:
+            record = self._frames[frame]
+            record.ack_status = "acked"
+            record.acked_unix_s = acked_unix_s
+
+    def record_ack_unknown(self, frame: int) -> None:
+        with self._lock:
+            self._frames[frame].ack_status = "unknown"
 
     def latest(self) -> FrameRecord | None:
         with self._lock:
