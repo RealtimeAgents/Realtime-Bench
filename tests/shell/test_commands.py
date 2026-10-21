@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import gc
 
+import pytest
+
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import DecisionBudget
 
@@ -322,12 +324,15 @@ def test_a_result_back_while_the_shell_is_busy_is_settled_only_if_the_kernel_tak
 def test_a_result_back_before_the_cap_while_the_shell_is_busy_is_filed_after_it():
     """Decision 47: the end check asked at 1 s takes 1 s, and the reply comes back at 1.4 s,
     before the 1.5 s cap. It is filed at the reading after the check, and the cap, due by then,
-    goes first: the move is skipped and its records are those of the call given up on. (The
-    runner, which checked nothing during a generation, applied it.)"""
+    goes first: the move is skipped. The call did come back in time, so its records are its
+    own, as when the shell was idle. (The runner, which checked nothing during a generation,
+    applied it.)"""
     world = World(slow_checks=[(1.0, 1.5, 1.0)])
     episode = run("wall", 3.0, [Reply(1.4), Reply(0.5)], world, per_move_cap_s=1.5)
     assert episode.statuses() == ["skipped_timeout", "applied"]
-    assert _decisions(episode.trace.payloads("InferenceCompleted")) == [(0, True), (1, False)]
+    assert _decisions(episode.trace.payloads("InferenceCompleted")) == [(0, False), (1, False)]
+    assert episode.env.lifecycle[0]["model_latency_s"] == 1.4
+    assert ("discard", 1) in episode.agent.calls
 
 
 def test_a_move_over_the_cap_took_the_cap_though_the_shell_saw_it_late():
@@ -354,18 +359,28 @@ def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
     assert "[think] deliberation budget exhausted: 2.0s >= 1.5s -> forfeit" in spent.logs
 
 
-def test_a_result_the_deadline_beat_while_the_shell_was_busy_is_never_settled():
-    """The end check asked at 2 s takes 1.5 s; the reply comes back at 2.9 s, during it, and is
-    filed when the check is over (decision 47). The 3 s deadline has given the generation up by
-    then and ended the episode: the decision goes unreported and the result is never settled;
-    the records are those of the call the deadline gave up on (decision 48)."""
+@pytest.mark.parametrize(
+    ("seconds", "row", "completed"),
+    [(2.9, (0, None), (0, False, 2.9)), (3.2, (0, True), (0, True, 3.0))],
+    ids=["before-the-deadline", "after-it"],
+)
+def test_a_result_back_while_the_shell_was_busy_at_the_deadline_is_recorded_as_it_came(
+    seconds, row, completed
+):
+    """The end check asked at 2 s takes 1.5 s, and the reply comes back during it; when the
+    check is over, the 3 s deadline goes first (decision 47), ends the episode and the result is
+    discarded. One back before the deadline is settled and its records are its own, as when the
+    shell was idle; one back after it is never settled, and the records are those of the call
+    the deadline gave up on (decision 48). (That one reaches the kernel only after the end.)"""
     world = World(slow_checks=[(2.0, 2.5, 1.5)])
-    episode = run("wall", 3.0, [Reply(2.9)], world)
+    episode = run("wall", 3.0, [Reply(seconds)], world)
     assert episode.statuses() == []
     rows = episode.agent.trajectory
-    assert [(row["decision"], row.get("timed_out")) for row in rows] == [(0, True)]
-    completed = episode.trace.payloads("InferenceCompleted")
-    assert [(p["decision"], p["timed_out"], p["latency_s"]) for p in completed] == [(0, True, 3.0)]
+    assert [(r["decision"], r.get("timed_out")) for r in rows] == [row]
+    payloads = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["timed_out"], p["latency_s"]) for p in payloads] == [completed]
+    if seconds < 3.0:
+        assert episode.agent.calls == [("discard", 1)]
     assert episode.env._termination["stop_reason"] == "time_limit"
 
 
