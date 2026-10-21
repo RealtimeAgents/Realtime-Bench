@@ -589,6 +589,9 @@ def _while_handling(error: Exception, handled: Exception) -> Exception:
         (OSError(errno.EHOSTDOWN, "host down"), TRANSIENT),
         (OSError(errno.ENETRESET, "network reset"), TRANSIENT),
         (OSError(errno.EADDRNOTAVAIL, "address not available"), FATAL),
+        (OSError(errno.ENOBUFS, "no buffer space"), FATAL),
+        (OSError(errno.EINVAL, "invalid argument"), FATAL),
+        (OSError("getaddrinfo returns an empty list"), FATAL),
         (PermissionError("permission"), FATAL),
         (FileNotFoundError("missing"), FATAL),
         (_while_handling(ValueError("bug"), FileNotFoundError("missing")), FATAL),
@@ -603,9 +606,9 @@ def _while_handling(error: Exception, handled: Exception) -> Exception:
 def test_only_a_network_failure_below_http_is_transient(error, kind):
     """classify_transport_error takes a connection that failed below HTTP as transient: refused
     or reset (ConnectionError), a network or host that is down or unreachable, a failed name
-    lookup, TLS, a timeout, and one that ended before the upgrade response (EOFError). A local
-    OSError, and an error raised while handling one, is fatal, as it was before any OSError was
-    taken as transient."""
+    lookup, TLS, a timeout, and one that ended before the upgrade response (EOFError). Every
+    other OSError is fatal, EADDRNOTAVAIL, ENOBUFS and one without an errno too, though they can
+    pass; so is an error raised while handling one."""
     assert OpenAIRealtimeDriver.classify_transport_error(error).kind == kind
 
 

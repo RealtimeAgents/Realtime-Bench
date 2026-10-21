@@ -283,8 +283,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         naming a network or host that is down or unreachable, a failed name lookup
         (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends before the
         upgrade response, with websockets' InvalidMessage caused by EOFError; these are
-        transient. Another OSError is local (a permission, a missing file, an address the host
-        lacks) and fatal.
+        transient. Every other OSError is fatal: a local fault (a permission, a missing file, an
+        invalid argument), and with them EADDRNOTAVAIL, ENOBUFS and an OSError without an errno
+        (a name lookup that returned no address), which can pass, as ephemeral ports or buffers
+        run out, but are not told apart from one.
         """
         transient = (
             ConnectionClosed,
