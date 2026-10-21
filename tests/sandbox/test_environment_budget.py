@@ -1,5 +1,7 @@
-"""Each environment operation fails once it runs past its overall budget, and the run is invalid;
-only the key release at the cleanup after the outcome is latched leaves the run as it was.
+"""Each environment operation fails once it runs past its overall budget, and as a rule the run is
+invalid. Not so for a refusal of the model's action that comes after the budget, which is still a
+refusal; for a state read the kernel counts, which is invalid at the third failure in a row; and
+for the key release at the cleanup after the outcome is latched, which leaves the run as it was.
 
 The real run_stream drives the real GuestEnvironment (sandbox/actions.py). Its GuestClient talks to
 FakeGuest; a real catalog game (realtime_tasks/game/runtime.py) reads its state, advances the token
