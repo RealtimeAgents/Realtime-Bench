@@ -294,3 +294,66 @@ def test_an_operation_that_raises_a_base_exception_is_answered_too():
         inbox.wait_for(2)
     lanes.close()
     assert event.decision == 0 and "RetryCancelled: abandoned" in event.error
+
+
+def test_a_lane_is_free_by_the_time_its_answer_is_posted():
+    """The kernel may send the lane's next command as soon as it gets the answer."""
+    clock, posted = FakeClock(), []
+    lane = Lane(
+        "test", lambda answer: (posted.append(answer), answer == 1 and lane.submit(two)), clock
+    )
+
+    def two():
+        return 2
+
+    with clock.participant():
+        lane.submit(lambda: 1)
+        clock.sleep(1.0)
+    lane.close()
+    assert posted == [1, 2]
+
+
+def test_an_action_never_reports_what_the_one_before_left():
+    """The turn-based shell clears the execution record before each action (shell.py _execute);
+    the token clock's key path sets a result but no coordinate trace (sandbox/actions.py)."""
+    clock, env, inbox, lanes = _lanes()
+    executed: list[Executed] = []
+    plain = env.execute
+
+    def without_a_trace(action, *, release_at=None):
+        env._operate("execute")
+        return "applied"
+
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), executed.append)
+        inbox.wait_for(1)
+        env.execute = without_a_trace
+        lanes.execute(Execute(1, CLICK), executed.append)
+        events = [event for _, event in inbox.wait_for(2)]
+    lanes.close()
+    env.execute = plain
+    assert [record.coordinate_trace for record in executed] == [{"x": 1}, None]
+    assert events[1] == ActionExecuted(1, result=None)
+
+
+def test_an_action_starts_when_it_holds_the_gate():
+    clock, _, inbox, lanes = _lanes()
+    executed: list[Executed] = []
+    with clock.participant():
+        lanes.check_end(CheckEnd(1))
+        clock.sleep(0.125)
+        lanes.execute(Execute(0, CLICK), executed.append)
+        inbox.wait_for(2)
+    lanes.close()
+    assert executed == [Executed(0, {"x": 1}, 0.5, 2.5)]
+
+
+def test_an_invalid_run_latched_before_the_lanes_began_is_not_theirs_to_post():
+    """As the turn-based shell, which posts only what an operation latched (shell.py _env)."""
+    clock, env, inbox, lanes = _lanes()
+    env._invalid_run = INVALID
+    with clock.participant():
+        lanes.capture(_frame)
+        inbox.wait_for(1)
+    lanes.close()
+    assert [type(event) for _, event in inbox.events] == [FrameCaptured]
