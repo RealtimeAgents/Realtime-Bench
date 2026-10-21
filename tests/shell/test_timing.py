@@ -14,7 +14,7 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation import shell
 from realtime_framework.evaluation.kernel.core import Kernel
 
-from .world import Reply, World, run
+from .world import Agent, Reply, World, run
 
 
 @pytest.fixture
@@ -63,6 +63,25 @@ def test_a_result_just_before_the_deadline_is_handled_before_it(seconds, statuse
         assert episode.agent.calls[0] == ("abort", 1)
     assert episode.env._termination["stop_reason"] == "time_limit"
     assert episode.env._termination["end_s"] == 3.0
+
+
+class _SlowTrajectory(Agent):
+    """Writing a trajectory row takes 10 ms."""
+
+    def finalize_decision_audit(self, result: dict) -> None:
+        super().finalize_decision_audit(result)
+        self.clock.sleep(0.01)
+
+
+def test_a_result_is_filed_when_it_came_back_not_when_it_was_settled():
+    """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after. It is
+    handled as of its return, so its action is proposed; the deadline then comes before the
+    check right before execution and the action is not applied, as the runner's check at
+    landing decides (runner.py _land_action)."""
+    episode = run("wall", 3.0, [Reply(2.995)], agent_type=_SlowTrajectory)
+    assert episode.statuses() == ["not_applied_time_limit"]
+    assert [p["decision"] for p in episode.trace.payloads("ActionProposed")] == [0]
+    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
 
 
 def test_the_token_watchdog_runs_on_operational_seconds_from_the_environment(monkeypatch, steps):
