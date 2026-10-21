@@ -101,9 +101,10 @@ class ShellEnvironment(Protocol):
     thread. An operation that fails raises, except ``execute()``: it returns ``"failed"`` and
     leaves the error in ``_last_exec_error``, whether the guest refused the action in
     ``_last_rejected_by_guest`` and the execution record in ``_last_execution_result``, which the
-    shell reads as the runner does (runner.py:576-585, 626). The environment may also latch the run
-    invalid itself (``_invalid_run``) with a more precise reason, such as ``clock_advance_failed``
-    from a tap; the shell posts that as Invalidated before the command's answer."""
+    shell reads as the runner does (runner.py ``_land_action``, ``_apply``). The environment may
+    also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
+    ``clock_advance_failed`` from a tap; the shell posts that as Invalidated before the command's
+    answer."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
     d: float  # seconds per environment tick
@@ -240,7 +241,6 @@ class _Decision:
 
     index: int
     observation: Observation | None = None
-    generation: _Generation | None = None
     # Its settled result: the one the kernel accepted, or the call it gave up on at the cap.
     result: dict | None = None
     landed_at: float | None = None  # operational time when its action came to land
@@ -548,7 +548,7 @@ class _Shell:
             self._now[0],
             clock.event(),
         )
-        self._generations[held.generation] = self._decision.generation = held
+        self._generations[held.generation] = held
         clock.start_thread(lambda: self._generate(held), name=f"generation-{held.generation}")
 
     def _generate(self, held: _Generation) -> None:
