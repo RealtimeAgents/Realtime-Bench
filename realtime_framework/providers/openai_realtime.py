@@ -7,6 +7,8 @@ import asyncio as asyncio
 import base64 as base64
 import logging as logging
 import os as os
+import socket
+import ssl
 import threading as threading
 import uuid as uuid
 from copy import copy as copy
@@ -246,15 +248,19 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         only when it has received no output or usage for the failed turn, so rebuilding from
         canonical history cannot duplicate a completed action.
 
-        A connect attempt fails below HTTP with an OSError (a refused or reset connection, a
-        failed name lookup, ssl.SSLError) or, when the connection ends before the upgrade
-        response, with websockets' InvalidMessage caused by EOFError; both are transient.
+        A connect attempt fails below HTTP with a ConnectionError (refused or reset), a failed
+        name lookup (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends
+        before the upgrade response, with websockets' InvalidMessage caused by EOFError; these
+        are transient. Another OSError is local (a permission, a missing file) and fatal.
         """
         transient = (
             ConnectionClosed,
             APIConnectionError,
             APITimeoutError,
-            OSError,
+            ConnectionError,
+            socket.gaierror,
+            ssl.SSLError,
+            TimeoutError,
             EOFError,
         )
         for current in exception_chain(exc):
