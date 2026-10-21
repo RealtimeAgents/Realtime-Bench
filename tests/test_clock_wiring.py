@@ -6,8 +6,9 @@ the runtime with it (harnesses/default/harness.py _setup_backend). A driver pass
 connect retry, its request pacing, its Choice decisions and the hooks that time its HTTP
 responses. Each of these falls back to real time when it is given no clock, so a clock lost on
 the way changes nothing a test on real time can see. Here every agent is built by create_agent on
-the fake clock (tests/fake_clock.py), and each case reads a time that only the agent's clock can
-have produced.
+the fake clock (tests/fake_clock.py). A case that reads a time reads one only the agent's clock
+can have produced; the runtime and what set_up_agent builds read no time a test can see, so they
+are checked for holding the clock itself.
 """
 
 from __future__ import annotations

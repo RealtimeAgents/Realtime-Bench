@@ -152,7 +152,8 @@ def _json_bytes(value) -> bytes:
         else:
             pieces.append(json.dumps(item, ensure_ascii=False).encode("utf-8"))
             if isinstance(item, str) and len(item) >= SPAN_MIN_CHARS:
-                time.sleep(0)  # noqa: TID251 - yields the GIL, waits no time
+                # Yields the GIL; waits no time.
+                time.sleep(0)  # noqa: TID251
 
     encode(value)
     return b"".join(pieces)
