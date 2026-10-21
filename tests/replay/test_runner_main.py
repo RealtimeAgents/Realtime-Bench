@@ -20,7 +20,7 @@ from unittest import mock
 
 import pytest
 
-from realtime_framework.clock import Clocks, SystemClock
+from realtime_framework.clock import Clocks, FrameClock, SystemClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
@@ -150,15 +150,20 @@ DESKTOP = types.SimpleNamespace(
 )
 
 
-def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False, seen=None) -> dict:
-    """Run main() for ``task`` and return its run_summary.json. With ``agent_trace`` the agent
-    gets an AgentTraceSink on the episode trace, as ``agent.sink``, as set_up_agent makes one.
-    ``seen`` gets the episode clocks main() makes and the arguments it calls set_up_agent and
-    run_stream with."""
+def run_main(
+    tmp_path, task, agent, clock, guest, *, agent_trace=False, seen=None, clock_mode="wall"
+) -> dict:
+    """Run main() for ``task`` and return its run_summary.json. ``clock`` is the operational
+    clock; on the wall clock it is world time too, and under the token clock (in pause mode)
+    world time is a FrameClock. With ``agent_trace`` the agent gets an AgentTraceSink on the
+    episode trace, as ``agent.sink``, as set_up_agent makes one. ``seen`` gets the episode clocks
+    main() makes, the keyword arguments it calls set_up_agent with, and the environment and
+    keyword arguments it calls run_stream with."""
     seen = {} if seen is None else seen
 
     def episode_clocks(clock_mode, fps):
-        seen.setdefault("clocks", []).append(Clocks(clock, clock))
+        semantic = FrameClock(fps) if clock_mode == "token" else clock
+        seen.setdefault("clocks", []).append(Clocks(semantic, clock))
         return seen["clocks"][-1]
 
     def set_up_agent(setup, *args, **kwargs):
@@ -175,9 +180,12 @@ def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False, seen=Non
         return real_run_stream(adapter, env, **kwargs)
 
     real_run_stream = runner.run_stream
+    clock_args = ["--clock", clock_mode]
+    if clock_mode == "token":
+        clock_args += ["--tokens-per-frame", "unlimited"]
     argv = [
         "runner", "--task", "fake_task", "--model", "fake-model", "--adapter", "anthropic_messages",
-        "--clock", "wall", "--fps", str(FPS), "--max-minutes", str(MAX_MINUTES),
+        *clock_args, "--fps", str(FPS), "--max-minutes", str(MAX_MINUTES),
         "--run-id", "run", "--results-dir", str(tmp_path),
     ]  # fmt: skip
     with (
@@ -223,19 +231,11 @@ def test_main_reports_the_termination_the_loop_latched(tmp_path, reason, solved,
     )
 
 
-def test_main_stamps_the_generation_artifact_on_the_operational_clock(tmp_path):
-    clock = FakeClock(1_000_000.0)
-    guest = FakeGuest()
-    task = FakeTask(clock, guest, "task_success", True)
-    run_main(tmp_path, task, FakeAgent(clock), clock, guest)
-    manifest = json.loads((tmp_path / "run" / "generation_artifact" / "manifest.json").read_text())
-    assert task.origin + SNAPSHOT_AT_S <= manifest["captured_unix_s"] <= clock.now
-
-
 def test_main_runs_the_episode_on_the_clocks_it_makes(tmp_path):
     """main() makes the episode clocks once and hands the same ones to run_stream and the
-    environment, and the operational one to set_up_agent, the scene capture it opens for it and
-    the episode trace."""
+    environment. On the wall clock they are one clock, which set_up_agent, the scene capture it
+    opens for it and the episode trace take; which of two clocks each takes is told apart under
+    the token clock (below)."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "task_success", True)
@@ -248,6 +248,32 @@ def test_main_runs_the_episode_on_the_clocks_it_makes(tmp_path):
     assert seen["set_up_agent"]["open_capture"](False).clock is clock
     started = json.loads((tmp_path / "run" / "episode_trace.jsonl").read_text().splitlines()[0])
     assert (started["event"], started["wall_time_ns"]) == ("EpisodeStarted", 1_000_000 * S)
+
+
+def test_the_token_clock_s_records_and_agent_read_the_operational_clock(tmp_path):
+    """Under the token clock world time is the environment's frames (FrameClock), and main()
+    hands the operational clock to set_up_agent, the scene capture it opens for it, the episode
+    trace and the generation artifact. The FrameClock has no wall time: an artifact stamped on it
+    would fail, and main() would score the run without its saved state."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    seen = {}
+    summary = run_main(
+        tmp_path, task, FakeAgent(clock), clock, guest, seen=seen, clock_mode="token"
+    )
+    (clocks,) = seen["clocks"]
+    assert isinstance(clocks.semantic, FrameClock) and clocks.operational is clock
+    assert seen["run_stream"]["clocks"] is clocks
+    assert seen["set_up_agent"]["clock"] is clock
+    assert seen["set_up_agent"]["open_capture"](False).clock is clock
+    run_dir = tmp_path / "run"
+    started = json.loads((run_dir / "episode_trace.jsonl").read_text().splitlines()[0])
+    assert (started["event"], started["wall_time_ns"]) == ("EpisodeStarted", 1_000_000 * S)
+    assert (summary["invalid_run"], summary["artifact_error"]) == (None, None)
+    assert summary["generation_artifact"] is not None
+    manifest = json.loads((run_dir / "generation_artifact" / "manifest.json").read_text())
+    assert 1_000_000.0 < manifest["captured_unix_s"] <= clock.now
 
 
 class RecordingAgent(FakeAgent):
