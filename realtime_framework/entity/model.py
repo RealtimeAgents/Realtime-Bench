@@ -520,43 +520,54 @@ class RequestRetry:
     attempt received model output. ``record(attempt, exc, failure, delay)`` sees every classified
     failure before any wait; delay is None when the request is not sent again, and the exception
     then propagates unless ``record`` raises its own. Once the context's retry_cancellation is
-    set, the backoff ends, no attempt starts, and RetryCancelled passes enclosing units unrecorded.
-    The backoff waits on ``clock``.
+    set, the backoff ends and no attempt starts. ``cancelled(attempt, exc)`` then sees the attempt
+    the cancellation stopped: the next one, or the one under way when a nested unit raised
+    RetryCancelled. The RetryCancelled propagates, and enclosing units take it the same way, never
+    as a failure. The backoff waits on ``clock``.
     """
 
     key: str  # the request unit's stable jitter key
     classify: Callable[[BaseException], TransportFailure | None]
     record: Callable[[int, BaseException, TransportFailure, float | None], None]
     replayable: Callable[[BaseException], bool] = lambda exc: True
+    cancelled: Callable[[int, RetryCancelled], None] = lambda attempt, exc: None
     clock: Clock = field(default_factory=SystemClock)
 
     def run(self, send):
         cancel = _RETRY_CANCEL.get()
         attempt = 1
-        while not cancel.is_set():
-            try:
-                return send(attempt)
-            except Exception as exc:
-                delay = self._failed(attempt, exc)
-                if delay is None:
-                    raise
-            _backoff(self.clock, cancel, delay)
-            attempt += 1
-        raise RetryCancelled(f"generation abandoned before attempt {attempt}")
+        try:
+            while not cancel.is_set():
+                try:
+                    return send(attempt)
+                except Exception as exc:
+                    delay = self._failed(attempt, exc)
+                    if delay is None:
+                        raise
+                _backoff(self.clock, cancel, delay)
+                attempt += 1
+            raise RetryCancelled(f"generation abandoned before attempt {attempt}")
+        except RetryCancelled as exc:
+            self.cancelled(attempt, exc)
+            raise
 
     async def run_async(self, send):
         cancel = _RETRY_CANCEL.get()
         attempt = 1
-        while not cancel.is_set():
-            try:
-                return await send(attempt)
-            except Exception as exc:
-                delay = self._failed(attempt, exc)
-                if delay is None:
-                    raise
-            await asyncio.to_thread(_backoff, self.clock, cancel, delay)
-            attempt += 1
-        raise RetryCancelled(f"generation abandoned before attempt {attempt}")
+        try:
+            while not cancel.is_set():
+                try:
+                    return await send(attempt)
+                except Exception as exc:
+                    delay = self._failed(attempt, exc)
+                    if delay is None:
+                        raise
+                await asyncio.to_thread(_backoff, self.clock, cancel, delay)
+                attempt += 1
+            raise RetryCancelled(f"generation abandoned before attempt {attempt}")
+        except RetryCancelled as exc:
+            self.cancelled(attempt, exc)
+            raise
 
     def _failed(self, attempt: int, exc: Exception) -> float | None:
         failure = self.classify(exc)

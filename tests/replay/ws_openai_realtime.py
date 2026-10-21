@@ -35,7 +35,7 @@ Scripted faults:
   response.created and then close the connection with 1011, before any output or usage.
 - ``edit_error_on_delete``: answer the n-th delete that carries an event_id with an error.
   Only the in-place compaction sends deletes with an event_id (openai_realtime_session.py:281-309).
-- ``reject_upgrades``: refuse the first n WebSocket upgrades with HTTP 503.
+- ``reject_upgrades``: refuse these WebSocket upgrades (1-based, over the stub) with HTTP 503.
 
 FailingListener stands where the server should be and fails every opening handshake before any
 HTTP response.
@@ -152,12 +152,12 @@ class RealtimeStub:
         *,
         drop_responses: tuple[int, ...] = (),
         edit_error_on_delete: int | None = None,
-        reject_upgrades: int = 0,
+        reject_upgrades: tuple[int, ...] = (),
     ):
         self._replies = list(replies)
         self._drop_responses = set(drop_responses)
         self._edit_error_on_delete = edit_error_on_delete
-        self._reject_upgrades = reject_upgrades
+        self._reject_upgrades = set(reject_upgrades)
         self.connections: list[Connection] = []
         # One entry per response.create: what the conversation held and what the stub produced.
         self.responses: list[dict] = []
@@ -261,7 +261,7 @@ class RealtimeStub:
                 authorization=headers.get("Authorization"),
             )
             self.connections.append(connection)
-            if connection.number <= self._reject_upgrades:
+            if connection.number in self._reject_upgrades:
                 connection.rejected = 503
                 connection.finished = True
                 self._lock.notify_all()

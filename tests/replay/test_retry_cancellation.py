@@ -24,6 +24,8 @@ import threading
 import pytest
 
 import realtime_framework.entity.model as model_module
+import realtime_framework.providers.decisions.selection as selection_module
+import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.model import (
     RATE_LIMITED,
     TRANSIENT,
@@ -41,8 +43,12 @@ from .fake_env import FakeEnvironment, Hang
 from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import commit_statuses, run_loop
 from .scenario import CLICK_NAME, TASK_INSTRUCTION, replies
+from .scenario_decisions import ADA, LOVELACE, SPACE, decision
 from .steps import Step
+from .steps_decisions import run_decisions
 from .stub import ChatCompletionsStub
+from .stub_decisions import DecisionsStub
+from .stub_decisions import Failure as QuestionFailure
 from .stub_openrouter import Failure, OpenRouterStub
 from .test_chat_completions import MODEL_KEY as CHAT_MODEL_KEY
 from .test_chat_completions import chat_completions_config
@@ -64,17 +70,21 @@ UNAVAILABLE = Failure(503, {"error": {"message": "upstream down", "code": 503}})
 
 
 class _GatedBackoff:
-    """Wraps the retry executor's backoff (entity/model.py:457-458). It records the delay, sets
-    ``entered`` and waits for ``release`` before the real wait, so the test aborts first."""
+    """Wraps the retry executor's backoff (entity/model.py _backoff). It records every delay;
+    backoffs before the ``gated``-th return at once. That one sets ``entered`` and waits for
+    ``release`` before the real wait, so the test aborts first."""
 
-    def __init__(self):
+    def __init__(self, gated: int = 1):
         self.calls = []
         self.entered = threading.Event()
         self.release = threading.Event()
+        self._gated = gated
         self._wait = model_module._backoff
 
     def __call__(self, clock, cancel, seconds):
         self.calls.append(seconds)
+        if len(self.calls) < self._gated:
+            return
         self.entered.set()
         if not self.release.wait(WAIT_S):
             raise AssertionError("the test never released the backoff")
@@ -84,14 +94,14 @@ class _GatedBackoff:
 GENERATION = 1  # the kernel's number of the generation each agent-level test aborts
 
 
-def _generate_in_worker(episode, observation):
-    """The shell's StartGeneration for decision 0: the agent's generate on a daemon thread."""
+def _generate_in_worker(episode, observation, decision=0):
+    """The shell's StartGeneration for the decision: the agent's generate on a daemon thread."""
     box, done = {}, threading.Event()
     budget = episode.budget(observation.tick_number)
 
     def worker():
         try:
-            box["pending"] = episode.agent.generate(GENERATION, 0, observation, budget)
+            box["pending"] = episode.agent.generate(GENERATION, decision, observation, budget)
         except BaseException as exc:  # noqa: BLE001 - reported by the test
             box["error"] = exc
         finally:
@@ -154,6 +164,27 @@ def _attempts(run_dir) -> list[tuple]:
     ]
 
 
+def _connects(run_dir) -> list[tuple]:
+    return [
+        (a["scope"]["phase"], a["scope"]["connect_attempt"], a["outcome"])
+        for a in _trace(run_dir, "ModelAttemptFinished")
+        if a["kind"] == "session_connect"
+    ]
+
+
+def _questions(run_dir) -> list[tuple]:
+    return [
+        (
+            a["scope"]["decision"],
+            a["scope"]["choice"]["question"],
+            a["scope"]["choice"]["transport_attempt"],
+            a["outcome"],
+        )
+        for a in _trace(run_dir, "ModelAttemptFinished")
+        if a["kind"] == "choice_question"
+    ]
+
+
 def _check_nothing_kept(agent, turns: list) -> None:
     """Only attempt 1 ran, for the generation the abort cancelled; no turn or action joins the
     history."""
@@ -164,10 +195,10 @@ def _check_nothing_kept(agent, turns: list) -> None:
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["run", "run_async"])
 def test_cancel_ends_the_backoff(asynchronous):
-    """A 25 s Retry-After backoff (entity/model.py:378-385) ends as soon as the cancel event is
-    set, and the unit is not sent again."""
+    """A 25 s Retry-After backoff (entity/model.py TransportRetryPolicy) ends as soon as the
+    cancel event is set, and the unit is not sent again; it records attempt 2 as cancelled."""
     cancel, recorded = threading.Event(), threading.Event()
-    sent, delays = [], []
+    sent, delays, stopped = [], [], []
 
     def send(attempt):
         sent.append(attempt)
@@ -180,7 +211,12 @@ def test_cancel_ends_the_backoff(asynchronous):
         delays.append(delay)
         recorded.set()
 
-    retry = RequestRetry("unit", lambda exc: TransportFailure(RATE_LIMITED, 25.0), record)
+    retry = RequestRetry(
+        "unit",
+        lambda exc: TransportFailure(RATE_LIMITED, 25.0),
+        record,
+        cancelled=lambda attempt, exc: stopped.append(attempt),
+    )
     box, done = {}, threading.Event()
 
     def worker():
@@ -200,17 +236,47 @@ def test_cancel_ends_the_backoff(asynchronous):
     cancel.set()
     assert done.wait(WAIT_S), "the backoff was not cancelled"
     assert isinstance(box.get("error"), RetryCancelled)
-    assert sent == [1] and delays == [25.0]
+    assert sent == [1] and delays == [25.0] and stopped == [2]
 
 
 def test_no_attempt_once_cancelled():
     cancel = threading.Event()
     cancel.set()
-    sent = []
-    retry = RequestRetry("unit", lambda exc: TransportFailure(TRANSIENT), lambda *args: None)
+    sent, stopped = [], []
+    retry = RequestRetry(
+        "unit",
+        lambda exc: TransportFailure(TRANSIENT),
+        lambda *args: None,
+        cancelled=lambda attempt, exc: stopped.append(attempt),
+    )
     with retry_cancellation(cancel), pytest.raises(RetryCancelled):
         retry.run(sent.append)
-    assert sent == []
+    assert sent == [] and stopped == [1]
+
+
+def test_a_nested_cancellation_stops_the_enclosing_attempt():
+    """A unit sent inside another's attempt, as a session connect inside a turn: the abort comes
+    while the inner unit's attempt fails. The inner unit records its retry as cancelled, and the
+    outer one the attempt under way, which it neither records as failed nor retries."""
+    cancel = threading.Event()
+    stopped, failed = [], []
+
+    def inner_send(attempt):
+        cancel.set()
+        raise ConnectionError("dropped")
+
+    def unit(name):
+        return RequestRetry(
+            name,
+            lambda exc: TransportFailure(TRANSIENT),
+            lambda attempt, exc, failure, delay: failed.append((name, attempt)),
+            cancelled=lambda attempt, exc: stopped.append((name, attempt)),
+        )
+
+    with retry_cancellation(cancel), pytest.raises(RetryCancelled):
+        unit("outer").run(lambda attempt: unit("inner").run(inner_send))
+    assert failed == [("inner", 1)]
+    assert stopped == [("inner", 2), ("outer", 1)]
 
 
 def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa: F811
@@ -452,7 +518,8 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
     """Session API. Response 1 is dropped, and attempt 2 rebuilds the session through connect()
     (RealtimeRuntime._ensure_ready). The abort lands before connect() opens it. connect()'s own
     attempts run under the generation's retry_cancellation (providers/openai_realtime.py
-    connect), so no WebSocket opens and no response runs."""
+    _connect), so no WebSocket opens and no response runs; the connect records its first attempt
+    as cancelled."""
     monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
         episode = _session_episode(stub, tmp_path)
@@ -487,5 +554,119 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
     assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None)]
-    connects = [a for a in _trace(tmp_path, "ModelAttemptFinished") if a["kind"] != "generation"]
-    assert [a["scope"]["phase"] for a in connects] == ["initialize"]  # none for the decision
+    assert _connects(tmp_path) == [("initialize", 1, "ok"), ("decision", 1, "cancelled")]
+
+
+def test_session_abort_during_connect_backoff(tmp_path, monkeypatch):
+    """Session API. Response 1 is dropped; attempt 2 rebuilds the session through connect(),
+    whose first upgrade is refused (HTTP 503), and connect() backs off
+    (providers/openai_realtime.py _connect). The abort lands during that backoff: no further
+    upgrade is tried, and after the attempt it meant to retry the connect records the next one as
+    cancelled."""
+    backoff = _GatedBackoff(gated=2)  # the turn's backoff passes, the connect's is held
+    monkeypatch.setattr(model_module, "_backoff", backoff)
+    with RealtimeStub(
+        realtime_replies([STEP]), drop_responses=(1,), reject_upgrades=(2,)
+    ) as stub:
+        episode = _session_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            stub.wait_for_session_update()
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert backoff.entered.wait(WAIT_S), "the refused upgrade was not retried"
+            _abort_like_the_kernel(agent)
+            backoff.release.set()
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+        connections = stub.finish()
+    assert stub.violations == [] and stub.unscripted == 0
+    assert [c["rejected"] for c in connections] == [None, 503]
+    assert len(backoff.calls) == 2
+    assert agent._runtime.turns == () and agent.action_history == []
+    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _connects(tmp_path) == [
+        ("initialize", 1, "ok"),
+        ("decision", 1, "retry"),
+        ("decision", 2, "cancelled"),
+    ]
+
+
+LUNA = "gpt-6-luna-decisions"  # configs/models/gpt-6-luna-decisions.yaml
+
+
+def _decision_episode(stub, tmp_path, monkeypatch):
+    """The Luna catalog row at the stub, as tests/replay/test_decisions.py runs it."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
+    config = catalog.to_model_config(LUNA, fps=1.0, reasoning_effort="fixed")
+    return build_episode(
+        config.model_copy(update={"api_base_url": stub.base_url}),
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        model_key=LUNA,
+    )
+
+
+def test_decision_abort_during_question_backoff(tmp_path, monkeypatch):
+    """Decision API. The first question gets HTTP 503 (TRANSIENT) and backs off in its own retry
+    (providers/decisions/selection.py _decide_with_retries), which runs under the generation's
+    retry_cancellation. The abort lands during the backoff: the question is not asked again, and
+    after the attempt it meant to retry the question records the next one as cancelled."""
+    backoff = _GatedBackoff()
+    monkeypatch.setattr(model_module, "_backoff", backoff)
+    with DecisionsStub(upstream="openai") as stub:
+        episode = _decision_episode(stub, tmp_path, monkeypatch)
+        agent = episode.agent
+        try:
+            stub.load(decision(QuestionFailure(503, "Provider returned error"), "click_P1").script)
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert backoff.entered.wait(WAIT_S), "the question was not retried"
+            _abort_like_the_kernel(agent)
+            backoff.release.set()
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+    assert len(stub.requests) == 1 and stub.unscripted == 0 and stub.unload() == 1
+    assert len(backoff.calls) == 1
+    assert agent._runtime.turns == () and agent.action_history == []
+    assert _questions(tmp_path) == [(0, 0, 1, "retry"), (0, 0, 2, "cancelled")]
+
+
+def test_decision_abort_between_questions(tmp_path, monkeypatch):
+    """Decision API. Decision 0 clicks the name field. Decision 1's first question picks
+    compose_text, and the abort lands before its first text-edit question is asked
+    (selection.py _ask). That question sends nothing, and records its first attempt as
+    cancelled."""
+    ask = selection_module.ChoiceDecision._ask
+    asked, entered, release = [], threading.Event(), threading.Event()
+
+    async def gated_ask(self, question, **kwargs):
+        asked.append(kwargs["phase"])
+        if len(asked) == 3:
+            entered.set()
+            await asyncio.to_thread(release.wait, WAIT_S)
+        return await ask(self, question, **kwargs)
+
+    monkeypatch.setattr(selection_module.ChoiceDecision, "_ask", gated_ask)
+    with DecisionsStub(upstream="openai") as stub:
+        episode = _decision_episode(stub, tmp_path, monkeypatch)
+        agent = episode.agent
+        try:
+            run_decisions(episode, [decision("click_P1")], stub)
+            stub.load(decision("compose_text", ADA, SPACE, LOVELACE, "finish").script)
+            observation = episode.frames.capture(1)
+            box, done = _generate_in_worker(episode, observation, decision=1)
+            assert entered.wait(WAIT_S), "the text-edit question was not reached"
+            _abort_like_the_kernel(agent)
+            release.set()
+            _discarded(agent, box, done)
+        finally:
+            release.set()
+            episode.finish()
+    assert asked == ["gui_action", "gui_action", "text_edit"]
+    assert len(stub.requests) == 2 and stub.unscripted == 0 and stub.unload() == 4
+    assert len(agent._runtime.turns) == len(agent.action_history) == 1
+    assert _questions(tmp_path) == [(0, 0, 1, "ok"), (1, 0, 1, "ok"), (1, 1, 1, "cancelled")]

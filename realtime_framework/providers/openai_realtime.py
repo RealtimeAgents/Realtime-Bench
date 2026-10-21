@@ -366,7 +366,13 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         # The session the connect resumes: the newest retained frame, or none at all.
         frames = [] if request.history is None else history_frames(request.history.items)[1]
         key = f"{frames[-1].id if frames else 'empty'}:connect"
-        retry = RequestRetry(key, self.classify_transport_error, record, clock=self.clock)
+        retry = RequestRetry(
+            key,
+            self.classify_transport_error,
+            record,
+            cancelled=lambda attempt, exc: self._connect_finished(attempt, "cancelled", exc),
+            clock=self.clock,
+        )
         await retry.run_async(send)
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
@@ -381,7 +387,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         await self._send_all(self._session.core.replay(request.history))
 
     def _connect_finished(self, attempt, outcome, error=None, failure=None, delay=None) -> None:
-        """One ModelAttemptFinished per open_session attempt of the shared connect retry."""
+        """One ModelAttemptFinished per open_session attempt of the shared connect retry, and one
+        for the attempt a cancellation stopped."""
         with trace_scope(connect_attempt=attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
