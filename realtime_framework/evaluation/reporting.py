@@ -550,6 +550,7 @@ def summarize_cost(
 
 from collections import Counter as Counter
 import math as math
+import re as re
 
 
 RUN_METRICS_SCHEMA = "realtime_bench.run_metrics.v1"
@@ -777,6 +778,120 @@ def summarize_run_metrics(
             source_counts=ttft_sources,
             missing_reason_counts=ttft_missing_reasons,
         ),
+    }
+
+
+STREAMING_SUMMARY_SCHEMA = "realtime_bench.streaming_summary.v1"
+_FRAME_BLOCK = re.compile(r"f\d+\.frame")  # harnesses/streaming/history.py frame_block
+
+
+def summarize_streaming(trace_path, settings: dict | None) -> dict:
+    """The streaming section of a native-streaming run's summary, from its episode trace.
+
+    Frames: those captured and pushed into the session, from the kernel's FrameCaptured and
+    FramePushed (seconds from capture to push), those dropped by reason (FrameDropped), and those
+    the provider confirmed or refused, from the session's delivery records of frame blocks
+    (seconds from sent to confirmed). Gemini Live confirms no frame. Actions: those that arrived,
+    the age of the frame each names when it arrived, and each one's outcome (ActionResolved), with
+    the seconds an applied action waited from its arrival and ran. Replies: those started and
+    those given up, by reason. Each distribution's total_decisions counts the frames or actions
+    it is taken over. ``settings`` is the run configuration's streaming settings: the
+    newest frames OpenAI Realtime keeps, which the harness deletes past, make the context control
+    exact; Gemini Live's compression thresholds, past which the server compresses the session
+    unseen, approximate (phase2.md, 上下文怎么管)."""
+    kernel = {
+        kind: []
+        for kind in (
+            "FrameCaptured",
+            "FramePushed",
+            "FrameDropped",
+            "ActionArrived",
+            "ActionResolved",
+            TraceEvent.INFERENCE_STARTED.value,
+            "GenerationAbandoned",
+        )
+    }
+    sent, confirmed, refused = {}, {}, set()
+    for row in rows(trace_path, {"KernelRecord", TraceEvent.SESSION_DELIVERY.value}):
+        payload = row["payload"]
+        if row["event"] == "KernelRecord":
+            if payload["kind"] in kernel:
+                kernel[payload["kind"]].append(payload["data"])
+            continue
+        at = payload["captured_monotonic_ns"] / 1e9
+        for content in payload["contents"]:
+            block = content["block"]
+            if block is None or not _FRAME_BLOCK.fullmatch(block):
+                continue
+            if payload["state"] == "sent":
+                sent.setdefault(block, at)
+            elif payload["state"] == "confirmed":
+                confirmed.setdefault(block, at)
+            elif payload["state"] == "refused":
+                refused.add(block)
+    captured = {
+        d["observation_id"]: d["timestamp"] for d in kernel["FrameCaptured"] if d["error"] is None
+    }
+    pushed = [d for d in kernel["FramePushed"] if d["error"] is None]
+    dropped = Counter(d["reason"] for d in kernel["FrameDropped"])
+    arrived = kernel["ActionArrived"]
+    applied = [d for d in kernel["ActionResolved"] if d["status"] == "applied"]
+
+    def seconds(values, total):
+        return _distribution(
+            values, total_decisions=total, unit="seconds", source="episode_trace.jsonl"
+        )
+
+    return {
+        "schema": STREAMING_SUMMARY_SCHEMA,
+        "context_control": (
+            None
+            if settings is None
+            else "exact"
+            if "retained_frames" in settings
+            else "approximate"
+        ),
+        "frames": {
+            "captured": len(captured),
+            "pushed": len(pushed),
+            "push_failed": len(kernel["FramePushed"]) - len(pushed),
+            "dropped": sum(dropped.values()),
+            "dropped_by_reason": dict(sorted(dropped.items())),
+            "confirmed": len(confirmed),
+            "refused": len(refused),
+            "capture_to_push_s": seconds(
+                [d["sent_at"] - captured[d["observation_id"]] for d in pushed], len(pushed)
+            ),
+            "send_to_confirm_s": seconds(
+                [at - sent[block] for block, at in confirmed.items() if block in sent],
+                len(sent),
+            ),
+        },
+        "actions": {
+            "arrived": len(arrived),
+            "outcomes": dict(
+                sorted(Counter(d["status"] for d in kernel["ActionResolved"]).items())
+            ),
+            "frame_age_s": seconds([d["frame_age_s"] for d in arrived], len(arrived)),
+            "frame_age_frames": _distribution(
+                [d["frame_age_frames"] for d in arrived],
+                total_decisions=len(arrived),
+                unit="frames",
+                source="episode_trace.jsonl",
+            ),
+            "arrival_to_start_s": seconds(
+                [d["started_at"] - d["arrived_at"] for d in applied], len(applied)
+            ),
+            "execution_s": seconds(
+                [d["finished_at"] - d["started_at"] for d in applied], len(applied)
+            ),
+        },
+        "replies": {
+            "started": len(kernel[TraceEvent.INFERENCE_STARTED.value]),
+            "abandoned": dict(
+                sorted(Counter(d["reason"] for d in kernel["GenerationAbandoned"]).items())
+            ),
+        },
     }
 
 

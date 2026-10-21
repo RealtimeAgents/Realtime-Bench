@@ -110,6 +110,7 @@ from realtime_framework.evaluation.config import config_fingerprint
 from realtime_framework.evaluation.config import effective_run_config
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
 from realtime_framework.evaluation.reporting import summarize_run_metrics
+from realtime_framework.evaluation.reporting import summarize_streaming
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.evaluation.reporting import episode_outcome
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
@@ -1097,6 +1098,10 @@ def main():
     summ.update(episode_outcome(summ))
     summ["episode_trace"] = episode_trace.describe()
     episode_trace.close()
+    if a.interaction_mode == "streaming":
+        summ["streaming"] = summarize_streaming(
+            run_dir / "episode_trace.jsonl", (runtime_config or {}).get("streaming")
+        )
     _atomic_write_json(run_dir / "run_summary.json", summ)
     from realtime_framework.evaluation.reporting import finalize_video
 
