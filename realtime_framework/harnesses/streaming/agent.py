@@ -105,6 +105,7 @@ from realtime_framework.harnesses.streaming.history import (
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
+from realtime_framework.providers.session_lifecycle import RenewalRequired
 
 if TYPE_CHECKING:
     from realtime_framework.evaluation.kernel.events import Outcome
@@ -373,6 +374,8 @@ class NativeStreamingAgent(VisionAgentBase):
                 retry_cancellation(self._closing),
             ):
                 while (gate := self._execution.run(self._push(key, pushed))) is not None:
+                    if gate.is_set():
+                        continue
                     # Held for the session's renewal, which is no push stuck in it.
                     self._post(PushHeld(key))
                     self.clock.wait(gate, None)
@@ -382,14 +385,16 @@ class NativeStreamingAgent(VisionAgentBase):
             raise
 
     async def _push(self, key: str | None, pushed: _Pushed) -> threading.Event | None:
-        """Put the frame in, or, when it has to wait, the gate to wait at before trying again.
+        """Put the frame in, or, when it has to wait, the gate to wait at before trying again;
+        one already open to try again at once.
 
         A session the provider asked to renew takes no frame before it is renewed, as Gemini
         Live's after a goAway, and renewing it would end the reply on it: the frame waits until
         that reply is off the session. That is decided here, on the execution thread, where the
         reader applies a goAway, and the gate opens once the reply is off (_off), whatever goes
-        on the session after it. The frames captured meanwhile wait in the policy's slot, not
-        counted as failed pushes."""
+        on the session after it; a goAway read while the push waits for the session, which
+        refuses the frame unwritten (RenewalRequired), is taken the same way. The frames
+        captured meanwhile wait in the policy's slot, not counted as failed pushes."""
         async with self._readying:
             self._stop_if_closed()
             with self._lock:
@@ -404,7 +409,18 @@ class NativeStreamingAgent(VisionAgentBase):
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
-        receipt = await self.driver.push_frame(pushed.value, view)
+        try:
+            receipt = await self.driver.push_frame(pushed.value, view)
+        except RenewalRequired:
+            # A goAway read while the push waited for the session, after the renewal check:
+            # nothing went out. Try again, once the reply renewing would end is off the session.
+            gate = self.clock.event()
+            with self._lock:
+                if self._on_session:
+                    self._gates.append(gate)
+                else:
+                    gate.set()
+            return gate
         frame = pushed.record.frame
         # On the execution thread, where the reply's messages are read: an action read from
         # now on finds the frame sent, when the receipt says it was written (decision N43), and
@@ -570,23 +586,29 @@ class NativeStreamingAgent(VisionAgentBase):
         try:
             async with self._readying:
                 self._stop_if_closed()
-                with self._lock:
-                    view = self._view()
-                await self._ready(view, renew=True)
-                # A push may have reopened the session for the reply after it was given up:
-                # asked for then, it would run beside the next one (context.py _run_turn).
-                if reply.cancel.is_set():
-                    raise RetryCancelled("generation abandoned before its reply")
-                reply.handle = await self.driver.request_reply(
-                    GenerationRequest(
-                        generation_id=f"streaming-{reply.generation}",
-                        provider_output_token_cap=budget.provider_output_tokens,
-                        transport_output_token_cap=budget.transport_output_tokens,
-                        clock_mode="wall",
-                        canonical=view,
-                        generation=reply.generation,
-                    )
-                )
+                while reply.handle is None:
+                    with self._lock:
+                        view = self._view()
+                    await self._ready(view, renew=True)
+                    # A push may have reopened the session for the reply after it was given up:
+                    # asked for then, it would run beside the next one (context.py _run_turn).
+                    if reply.cancel.is_set():
+                        raise RetryCancelled("generation abandoned before its reply")
+                    try:
+                        reply.handle = await self.driver.request_reply(
+                            GenerationRequest(
+                                generation_id=f"streaming-{reply.generation}",
+                                provider_output_token_cap=budget.provider_output_tokens,
+                                transport_output_token_cap=budget.transport_output_tokens,
+                                clock_mode="wall",
+                                canonical=view,
+                                generation=reply.generation,
+                            )
+                        )
+                    except RenewalRequired:
+                        # A goAway read while the trigger waited for the session, after the
+                        # renewal check: nothing went out, so renew and ask again.
+                        continue
                 with self._lock:
                     self._on_session.add(reply.generation)
             async for event in self.driver.events(reply.handle):

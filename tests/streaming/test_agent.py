@@ -1147,6 +1147,73 @@ def test_a_push_held_for_a_renewal_tells_the_kernel_when_it_waits_and_when_it_go
     agent.close()
 
 
+# ---- a goAway read while an input waits for the session (review-final-drivers 中 5) ------------
+
+
+def test_a_reply_refused_for_a_go_away_read_after_its_renewal_check_renews_and_is_asked_again(
+    monkeypatch, clock
+):
+    """The trigger waited for the session while a push wrote, and the reader read a goAway
+    meanwhile: refused before anything went out (RenewalRequired), the reply renews the session
+    and is asked for again, instead of failing the run."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.go_away_on = ["reply"]
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    pending = agent.generate(7, 3, frame, BUDGET)
+    assert not pending.cancelled
+    assert [call[:2] for call in agent.driver.calls][-4:] == [
+        ("reply", 7),
+        ("close",),
+        ("sync", "go_away"),
+        ("reply", 7),
+    ]
+    agent.close()
+
+
+def test_a_push_refused_for_a_go_away_read_after_its_check_renews_and_goes_in(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    _two_frames(agent, clock)
+    agent.driver.go_away_on = ["push"]
+    agent.push(observation(clock, 3))
+    assert [call[:2] for call in agent.driver.calls][-4:] == [
+        ("push", "obs-3"),
+        ("close",),
+        ("sync", "go_away"),
+        ("push", "obs-3"),
+    ]
+    record, _ = agent.frames.locate(3)
+    assert record.send_status == "sent"
+    agent.close()
+
+
+def test_a_push_refused_for_a_go_away_while_a_reply_is_on_waits_for_it(monkeypatch, clock):
+    """Refused the same way with a reply on the session, which renewing would end: the push
+    waits at its gate, as one that saw the goAway first does."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply(ends_at=2.0))
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.driver.go_away_on = ["push"]
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    assert clock.wait(replied, 2.0)
+    clock.sleep(0.5)
+    assert not pushed.is_set()
+    agent.accept(7)
+    assert clock.wait(pushed, 1.0)
+    assert "error" not in pushing
+    assert [type(e).__name__ for e in posted if isinstance(e, (PushHeld, PushResumed))] == [
+        "PushHeld",
+        "PushResumed",
+    ]
+    assert agent.driver.calls[-2][:2] == ("sync", "go_away")
+    agent.close()
+
+
 def test_a_close_that_outlasts_its_bound_is_logged_not_raised(monkeypatch, clock, caplog):
     """A push reopening the session takes longer than close() waits (review-final-drivers 中 3):
     as a turn's close (RealtimeRuntime.close), the timeout is logged and the episode's outcome
