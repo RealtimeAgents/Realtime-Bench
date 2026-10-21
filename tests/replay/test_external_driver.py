@@ -390,10 +390,18 @@ def test_preflight_reads_the_external_declaration(external, capsys):
                 "transport_output_token_cap()"
             ),
         ),
+        # A streaming run records the settings (evaluation/config.py effective_run_config).
+        (
+            "rtb_ext.broken:StreamingNoSettings",
+            (
+                "'rtb_ext.broken:StreamingNoSettings' declares streaming but no "
+                "streaming_settings (a dict class attribute)"
+            ),
+        ),
     ],
     ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
          "no-context-status", "no-capabilities", "no-deployment", "no-model-defaults",
-         "classifier-flag", "renewal-flag", "output-cap-flag"],
+         "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-settings"],
 )
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")

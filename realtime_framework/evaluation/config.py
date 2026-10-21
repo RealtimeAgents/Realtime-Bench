@@ -773,7 +773,8 @@ def effective_run_config(
     if is_external_driver(adapter_type):
         config["external_driver"] = external_driver_identity(adapter_type)
     if interaction_mode == "streaming":
-        # validate_model_interaction admits only a live API that declares streaming. The model
+        # validate_model_interaction admits only a live API that declares streaming, and a driver
+        # that declares it declares its settings (providers/registry.py _check_driver). The model
         # YAML's settings replace those of its driver's they name.
         config["streaming"] = {**driver.streaming_settings, **streaming}
     if mode is not None:
