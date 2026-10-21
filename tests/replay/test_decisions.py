@@ -421,13 +421,14 @@ def test_jev_large_observation(tmp_path):
 ARCHIVE_WINDOWS = {"two_blocks": (40000, 3000), "exhausted": (32000, 4000)}
 
 
+def _trace_events(run_dir: Path) -> list[dict]:
+    return [json.loads(line) for line in (run_dir / "episode_trace.jsonl").read_text().splitlines()]
+
+
 def _pressure_archives(run_dir: Path, kind: str = "pressure_archive") -> list[dict]:
-    events = [
-        json.loads(line) for line in (run_dir / "episode_trace.jsonl").read_text().splitlines()
-    ]
     return [
         e["payload"]
-        for e in events
+        for e in _trace_events(run_dir)
         if e["event"] == "HistoryChanged" and e["payload"]["kind"] == kind
     ]
 
@@ -532,11 +533,27 @@ def test_history_overflow_ledger(tmp_path):
     assert [o["scope"]["decision"] for o in omissions] == list(script.LEDGER_OMISSIONS)
     assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20]
     assert all(o["request_context"]["pressure"] for o in omissions)
+    first = script.LEDGER_OMISSIONS[0]
+    # Each step records how many actions the ledger leaves out, once any is.
+    totals = [_runtime(r).get("history_omitted_actions_total") for r in records]
+    assert totals == [None] * first + [
+        10 * sum(k >= decision for decision in script.LEDGER_OMISSIONS)
+        for k in range(first, len(records))
+    ]
+    omitted_now = [_runtime(r).get("request_context_omitted_actions") for r in records]
+    assert {k: n for k, n in enumerate(omitted_now) if n} == dict.fromkeys(
+        script.LEDGER_OMISSIONS, 10
+    )
+    prepared = [
+        e["payload"]["history"]["omitted_actions_total"]
+        for e in _trace_events(tmp_path)
+        if e["event"] == "GenerationPrepared"
+    ]
+    assert prepared == [total or 0 for total in totals]
 
     def ledger(k: int) -> list[str]:
         return _bodies(records[k])[0]["state"]["history"][1]["content"].split("\n")
 
-    first = script.LEDGER_OMISSIONS[0]
     assert all(line.startswith("{") for line in ledger(first - 1)[1:])
     for k in range(first, len(records)):
         header_line, note, *kept = ledger(k)

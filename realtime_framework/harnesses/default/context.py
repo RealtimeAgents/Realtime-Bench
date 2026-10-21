@@ -552,6 +552,7 @@ class RealtimeRuntime:
         compactions = 0
         archived_count = 0
         omitted_blocks = 0
+        omitted_before = self._omitted_action_count
         while True:
             executed_action_ledger = self._action_ledger(action_history)
             canonical = request_builder(
@@ -590,6 +591,9 @@ class RealtimeRuntime:
                         "every archived action omitted; use a larger endpoint window"
                     )
                 omitted_blocks += 1
+                physical_metadata["request_context_omitted_actions"] = (
+                    self._omitted_action_count - omitted_before
+                )
                 continue
             archived = self._turns[: self.policy.turns.block]
             del self._turns[: len(archived)]
@@ -618,6 +622,12 @@ class RealtimeRuntime:
             "history_archived_turns": retention["archived_turns"],
             "history_archived_actions": retention["archived_actions"],
             "history_archived_actions_total": self._archived_action_count,
+            # Only once the ledger leaves actions out: a run that never does records no more.
+            **(
+                {"history_omitted_actions_total": self._omitted_action_count}
+                if self._omitted_action_count
+                else {}
+            ),
             "history_detailed_turns": len(self._turns),
             "history_current_observations": len(incoming),
             "history_prompt_turns": len(self._turns) + len(incoming),
@@ -997,6 +1007,7 @@ class RealtimeRuntime:
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
                     "archived_actions_total": self._archived_action_count,
+                    "omitted_actions_total": self._omitted_action_count,
                     "detailed_turns": len(self._turns),
                     "current_observations": len(incoming),
                     "prompt_turns": len(turns),
