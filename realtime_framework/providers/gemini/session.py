@@ -199,8 +199,8 @@ class Received:
 class Orphan:
     """One server message that no generation's reply takes, as the core applied it (arrived).
 
-    Its goAway still asks for a new connection and its resumption update is still the candidate,
-    promoted at a clean boundary; read from a closed connection, it changes nothing.
+    Its goAway still asks for a new connection and its resumption update is still the latest
+    handle; read from a closed connection, it changes nothing.
     """
 
     connection: int  # the connection it was read from
@@ -435,9 +435,6 @@ class SessionCore:
         return observation
 
     def interrupt_sent(self) -> None:
-        """The interrupt is an input: no handle resumes the session until a turn completes
-        cleanly."""
-        self.last_turn_clean = False
         self.resume_handle = None
 
     def calls_received(self, calls: list[tuple]) -> None:
@@ -516,26 +513,14 @@ class SessionCore:
     def arrived(self, connection: int, message, now: float) -> Received | Orphan:
         """Apply one server message as a reader that reads every message as it arrives does
         (streaming): as received() does while a generation's reply is being read on
-        ``connection``, else as an orphan. An orphan's goAway asks for a new connection, and its
-        resumption update is promoted when the session is at a clean boundary: no observation or
-        interrupt sent, and no output read, since the last clean completion, seed or resume.
-
-        Output that no generation takes (an acknowledgement can prompt a reply of its own) is not
-        in the history, so it ends the boundary as an observation does.
-        """
+        ``connection``, else as an orphan, whose goAway still asks for a new connection and whose
+        resumption update is still the latest handle."""
         received = self.received(connection, message, now)
         if received is not None:
             return received
-        if connection != self.connection:
-            return Orphan(connection, message, {}, _cancelled(message))
-        if (
-            getattr(message, "server_content", None) is not None
-            or getattr(message, "tool_call", None) is not None
-        ):
-            self.last_turn_clean = False
-            self.resume_handle = None
-            self.candidate_resume_handle = None
-        control = self._control(message, clean=self.last_turn_clean, now=now)
+        control = (
+            self._control(message, clean=False, now=now) if connection == self.connection else {}
+        )
         return Orphan(connection, message, control, _cancelled(message))
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
