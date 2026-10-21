@@ -1,14 +1,24 @@
-"""GuestEnvironment's wall-clock half that only the legacy loop (legacy_loop.py) reads, moved here
-from sandbox/actions.py unchanged (decision 11): the deadline the environment was built with and
-compared itself against, in its waits, its WAIT, done() and the optional deadline hooks. The
-kernel judges the deadline itself (kernel/turns.py), so production's GuestEnvironment takes none.
-The token half the legacy loop reads, done() and the advance's end check without the kernel
-counting reads, is still in sandbox/actions.py."""
+"""What of GuestEnvironment only the legacy loop (legacy_loop.py) reads, moved here from
+sandbox/actions.py unchanged (decision 11).
+
+LegacyWallClock is the wall-clock half: the deadline the environment was built with and compared
+itself against, in its waits, its WAIT, done() and the optional deadline hooks. The kernel judges
+the deadline itself (kernel/turns.py), so production's GuestEnvironment takes none.
+
+LegacyStateReads is the rest: done(), the legacy loop's end check, and the end check after each
+token step through it, which invalidates the run at the first failed read, while the kernel's
+shell, which counts the reads itself, has not set kernel_counts_reads. Production's
+GuestEnvironment answers check_end() only.
+"""
 
 from __future__ import annotations
 
+import traceback
+
 from realtime_framework.entity.actions import ActionType
+from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.actions import GuestEnvironment
+from realtime_framework.sandbox.budget import operation_budget
 
 
 class LegacyWallClock:
@@ -66,5 +76,49 @@ class LegacyWallClock:
         return super().done()
 
 
-class LegacyGuestEnvironment(LegacyWallClock, GuestEnvironment):
+class LegacyStateReads:
+    """Mixed in before GuestEnvironment, after LegacyWallClock if both are."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
+        # makes go to last_end_checks, each (ended, reason, error) as check_end() answered or
+        # failed, (False, None, None) also when the task has no end check, instead of done(),
+        # which invalidates the run at the first failure.
+        self.kernel_counts_reads = False
+
+    def _ended_after_step(self):
+        if not self.kernel_counts_reads:
+            return self.done()
+        return super()._ended_after_step()
+
+    def done(self):
+        if getattr(self, "_invalid_run", None):
+            return True
+        if self._done:
+            return True
+        if self.stop_check is not None:
+            try:
+                with operation_budget(
+                    "state read",
+                    actions.ENVIRONMENT_BUDGET.state_read_s,
+                    clock=self.clocks.operational,
+                ):
+                    terminal = self.stop_check()
+                if terminal:
+                    self._episode_over = True
+                    if isinstance(terminal, str):
+                        self._terminal_reason = terminal
+                    return True
+            except Exception:  # noqa: BLE001 - a failed read invalidates the run
+                self._invalid_run = {
+                    "category": "environment",
+                    "reason": "terminal_state_check_failed",
+                    "detail": traceback.format_exc(),
+                }
+                return True
+        return False
+
+
+class LegacyGuestEnvironment(LegacyWallClock, LegacyStateReads, GuestEnvironment):
     """GuestEnvironment as the legacy loop had it."""

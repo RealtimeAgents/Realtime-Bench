@@ -8,7 +8,7 @@ import pytest
 
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import Action
-from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, GuestEnvironment
+from realtime_framework.sandbox.actions import GuestEnvironment
 from realtime_framework.sandbox.budget import Deadline, operation_budget
 
 from .fake_clock import FakeClock
@@ -70,26 +70,6 @@ def test_wall_hold_is_released_by_a_timer_on_the_clock():
         (0.25, "xdotool keydown -- Left"),
         (1.75, "xdotool keyup -- Left"),
     ]
-
-
-def test_an_environment_operation_is_timed_on_the_operational_clock():
-    """A state read past its budget invalidates the run; a call inside it, such as a CDP call,
-    spends what is left of the same deadline (sandbox/budget.py)."""
-    clock = FakeClock(wall_origin=ORIGIN)
-    budget = ENVIRONMENT_BUDGET.state_read_s
-    left = []
-
-    def stop_check():
-        left.append(Deadline(None, "CDP call").remaining())
-        clock.sleep(budget + 1.0)
-
-    env = _wall(clock, stop_check=stop_check)
-    with clock.participant():
-        assert env.done()
-    assert left == [budget] and clock.monotonic() == budget + 1.0
-    invalid = env._invalid_run
-    assert invalid["reason"] == "terminal_state_check_failed"
-    assert invalid["detail"].rstrip().endswith("BudgetExceeded: state read took longer than 120 s")
 
 
 def test_the_clocks_must_fit_the_clock_mode():

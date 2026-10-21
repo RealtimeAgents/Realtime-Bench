@@ -39,6 +39,7 @@ from tests.replay.test_openrouter import MODEL_KEY as OPENROUTER_MODEL_KEY
 from tests.replay.token_env import TokenEnvironment
 
 from . import drivers
+from .legacy_environment import LegacyStateReads
 from .projection import (
     ONCE,
     Once,
@@ -353,7 +354,7 @@ class _Guest:
         return {"status": "ok"}
 
 
-class TokenWorld(_Latched, TokenEnvironment):
+class TokenWorld(_Latched, LegacyStateReads, TokenEnvironment):
     """TokenEnvironment with the script's end, failed state reads and advances, refusals and
     faults, and a log of every end check and key release with the tick it happened at. The step,
     the end check and the releases a tap makes inside execute (sandbox/actions.py

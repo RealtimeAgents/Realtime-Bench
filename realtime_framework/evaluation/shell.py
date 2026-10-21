@@ -39,7 +39,8 @@ over every read that decides whether the episode is over: ``check_end()``, which
 and on the token clock the reads a key tap makes inside ``execute()``, which the shell passes on as
 ``ActionExecuted.end_checks``. The shell sets ``kernel_counts_reads``, and then the environment
 invalidates the run for a failed read on neither path; under the legacy loop it stays unset, and
-the first failed read invalidates the run as today.
+the legacy loop's environment (tests/differential/legacy_environment.py) invalidates the run at
+the first failed read.
 """
 
 from __future__ import annotations

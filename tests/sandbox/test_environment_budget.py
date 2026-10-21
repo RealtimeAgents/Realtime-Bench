@@ -584,23 +584,6 @@ def test_only_the_operation_s_own_budget_exceeded_goes_through_as_it_is(fail, ca
     assert raised.value.__cause__ is not None
 
 
-def test_a_task_failure_past_the_budget_keeps_its_traceback():
-    clock = FakeClock()
-
-    def read_the_game_state():
-        clock.sleep(121.0)
-        raise RuntimeError("no state")
-
-    env, _ = _timed(clock, stop_check=read_the_game_state)
-    with clock.participant():
-        assert env.done()
-    detail = env._invalid_run["detail"]
-    assert "in read_the_game_state" in detail
-    assert detail.rstrip().endswith(
-        "BudgetExceeded: state read took longer than 120 s (RuntimeError: no state)"
-    )
-
-
 def test_text_input_has_its_extended_budget():
     clock = FakeClock()
     env, _ = _timed(clock, _ClockGuest(clock, 100.0))
