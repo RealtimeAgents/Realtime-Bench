@@ -866,6 +866,39 @@ def test_fewer_than_three_failed_checks_in_a_row_leave_the_run_valid(failing):
     assert sim.termination.invalid is None
 
 
+@pytest.mark.parametrize(
+    ("world", "asked"),
+    [
+        # The commit runs from the frame at 1 s to 2.5 s: the periodic check due at 2 s is asked
+        # at 2.5 s, then the next loop top, both at 2.5 s.
+        (
+            World(replies=[Reply(0.5, CLICK), Reply(100.0)], commit_s=1.5),
+            [0.0, 0.5, 0.5, 1.0, 2.5, 2.5],
+        ),
+        # The click is executed from 2.25 s to 3.25 s: the periodic check due at 3 s is asked at
+        # 3.25 s, then the check after execution, both at 3.25 s.
+        (
+            World(replies=[Reply(2.25, CLICK), Reply(100.0)], execute_s=1.0),
+            [0.0, 1.0, 2.0, 2.25, 3.25, 3.25],
+        ),
+    ],
+    ids=["after-a-long-commit", "after-a-long-execution"],
+)
+def test_failed_reads_at_one_instant_count_in_the_order_they_were_made(world, asked):
+    # The reads before and after the last two at one instant fail, the earlier of those two
+    # answers and the later fails: failures in a row 1, 2, 0, 1, so the run stays valid. A failed
+    # read is no end and is handled in its turn, not ahead of an earlier answer (phase2.md,
+    # 时间和结束判定: in a row).
+    failing = (len(asked) - 2, len(asked) - 3, len(asked))
+    world.check_errors = _failing(*failing)
+    sim = _episode(_wall(4.0), world)
+    assert _asked(sim)[: len(asked)] == asked
+    requests = [event.request for event in _data(sim, "EndChecked")]
+    assert requests == sorted(requests)
+    assert sim.entries("RunInvalidated") == []
+    assert _ended(sim)[:2] == ("time_limit", "deadline")
+
+
 def test_an_invalidation_posted_during_a_generation_ends_the_episode_at_once():
     # Another thread's failure, such as the wall key-release timer's, arrives through the inbox.
     invalid = Invalidated("environment", "wall_key_release_failed", "keyup failed")
