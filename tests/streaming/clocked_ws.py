@@ -9,7 +9,8 @@ for no longer than the next timed record's time, so a timed message leaves when 
 extension (the client then sends uncompressed frames) and no message size limit: client frames
 carry base64 screenshots. Every message is sent as a text frame: the episode trace a cassette may
 come from keeps a message's bytes, not its frame type. Once the cursor finds a problem, the
-connection it found it on is closed with 1011 and the problem as its reason.
+connection it found it on is closed with 1011 and the problem as its reason, and every other
+connection is dropped at once.
 
 clocked_connection makes a websockets.sync client connection class wait on the clock instead. The
 connection reads its socket on a thread websockets starts in its constructor
@@ -103,9 +104,8 @@ class CassetteServer:
         self._lock = threading.Lock()
         self._listener = socket.create_server(("127.0.0.1", 0))
         self._closing = False
-        self.dropped = False  # the server ended its connections, which then read as ended
         self._threads: list[threading.Thread] = []
-        self._sockets: list[socket.socket] = []
+        self._connections: list[_Connection] = []
         # The request path of each upgrade, in order, and any error a connection thread raised.
         self.paths: list[str] = []
         self.errors: list[str] = []
@@ -126,14 +126,11 @@ class CassetteServer:
             thread.join(5.0)
         self._listener.close()
 
-    def drop(self) -> None:
-        """End every connection at once, without a closing handshake."""
-        self.dropped = True
-        for sock in self._sockets:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+    def drop(self, but: _Connection | None = None) -> None:
+        """End every connection (``but`` one) at once, without a closing handshake."""
+        for connection in self._connections:
+            if connection is not but:
+                connection.drop()
 
     def finish(self) -> list[str]:
         """The cursor's problems, with the records left unused, and any error a connection thread
@@ -150,8 +147,8 @@ class CassetteServer:
             if self._closing:
                 sock.close()
                 return
-            self._sockets.append(sock)
             connection = _Connection(self, sock)
+            self._connections.append(connection)
             self._threads.append(
                 self._clock.start_thread(connection.serve, name="cassette-connection")
             )
@@ -166,6 +163,14 @@ class _Connection:
         self.protocol = ServerProtocol(max_size=None)
         self.number: int | None = None
         self.closing = False  # the server sent its close
+        self.dropped = False  # the server ended it, which then reads as ended
+
+    def drop(self) -> None:
+        self.dropped = True
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     def serve(self) -> None:
         server = self.server
@@ -216,7 +221,7 @@ class _Connection:
             self._send()
             if not self._read() and self.protocol.close_rcvd is None and not self.closing:
                 with server._lock:
-                    if server.dropped:
+                    if self.dropped:
                         cursor.left_open(self.number)
                     else:
                         cursor.client_closed(self.number, None, server._now())  # no close frame
@@ -249,10 +254,14 @@ class _Connection:
                 return
 
     def _fail(self) -> None:
-        """Close the connection over the first problem, with the problem as its reason."""
+        """Close the connection over the first problem, with the problem as its reason; the
+        connection that fails first drops the others."""
+        if self.dropped:
+            return
         with self.server._lock:
             problems = self.server.cursor.problems
             problem = problems[0] if problems else "unexpected connection"
+        self.server.drop(but=self)
         if self.protocol.state is OPEN:
             # A close reason holds at most 123 bytes.
             self.protocol.send_close(1011, problem.encode()[:120].decode(errors="ignore"))

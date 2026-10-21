@@ -236,3 +236,30 @@ def test_a_message_due_when_the_client_closes_goes_first():
         ws.close()
 
     assert [_replay(records, client) for _ in range(10)] == [[]] * 10
+
+
+@pytest.mark.parametrize(
+    "conn_1_next", [_record("c2s", {"type": "idle"}, 9.0), _record("s2c", {"type": "later"}, 5.0)]
+)
+def test_a_problem_on_one_connection_ends_the_others_at_once(conn_1_next):
+    """L3: the connection with the problem is closed with 1011 and the problem as its reason; every
+    other connection is dropped then too, whether it waits for the client or for a time."""
+    records = [
+        _record("open", at=0.0),
+        _record("open", at=0.0, conn=2),
+        conn_1_next,
+        _record("c2s", {"type": "hello", "n": 1}, 1.0, conn=2),
+    ]
+    ended = []
+
+    def client(open_connection, clock):
+        ws_1, ws_2 = open_connection(), open_connection()
+        clock.sleep(1.0)
+        _send(ws_2, {"type": "hello", "n": 2})
+        for ws in (ws_2, ws_1):
+            with pytest.raises(ConnectionClosedError) as closed:
+                ws.recv()
+            ended.append((closed.value.rcvd and closed.value.rcvd.code, clock.monotonic()))
+
+    assert _replay(records, client) == ["conn 2 record 3: c2s hello differs:\n  msg.n: 1 -> 2"]
+    assert ended == [(1011, 1.0), (None, 1.0)]
