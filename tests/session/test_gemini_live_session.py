@@ -851,8 +851,8 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
 
 def test_streaming_resumes_with_the_latest_resumable_handle():
     """A streaming goAway renewal resumes with the latest handle the server called resumable,
-    through the frames pushed after it, unresumable updates and an interrupted reply, where a
-    turn-based session rebuilds; a forced rebuild, or another reason, rebuilds."""
+    through the frames pushed after it, unresumable updates and an interrupted reply; a forced
+    rebuild, or another reason, rebuilds."""
     core = session_core(streaming=True)
     connected(core)
     start_reply(core, "turn-0", [pushed(1)])
@@ -879,6 +879,56 @@ def test_streaming_resumes_with_the_latest_resumable_handle():
     assert core.resume_handle_for("go_away", **renewal) == "handle-2"
     connected(core, streaming_view([pushed(1)]))  # a rebuild has no handle until one comes
     assert core.resume_handle_for("go_away", **renewal) is None
+
+
+def test_the_latest_handle_is_the_open_connection_s():
+    """Closing a connection keeps its latest handle for the renewal that follows; a reply still
+    read from it once the next connection is up does not change the next one's."""
+    core = session_core(streaming=True)
+    connected(core)
+    clean_reply(core, "turn-0", "handle-0")
+    start_reply(core, "turn-1")
+    core.closed()
+    renewal = {"force_rebuild": False, "generation_clean": True}
+    assert core.resume_handle_for("go_away", **renewal) == "handle-0"
+    connected(core, resume_handle="handle-0")
+    assert core.received(1, update("handle-stale"), 0.0).generation_id == "turn-1"
+    assert core.resume_handle_for("go_away", **renewal) == "handle-0"
+
+
+def test_a_streaming_push_leaves_the_feedback_in_front_of_its_frame_to_a_trigger():
+    """Under frame_prefix a pushed frame is its own text: the feedback in front of it goes in a
+    trigger, once."""
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+        pushed(2),
+    ]
+    core = session_core(streaming=True)
+    connected(core)
+    push = core.push(streaming_view(blocks, placement="frame_prefix"))
+    assert push.inputs[1] == RealtimeInput("text", text="frame 2")
+    trigger = core.trigger(streaming_view(blocks, placement="frame_prefix"))
+    assert trigger.keys == (("block", "d1.prefix"),)
+    assert trigger.inputs[1] == RealtimeInput("text", text="EXECUTION RESULT: ok")
+
+
+def test_a_trigger_carries_only_what_a_block_gained_however_often_it_was_handed_over():
+    """Feedback waiting for the next frame gains a line with each action; each trigger carries
+    only the lines since the last, the third as the second."""
+    core = session_core(streaming=True)
+    blocks = [pushed(1)]
+    connected(core, streaming_view(blocks, placement="frame_prefix"))
+    carried = []
+    for decision in (1, 2, 3):
+        blocks += [
+            output_block(decision, "click P1", "obs-1", None),
+            feedback_block(decision, None, f"FEEDBACK {decision}", None),
+        ]
+        trigger = core.trigger(streaming_view(blocks, placement="frame_prefix"))
+        carried.append(trigger.inputs[1].text)
+    assert carried == ["FEEDBACK 1", "FEEDBACK 2", "FEEDBACK 3"]
 
 
 def test_an_orphan_from_a_closed_connection_changes_nothing():
