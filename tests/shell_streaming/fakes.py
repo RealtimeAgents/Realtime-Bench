@@ -149,6 +149,7 @@ class FakeAgent:
         self.push_s = push_s
         self._replies = iter(replies)
         self.post = None
+        self.origin: float | None = None
         self.pushed: list[tuple[str, float]] = []  # (observation id, when it went out)
         self.started: list[tuple[int, str, float]] = []  # (generation, frame, when)
         self.ended: list[tuple[int, float]] = []
@@ -158,8 +159,8 @@ class FakeAgent:
         self.committed: list = []
         self._cancel: dict[int, object] = {}
 
-    def bind_inbox(self, post) -> None:
-        self.post = post
+    def bind_inbox(self, post, origin) -> None:
+        self.post, self.origin = post, origin
 
     def push(self, observation: Observation) -> None:
         self.clock.sleep(self.push_s)
