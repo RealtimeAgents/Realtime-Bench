@@ -53,7 +53,6 @@ from realtime_framework.providers.capture import LoggerCapture
 from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
-from realtime_framework.providers.context import validate_context_reserve
 
 LITELLM_VERSION = "1.106.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -1079,7 +1078,6 @@ class LiteLLMDriver:
         limit = self.config.context_window_tokens
         if limit is None:
             return {"pressure": False, "counter": "unconfigured"}
-        validate_context_reserve(self.config)
         messages = self._request_kwargs(request)["messages"]
         if self.config.context_counter == "vllm":
             endpoint = self.base_url.removesuffix("/v1") + "/tokenize"

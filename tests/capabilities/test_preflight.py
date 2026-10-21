@@ -300,6 +300,16 @@ def test_context_reserve():
     fails(lambda: episode(preset("my-model")), "Context capacity must exceed generation reserve")
 
 
+@pytest.mark.parametrize("key", ["jev-1.13", "gpt-6-luna-decisions"])
+def test_context_reserve_of_a_choice_api(key):
+    """Every API that estimates its requests against a window, not only chat_completions."""
+    config = preset(key)
+    fails(
+        lambda: episode(preset(key, context_reserve_tokens=config.context_window_tokens)),
+        "Context capacity must exceed generation reserve",
+    )
+
+
 def gemini(**fields):
     return ModelConfig(adapter_type="gemini_live", api_key_env="GEMINI_API_KEY", **fields)
 

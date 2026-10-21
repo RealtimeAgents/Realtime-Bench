@@ -3,11 +3,7 @@
 from typing import ClassVar
 
 from realtime_framework.entity.model import Deployment, RealtimeCapabilities
-from realtime_framework.providers.context import (
-    context_status,
-    estimated_request_tokens,
-    validate_context_reserve,
-)
+from realtime_framework.providers.context import context_status, estimated_request_tokens
 from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
 
@@ -53,7 +49,6 @@ class JevDecisionsClient(OpenAIDecisionsClient):
         """Estimate the digest state that every question of the decision sends."""
         if self.config.context_window_tokens is None:
             return {"pressure": False, "counter": "unconfigured"}
-        validate_context_reserve(self.config)
         count = estimated_request_tokens(
             render_digest(request.canonical), self.config.context_image_tokens
         )
