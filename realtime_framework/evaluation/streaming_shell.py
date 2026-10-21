@@ -6,8 +6,9 @@ as evaluation/shell.py drives the turn-based policy: it reads the clock, runs th
 kernel set. What differs is where the commands run: the shell's own thread never waits for the
 environment or for the session (phase2.md, native streaming).
 
-- Captures, actions and end checks run on the environment lanes, behind the shell's one gate
-  (evaluation/env_lanes.py); end checks have a lane of their own (stream-plan 4.9).
+- Captures, actions and end checks run on the environment lanes, behind the shell's gate
+  (evaluation/env_lanes.py): a capture and an action share it, so frames keep coming during a
+  long action, and an end check, on a lane of its own (stream-plan 4.9), holds it alone.
 - A frame goes into the session on the push lane. A reply runs on a worker until it ends; the agent
   posts its actions, and the calls the provider cancels, as they appear.
 - Feedback, accepting or discarding a reply and giving one up run on the shell's thread. Giving up

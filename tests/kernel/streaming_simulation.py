@@ -8,13 +8,14 @@ executing each run on a lane of their own, standing for the shell's other thread
 is posted when the command's time is up, so the kernel goes on handling events meanwhile. A lane
 takes one command at a time; one more while it is busy is a policy bug.
 
-The environment has a lock by resource, as the streaming shell's (evaluation/env_lanes.py) is to
-have it after decision 50: a capture and an action may hold it together, an end check and the
+The environment has a lock by resource, as the streaming shell's gate has it (evaluation/
+env_lanes.py, decision 50): a capture and an action may hold it together, an end check and the
 snapshot only alone, first come first served. An operation reads the task, presses keys or takes
 its frame once it holds the lock, not when it was asked for. The snapshot runs on a thread of its
 own and goes ahead of those waiting, after those holding the lock (``EnvLanes.freeze_turn``); the
-shell bounds that wait by the action's budget, which no script here runs into. Commit runs on the
-shell's own thread and occupies it.
+shell bounds that wait by the action's budget, which no script here runs into. Unlike the gate, a
+capture does not go past what waits to hold the lock alone while an action holds it: the policy
+never sends one then. Commit runs on the shell's own thread and occupies it.
 
 Every command is checked as it runs (one generation in flight at most; nothing captured, pushed,
 started, asked or executed at or after the deadline or after the end), and every finished episode
