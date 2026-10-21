@@ -22,6 +22,7 @@ from realtime_framework.entity.context_policy import (
     FIXED_TEXTS,
     MODEL_PRESETS,
     PRESETS,
+    DecisionHistory,
     current_context_policy,
 )
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
@@ -69,15 +70,10 @@ def test_retention_follows_the_environment(monkeypatch):
 
 @pytest.mark.parametrize("api", sorted(APIS))
 def test_feedback_placement(api):
-    """Session paths prefix the next frame (harness.py:1011); a digest carries its own."""
+    """Each action's feedback is its own block on every path, the live sessions' included; a
+    digest carries its own."""
     caps = capabilities(api)
-    expected = (
-        "frame_prefix"
-        if caps.persistent_session
-        else "digest"
-        if caps.history_replay == "action_digest"
-        else "separate_message"
-    )
+    expected = "digest" if caps.history_replay == "action_digest" else "separate_message"
     assert POLICY.paths[api].feedback == expected
 
 
@@ -101,12 +97,13 @@ def test_model_preset():
     preset's items, then the row's own."""
     k3 = POLICY.for_path("moonshot", {}, "kimi_k3")
     assert k3 == replace(POLICY.paths["moonshot"], preset="kimi_k3", reasoning_replay=True)
-    # The row's own feedback placement wins over JEV's digest. No model YAML can name jev
+    # The row's own Decision history form wins over JEV's digest. No model YAML can name jev
     # (MODEL_PRESETS); this pins the order for_path applies.
-    jev = POLICY.for_path("openai_realtime", {}, "jev")
-    assert (jev.preset, jev.feedback, jev.observation) == (
+    jev = POLICY.for_path("openai_decisions", {}, "jev")
+    assert (jev.preset, jev.decision_history, jev.feedback, jev.observation) == (
         "jev",
-        "frame_prefix",
+        DecisionHistory("turns"),
+        "digest",
         "observation_json_text",
     )
     # Luna's observation form leaves with Luna's preset; the row's own prompts stay.

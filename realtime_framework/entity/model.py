@@ -139,11 +139,11 @@ class ProviderObservation:
     image_detail: str
     geometry: dict
     inspection: dict | None = None
-    # Session paths send the pending execution feedback before the frame prompt; it is kept
-    # apart from the prompt and dropped when the screenshot folds.
+    # Under the frame_prefix placement the frame opens with the pending execution feedback,
+    # before its prompt; it is kept apart from the prompt and dropped when the screenshot folds.
     feedback_prefix: str = ""
-    # Other paths open a frame only with the feedback on a decision of which nothing was
-    # accepted, which no turn carries; the fold keeps it.
+    # Under the other placements a frame opens only with the feedback on a decision of which
+    # nothing was accepted, which no turn carries; the fold keeps it.
     unattached_feedback: str = ""
 
     @property

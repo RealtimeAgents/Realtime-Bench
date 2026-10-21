@@ -2399,7 +2399,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -2504,7 +2504,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "790b6aefaf0f95f9a066ad5a733c56662b4d57daf87b8190244778a535be9afb"
+    "hash": "2120adf07f7b532c81b9b1deb49a336b92b6a19c915f9adde19349c71d900056"
    },
    "token/None": {
     "config": {
@@ -2522,7 +2522,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -2627,7 +2627,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1ac41fb2ca413336f88e28d0a9c10f2c0d18af69437f201ff36e48c8fdc745c5"
+    "hash": "30022107242421ae46a6a93590a548f4df314781dc55b6065ff2423c8b79a224"
    },
    "wall/None": {
     "config": {
@@ -2645,7 +2645,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -2750,7 +2750,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "28e29ea495d8393b5ced79fe34c795e442fd9b6ea6a17270b84b0250c554d68d"
+    "hash": "367f62057344090a327791012a70a4de4033564599cd529523495360a158dbee"
    }
   },
   "vendor": "google"
@@ -2853,7 +2853,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -2958,7 +2958,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ba55c16ebf7db05cfc438ed2e8e5a1d53f549038ff53df85c6444531ef03a94a"
+    "hash": "7d2669d9b54065c03ecc3f205c5a8e57418c751ab41f218aaa93a7ad04149106"
    },
    "token/None": {
     "config": {
@@ -2976,7 +2976,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -3081,7 +3081,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "df3ff16655ea0c85867189f43228610e186eca675f06598749d578fc34c54766"
+    "hash": "7f14c91b2c9fac5eb828ee6f733f055fded411202f26b2aed9fe34fa4ab63ace"
    },
    "wall/None": {
     "config": {
@@ -3099,7 +3099,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -3204,7 +3204,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "21b456ffcb002a61291507348259ecca2420cdbbfca79044c6f3eb5f321a7f24"
+    "hash": "4e2688d4274d4019623c7c72cc7956ab54623c1163336739a9f873430c6b663a"
    }
   },
   "vendor": "google"
@@ -3307,7 +3307,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -3412,7 +3412,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "906d68da6d377c03aa54ae49265de5650bef76c7c5a1932161207b829d71ebf1"
+    "hash": "c25c7438bb82fe33adbd4cdab635704696036bbaea81988abca7f6870c53414c"
    },
    "token/None": {
     "config": {
@@ -3430,7 +3430,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -3535,7 +3535,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "85c2c8b69288fe7293f84269e67288b415c83448248d2f7cae2a15d5d68b97c7"
+    "hash": "badad2bacde321bd2683b330af17dcf7b819644dcd72e30dedf023aa25a41a1d"
    },
    "wall/None": {
     "config": {
@@ -3553,7 +3553,7 @@
      "context_policy": {
       "api": "gemini_live",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -3658,7 +3658,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c2e68e095a7bd427e8da9ff71e37e05ba76cdee8d85103bda299ab61d874451b"
+    "hash": "0280374ca2979baef9b6466616e1ea31a2381ab18ec23cba48a3d70c1ccd7f42"
    }
   },
   "vendor": "google"
@@ -4841,7 +4841,7 @@
      "context_policy": {
       "api": "openai_realtime",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -4940,7 +4940,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2c173e5dd8fa7f23cf80d82c57b146e4acffad7be35be1dd10654a5f2b9077d5"
+    "hash": "6f9bc641b8be4db6c4c16065a67013246a8de45c5b60157568220eca1be57bb0"
    },
    "token/None": {
     "config": {
@@ -4958,7 +4958,7 @@
      "context_policy": {
       "api": "openai_realtime",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -5057,7 +5057,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ee0754ed9ec1ff9a7532055c049408813cd373a7c469b28aa87cdb1cb6bc9870"
+    "hash": "edfd13b75e58e2d981e115ab56d3adc07ed06236de6559fce3fa91a3f65aeb6d"
    },
    "wall/None": {
     "config": {
@@ -5075,7 +5075,7 @@
      "context_policy": {
       "api": "openai_realtime",
       "decision_history": null,
-      "feedback": "frame_prefix",
+      "feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
@@ -5174,7 +5174,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1dc6b521fffd75aa5caf907932fd8724a03ea2f5b9d58d08820f2c796f4f3b2b"
+    "hash": "dc8754fcb77db1fe6b0a4287b9bc35be892c149dcce2fa3aa2bded9ba56761d2"
    }
   },
   "vendor": "openai"

@@ -103,13 +103,16 @@ def test_a_traced_session_becomes_a_cassette_that_replays_on_the_fake_clock(tmp_
     assert sent == [normalize(json.loads(message)) for message in connection.received]
     assert read == [normalize(json.loads(message)) for message in connection.sent[: len(read)]]
     assert read[2]["item"]["id"] == sent[1]["item"]["id"] == "<rtb_user-1>"
+    # The second turn sends the first turn's feedback item, then its frame.
     assert [m["type"] for m in sent] == [
         "session.update",
         "conversation.item.create",
         "response.create",
         "conversation.item.create",
+        "conversation.item.create",
         "response.create",
     ]
+    assert sent[3]["item"]["id"] == "<rtb_feedback-1>"
     assert read[-1]["type"] == "response.done"
     times = [r["at"] for r in records if r["dir"] == "s2c"]
     assert 0 <= times[0] and times[-1] < 30.0
@@ -260,7 +263,7 @@ def test_a_retried_run_converts_its_last_attempt_only(tmp_path):
     _record_session(tmp_path)
     records = ws_cassette.from_trace(tmp_path)
     assert [r["dir"] for r in records].count("open") == 1
-    assert [r["dir"] for r in records].count("c2s") == 5
+    assert [r["dir"] for r in records].count("c2s") == 6  # one session's, as listed above
 
 
 def test_a_server_messages_time_counts_from_the_episode_origin(tmp_path):

@@ -127,7 +127,8 @@ RequestBuilder = Callable[[tuple[CanonicalTurn, ...], ContentBlock | None], Cano
 
 
 def session_frame_text(observation) -> str:
-    """The prompt the live drivers send for one ProviderObservation, after its pending feedback."""
+    """The prompt the live drivers send for one ProviderObservation, after the feedback
+    prefixed to it."""
     prefix = observation.feedback_prefix
     return f"{prefix}\n{observation.prompt}" if prefix else observation.prompt
 

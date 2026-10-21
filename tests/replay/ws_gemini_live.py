@@ -58,8 +58,14 @@ TRANSCRIPT_HEADER = (
     "(current actions must use native functions):\n"
 )
 SEED_CONTENTS_PER_MESSAGE = 12  # live.py:45, 523-557
-# realtime_input sends one observation as these five messages (live.py:698-719).
-REALTIME_INPUT_ORDER = ("activityStart", "video", "text", "audio", "activityEnd")
+
+
+def realtime_input_order(feedback: int = 0) -> tuple[str, ...]:
+    """The messages realtime_input sends one observation as (live.py send_observation): a text
+    for each feedback the session does not hold yet, before the frame's."""
+    return ("activityStart", "video", *("text",) * feedback, "text", "audio", "activityEnd")
+
+
 # Answers an observation that has no scripted reply. The driver classifies 1008 with this reason
 # as FATAL (live.py:267-327), which the shared policy never retries (entity/model.py:358-360,
 # 375-378), so the decision fails at once instead of waiting for a reply.
@@ -373,14 +379,16 @@ class LiveStub:
         return exchanges
 
     async def _observation(self, ws, conn: int) -> None:
-        """Read one observation: a completed client_content turn, or the realtime_input
-        sequence (live.py:686-725)."""
+        """Read one observation: a completed client_content turn, its feedback Contents (one
+        text part each) before the frame, or the realtime_input sequence (live.py
+        send_observation)."""
         message = await self._recv(ws, conn)
         self._set_state(conn, "generating")
         if "client_content" in message:
             content = message["client_content"]
             self._check(
-                content["turnComplete"] is True and len(content["turns"]) == 1,
+                content["turnComplete"] is True
+                and all(len(turn["parts"]) == 1 for turn in content["turns"][:-1]),
                 f"conn {conn}: observation {list(content)}",
             )
             return
@@ -388,7 +396,8 @@ class LiveStub:
         while sequence[-1] != "activityEnd":
             sequence.append(next(iter((await self._recv(ws, conn))["realtime_input"])))
         self._check(
-            tuple(sequence) == REALTIME_INPUT_ORDER, f"conn {conn}: realtime_input {sequence}"
+            tuple(sequence) == realtime_input_order(sequence.count("text") - 1),
+            f"conn {conn}: realtime_input {sequence}",
         )
 
     async def _play(self, ws, conn: int, turn: list) -> None:

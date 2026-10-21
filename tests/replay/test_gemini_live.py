@@ -45,11 +45,11 @@ from .scenario import CLICK_AGREE, CLICK_NAME, LONG_SCENARIO, TASK_INSTRUCTION
 from .steps import Step
 from .ws_gemini_live import (
     AWAIT_ACK,
-    REALTIME_INPUT_ORDER,
     TRANSCRIPT_HEADER,
     LiveStub,
     WireNormalizer,
     interrupted_before_output,
+    realtime_input_order,
 )
 
 BASELINES = Path(__file__).parent / "baselines"
@@ -437,15 +437,16 @@ def seed_contents(record: dict) -> list[dict]:
     return seed_and_observations(record)[0]
 
 
-def observation_prompt(record: dict) -> str:
-    """The text of the decision's observation, for either transport (live.py:686-725)."""
+def observation_texts(record: dict) -> list[str]:
+    """The texts of the decision's observation, for either transport (live.py send_observation):
+    the feedback the session did not hold yet, each its own Content or text, then the frame's
+    prompt."""
     realtime_input = client_messages(record, "realtime_input")
     texts = [message["text"] for message in realtime_input if "text" in message]
     if texts:
-        (text,) = texts
-        return text
+        return texts
     (observation,) = seed_and_observations(record)[1]
-    return observation["turns"][0]["parts"][0]["text"]
+    return [turn["parts"][0]["text"] for turn in observation["turns"]]
 
 
 def check_rebuilds(steps: list[dict], results: list[dict]) -> None:
@@ -476,14 +477,15 @@ def check_rebuilds(steps: list[dict], results: list[dict]) -> None:
 
 
 def check_rejection_feedback(steps: list[dict]) -> None:
-    """A rejected action's detail reaches the model at the start of the next frame's prompt on a
-    persistent session (harness.py:1071-1079, 1602-1622)."""
+    """A rejected action's detail reaches the model as feedback of its own ahead of the next
+    frame, whose prompt it no longer opens (none of these frames rebuilds the session)."""
     rejected = [k for k, record in enumerate(steps) if record["commit"]["detail"]]
-    assert rejected
+    assert rejected and not set(rejected) & {k - 1 for k in REBUILD_STEPS}
     for k in rejected:
-        feedback = observation_prompt(steps[k + 1]).split("\n", 1)[0]
+        feedback, prompt = observation_texts(steps[k + 1])
         assert feedback.startswith("EXECUTION RESULT: ") and "status=rejected." in feedback
         assert steps[k]["commit"]["detail"] in feedback
+        assert not prompt.startswith("EXECUTION RESULT: ")
 
 
 def check_token_clock(steps: list[dict], config: ModelConfig) -> None:
@@ -537,9 +539,10 @@ def test_driver_default_short(live_env, tmp_path):
     steps = records[2:-1]
     with matches_baseline(name, records, tmp_path / "run"):
         check_session(stub, results)
-        for record in steps:
+        # From decision 1 on, the feedback on the decision before goes as a text of its own.
+        for k, record in enumerate(steps):
             sent = [next(iter(message)) for message in client_messages(record, "realtime_input")]
-            assert sent == list(REALTIME_INPUT_ORDER)
+            assert sent == list(realtime_input_order(feedback=int(k > 0)))
             assert seed_and_observations(record)[1] == []
         sync = results[1]["realtime_runtime"]["history_sync"]
         assert (sync["disposition"], sync["detail"]) == ("rebuilt", "go_away")
@@ -666,9 +669,9 @@ def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
         before_initialize=lambda agent: setattr(agent.driver, "clock", clock),
     )
     check_session(stub, results)
-    for record in records[2:-1]:
+    for k, record in enumerate(records[2:-1]):
         sent = [next(iter(message)) for message in client_messages(record, "realtime_input")]
-        assert sent == list(REALTIME_INPUT_ORDER)
+        assert sent == list(realtime_input_order(feedback=int(k > 0)))
     assert clock.sleeps == [1.0, 3.0, 1.0, 3.0, 1.0]
     assert session_waits(tmp_path / "run") == [
         "video_ingestion",

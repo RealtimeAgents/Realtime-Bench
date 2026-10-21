@@ -943,12 +943,12 @@ def test_jev_opens_the_next_observation_with_the_note(tmp_path, monkeypatch):
 
 
 def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
-    """OpenAI Realtime, whose feedback opens the next frame. Decision 1's frame opens with
-    decision 0's feedback, and its reply is back when its move runs over the per-move cap: the
-    kernel aborts and discards its generation, and reports skipped_timeout for a decision of
-    which nothing was accepted. Decision 0's action record and turn keep their own outcome. The
-    next frame opens with decision 0's feedback, which only the discarded frame carried, then
-    the note that decision 1's move was skipped."""
+    """OpenAI Realtime, whose feedback is an item of its own after each reply. Decision 1's
+    reply is back when its move runs over the per-move cap: the kernel aborts and discards its
+    generation, and reports skipped_timeout for a decision of which nothing was accepted.
+    Decision 0's action record and turn keep their own outcome, and its feedback item follows
+    its reply, ahead of decision 1's frame and in the replay after the abort. The note on
+    decision 1 has no turn to follow, so the next frame opens with it."""
     steps = [LONG_SCENARIO[0], LONG_SCENARIO[2], LONG_SCENARIO[3]]
     with RealtimeStub(realtime_replies(steps)) as stub:
         episode = build_episode(
@@ -981,15 +981,19 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
             episode.finish()
         stub.finish()
     assert skipped.cancelled and skipped.staged.result is not None
-    assert skipped.staged.observation.feedback_prefix == feedback
+    # Decision 0's feedback went as its own item: decision 1's frame opens with none.
+    opening = skipped.staged.observation
+    assert (opening.feedback_prefix, opening.unattached_feedback) == ("", "")
     assert agent.action_history[0] == record and record["result"] == "applied"
     assert [r["tick"] for r in agent.action_history] == [1, 2]
     first, last = agent._runtime.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    prefix = f"{feedback}\n{NOTE}"
-    assert last.observation.feedback_prefix == prefix
-    frames = [text for _, role, text, _ in stub.views[-1] if role == "user" and text]
-    assert frames[-1].startswith(prefix)
+    assert (last.observation.feedback_prefix, last.observation.unattached_feedback) == ("", NOTE)
+    for view in (stub.views[1], stub.views[-1]):
+        items = [(role, text) for _, role, text, _ in view]
+        replied = items.index(("assistant", CLICK_NAME))
+        assert items[replied + 1] == ("user", feedback)
+    assert items[-1][1].startswith(NOTE + "\n")
 
 
 def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch):
