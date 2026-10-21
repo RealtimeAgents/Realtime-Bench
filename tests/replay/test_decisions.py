@@ -41,7 +41,7 @@ BASELINES = Path(__file__).parent / "baselines"
 DUMMY_KEY = "replay-dummy-key"
 # api -> (catalog key = configs/models/<key>.yaml, upstream provider the response must name).
 # Luna's upstream is the YAML's upstream_provider; JEV's comes from its driver's model_defaults
-# (providers/jev/decisions.py:31-33; registry.py:277-278, 299-300; openai_decisions.py:196-197).
+# (providers/jev/decisions.py:31-33; registry.py:277-278, 299-300; decisions/protocol.py decide).
 APIS = {
     "openai_decisions": ("gpt-6-luna-decisions", "openai"),
     "jev_decisions": ("jev-1.13", "typesafe"),
@@ -117,8 +117,8 @@ def _runtime(record: dict) -> dict:
 
 
 def _check_requests(api: str, records: list[dict]) -> None:
-    """One POST per question attempt (openai_decisions.py:173), the route block only for Luna
-    (openai_decisions.py:113-118; providers/jev/decisions.py:29-30)."""
+    """One POST per question attempt (providers/decisions/protocol.py decide), the route block
+    only for Luna (pin_route: providers/openai_decisions.py, providers/jev/decisions.py)."""
     for record in records:
         for request in record["requests"]:
             assert request["path"] == "/api/alpha/decisions"
