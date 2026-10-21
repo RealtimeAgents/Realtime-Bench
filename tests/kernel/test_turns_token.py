@@ -1234,21 +1234,51 @@ def test_a_tap_that_sees_the_end_ends_the_episode_at_its_tick_by_the_tasks_reaso
     assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 1)
 
 
-def test_an_end_a_tap_saw_is_not_lost_to_a_failed_check_after_it():
-    # As above, with the check after execution scripted to fail: it is not asked, so it neither
-    # delays the end nor counts. Today's loop would have invalidated the run there.
+def test_the_reads_a_repeated_tap_makes_after_it_saw_the_end_are_not_counted():
+    # At 1 fps a tap repeated four times reads once a press, at 1/60, 2/60, 3/60 and 4/60. The
+    # first read sees the end and the three after it fail: the end ends the episode, by the
+    # task's reason, and the reads made after it count for nothing, where today's loop, reading
+    # with done(), would have invalidated the run at the first of them.
+    tap = Action(ActionType.KEY, {"key": "space", "repeat": 4})
     sim = _run(
-        _token(10, None, env_fps=120),
-        Reply(action=TAP),
-        ends_at=1,
+        _token(10, None),
+        Reply(action=tap),
+        ends_at=1 / 60,
         end_reason="target_reached",
-        check_errors={2: "check 2 failed"},
+        tap_check_errors={2: "read 2 failed", 3: "read 3 failed", 4: "read 4 failed"},
     )
-    assert sim.tap_checks == [1]
-    assert _asked(sim) == [0]
-    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
+    assert sim.tap_checks == pytest.approx([1 / 60, 2 / 60, 3 / 60, 4 / 60])
+    (executed,) = sim.entries("ActionExecuted")
+    assert [error is not None for _, _, error in executed.data.end_checks] == [
+        False,
+        True,
+        True,
+        True,
+    ]
     assert sim.entries("RunInvalidated") == []
-    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 1)
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
+    assert sim.termination.stop_reason == "target_reached"
+
+
+def test_a_taps_reads_count_in_the_order_they_were_made():
+    # Paused at 120 fps, a tap repeated twice reads at ticks 1 and 2, then at 3, where the task
+    # has ended. The loop top's read failed, and so do the tap's first two: the third failure
+    # in a row comes before the read that sees the end, and invalidates the run.
+    tap = Action(ActionType.KEY, {"key": "space", "repeat": 2})
+    sim = _run(
+        _token(8 / 120, None, env_fps=120, input_fps=120),
+        Reply(action=tap),
+        ends_at=3,
+        check_errors={1: "loop top failed"},
+        tap_check_errors={1: "tap read 1 failed", 2: "tap read 2 failed"},
+    )
+    assert sim.tap_checks == [1, 2, 3]
+    termination = sim.termination
+    assert termination.stop_reason == "invalid_run"
+    assert termination.invalid == Invalidated(
+        "environment", "terminal_state_check_failed", "tap read 2 failed"
+    )
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
 
 
 def test_an_end_seen_by_a_repeated_tap_dates_from_where_the_tap_stopped():
