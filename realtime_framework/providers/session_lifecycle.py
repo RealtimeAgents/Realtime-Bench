@@ -37,9 +37,10 @@ class SessionLifecycle:
 
     The session is connected once connect() opened it or a sync left it exact, and no longer once
     close() or abort() closed it or a sync raised an Exception or broke it; the last two leave it
-    broken until it is opened again. A connected session is dirty when the provider may hold what
-    the canonical history does not: a generation on it failed or was aborted (mark_dirty), a sync
-    left it neither exact nor broken, or a sync was cut short (RetryCancelled, a cancelled task).
+    broken until it is opened again or aborted. A connected session is dirty when the provider
+    may hold what the canonical history does not: a generation on it failed or was aborted
+    (mark_dirty), a sync left it neither exact nor broken, or a sync was cut short
+    (RetryCancelled, a cancelled task).
     A connection that an operation closes on its way (the one a connect replaces, one past its
     goAway deadline) changes neither.
 
@@ -78,7 +79,7 @@ class SessionLifecycle:
     _dirty = False
     _broken = False
     _cleanup: asyncio.Task | None = None
-    _lock: asyncio.Lock | None = None
+    _operation_lock: asyncio.Lock | None = None
 
     @property
     def state(self) -> RuntimeState:
@@ -206,9 +207,9 @@ class SessionLifecycle:
 
     def _session_lock(self) -> asyncio.Lock:
         # Made on first use, on the execution thread's loop, which every operation runs on.
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
+        if self._operation_lock is None:
+            self._operation_lock = asyncio.Lock()
+        return self._operation_lock
 
     async def _sync(
         self, request: HistorySyncRequest, record: Callable[..., None]
