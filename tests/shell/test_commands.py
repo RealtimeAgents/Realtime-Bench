@@ -319,6 +319,17 @@ def test_a_result_back_while_the_shell_is_busy_is_settled_only_if_the_kernel_tak
     assert ("accept", 1) not in agent.calls and ("discard", 1) in agent.calls
 
 
+def test_a_result_back_before_the_cap_while_the_shell_is_busy_is_filed_after_it():
+    """Decision 47: the end check asked at 1 s takes 1 s, and the reply comes back at 1.4 s,
+    before the 1.5 s cap. It is filed at the reading after the check, and the cap, due by then,
+    goes first: the move is skipped and its records are those of the call given up on. (The
+    runner, which checked nothing during a generation, applied it.)"""
+    world = World(slow_checks=[(1.0, 1.5, 1.0)])
+    episode = run("wall", 3.0, [Reply(1.4), Reply(0.5)], world, per_move_cap_s=1.5)
+    assert episode.statuses() == ["skipped_timeout", "applied"]
+    assert _decisions(episode.trace.payloads("InferenceCompleted")) == [(0, True), (1, False)]
+
+
 def test_a_move_over_the_cap_took_the_cap_though_the_shell_saw_it_late():
     """The 1.5 s cap falls due during the end check that runs from 1 s to 2 s. The move is
     charged the cap (kernel/turns.py on_timer), and its record says so, as the runner's bounded
