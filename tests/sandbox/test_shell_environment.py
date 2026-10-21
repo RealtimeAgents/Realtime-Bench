@@ -15,7 +15,7 @@ import pytest
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import Action, ActionType
-from realtime_framework.sandbox.actions import GuestEnvironment
+from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, GuestEnvironment
 from realtime_framework.sandbox.budget import BudgetExceeded
 
 from ..fake_clock import FakeClock
@@ -408,6 +408,23 @@ def test_a_tap_s_failed_reads_go_to_the_kernel_and_the_tap_goes_on():
     assert failed.rstrip().endswith("RuntimeError: no state") and answered is None
     assert env.tick_index() == 2
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "advance", "keyUp"]
+    assert getattr(env, "_invalid_run", None) is None
+
+
+def test_a_tap_s_reads_that_run_past_their_budget_go_to_the_kernel_too():
+    """A wedged environment, X12's main case: each read times out (BudgetExceeded)."""
+    clock = FakeClock()
+
+    def stop_check():
+        clock.sleep(ENVIRONMENT_BUDGET.state_read_s + 1.0)
+        return False
+
+    env, _ = _token(120.0, stop_check=stop_check, clocks=Clocks(FrameClock(120.0), clock))
+    with clock.participant():
+        assert _kernel_counting(env).execute(TAP) == "applied"
+    assert len(env.last_end_checks) == 2
+    for error in env.last_end_checks:
+        assert error.rstrip().endswith("BudgetExceeded: state read took longer than 120 s")
     assert getattr(env, "_invalid_run", None) is None
 
 
