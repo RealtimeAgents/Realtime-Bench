@@ -5,7 +5,8 @@
 2. The runner-loop cases of tests/replay/test_runner_loop.py (CASES and the long scenario, its
    actions spelled in the script vocabulary).
 3. What the replay tests lacked: a wall result exactly at the deadline, a wall wait across the
-   deadline, a hold expiring between two frames on both clocks, a frozen stream.
+   deadline, a retry across the deadline, a hold expiring between two frames on both clocks, a
+   frozen stream.
 4. A script for each expected difference (rules.py).
 5. phase2.md:283: a wall game that ends during a model call, found by the periodic check; an
    early end whose teardown runs past the deadline.
@@ -215,6 +216,17 @@ MISSING = [
         _timed(["click", "type:Ada", "wait:5"], [0.5, 0.5, 0.5]),
         expect=frozenset({"U1", "X1", "X2"}),
         name="wall-wait-across-the-deadline",
+    ),
+    # Decision 3's request fails twice with HTTP 503 at once, as in test_runner_clock: the first
+    # backoff (1 s +-25%, entity/model.py) already runs past the 3.75 s deadline, and today's
+    # bounded wait gives up at 5.75 s. The simulation needs only a reply past the deadline.
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM[:3], [0.5] * 3)
+        + (Turn("click", attempts=(Attempt(0.0, 503), Attempt(0.0, 503), Attempt(0.5))),),
+        expect=frozenset({"K-a", "K-g", "U1"}),
+        name="wall-retry-across-the-deadline",
     ),
     # A 0.5 s hold pressed at 0.25 s is released at 0.75 s, between the frames at 0 and 1 s.
     Script(
