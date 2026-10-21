@@ -215,8 +215,8 @@ class GenerationRequest:
     timeout_s: float | None = None
     # Filled by the runtime from the retained history before each provider call.
     canonical: CanonicalRequest | None = None
-    # The event kernel's number of this generation, for an agent that keys a generation's state by
-    # it; None when the agent does not pass it on, as the default harness's requests do not.
+    # The event kernel's number of this generation, which the default harness keys the
+    # generation's state by; None when the legacy loop drives the agent and numbers none.
     generation: int | None = None
 
 
