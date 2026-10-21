@@ -34,7 +34,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 from websockets.frames import Opcode
 from websockets.protocol import CLOSED, OPEN
@@ -376,10 +376,11 @@ class _Connection:
         """The server ended its side after the closing handshake; the client ends its own as soon
         as it reads that, with no time passing. Wait for it in real time, busy on the clock: the end
         of a stream in flight, unlike bytes, does not keep the fake clock still, so while it
-        travels every participant could be waiting and the clock would stall."""
+        travels every participant could be waiting and the clock would stall. A reset ends it too."""
         self.sock.settimeout(CLIENT_END_WAIT_S)
-        while self.sock.recv(RECV_BYTES):
-            pass
+        with suppress(ConnectionResetError):
+            while self.sock.recv(RECV_BYTES):
+                pass
         self.protocol.receive_eof()
 
 

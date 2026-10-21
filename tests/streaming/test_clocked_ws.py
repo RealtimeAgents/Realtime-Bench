@@ -364,6 +364,22 @@ def test_a_client_that_resets_its_connection_closes_it_without_a_close_frame():
     assert [_replay(records, client) for _ in range(10)] == [[]] * 10
 
 
+def test_a_reset_while_the_server_awaits_the_clients_end_is_that_end():
+    """L10(c): websockets' close_socket shuts the client's side down before it closes the socket,
+    so with SO_LINGER(1, 0) the reset can come after the end of the stream, while the server waits
+    for the client's end."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    peer = socket.create_connection(listener.getsockname())
+    sock, _ = listener.accept()
+    listener.close()
+    peer.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    peer.close()
+    try:
+        clocked_ws._Connection(None, sock)._await_client_end()
+    finally:
+        sock.close()
+
+
 def test_a_binary_message_is_a_problem():
     """L10(f): a recording holds text messages only."""
     records = [_record("open", at=0.0)]
