@@ -28,19 +28,38 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 import traceback
 
 from websockets.frames import Opcode
 from websockets.protocol import CLOSED, OPEN
 from websockets.server import ServerProtocol
 
-from tests.fake_clock import wait_delivered
+from tests import fake_clock
 from tests.replay import baseline
 
 from .ws_cassette import Cursor
 
 RECV_BYTES = 65536
 CLIENT_END_WAIT_S = 10.0  # real seconds, like websockets' close timeout
+
+
+def wait_delivered(sock) -> None:
+    """tests/fake_clock.py's wait_delivered, which looks for the peer's close with a blocking
+    peek. The clocked client reads its socket on another thread, which can take the bytes between
+    that look and the peek; the peek then waits for bytes that never come, holding the protocol
+    lock the reader needs next (websockets/sync/connection.py:833, 1024). This one never blocks:
+    busy until the peer's kernel holds every byte written to ``sock``, or the peer has closed the
+    connection, or the socket has."""
+    while sock.fileno() >= 0 and fake_clock._unacknowledged(sock.fileno()) > 0:
+        try:
+            if not sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT):
+                return
+        except BlockingIOError:
+            pass  # nothing to read: the peer is still there
+        except OSError:
+            return
+        time.sleep(0.0001)
 
 
 class CassetteServer:
