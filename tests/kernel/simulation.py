@@ -150,6 +150,7 @@ class Simulation:
         self.command_times: list[float] = []  # the semantic time each command was run at
         self.checks: list[tuple[float, float]] = []  # (semantic, ops) at every end check
         self.after_action: list[bool] = []  # for every end check, whether it follows an action
+        self.before_landing: list[bool] = []  # and whether it comes right before a landing
         self.tap_checks: list[float] = []  # the tick at every end check inside a key tap
         self.captures: list[tuple[float, float]] = []  # (tick, timestamp) of every frame
         self.executed: list[tuple[int, float, Action]] = []  # (decision, semantic, action)
@@ -250,6 +251,7 @@ class Simulation:
                 semantic = self.semantic()
                 self.checks.append((semantic, self.ops))
                 self.after_action.append(kernel.policy.phase.value == "post_check")
+                self.before_landing.append(kernel.policy.phase.value == "pre_check")
                 error = world.check_errors.get(len(self.checks))
                 ended = error is None and (
                     (world.ends_at is not None and semantic >= world.ends_at)

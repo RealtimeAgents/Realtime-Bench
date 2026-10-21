@@ -14,6 +14,7 @@ reading only a tick not read yet; on the wall clock once a frame by the check du
 
 from __future__ import annotations
 
+import math
 import random
 from collections import Counter
 from dataclasses import asdict
@@ -101,16 +102,24 @@ def _past_the_deadline(sim: Simulation) -> list:
     ]
 
 
-def _reads_by_reading(sim: Simulation) -> Counter:
-    """How many times the state was read at each semantic reading, besides the reads after an
-    action: on the token clock a reading is a tick, which a tap's reads also read."""
-    readings = Counter(
-        semantic
-        for (semantic, _), after in zip(sim.checks, sim.after_action, strict=True)
-        if not after
-    )
-    readings.update(sim.tap_checks)
-    return readings
+def _reads_by_what_they_read(sim: Simulation) -> Counter:
+    """How many times the state was read over each thing a read reads, besides the reads right
+    after an action: on the token clock a tick, which a tap's reads also read; on the wall clock
+    the environment frame, but for the check before landing its reading."""
+    counts = Counter()
+    for (semantic, _), after, before in zip(
+        sim.checks, sim.after_action, sim.before_landing, strict=True
+    ):
+        if after:
+            continue
+        if sim.token:
+            counts["tick", semantic] += 1
+        elif before:
+            counts["reading before landing", semantic] += 1
+        else:
+            counts["frame", math.floor(semantic * sim.config.env_fps + 1e-9)] += 1
+    counts.update(("tick", tick) for tick in sim.tap_checks)
+    return counts
 
 
 def _check_invariants(sim: Simulation) -> None:
@@ -129,9 +138,9 @@ def _check_invariants(sim: Simulation) -> None:
     assert [command for command in commands[ended:] if isinstance(command, banned)] == []
     # Nor from the wall deadline on, though an answer filed before it may be handled after it.
     assert _past_the_deadline(sim) == []
-    # The state is read at most once a reading, and once more after every action that did not
-    # end the episode.
-    assert set(_reads_by_reading(sim).values()) <= {1}
+    # The state is read at most once over what a read reads, and once more after every action
+    # that did not end the episode.
+    assert set(_reads_by_what_they_read(sim).values()) <= {1}
     landed = [
         entry
         for entry in sim.entries("ActionResolved")
@@ -1220,6 +1229,7 @@ def _random_wall_episode(seed: int) -> tuple[TurnConfig, World]:
         start_s=rng.choice([0.0, 0.0, 0.6]),
     )
     config = _wall(duration_s, per_move_cap_s=rng.choice([None, None, None, 1.5]))
+    world.accept_s = rng.choice([0.0, 0.0, 0.01, 0.3])
     return config, world
 
 
