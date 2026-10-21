@@ -2,18 +2,19 @@
 
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it and the execution-feedback item after those, and the archived-action
-ledger item; in native streaming, an item for each block of the streaming history view, a frame,
-a reply's output or an execution feedback, in the order the agent accepted them, feedback placed
-in front of a frame going into the frame's item. From a history view it plans the item creates
-and deletes that bring the server there, and it records what became of each one, which the
-driver writes to the event log: unknown while it is written, sent once the write returned,
+ledger item; in native streaming, the item of each frame and each execution feedback the driver
+pushed (feedback placed in front of a frame goes into the frame's item), each after the item the
+server put it after, a reply's items being the server's. From a history view it plans the item
+creates and deletes that bring the server there, and it records what became of each one, which
+the driver writes to the event log: unknown while it is written, sent once the write returned,
 acknowledged once the server confirmed it, refused if the server answered a native-streaming
 push with an error. Each server event the driver reads is handed to ``receive``, in the order the
 connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
 settles the in-place edit waiting for it, an error about a block native streaming pushed refuses
-that block alone, a response event joins its generation. Sending and receiving are the driver's;
-it reads only while something waits for an event, so what arrives after the last wait reaches the
-core with the next read.
+that block alone, a response event joins its generation. Sending and receiving are the driver's.
+On a turn-based session it reads only while something waits for an event, so what arrives after
+the last wait reaches the core with the next read; native streaming's reader reads every event as
+it arrives and hands it to ``arrived``.
 """
 
 from __future__ import annotations
@@ -89,7 +90,8 @@ def _unrecorded(state: str, contents: list[tuple]) -> None:
 
 @dataclass
 class SentFrame:
-    """A frame as the driver last wrote it into the conversation."""
+    """A frame as the driver last wrote it into the conversation; in native streaming, an
+    execution feedback the driver pushed as well."""
 
     user_item_id: str
     text: str
@@ -138,8 +140,8 @@ class EditBatch:
 @dataclass(frozen=True)
 class ViewFrame:
     """One frame of a history view, with the frame prefix before it, and the output and the
-    execution feedback after it; of a native-streaming view, one block, a frame with the prefix
-    before it."""
+    execution feedback after it; of a native-streaming view, one block of any kind, a frame with
+    the prefix before it."""
 
     item: RequestItem
     prefix: str = ""
@@ -178,10 +180,9 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
 
 def streaming_blocks(items) -> list[ViewFrame]:
     """Read a native-streaming history view (harnesses/streaming/history.py): its blocks in the
-    order the agent accepted them, frames, replies' outputs and execution feedback, each one item
-    of the session. Feedback the policy places in front of a frame is that frame's prefix, as a
-    turn-based frame's is; the feedback waiting at the end for the next frame is not yet any
-    item's."""
+    order the agent accepted them, frames, replies' outputs and execution feedback. Feedback the
+    policy places in front of a frame is that frame's prefix, as a turn-based frame's is; the
+    feedback waiting at the end for the next frame is not yet any block's."""
     blocks, prefix = [], ""
     for item in items:
         if item.intent.position == "frame_prefix":
@@ -194,10 +195,10 @@ def streaming_blocks(items) -> list[ViewFrame]:
 
 @dataclass
 class Generation:
-    """One response on this connection: its number on the connection, the frame it answers (in
-    native streaming, the output block it becomes instead), its response id once the server
-    created it, the output items the server made for it, the client event that cancels it, and
-    its server events not yet taken, in arrival order."""
+    """One response on this connection: its number on the connection, the frame it answers (None
+    for a native-streaming reply, which answers the session as it is), its response id once the
+    server created it, the output items the server made for it, the client event that cancels
+    it, and its server events not yet taken, in arrival order."""
 
     number: int
     answered: SentFrame | None
@@ -205,7 +206,6 @@ class Generation:
     output_item_ids: list[str] = field(default_factory=list)
     cancel_event_id: str | None = None
     events: deque = field(default_factory=deque)
-    output_id: str | None = None
     # When native streaming's reader received each completed output text, by server event id.
     received_at: dict[str, float] = field(default_factory=dict)
 
@@ -241,11 +241,12 @@ class RealtimeSessionCore:
         # When native streaming's reader received the first event that confirmed each operation,
         # by Operation.key, on the driver's clock.
         self.acknowledged_at: dict[tuple[str, str], float] = {}
+        # The item the server had before each item native streaming created, as the creation's
+        # confirmation names it (None: the first), followed to its replacement once replaced.
+        self._previous: dict[str, str | None] = {}
         self._blocks: dict[tuple[str, str], str | None] = {}
         # Every block native streaming pushed, by the client event of its create.
         self.pushes: dict[str, Push] = {}
-        # The items of each reply native streaming requested, by the output block it becomes.
-        self.outputs: dict[str, list[str]] = {}
         # The in-place edit waiting for the server: its operations not yet confirmed, and the
         # error that failed it.
         self._edit: EditBatch | None = None
@@ -357,7 +358,6 @@ class RealtimeSessionCore:
             block = frame.item.block
             if block.kind == "model_output":
                 assistant = self._output_create(frame.item if block.text else None)
-                self.outputs[block.id] = [] if assistant is None else [assistant.item_id]
                 operations += [] if assistant is None else [assistant]
             else:
                 operations.append(self._push(frame))
@@ -386,13 +386,22 @@ class RealtimeSessionCore:
         self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
         return user
 
-    def push(self, history: CanonicalRequest) -> Create:
-        """Plan the user item of a native-streaming history view's newest block, a frame with the
-        feedback in front of it or an execution feedback, as native streaming pushes it while
-        responses and edits are in progress: its create names a client event, so a server error
-        about it refuses this block alone, with the feedback in front of a frame, which is in the
-        frame's item."""
-        return self._push(streaming_blocks(history.items)[-1])
+    def push(self, history: CanonicalRequest) -> list[Create]:
+        """Plan, in the order of the native-streaming history view, the user items of the blocks
+        it holds that the session lacks: each frame, with the feedback in front of it, and each
+        execution feedback the policy makes an item of its own. A reply's items are the server's,
+        and a block the server refused stays out. Native streaming pushes them while replies and
+        edits are in progress, so each create names a client event: a server error about it
+        refuses that block alone, with the feedback in front of a frame, which is in the frame's
+        item."""
+        refused = {push.block_id for push in self.pushes.values() if push.error is not None}
+        return [
+            self._push(frame)
+            for frame in streaming_blocks(history.items)
+            if frame.item.block.kind != "model_output"
+            and frame.id not in self.frames
+            and frame.id not in refused
+        ]
 
     def _push(self, frame: ViewFrame) -> Create:
         user = self._frame_create(frame, event_id=self._new_id("push"))
@@ -422,14 +431,16 @@ class RealtimeSessionCore:
         self._unconfirmed = {op.key for op in batch.operations}
         return batch
 
+    @staticmethod
+    def _changed(frame: ViewFrame, sent: SentFrame) -> bool:
+        """Whether a sent user item's text changed in the view, or its screenshot folded."""
+        return frame.text != sent.text or (frame.item.block.folded and not sent.folded)
+
     def _replacement(
         self, frame: ViewFrame, sent: SentFrame, previous_item_id: str
     ) -> list[Operation]:
-        """Replace a sent user item whose text changed or whose screenshot folded with the
-        view's, where it was: delete it, then create the view's after ``previous_item_id``.
-        Nothing when it is unchanged."""
-        if frame.text == sent.text and not (frame.item.block.folded and not sent.folded):
-            return []
+        """Replace a sent user item with the view's, where it was: delete it, then create the
+        view's after ``previous_item_id``."""
         delete = Delete(sent.user_item_id, self._new_id("delete"))
         create = self._frame_create(
             frame, previous_item_id=previous_item_id, event_id=self._new_id("create")
@@ -472,7 +483,8 @@ class RealtimeSessionCore:
         for frame in frames:
             sent = self.frames[frame.id]
             folded = frame.item.block.folded
-            replacement = self._replacement(frame, sent, previous_item_id)
+            changed = self._changed(frame, sent)
+            replacement = self._replacement(frame, sent, previous_item_id) if changed else []
             operations += replacement
             folded_count += int(folded and not sent.folded)
             prompt_edit_count += int(frame.text != sent.text)
@@ -549,14 +561,20 @@ class RealtimeSessionCore:
             del self.frames[frame_id]
         for frame_id, planned in batch.frames.items():
             sent = self.frames[frame_id]
+            if planned[0] != sent.user_item_id:
+                # The item after the replaced one now follows its replacement.
+                for after, before in self._previous.items():
+                    if before == sent.user_item_id:
+                        self._previous[after] = planned[0]
             sent.user_item_id, sent.text, sent.folded = planned
         return batch
 
     def queue_edit(self, history: CanonicalRequest) -> EditBatch | None:
-        """Plan a native-streaming edit to the streaming history view, or keep the view while an
-        edit is not finished: one edit is sent at a time. Returns the batch to send now; None
-        while the view is kept, to be planned by next_edit once that edit is finished, or dropped
-        if it fails."""
+        """Plan a native-streaming edit to the streaming history view, after the push of what it
+        holds that the session lacks, or keep the view while an edit is not finished: one edit is
+        sent at a time. Returns the batch to send now, which waits for the server's answers and
+        then finish_edit even when it has no operation; None while the view is kept, to be
+        planned by next_edit once that edit is finished, or dropped if it fails."""
         self._queued = history
         return self.next_edit()
 
@@ -566,51 +584,37 @@ class RealtimeSessionCore:
         if self._edit is not None or self._queued is None:
             return None
         history, self._queued = self._queued, None
-        return self._begin(self._fold_batch(self._held_blocks(history)))
+        return self._begin(self._fold_batch(history))
 
-    def _held_blocks(self, history: CanonicalRequest) -> list[ViewFrame]:
-        """The native-streaming view's blocks an edit covers: those up to the newest one the
-        session holds, except the blocks whose push the server refused, which the server does
-        not have. Every other block before the newest held one is held: frames and feedback are
-        pushed in the view's order, and a reply's output joins the view only once the reply has
-        ended. The view's blocks after the newest held one are not in the session yet; the
-        session's blocks the view lacks were pushed after it was made, as a view keeps every
-        block it once had (decision 4.6). The edit leaves them all alone."""
-        refused = {push.block_id for push in self.pushes.values() if push.error is not None}
-        blocks = [frame for frame in streaming_blocks(history.items) if frame.id not in refused]
-        held = [index for index, frame in enumerate(blocks) if self._holds(frame.item.block)]
-        return blocks[: held[-1] + 1] if held else []
+    def _fold_batch(self, history: CanonicalRequest) -> EditBatch:
+        """Plan one native-streaming edit from the view, in send order: replace each frame or
+        feedback item whose text changed or whose screenshot folded where it is on the server, as
+        a turn-based edit does (decision 23: the view folds each frame older than the newest K to
+        the turn-based placeholder): after the item the server has before it, or after that
+        item's replacement in this edit. Every block stays, so nothing else is deleted. Every
+        operation names its client event.
 
-    def _holds(self, block) -> bool:
-        return block.id in (self.outputs if block.kind == "model_output" else self.frames)
-
-    def _fold_batch(self, blocks: list[ViewFrame]) -> EditBatch:
-        """Plan one native-streaming edit from the blocks it covers, in send order: replace each
-        user item whose text changed or whose screenshot folded, after the item of the block
-        before it in the view, as a turn-based edit does (decision 23: the view folds each frame
-        older than the newest K to the turn-based placeholder). A frame pushed while a reply ran
-        is before the reply in the view but may be after its items on the server; its
-        replacement goes where the view has it, as a rebuild would put it. Every block stays, so
-        nothing else is deleted. Every operation names its client event."""
+        The edit covers the frames and feedback of the view the session holds. The view's others
+        are not pushed yet, or were refused, which the server does not have; a reply's items are
+        the server's. The session's blocks the view lacks were pushed after it was made, as a
+        view keeps every block it once had (decision 4.6)."""
         operations: list[Operation] = []
         replaced: dict[str, tuple[str, str, bool]] = {}
+        placed: dict[str, str] = {}  # each item this edit replaces, and its replacement
         folded_count = 0
         prompt_edit_count = 0
-        previous_item_id = "root"
-        for frame in blocks:
+        for frame in streaming_blocks(history.items):
             block = frame.item.block
-            if block.kind == "model_output":
-                if self.outputs[block.id]:
-                    previous_item_id = self.outputs[block.id][-1]
+            sent = self.frames.get(block.id)
+            if sent is None or not self._changed(frame, sent):
                 continue
-            sent = self.frames[block.id]
-            replacement = self._replacement(frame, sent, previous_item_id)
+            before = self._previous[sent.user_item_id]
+            replacement = self._replacement(frame, sent, placed.get(before, before) or "root")
             operations += replacement
             folded_count += int(block.folded and not sent.folded)
             prompt_edit_count += int(frame.text != sent.text)
-            previous_item_id = replacement[-1].item_id if replacement else sent.user_item_id
-            if replacement:
-                replaced[block.id] = (previous_item_id, frame.text, block.folded)
+            placed[sent.user_item_id] = replacement[-1].item_id
+            replaced[block.id] = (replacement[-1].item_id, frame.text, block.folded)
         return EditBatch(
             tuple(operations),
             self.ledger_item_id,
@@ -629,11 +633,12 @@ class RealtimeSessionCore:
         self._requested.append(generation)
         return generation
 
-    def start_reply(self, output_id: str) -> Generation:
-        """Register a response native streaming is about to request, whose output becomes the
-        history view's block ``output_id``; it takes its events as start_generation's does."""
+    def start_reply(self) -> Generation:
+        """Register the response native streaming is about to request on the session as it is,
+        before its response.create goes out and after the push of what the reply should see; it
+        takes its events as start_generation's does."""
         self._generations += 1
-        generation = Generation(self._generations, None, output_id=output_id)
+        generation = Generation(self._generations, None)
         self._requested.append(generation)
         return generation
 
@@ -690,6 +695,8 @@ class RealtimeSessionCore:
         key = self._acknowledged(kind, event)
         if key is not None:
             self.acknowledged_at.setdefault(key, now)
+            if key[0] == "create":
+                self._previous.setdefault(key[1], getattr(event, "previous_item_id", None))
         elif kind == "response.output_text.done":
             generation = self._responses[getattr(event, "response_id", None)]
             generation.received_at[getattr(event, "event_id", None)] = now
@@ -730,20 +737,16 @@ class RealtimeSessionCore:
 
     def _response_event(self, generation: Generation, kind: str, event) -> None:
         """Record what a response event says about the conversation: the output items the server
-        made, and at response.done the answered frame's assistant items, or the items of the
-        output block a native-streaming reply becomes."""
+        made, and at response.done the answered frame's assistant items."""
         if kind in {"response.output_item.added", "response.output_item.done"}:
             self._output_item(generation, getattr(getattr(event, "item", None), "id", None))
         elif kind == "response.done":
             response = getattr(event, "response", None)
             for item in getattr(response, "output", None) or []:
                 self._output_item(generation, getattr(item, "id", None))
-            if getattr(response, "status", None) != "failed":
-                # A superseded response's session is closed and replayed before its next use.
-                if generation.answered is None:
-                    self.outputs[generation.output_id] = list(generation.output_item_ids)
-                else:
-                    generation.answered.assistant_item_ids = list(generation.output_item_ids)
+            # A superseded response's session is closed and replayed before its next use.
+            if getattr(response, "status", None) != "failed" and generation.answered is not None:
+                generation.answered.assistant_item_ids = list(generation.output_item_ids)
             del self._responses[generation.response_id]
 
     @staticmethod

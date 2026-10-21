@@ -104,9 +104,11 @@ class _Session:
     """One open connection: the number the trace gives its WebSocket connection, its session core
     and its one reader.
 
-    The reader reads on demand: only while something waits for an acknowledgement or a response
-    event, and at most one read at a time, which every waiter awaits instead of receiving on its
-    own. Each server event it reads goes to the core, which hands it to the state it belongs to.
+    On a turn-based session the reader reads on demand: only while something waits for an
+    acknowledgement or a response event, and at most one read at a time, which every waiter
+    awaits instead of receiving on its own. On a native-streaming session it reads every event as
+    it arrives, from the connect until the connection ends, and waiters only wait for its reads.
+    Each server event it reads goes to the core, which hands it to the state it belongs to.
     """
 
     def __init__(self, number: int, conn, core: RealtimeSessionCore):
@@ -114,9 +116,34 @@ class _Session:
         self.core = core
         self._conn = conn
         self._read: asyncio.Task | None = None
+        # Native streaming: the reader that reads every event, the clock it reads each event's
+        # arrival on, and what tells waiters that it read one.
+        self._reader: asyncio.Task | None = None
+        self._clock = None
+        self._read_one: asyncio.Event | None = None
         # How the connection ended: closed normally (by either side), or a failed read.
         self.closed: ConnectionClosedOK | None = None
         self.failure: Exception | None = None
+
+    def read_continuously(self, clock) -> None:
+        """Read every event as it arrives until the connection ends, and hand each to the core
+        with the time ``clock`` reads then (native streaming)."""
+        self._clock, self._read_one = clock, asyncio.Event()
+        self._reader = asyncio.create_task(self._read_all())
+
+    async def _read_all(self) -> None:
+        while self.closed is None and self.failure is None:
+            await self._receive()
+            self._read_one.set()
+
+    async def stop_reading(self, *, closed: bool) -> None:
+        """Once the connection is closed, wait for the reader to end; a connection that may
+        still be open cancels it instead."""
+        if self._reader is None:
+            return
+        if not closed:
+            self._reader.cancel()
+        await asyncio.wait({self._reader})
 
     async def receive_until(self, ready) -> None:
         """Receive until ``ready()`` holds or the connection closes normally. A failed read
@@ -126,6 +153,10 @@ class _Session:
                 raise self.failure
             if self.closed:
                 return
+            if self._reader is not None:
+                self._read_one.clear()
+                await self._read_one.wait()
+                continue
             if self._read is None:
                 # The read runs in the context of the waiter that starts it: the trace records the
                 # message in that waiter's scope, whichever state the message turns out to be for.
@@ -140,7 +171,11 @@ class _Session:
         except Exception as exc:  # noqa: BLE001 - every waiter raises it
             self.failure = exc
         else:
-            if not self.core.receive(event):
+            if self._clock is None:
+                taken = self.core.receive(event)
+            else:
+                taken = self.core.arrived(event, self._clock.monotonic())
+            if not taken:
                 logger.debug(
                     "OpenAI Realtime connection %d: no state takes %s",
                     self.number,
@@ -175,6 +210,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     # placeholder (the turn-based visual budget, 20 s at 1 fps) until a smoke test measures what a
     # frame costs against the model's context.
     streaming_settings: ClassVar[dict] = {"retained_frames": 20}
+    # "streaming" for a native-streaming episode, set before the session connects: the session
+    # then reads every event as it arrives, and is rebuilt from the streaming history view.
+    interaction_mode = "turn_based"
 
     def __init__(self, config, *, clock=None):
         self.config = config
@@ -323,13 +361,16 @@ class OpenAIRealtimeDriver(SessionLifecycle):
 
     async def _close_current(self) -> None:
         cm, self._cm = self._cm, None
+        session, self._session = self._session, None
         self._conn = None
-        self._session = None
+        closed = True
         if cm is not None:
             try:
                 await asyncio.to_thread(cm.__exit__, None, None, None)
-            except Exception:  # noqa: BLE001, S110 - best-effort SDK cleanup
-                pass
+            except Exception:  # noqa: BLE001 - best-effort SDK cleanup
+                closed = False
+        if session is not None:
+            await session.stop_reading(closed=closed)
 
     async def _connect(self, request: ConnectRequest) -> None:
         await self._close_current()
@@ -372,8 +413,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                     self._record_wait("connect_backoff", delay)
 
         # The session the connect resumes: the newest retained frame, or none at all.
-        frames = [] if request.history is None else history_frames(request.history.items)[1]
-        key = f"{frames[-1].id if frames else 'empty'}:connect"
+        items = () if request.history is None else request.history.items
+        frames = [item.block.id for item in items if item.block.kind == "frame"]
+        key = f"{frames[-1] if frames else 'empty'}:connect"
         retry = RequestRetry(
             key,
             self.classify_transport_error,
@@ -387,7 +429,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``
         # (openai/resources/realtime/realtime.py:765).
         connection = self._conn._connection
-        self._session = _Session(
+        session = self._session = _Session(
             connection.trace_connection_number,
             self._conn,
             RealtimeSessionCore(
@@ -396,7 +438,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             ),
         )
         # The history is None when the runtime opens the episode's first session.
-        await self._send_all(self._session.core.replay(request.history))
+        if self.interaction_mode == "streaming":
+            session.read_continuously(self.clock)
+            await self._send_all(session.core.replay_streaming(request.history))
+        else:
+            await self._send_all(session.core.replay(request.history))
 
     def _connect_finished(self, attempt, outcome, error=None, failure=None, delay=None) -> None:
         """One ModelAttemptFinished per open_session attempt of the shared connect retry, and one
@@ -430,6 +476,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         # The frame this response answers is the request's newest; its output items join it.
         _, frames = history_frames(request.canonical.items)
         core_generation = session.core.start_generation(frames[-1].id)
+        return await self._create_response(session, core_generation, request)
+
+    async def _create_response(
+        self, session: _Session, core_generation, request: GenerationRequest
+    ) -> GenerationHandle:
         logger.debug(
             "OpenAI Realtime connection %d: generation %d is %s",
             session.number,
@@ -445,6 +496,50 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             response=response,
         )
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
+
+    async def push_frame(self, observation: ProviderObservation, history) -> None:
+        """Native streaming: push the frame the streaming history view ends with, after the
+        feedback it holds that the session lacks, and fold the frames the view folds
+        (decision 23). Returns once the server confirmed the frame; raises when the server
+        refused it, which loses that frame alone. A fold the server fails leaves the session
+        dirty, for the next ensure_ready to rebuild it from the view."""
+        session = self._connected_session()
+        core = session.core
+        pushes = core.push(history)
+        await self._send_all(pushes)
+        await self._fold(session, history)
+        frame = pushes[-1]
+        await session.receive_until(lambda: core.settled(frame))
+        if not core.settled(frame):
+            raise session.closed
+        error = core.pushes[frame.event_id].error
+        if error is not None:
+            raise RuntimeError(f"OpenAI Realtime refused {frame.block}: {error!r}")
+
+    async def _fold(self, session: _Session, history) -> None:
+        """Bring the session to the view's folds, one edit at a time (queue_edit)."""
+        core = session.core
+        batch = core.queue_edit(history)
+        while batch is not None:
+            await self._send_all(batch.operations)
+            await self._wait_for_item_edits(session)
+            try:
+                core.finish_edit()
+            except RuntimeError:
+                logger.warning(
+                    "OpenAI Realtime connection %d: a fold failed", session.number, exc_info=True
+                )
+                self.mark_dirty()
+                return
+            batch = core.next_edit()
+
+    async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
+        """Native streaming: ask for a reply on the session as it is, after pushing what the
+        streaming history view ``request.canonical`` holds that the session lacks (the feedback
+        accepted since the newest frame). Its events come as a turn's do."""
+        session = self._connected_session()
+        await self._send_all(session.core.push(request.canonical))
+        return await self._create_response(session, session.core.start_reply(), request)
 
     async def events(self, generation: GenerationHandle):
         session, core_generation = generation.opaque
@@ -640,6 +735,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         )
 
     async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+        if self.interaction_mode == "streaming":
+            # Native streaming edits the session as frames are pushed (push_frame); any sync
+            # rebuilds it from the streaming view (decisions 4.7, 4.14).
+            return await self._rebuild(request)
         generation = request.current_generation
         if (
             not request.force_rebuild
