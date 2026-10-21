@@ -1232,11 +1232,9 @@ def active_timeline(run_dir):
             continue
         action = r.get("action") or {}
         proof = decisions.get(r.get("decision"), {}).get("inspection") or {}
-        inspection = inspections_by_call.get(proof.get("call_id"))
-        if inspection is None and not proof.get("call_id"):
-            candidates = inspections_by_observation.get(r.get("observation_id"), [])
-            if len(candidates) == 1:
-                inspection = candidates[0]
+        inspection, proof = _action_inspection(
+            r, proof, inspections_by_call, inspections_by_observation
+        )
         events.append(
             {
                 "decision": r.get("decision"),
@@ -1301,11 +1299,35 @@ def active_timeline(run_dir):
     }
 
 
+def _grounded_observation(event):
+    """The observation whose marks resolved the action: the frame a streaming action names,
+    which its grounding records, or else the action's own."""
+    grounding = (event.get("action_protocol") or {}).get("grounding") or {}
+    return grounding.get("observation_id") or event.get("observation_id")
+
+
+def _action_inspection(event, proof, inspections_by_call, inspections_by_observation):
+    """The inspection row an action's targets are drawn from, and the proof that checks it: the
+    decision's own row, or for a streaming action on an older frame that frame's row, which the
+    decision's proof does not describe."""
+    grounded = _grounded_observation(event)
+    if grounded != event.get("observation_id"):
+        candidates = inspections_by_observation.get(grounded, [])
+        return (candidates[0] if len(candidates) == 1 else None), {}
+    inspection = inspections_by_call.get(proof.get("call_id"))
+    if inspection is None and not proof.get("call_id"):
+        candidates = inspections_by_observation.get(event.get("observation_id"), [])
+        if len(candidates) == 1:
+            inspection = candidates[0]
+    return inspection, proof
+
+
 def action_targets(event, inspection, proof):
-    """Recover only explicitly resolved marks from the action's own observation."""
-    if not inspection or not event.get("observation_id"):
+    """Recover only explicitly resolved marks from the observation whose marks resolved them."""
+    observation_id = _grounded_observation(event)
+    if not inspection or not observation_id:
         return []
-    if inspection.get("observation_id") != event["observation_id"]:
+    if inspection.get("observation_id") != observation_id:
         return []
     if proof.get("mark_map_sha256") and proof["mark_map_sha256"] != inspection.get(
         "mark_map_sha256"
@@ -1352,7 +1374,7 @@ def action_targets(event, inspection, proof):
                 "mark": mark,
                 "bbox": normalized,
                 "label": entry.get("label") or "",
-                "observation_id": event["observation_id"],
+                "observation_id": observation_id,
             }
         )
         seen.add(mark)
