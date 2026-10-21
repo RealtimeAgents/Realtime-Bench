@@ -161,7 +161,7 @@ def _block_of(key: tuple) -> str | None:
     return key[1] if key[0] == "block" else None
 
 
-def _unrecorded(state: str, contents: list[tuple]) -> None:
+def _unrecorded(state: str, contents: list[tuple], connection: int | None) -> None:
     pass
 
 
@@ -306,9 +306,10 @@ class SessionCore:
     def __init__(self, options: dict, *, streaming: bool = False, on_delivery=_unrecorded):
         """``options`` are the driver's resolved Live options (live.py live_options);
         ``streaming``: native streaming drives the session, pushing frames, triggering replies
-        and reading every message as it arrives; ``on_delivery(state, contents)`` hears each
-        change in the delivery record, with each key and the history block it carries ("system"
-        for the setup)."""
+        and reading every message as it arrives; ``on_delivery(state, contents, connection)``
+        hears each change in the delivery record, with each key and the history block it carries
+        ("system" for the setup), and the number of the connection written on (None for a seed
+        that failed before its connection counted)."""
         self._completion_signal = options["completion_signal"]
         self.streaming = streaming
         self._on_delivery = on_delivery
@@ -333,6 +334,8 @@ class SessionCore:
         # Since the connection was planned: the latest handle the server called resumable, else
         # the one the connection resumes. Streaming resumes with it.
         self.latest_resume_handle: str | None = None
+        # Streaming: what the session holds is not known (unresumable) until the next connection.
+        self.held_unknown = False
         self.renewal_required = False  # a goAway asked for a new connection
         # Streaming: the execution feedback a seed or a trigger has handed to a connection of the
         # session, over the episode, the text handed by block id; a trigger's counts from when
@@ -499,6 +502,7 @@ class SessionCore:
         self._set([("setup",)], Delivery.CONFIRMED)
         self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
+        self.held_unknown = False
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -516,7 +520,8 @@ class SessionCore:
         resumable, whatever was sent or read after it, so the session it restores may lack input
         or output the history has, or hold output the history lacks."""
         if self.streaming:
-            return self.latest_resume_handle if reason == "go_away" and not force_rebuild else None
+            resumes = reason == "go_away" and not force_rebuild and not self.held_unknown
+            return self.latest_resume_handle if resumes else None
         if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
             return self.resume_handle
         return None
@@ -547,19 +552,23 @@ class SessionCore:
             for block_id in ids
             if block_id not in failed
         )
-        self._on_delivery(Delivery.CONFIRMED.value, [(("setup",), "system")])
+        self._on_delivery(Delivery.CONFIRMED.value, [(("setup",), "system")], None)
         for state, ids in ((Delivery.SENT, written), (Delivery.UNKNOWN, failed)):
             if ids:
                 self._on_delivery(
-                    state.value, [(("block", block_id), block_id) for block_id in ids]
+                    state.value, [(("block", block_id), block_id) for block_id in ids], None
                 )
 
-    def _set(self, keys, delivery: Delivery) -> None:
+    def _set(self, keys, delivery: Delivery, connection: int | None = None) -> None:
+        """Record writes on ``connection``, the open one by default; one on a connection closed
+        since is heard, and is no write of the open one."""
         keys = list(keys)
-        for key in keys:
-            self.delivery[key] = delivery
+        connection = self.connection if connection is None else connection
+        if connection == self.connection:
+            for key in keys:
+                self.delivery[key] = delivery
         if keys:
-            self._on_delivery(delivery.value, [(key, _block_of(key)) for key in keys])
+            self._on_delivery(delivery.value, [(key, _block_of(key)) for key in keys], connection)
 
     def observe(self, history: CanonicalRequest) -> Observation:
         """Plan the history view's newest frame, after its feedback, as one input, and record it
@@ -640,24 +649,33 @@ class SessionCore:
     def interrupt_sent(self) -> None:
         self.resume_handle = None
 
-    def calls_received(self, calls: list[tuple]) -> None:
-        self.pending_calls.extend(calls)
+    def calls_received(self, calls: list[tuple], connection: int) -> None:
+        """Calls read on ``connection``, pending there until acknowledged; read on a connection
+        closed since, they are pending nowhere."""
+        if connection == self.connection:
+            self.pending_calls.extend(calls)
 
-    def acknowledging(self) -> tuple[tuple, ...]:
-        """The (id, name) of the calls a queued acknowledgement answers: every pending one."""
-        pending = tuple(self.pending_calls)
+    def acknowledging(self, connection: int) -> tuple[tuple, ...]:
+        """The (id, name) of the calls a queued acknowledgement on ``connection`` answers: every
+        one pending there, none on a connection closed since."""
+        pending = tuple(self.pending_calls) if connection == self.connection else ()
         self.sending(("tool_response", call_id) for call_id, _ in pending)
         return pending
 
-    def acknowledgement_sent(self, calls: tuple[tuple, ...]) -> None:
-        """The acknowledgement of ``calls`` (acknowledging) was written, also if an abort closed
-        the connection meanwhile."""
-        self.sent(("tool_response", call_id) for call_id, _ in calls)
-        self.pending_calls.clear()
+    def acknowledgement_sent(self, calls: tuple[tuple, ...], connection: int) -> None:
+        """The acknowledgement of ``calls`` (acknowledging) was written on ``connection``, also
+        if an abort closed it meanwhile."""
+        keys = (("tool_response", call_id) for call_id, _ in calls)
+        self._set(keys, Delivery.SENT, connection)
+        if connection == self.connection:
+            self.pending_calls.clear()
 
-    def acknowledgement_failed(self, calls: tuple[tuple, ...]) -> None:
-        """Its write failed: still pending, the next acknowledgement answers them again."""
-        self.send_failed(("tool_response", call_id) for call_id, _ in calls)
+    def acknowledgement_failed(self, calls: tuple[tuple, ...], connection: int) -> None:
+        """Its write on ``connection`` failed: still pending there, the next acknowledgement
+        answers them again."""
+        self._set(
+            (("tool_response", call_id) for call_id, _ in calls), Delivery.UNKNOWN, connection
+        )
 
     # ---- reads -----------------------------------------------------------------------------
 
@@ -675,6 +693,19 @@ class SessionCore:
     def reader_failed(self, connection: int) -> None:
         """The connection's reader failed: no reply is read on it any more."""
         self.replies.pop(connection, None)
+
+    def unresumable(self) -> None:
+        """What the session holds is not known any more (an abort closed its connection, a
+        trigger did not go out whole): no handle resumes it, not even one the server sends on its
+        connection after this, and the next connection rebuilds it from the history."""
+        self.held_unknown = True
+        self.latest_resume_handle = None
+        self.resume_handle = None
+
+    def reply_abandoned(self) -> None:
+        """The reply started on the open connection will not come (its trigger did not go out):
+        its generation takes none of the connection's messages."""
+        self.replies.pop(self.connection, None)
 
     def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's

@@ -165,6 +165,12 @@ def current_trace_scope() -> dict | None:
     return _TRACE_SCOPE.get()
 
 
+def enter_trace_scope(scope: dict | None) -> None:
+    """Attribute captures in this context to ``scope`` from now on, in place of any: for a task
+    that outlives the call that started it, whose captures belong to what it works for now."""
+    _TRACE_SCOPE.set(scope)
+
+
 class AgentTrace(Protocol):
     def capture(self, event: TraceEvent, payload: dict, *, body=None, classify=None) -> int | None:
         """Queue one record without I/O; return its capture sequence, or None once sealed."""
