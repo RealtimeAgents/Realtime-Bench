@@ -555,6 +555,7 @@ class GeminiLiveDriver(SessionLifecycle):
             # turn_complete=False can cause historical model content to be echoed as new
             # output. HistoryConfig makes this a non-generating initialization boundary.
             # Bound the messages so screenshots do not form one oversized WebSocket frame.
+            index = 0
             try:
                 for index, batch in enumerate(connect.seed):
                     await session.send_client_content(
@@ -562,7 +563,7 @@ class GeminiLiveDriver(SessionLifecycle):
                         turn_complete=index == len(connect.seed) - 1,
                     )
             except BaseException:
-                self._core.seed_failed(connect)
+                self._core.seed_failed(connect, index)
                 raise
         except BaseException as exc:
             try:

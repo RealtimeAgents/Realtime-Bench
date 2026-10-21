@@ -484,8 +484,8 @@ def test_an_observation_counts_as_sent_once_written(model, messages):
 
 
 def test_a_seed_that_failed_is_unknown():
-    """A seed whose write failed leaves its blocks unknown on the connection it was written on;
-    that connection never counted."""
+    """A seed whose write failed leaves its blocks unknown on the connection it was written on,
+    whose setup the server had acknowledged; that connection never counted."""
     rig = Rig("gemini-3.8-live", [[]])
     socket = rig.live.sockets[0]
     socket.fail = lambda message: "client_content" in message
@@ -498,7 +498,40 @@ def test_a_seed_that_failed_is_unknown():
             await rig.driver.connect(ConnectRequest(seed=rig.seed, history=history))
 
     asyncio.run(run())
-    assert log.events == [("unknown", ["d0.frame"], "gemini_live.ws-1", 0)]
+    connection = "gemini_live.ws-1"
+    assert log.events == [
+        ("confirmed", ["system"], connection, 0),
+        ("unknown", ["d0.frame"], connection, 0),
+    ]
+
+
+def test_a_seed_that_failed_halfway_keeps_the_batches_written_sent():
+    """Thirteen frames seed in two batches (HISTORY_CONTENTS_PER_MESSAGE). The first is written,
+    the second's write fails: the first batch's blocks are sent, the second's unknown."""
+    rig = Rig("gemini-3.8-live", [[]])
+    socket = rig.live.sockets[0]
+    seeds = []
+
+    def second_seed(message) -> bool:
+        seeds.extend(["client_content"] if "client_content" in message else [])
+        return len(seeds) == 2
+
+    socket.fail = second_seed
+    log = DeliveryLog(lambda: socket.sent)
+    rig.driver.bind_trace(log)
+
+    async def run():
+        history = rig.view([frame_turn(k) for k in range(13)])
+        with pytest.raises(ConnectionClosedError):
+            await rig.driver.connect(ConnectRequest(seed=rig.seed, history=history))
+
+    asyncio.run(run())
+    connection = "gemini_live.ws-1"
+    assert log.events == [
+        ("confirmed", ["system"], connection, 1),
+        ("sent", [f"d{k}.frame" for k in range(12)], connection, 1),
+        ("unknown", ["d12.frame"], connection, 1),
+    ]
 
 
 TRANSCRIPT = {"serverContent": {"outputTranscription": {"text": "partial"}}}
