@@ -15,6 +15,9 @@ from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.evaluation.kernel.streaming import ActionArrived
 
+# The operations that hold the gate alone (evaluation/env_lanes.py).
+ALONE = {"check_end", "snapshot"}
+
 
 class FakeTask:
     def __init__(self, env: FakeEnv):
@@ -44,8 +47,9 @@ class FakeEnv:
         self.ends_at: float | None = None  # the task reports its end from this time on
         self.intervals: list[tuple[str, float, float]] = []
         self.counts: dict[str, int] = {}
-        self.running = 0
-        self.overlapped = False
+        self.running: list[str] = []
+        self.concurrent = False  # two operations ran at once
+        self.overlapped = False  # one that must run alone ran with another
         self.captures = 0
         self.fail: set[str] = set()
         self.during: dict = {}  # name -> what an operation does halfway through
@@ -61,8 +65,10 @@ class FakeEnv:
         self.last_end_checks = ()
 
     def _operate(self, name: str) -> None:
-        self.running += 1
-        self.overlapped |= self.running > 1
+        if self.running:
+            self.concurrent = True
+            self.overlapped |= bool(ALONE & {name, *self.running})
+        self.running.append(name)
         self.counts[name] = self.counts.get(name, 0) + 1
         seconds = self.durations.get((name, self.counts[name]), self.seconds[name])
         start = self.clock.monotonic()
@@ -73,14 +79,11 @@ class FakeEnv:
             if name in self.fail:
                 raise RuntimeError(f"{name} failed")
         finally:
-            self.running -= 1
+            self.running.remove(name)
             self.intervals.append((name, start, self.clock.monotonic()))
 
     def capture(self) -> Observation:
         self._operate("capture")
-        # What a later operation leaves behind: an action read after it would see this.
-        self._last_exec_error, self._last_rejected_by_guest = None, False
-        self._last_execution_result = {"left": "by a capture"}
         self.captures += 1
         return Observation(b"", self.clock.time(), 0, {"observation_id": f"obs-{self.captures}"})
 
