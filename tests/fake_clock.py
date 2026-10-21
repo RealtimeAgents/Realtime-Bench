@@ -7,13 +7,14 @@ waiting for a condition: an Event from event() to be set, a Future to be done, a
 readable (wait_readable), or a deadline. When every participant waits and no condition holds, the
 clock jumps to the earliest deadline and wakes what is due.
 
-An event loop waits while it sits in select with nothing ready. A thread-safe callback, a ready
-socket, a pending connect or write, or bytes it sent that the peer's kernel has not acknowledged
-yet keep it busy: loopback delivery is asynchronous, so a reply can be in flight while neither end
-is ready. Test servers that wait with wait_readable() call wait_delivered() before they close a
-connection. Work a loop hands to another thread must run on a participating thread too: the loop's
-default executor does, and on a fake loop anyio.to_thread.run_sync (LiteLLM runs its end-of-stream
-chunk builder there) is routed to that executor instead of anyio's own worker threads.
+An event loop waits while it sits in select with nothing ready, and while it is not running (made
+and not run yet, or stopped and not closed). A thread-safe callback, a ready socket, a pending
+connect or write, or bytes it sent that the peer's kernel has not acknowledged yet keep it busy:
+loopback delivery is asynchronous, so a reply can be in flight while neither end is ready. Test
+servers that wait with wait_readable() call wait_delivered() before they close a connection. Work
+a loop hands to another thread must run on a participating thread too: the loop's default
+executor does, and on a fake loop anyio.to_thread.run_sync (LiteLLM runs its end-of-stream chunk
+builder there) is routed to that executor instead of anyio's own worker threads.
 
 When every participant waits and nothing is due, nothing can happen any more. A thread that joined
 with ``participant()`` and is waiting then raises FakeClockStalled instead of hanging the test.
@@ -106,10 +107,14 @@ class _Waiter:
 
 class _LoopState:
     """A participating event loop: busy, or waiting in select until a socket is ready, a
-    thread-safe callback arrives (``woken``) or ``deadline``."""
+    thread-safe callback arrives (``woken``) or ``deadline``. A loop outside run_forever can do
+    nothing by itself and counts as waiting, unless a callback arrived before it first ran: a
+    thread is about to run it."""
 
     def __init__(self, name: str):
         self.name = name
+        self.running = False
+        self.ran = False
         self.waiting = False
         self.woken = False
         self.deadline = None
@@ -223,6 +228,13 @@ class _FakeLoop(asyncio.SelectorEventLoop):
 
     def time(self) -> float:
         return self._fake_clock.monotonic()
+
+    def run_forever(self) -> None:
+        self._fake_clock._loop_starts(self._fake_state)
+        try:
+            super().run_forever()
+        finally:
+            self._fake_clock._loop_stops(self._fake_state)
 
     def call_soon_threadsafe(self, callback, *args, context=None):
         self._fake_clock._wake(self._fake_state)
@@ -426,6 +438,15 @@ class FakeClock:
         with self._cond:
             state.woken = True
 
+    def _loop_starts(self, state: _LoopState) -> None:
+        with self._cond:
+            state.running = state.ran = True
+
+    def _loop_stops(self, state: _LoopState) -> None:
+        with self._cond:
+            state.running = False
+            self._settle()
+
     def _loop_waits(self, state: _LoopState, timeout: float | None) -> None:
         with self._cond:
             state.waiting = True
@@ -458,6 +479,10 @@ class FakeClock:
             if waiter.in_flight is not None and waiter.in_flight():
                 return False
         for state in self._loops:
+            if not state.running:
+                if state.woken and not state.ran:
+                    return False
+                continue
             if not state.waiting or state.woken:
                 return False
             if state.deadline is not None and state.deadline <= self._now:
