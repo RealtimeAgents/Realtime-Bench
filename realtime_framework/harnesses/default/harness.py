@@ -1052,6 +1052,15 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s):
     return action, action_protocol
 
 
+@dataclass
+class _Generation:
+    """One generation's own state. An abandoned generation can still be running when the next
+    one starts, so none of it is kept on the agent."""
+
+    decision: int
+    cancel: threading.Event  # set by abort() and close(): the generation sends nothing more
+
+
 class DefaultHarness(VisionAgentBase):
     """Common frame, context, action, and audit behavior for every catalog model.
 
@@ -1071,6 +1080,9 @@ class DefaultHarness(VisionAgentBase):
         self._provider_usage_started = False
         # The decision an abort() belongs to: the runner aborts only the one in flight.
         self._trace_decision = None
+        # The generations that have not ended; abort() and close() cancel them.
+        self._generations: list[_Generation] = []
+        self._generations_lock = threading.Lock()
         # The episode's operational clock; the runtime, the driver and the retry wait read it.
         self.clock = clock or SystemClock()
         super().__init__(config, log_dir, trace=trace)
@@ -1106,7 +1118,7 @@ class DefaultHarness(VisionAgentBase):
             "provider_upstream": getattr(self.config, "upstream_provider", None),
             "collection": "inline",
             "status": "reported" if usage else "missing",
-            "stale": result.stale,
+            "stale": result.cancelled,
             "usage": usage,
             "usage_at_action_commit": deepcopy(usage),
             "missing_reason": (
@@ -1245,10 +1257,32 @@ class DefaultHarness(VisionAgentBase):
             "invalid_reason": "inspection_protocol_error",
         }
 
+    def _open(self, decision: int) -> _Generation:
+        """Start a generation's state; abort() reaches it until _close()."""
+        generation = _Generation(decision, self.clock.event())
+        with self._generations_lock:
+            self._generations.append(generation)
+        self._trace_decision = decision
+        return generation
+
+    def _close(self, generation: _Generation) -> None:
+        with self._generations_lock:
+            self._generations.remove(generation)
+
+    def _cancel_all(self) -> None:
+        with self._generations_lock:
+            for generation in self._generations:
+                generation.cancel.set()
+
     def stream_generate(self, tick=0):
-        self._trace_decision = tick
-        # The runner abandons this decision by aborting its epoch: its retries stop there.
-        epoch, abandoned = self._runtime.epoch_scope()
+        generation = self._open(tick)
+        try:
+            return self._generate(generation)
+        finally:
+            self._close(generation)
+
+    def _generate(self, generation: _Generation):
+        tick = generation.decision
         observations = self._runtime.drain_observations()
         if not observations:
             return {
@@ -1359,7 +1393,7 @@ class DefaultHarness(VisionAgentBase):
                 timeout=None,
                 request_builder=lambda turns, ledger: self._build_request(turns, ledger, call),
                 decision=tick,
-                epoch=epoch,
+                cancel=generation.cancel,
             )
 
         collector_type = (
@@ -1382,7 +1416,7 @@ class DefaultHarness(VisionAgentBase):
         def send(attempt):
             nonlocal collector
             collector = collector_type(self)
-            with self._attempt_scope(request, attempt):
+            with self._attempt_scope(generation, request, attempt):
                 return run_once(collector)
 
         def classify(exc):
@@ -1410,7 +1444,14 @@ class DefaultHarness(VisionAgentBase):
                 retry_usages.append(collector.usage)
                 retry_delays.append(delay)
                 self._attempt_failed(
-                    request, attempt, exc, failure, received, collector.usage, delay=delay
+                    generation,
+                    request,
+                    attempt,
+                    exc,
+                    failure,
+                    received,
+                    collector.usage,
+                    delay=delay,
                 )
                 return
             # A partially received turn cannot be replayed without risking a duplicate action,
@@ -1423,6 +1464,7 @@ class DefaultHarness(VisionAgentBase):
                     f"{'; '.join(retry_reasons)}; final error: {exc!r}"
                 )[:500]
             self._attempt_failed(
+                generation,
                 request,
                 attempt,
                 exc,
@@ -1440,7 +1482,7 @@ class DefaultHarness(VisionAgentBase):
             clock=self.clock,
         )
         try:
-            with retry_cancellation(abandoned):
+            with retry_cancellation(generation.cancel):
                 runtime_result = retry.run(send)
         except RetryCancelled:
             for execution in inspection_executions:
@@ -1457,7 +1499,7 @@ class DefaultHarness(VisionAgentBase):
         except Exception:  # noqa: BLE001, S110 - record() kept the final failure
             pass
         else:
-            self._attempt_finished(request, len(retry_reasons) + 1, runtime_result)
+            self._attempt_finished(generation, request, len(retry_reasons) + 1, runtime_result)
             # The runtime takes exactly one observation per generation: the newest frame.
             self.frames.record_sent(
                 self.frames.latest().frame,
@@ -1567,7 +1609,7 @@ class DefaultHarness(VisionAgentBase):
             executed = action.action_type.value + (
                 f" {action.parameters}" if action.parameters else ""
             )
-        if not runtime_result.stale:
+        if not runtime_result.cancelled:
             if self._pending_feedback == feedback:
                 self._pending_feedback = ""
             self.tick_count += 1
@@ -1595,7 +1637,7 @@ class DefaultHarness(VisionAgentBase):
                 raw_action_output=output.text if index == len(inspection_executions) - 1 else "",
                 outcome=(
                     "superseded_by_timeout"
-                    if runtime_result.stale
+                    if runtime_result.cancelled
                     else (
                         "action_protocol_error"
                         if action_protocol.get("protocol_failure")
@@ -1660,7 +1702,7 @@ class DefaultHarness(VisionAgentBase):
             self._runtime.turns, self._runtime.ledger_block(audit_ledger), call
         )
         log_entry = {
-            "type": "decision_discarded" if runtime_result.stale else "decision",
+            "type": "decision_discarded" if runtime_result.cancelled else "decision",
             "tick": tick,
             "decision": tick,
             "num_frames": len(prepared),
@@ -1690,7 +1732,7 @@ class DefaultHarness(VisionAgentBase):
             **token_fields,
         }
         result = {
-            "action": None if runtime_result.stale else action,
+            "action": None if runtime_result.cancelled else action,
             "thinking": thinking,
             "raw": output.text,
             # Consumers read `latency` as the complete decision wall duration.
@@ -1715,7 +1757,7 @@ class DefaultHarness(VisionAgentBase):
             "_trajectory_entry": log_entry,
             **token_fields,
         }
-        if runtime_result.stale:
+        if runtime_result.cancelled:
             result["stale"] = True
         if sync.disposition in {SyncDisposition.UNSUPPORTED, SyncDisposition.BROKEN}:
             result.update(
@@ -1749,23 +1791,23 @@ class DefaultHarness(VisionAgentBase):
         self._pending_feedback = feedback
         self._runtime.record_execution_feedback(feedback)
 
-    def _attempt_scope(self, request, attempt):
+    def _attempt_scope(self, generation, request, attempt):
         return trace_scope(
             phase="decision",
-            decision=self._trace_decision,
+            decision=generation.decision,
             generation_id=request.generation_id,
             attempt=attempt,
         )
 
-    def _attempt_finished(self, request, attempt, result) -> None:
+    def _attempt_finished(self, generation, request, attempt, result) -> None:
         """Record one completed attempt of the shared whole-turn retry."""
         metadata = result.provider_metadata
-        with self._attempt_scope(request, attempt):
+        with self._attempt_scope(generation, request, attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
                 {
                     "kind": "generation",
-                    "outcome": "stale" if result.stale else "ok",
+                    "outcome": "cancelled" if result.cancelled else "ok",
                     "usage": result.output.usage,
                     "token_fields": result.output.token_fields,
                     "runtime_turn_wall_latency_s": result.latency_s,
@@ -1775,13 +1817,14 @@ class DefaultHarness(VisionAgentBase):
                     ),
                     "terminal_history_state": result.terminal_history_state.value,
                     "interrupted": result.interrupted,
-                    "stale": result.stale,
+                    "cancelled": result.cancelled,
                     "backend_route": metadata.get("backend_route"),
                 },
             )
 
     def _attempt_failed(
         self,
+        generation,
         request,
         attempt,
         exc,
@@ -1793,7 +1836,7 @@ class DefaultHarness(VisionAgentBase):
         invalid_reason=None,
     ) -> None:
         """Record one failed attempt: retried after ``delay``, or final with ``invalid_reason``."""
-        with self._attempt_scope(request, attempt):
+        with self._attempt_scope(generation, request, attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
                 {
@@ -1810,10 +1853,12 @@ class DefaultHarness(VisionAgentBase):
 
     def abort(self, generation: int | None = None):
         super().abort(generation)
+        self._cancel_all()
         with trace_scope(phase="abort", decision=self._trace_decision):
             self._runtime.abort()
 
     def close(self):
+        self._cancel_all()
         try:
             with trace_scope(phase="close"):
                 self._runtime.close()

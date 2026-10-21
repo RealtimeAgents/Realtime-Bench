@@ -267,7 +267,7 @@ class RuntimeTurnResult:
     history_sync: HistorySyncResult
     terminal_history_state: ProviderHistoryState
     interrupted: bool
-    stale: bool
+    cancelled: bool  # the generation was aborted before its result came back
     latency_s: float
     provider_call_latency_s: float
     provider_metadata: dict[str, Any] = field(default_factory=dict)
