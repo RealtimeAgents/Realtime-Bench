@@ -8,6 +8,8 @@ import asyncio
 import json
 import threading
 
+import pytest
+
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action
 from realtime_framework.evaluation.kernel.events import Outcome
@@ -267,10 +269,19 @@ def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
     assert messages[replied + 1] == {"role": "user", "content": feedback}
 
 
-def test_a_done_is_reported_as_the_wait_it_ran(tmp_path):
+@pytest.mark.parametrize(
+    ("status", "executed", "note"),
+    [
+        ("wait", "wait", UNSUPPORTED_TERMINAL_ACTION_FEEDBACK),
+        ("skipped_budget", "wait()", ACTION_RESULT_NOTES["skipped_budget"]),
+    ],
+    ids=["ran", "skipped"],
+)
+def test_a_done_is_reported_as_the_wait_it_ran(tmp_path, status, executed, note):
     """The model answers done, which the loop does not support: the kernel runs a wait in its
     place and reports it (kernel/turns.py _accept). The record and the feedback name the wait as
-    what ran and the done as what was asked, and a note says why."""
+    what ran and the done as what was asked, and a note says why. A wait that did not run, as
+    when the deliberation budget ran out, is reported as any skipped action is."""
     with ChatCompletionsStub(replies([Step('{"action": "done"}')])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
@@ -280,7 +291,7 @@ def test_a_done_is_reported_as_the_wait_it_ran(tmp_path):
             agent.commit(
                 _outcome(
                     0,
-                    "wait",
+                    status,
                     action=Action.wait(),
                     protocol_failure="unsupported_terminal_action",
                 )
@@ -288,11 +299,8 @@ def test_a_done_is_reported_as_the_wait_it_ran(tmp_path):
         finally:
             episode.finish()
     (record,) = agent.action_history
-    assert (record["requested"], record["executed"], record["result"]) == ("done", "wait", "wait")
-    feedback = (
-        "EXECUTION RESULT: actual=wait; requested=done; status=wait. "
-        + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
-    )
+    assert (record["requested"], record["executed"], record["result"]) == ("done", executed, status)
+    feedback = f"EXECUTION RESULT: actual={executed}; requested=done; status={status}. {note}"
     assert agent._runtime.turns[0].execution_feedback == feedback
 
 

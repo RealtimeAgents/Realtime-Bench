@@ -1945,7 +1945,8 @@ class DefaultHarness(VisionAgentBase):
         requested = "invalid_action" if parse_failed else (last.get("executed") or "none")
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
-        if replacement is not None and status in landed_statuses:
+        replaced = replacement is not None and status in landed_statuses
+        if replaced:
             executed = _action_text(replacement)
         if entry is not None:
             entry["applied"] = status == "applied"
@@ -1961,7 +1962,7 @@ class DefaultHarness(VisionAgentBase):
         )
         if note:
             feedback += " " + note
-        if replacement is not None:
+        if replaced:
             feedback += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
         return feedback
 
