@@ -61,6 +61,7 @@ from realtime_framework.evaluation.kernel.events import (
     StartGeneration,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
+from realtime_framework.sandbox.actions import WALL_RELEASE_MAX_ATTEMPTS, WALL_RELEASE_RETRY_S
 
 TAP_HOLD_S = 1.0 / 60.0  # sandbox/actions.py TAP_HOLD_S: how long a token key tap holds its key
 
@@ -170,6 +171,7 @@ class Simulation:
         self._replies = iter(world.replies)
         self._results: dict[int, list] = {}  # generation -> its pending result entry
         self._releases: dict[str, float] = {}  # wall clock: key -> latest release time
+        self._wall_release_reported = False  # the environment latched its invalid run
         self._frozen_tick: float | None = None
 
     # ---- driving ----------------------------------------------------------------------------
@@ -407,11 +409,20 @@ class Simulation:
 
     def _wall_release(self, key: str, at: float) -> None:
         """The environment's own release timer on the wall clock. It tells the kernel nothing of
-        a release that worked; one that failed for good, after its retries, goes through
-        on_invalid (sandbox/actions.py GuestEnvironment._wall_release_due; shell.py)."""
+        a release that worked. A scripted failure fails every attempt: the timer tries again
+        every WALL_RELEASE_RETRY_S, gives up after its last attempt and reports the invalid run
+        through on_invalid, once an episode (sandbox/actions.py
+        GuestEnvironment._wall_release_due; shell.py)."""
         if self._releases.get(key) != at:
             return
         del self._releases[key]
         error = self._release((key,))
-        if error is not None:
+        if error is None:
+            return
+        given_up = at + (WALL_RELEASE_MAX_ATTEMPTS - 1) * WALL_RELEASE_RETRY_S
+        self._later(given_up, lambda: self._wall_release_given_up(error))
+
+    def _wall_release_given_up(self, error: str) -> None:
+        if not self._wall_release_reported:
+            self._wall_release_reported = True
             self.kernel.post(Invalidated("environment", "wall_key_release_failed", error))

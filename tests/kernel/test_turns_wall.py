@@ -806,9 +806,10 @@ def test_a_hold_longer_to_execute_than_to_last_is_released_on_time():
 
 
 def test_a_release_the_environments_timer_fails_invalidates_the_run():
-    # The environment's timer cannot lift "a" at 1.25 s, during the second generation: it gives
-    # up after its retries and reports the invalid run through on_invalid, which the shell posts
-    # (sandbox/actions.py GuestEnvironment._wall_release_due; shell.py).
+    # The environment's timer cannot lift "a" at 1.25 s, during the second generation: it tries
+    # again every 0.5 s, gives up after its fourth attempt, at 2.75 s, and reports the invalid
+    # run through on_invalid, which the shell posts (sandbox/actions.py
+    # GuestEnvironment._wall_release_due; shell.py).
     replies = [Reply(0.25, Action.hold_key("a", 1.0)), Reply(5.0, CLICK)]
     world = World(replies=replies, release_errors={1: "xdotool keyup failed"})
     sim = _episode(_wall(3.0), world)
@@ -822,7 +823,7 @@ def test_a_release_the_environments_timer_fails_invalidates_the_run():
     ]
     assert _data(sim, "GenerationAbandoned") == [{"generation": 2, "reason": "invalid"}]
     assert "KeysReleased" not in sim.kinds()
-    assert _ended(sim) == ("invalid_run", "invalid", 1.25, 1.25)
+    assert _ended(sim) == ("invalid_run", "invalid", 2.75, 2.75)
     _assert_nothing_after_the_end(sim)
 
 
