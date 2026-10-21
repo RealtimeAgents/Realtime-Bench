@@ -19,7 +19,7 @@ import pytest
 
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
-from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.evaluation import runner
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
@@ -30,7 +30,7 @@ from realtime_tasks.types import Task
 
 from ..fake_clock import FakeClock
 from ..replay.clock_task import ClockTask
-from .fakes import FakeCDP, FakeGuest
+from .fakes import SCREENSHOT_PNG, FakeCDP, FakeGuest
 
 BUDGET = 0.5
 # A failing operation must end by its budget plus this much scheduling slack, still well before
@@ -164,6 +164,11 @@ def test_an_action_budget_extends_for_text_input_and_holds_as_the_guest_request_
     assert action_timeout(Action(ActionType.DRAG, drag), budget) == 25.0
 
 
+def test_the_freeze_s_snapshot_read_has_16_s_and_a_token_key_event_10_s():
+    assert actions.ENVIRONMENT_BUDGET.snapshot_read_s == 16.0
+    assert actions.ENVIRONMENT_BUDGET.key_event_s == 10.0
+
+
 def test_a_run_within_its_budgets_reads_acts_captures_and_freezes(game, monkeypatch):
     with FakeGuest() as guest, FakeCDP(values={_GET_STATE: PLAYING}) as fake:
         task = game(fake)
@@ -207,6 +212,24 @@ def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
     _invalid(env, "action_execution_failed", "key action")
     assert elapsed >= BUDGET
     assert guest.actions == []
+
+
+def test_a_wall_xdotool_command_gets_what_is_left_of_the_action_s_budget(budgets):
+    # A tap of a held key presses it again with xdotool (sandbox/actions.py _restore_wall_holds),
+    # a guest request with 15 s of its own.
+    budgets(action_s=BUDGET)
+    with FakeGuest() as guest:
+        env = _wall_environment(guest)
+        assert env.execute(Action.hold_key("a", 30.0)) == "applied"
+        guest.command_delay = 5.0
+        started = time.monotonic()
+        status = env.execute(Action(ActionType.KEY, {"key": "a"}))
+        elapsed = time.monotonic() - started
+        guest.command_delay = 0.0
+        env.release_inputs()
+    assert status == "failed"
+    _invalid(env, "action_execution_failed", "key action")
+    _spent_the_budget(elapsed)
 
 
 def test_a_slow_capture_fails_within_its_budget(budgets):
@@ -410,6 +433,46 @@ def test_a_task_failure_past_the_budget_keeps_its_traceback():
     assert detail.rstrip().endswith(
         "BudgetExceeded: state read took longer than 120 s (RuntimeError: no state)"
     )
+
+
+@pytest.mark.parametrize(
+    ("action", "seconds"),
+    [
+        pytest.param(Action(ActionType.TYPE, {"text": "Ada"}), 100.0, id="text-input"),
+        pytest.param(
+            Action(ActionType.DRAG, {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 20}),
+            24.0,
+            id="a-20-s-drag",
+        ),
+    ],
+)
+def test_text_input_and_a_timed_action_have_their_extended_budget(action, seconds):
+    clock = FakeClock()
+    env, _ = _timed(clock, _ClockGuest(clock, seconds))
+    with clock.participant():
+        assert env.execute(action) == "applied"
+        assert clock.monotonic() == seconds
+    assert getattr(env, "_invalid_run", None) is None
+
+
+def test_a_call_s_own_shorter_timeout_applies_inside_an_operation():
+    """A window probe gives up after its own 8 s (sandbox/browser/cdp.py _probe_one) and the
+    capture goes on without it (sandbox/observation/capture.py _probe)."""
+    clock = FakeClock()
+
+    class ProbingCapture:
+        def capture(self, tick):
+            try:
+                _sandbox_call(clock, 3600.0, 8.0)
+            except TimeoutError:
+                pass
+            return Observation(SCREENSHOT_PNG, clock.time(), tick)
+
+    env, _ = _timed(clock, scene_capture=ProbingCapture())
+    with clock.participant():
+        env.capture()
+        assert clock.monotonic() == 8.0
+    assert getattr(env, "_invalid_run", None) is None
 
 
 def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_10_s():
