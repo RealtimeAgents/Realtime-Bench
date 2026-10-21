@@ -10,7 +10,8 @@ push and each reply readies the session first, and renews the connection the pro
 renew, except a push while a reply is on the session: readying it then would close the reply's
 connection, or rebuild the session without the reply's output. A push the session refuses until
 it is renewed, as Gemini Live's after a goAway, waits for that reply instead, at a gate of its
-own; whether it waits is decided on the execution thread, where the goAway is read.
+own, between a PushHeld and a PushResumed to the kernel; whether it waits is decided on the
+execution thread, where the goAway is read.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and once the
 driver put it into the session records it as sent and confirmed when the driver's receipt says it
