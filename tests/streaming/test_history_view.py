@@ -33,7 +33,6 @@ POLICY = current_context_policy().paths["openai_realtime"]
 SYSTEM = system_block("Fill in the form.", 1_000)
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("gpt-realtime-2", None, None)
-OLDER_FORMS = ("placeholder", "text", "prompt")
 
 
 def _observation(n: int) -> ProviderObservation:
@@ -99,14 +98,12 @@ class History:
         return self
 
 
-def _view(
-    blocks, frames=20, older_frames="placeholder", replies="all", actions=None, policy=POLICY
-):
+def _view(blocks, frames=20, replies="all", actions=None, policy=POLICY):
     return history_view(
         blocks,
         policy=policy,
         system=SYSTEM,
-        retention=StreamingRetention(frames=frames, older_frames=older_frames, replies=replies),
+        retention=StreamingRetention(frames=frames, replies=replies),
         actions=actions or {},
         answer=ANSWER,
         call=CALL,
@@ -146,12 +143,12 @@ def test_blocks_are_numbered_by_frame_table_and_generation():
     assert history.blocks[0].image.data == b"png 1"
 
 
-@pytest.mark.parametrize("older_frames", OLDER_FORMS)
-def test_only_the_newest_frames_keep_their_screenshots(older_frames):
+def test_only_the_newest_frames_keep_their_screenshots():
     history = History().play("F" * 30)
-    frames = _frames(_view(history.blocks, frames=20, older_frames=older_frames))
+    frames = _frames(_view(history.blocks, frames=20))
     assert [frame.id for frame in frames] == [f"f{n}.frame" for n in range(1, 31)]
     assert [frame.image is not None for frame in frames] == [False] * 10 + [True] * 20
+    assert [frame.folded for frame in frames] == [True] * 10 + [False] * 20
     assert frames[10:] == history.blocks[10:]
 
 
@@ -161,36 +158,15 @@ def test_a_history_with_no_more_frames_than_retained_is_the_view_unchanged():
     assert [item.block for item in view.items[1:]] == history.blocks
 
 
-def test_an_older_frame_in_placeholder_form_is_the_turn_based_fold():
+def test_an_older_frame_is_the_turn_based_fold():
     history = History().play("FF")
-    older = _frames(_view(history.blocks, frames=1, older_frames="placeholder"))[0]
+    older = _frames(_view(history.blocks, frames=1))[0]
     turn = CanonicalTurn(observation=_observation(1), decision=0)
     turn.fold_visual()
     folded = build_request(POLICY, SYSTEM, (turn,), None, ANSWER, CALL).items[1].block
     assert replace(older, id=folded.id) == folded
+    # The element list goes with the screenshot.
     assert (older.text, older.image, older.folded) == (POLICY.texts.folded_visual, None, True)
-
-
-def test_an_older_frame_in_text_form_keeps_its_element_list():
-    history = History().play("FF")
-    older = _frames(_view(history.blocks, frames=1, older_frames="text"))[0]
-    assert older == replace(history.blocks[0], image=None, folded=True)
-    assert FRAME_INTERACTABLES_HEADER in older.text
-
-
-def test_an_older_frame_in_prompt_form_drops_its_element_list():
-    history = History().play("FF")
-    older = _frames(_view(history.blocks, frames=1, older_frames="prompt"))[0]
-    assert older == replace(
-        history.blocks[0], text="Frame 1 of the form.", image=None, folded=True
-    )
-
-
-@pytest.mark.parametrize("older_frames", OLDER_FORMS)
-def test_every_older_frame_is_folded_and_the_newest_are_not(older_frames):
-    history = History().play("FFF")
-    frames = _frames(_view(history.blocks, frames=2, older_frames=older_frames))
-    assert [frame.folded for frame in frames] == [True, False, False]
 
 
 def test_outputs_and_feedback_stay_where_they_were_accepted():
@@ -231,12 +207,11 @@ def _script(rng: random.Random, length: int) -> str:
 @pytest.mark.parametrize("seed", range(6))
 def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed):
     rng = random.Random(seed)
-    older_frames = OLDER_FORMS[seed % len(OLDER_FORMS)]
     retained = rng.randint(1, 25)
     history = History().play(_script(rng, 160))
     previous = None
     for count in range(len(history.blocks) + 1):
-        view = _view(history.blocks[:count], frames=retained, older_frames=older_frames)
+        view = _view(history.blocks[:count], frames=retained)
         blocks = [item.block for item in view.items[1:]]
         assert [block.id for block in blocks] == [block.id for block in history.blocks[:count]]
         frames = [block for block in blocks if block.kind == "frame"]
@@ -388,7 +363,6 @@ def test_each_longer_history_only_adds_to_the_archive(seed):
         view = _view(
             accepted,
             frames=retained,
-            older_frames=OLDER_FORMS[seed % len(OLDER_FORMS)],
             replies="archive",
             actions=history.actions,
             policy=policy,

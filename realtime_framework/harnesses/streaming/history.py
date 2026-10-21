@@ -6,7 +6,7 @@ number, each reply's model output, based on the frame its action names, and each
 feedback, attached to the output whose action it reports. Feedback stays where it arrived, after
 the frames pushed while the action ran. The view keeps that order and every block's id, so an
 encoder can diff two views by id. Only the newest frames keep their screenshots; an older frame
-takes the form the retention names, and never gets its screenshot back. Under the archive
+folds as a turn-based frame does, and never gets its screenshot back. Under the archive
 retention the oldest replies leave for the action ledger, and never come back.
 """
 
@@ -31,21 +31,16 @@ from realtime_framework.entity.request import (
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.request import ledger_block
-from realtime_framework.sandbox.observation.som import without_observation_interactables
 
 _KIND_ROLES = {"frame": "input", "model_output": "model", "execution_feedback": "input"}
 
 
 @dataclass(frozen=True)
 class StreamingRetention:
-    """What the view keeps of the history older than the newest frames. Each item offers every
-    form still open in the native-streaming plan (stream-plan.md 4.4, 4.6)."""
+    """What the view keeps of the history older than the newest frames. The reply item offers
+    both forms still open in the native-streaming plan (stream-plan.md 4.6)."""
 
     frames: int  # the newest frames, which keep their screenshots
-    # What an older frame becomes, folded (without its screenshot): "placeholder", the turn-based
-    # fold placeholder in place of its text; "text", its text with its element list; "prompt",
-    # its text without the element list.
-    older_frames: Literal["placeholder", "text", "prompt"]
     # "all": every reply stays, with its feedback. "archive": the policy's turn window counts
     # replies as the turn-based one counts turns, and the replies it archives leave for the
     # action ledger.
@@ -106,7 +101,7 @@ def history_view(
 ) -> CanonicalRequest:
     """The session the accepted ``blocks`` (frames, outputs and feedback, in acceptance order)
     make under ``retention``: the system instruction, the action ledger, then every block not
-    archived, in order, the frames older than the newest ``retention.frames`` in their older form.
+    archived, in order, the frames older than the newest ``retention.frames`` folded.
 
     An archived reply takes the feedback on its action, wherever that arrived, and the older
     frames accepted before it; the newest frames stay. ``actions`` has each reply's action
@@ -139,7 +134,9 @@ def history_view(
         elif index in older:
             if index < cut:
                 continue
-            block = _older_frame(block, retention.older_frames, policy)
+            # The fold placeholder in place of its text and screenshot, as a turn-based frame
+            # folds (harnesses/default/request.py _frame).
+            block = replace(block, text=policy.texts.folded_visual, image=None, folded=True)
         items.append(RequestItem(block, Intent(_KIND_ROLES[block.kind], "in_order")))
     return CanonicalRequest(
         policy=policy, history_form="turns", items=tuple(items), answer=answer, call=call
@@ -154,15 +151,3 @@ def _archived_replies(count: int, turns: Retention) -> int:
     while count - archived > turns.keep:
         archived += turns.block
     return archived
-
-
-def _older_frame(block: ContentBlock, form: str, policy: PathPolicy) -> ContentBlock:
-    # Folded in every form: the session encoders take a folded frame for one whose screenshot
-    # left (providers/openai_realtime_session.py _edit_batch).
-    if form == "placeholder":
-        text = policy.texts.folded_visual
-    elif form == "text":
-        text = block.text
-    else:
-        text = without_observation_interactables(block.text)
-    return replace(block, text=text, image=None, folded=True)
