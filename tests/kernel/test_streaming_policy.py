@@ -418,6 +418,18 @@ def test_the_deadline_waits_for_the_read_after_an_execution_answered_before_it(e
     assert _ended(sim) == ended
 
 
+def test_the_deadline_waits_for_the_read_after_an_action_answered_while_the_shell_is_busy():
+    """The click finishes at 4.75 and ends the task; its answer comes while the refusal's feedback,
+    from 4.7, holds the shell until 5.7. It is filed where the click finished, before the deadline,
+    so the deadline waits for the read after it (N31), as for an answer filed before the shell
+    was held."""
+    calls = (Call(0.5, CLICK, "a", execute_s=4.25), Call(4.7, TYPE, "b", grounding=MISSING_FRAME))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=1.0, ends_at=4.75))
+    assert sim.checks == [0.0, 5.7]
+    assert _ended(sim) == ("game_decided", "environment", 4.75, 5.7)
+    assert sim.resolved()[0]["terminal_after_action"] is True
+
+
 def test_the_deadline_beats_a_watchdog_due_before_it():
     """The click's feedback holds the shell from 4.25 to 5.25, across the watchdog due at 4.5 and
     the deadline. The watchdog is handled first, but the deadline gives the reply up."""

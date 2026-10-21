@@ -598,11 +598,10 @@ class Simulation:
                 if op[0] != "check":
                     assert not (op[2] < read[3] and read[2] < op[3]), f"{op} overlaps {read}"
         # The state is read at most once a frame, but right after an action; an action applied
-        # while the episode ran is followed by that read before another action executes
-        # (decision 31), also when the deadline comes while it waits (N31), unless the run turns
-        # invalid first.
+        # that finished before the deadline is followed by that read before another action
+        # executes (decision 31), also when the deadline comes while it waits (N31), unless the
+        # run turns invalid first.
         end = self.entries("EpisodeEnded")[0].seq
-        handled = {entry.data.started_at: entry.seq for entry in self.entries("ActionExecuted")}
         executions = [op for op in gated if op[0] == "execute"]
         for before, after in itertools.pairwise(reads):
             frame = math.floor(after[2] * self.config.env_fps + 1e-9)
@@ -619,7 +618,7 @@ class Simulation:
             if (
                 data is None
                 or data["terminal_after_action"]
-                and (handled[execution[2]] > end or self.termination.cause == "invalid")
+                and (execution[3] >= self.config.duration_s or self.termination.cause == "invalid")
             ):
                 continue
             until = math.inf if following is None else following[4]
