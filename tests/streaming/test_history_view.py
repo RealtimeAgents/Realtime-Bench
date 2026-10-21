@@ -56,7 +56,7 @@ class History:
         self.table = FrameTable()
         self.blocks: list = []
         self.frames = 0
-        self.generations = 0
+        self.replies = 0
         self.reported = 0
 
     def frame(self) -> None:
@@ -66,15 +66,15 @@ class History:
         self.blocks.append(frame_block(record, observation))
 
     def reply(self, based_on: str | None = "newest") -> None:
-        self.generations += 1
         if based_on == "newest":
             based_on = next(b.observation_id for b in reversed(self.blocks) if b.kind == "frame")
         text = f'{{"action": "click", "target": "P1", "frame": {self.frames}}}'
-        self.blocks.append(output_block(self.generations, text, based_on, 2_000))
+        self.blocks.append(output_block(self.replies, text, based_on, 2_000))
+        self.replies += 1
 
     def feedback(self) -> None:
-        self.reported += 1
-        self.blocks.append(feedback_block(self.reported, f"applied {self.reported}", 3_000))
+        decision, self.reported = self.reported, self.reported + 1
+        self.blocks.append(feedback_block(decision, "a1", f"applied {decision}", 3_000))
 
     def play(self, script: str) -> History:
         """F: push a frame; R: a reply on the newest frame; B: feedback on the oldest reply
@@ -107,20 +107,37 @@ def test_the_view_opens_with_the_system_instruction_and_carries_the_request_part
     assert view.selection is None
 
 
-def test_blocks_are_numbered_by_frame_table_and_generation():
+def test_blocks_are_numbered_by_frame_table_decision_and_call():
     history = History().play("FFRBFR")
     assert [block.id for block in history.blocks] == [
         "f1.frame",
         "f2.frame",
-        "g1.output",
-        "g1.feedback",
+        "d0.output",
+        "d0.a1.feedback",
         "f3.frame",
-        "g2.output",
+        "d1.output",
     ]
     first_reply = history.blocks[2]
-    assert (first_reply.based_on, history.blocks[3].attached_to) == ("o2", "g1.output")
+    assert (first_reply.based_on, history.blocks[3].attached_to) == ("o2", "d0.output")
     assert history.blocks[0].observation_id == "o1"
     assert history.blocks[0].image.data == b"png 1"
+
+
+def test_each_action_of_a_reply_has_its_own_feedback():
+    history = History().play("FRF")
+    history.blocks += [
+        feedback_block(0, "a2", "superseded", 3_000),
+        feedback_block(0, "a1", "applied", 3_001),
+        output_block(1, "", None, 4_000),
+        feedback_block(1, None, "no action", 4_001),
+    ]
+    view = _view(history.blocks)
+    feedback = [item.block for item in view.items if item.block.kind == "execution_feedback"]
+    assert [(block.id, block.attached_to) for block in feedback] == [
+        ("d0.a2.feedback", "d0.output"),
+        ("d0.a1.feedback", "d0.output"),
+        ("d1.feedback", "d1.output"),
+    ]
 
 
 def test_only_the_newest_frames_keep_their_screenshots():
@@ -181,7 +198,7 @@ def test_a_reply_whose_action_names_no_sent_frame_stays_in_the_view():
     history = History().play("F")
     history.reply(based_on=None)
     reply = _view(history.blocks).items[-1].block
-    assert (reply.id, reply.based_on) == ("g1.output", None)
+    assert (reply.id, reply.based_on) == ("d0.output", None)
 
 
 def _script(rng: random.Random, length: int) -> str:
