@@ -44,8 +44,9 @@ class SessionLifecycle:
     Every timed wait of the encoder on the clock is written to the trace before it starts
     (_record_wait): what it waits for, how long, and until which time on the operational clock.
     ensure_ready's wait for an abort's cleanup has no time bound and is not recorded.
-    _wait takes a cancel event and ends early once it is set; a bound on an operation (a goAway
-    deadline, a close) ends with the operation, and an abort's close ends the operation.
+    _wait ends early once the cancel event it is given is set; the encoders' own waits give none
+    yet, so nothing ends them early. A bound on an operation (a goAway deadline, a close) ends
+    with the operation, and an abort's close ends the operation.
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
@@ -123,7 +124,8 @@ class SessionLifecycle:
 
     async def abort(self, generation: GenerationHandle | None) -> None:
         """Interrupt ``generation`` (None when none had started), then close the connection, as
-        far as either works. The next ensure_ready, or close, waits for this to finish."""
+        far as either works. The next ensure_ready waits for this to finish, close for at most
+        _CLEANUP_WAIT_S; a later abort takes its place as the one they wait for."""
         self._cleanup = asyncio.ensure_future(self._interrupt_and_close(generation))
         await asyncio.wait({self._cleanup})
 
@@ -157,9 +159,10 @@ class SessionLifecycle:
     async def _wait(
         self, wait: str, seconds: float, cancel: threading.Event = _NEVER_CANCELLED
     ) -> None:
-        """Wait ``seconds`` on the operational clock, the way RequestRetry's backoff waits. Once
-        ``cancel`` is set the generation the wait belongs to is abandoned, and RetryCancelled
-        ends the wait."""
+        """Wait ``seconds`` on the operational clock, on an executor thread as RequestRetry's
+        backoff does. Once ``cancel`` is set the generation the wait belongs to is abandoned, and
+        RetryCancelled ends the wait. Unlike RequestRetry, which takes the event of the enclosing
+        retry_cancellation, it waits only on the ``cancel`` it is given."""
         self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")

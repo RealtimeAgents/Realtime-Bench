@@ -569,8 +569,8 @@ class _SleepRecordingClock(SystemClock):
 
 def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
     """On the realtime_input transport (the driver defaults) one video frame follows the last by
-    at least one model-input frame interval (live.py:700-710): 4 s at 0.25 fps. Each video is
-    followed by the 1 s ingestion wait (live.py:711-712), so the wait before the next video is
+    at least one model-input frame interval (live.py:597-603): 4 s at 0.25 fps. Each video is
+    followed by the 1 s ingestion wait (live.py:611-612), so the wait before the next video is
     the other 3 s."""
     clock = _SleepRecordingClock()
     preset = DRIVER_DEFAULT

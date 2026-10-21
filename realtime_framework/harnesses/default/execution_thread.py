@@ -13,9 +13,10 @@ class ExecutionThread:
     """One private asyncio event loop, on its own thread, for every operation of the driver.
 
     The synchronous harness calls the agent from the runner's main thread and from a worker thread
-    per decision; whatever the protocol, the driver's operations run here instead, so async
-    WebSocket SDKs and the synchronous transports a driver bridges with asyncio.to_thread follow
-    one order. The operational clock makes the loop, so the drivers' waits run on its time.
+    per decision. Driver operations submitted here run on this one loop instead, whatever the
+    protocol, so async WebSocket SDKs and the synchronous transports a driver bridges with
+    asyncio.to_thread follow one order. The operational clock makes the loop, so the drivers'
+    waits run on its time.
     """
 
     def __init__(self, clock: Clock, name: str):
