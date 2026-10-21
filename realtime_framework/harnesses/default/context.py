@@ -485,6 +485,9 @@ class RealtimeRuntime:
             self._active_generation = generation
         started = self.clock.monotonic()
         terminal_history = ProviderHistoryState.UNKNOWN
+        # The totals and turn counts below are read from the history once the request has
+        # started: a generation aborted while it starts may find them as the next one has left
+        # them. Its GenerationPrepared holds them as its request went.
         provider_metadata: dict = {
             "provider_call_started_monotonic_ns": provider_call_started_monotonic_ns,
             "provider_call_started_wall_time_ns": provider_call_started_wall_time_ns,
