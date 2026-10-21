@@ -20,12 +20,14 @@ since the kernel started; it must be passed, or the kernel would time its watchd
 ``FrameCaptured.timestamp`` are semantic seconds since the episode origin.
 
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
-ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, their
-payload completed with the fields the runner writes today. Of the echoes of the events it handled,
-FrameCaptured of a frame that was captured is written as ObservationCaptured (a failed capture,
-and the frame that shows the stream frozen, write none), GenerationFinished of a result the shell
-settled as OutputChunkReceived and InferenceCompleted, and an agent's AgentRecord under its own
-kind with the data its trace sink gave.
+ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, with the
+payload the runner writes (evaluation/episode_records.py) instead of the kernel's data, which only
+ClockAdvanced keeps: a generation's number is in no record but the KernelRecords naming it. Of the
+echoes of the events it handled, FrameCaptured of a frame that was captured is written as
+ObservationCaptured (a failed capture writes none, nor does the frame that froze the stream when
+that is the run's failure), GenerationFinished of a result the shell settled as
+OutputChunkReceived and InferenceCompleted (GenerationAbandoned is, for one the kernel gave up on
+first), and an agent's AgentRecord under its own kind with the data its trace sink gave.
 Every other record (TimerSet, EpisodeEnded, Termination and the other echoes, SnapshotFrozen's too)
 is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the trace holds at most one
 SnapshotFrozen, the one main() writes for a snapshot it took. Every record carries ``kernel_seq``,
@@ -103,8 +105,10 @@ class ShellEnvironment(Protocol):
     ``_last_rejected_by_guest`` and the execution record in ``_last_execution_result``, which the
     shell reads as the runner does (runner.py ``_land_action``, ``_apply``). The environment may
     also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
-    ``clock_advance_failed`` from a tap; the shell posts that as Invalidated before the command's
-    answer."""
+    ``clock_advance_failed`` from a tap; for an operation that returns, the shell posts that as
+    Invalidated before the command's answer. One that raises is answered with its error, and the
+    run is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
+    ``_rendered``)."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
     d: float  # seconds per environment tick
@@ -248,9 +252,12 @@ class _Decision:
 
     index: int
     observation: Observation | None = None
-    # Its settled result: the one the kernel accepted, or the call it gave up on at the cap.
+    # Its settled result: the one the kernel accepted, or the one of the move it gave up on at the
+    # cap: the call given up on, or the result settled past the cap.
     result: dict | None = None
-    landed_at: float | None = None  # operational time when its action came to land
+    # When its action came to land, Unix seconds: the landing's reading on the wall clock,
+    # operational time on the token clock.
+    landed_at: float | None = None
     coordinate_trace: Any = None
     resolved: dict | None = None  # its ActionResolved payload
 
@@ -440,7 +447,9 @@ class _Shell:
                 try:
                     rendered = self._env(self.env.render_current_frame)
                 except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
-                    self.post(FrameRendered(error=traceback.format_exc()))
+                    failure = traceback.format_exc()
+                    self._escaped(failure)
+                    self.post(FrameRendered(error=failure))
                 else:
                     self.post(FrameRendered(rendered is not None))
             case Commit(outcome=outcome):
@@ -459,11 +468,16 @@ class _Shell:
 
     def _raised(self, failure: str) -> None:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
-        finalizes; the first traceback is the summary's error (runner.py main)."""
+        finalizes."""
+        self._escaped(failure)
+        self.post(Invalidated("runner", "run_exception", failure))
+
+    def _escaped(self, failure: str) -> None:
+        """An exception that escaped the legacy loop: it is logged, and the first traceback is
+        the summary's error (runner.py run_stream, main)."""
         self.log(f"[default] decision loop raised:\n{failure}")
         if self._loop_error is None:
             self._loop_error = self.env._loop_error = failure
-        self.post(Invalidated("runner", "run_exception", failure))
 
     def _unanswered(self, command, failure: str):
         """The answer to a command whose run raised, so that the kernel, which waits for it, can
@@ -483,8 +497,8 @@ class _Shell:
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
         itself in an operation that returned, such as a key tap's failed advance inside
-        ``execute()``, goes to the kernel with its own reason before the command's answer. An
-        operation that raised is answered with its error."""
+        ``execute()``, goes to the kernel with its own reason before the command's answer. One
+        that raised raises here, with no post: its caller answers with the error."""
         latched = getattr(self.env, "_invalid_run", None)
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
@@ -493,11 +507,16 @@ class _Shell:
         return result
 
     def _failure(self, operation, *args) -> str | None:
-        """Run one synchronous environment operation; its error, None when it returned."""
+        """Run one synchronous environment operation; its error, None when it returned. The
+        legacy loop let it escape, except a token wait's own step, which ran inside execute()
+        and failed the action (sandbox/actions.py GuestEnvironment.execute)."""
         try:
             self._env(operation, *args)
         except Exception:  # noqa: BLE001 - the command's answer carries it
-            return traceback.format_exc()
+            failure = traceback.format_exc()
+            if self.policy.phase != "wait":
+                self._escaped(failure)
+            return failure
         return None
 
     def _check_end(self, request: int) -> None:
