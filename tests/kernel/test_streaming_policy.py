@@ -728,12 +728,14 @@ def test_an_action_waiting_behind_one_the_guest_refused_then_executes():
     assert sim.checks == [0.0, 1.25, 2.0, 3.0, 4.0]
 
 
-def test_a_frame_repeated_once_the_episode_is_over_invalidates_nothing():
+def test_a_frame_repeated_once_the_episode_is_over_still_invalidates_the_run():
     """From the capture at 1 on the stream repeats a frame; the third time comes from the capture
-    at 3, which answers at 3.5, after the deadline at 3.25."""
+    at 3, which answers at 3.5, after the deadline at 3.25. The frame is judged as a failed
+    capture would be, as on the turn-based clock."""
     sim = _run(World(frozen_from=1, capture_times={4: 0.5}), 3.25)
     assert len(sim.captures) == 4
-    assert sim.termination.stop_reason == "time_limit"
+    assert _ended(sim) == ("invalid_run", "deadline", 3.25, 3.5)
+    assert sim.termination.invalid.reason == "observation_stream_frozen"
 
 
 # ---- frame rates ------------------------------------------------------------------------------
