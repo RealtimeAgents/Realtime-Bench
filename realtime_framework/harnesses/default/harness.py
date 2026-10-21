@@ -1056,8 +1056,9 @@ def _action_text(action: Action) -> str:
 
 @dataclass
 class _Staged:
-    """What accepting a generation's result writes into the history. Discarding it only ends
-    its tool calls and records the usage of a result that came back."""
+    """What accepting a generation's result writes into the history. Discarding it writes no
+    history: it ends the tool calls, records the usage of a result that came back and marks the
+    trajectory row discarded."""
 
     feedback: str  # the pending feedback when it started
     unattached: str  # and the part of it that no turn carries
@@ -1081,7 +1082,7 @@ class _Generation:
     provider_output_tokens: int | None
     transport_output_tokens: int | str | None
     clock_mode: str
-    cancel: threading.Event  # set by abort() and close(): the generation sends nothing more
+    cancel: threading.Event  # set by abort() and close(); the runtime stops the generation
     # (ChoiceRequirements, SelectionMaterial) of its observation, for its requests.
     choice: tuple | None = None
     staged: _Staged | None = None
