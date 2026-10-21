@@ -265,12 +265,12 @@ def load_definitions(directory):
         if not isinstance(value, dict):
             raise ValueError(f"{filename}: model definition must be a mapping")  # noqa: TRY004
         if (
-            set(value) - {"endpoint", "reasoning_effort", "context_preset"}
+            set(value) - {"endpoint", "reasoning_effort", "context_preset", "streaming"}
             or "endpoint" not in value
         ):
             raise ValueError(
-                f"{filename}: use an endpoint block, plus optional reasoning_effort and "
-                "context_preset"
+                f"{filename}: use an endpoint block, plus optional reasoning_effort, "
+                "context_preset and streaming"
             )
         key = Path(filename).stem
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in seen:
@@ -323,8 +323,40 @@ def load_definitions(directory):
         defaults = definition["defaults"]
         if "context_preset" in defaults and defaults["context_preset"] not in MODEL_PRESETS:
             raise ValueError(f"{filename}: context_preset must be one of {list(MODEL_PRESETS)}")
+        if "streaming" in value:
+            defaults["streaming"] = _streaming_settings(filename, api, driver, value["streaming"])
         result.append((filename, definition))
     return result
+
+
+def _streaming_settings(filename: str, api: str, driver: type, settings) -> dict:
+    """A model YAML's streaming settings: some of the keys its driver's streaming_settings
+    declares, each a positive integer. Merged over the driver's, Gemini Live's sliding window
+    keeps fewer tokens than set it off (google.genai SlidingWindow.target_tokens)."""
+    declared = getattr(driver, "streaming_settings", None)
+    if declared is None:
+        raise ValueError(f"{filename}: the {api} API takes no streaming settings")
+    if not isinstance(settings, dict):
+        raise ValueError(f"{filename}: streaming must be a mapping")  # noqa: TRY004
+    unknown = set(settings) - set(declared)
+    if unknown:
+        raise ValueError(
+            f"{filename}: unknown streaming settings {sorted(unknown)}; the {api} API takes "
+            f"{sorted(declared)}"
+        )
+    for name, setting in settings.items():
+        if type(setting) is not int or setting <= 0:
+            raise ValueError(f"{filename}: streaming.{name} must be a positive integer")
+    merged = {**declared, **settings}
+    if (
+        "compression_target_tokens" in merged
+        and merged["compression_target_tokens"] >= merged["compression_trigger_tokens"]
+    ):
+        raise ValueError(
+            f"{filename}: streaming.compression_target_tokens must be below "
+            "compression_trigger_tokens"
+        )
+    return dict(settings)
 
 
 # Factory
@@ -434,6 +466,12 @@ def _check_driver(target: str, driver: type) -> None:
     # The runtime also reads a persistent session's state (RealtimeRuntime.state).
     if driver.capabilities.persistent_session and not hasattr(driver, "state"):
         raise ValueError(f"{target!r} declares persistent_session but has no state")
+    if "streaming" in driver.capabilities.interaction_modes and not isinstance(
+        getattr(driver, "streaming_settings", None), dict
+    ):
+        raise ValueError(
+            f"{target!r} declares streaming but no streaming_settings (a dict class attribute)"
+        )
     estimates = driver.capabilities.request_size_estimation
     if callable(getattr(driver, "request_context_status", None)) and not estimates:
         raise ValueError(

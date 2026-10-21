@@ -98,6 +98,29 @@ Whether either takes effect is not recorded on its own: it follows from the driv
 harness fingerprint covers (an external driver's identity, for an external driver), and from the
 model configuration, which the run hash covers.
 
+### Streaming settings
+
+`streaming` (top level, optional) sets what a live API keeps of a native-streaming session
+(`--ak interaction_mode=streaming`): `retained_frames` for `openai_realtime`, the newest frames
+that keep their screenshots, and `compression_trigger_tokens` and `compression_target_tokens` for
+`gemini_live`, the context size at which the server compresses the session and the size it
+compresses it to, which must be smaller. Each is a positive integer, and a key left out keeps the
+API's default (`streaming_settings` of its driver):
+
+```yaml
+endpoint:
+  api: openai_realtime
+  model: gpt-realtime-2
+  api_key_env: OPENAI_API_KEY
+reasoning_effort: low
+streaming:
+  retained_frames: 10
+```
+
+Only a streaming run uses and records them: its configuration lists every setting with the value
+it ran with, and a turn-based run's configuration has none. To compare values, save each as its
+own preset, so the runs keep apart by model name too.
+
 ## Add a model API
 
 A model that needs a new wire protocol gets a driver:
@@ -138,8 +161,12 @@ A model that needs a new wire protocol gets a driver:
    pre-run checks (`providers/preflight.py`) read the rest; an undeclared value counts as
    unsupported, and a context policy the driver cannot render is refused.
    Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
-   `model_defaults` (per-model ModelConfig defaults, usually `{}`). Function-call drivers send the
-   function declarations the harness puts in `SessionSeed.answer`.
+   `model_defaults` (per-model ModelConfig defaults, usually `{}`). A driver that lists
+   `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
+   [streaming settings](#streaming-settings) (a dict); an external driver without it is refused
+   when its model is loaded, and the tests hold every registered driver to the same check.
+   Function-call drivers send the function declarations the harness puts in
+   `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
    provider-measured usage.
 4. Implement `classify_transport_error(exc) -> TransportFailure` and declare
