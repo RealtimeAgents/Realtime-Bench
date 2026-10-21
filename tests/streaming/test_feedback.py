@@ -87,15 +87,36 @@ def test_an_action_whose_frame_cannot_be_found_keeps_what_was_asked_and_says_why
 
 
 def test_a_reply_with_no_action_ran_nothing():
-    world = World(replies=[Reply(1.0, protocol_failure="invalid_action_output"), Reply(1.0)])
-    outcome = _outcomes(world, 1.5)[None]
-    assert outcome.status == "none"
+    outcome = _outcomes(World(replies=[Reply(1.0), Reply(1.0)]), 1.5)[None]
+    assert (outcome.status, outcome.protocol_failure) == ("none", None)
     text = execution_feedback(outcome, "none")
     assert text == (
         "EXECUTION RESULT: actual=none; requested=none; status=none. "
         "NOTE: your reply had no valid action, so nothing was executed."
     )
     assert "WAIT was executed" not in text
+
+
+@pytest.mark.parametrize(
+    ("calls", "failure"),
+    [((Call(0.5, CLICK, "a"),), "malformed_second_call"), ((), "invalid_action_output")],
+    ids=["after_an_action", "alone"],
+)
+def test_a_reply_with_a_protocol_failure_says_what_could_not_run_and_leaves_its_actions_be(
+    calls, failure
+):
+    """A reply's protocol failure has an outcome of its own, also when the reply handed actions
+    over, which have theirs."""
+    outcomes = _outcomes(World(replies=[Reply(1.0, calls=calls, protocol_failure=failure)]), 1.5)
+    outcome = outcomes[None]
+    assert (outcome.status, outcome.protocol_failure) == ("none", failure)
+    assert execution_feedback(outcome, "none") == (
+        "EXECUTION RESULT: actual=none; requested=none; status=none. "
+        f"NOTE: your reply held something that could not be executed ({failure}); nothing ran "
+        "for it, and each action the reply handed over has its own feedback."
+    )
+    if calls:
+        assert execution_feedback(outcomes["a"], action_text(CLICK)).endswith("status=applied.")
 
 
 def test_a_done_ran_as_the_wait_it_became_and_says_so_as_the_turn_based_feedback_does():
