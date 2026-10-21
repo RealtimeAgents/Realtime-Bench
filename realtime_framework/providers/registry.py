@@ -431,6 +431,9 @@ def _check_driver(target: str, driver: type) -> None:
         for method in methods:
             if getattr(driver.capabilities, flag) and not callable(getattr(driver, method, None)):
                 raise ValueError(f"{target!r} declares {flag} but has no {method}()")
+    # The runtime also reads a persistent session's state (RealtimeRuntime.state).
+    if driver.capabilities.persistent_session and not hasattr(driver, "state"):
+        raise ValueError(f"{target!r} declares persistent_session but has no state")
     estimates = driver.capabilities.request_size_estimation
     if callable(getattr(driver, "request_context_status", None)) and not estimates:
         raise ValueError(

@@ -117,8 +117,11 @@ A model that needs a new wire protocol gets a driver:
    observation and keep native history. A session API (`persistent_session`) also manages its
    session: the runtime calls its `ensure_ready` before each generation, `synchronize` after the
    retained history changed, `renew`, `repair` after each generation, `abort` and `mark_dirty`,
-   and reads its `state`. Inherit `SessionLifecycle`
-   (`realtime_framework/providers/session_lifecycle.py`) for these: it implements them, with
+   and reads its `state`. Each of them but `abort` and `mark_dirty` takes the runtime's
+   `record(sync, result=None, error=None)`: called once for each sync the operation runs, with
+   the sync request and its result or error, and with `sync=None` once it reopened the session,
+   it writes the history change to the trace. A session API inherits `SessionLifecycle`
+   (`realtime_framework/providers/session_lifecycle.py`), which implements them, with
    `connect`, `sync_history` and `close`, over your `_connect`, `_sync_history`,
    `_close_current` and `interrupt`; it reads `self.clock`, writes its records to the trace
    `bind_trace` gave you, kept as `self._trace`, and `_wait` records a wait and takes it. Record
@@ -166,7 +169,7 @@ driver as a [model API](#add-a-model-api).
    `server_context="none"` for a stateless API. Each optional-method flag you set
    (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
    `maps_output_cap`) needs its method, and `persistent_session` needs `ensure_ready`,
-   `synchronize`, `renew`, `repair`, `abort` and `mark_dirty`. The driver runs under the
+   `synchronize`, `renew`, `repair`, `abort`, `mark_dirty` and `state`. The driver runs under the
    `chat_completions` context policy, with the model's [context preset](#context-preset) if it
    names one. With
    `request_size_estimation`, the runtime asks `request_context_status(request)`

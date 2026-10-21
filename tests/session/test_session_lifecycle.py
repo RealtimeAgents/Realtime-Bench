@@ -642,6 +642,13 @@ def test_a_persistent_session_must_manage_itself():
         driver = type("SessionDriver", (), {**attributes, **methods})
         with pytest.raises(ValueError, match=rf"declares persistent_session but has no {missing}"):
             catalog._check_driver("rtb_ext.session:SessionDriver", driver)
+    # The runtime reads the session's state too (RealtimeRuntime.state), a property.
+    methods = {name: getattr(SessionLifecycle, name) for name in lifecycle}
+    driver = type("SessionDriver", (), {**attributes, **methods})
+    with pytest.raises(ValueError, match=r"declares persistent_session but has no state$"):
+        catalog._check_driver("rtb_ext.session:SessionDriver", driver)
+    managed = type("SessionDriver", (), {**attributes, **methods, "state": SessionLifecycle.state})
+    catalog._check_driver("rtb_ext.session:SessionDriver", managed)
 
 
 # ---- OpenAI Realtime on a fake SDK connection ---------------------------------------------
