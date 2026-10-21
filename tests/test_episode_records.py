@@ -287,6 +287,34 @@ def test_a_call_the_episodes_end_gave_up_on_stays_out_of_the_token_totals():
     assert summary["counts"]["provider_output_tokens"]["complete"] is False
 
 
+def test_a_call_whose_decision_goes_unreported_stays_out_of_the_reported_subtotal():
+    """The kernel gave up on two decisions, which no lifecycle record reports (K-a): one settled
+    before it did, and one at the deadline, synthesized without usage. The totals count both, the
+    second leaving them incomplete (decision 48); the subtotal of reported decisions leaves them
+    out. A summary without one has no subtotal."""
+    env = _Env()
+    reported = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    episode_records.account_tokens(reported, None, env)
+    assert "reported_decisions" not in env._token_accounting.summary()
+    settled = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    episode_records.account_tokens(settled, None, env)
+    cut = episode_records.timed_out_result(2.0, "wall_deadline")
+    episode_records.account_tokens(cut, None, env)
+    for r in (settled, cut):
+        env._token_accounting.leave_unreported(r["token_accounting"])
+    summary = env._token_accounting.summary()
+    clock = summary["counts"]["clock_output_tokens"]
+    assert (summary["responses"], clock["known_total"], clock["complete"]) == (3, 40, False)
+    assert summary["reported_decisions"] == {
+        "responses": 1,
+        "counts": {
+            "clock_output_tokens": {
+                "total": 20, "known_total": 20, "responses_with_count": 1, "complete": True,
+            }
+        },
+    }  # fmt: skip
+
+
 def _trajectory(tmp_path, rows: list[dict]):
     (tmp_path / "trajectory.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     return summarize_model_timing(tmp_path)
