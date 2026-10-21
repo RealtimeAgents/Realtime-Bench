@@ -206,6 +206,36 @@ def test_a_run_plan_carries_both_rates_to_the_runner(tmp_path):
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
+def test_ak_fps_on_a_run_plan_without_a_model_input_rate_sets_both(tmp_path, monkeypatch):
+    """``rtbench run -c PLAN --ak fps=N``: Harbor merges --ak into each agent's kwargs key by key
+    (harbor/cli/jobs.py:1575-1577). A plan that does not set model_input_fps leaves it to the
+    agent's options, which default it to the fps they end up with, as without a plan; a plan
+    that sets it keeps it."""
+    from harbor.cli.utils import parse_kwargs
+
+    from realtime_framework.evaluation import harbor_cli
+    from realtime_framework.evaluation.harbor import RealtimeBenchOptions
+
+    # suite_dataset links task folders under temp/; the job only needs the selected names.
+    monkeypatch.setattr(
+        harbor_cli, "suite_dataset", lambda suite, selected: {"path": suite, "task_names": selected}
+    )
+
+    def rates(plan, *ak):
+        (agent,) = harbor_cli.plan_job(plan)["agents"]
+        agent["kwargs"].update(parse_kwargs(list(ak)))
+        options = RealtimeBenchOptions(**agent["kwargs"])
+        return options.fps, options.model_input_fps
+
+    default = harbor_cli.ROOT / "configs/runs/default.yaml"
+    assert rates(default) == (1.0, 1.0)
+    assert rates(default, "fps=2") == (2.0, 2.0)
+    split = tmp_path / "split.yaml"
+    split.write_text(PLAN)
+    assert rates(split) == (2.0, 1.0)
+    assert rates(split, "fps=4") == (4.0, 1.0)
+
+
 def _trial(model_input_fps, fps=2.0) -> tuple[dict, dict, dict]:
     """A trial's identity (evaluation/harbor.py:506-520), its request, and the one-task local
     report whose group carries the identity reporting.report found in the run summary."""
