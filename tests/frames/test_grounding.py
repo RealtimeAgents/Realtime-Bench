@@ -11,6 +11,12 @@ import json
 from PIL import Image
 
 from realtime_framework.entity.actions import normalize_action
+from realtime_framework.evaluation.episode_records import action_record
+from realtime_framework.evaluation.reporting import (
+    _action_inspection,
+    action_points,
+    action_targets,
+)
 from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
     INVALID_FRAME_SYNTAX,
@@ -85,6 +91,40 @@ def test_an_action_uses_the_marks_and_geometry_of_the_frame_it_names(tmp_path):
     assert by_coordinates.coordinate_transform == first.geometry
     desktop, _ = normalize_action(by_coordinates)
     assert (desktop.parameters["x"], desktop.parameters["y"]) == (750, 375)  # scale 2.5 x 1.875
+
+
+def test_an_action_on_an_older_frame_is_traced_and_drawn_on_that_frame(tmp_path):
+    """Decision 2 clicks P3 of frame 1. Its own inspection row, frame 3's, records that frame
+    1's marks resolved it, and the report draws the target box from frame 1's inspection, where
+    the click is, not from frame 3's."""
+    steps = [
+        Step('{"action": "wait", "frame": 1}', status="wait"),
+        Step('{"action": "wait", "frame": 2}', status="wait"),
+        Step('{"action": "click", "target": "P3", "frame": 1}'),
+    ]
+    table, results, _ = _run(tmp_path, steps)
+    first, own = table.locate(1)[0], table.locate(3)[0]
+    rows = [json.loads(line) for line in (tmp_path / "tool_calls.jsonl").read_text().splitlines()]
+    by_observation = {}
+    for row in rows:
+        by_observation.setdefault(row["observation_id"], []).append(row)
+    (own_row,) = by_observation[own.observation_id]
+    resolution = own_row["reference_resolution"]
+    assert (resolution["frame"], resolution["observation_id"]) == (1, first.observation_id)
+
+    result = results[2]
+    event = {
+        "observation_id": own.observation_id,
+        "action_protocol": result["action_protocol"],
+        "action": action_record(result["action"]),
+    }
+    by_call = {row["call_id"]: row for row in rows}
+    inspection, proof = _action_inspection(event, result["inspection"], by_call, by_observation)
+    (target,) = action_targets(event, inspection, proof)
+    ((x, y),) = action_points(event)
+    x1, y1, x2, y2 = target["bbox"]
+    assert target["observation_id"] == first.observation_id
+    assert x1 <= x <= x2 and y1 <= y <= y2
 
 
 def test_each_grounded_action_records_its_frame_and_age(tmp_path):
