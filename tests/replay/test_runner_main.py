@@ -324,6 +324,7 @@ def test_main_records_the_kernel_s_inputs(tmp_path):
     inputs = (run_dir / "kernel_inputs.jsonl").read_text()
     lines = [json.loads(line) for line in inputs.splitlines()]
     assert any(event["event"] == "AgentRecord" for line in lines for event in line["events"])
+    assert lines[-1]["call"] == "end"
     config = TurnConfig("wall", HORIZON_S, FPS, FPS, timing=runner.RUNNER_TIMING)
     kernel, entries = replay_inputs(config, lines)
     assert entries == logged
