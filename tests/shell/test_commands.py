@@ -294,6 +294,19 @@ def test_a_result_back_while_the_shell_is_busy_is_settled_only_if_the_kernel_tak
     assert ("accept", 1) not in agent.calls and ("discard", 1) in agent.calls
 
 
+def test_a_move_over_the_cap_took_the_cap_though_the_shell_saw_it_late():
+    """The 1.5 s cap falls due during the end check that runs from 1 s to 2 s. The move is
+    charged the cap (kernel/turns.py on_timer), and its record says so, as the runner's bounded
+    wait did (runner.py _run_step)."""
+    world = World(slow_checks=[(1.0, 1.5, 1.0)])
+    episode = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], world, per_move_cap_s=1.5)
+    assert episode.statuses()[0] == "skipped_timeout"
+    assert episode.env.lifecycle[0]["model_latency_s"] == 1.5
+    assert episode.timeline[0][2] == 1.5
+    (timed_out,) = [p for p in episode.trace.payloads("InferenceCompleted") if p["decision"] == 0]
+    assert timed_out["latency_s"] == 1.5
+
+
 def test_a_result_the_deadline_beat_while_the_shell_was_busy_leaves_no_records():
     """The end check asked at 2 s takes 1.5 s; the reply comes back at 2.9 s, during it. When the
     check is over, the 3 s deadline has given the generation up first and ended the episode: the

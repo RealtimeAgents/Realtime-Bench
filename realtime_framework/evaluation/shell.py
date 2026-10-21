@@ -226,6 +226,7 @@ class _Generation:
     budget: DecisionBudget
     usage_before: dict | None
     started_at: float  # operational time when it started
+    started_semantic: float  # the semantic reading it started at
     done: threading.Event  # set once the worker has handed its result back
     result: dict | None = None  # as the worker handed it back
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
@@ -284,6 +285,7 @@ class _Shell:
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
+        self._cap_due: float | None = None  # when the per-move cap that fired fell due
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -541,6 +543,7 @@ class _Shell:
             budget,
             usage_before,
             clock.time(),
+            self._now[0],
             clock.event(),
         )
         self._generations[held.generation] = self._decision.generation = held
@@ -625,7 +628,8 @@ class _Shell:
         ``on_timer``); the other generations it gives up on end the episode and their decision
         goes unreported. The move's records are the runner's of a call it gave up on."""
         held = self._generations[entry.data["generation"]]
-        latency = round(self.clocks.operational.time() - held.started_at, 2)
+        # The cap, however late the shell got to it: the kernel charges the move that much.
+        latency = round(self._cap_due - held.started_semantic, 2)
         r = episode_records.timed_out_result(latency, entry.data["reason"])
         _, (chunks, completed) = self._settle(held, r)
         self._decision.result = r
@@ -883,6 +887,8 @@ class _Shell:
             self._emit(TraceEvent.RUN_INVALIDATED, _invalid_record(invalid), entry)
         else:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
+            if kind == "TimerFired" and data["kind"] == "per_move_cap":
+                self._cap_due = data["at"]
             if kind == "GenerationAbandoned" and data["reason"] == "per_move_cap":
                 self._timed_out(entry)
 
