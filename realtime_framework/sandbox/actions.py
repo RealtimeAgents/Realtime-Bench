@@ -937,10 +937,10 @@ class GuestEnvironment:
 
     def _execution_failed(self, exc):
         self.failed += 1
-        self._last_exec_error = str(exc)
-        self._last_rejected_by_guest = self._guest_refusal(exc) is not None or isinstance(
-            exc, ActionRejected
-        )
+        refusal = self._guest_refusal(exc)
+        # The model is told the guest's own words; the execution result keeps the whole failure.
+        self._last_exec_error = str(exc if refusal is None else refusal)
+        self._last_rejected_by_guest = refusal is not None or isinstance(exc, ActionRejected)
         if not self._last_rejected_by_guest and not getattr(self, "_invalid_run", None):
             self._invalid_run = {
                 "category": "environment",
