@@ -101,12 +101,17 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
             messages.append({"role": JEV_ROLES[item.intent.role], "content": block.text})
         elif block.kind == "action_ledger":
             if compact_ledger:
-                records = [json.loads(line) for line in block.text.splitlines() if line]
+                lines = [line for line in block.text.splitlines() if line]
+                # Each archived action is a JSON object; the note for omitted ones is not
+                # (harnesses/default/context.py RealtimeRuntime.ledger_block).
+                notes = [line for line in lines if not line.startswith("{")]
+                records = [json.loads(line) for line in lines if line.startswith("{")]
                 records = compact_repeated_records(records, ("decision", "observed_at_tick"))
-                content = texts.jev_ledger_header + "\n" + "\n".join(
+                record_lines = [
                     json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                     for r in records
-                )
+                ]
+                content = "\n".join([texts.jev_ledger_header, *notes, *record_lines])
             else:
                 content = texts.ledger_header + "\n" + block.text
             messages.append({"role": JEV_ROLES[item.intent.role], "content": content})

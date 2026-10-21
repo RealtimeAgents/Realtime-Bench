@@ -143,7 +143,9 @@ driver as a [model API](#add-a-model-api).
    policy, with the model's [context preset](#context-preset) if it names one. With
    `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
-   window; without a declared window the method returns
+   window. With no turn left, the earliest archived actions give way to a note in the ledger;
+   a request that still does not fit is not sent, and the decision is invalid
+   (`context_exceeded_before_request`). Without a declared window the method returns
    `{"pressure": False, "counter": "unconfigured"}`. The flag, not the method, decides this: a
    driver that implements `request_context_status` without declaring `request_size_estimation`
    is refused when its YAML is loaded.
