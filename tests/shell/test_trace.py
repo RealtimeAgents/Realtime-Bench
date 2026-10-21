@@ -124,7 +124,7 @@ def test_the_only_snapshot_frozen_record_is_main_s():
 
 def test_the_frame_that_shows_the_stream_frozen_is_not_written_as_captured():
     """From the second frame on every capture repeats one identity; the third of them freezes the
-    stream. The runner writes no frame its check stops (runner.py _decide): the trace has the
+    stream. The runner writes no frame its check stops (legacy_loop.py _decide): the trace has the
     frames of the three decisions made, and the fourth only as the kernel's record."""
     episode = run("wall", 10.0, [Reply(0.5)] * 5, World(frozen_from=1))
     assert episode.invalid["reason"] == "observation_stream_frozen"

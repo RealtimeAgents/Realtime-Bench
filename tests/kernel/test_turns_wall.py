@@ -235,7 +235,7 @@ def test_a_deadline_while_the_check_before_landing_runs_leaves_the_action_unappl
     assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.75]
     assert _landings(sim) == [(5, 5.75, 5, 0)]
     assert sim.executed == []
-    # Frame age runs to the moment landing begins, before its checks (runner.py _apply).
+    # Frame age runs to the moment landing begins, before its checks (legacy_loop.py _apply).
     assert sim.outcomes == [_outcome(0, "not_applied_time_limit", 5.75, 6, 5.25)]
     (resolved,) = _data(sim, "ActionResolved")
     assert resolved["status"] == "not_applied_time_limit"
@@ -370,8 +370,8 @@ def test_the_frame_at_the_horizon_is_waited_for_until_the_deadline():
 
 def test_a_deadline_inside_the_next_frame_wait_stops_it_at_the_deadline():
     sim = _episode(_wall(5.5), World(replies=[Reply(5.25, CLICK)]))
-    # next = min(max(0 + 1, ceil(5.25)), T = 5.5) = 5.5 (runner.py _apply); the deadline beats the
-    # wake due with it, the move stops at tick 5 and every frame crossed but one was dropped.
+    # next = min(max(0 + 1, ceil(5.25)), T = 5.5) = 5.5 (legacy_loop.py _apply); the deadline beats
+    # the wake due with it, the move stops at tick 5 and every frame crossed but one was dropped.
     assert _timers(sim, "wake") == [5.5]
     assert _boundaries(sim) == [(5, 5.5, 5, 4)]
     assert sim.outcomes == [_outcome(0, "applied", 5.25, 5.5, 5.25, dropped=4)]
@@ -474,7 +474,7 @@ def test_an_end_found_by_the_check_before_landing_leaves_the_action_unapplied():
 def test_an_end_after_the_frames_check_is_found_by_the_check_before_landing():
     # The task ends at 4.25 s, after frame 4 was read at 4 s. The reply at 4.5 s lands in that
     # frame, but at another reading: the wall clock moved on since, so the state is read again
-    # before execution, as today (runner.py _land_action), and the click is not applied.
+    # before execution, as today (legacy_loop.py _land_action), and the click is not applied.
     world = World(replies=[Reply(4.5, CLICK)], ends_at=4.25, end_reason="target_reached")
     sim = _episode(_wall(10.0), world)
     assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.5]
@@ -506,7 +506,7 @@ def test_an_end_found_by_the_check_after_execution_keeps_the_action_applied():
 def test_an_action_back_just_before_the_deadline_lands_only_after_the_shell_accepted_it():
     # T = 3. The click is back at 2.995 s and accepting it takes 10 ms. The action lands at the
     # reading after the accept, 3.005 s, past the deadline, so it is not applied: nothing lands
-    # after the deadline (phase2.md, 时间和结束判定; runner.py _land_action reads the clock right
+    # after the deadline (phase2.md, 时间和结束判定; legacy_loop.py _land_action reads the clock right
     # before it executes).
     world = World(replies=[Reply(2.995, CLICK), Reply(9.0)], accept_s=0.01)
     sim = _episode(_wall(3.0), world)
@@ -535,7 +535,7 @@ def test_the_check_before_landing_is_asked_once_the_shell_accepted_the_result():
 def test_an_action_whose_check_after_it_answers_past_the_deadline_is_not_paced():
     # T = 3. The click back at 2.5 s is read before and executes until 2.8 s; the check after it,
     # asked then, answers "not over" at 3.3 s and is handled first, filed at its asking. Tick 3 is
-    # the horizon, so nothing is paced (runner.py _apply paces only while tick_index() <
+    # the horizon, so nothing is paced (legacy_loop.py _apply paces only while tick_index() <
     # max_ticks): the decision commits at once, nothing dropped, and the deadline ends the episode.
     world = World(replies=[Reply(2.5, CLICK), Reply(9.0)], execute_s=0.3, check_seconds={5: 0.5})
     sim = _episode(_wall(3.0), world)
@@ -889,7 +889,7 @@ def test_the_per_move_cap_is_at_least_a_tenth_of_a_second():
 
 
 def test_a_call_over_the_per_move_cap_costs_the_cap_against_the_think_budget():
-    # Budget 1.5 s, cap 1 s: each call outlasts the cap and costs 1 s (runner.py _charge). The
+    # Budget 1.5 s, cap 1 s: each call outlasts the cap and costs 1 s (legacy_loop.py _charge). The
     # second brings the spend to 2 s >= 1.5 s, and the episode ends once it is reported, at 2 s.
     world = World(replies=[Reply(5.0, CLICK)] * 3)
     sim = _episode(_wall(10.0, per_move_cap_s=1.0, think_budget_s=1.5), world)
@@ -1080,7 +1080,7 @@ def test_a_failed_execution_invalidates_and_its_decision_is_still_reported():
 def test_a_capture_that_fails_after_the_deadline_still_invalidates():
     # The loop starts at 2.5 s and the capture runs until 3.5 s, then fails. The deadline is handled
     # first and ends the episode; the failure still makes the run invalid, as today's loop judges
-    # every failed capture (runner.py _decide).
+    # every failed capture (legacy_loop.py _decide).
     world = World(replies=[], start_s=2.5, capture_s=1.0, capture_errors={1: "screenshot failed"})
     sim = _episode(_wall(3.0), world)
     assert sim.captures == [(2, 3.5)]
@@ -1180,8 +1180,8 @@ def test_a_frame_that_freezes_the_stream_invalidates_the_run_also_past_the_deadl
     config, world, cause, ended_at
 ):
     """A frame captured under way at the deadline is judged like any other: today's loop judges
-    every frame it captured (runner.py _decide, _accept_observation), as the kernel judges every
-    failed capture. Where its answer is filed only changes which end comes first."""
+    every frame it captured (legacy_loop.py _decide, _accept_observation), as the kernel judges
+    every failed capture. Where its answer is filed only changes which end comes first."""
     sim = _episode(config, world)
     assert len(sim.captures) == 2
     termination = sim.termination

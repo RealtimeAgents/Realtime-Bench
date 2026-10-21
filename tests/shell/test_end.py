@@ -2,7 +2,7 @@
 clocks: at the loop top, right before an action lands and right after it is executed. The stop
 reason is the task's, the end time is when the check that saw it was asked (kernel/turns.py
 _end_checked), an action the end comes before is not applied and one it comes right after is
-(runner.py _land_action)."""
+(legacy_loop.py _land_action)."""
 
 from __future__ import annotations
 

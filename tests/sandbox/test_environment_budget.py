@@ -1016,7 +1016,7 @@ def test_a_failed_wall_hold_keeps_a_held_key_s_lease_and_skips_keys_xdotool_cann
 @pytest.mark.parametrize("slow", [True, False], ids=["slow", "failing"])
 def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(slow):
     """release_inputs runs once run_stream has latched the outcome, and the runner only logs its
-    failure (evaluation/runner.py _finalize); main() would still take an invalid run latched here
+    failure (legacy_loop.py _finalize); main() would still take an invalid run latched here
     for the run's."""
     clock = FakeClock()
     guest = _ClockGuest()

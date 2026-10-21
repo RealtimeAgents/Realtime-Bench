@@ -36,7 +36,7 @@ def _calls(episode) -> list[tuple]:
 def test_a_token_delay_is_recorded_in_input_frames_and_timed_in_environment_ticks():
     """At 4 fps with the model fed at 1 fps and B = 100, 50 tokens are half an input frame, two
     environment ticks. The lifecycle records the delay in input frames and the timeline main()
-    reads keeps it in ticks, as the runner does (runner.py _apply); the second decision's 100
+    reads keeps it in ticks, as the runner does (legacy_loop.py _apply); the second decision's 100
     tokens are the whole allowance and land on the horizon."""
     replies = [Reply(0.0, CLICK, output_tokens=50), Reply(0.0, CLICK, output_tokens=100)]
     episode = run("token", 2.0, replies, fps=4.0, input_fps=1.0, tokens_per_frame=100)
@@ -205,7 +205,7 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
 
 def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
     """The runner times an action's resolution when it lands, before the check right before
-    execution (runner.py _apply). With end checks of 125 ms the frame age and the resolution
+    execution (legacy_loop.py _apply). With end checks of 125 ms the frame age and the resolution
     time still agree, for an executed action and for a wait the kernel lets pass."""
     episode = run("wall", 4.0, [Reply(0.5), Reply(0.5, Action.wait(1.0))], World(check_s=0.125))
     env = episode.env
@@ -229,7 +229,7 @@ class _SlowTrajectory(Agent):
 
 def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_settling_it_took_time():
     """The result comes back at 0.5 s and settling it takes 0.125 s; the kernel gets it after,
-    as the runner landed it after settling it (runner.py _decide): it lands at 0.625 s, and its
+    as the runner landed it after settling it (legacy_loop.py _decide): it lands at 0.625 s, and its
     record's resolution time and frame age agree, as the definition the record gives says they
     must."""
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=_SlowTrajectory)
@@ -262,8 +262,8 @@ def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_accepting_it_t
 
 
 def test_a_token_action_is_timed_when_the_clock_got_to_it():
-    """The call takes 0.25 s and its 100 tokens put the action at tick 1; the clock gets there
-    at once. The runner times the resolution then (runner.py _apply): 0.25 s in, operational."""
+    """The call takes 0.25 s and its 100 tokens put the action at tick 1; the clock gets there at
+    once. The runner times the resolution then (legacy_loop.py _apply): 0.25 s in, operational."""
     episode = run("token", 3.0, [Reply(0.25, CLICK, output_tokens=100)], tokens_per_frame=100)
     (resolved, *_) = episode.trace.payloads("ActionResolved")
     assert resolved["action_resolved_unix_s"] == ORIGIN + 0.25
@@ -281,7 +281,7 @@ def test_an_action_the_guest_refuses_is_reported_with_its_reason():
 @pytest.mark.parametrize("terminal", [ActionType.DONE, ActionType.FAIL])
 def test_a_done_reply_lands_as_a_wait_and_its_record_says_why(terminal):
     """The loop has no terminal actions: the kernel lands a DONE or a FAIL as a wait, and the
-    lifecycle record keeps the fallback protocol the runner writes (runner.py _decide)."""
+    lifecycle record keeps the fallback protocol the runner writes (legacy_loop.py _decide)."""
     episode = run(
         "wall",
         1.0,
@@ -305,7 +305,7 @@ def test_a_done_reply_lands_as_a_wait_and_its_record_says_why(terminal):
 def test_a_done_reply_over_the_cap_still_records_why_it_was_not_a_done(terminal):
     """Its 100 tokens are one second at B = 100, over the 0.5 s cap: the kernel places no action
     and so names no protocol failure (kernel/turns.py _accept). The runner rewrites the protocol
-    of every DONE or FAIL it was given (runner.py _decide), and the record says so here too."""
+    of every DONE or FAIL it was given (legacy_loop.py _decide), and the record says so here too."""
     reply = Reply(0.0, Action(terminal), 100, fields={"action_protocol": {"source": "json"}})
     episode = run("token", 2.0, [reply, reply], tokens_per_frame=100, per_move_cap_s=0.5)
     assert episode.statuses()[0] == "skipped_timeout"
@@ -320,7 +320,7 @@ def test_a_done_reply_over_the_cap_still_records_why_it_was_not_a_done(terminal)
 def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_out_call():
     """The legacy wall cap is a timer: at 1 s the kernel gives the generation up, the agent is
     asked to abort it and the decision is reported skipped. Its records are the runner's of the
-    call it gave up on (runner.py _run_step): the cap's latency and no usage. The aborted call
+    call it gave up on (legacy_loop.py _run_step): the cap's latency and no usage. The aborted call
     hands back what it had; the kernel discards it and nothing records it."""
     episode = run("wall", 2.0, [Reply(2.0), Reply(0.5)], per_move_cap_s=1.0)
     agent = episode.agent
@@ -391,7 +391,7 @@ def test_a_result_back_before_the_cap_while_the_shell_is_busy_is_filed_after_it(
 def test_a_move_over_the_cap_took_the_cap_though_the_shell_saw_it_late():
     """The 1.5 s cap falls due during the end check that runs from 1 s to 2 s. The move is
     charged the cap (kernel/turns.py on_timer), and its record says so, as the runner's bounded
-    wait did (runner.py _run_step)."""
+    wait did (legacy_loop.py _run_step)."""
     world = World(slow_checks=[(1.0, 1.5, 1.0)])
     episode = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], world, per_move_cap_s=1.5)
     assert episode.statuses()[0] == "skipped_timeout"
@@ -413,7 +413,7 @@ def test_a_later_move_over_the_cap_took_the_cap():
 
 
 def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
-    """The runner's lines for them (runner.py _run_step, _mark_budget_exhausted). The deadline
+    """The runner's lines for them (legacy_loop.py _run_step, _mark_budget_exhausted). The deadline
     line gives the seconds from the call's start; the runner's gave the time left plus its
     grace (K-a)."""
     capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.0)
@@ -437,7 +437,7 @@ def test_a_result_back_at_the_cap_itself_came_too_late():
 
 def test_the_timed_out_lines_give_the_bounds_as_the_runner_takes_them():
     """The runner's cap is at least 0.1 s, its watchdog the configured seconds, whatever float
-    the start and the due time make of them (runner.py _move_timeout); the deadline line gives
+    the start and the due time make of them (legacy_loop.py _move_timeout); the deadline line gives
     the seconds from the call's start, to two places."""
     capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=0.05)
     assert "[default] k=0 generation TIMED OUT (>0.1s, per_move_cap) — discarded" in capped.logs
@@ -573,10 +573,10 @@ def test_a_result_back_while_the_shell_was_busy_at_the_deadline_is_recorded_as_i
 
 
 def test_a_generation_the_deadline_gave_up_on_is_recorded_as_the_runner_records_it():
-    """Decision 48: the call the 3 s deadline cut leaves the runner's record of a call it gave up
-    on (runner.py _run_step): an InferenceCompleted, a trajectory row and a token record without
-    usage, so the episode's output tokens are not complete. The decision is not reported (K-a),
-    and the agent's own usage is not touched (decision 37)."""
+    """Decision 48: the call the 3 s deadline cut leaves the runner's record of a call it gave up on
+    (legacy_loop.py _run_step): an InferenceCompleted, a trajectory row and a token record without
+    usage, so the episode's output tokens are not complete. The decision is not reported (K-a), and
+    the agent's own usage is not touched (decision 37)."""
     episode = run("wall", 3.0, [Reply(0.5, output_tokens=40), Reply(hang=True)])
     assert episode.statuses() == ["applied"]
     assert len(episode.env.lifecycle) == 1
@@ -628,7 +628,7 @@ def test_without_a_snapshot_reader_the_termination_has_no_snapshot_time():
 
 def test_the_snapshot_is_timed_when_its_read_returned():
     """The read at the 1 s deadline takes 0.5 s; the termination record has when it returned and
-    how late that was (runner.py _finalize)."""
+    how late that was (legacy_loop.py _finalize)."""
     episode = run("wall", 1.0, [Reply(0.5)], World(snapshot_s=0.5))
     assert episode.env._termination == {
         "stop_reason": "time_limit",
@@ -694,7 +694,7 @@ class _Uninterruptible(Agent):
 
 def test_main_waits_for_the_worker_of_a_generation_given_up_on():
     """The deadline gives up a 5 s call at 2 s; main()'s drain waits for its worker before it
-    closes the agent (runner.py main, _drain_abandoned)."""
+    closes the agent (runner.py main; shell.py _drain_abandoned)."""
     episode = run("wall", 2.0, [Reply(5.0)], agent_type=_Uninterruptible)
     assert "[default] draining 1 abandoned generate worker(s), <= 30s" in episode.logs
     assert not any("STILL inside" in line for line in episode.logs)

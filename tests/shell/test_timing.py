@@ -160,11 +160,11 @@ def test_a_result_settled_across_the_cap_is_the_moves_only_record():
 def test_a_token_result_back_before_the_watchdog_is_taken_though_settling_it_crosses_it(
     tokens_per_frame,
 ):
-    """The result comes back 5 ms before the 7 s operational watchdog and settling it takes
-    10 ms. The world stands still while it settles, so the kernel gets it at the reading the
-    shell took as it woke for it, before the settling, as the runner's bounded wait returned
-    with it (runner.py _bounded_call). (A shell that woke later than the watchdog would lose it:
-    the window is the wake-up lag.)"""
+    """The result comes back 5 ms before the 7 s operational watchdog and settling it takes 10 ms.
+    The world stands still while it settles, so the kernel gets it at the reading the shell took as
+    it woke for it, before the settling, as the runner's bounded wait returned with it
+    (legacy_loop.py _bounded_call). (A shell that woke later than the watchdog would lose it: the
+    window is the wake-up lag.)"""
     replies = [Reply(6.995, CLICK, output_tokens=100), Reply(0.0, CLICK, output_tokens=100)]
     timing = RunnerTimingConfig(provider_watchdog_s=7.0)
     episode = run(
@@ -232,8 +232,8 @@ def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_m
 
 def test_a_generation_the_watchdog_gave_up_on_is_recorded_as_the_runner_records_it():
     """Decision 48: the call the 7 s watchdog gave up on leaves the runner's record of it
-    (runner.py _run_step): an InferenceCompleted and a trajectory row naming the watchdog, and a
-    token record without usage."""
+    (legacy_loop.py _run_step): an InferenceCompleted and a trajectory row naming the watchdog, and
+    a token record without usage."""
     timing = RunnerTimingConfig(provider_watchdog_s=7.0)
     episode = run("token", 5.0, [Reply(hang=True)], timing=timing)
     assert episode.invalid["reason"] == "generation_watchdog_timeout"

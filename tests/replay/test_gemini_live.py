@@ -255,7 +255,7 @@ def run_live_steps(
     records, results = [], []
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
-        budget = episode.budget(observation.tick_number)  # t_k: runner.py _decide
+        budget = episode.budget(observation.tick_number)  # t_k: legacy_loop.py _decide
         first = len(stub.events)
         agent.configure_decision(budget)
         agent.stream_prefill(observation)

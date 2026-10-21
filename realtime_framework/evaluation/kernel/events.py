@@ -59,7 +59,7 @@ class Timer:
 
 @dataclass(frozen=True)
 class Invalidated:
-    """A non-model failure. The run is never scored (runner.py _invalidate)."""
+    """A non-model failure. The run is never scored (legacy_loop.py _invalidate)."""
 
     category: str
     reason: str

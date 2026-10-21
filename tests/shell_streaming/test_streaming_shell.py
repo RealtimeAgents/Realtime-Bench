@@ -363,7 +363,7 @@ def test_the_first_of_a_failed_snapshot_and_a_kernel_that_raises_is_the_error(mo
     of its own, at the same instant unless one is made to come later: here the kernel raises at
     the step after the snapshot's failed answer was posted, or the snapshot's thread raises 0.1 s
     after the kernel did. The first is the summary's error and the run's, as the runner kept the
-    exception that escaped its loop (runner.py _run_stream_legacy); the wrap-up waits for the
+    exception that escaped its loop (legacy_loop.py _run_stream_legacy); the wrap-up waits for the
     snapshot's thread either way."""
     clocks = []
 

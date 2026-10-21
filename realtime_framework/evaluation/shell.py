@@ -102,14 +102,14 @@ from realtime_framework.sandbox.budget import operation_budget
 
 class ShellEnvironment(Protocol):
     """The environment adapter as the shell runs the kernel's commands on it, all on the shell's
-    thread. An operation that fails raises, except ``execute()``: it returns ``"failed"`` and
-    leaves the error in ``_last_exec_error``, whether the guest refused the action in
+    thread. An operation that fails raises, except ``execute()``: it returns ``"failed"`` and leaves
+    the error in ``_last_exec_error``, whether the guest refused the action in
     ``_last_rejected_by_guest`` and the execution record in ``_last_execution_result``, which the
-    shell reads as the runner does (runner.py ``_land_action``, ``_apply``). The environment may
-    also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
+    shell reads as the runner does (legacy_loop.py ``_land_action``, ``_apply``). The environment
+    may also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
     ``clock_advance_failed`` from a tap; for an operation that returns, the shell posts that as
-    Invalidated before the command's answer. One that raises is answered with its error, and the
-    run is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
+    Invalidated before the command's answer. One that raises is answered with its error, and the run
+    is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
     ``_rendered``)."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
@@ -281,7 +281,7 @@ def _invalidated(record: dict) -> Invalidated:
 
 def _invalid_record(invalid: Invalidated) -> dict:
     """An invalid run as the runner keeps it on ``env._invalid_run`` and writes it as
-    RunInvalidated: the detail only when there is one (runner.py ``_invalidate``)."""
+    RunInvalidated: the detail only when there is one (legacy_loop.py ``_invalidate``)."""
     record = {"category": invalid.category, "reason": invalid.reason}
     if invalid.detail:
         record["detail"] = invalid.detail
@@ -305,7 +305,7 @@ def _escaped_termination(
     invalid = kernel.invalid or (
         _invalidated(latched)
         if latched is not None
-        # The end of a traceback names the exception (runner.py _invalidate).
+        # The end of a traceback names the exception (legacy_loop.py _invalidate).
         else Invalidated("runner", "run_exception", failure[-2000:])
     )
     if ending is None:
@@ -758,7 +758,7 @@ class _Shell:
 
     def _settle(self, held: _Generation, r: dict) -> tuple[GenerationResult, tuple]:
         """The result's annotations, usage, token accounting, cap audit and trajectory row, in
-        the runner's order (runner.py ``_decide``); what the kernel needs of it, and its
+        the runner's order (legacy_loop.py ``_decide``); what the kernel needs of it, and its
         OutputChunkReceived and InferenceCompleted payloads as they were before the trajectory
         row."""
         budget, clock_mode, agent = held.budget, self.config.clock_mode, self.agent
@@ -1003,7 +1003,7 @@ class _Shell:
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
-        (runner.py ``_termination``); the token clock's are ticks."""
+        (legacy_loop.py ``_termination``); the token clock's are ticks."""
         try:
             self._terminate(termination)
         finally:
@@ -1136,8 +1136,8 @@ class _Shell:
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
             if data["phase"] == "inference_to_action":
                 # The action lands: the runner times its resolution here, whatever comes of it
-                # (runner.py _apply). On the wall clock that is the reading the kernel landed it
-                # at, which its frame age counts from too (kernel/turns.py _approached); on the
+                # (legacy_loop.py _apply). On the wall clock that is the reading the kernel landed
+                # it at, which its frame age counts from too (kernel/turns.py _approached); on the
                 # token clock it is when the clock got to the action time.
                 decision.landed_at = (
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
@@ -1179,10 +1179,10 @@ class _Shell:
         """A generation the kernel gave up on. One whose result came back before and was settled
         keeps the call's own records, written now, ahead of the decision's, and what made that
         result unusable still invalidates the run, as the runner's check of every result did
-        (runner.py _apply): the shell posts that reason, as the kernel discards the result
+        (legacy_loop.py _apply): the shell posts that reason, as the kernel discards the result
         without it. Otherwise one given up on at the per-move cap, the wall deadline or the
         provider watchdog timed out: it is logged and recorded as the runner records a call it
-        gave up on (runner.py _run_step), with no usage, which leaves the episode's cost
+        gave up on (legacy_loop.py _run_step), with no usage, which leaves the episode's cost
         incomplete (decision 48). One the task's end or an invalidation gave up on is recorded
         so too, named for what ended the episode (N10), as a synthesized record the token
         totals and the model timing leave out (N34). Only the move over the cap is reported, as
@@ -1227,7 +1227,7 @@ class _Shell:
             capped = bound == "per_move_cap"
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         if bound is not None:
-            # The cap and the watchdog as the runner names them (runner.py _move_timeout); the
+            # The cap and the watchdog as the runner names them (legacy_loop.py _move_timeout); the
             # deadline from the call's start, where the runner gave the time left plus a grace.
             self.log(
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
@@ -1249,7 +1249,7 @@ class _Shell:
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the
         step that handled it (kernel/turns.py _captured), and the runner writes no frame its
-        check stops (runner.py _decide)."""
+        check stops (legacy_loop.py _decide)."""
         invalid = self.kernel.invalid
         return invalid is not None and invalid.reason == "observation_stream_frozen"
 

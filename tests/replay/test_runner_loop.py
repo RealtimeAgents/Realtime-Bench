@@ -237,7 +237,7 @@ CASES = [
     ),
     # The task is decided at 2.25 s, while decision 2 waits for its reply. The clock has moved on
     # since frame 2 was read at 2.0 s, so the state is read again before the action
-    # (kernel/turns.py _read_already), as the runner reads it (runner.py _land_action): the
+    # (kernel/turns.py _read_already), as the runner reads it (legacy_loop.py _land_action): the
     # action is not executed, and the reason defaults to game_decided (kernel/core.py _finish).
     Case(
         "environment_done_during_reply",
