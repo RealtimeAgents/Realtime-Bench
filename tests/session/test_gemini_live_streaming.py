@@ -35,7 +35,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
 )
-from realtime_framework.entity.records import UNTRACED
+from realtime_framework.entity.records import UNTRACED, current_trace_scope, trace_scope
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.streaming.history import (
@@ -60,6 +60,7 @@ class FedSocket:
     def __init__(self, number: int):
         self.trace_connection_id = f"gemini_live.ws-{number}"
         self.sent: list[dict] = []
+        self.read_scopes: list[tuple] = []  # each server message's kind and its trace scope
         self._frames: asyncio.Queue = asyncio.Queue()
         self._answers: list[tuple] = []  # (kind, frames), in the order they are due
         self.fail = None  # a predicate on a client message whose send raises
@@ -85,6 +86,9 @@ class FedSocket:
         frame = await self._frames.get()
         if isinstance(frame, BaseException):
             raise frame
+        # The trace records a server message in the scope it is read in, as here
+        # (providers/capture.py, the recording connection's recv).
+        self.read_scopes.append((next(iter(json.loads(frame))), current_trace_scope()))
         return frame
 
     async def send(self, message):
@@ -757,6 +761,36 @@ def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatc
 
     assert isinstance(asyncio.run(run()), ConnectionClosedError)
     assert len(rig.live.sockets) == 2
+
+
+def test_each_message_is_traced_under_the_reply_it_was_read_for():
+    """The reader records each message in the scope of the reply in flight when it reads it, as
+    a turn-based reply's own read does: not in the scope of the call that opened the connection,
+    and in none between replies."""
+    rig = Rig()
+
+    async def run():
+        with trace_scope(phase="initialize"):
+            await rig.connect()
+        for k in (1, 2):
+            request = GenerationRequest(f"turn-{k}", None, "inf", "wall", canonical=rig.view([]))
+            with trace_scope(phase="decision", generation=k):
+                rig.socket.answer("activityEnd", call(f"call-{k}"), TURN_COMPLETE)
+                await drain(rig.driver.events(await rig.driver.request_reply(request)))
+            rig.socket.feed(update(f"handle-{k}"))
+            await settle()
+        await rig.driver.close()
+
+    asyncio.run(run())
+    scopes = [{"phase": "decision", "generation": k} for k in (1, 2)]
+    assert rig.socket.read_scopes == [
+        ("toolCall", scopes[0]),
+        ("serverContent", scopes[0]),
+        ("sessionResumptionUpdate", None),
+        ("toolCall", scopes[1]),
+        ("serverContent", scopes[1]),
+        ("sessionResumptionUpdate", None),
+    ]
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
