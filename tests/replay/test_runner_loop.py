@@ -398,7 +398,7 @@ def test_agent_exception_is_finalized(tmp_path):
 
 
 # After run_stream returns, main() still saves the artifact, drains abandoned workers, closes the
-# agent and evaluates before it writes the summary (runner.py:1831-1962).
+# agent and evaluates before it writes the summary (runner.py main).
 TEARDOWN_S = 2.0
 
 
@@ -428,7 +428,7 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
         "snapshot_s": 2.5,
         "snapshot_delay_s": 0.0,
     }
-    # The fields of run_summary.json that main() takes from the loop (runner.py:2088-2095).
+    # The fields of run_summary.json that main() takes from the loop (runner.py main).
     summary = {
         "invalid_run": None,
         "solved": solved,

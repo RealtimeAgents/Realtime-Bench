@@ -1,6 +1,6 @@
 """GuestEnvironment itself on the token clock, logging the runner's calls into it.
 
-On the token clock main() hands run_stream a GuestEnvironment (evaluation/runner.py:1678-1690).
+On the token clock main() hands run_stream a GuestEnvironment (evaluation/runner.py main).
 Here that class runs unchanged: its tick, horizon, key leases and waits (sandbox/actions.py) move a
 ClockTask (clock_task.py) in place of a game's task clock, captures come from the synthetic frames
 of frames.py, and pointer and text actions reach a guest that only records them. Each call
@@ -44,13 +44,13 @@ class _Guest:
 
 class TokenEnvironment(GuestEnvironment):
     """``task`` is the task the agent was set up with; ``max_minutes`` sets the horizon.
-    ``stop_check()`` stands for the task's episode_over, which main() passes (runner.py:1773)."""
+    ``stop_check()`` stands for the task's episode_over, which main() passes (runner.py main)."""
 
     def __init__(
         self, frames: FrameSource, task: ClockTask, *, max_minutes: float, stop_check=None
     ):
         self.calls: list[dict] = []
-        self.decision = -1  # run_stream captures once per decision (runner.py:846)
+        self.decision = -1  # run_stream captures once per decision (shell.py _capture)
         self.finalizing = False
         super().__init__(
             _Guest(self),

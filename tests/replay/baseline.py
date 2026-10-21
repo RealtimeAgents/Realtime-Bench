@@ -71,7 +71,7 @@ DIGESTED_FIELDS = frozenset({"input_prompt"})
 IMAGE_SHA256_FIELDS = frozenset(
     {
         # the screenshot (sandbox/observation/capture.py:285, 301), as the step records copy it
-        # and the runner traces it (evaluation/runner.py:883)
+        # and the runner traces it (evaluation/episode_records.py observation_captured)
         "screenshot_sha256",
         # the SoM-marked frame (sandbox/observation/som.py:448, 725)
         "marked_image_sha256",
@@ -102,7 +102,7 @@ def registered_image(sha256: str) -> str:
 
 
 def action_record(action: Action) -> dict:
-    """The fields run_stream records for an action (runner.py:182-190)."""
+    """The fields run_stream records for an action (episode_records.py action_record)."""
     return {
         "action_type": action.action_type.value,
         "parameters": action.parameters,

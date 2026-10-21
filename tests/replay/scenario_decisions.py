@@ -7,10 +7,11 @@ providers/decisions/questions.py:57-113). Both APIs get the same candidates on t
 so the web scripts serve both.
 
 Statuses are scripted as in scenario.py: "applied" for executed GUI actions, "wait" for WAIT
-(sandbox/actions.py:830-936), "rejected" with the environment's message (runner.py:533-537, 674)
-and "not_applied_time_limit" past the deadline (runner.py:526). Every web candidate is a page
-mark or a key the guest accepts (sandbox/guest_server/server.py:22-63), so the web scenario has
-no rejection; the game page has one, a composed screen pointer on the browser toolbar.
+(sandbox/actions.py:830-936), "rejected" with the environment's message (shell.py _execute,
+kernel/turns.py _executed) and "not_applied_time_limit" past the deadline (kernel/turns.py
+_skipped). Every web candidate is a page mark or a key the guest accepts
+(sandbox/guest_server/server.py:22-63), so the web scenario has no rejection; the game page has
+one, a composed screen pointer on the browser toolbar.
 """
 
 from __future__ import annotations

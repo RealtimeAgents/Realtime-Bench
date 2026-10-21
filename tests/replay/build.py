@@ -3,9 +3,11 @@
 runner.main() and build_episode both call set_up_agent (evaluation/runner.py); in place of a
 BrowserSceneCapture on the container's browser, build_episode hands it the synthetic frames.
 The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
-frame budget B (None on the wall clock and in pause mode, runner.py:1407-1408), and ``max_ticks``
-is the episode length run_stream receives (runner.py:1714). The finite token clock changes the
-per-decision budget (runner.py:866-889) and the clock prompt (harnesses/default/prompts.py:177-201).
+frame budget B (None on the wall clock and in pause mode, runner.py main), and ``max_ticks`` is
+the episode length in ticks, the duration_s run_stream receives times its env_fps (runner.py main,
+kernel/turns.py TurnConfig.max_ticks). The finite token clock changes the per-decision budget
+(kernel/turns.py _captured, episode_records.py decision_budget) and the clock prompt
+(harnesses/default/prompts.py:177-201).
 """
 
 from __future__ import annotations
@@ -61,9 +63,11 @@ class Episode:
 
     def budget(self, t_k: int) -> DecisionBudget:
         """The budget run_stream binds before the decision at clock position ``t_k``
-        (runner.py:853, 863-915). Without a finite token clock nothing bounds the decision except
-        the native limit, and an agent with unbounded output sends no provider cap. Step-driven
-        episodes observe one frame per tick, so run_stream's frame_ticks is 1 here."""
+        (kernel/turns.py _captured, shell.py _start_generation, episode_records.py
+        decision_budget). Without a finite token clock nothing bounds the decision except the
+        native limit, and an agent with unbounded output sends no provider cap. Step-driven
+        episodes observe one frame per tick, so run_stream's env_fps and input_fps are equal
+        here."""
         agent = self.agent
         native_output_limit = getattr(getattr(agent, "config", None), "native_output_limit", None)
         remaining_clock_tokens = None
@@ -71,7 +75,7 @@ class Episode:
             remaining_clock_tokens = max(
                 0, math.floor((float(self.max_ticks) - float(t_k)) * self.tokens_per_frame + 1e-9)
             )
-            # run_stream ends the episode here instead of deciding (runner.py:871-873).
+            # run_stream ends the episode here instead of deciding (kernel/turns.py _captured).
             assert remaining_clock_tokens > 0, "the scenario outlasts the token clock"
         runtime_output_cap = (
             native_output_limit
@@ -91,7 +95,7 @@ class Episode:
             if callable(transport_cap_mapper)
             else provider_output_token_cap
         )
-        if not (  # runner.py:896-907
+        if not (  # episode_records.py decision_budget
             transport_output_cap is None
             or transport_output_cap == "inf"
             or (

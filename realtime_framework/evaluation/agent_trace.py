@@ -29,7 +29,7 @@ from realtime_framework.entity.records import TraceEvent, current_trace_scope
 from realtime_framework.evaluation.kernel.events import AgentRecord
 
 # Bound on writing the queued agent records at episode end, sized like ABANDONED_DRAIN_S
-# (runner.py:52-54). A run whose agent records are incomplete is invalid.
+# (runner.py). A run whose agent records are incomplete is invalid.
 AGENT_TRACE_FLUSH_S = 30.0
 # Base64 spans at least this long are stored verbatim and once per hash.
 SPAN_MIN_CHARS = 4096

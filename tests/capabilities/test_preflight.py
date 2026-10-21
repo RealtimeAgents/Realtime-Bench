@@ -3,9 +3,9 @@
 One test per condition, asserting the exact message each check produced before the checks were
 collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0); the context-policy
 checks came later and are pinned as written. The runner's own rules run in check_episode
-(evaluation/runner.py:2242); its argparse checks and those of identity_main and the Harbor trial
-worker are exercised through their main functions, which fail before any container or network is
-used.
+(evaluation/runner.py set_up_agent); its argparse checks and those of identity_main and the
+Harbor trial worker are exercised through their main functions, which fail before any container
+or network is used.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ GAME, WEB = "gomoku", "rt_waitlist_fit"
 
 @pytest.fixture(autouse=True)
 def environment():
-    """The entry points write os.environ (runner.py:1403-1404; _trial.py:101-102)."""
+    """The entry points write os.environ (runner.py main; _trial.py:101-102)."""
     saved = dict(os.environ)
     os.environ.pop("ALLOW_EXPERIMENTAL_MODEL", None)
     yield
@@ -48,7 +48,7 @@ def environment():
 
 
 def preset(key, **overrides):
-    """What the runner builds for a catalog key (runner.py:1548-1553)."""
+    """What the runner builds for a catalog key (runner.py main)."""
     entry = catalog.get(key)
     return catalog.to_model_config(
         key, **{"fps": 1.0, "reasoning_effort": entry.defaults["reasoning_effort"], **overrides}
@@ -234,7 +234,7 @@ def test_finite_budget_identity(capsys):
 def test_finite_budget_unknown_adapter_is_not_a_usage_error():
     """A raw model id without --adapter, on the runner's default token clock.
 
-    The lookup error is raised as before, not turned into a usage error (runner.py:1453-1460).
+    The lookup error is raised as before, not turned into a usage error (runner.py main).
     """
     fails(
         lambda: check_token_budget(None, clock_mode="token", tokens_per_frame=256),

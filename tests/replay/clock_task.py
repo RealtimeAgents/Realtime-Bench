@@ -1,7 +1,7 @@
 """A game task's token clock without the browser, for GuestEnvironment on the token clock.
 
 The runner configures the task clock with the environment fps before anything else
-(evaluation/runner.py:1536), and GuestEnvironment takes its tick from it (sandbox/actions.py:130).
+(evaluation/runner.py main), and GuestEnvironment takes its tick from it (sandbox/actions.py:130).
 On the token clock GuestEnvironment pushes time into the task with advance_clock and sends key
 input with clock_key_event (sandbox/actions.py:214-249, 495-605), as it does for a game
 (realtime_tasks/game/runtime.py:177-214). Here the frame counter of realtime_tasks/types.py
@@ -71,7 +71,7 @@ class ClockTask(Task):
         )
 
     def evaluation_snapshot(self) -> dict:
-        """run_stream freezes this when the loop ends (runner.py:778-788)."""
+        """run_stream freezes this when the loop ends (shell.py _freeze)."""
         snapshot = {"kind": "replay_clock", **self.clock_snapshot()}
         self._event({"event": "evaluation_snapshot", "snapshot": snapshot})
         return snapshot
