@@ -5,6 +5,7 @@ real run's inputs after a change needs (phase2.md, 怎么验证)."""
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import pathlib
@@ -89,6 +90,21 @@ def replay_inputs(config, lines: list[dict]) -> tuple[Kernel, list]:
     return kernel, entries
 
 
+@contextlib.contextmanager
+def kernel_log():
+    """The entries the kernels write meanwhile, in order."""
+    entries: list = []
+    log = Kernel._log
+
+    def spied(kernel, kind, data):
+        log(kernel, kind, data)
+        entries.append(kernel._out[-1].entry)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Kernel, "_log", spied)
+        yield entries
+
+
 @pytest.mark.parametrize(
     ("clock_mode", "replies", "world", "fields"),
     [
@@ -120,9 +136,11 @@ def test_replaying_the_recorded_inputs_reproduces_the_episode_log(
     tmp_path, clock_mode, replies, world, fields
 ):
     path = tmp_path / "kernel_inputs.jsonl"
-    episode = run(clock_mode, 3.0, replies, world, inputs_log=path, **fields)
+    with kernel_log() as logged:
+        episode = run(clock_mode, 3.0, replies, world, inputs_log=path, **fields)
     lines = [json.loads(line) for line in path.read_text().splitlines()]
     kernel, entries = replay_inputs(episode.config, lines)
+    assert entries == logged
     assert kernel.termination is not None
     assert kernel.termination.stop_reason == episode.env._stop_reason
     written = {}

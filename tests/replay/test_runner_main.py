@@ -28,7 +28,7 @@ from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 
-from ..shell.test_inputs import replay_inputs
+from ..shell.test_inputs import kernel_log, replay_inputs
 
 S = 1_000_000_000  # nanoseconds
 FPS = 1
@@ -313,18 +313,20 @@ def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):
 
 def test_main_records_the_kernel_s_inputs(tmp_path):
     """main() has the shell record what the kernel was given, the agent's records among it, next
-    to the episode trace. Fed to a new kernel they reproduce the kernel's records in the trace,
-    with their numbers and readings (phase2.md, 怎么验证)."""
+    to the episode trace. Fed to a new kernel they reproduce the kernel's log, and so its records
+    in the trace with their numbers and readings (phase2.md, 怎么验证)."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "task_success", True)
-    run_main(tmp_path, task, RecordingAgent(clock), clock, guest, agent_trace=True)
+    with kernel_log() as logged:
+        run_main(tmp_path, task, RecordingAgent(clock), clock, guest, agent_trace=True)
     run_dir = tmp_path / "run"
     inputs = (run_dir / "kernel_inputs.jsonl").read_text()
     lines = [json.loads(line) for line in inputs.splitlines()]
     assert any(event["event"] == "AgentRecord" for line in lines for event in line["events"])
     config = TurnConfig("wall", HORIZON_S, FPS, FPS, timing=runner.RUNNER_TIMING)
     kernel, entries = replay_inputs(config, lines)
+    assert entries == logged
     assert kernel.termination.stop_reason == "task_success"
     trace = (run_dir / "episode_trace.jsonl").read_text()
     records = [json.loads(line) for line in trace.splitlines()]
