@@ -18,13 +18,18 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from realtime_framework.harnesses.default.prompts import (
+    UNANSWERED_STEP_NOTES,
+    UNSUPPORTED_TERMINAL_ACTION_FEEDBACK,
+)
 from realtime_framework.sandbox.actions import TAP_HOLD_S
 
 from .projection import TOLERANCE, Projection, differences, earlier, ends_the_run, key_releases
-from .script import Script
+from .script import Script, parse
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,7 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
     sent = old.beyond["requests"]
     if _wall(script):
         sent = [
-            r for r, at in zip(sent, old.facts["requested_at"], strict=True) if earlier(at, end)
+            r for r, (_, at) in zip(sent, old.facts["requested"], strict=True) if earlier(at, end)
         ]
     else:
         sent = sent[: len(sent) - sum(len(script.turns[k].attempts) for k in gone)]
@@ -102,13 +107,20 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
     if _started(old) == _started(new):
         if len(requests[0]) != len(requests[1]):
             problems.append(f"requests: {len(requests[0])} -> {len(requests[1])}")
-        if old.beyond["usage"] is not None:
-            problems += differences(old.beyond["usage"], new.beyond["usage"], "usage")[0]
+        problems += differences(old.beyond["usage"], new.beyond["usage"], "usage")[0]
+    synthesized = set(old.beyond["synthesized"])
     for kind, by_decision in old.beyond["trace"].items():
         other = new.beyond["trace"][kind]
-        for k in sorted(started - set(old.beyond["racing"])):
-            records = [_shared(kind, record) for record in other.get(k, [])]
+        for k in sorted(started - synthesized):
+            records = other.get(k, [])
             problems += differences(by_decision.get(k, []), records, f"trace.{kind}[{k}]")[0]
+    for k in sorted(started & synthesized):
+        streamed = new.beyond["trace"]["OutputChunkReceived"].get(k, [])
+        completed = new.beyond["trace"]["InferenceCompleted"].get(k, [])
+        if streamed or [record["timed_out"] for record in completed] != [True]:
+            problems.append(
+                f"trace[{k}]: not one timed-out InferenceCompleted and nothing streamed"
+            )
     # A frame captured for a decision that never started is written or not; what is written of
     # it is a frame's record, as for the others.
     frames = old.beyond["trace"]["ObservationCaptured"], new.beyond["trace"]["ObservationCaptured"]
@@ -117,15 +129,6 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
         if k not in started and a != b:
             problems.append(f"trace.ObservationCaptured[{k}]: {a} record(s) -> {b}")
     return problems
-
-
-# Trace fields only the shell writes (evaluation/shell.py _Shell._start_generation), left out as
-# fields of one side are (wave2-plan.md, P4 投影).
-SHELL_ONLY = {"InferenceStarted": ("generation", "remaining_clock_tokens")}
-
-
-def _shared(kind: str, record: dict) -> dict:
-    return {name: value for name, value in record.items() if name not in SHELL_ONLY.get(kind, ())}
 
 
 def _started(p: Projection) -> set[int]:
@@ -157,10 +160,11 @@ def _dropped(script: Script, t_k: float, reached: float) -> int:
     return max(0, crossed - 1)
 
 
-def _give_up(p: Projection, notes: dict, k: int) -> None:
-    """Decision k's generation was given up on: it keeps its observation and nothing else, and
-    the agent is aborted, unless today's loop aborted it too (its bounded wait ran out)."""
-    notes.setdefault("given_up", set()).add(k)
+def _give_up(p: Projection, notes: dict, k: int, *, at_deadline: bool = False) -> None:
+    """Decision k's generation was given up on, at the wall deadline or at another end: it
+    keeps its observation and nothing else, and the agent is aborted, unless today's loop
+    aborted it too (its bounded wait ran out)."""
+    notes.setdefault("given_up", {})[k] = at_deadline
     started = p.facts["started_at"][k]
     if not any(not earlier(at, started) for at in p.facts["aborted_at"]):
         p.episode["aborts"] += 1
@@ -255,7 +259,7 @@ def x12_plan(script: Script, probe: Projection) -> X12Plan:
     in_a_row = 0
     for kind, read, answer in probe.facts["reads"]:
         if read not in failing[kind]:
-            if ends_the_run(kind == "tap", answer):
+            if ends_the_run(answer):
                 break  # the end came before a third failure in a row
             in_a_row = 0
             continue
@@ -275,13 +279,16 @@ def x12_plan(script: Script, probe: Projection) -> X12Plan:
 
 
 def _x12_wall(script: Script, probe: Projection) -> X12Plan:
-    """Besides today's reads, the wall kernel reads every 1/env_fps s while the episode lasts
-    (turns.py TurnPolicy.on_timer, _schedule_end_check)."""
+    """The wall kernel reads at the start, every 1/env_fps s while the episode lasts and after
+    every executed action (turns.py TurnPolicy.on_timer, _schedule_end_check, _check_end); of
+    today's reads, those it makes too stand for the reads at their instants, and only they fail
+    (WallEnvironment._kernels)."""
     fps, end = script.env_fps, probe.episode["termination"]["end_s"]
-    reads = [(at, "loop") for at, _ in probe.facts["reads"]]
+    reads = [(at, "loop") for at, _, kernels in probe.facts["reads"] if kernels]
     j = 1
     while j / fps < script.duration_s and earlier(j / fps, end):
-        reads.append((j / fps, "periodic"))
+        if not any(_same(at, j / fps) for at, _ in reads):
+            reads.append((j / fps, "periodic"))
         j += 1
     reads.sort(key=lambda read: read[0])  # stable: today's reads at one instant keep their order
     first = next(
@@ -355,11 +362,129 @@ def _kf2(script: Script, p: Projection, notes: dict) -> None:
         for record in (resolved, d["commit"], d["outcome"]):
             record["status"] = "not_applied_tick_limit"
         d["applied"], d["executed"], d["boundary"] = False, [], None
-        p.episode["checks"].remove(whole)  # the check after the execution
+        # The check after the execution, one the kernel would make, the last on that tick.
+        checks, extras = p.episode["checks"], list(p.facts["check_extras"])
+        at = max(i for i, tick in enumerate(checks) if tick == whole and extras[i] is None)
+        del checks[at], extras[at]
+        p.facts = {**p.facts, "check_extras": extras}
     p.episode["captures"] = [c for c in p.episode["captures"] if earlier(c["tick"], whole)]
     termination = p.episode["termination"]
     if termination["stop_reason"] == "completed":
         termination["stop_reason"] = "tick_limit"
+
+
+def _kf5(script: Script, p: Projection, notes: dict) -> None:
+    """Token clock: the kernel reads the state at most once a frame, the clock's position, and
+    once more after every executed action (decision 31; turns.py TurnPolicy._check_end), and
+    asks nothing once the episode is over. Today's loop reads again at the loop top and before
+    landing, on a tick an advance step just read (KF5a, KF5b), and at the top after the
+    environment found the end inside an advance (U3, now KF5a)."""
+    _cut_checks(script, p, ("frame", "ended"))
+
+
+def _kf4(script: Script, p: Projection, notes: dict) -> None:
+    """Token clock: a tap's read that saw the end ends the episode where the tap stopped, by the
+    task's reason (turns.py TurnPolicy._executed); today the loop asks once more after the
+    action (runner.py _land_action)."""
+    _cut_checks(script, p, ("tap_end",))
+
+
+def _cut_checks(script: Script, p: Projection, extras: tuple[str, ...]) -> None:
+    if _wall(script):
+        return
+    checks = p.episode["checks"]
+    kept = [
+        (tick, extra)
+        for tick, extra in zip(checks, p.facts["check_extras"], strict=True)
+        if extra not in extras
+    ]
+    p.episode["checks"] = [tick for tick, _ in kept]
+    p.facts = {**p.facts, "check_extras": [extra for _, extra in kept]}
+
+
+def _kf5d(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: an action landing in a frame already read is executed at once, without a read
+    before it (decision 31; turns.py TurnPolicy._pre_checked); today the loop reads before landing
+    and settles an action that finds an end come since as not_applied_terminal
+    (runner.py _land_action). The kernel finds it later: an action that took effect, by the read
+    after it; a wait (a done or a reply without one is a wait of no time) when its time is up or
+    at the next periodic read, which cuts it short; a refused action, which is read after by
+    nobody, at the next periodic read while it paces."""
+    if not _wall(script) or script.ends_at_s is None or "ended" in notes:
+        return
+    fps = script.env_fps
+    for k, d in p.decisions.items():
+        resolved = d["resolved"]
+        if resolved is None or resolved["status"] != "not_applied_terminal":
+            continue
+        landed = p.facts["resolved_at"][k]
+        if not earlier(_floor(landed * fps) / fps, script.ends_at_s):
+            continue  # the frame's own read saw the end
+        periodic = (_floor(landed * fps) + 1) / fps
+        turn, word = script.turns[k], parse(script.turns[k].action)
+        if turn.rejected:
+            notes["ended"] = (_landed_refused(script, p, k, landed, periodic), k)
+        elif word.kind in ("wait", "done", "garbage"):
+            notes["ended"] = (_landed_wait(script, p, k, landed, periodic, word.seconds or 0.0), k)
+        else:
+            for record in (resolved, d["commit"], d["outcome"]):
+                record["status"] = "applied"
+            resolved["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
+            d["applied"] = True
+            d["executed"] = [{"at": landed, "action": d["proposed"]}]
+
+
+def _landed_wait(
+    script: Script, p: Projection, k: int, landed: float, periodic: float, seconds: float
+) -> float:
+    """A wait landed after the end came: it runs out, or the next periodic read cuts it short
+    (turns.py TurnPolicy._waited); at one instant its timer goes first (Priority.COMPLETION)."""
+    d = p.decisions[k]
+    cut = earlier(periodic, landed + seconds)
+    end = periodic if cut else landed + seconds
+    tick = _floor(end * script.env_fps)
+    for record in (d["resolved"], d["commit"], d["outcome"]):
+        record["status"] = "wait"
+    d["resolved"]["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
+    d["resolved"]["environment_tick"] = d["outcome"]["next_observation_tick"] = tick
+    d["applied"], d["executed"] = True, []
+    d["wait_record"] = {
+        "duration_simulated_seconds": round(end - landed, 9),
+        "requested_duration_simulated_seconds": seconds,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": cut,
+    }
+    p.episode["termination"]["end_s"] = round(end, 9)
+    return end
+
+
+def _landed_refused(script: Script, p: Projection, k: int, landed: float, periodic: float) -> float:
+    """A refused action landed after the end came: no read follows a refusal, and the next
+    periodic read finds the end while the decision paces to its next frame
+    (turns.py TurnPolicy._executed, _resolve, on_end)."""
+    d = p.decisions[k]
+    frame_ticks = script.env_fps / script.input_fps
+    tick, t_k = _floor(landed * script.env_fps), d["observed"]
+    next_frame = max(_floor(t_k / frame_ticks) + 1, _whole_up(tick / frame_ticks))
+    next_tick = min(_whole_up(next_frame * frame_ticks), script.max_ticks)
+    reached = min(next_tick, _floor(periodic * script.env_fps))
+    dropped = _dropped(script, t_k, reached)
+    for record in (d["resolved"], d["commit"], d["outcome"]):
+        record["status"] = "rejected"
+    d["commit"]["detail"] = script.turns[k].rejected
+    d["resolved"]["terminal_after_action"] = d["outcome"]["terminal_after_action"] = False
+    d["executed"] = [{"at": landed, "action": d["proposed"]}]
+    d["boundary"] = {
+        "from": tick,
+        "requested": next_tick,
+        "to": reached,
+        "rendered": False,
+        "dropped": dropped,
+    }
+    d["outcome"]["next_observation_tick"] = next_tick
+    d["outcome"]["dropped_intermediate_frames"] = dropped
+    p.episode["termination"]["end_s"] = round(periodic, 9)
+    return periodic
 
 
 def _x1(script: Script, p: Projection, notes: dict) -> None:
@@ -576,7 +701,7 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
         if earlier(facts["started_at"].get(k, math.inf), deadline) and (
             finished is None or not earlier(finished, deadline)
         ):
-            _give_up(p, notes, k)
+            _give_up(p, notes, k, at_deadline=True)
             notes["in_hand"] = None
 
 
@@ -661,20 +786,6 @@ def _kj(script: Script, p: Projection, notes: dict) -> None:
             at = ends[0] * seconds
         released.append({"at": at, "keys": logged["keys"]})
     p.episode["key_ups"] = key_releases(released, p.episode["termination"]["end_s"])
-
-
-def _kn(script: Script, p: Projection, notes: dict) -> None:
-    """A failed read in the check right before landing settles the decision as invalid_run
-    (turns.py TurnPolicy._skipped); today the environment's True reads as the task's end and the
-    decision is not_applied_terminal (sandbox/actions.py GuestEnvironment.done, runner.py
-    _land_action)."""
-    invalid = p.episode["invalid"]
-    if invalid is None or invalid["reason"] != "terminal_state_check_failed":
-        return
-    for d in p.decisions.values():
-        for record in (d["resolved"], d["commit"], d["outcome"]):
-            if record is not None and record["status"] == "not_applied_terminal":
-                record["status"] = "invalid_run"
 
 
 def _ke(script: Script, p: Projection, notes: dict) -> None:
@@ -775,85 +886,6 @@ def _u2(script: Script, p: Projection, notes: dict) -> None:
         p.episode["invalidation_records"] = 1
 
 
-def _u3(script: Script, p: Projection, notes: dict) -> None:
-    """Token clock: once an end check finds the end, or a read fails for the last time, the
-    kernel asks no more (turns.py TurnPolicy._end_checked, _executed); when today's environment
-    finds the end inside an advance, or a read inside a tap fails, the loop asks again at its top
-    or after execution (sandbox/actions.py GuestEnvironment.wait_until_tick, _ended_after_step,
-    runner.py run_stream, _land_action). That extra read can also fail and void the run today; the
-    kernel never makes it, so X12's plan never fails it."""
-    if _wall(script):
-        return
-    asked = 0
-    for kind, _, answer in p.facts["reads"]:
-        asked += kind == "check"
-        if ends_the_run(kind == "tap", answer):
-            del p.episode["checks"][asked:]
-            return
-
-
-def _u4(script: Script, p: Projection, notes: dict) -> None:
-    """Token clock: the environment latches a failed clock step itself, and the shell hands
-    the kernel that Invalidated before the step's answer (evaluation/shell.py _Shell._env). The
-    episode ends first, and a wait in hand is cut short as by any end (turns.py TurnPolicy.on_end,
-    _waited), a wait with the episode over after it; the failed step's answer, which would
-    settle it as a failed action (turns.py _step_failed), comes too late. Today the environment
-    reports the failed action (sandbox/actions.py GuestEnvironment._execution_failed)."""
-    invalid = p.episode["invalid"]
-    if _wall(script) or invalid is None or invalid["reason"] != "clock_advance_failed":
-        return
-    for d in p.decisions.values():
-        # Only a wait today's environment failed itself (its record holds the error); one whose
-        # step to the action time failed is K-e's.
-        if "error" not in (d["wait_record"] or {}):
-            continue
-        resolved, proposed = d["resolved"], d["proposed"]
-        start, reached = d["approach"]["to"], resolved["environment_tick"]
-        requested = float(proposed.split(":")[1])
-        elapsed = round(max(0.0, (reached - start) / script.env_fps), 9)
-        horizon_truncates = start + requested * script.env_fps > script.max_ticks + 1e-9
-        by_horizon = horizon_truncates and reached >= script.max_ticks - 1e-9
-        d["wait_record"] = {
-            "duration_simulated_seconds": elapsed,
-            "requested_duration_simulated_seconds": requested,
-            "truncated_by_episode_horizon": by_horizon,
-            "truncated_by_terminal_condition": elapsed + 1e-9 < requested and not by_horizon,
-        }
-        d["applied"] = True
-        for record in (resolved, d["commit"], d["outcome"]):
-            record["status"] = "wait"
-        resolved["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
-
-
-def _u5(script: Script, p: Projection, notes: dict) -> None:
-    """Wall clock: the environment latches a failed action itself, and the shell hands the
-    kernel that Invalidated before the action's answer (evaluation/shell.py _Shell._env). The
-    episode ends first and freezes the snapshot (kernel/core.py Kernel.end); the action's
-    decision settles on its answer after that (turns.py TurnPolicy.on_end), at the tick the
-    snapshot read left. Today the loop settles it as the action fails."""
-    invalid = p.episode["invalid"]
-    if not _wall(script) or invalid is None or invalid["reason"] != "action_execution_failed":
-        return
-    tick = _floor((p.episode["termination"]["end_s"] + script.snapshot_s) * script.env_fps)
-    for k, d in p.decisions.items():
-        if k < len(script.turns) and script.turns[k].fault and d["outcome"] is not None:
-            d["resolved"]["environment_tick"] = tick
-            d["outcome"]["next_observation_tick"] = tick
-
-
-def _u6(script: Script, p: Projection, notes: dict) -> None:
-    """The shell writes the frame the frozen-stream watchdog judged as ObservationCaptured
-    (evaluation/shell.py _Shell._record), before the kernel invalidates the run on it; today the
-    loop judges the frame first and writes none (runner.py _accept_observation)."""
-    invalid = p.episode["invalid"]
-    if invalid is None or invalid["reason"] != "observation_stream_frozen":
-        return
-    frames = p.beyond["trace"]["ObservationCaptured"]
-    k = len(p.episode["captures"]) - 1
-    if k not in frames:
-        frames[k] = [{"frozen": True}]  # counted only: its decision never started
-
-
 def _x2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot before it reports the decision in hand (core.py Kernel.end,
     turns.py TurnPolicy.on_end); today the decision is reported first and the snapshot read after
@@ -864,37 +896,85 @@ def _x2(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _x3(script: Script, p: Projection, notes: dict) -> None:
-    """A generation the kernel gave up on leaves no reply records: the shell settles no result
-    the kernel no longer waits for (evaluation/shell.py _Shell._settle_returned). Today the
+    """A generation the kernel gave up on at the wall deadline is recorded as the runner records
+    a call it gave up on, InferenceCompleted timed out and nothing streamed (decision 48;
+    evaluation/shell.py _Shell._abandoned_on_a_bound); one given up at another end leaves no
+    reply records. Neither settles a reply that came back: the shell settles none the kernel no
+    longer waits for (_Shell._settle_returned), and the agent counts the usage of accepted
+    results only (decision 37; harnesses/default/harness.py DefaultHarness.accept). Today the
     runner settles a reply back within its grace, or writes a timed-out one for the bounded wait
-    it gave up (runner.py _decide). Its usage counts when the reply came back before the abort,
-    which follows the snapshot read (kernel/core.py Kernel.end). On the fake clock a reply at the
-    very instant of the end races it: whether the shell settled the result first, records and
-    all (evaluation/shell.py _Shell._step), is the scheduler's call, and its records are not
-    compared; nor is the usage of a reply at the instant of the abort."""
-    end = p.episode["termination"]["end_s"]
-    abort_at = end + (script.snapshot_s if _wall(script) else 0.0)
-    for k in sorted(notes.get("given_up", ())):
-        back = p.facts["finished_at"].get(k)
-        if back is None or earlier(abort_at, back):
-            _drop_replies(p, k)
-            continue
-        if earlier(end, back):
-            _drop_replies(p, k, usage=False)
-        else:
-            p.beyond["racing"].append(k)
-        if not earlier(back, abort_at):
-            p.beyond["usage"] = None
+    it gave up (runner.py _decide)."""
+    for k, at_deadline in sorted(notes.get("given_up", {}).items()):
+        _drop_replies(p, k)
+        if at_deadline:
+            p.beyond["synthesized"].append(k)
 
 
-def _drop_replies(p: Projection, k: int, *, usage: bool = True) -> None:
+def _drop_replies(p: Projection, k: int) -> None:
     """Decision k's reply records, and the usage its reply added."""
     trace = p.beyond["trace"]
     trace["OutputChunkReceived"].pop(k, None)
     for completed in trace["InferenceCompleted"].pop(k, []):
         for name, value in (completed["frame_usage"] or {}).items():
-            if usage and p.beyond["usage"] is not None:
-                p.beyond["usage"][name] -= value
+            p.beyond["usage"][name] -= value
+
+
+def _x6(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: a move the per-move cap gave up on changes no earlier record; its feedback,
+    which names no action, opens every next frame until a result is accepted (H3; decision 10;
+    harnesses/default/harness.py DefaultHarness.commit). Today the report goes to the newest
+    record, and with none it is lost (DefaultHarness.commit_action). Only moves with no accepted
+    result before them are rewritten here, as in the named script."""
+    if not _wall(script):
+        return
+    note = f"EXECUTION RESULT: status=skipped_timeout. {UNANSWERED_STEP_NOTES['skipped_timeout']}\n"
+    skipped = {
+        k
+        for k, reason in p.facts["timeout_reasons"].items()
+        if reason == "per_move_cap" and p.decisions[k]["commit"]["status"] == "skipped_timeout"
+    }
+    if not skipped or min(skipped) != 0:
+        return
+    for request, (k, _) in zip(p.beyond["requests"], p.facts["requested"], strict=True):
+        unanswered = sum(1 for j in range(k) if j in skipped)
+        if unanswered != k or not unanswered:
+            continue
+        frame = next(m for m in reversed(request["body"]["messages"]) if m["role"] == "user")
+        frame["content"][0]["text"] = note * unanswered + frame["content"][0]["text"]
+
+
+def _x7(script: Script, p: Projection, notes: dict) -> None:
+    """A done or fail the kernel ran as a wait is reported as the wait it ran, with a note
+    (H4; harnesses/default/harness.py DefaultHarness._report); today the report names the done."""
+    terminal = re.compile(r"EXECUTION RESULT: actual=(done|fail); requested=\1; status=wait\.")
+    note = UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
+
+    def rewrite(value):
+        if isinstance(value, dict):
+            return {key: rewrite(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        if isinstance(value, str):
+            return terminal.sub(
+                lambda m: f"EXECUTION RESULT: actual=wait; requested={m[1]}; status=wait. {note}",
+                value,
+            )
+        return value
+
+    p.beyond["requests"] = rewrite(p.beyond["requests"])
+
+
+def _u7(script: Script, p: Projection, notes: dict) -> None:
+    """The shell takes a result's usage before the kernel accepts it (evaluation/shell.py
+    _Shell._settle), and the agent counts the usage only once the result is accepted
+    (harnesses/default/harness.py DefaultHarness.accept), so every InferenceCompleted's
+    frame_usage is all zeros; today the turn is written at once and the frame's usage is the
+    reply's."""
+    started = _started(p)
+    for k, completed in p.beyond["trace"]["InferenceCompleted"].items():
+        for record in completed:
+            if k in started and record["frame_usage"]:
+                record["frame_usage"] = dict.fromkeys(record["frame_usage"], 0)
 
 
 def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
@@ -914,9 +994,12 @@ def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
 RULES = (
     Rule("X4", "ticks and frame positions agree within 1e-9", _x4),
     Rule("KF2", "a horizon within 1e-9 above a whole tick is that tick", _kf2),
+    Rule("KF5", "the state is read at most once a frame, and once after every action", _kf5),
+    Rule("KF4", "a tap's read that saw the end ends the episode", _kf4),
     Rule("X1", "a wait is not executed by the environment; its record has no holds", _x1),
     Rule("X12", "the third failed state read in a row invalidates the run", _x12),
     Rule("K-b", "the wall clock checks the end every 1/env_fps s", _kb),
+    Rule("KF5d", "a wall action in a frame already read lands before the end is read", _kf5d),
     Rule("K-c", "a wall wait is a timer the end interrupts", _kc),
     Rule("K-i", "think budget and the task's end: the first names the reason", _ki),
     Rule("K-d", "nothing advances after the first end signal", _kd),
@@ -930,7 +1013,11 @@ RULES = (
     Rule("K-h", "a frozen stream does not abort the agent", _kh),
     Rule("K-f", "an unusable result resolves its action as invalid_run", _kf),
     Rule("K-j", "a lease ending inside a token tap is released where the tap ends", _kj),
-    Rule("K-n", "a failed read before landing is invalid_run, not not_applied_terminal", _kn),
+    Rule(
+        "K-n",
+        "a failed read before landing is invalid_run, not not_applied_terminal",
+        seen="no longer: the kernel does not read before landing (decision 31, KF5b, KF5d)",
+    ),
     Rule("K-e", "an escaping fault: the decision in hand is settled and reported", _ke),
     Rule("K-rel", "a wall hold's lease starts at Execute", _krel),
     Rule(
@@ -948,21 +1035,22 @@ RULES = (
         "waiting for the next wall frame is a timer, not a 30 ms poll",
         seen="not observable: FakeEnvironment lands on whole ticks (fake_env.py wait_until_tick)",
     ),
-    Rule("U3", "no state read after the token end was found inside an advance", _u3),
     Rule("U2", "an environment-latched failure is written as RunInvalidated", _u2),
-    Rule("U4", "a token wait whose step fails is cut short as by the end", _u4),
-    Rule("U5", "a failed wall action settles at the tick after the snapshot read", _u5),
-    Rule("U6", "the frame judged frozen is written as ObservationCaptured", _u6),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
-    Rule("X3", "a generation the kernel gave up on writes no reply and no usage", _x3),
+    Rule("X3", "a generation given up on is recorded as a call given up on, or not at all", _x3),
+    Rule("U7", "an InferenceCompleted's frame_usage is all zeros under the shell", _u7),
     Rule(
         "X5",
         "KernelRecord entries in the episode trace",
         seen="left out of the projection, as the plan's 投影 says",
     ),
-    Rule("X6", "a timed-out step's feedback does not rewrite the previous record", seen="P2"),
-    Rule("X7", "DONE turned into a wait is reported as actual=wait", seen="P2"),
-    Rule("X8", "generation numbers in the agent trace; Decision client rebuilt", seen="P2"),
+    Rule("X6", "a timed-out step's feedback opens the next frame, no record changes", _x6),
+    Rule("X7", "DONE turned into a wait is reported as actual=wait", _x7),
+    Rule(
+        "X8",
+        "generation numbers in the agent trace; Decision client rebuilt",
+        seen="not compared: the agent's event log, and no Decision API is replayed here",
+    ),
     Rule("X9", "agent events numbered by the kernel", seen="P1d"),
     Rule("X10", "SessionReleaseWait agent records", seen="P3, live drivers only"),
     Rule(

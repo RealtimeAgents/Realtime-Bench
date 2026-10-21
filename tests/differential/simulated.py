@@ -12,7 +12,6 @@ import itertools
 
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation.kernel.events import (
-    AdvanceClock,
     CheckEnd,
     Commit,
     FreezeSnapshot,
@@ -21,7 +20,7 @@ from realtime_framework.evaluation.kernel.events import (
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from tests.kernel.simulation import Reply, Simulation, World
 
-from .projection import Projection, decision, key_releases
+from .projection import Projection, decision, key_releases, wait_record
 from .script import Script, action_key, sim_action
 
 NEVER_S = 1e9  # a call that is never answered
@@ -77,9 +76,10 @@ def world(script: Script) -> World:
 class ScriptedSimulation(Simulation):
     """The simulation with the replayed world's traits it lacks: the task ends once the script's
     ``ends_after`` actions have taken effect; on the wall clock every end check asked within one
-    of the script's ``failing_reads_s`` fails; and a fault the environment latches itself, a
-    failed action or clock step, reaches the kernel as Invalidated before the command's answer,
-    as the shell posts it (evaluation/shell.py _Shell._env)."""
+    of the script's ``failing_reads_s`` fails; and a failed action, which the environment latches
+    itself while execute() returns, reaches the kernel as Invalidated before the action's answer,
+    as the shell posts it (evaluation/shell.py _Shell._env). A clock step that raises is answered
+    with its error only."""
 
     def __init__(self, config, world, script: Script) -> None:
         super().__init__(config, world)
@@ -102,10 +102,6 @@ class ScriptedSimulation(Simulation):
     def _run(self, command) -> None:
         if isinstance(command, CheckEnd) and self.script.read_fails_at(self.semantic()):
             self.world.check_errors[len(self.checks) + 1] = STATE_READ_FAILED
-        if isinstance(command, AdvanceClock):
-            error = self.world.advance_errors.get(len(self.advances) + 1)
-            if error is not None:
-                self.kernel.post(Invalidated("environment", "clock_advance_failed", error))
         super()._run(command)
 
 
@@ -214,7 +210,7 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
                 and action.action_type.value == "wait"
                 and data.get("execution_result")
             ):
-                d["wait_record"] = dict(data["execution_result"])
+                d["wait_record"] = wait_record(data["execution_result"])
         elif entry.kind == "ActionApplied":
             of(data["decision"])["applied"] = True
     for k, semantic, action in sim.executed:

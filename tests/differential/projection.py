@@ -70,12 +70,21 @@ def earlier(a: float, b: float) -> bool:
     return a < b - TOLERANCE
 
 
-def ends_the_run(in_tap: bool, answer: str | None) -> bool:
+def ends_the_run(answer: str | None) -> bool:
     """Whether the kernel's episode is over after a token state read that answered ``answer``
-    (None, "task", "failed" or "invalid_run"): an end check that saw the end or did not read; a
-    read inside a tap only when it failed for the last time, since one that sees the end only
-    stops the tap and the end check after it tells the kernel (turns.py TurnPolicy._executed)."""
-    return answer == "failed" if in_tap else bool(answer)
+    (None, "task", "failed" or "invalid_run"): one that saw the end or did not read, inside a tap
+    too (turns.py TurnPolicy._executed), or failed for the last time."""
+    return bool(answer)
+
+
+def wait_record(record: dict | None) -> dict | None:
+    """A wait's execution record, None for a wait that did not land. A failed step's error is
+    its message: the shell answers it with the traceback (evaluation/shell.py _Shell._failure),
+    the environment with the message (sandbox/actions.py GuestEnvironment._execution_failed)."""
+    error = None if record is None else record.get("error")
+    if error is None:
+        return None if record is None else dict(record)
+    return {**record, "error": error.strip().splitlines()[-1].split(": ", 1)[-1]}
 
 
 def key_releases(released: list[dict], until: float) -> list[dict]:
