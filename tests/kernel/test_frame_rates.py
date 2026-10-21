@@ -261,6 +261,25 @@ def test_the_allowance_is_the_remaining_input_frames_times_b(
     )
 
 
+def test_a_large_allowance_is_rounded_down_within_float_noise():
+    """25/4, B = 100000, 5 minutes = 7500 ticks; an input frame is 6.25 ticks. Decision 0's
+    52998400 tokens are 529.984 frames, 3312.4 ticks; frame 530 (3312.5) is observed at tick 3313.
+    The 4187 ticks left are 669.92 frames, exactly 66992000 tokens, which floats put a
+    hundred-millionth of a token below: past a fixed 1e-9, within 1e-12 of the allowance
+    (runner.py _decide). A response of all of them lands on the horizon, none of it past it."""
+    replies = [
+        Reply(latency=1.0, output_tokens=52998400),
+        Reply(latency=1.0, action=CLICK, output_tokens=66992000),
+    ]
+    sim = _run(_config("token", (25, 4), 300.0, 100000), replies)
+    assert [tick for tick, _ in sim.captures] == [0, 3313]
+    starts = [command for command in sim.commands if isinstance(command, StartGeneration)]
+    assert [start.remaining_clock_tokens for start in starts] == [120000000, 66992000]
+    assert [outcome.status for outcome in sim.outcomes] == ["none", "not_applied_tick_limit"]
+    assert sim.outcomes[1].post_horizon_output_tokens == 0
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("tick_limit", 7500)
+
+
 @pytest.mark.parametrize(
     ("tokens_per_frame", "last"),
     [(None, "applied"), (100, "not_applied_tick_limit")],
