@@ -198,8 +198,8 @@ class Received:
 class Orphan:
     """One server message that no generation's reply takes, as the core applied it (arrived).
 
-    Its goAway and resumption update still change the session, as in a reply; read from a closed
-    connection, it changes nothing.
+    Its goAway still asks for a new connection and its resumption update is still the candidate,
+    promoted at a clean boundary; read from a closed connection, it changes nothing.
     """
 
     connection: int  # the connection it was read from
@@ -534,15 +534,24 @@ class SessionCore:
         (streaming): as received() does while a generation's reply is being read on
         ``connection``, else as an orphan. An orphan's goAway asks for a new connection, and its
         resumption update is promoted when the session is at a clean boundary: no observation or
-        interrupt sent since the last clean completion, seed or resume."""
+        interrupt sent, and no output read, since the last clean completion, seed or resume.
+
+        Output that no generation takes (an acknowledgement can prompt a reply of its own) is not
+        in the history, so it ends the boundary as an observation does.
+        """
         received = self.received(connection, message, now)
         if received is not None:
             return received
-        control = (
-            self._control(message, clean=self.last_turn_clean, now=now)
-            if connection == self.connection
-            else {}
-        )
+        if connection != self.connection:
+            return Orphan(connection, message, {}, _cancelled(message))
+        if (
+            getattr(message, "server_content", None) is not None
+            or getattr(message, "tool_call", None) is not None
+        ):
+            self.last_turn_clean = False
+            self.resume_handle = None
+            self.candidate_resume_handle = None
+        control = self._control(message, clean=self.last_turn_clean, now=now)
         return Orphan(connection, message, control, _cancelled(message))
 
     def _control(self, message, *, clean: bool, now: float) -> dict:

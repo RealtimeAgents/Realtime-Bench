@@ -508,6 +508,22 @@ def test_an_orphan_resumption_update_is_promoted_at_a_clean_boundary():
     assert (fresh.resume_handle, fresh.candidate_resume_handle) == (None, "handle-0")
 
 
+def test_output_no_generation_takes_ends_the_clean_boundary():
+    """A reply the server makes of its own accord, read between replies, is not in the history:
+    a handle that arrives after it does not resume the session."""
+    for output in (
+        message({"toolCall": {"functionCalls": [{"id": "call-9", "name": "wait", "args": {}}]}}),
+        server_content(outputTranscription={"text": "unprompted"}),
+    ):
+        core = session_core()
+        connected(core)
+        clean_turn(core, "turn-0", "handle-0")
+        assert arrive(core, output).control == {}
+        arrive(core, update("handle-1"))
+        assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-1")
+        assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) is None
+
+
 def test_an_interrupt_ends_the_clean_boundary():
     """An interrupt is an input: a handle that arrives after it is not the clean boundary's."""
     core = session_core()
