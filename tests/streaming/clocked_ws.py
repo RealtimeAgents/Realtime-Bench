@@ -210,6 +210,10 @@ class _Connection:
             timeout = None if due is None else max(0.0, due - server._now())
             if not server._clock.wait_readable(self.sock, timeout):
                 continue  # the next timed record is due
+            # What is due goes before what the client did, its close included.
+            with server._lock:
+                self._release(server._now())
+            self._send()
             if not self._read() and self.protocol.close_rcvd is None and not self.closing:
                 with server._lock:
                     if server.dropped:
