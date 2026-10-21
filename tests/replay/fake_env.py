@@ -271,9 +271,10 @@ class FakeEnvironment:
 
     def model_request(self, index: int) -> bool:
         """Stub hook, on the stub's thread: request ``index`` takes its scripted fake time before
-        it is answered. True asks the stub to hold the request (Hang). A request beyond the
-        script takes no time, so the stub's own refusal of it (stub.py) fails the decision at
-        once."""
+        it is answered. A reply that comes due at the same instant as another wait, such as one
+        landing on a frame boundary, comes back first (FakeClock.sleep). True asks the stub to
+        hold the request (Hang). A request beyond the script takes no time, so the stub's own
+        refusal of it (stub.py) fails the decision at once."""
         if index >= len(self.reply_latencies):
             self.log("model.request", request=index, seconds=None, hang=False)
             return False
@@ -282,5 +283,5 @@ class FakeEnvironment:
         seconds = latency.seconds if hang else latency
         self.log("model.request", request=index, seconds=seconds, hang=hang)
         if not hang:
-            self.clock.sleep(seconds)
+            self.clock.sleep(seconds, first=True)
         return hang
