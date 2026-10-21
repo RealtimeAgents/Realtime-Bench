@@ -113,6 +113,7 @@ class CassetteServer:
         self.cursor = Cursor(records, normalizer or RealtimeNormalizer())
         # Every connection's thread reads and moves the one cursor.
         self._lock = threading.Lock()
+        self._failed_by: _Connection | None = None  # the connection that met the first problem
         self._listener = socket.create_server(("127.0.0.1", 0))
         self._closing = False
         self._threads: list[threading.Thread] = []
@@ -178,7 +179,14 @@ class _Connection:
         self._took = False  # sending took in bytes the next _read has not followed yet
 
     def drop(self) -> None:
-        self.dropped = True
+        """End the connection now. One whose client has ended its stream already, or reset it,
+        ends as the client's doing."""
+        try:
+            self.dropped = self.sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) != b""
+        except BlockingIOError:
+            self.dropped = True
+        except OSError:
+            pass
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -191,6 +199,7 @@ class _Connection:
                 return
             with server._lock:
                 self.number = server.cursor.open(server._now())
+                self._claim()
             if self.number is None:
                 self._fail()
             else:
@@ -237,6 +246,7 @@ class _Connection:
                         cursor.left_open(self.number)
                     else:
                         cursor.client_closed(self.number, None, server._now())  # no close frame
+                    self._claim()
             for frame in self.protocol.events_received():
                 with server._lock:
                     self._received(frame, server._now())
@@ -250,9 +260,18 @@ class _Connection:
             self._release(now)
             if not self.closing:
                 cursor.receive(self.number, json.loads(frame.data), now)
+        elif frame.opcode is Opcode.BINARY:
+            cursor.unrecordable(self.number, "a binary message")
         elif frame.opcode is Opcode.CLOSE and self.protocol.close_rcvd_then_sent:
             # A close the client started; one answering the server's close is not recorded.
             cursor.client_closed(self.number, self.protocol.close_rcvd.code, now)
+        self._claim()
+
+    def _claim(self) -> None:
+        """After this connection moved the cursor, under the server's lock: a first problem it met
+        is this connection's to close over."""
+        if self.server.cursor.failed and self.server._failed_by is None:
+            self.server._failed_by = self
 
     def _release(self, now: float) -> None:
         if self.closing or self.protocol.state is not OPEN:
@@ -266,11 +285,11 @@ class _Connection:
                 return
 
     def _fail(self) -> None:
-        """Close the connection over the first problem, with the problem as its reason; the
-        connection that fails first drops the others."""
-        if self.dropped:
-            return
+        """Close the connection over the first problem, with the problem as its reason, and drop
+        the others, if it met that problem; any other one ends, as one dropped."""
         with self.server._lock:
+            if self.server._failed_by is not self:
+                return
             problems = self.server.cursor.problems
             problem = problems[0] if problems else "unexpected connection"
         self.server.drop(but=self)
@@ -290,7 +309,10 @@ class _Connection:
             self._took = False
             return True
         self.server._clock.wait_readable(self.sock)
-        data = self.sock.recv(RECV_BYTES)
+        try:
+            data = self.sock.recv(RECV_BYTES)
+        except ConnectionResetError:
+            data = b""  # the client's stream ended all the same
         if data:
             self.protocol.receive_data(data)
         else:

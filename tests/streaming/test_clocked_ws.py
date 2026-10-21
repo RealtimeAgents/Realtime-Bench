@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import socket
+import struct
 import threading
 import time
 
@@ -306,6 +307,74 @@ def test_a_problem_on_one_connection_ends_the_others_at_once(conn_1_next):
 
     assert _replay(records, client) == ["conn 2 record 3: c2s hello differs:\n  msg.n: 1 -> 2"]
     assert ended == [(1011, 1.0), (None, 1.0)]
+
+
+def test_the_connection_with_the_problem_closes_it_though_another_finds_it_first(monkeypatch):
+    """L10(d): connection 1 finds the problem connection 2 had while connection 2 is still on its
+    way to drop the others; connection 2's client still gets the 1011. The drops wait for each
+    other, so two connections that both set out to drop the others would drop each other."""
+    drop, both = CassetteServer.drop, threading.Barrier(2, timeout=0.5)
+
+    def drop_together(self, but=None):
+        try:
+            both.wait()
+        except threading.BrokenBarrierError:
+            pass  # only one set out
+        drop(self, but)
+
+    monkeypatch.setattr(CassetteServer, "drop", drop_together)
+    records = [
+        _record("open", at=0.0),
+        _record("open", at=0.0, conn=2),
+        _record("c2s", {"type": "hello", "n": 1}, 1.0, conn=2),
+        _record("c2s", {"type": "idle"}, 1.0),
+    ]
+    ended = []
+
+    def client(open_connection, clock):
+        ws_1, ws_2 = open_connection(), open_connection()
+        clock.sleep(1.0)
+        _send(ws_2, {"type": "hello", "n": 2})
+        _send(ws_1, {"type": "idle"})
+        for ws in (ws_2, ws_1):
+            with pytest.raises(ConnectionClosedError) as closed:
+                ws.recv()
+            ended.append(closed.value.rcvd and closed.value.rcvd.code)
+
+    assert _replay(records, client) == ["conn 2 record 2: c2s hello differs:\n  msg.n: 1 -> 2"]
+    assert ended == [1011, None]
+
+
+def test_a_client_that_resets_its_connection_closes_it_without_a_close_frame():
+    """L10(c): a connection the client resets ends its stream like one it shuts down."""
+    records = [
+        _record("open", at=0.0),
+        _record("c2s", {"type": "hello"}, 0.0),
+        _record("s2c", {"type": "ack"}),
+        _record("close", {"by": "client", "code": None}, 0.0),
+    ]
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        _send(ws, {"type": "hello"})
+        assert _recv(ws) == {"type": "ack"}
+        ws.socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        ws.close_socket()
+
+    assert [_replay(records, client) for _ in range(10)] == [[]] * 10
+
+
+def test_a_binary_message_is_a_problem():
+    """L10(f): a recording holds text messages only."""
+    records = [_record("open", at=0.0)]
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        ws.send(b"\x00")
+        with pytest.raises(ConnectionClosedError):
+            ws.recv()
+
+    assert _replay(records, client) == ["conn 1: the client sent a binary message"]
 
 
 def test_messages_the_client_leaves_unread_never_stop_its_reader():

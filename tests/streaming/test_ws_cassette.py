@@ -267,6 +267,35 @@ def test_a_server_message_gone_ahead_of_carries_this_sessions_ids():
     assert cursor.finish() == []
 
 
+def test_a_close_never_goes_ahead_of_a_server_message():
+    """L10(a): a message may go ahead of server records in an order-only recording, which are sent
+    after it; a close may not, as nothing would reach the client after it."""
+    records = [
+        _record("open"),
+        _record("s2c", {"type": "x"}, 1.0002),
+        _record("close", {"by": "client", "code": 1000}),
+    ]
+    cursor = _cursor(records)
+    cursor.open(0.0)
+    cursor.client_closed(1, 1000, 1.0)
+    assert cursor.problems == [
+        "conn 1: the client closed it (1000), but the recording has s2c x next (record 1)"
+    ]
+
+
+def test_server_messages_gone_ahead_of_but_never_sent_are_left_unused():
+    """L10(b): the client went ahead of a server message and then closed before the server sent
+    it."""
+    records = [_record("open"), _record("s2c", {"type": "x"}, 5.0), _record("c2s", {"type": "a"})]
+    cursor = _cursor(records)
+    cursor.open(0.0)
+    cursor.receive(1, {"type": "a"}, 0.0)
+    cursor.client_closed(1, 1000, 0.0)
+    assert cursor.finish() == [
+        "conn 1: 1 record(s) gone ahead of but never sent, from record 1 (s2c x)"
+    ]
+
+
 def test_nothing_gone_ahead_of_is_released_once_the_message_differs():
     records = [
         _record("open"),
