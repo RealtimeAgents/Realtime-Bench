@@ -241,6 +241,9 @@ INVALID = {
     "no_answers": {k: v for k, v in _reply().items() if k != "answers"},
     "no_answer": _reply(answers={}),
     "answers_not_a_mapping": _reply(answers=[]),
+    "answer_not_asked": _reply(
+        answers={**_reply()["answers"], "other": _reply()["answers"]["next_action"]}
+    ),
     "refusal": _reply(answers={"next_action": {"type": "refusal", "refusal": "no"}}),
     "choice_not_offered": _answer(choice="c"),
     "choice_not_text": _answer(choice=1),
