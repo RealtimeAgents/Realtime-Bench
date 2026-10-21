@@ -84,10 +84,18 @@ class Script:
     ends_after: int | None = None  # ... or once this many actions have taken effect
     end_reason: str | None = None
     frozen_from: int | None = None  # from this capture (0-based) on every frame repeats it
-    # Token clock, counted 1-based as the kernel asks them: end checks that fail to read, and
-    # clock steps that fail.
+    # Token clock, counted 1-based as the kernel asks them: end checks that fail to read, reads
+    # inside key taps that fail (counted across all taps), and clock steps that fail.
     check_errors: tuple[int, ...] = ()
+    tap_check_errors: tuple[int, ...] = ()
     advance_errors: tuple[int, ...] = ()
+    # Wall clock: every state read asked within one of these [start, end) windows fails.
+    failing_reads_s: tuple[tuple[float, float], ...] = ()
+    # Token clock, for today's loop only (rules.x12_plan): reads that answer "not ended" whatever
+    # the task says until a read has seen the end, as the kernel takes a failed read short of the
+    # third in a row.
+    blind_checks: tuple[int, ...] = ()
+    blind_tap_checks: tuple[int, ...] = ()
     snapshot_error: str | None = None
     think_budget_s: float | None = None
     per_move_cap_s: float | None = None
@@ -104,8 +112,14 @@ class Script:
             raise ValueError("operation times are world time only on the wall clock")
         if self.clock != "wall" and any(turn.hangs for turn in self.turns):
             raise ValueError("a hang is only bounded on the wall clock")
-        if (self.check_errors or self.advance_errors) and self.clock == "wall":
+        counted = (self.check_errors, self.tap_check_errors, self.advance_errors)
+        if self.clock == "wall" and any(counted + (self.blind_checks, self.blind_tap_checks)):
             raise ValueError("wall end checks and waits are not comparable one by one")
+        if self.clock != "wall" and self.failing_reads_s:
+            raise ValueError("token reads fail by their number, not by the time")
+        if self.failing_reads_s and (self.ends_at_s is not None or self.ends_after is not None):
+            # Today's loop cannot be told to miss an end the way a failed read hides it.
+            raise ValueError("a wall script with failed reads has the task go on")
         # The guest only executes pointer and text actions on the token clock (key input goes to
         # the task clock), and a wait is never the guest's to refuse.
         refusable = ("click", "type") if self.clock != "wall" else ("click", "type", "key", "hold")
@@ -121,6 +135,14 @@ class Script:
     @property
     def max_ticks(self) -> float:
         return self.duration_s * self.env_fps
+
+    @property
+    def fails_reads(self) -> bool:
+        return bool(self.check_errors or self.tap_check_errors or self.failing_reads_s)
+
+    def read_fails_at(self, at: float) -> bool:
+        """Wall clock: whether a state read asked at ``at`` seconds fails."""
+        return any(start <= at < end for start, end in self.failing_reads_s)
 
     def but(self, **changes) -> Script:
         return replace(self, **changes)

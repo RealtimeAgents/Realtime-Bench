@@ -403,6 +403,114 @@ PER_RULE = [
     ),
 ]
 
+# X12: the kernel invalidates on the third failed state read in a row, today's loop on the first.
+# Token clock, 1/1, B = 100, 50-token actions: decision 0 reads at the loop top (check 1), after
+# the step to its action time 0.5 (2), before landing (3), after landing (4) and after pacing to
+# tick 1 (5); a tap at 0.5 reads once inside, at 0.5 + 1/60 (tap read 1), between 3 and 4.
+TAP_FIRST = _tokens([("key:tab", 50)] + [("click", 50)] * 3)
+
+X12 = [
+    # Checks 2 and 3 fail and 4 reads: the kernel goes on, today's loop stops at check 2.
+    Script(
+        "token",
+        3.0,
+        TWO_CLICKS,
+        tokens_per_frame=100,
+        check_errors=(2, 3),
+        expect=frozenset({"X12"}),
+        name="token-two-failed-reads-in-a-row-are-tolerated",
+    ),
+    # K-n: checks 1 to 3 fail; the third is the one before landing.
+    Script(
+        "token",
+        3.0,
+        TWO_CLICKS,
+        tokens_per_frame=100,
+        check_errors=(1, 2, 3),
+        expect=frozenset({"K-n", "U2", "X2", "X12"}),
+        name="token-third-failed-read-before-landing",
+    ),
+    # Checks 2 and 3 fail and so does the read inside the tap: the tap is reported applied, with
+    # the episode over after it.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        tokens_per_frame=100,
+        check_errors=(2, 3),
+        tap_check_errors=(1,),
+        expect=frozenset({"U2", "U3", "X2", "X12"}),
+        name="token-third-failed-read-inside-a-tap",
+    ),
+    # Checks 2 and 3 fail, the read inside the tap succeeds and resets the count, and checks 4
+    # and 5 fail: two in a row again, so the run goes on.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        tokens_per_frame=100,
+        check_errors=(2, 3, 4, 5),
+        expect=frozenset({"X12"}),
+        name="token-a-read-inside-a-tap-resets-the-count",
+    ),
+    # The read inside the tap fails, then checks 4 and 5: the third is the check after pacing.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        tokens_per_frame=100,
+        check_errors=(4, 5),
+        tap_check_errors=(1,),
+        expect=frozenset({"U2", "U3", "X2", "X12"}),
+        name="token-a-failed-read-inside-a-tap-counts",
+    ),
+    # Wall clock, decisions at 0, 1, 2 and 3 s. At 3 fps the reads within [1.4, 1.6) are the two
+    # around decision 1's landing at 1.5 s; the periodic read at 5/3 s succeeds.
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5] * 4),
+        env_fps=3.0,
+        failing_reads_s=((1.4, 1.6),),
+        expect=frozenset({"U1", "X2", "X12"}),
+        name="wall-two-failed-reads-are-tolerated",
+    ),
+    # At 8 fps the periodic reads at 1.25 and 1.375 s fail, then the read before decision 1
+    # lands at 1.45 s, the third. Today's loop makes no periodic reads, so its first failed read
+    # is that one too, and X12 changes nothing: K-n is the only difference in how it ends.
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
+        env_fps=8.0,
+        failing_reads_s=((1.2, 1.6),),
+        expect=frozenset({"K-n", "U1", "U2", "X2", "X4"}),
+        name="wall-third-failed-read-is-todays-first",
+    ),
+    # The periodic reads at 1.125, 1.25 and 1.375 s fail while decision 1 waits for its reply:
+    # the kernel gives up on the generation; today's loop never reads then.
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5] * 4),
+        env_fps=8.0,
+        failing_reads_s=((1.1, 1.45),),
+        expect=frozenset({"K-g", "U1", "X12"}),
+        name="wall-third-failed-read-during-a-reply",
+    ),
+    # Two failed periodic reads, a successful one at 1.375 s, then the two around decision 1's
+    # landing at 1.45 s fail: never three in a row.
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
+        env_fps=8.0,
+        failing_reads_s=((1.1, 1.3), (1.4, 1.48)),
+        expect=frozenset({"U1", "X2", "X4", "X12"}),
+        name="wall-a-successful-read-resets-the-count",
+    ),
+]
+
 # ---- 5. phase2.md:283 --------------------------------------------------------------------------
 
 EARLY_END = [
@@ -419,4 +527,4 @@ EARLY_END = [
     ),
 ]
 
-NAMED = FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + EARLY_END
+NAMED = FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + X12 + EARLY_END

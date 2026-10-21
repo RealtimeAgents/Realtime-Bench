@@ -39,14 +39,13 @@ from tests.replay.token_env import TokenEnvironment
 from . import drivers
 from .projection import Projection, decision, key_releases
 from .script import Script, action_key, reply_text
-from .simulated import turn_config
+from .simulated import STATE_READ_FAILED, turn_config
 
 # The fake wall clock starts here: a whole binary number of seconds, so that a time since the
 # origin is exact to ~1e-13 s. At the replay baselines' CLOCK_ORIGIN (1.76e9 s) one ulp is
 # 2.4e-7 s, which would swamp the comparison's tolerance.
 ORIGIN = 1024.0
 PROMPT_TOKENS = 1500
-STATE_READ_FAILED = "state read failed"
 
 
 def _usage(output_tokens: int | None) -> dict | None:
@@ -159,8 +158,19 @@ class WallEnvironment(_Latched, FakeEnvironment):
     def done(self) -> bool:
         asked = self.now()
         cause, _ = self._over()
-        over = super().done()
-        if cause not in ("invalid_run", "deadline"):  # the task's state was read
+        reads = cause not in ("invalid_run", "deadline")  # the task's state is read
+        if reads and self.script.read_fails_at(asked):
+            # GuestEnvironment latches a failed read and answers that the episode is over
+            # (sandbox/actions.py:1004-1010).
+            self._invalid_run = {
+                "category": "environment",
+                "reason": "terminal_state_check_failed",
+                "detail": STATE_READ_FAILED,
+            }
+            cause, over = "failed", True
+        else:
+            over = super().done()
+        if reads:
             self.clock.sleep(self.script.check_s)
         self.log("diff.check", at=asked, answer=cause)
         return over
@@ -290,6 +300,8 @@ class TokenWorld(_Latched, TokenEnvironment):
         self.script = script
         self._in_tap = False
         self._checks = 0
+        self._tap_reads = 0
+        self._saw_end = False
         self._advances = 0
         self._applied = 0
         super().__init__(frames, task, max_minutes=script.duration_s / 60, stop_check=self._stop)
@@ -303,8 +315,17 @@ class TokenWorld(_Latched, TokenEnvironment):
         return self._logical_tick / self.fps
 
     def _stop(self):
-        if not self._in_tap and self._checks in self.script.check_errors:
+        script = self.script
+        if self._in_tap:
+            read, failing, blind = self._tap_reads, script.tap_check_errors, script.blind_tap_checks
+        else:
+            read, failing, blind = self._checks, script.check_errors, script.blind_checks
+        if read in failing:
             raise RuntimeError(STATE_READ_FAILED)
+        if read in blind and not self._saw_end:
+            # A blind read stands for a failure the kernel takes as "not ended"; once a read has
+            # seen the end, the kernel reads no more, and today's loop reads the task as it is.
+            return None
         ends_at = self.script.ends_at_s
         reached = ends_at is not None and self._logical_tick >= ends_at * self.fps
         return _ended(self.script, reached, self._applied)
@@ -324,7 +345,9 @@ class TokenWorld(_Latched, TokenEnvironment):
         return observation
 
     def done(self) -> bool:
-        if not self._in_tap:
+        if self._in_tap:
+            self._tap_reads += 1
+        else:
             self._checks += 1
         tick, before = self._logical_tick, self._invalid_run
         over = super().done()
@@ -334,7 +357,9 @@ class TokenWorld(_Latched, TokenEnvironment):
             answer = "invalid_run"
         else:
             answer = "task" if self._invalid_run is None else "failed"
-        self.log("diff.check", tick=tick, in_tap=self._in_tap, answer=answer)
+        self._saw_end = self._saw_end or answer == "task"
+        read = self._tap_reads if self._in_tap else self._checks
+        self.log("diff.check", tick=tick, in_tap=self._in_tap, read=read, answer=answer)
         return over
 
     def execute(self, action):
@@ -513,9 +538,9 @@ def project(script: Script, env) -> Projection:
     def of(k: int) -> dict:
         return decisions.setdefault(k, decision())
 
-    captures, checks, check_answers, key_ups = [], [], [], []
+    captures, checks, key_ups = [], [], []
     started_at, finished_at, resolved_at, committed_at, timeout_reasons = {}, {}, {}, {}, {}
-    taps, records, aborts = [], 0, 0
+    taps, reads, records, aborts = [], [], 0, 0
     commits, snapshot_after, aborted_at, output_tokens = 0, None, [], {}
     first_end, ended_before_commit = None, {}
     for call in env.calls:
@@ -600,9 +625,12 @@ def project(script: Script, env) -> Projection:
             captures.append(
                 {"tick": call["tick"], "timestamp": call["timestamp"] if token else call["at"]}
             )
-        elif name == "diff.check" and token and not call["in_tap"]:
-            checks.append(call["tick"])
-            check_answers.append(call["answer"])
+        elif name == "diff.check" and token:
+            reads.append(("tap" if call["in_tap"] else "check", call["read"], call["answer"]))
+            if not call["in_tap"]:
+                checks.append(call["tick"])
+        elif name == "diff.check" and call["answer"] not in ("invalid_run", "deadline"):
+            reads.append((call["at"], call["answer"]))
         elif name == "diff.key_up" and not call["finalizing"]:
             if token:
                 key_ups.append(
@@ -642,7 +670,10 @@ def project(script: Script, env) -> Projection:
         "resolved_at": resolved_at,
         "committed_at": committed_at,
         "timeout_reasons": timeout_reasons,
-        "check_answers": check_answers,
+        # Every state read before the snapshot, in order, with its answer (None, "task" or
+        # "failed"): (kind, number, answer) on the token clock, kind "check" or "tap" numbered
+        # as Script.check_errors and Script.tap_check_errors; (seconds, answer) on the wall clock.
+        "reads": reads,
         "taps": taps,
         "key_ups": key_ups,
         "aborted_at": aborted_at,

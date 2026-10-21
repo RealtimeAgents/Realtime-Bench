@@ -61,6 +61,8 @@ def check(script: Script, old: Projection, new: Projection) -> Verdict:
     verdict.problems, verdict.close = differences(current.compared, new.compared)
     if verdict.close and "X4" not in verdict.triggered:
         verdict.triggered.append("X4")
+    if old.facts.get("x12_shown") and "X12" not in verdict.triggered:
+        verdict.triggered.append("X12")  # it changed what today's loop was made to read
     verdict.triggered.sort(key=ORDER.index)
     verdict.unexpected = [rule for rule in verdict.triggered if rule not in script.expect]
     verdict.unused = sorted(set(script.expect) - set(verdict.triggered), key=ORDER.index)
@@ -145,6 +147,105 @@ def _in_hand_at(p: Projection, at: float) -> int | None:
     return None
 
 
+# ---- X12: which failed read ends the run ------------------------------------------------------
+
+READS_IN_A_ROW = 3  # turns.py:63 READ_FAILURE_LIMIT
+
+
+@dataclass(frozen=True)
+class X12Plan:
+    """What today's loop plays for a script with failed reads, so that it shows what the kernel
+    does with them. ``script`` fails only the read the kernel ends the run on, and takes the
+    failures before it as reads that saw no end; ``end_at`` is that read's time on the wall
+    clock when it is one of the kernel's periodic reads, which today's loop never makes, for the
+    rule to place; ``shown`` is whether the kernel ends anywhere else than on today's first
+    failed read."""
+
+    script: Script
+    end_at: float | None
+    shown: bool
+
+
+def x12_probe(script: Script) -> Script:
+    """Today's loop with every scripted failure taken as a read that saw no end: until a third
+    failure in a row the kernel reads the episode the same way (turns.py:691-700)."""
+    if _wall(script):
+        return script.but(failing_reads_s=())
+    return script.but(
+        check_errors=(),
+        tap_check_errors=(),
+        blind_checks=script.check_errors,
+        blind_tap_checks=script.tap_check_errors,
+    )
+
+
+def x12_plan(script: Script, probe: Projection) -> X12Plan:
+    """The kernel counts failed reads in the order it handles them: end checks, and on the token
+    clock the reads a key tap makes, before the check after it (turns.py:471-474). A read that
+    succeeds resets the count, whatever it answers; the third failure in a row ends the run. Today
+    the first failure does (sandbox/actions.py:1004-1010)."""
+    if _wall(script):
+        return _x12_wall(script, probe)
+    failing = {"check": set(script.check_errors), "tap": set(script.tap_check_errors)}
+    first = third = None
+    in_a_row = 0
+    for kind, read, answer in probe.facts["reads"]:
+        if read not in failing[kind]:
+            if answer:
+                break  # the end came before a third failure in a row
+            in_a_row = 0
+            continue
+        first = first or (kind, read)
+        in_a_row += 1
+        if in_a_row == READS_IN_A_ROW:
+            third = (kind, read)
+            break
+    kept = {} if third is None else {third[0]: (third[1],)}
+    played = script.but(
+        check_errors=kept.get("check", ()),
+        tap_check_errors=kept.get("tap", ()),
+        blind_checks=tuple(sorted(failing["check"] - set(kept.get("check", ())))),
+        blind_tap_checks=tuple(sorted(failing["tap"] - set(kept.get("tap", ())))),
+    )
+    return X12Plan(played, None, first is not None and first != third)
+
+
+def _x12_wall(script: Script, probe: Projection) -> X12Plan:
+    """Besides today's reads, the wall kernel reads every 1/env_fps s while the episode lasts
+    (turns.py:235-240, 671-675)."""
+    fps, end = script.env_fps, probe.episode["termination"]["end_s"]
+    reads = [(at, "loop") for at, _ in probe.facts["reads"]]
+    j = 1
+    while j / fps < script.duration_s and earlier(j / fps, end):
+        reads.append((j / fps, "periodic"))
+        j += 1
+    reads.sort(key=lambda read: read[0])  # stable: today's reads at one instant keep their order
+    first = next(
+        (at for at, source in reads if source == "loop" and script.read_fails_at(at)), None
+    )
+    third, in_a_row = None, 0
+    for index, (at, _) in enumerate(reads):
+        if not script.read_fails_at(at):
+            in_a_row = 0
+            continue
+        in_a_row += 1
+        if in_a_row == READS_IN_A_ROW:
+            third = index
+            break
+    if third is None:
+        return X12Plan(script.but(failing_reads_s=()), None, first is not None)
+    at, source = reads[third]
+    # Today's reads at one instant come in a known order, a periodic read among them does not;
+    # and a window can only fail the first of today's reads at an instant.
+    same = [index for index, (other, _) in enumerate(reads) if _same(other, at)]
+    if same[0] != third or len(same) > 1 and any(reads[i][1] == "periodic" for i in same):
+        raise ValueError(f"the third failed read in a row is not alone first at {at:g} s")
+    if source == "periodic":
+        return X12Plan(script.but(failing_reads_s=()), at, True)
+    played = script.but(failing_reads_s=((at - TOLERANCE, at + TOLERANCE),))
+    return X12Plan(played, None, first is None or not _same(first, at))
+
+
 # ---- the rules --------------------------------------------------------------------------------
 
 
@@ -194,10 +295,26 @@ def _x1(script: Script, p: Projection, notes: dict) -> None:
             d["wait_record"].pop("active_mouse_buttons", None)
 
 
-def _kernel_end(script: Script, p: Projection) -> tuple[float, int | None] | None:
+def _x12(script: Script, p: Projection, notes: dict) -> None:
+    """The kernel invalidates the run on the third failed state read in a row (turns.py:691-700),
+    today's loop on the first; compare() has today's loop fail only that third read
+    (x12_plan). On the wall clock it can be a periodic read today's loop never makes: the run
+    ends there, invalidated."""
+    at = p.facts.get("x12_end")
+    if at is None:
+        return
+    p.episode["termination"]["stop_reason"] = "invalid_run"
+    p.episode["invalid"] = {"category": "environment", "reason": "terminal_state_check_failed"}
+    p.episode["invalidation_records"] = 1
+    k = _in_hand_at(p, at)
+    notes["ended"] = (at, k)
+    _end_at(script, p, notes, k, at)
+
+
+def _kernel_end(script: Script, p: Projection, notes: dict) -> tuple[float, int | None] | None:
     """Wall clock: when and in which decision the kernel's periodic check finds the task's end
     before today's loop does, or None when today's loop finds it first."""
-    if not _wall(script) or script.ends_at_s is None:
+    if not _wall(script) or script.ends_at_s is None or "ended" in notes:
         return None
     end_s = p.episode["termination"]["end_s"]
     found = _grid_check(script, script.ends_at_s)
@@ -222,7 +339,7 @@ def _kb(script: Script, p: Projection, notes: dict) -> None:
     """The wall clock checks the end every 1/env_fps s, during generations, waits and pacing too
     (turns.py:205-206, 671-675); an end found so is dated at the asking. Today only the loop top
     and the checks around landing ask (runner.py:858, 485-504)."""
-    found = _kernel_end(script, p)
+    found = _kernel_end(script, p, notes)
     if found is None:
         return
     at, k = found
@@ -244,6 +361,7 @@ def _end_at(script: Script, p: Projection, notes: dict, k: int | None, at: float
     """The episode ends at ``at`` with decision k in hand, or none."""
     p.episode["termination"]["end_s"] = round(at, 9)
     p.episode["key_ups"] = key_releases(p.facts["key_ups"], at)
+    p.episode["captures"] = [c for c in p.episode["captures"] if earlier(c["timestamp"], at)]
     notes["in_hand"] = None
     if k is not None:
         _cut(script, p, notes, k, at)
@@ -331,7 +449,7 @@ def _ki(script: Script, p: Projection, notes: dict) -> None:
         if p.facts["ended_by"] == "task":
             termination["stop_reason"] = script.end_reason or "game_decided"
         return
-    found = _kernel_end(script, p)
+    found = _kernel_end(script, p, notes)
     if found is None:
         return
     at, k = found
@@ -569,19 +687,19 @@ def _u2(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _u3(script: Script, p: Projection, notes: dict) -> None:
-    """Token clock: once a check finds the end, the kernel asks no more (turns.py:677-689); when
-    today's environment finds it inside an advance, the loop top asks again
-    (sandbox/actions.py:279-280, runner.py:858), and that read can fail and void the run."""
+    """Token clock: once a read finds the end, or fails for the last time, the kernel asks no more
+    (turns.py:677-689, 471-474); when today's environment finds it inside an advance or a tap,
+    the loop asks again after execution or at its top (sandbox/actions.py:279-280,
+    runner.py:504, 858). That extra read can also fail and void the run today; the kernel never
+    makes it, so X12's plan never fails it."""
     if _wall(script):
         return
-    answers = p.facts["check_answers"]
-    first = next((i for i, answer in enumerate(answers) if answer), None)
-    if first is None:
-        return
-    del p.episode["checks"][first + 1 :]
-    if answers[first] == "task" and "failed" in answers[first + 1 :]:
-        p.episode["invalid"], p.episode["invalidation_records"] = None, 0
-        p.episode["termination"]["stop_reason"] = script.end_reason or "game_decided"
+    asked = 0
+    for kind, _, answer in p.facts["reads"]:
+        asked += kind == "check"
+        if answer:
+            del p.episode["checks"][asked:]
+            return
 
 
 def _x2(script: Script, p: Projection, notes: dict) -> None:
@@ -611,6 +729,7 @@ RULES = (
     Rule("X4", "ticks and frame positions agree within 1e-9", _x4),
     Rule("U1", "wall Outcome.action_output_tokens carries the result's tokens", _u1),
     Rule("X1", "a wait is not executed by the environment; its record has no holds", _x1),
+    Rule("X12", "the third failed state read in a row invalidates the run", _x12),
     Rule("K-b", "the wall clock checks the end every 1/env_fps s", _kb),
     Rule("K-c", "a wall wait is a timer the end interrupts", _kc),
     Rule("K-i", "think budget and the task's end: the first names the reason", _ki),
@@ -654,7 +773,6 @@ RULES = (
     Rule("X9", "agent events numbered by the kernel", seen="P1d"),
     Rule("X10", "SessionReleaseWait agent records", seen="P3, live drivers only"),
     Rule("X11", "token key events and releases bounded by the environment budget", seen="P5b"),
-    Rule("X12", "three consecutive failed reads before the run is invalid", seen="W0"),
     Rule("X13", "a periodic wall state read is bounded by 10 s", seen="shell and environment"),
 )
 ORDER = [rule.id for rule in RULES]
