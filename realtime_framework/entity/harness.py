@@ -3,9 +3,14 @@ from __future__ import annotations
 # Base
 from abc import ABC as ABC
 from abc import abstractmethod as abstractmethod
+from typing import TYPE_CHECKING
 
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DecisionBudget
+from realtime_framework.entity.model import PendingDecision
+
+if TYPE_CHECKING:  # the entity layer does not import the evaluation package at run time
+    from realtime_framework.evaluation.kernel.events import Outcome
 
 
 class StreamingAgent(ABC):
@@ -43,6 +48,27 @@ class StreamingAgent(ABC):
 
     def stream_generate(self, tick: int = 0) -> dict:
         raise NotImplementedError(f"{type(self).__name__} is not a frame-driven adapter")
+
+    # The event kernel's agent (evaluation/shell.py KernelAgent). These defaults run the legacy
+    # turn: stream_generate writes the history itself and marks a result stale once the runtime's
+    # epoch has moved on, so accepting and discarding have nothing left to do.
+
+    def generate(
+        self, generation: int, decision: int, observation: Observation, budget: DecisionBudget
+    ) -> PendingDecision:
+        self.configure_decision(budget)
+        self.stream_prefill(observation)
+        result = self.stream_generate(tick=decision)
+        return PendingDecision(generation, decision, result, cancelled=bool(result.get("stale")))
+
+    def accept(self, generation: int) -> None:
+        pass
+
+    def discard(self, generation: int) -> None:
+        pass
+
+    def commit(self, outcome: Outcome) -> None:
+        self.commit_action(outcome.status, outcome.detail)
 
 
 from dataclasses import dataclass as dataclass

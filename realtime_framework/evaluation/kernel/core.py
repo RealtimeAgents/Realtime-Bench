@@ -166,8 +166,9 @@ class Kernel:
     def invalidate(self, category: str, reason: str, detail=None) -> None:
         """Latch the first non-model failure; it ends the episode and the run is never scored."""
         if self.invalid is None:
+            # The end of a traceback names the exception (runner.py:205-207).
             self.invalid = Invalidated(
-                category, reason, None if detail is None else str(detail)[:2000]
+                category, reason, None if detail is None else str(detail)[-2000:]
             )
             self.record(TraceEvent.RUN_INVALIDATED.value, **asdict(self.invalid))
         self.end("invalid", self.semantic)

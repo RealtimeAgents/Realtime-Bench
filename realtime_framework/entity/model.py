@@ -215,6 +215,8 @@ class GenerationRequest:
     timeout_s: float | None = None
     # Filled by the runtime from the retained history before each provider call.
     canonical: CanonicalRequest | None = None
+    # The event kernel's number of this generation; None when the legacy loop drives the agent.
+    generation: int | None = None
 
 
 @dataclass
@@ -268,6 +270,18 @@ class RuntimeTurnResult:
     latency_s: float
     provider_call_latency_s: float
     provider_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PendingDecision:
+    """One generation's result, held by the agent until the event kernel accepts or discards it."""
+
+    generation: int  # the kernel's generation number
+    decision: int
+    result: dict  # the decision result, as stream_generate returns it
+    cancelled: bool = False  # the generation was aborted before its result came back
+    # What accepting the result writes, kept by the agent; the shell does not read it.
+    staged: Any = None
 
 
 @runtime_checkable

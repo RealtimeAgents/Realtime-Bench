@@ -58,6 +58,10 @@ NOT_APPLIED = {
     "environment": "not_applied_terminal",
 }
 
+# The run is invalid once this many state reads in a row have failed; a read that answers starts
+# the count over (phase2.md, 时间和结束判定). A failed read short of it answers "not over".
+READ_FAILURE_LIMIT = 3
+
 
 @dataclass(frozen=True)
 class TurnConfig:
@@ -111,6 +115,7 @@ class _Decision:
     remaining: int | None = None
     timeout: int | None = None  # the timer bounding the generation
     action: Action | None = None
+    protocol_failure: str | None = None
     timed_out: bool = False
     over_budget: bool = False
     output_tokens: int | None = None
@@ -180,6 +185,7 @@ class TurnPolicy:
         self.leases: dict[str, float] = {}
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
         self._asked: dict[int, float] = {}  # end checks out: request -> semantic time asked
+        self._failed_reads = 0  # state reads failed in a row
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
@@ -374,14 +380,14 @@ class TurnPolicy:
         cap = config.per_move_cap_s
         if cap is not None and deliberation > cap:
             self.spent += cap
-            action, timed_out = None, True
+            action, protocol_failure, timed_out = None, None, True
         else:
             self.spent += deliberation
         d.over_budget = config.think_budget_s is not None and self.spent >= config.think_budget_s
         d.tau = d.t_k + d.d_ticks if self.token else max(self._position(), self.tau_prev)
         self.tau_prev = d.tau
         d.target = min(d.tau, config.max_ticks)
-        d.action, d.timed_out = action, timed_out
+        d.action, d.protocol_failure, d.timed_out = action, protocol_failure, timed_out
         d.approach_from = self._tick()
         if self.token:
             # Token time stood still during the generation: move it to the action time first.
@@ -462,6 +468,10 @@ class TurnPolicy:
         if self.phase is not _Phase.EXECUTE:
             return
         d, kernel = self.decision, self.kernel
+        # A tap's end checks were made before the action finished.
+        for error in event.end_checks:
+            if self._count_read(error):
+                break
         # A refusal or a failure leaves its own execution record (sandbox/actions.py:817).
         d.execution_result = event.result
         if event.error is not None:
@@ -626,6 +636,8 @@ class TurnPolicy:
             token_delay_frames=d.d_ticks if self.token else None,
             action_output_tokens=d.output_tokens,
             post_horizon_output_tokens=d.post_horizon,
+            action=d.action,
+            protocol_failure=d.protocol_failure,
         )
         self.phase = _Phase.COMMIT
         self.kernel.emit(Commit(outcome))
@@ -667,14 +679,25 @@ class TurnPolicy:
         kernel = self.kernel
         if kernel.ending is not None:
             return
-        if event.error is not None:
-            return kernel.invalidate("environment", "terminal_state_check_failed", event.error)
+        if self._count_read(event.error):
+            return
         if event.ended:
             return kernel.end("environment", asked_at, reason=event.reason)
         if self._awaited is not None and self._awaited[0] == event.request:
             then = self._awaited[1]
             self._awaited = None
             then()
+
+    def _count_read(self, error: str | None) -> bool:
+        """Count one state read; True when it is the failure that invalidates the run."""
+        if error is None:
+            self._failed_reads = 0
+            return False
+        self._failed_reads += 1
+        if self._failed_reads < READ_FAILURE_LIMIT:
+            return False
+        self.kernel.invalidate("environment", "terminal_state_check_failed", error)
+        return True
 
     # ---- moving the semantic clock ----------------------------------------------------------
 
