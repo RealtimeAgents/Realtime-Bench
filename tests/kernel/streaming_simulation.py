@@ -18,8 +18,9 @@ capture does not go past what waits to hold the lock alone while an action holds
 never sends one then. Commit runs on the shell's own thread and occupies it.
 
 Every command is checked as it runs (one generation in flight at most; nothing captured, pushed,
-started, asked or executed at or after the deadline or after the end), and every finished episode
-against what the policy keeps over a whole run (``check``).
+started, asked or executed at or after the deadline or after the end, but the read after an action
+that finished before the deadline), and every finished episode against what the policy keeps over
+a whole run (``check``).
 """
 
 from __future__ import annotations
@@ -203,6 +204,7 @@ class Simulation:
         self._calls: dict[int, tuple[Action, Call]] = {}  # id(action) -> (action, its call)
         self._releases: dict[str, float] = {}  # key -> its latest release time
         self._frozen_tick: float | None = None
+        self._read_owed = False  # an action finished before the deadline, and no read since
 
     # ---- driving ----------------------------------------------------------------------------
 
@@ -320,7 +322,9 @@ class Simulation:
         self.commands.append(command)
         if isinstance(command, IN_WORLD):
             assert not self._ended, f"{command!r} after the end"
-            assert self.ops < self.config.duration_s, (
+            # Past the deadline only the read after an action that finished before it (N31).
+            owed = isinstance(command, CheckEnd) and self._read_owed
+            assert owed or self.ops < self.config.duration_s, (
                 f"{command!r} at {self.ops}, past the deadline"
             )
         world, kernel = self.world, self.kernel
@@ -372,6 +376,7 @@ class Simulation:
 
         def read() -> Callable:
             self.checks.append(self.ops)
+            self._read_owed = False
             error = world.check_errors.get(index)
             ended = error is None and world.ends_at is not None and self.ops >= world.ends_at
             reason = world.end_reason if ended else None
@@ -525,6 +530,7 @@ class Simulation:
             result = {"action": action.action_type.value}
 
             def answer() -> None:
+                self._read_owed = self.ops < self.config.duration_s
                 self.kernel.post(
                     ActionExecuted(
                         decision,
@@ -591,7 +597,10 @@ class Simulation:
                     assert not (op[2] < read[3] and read[2] < op[3]), f"{op} overlaps {read}"
         # The state is read at most once a frame, but right after an action; an action applied
         # while the episode ran is followed by that read before another action executes
-        # (decision 31).
+        # (decision 31), also when the deadline comes while it waits (N31), unless the run turns
+        # invalid first.
+        end = self.entries("EpisodeEnded")[0].seq
+        handled = {entry.data.started_at: entry.seq for entry in self.entries("ActionExecuted")}
         executions = [op for op in gated if op[0] == "execute"]
         for before, after in itertools.pairwise(reads):
             frame = math.floor(after[2] * self.config.env_fps + 1e-9)
@@ -604,7 +613,12 @@ class Simulation:
             if data["status"] == "applied" and data["action"].action_type is not ActionType.WAIT
         }
         for execution, following in itertools.zip_longest(executions, executions[1:]):
-            if applied.get(execution[2], {}).get("terminal_after_action", True):
+            data = applied.get(execution[2])
+            if (
+                data is None
+                or data["terminal_after_action"]
+                and (handled[execution[2]] > end or self.termination.cause == "invalid")
+            ):
                 continue
             until = math.inf if following is None else following[4]
             assert any(execution[4] < read[4] < until for read in reads), (
@@ -697,7 +711,7 @@ class Simulation:
         # Past the deadline nothing is decided before the deadline ends the episode, but an
         # arrival's record, a stale result, an invalidation that comes first, and the outcome of
         # an action that finished before the deadline.
-        end, deadline = self.entries("EpisodeEnded")[0].seq, self.config.duration_s
+        deadline = self.config.duration_s
         for entry in records[: end - 1]:
             if entry.semantic < deadline or not isinstance(entry.data, dict):
                 continue

@@ -389,6 +389,7 @@ def test_the_random_scripts_reach_the_states_that_matter():
         "an action that ended the task": 12,
         "an action the end kept from executing": 30,
         "a capture during an action": 85,
+        "the deadline waits for the read after an action": 2,
     }
     assert {state: reached[state] >= floor for state, floor in floors.items()} == dict.fromkeys(
         floors, True
@@ -431,5 +432,8 @@ COVERAGE = {
         if execution[0] == "execute"
         for capture in sim.operations
         if capture[0] == "capture"
+    ),
+    "the deadline waits for the read after an action": lambda sim: any(
+        op[0] == "check" and op[2] >= sim.config.duration_s for op in sim.operations
     ),
 }

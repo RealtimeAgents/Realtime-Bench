@@ -24,8 +24,11 @@ one that takes none before the first reply, when there is none to give up, inval
 The state is read at most once an environment frame, at the frame's grid point, during replies too,
 and once more right after every action executed: that read settles the action, as the one that
 ended the task or not, before anything else runs, so nothing executes once the task has ended. A
-failed read counts as the frame's. Three failed reads in a row invalidate the run. Every outcome,
-the refusals included, is committed to the agent as its feedback.
+capture out when the action finishes holds that read up, but it stands for one right as the action
+finished: an end it finds is dated there, and the deadline waits for it (N31), as the turn-based
+clock reads right then. A failed read counts as the frame's. Three failed reads in a row
+invalidate the run. Every outcome, the refusals included, is committed to the agent as its
+feedback.
 
 Captures, reads and actions run on lanes of their own. A capture and an action may run at once,
 so that frames keep coming during a long action (phase2.md, native streaming); a read runs only
@@ -337,7 +340,7 @@ class StreamingPolicy:
 
     def on_end(self) -> None:
         """The reply in flight was given up and the action waiting will not execute; an action
-        whose read was out is the episode's last, and one executing settles when its answer
+        whose read was due is the episode's last, and one executing settles when its answer
         arrives."""
         if self.generation is not None:
             self.abandoned.add(self.generation)
@@ -370,8 +373,12 @@ class StreamingPolicy:
         the capture and the action out, and a capture and an action for the read out. A read
         that waits for a capture holds back what came due after it, so that reads on a fast grid
         and captures take turns; one that waits for an action does not, so that frames keep
-        coming during it. The action waiting may have gone meanwhile, withdrawn or given up."""
+        coming during it. The action waiting may have gone meanwhile, withdrawn or given up. Past
+        the deadline only the read after an action goes, which the end waits for."""
         if self._stopped():
+            waits = self._deadline_due and self.current is not None
+            if waits and not (self._asked or self._capturing):
+                self._ask()
             return
         for operation in list(self._line):
             if self._asked:
@@ -406,7 +413,7 @@ class StreamingPolicy:
                 "environment", "observation_stream_frozen", repr(event.fingerprint)
             )
         if self._stopped():
-            return
+            return self._proceed()
         if self._pushing is None:
             self._push(event)
         else:
@@ -591,14 +598,13 @@ class StreamingPolicy:
             self.current = None
             self._resolve(a, "rejected", event.rejection)
             return self._proceed()
-        if kernel.ending is not None or kernel.semantic >= self.config.duration_s:
-            # The end came while it ran, or comes now that the deadline has passed, and the
-            # snapshot waits for it: it is the last action.
+        if kernel.ending is not None:
+            # The end came while it ran, and the snapshot waited for it: it is the last action.
             self.current = None
-            self._resolve(a, "applied", terminal_after_action=True)
-            return self._apply_deadline()
+            return self._resolve(a, "applied", terminal_after_action=True)
         # An action can end the task at once: the read after it settles it before anything else
-        # starts, once a capture out is answered (decision 31).
+        # starts, once a capture out is answered (decision 31). Its answer was filed before the
+        # deadline, so the deadline waits for that read (N31).
         if "read" in self._line:
             self._line.remove("read")
         self._line.insert(0, "read")
@@ -728,16 +734,18 @@ class StreamingPolicy:
     def _apply_deadline(self) -> None:
         """End the episode once the deadline has passed. An answer filed before the deadline can
         be handled after it, behind a command the shell ran across it; the deadline then ends the
-        episode before the answer leads to anything. But a read asked before the deadline that
-        is still out decides first: its answer dates a task's end it finds by when it was asked,
-        before the deadline, as the turn-based kernel files such an answer (core.py ``step``).
-        The end waits for that answer, which the read's budget bounds."""
+        episode before the answer leads to anything, but for an action's. Two reads decide first,
+        and the end waits for them: one asked before the deadline that is still out, which dates
+        a task's end it finds by when it was asked, as the turn-based kernel files such an answer
+        (core.py ``step``); and the read after an action that finished before the deadline, due
+        behind a capture out or behind the action's answer, which dates it where the action
+        finished (N31). The read's budget bounds the wait, and the capture's."""
         kernel = self.kernel
         if kernel.ending is not None or self._deadline_due:
             return
         if kernel.semantic < self.config.duration_s:
             return
-        if self._asked:
+        if self._asked or (self.current is not None and not self._executing):
             self._deadline_due = True
         else:
             kernel.end("deadline", self.config.duration_s)
@@ -749,7 +757,8 @@ class StreamingPolicy:
 
     def _ask(self) -> None:
         """Read the state now: no capture or action is out, so the read samples the task now, the
-        time its end is dated by. It is this frame's read, and whichever came due meanwhile."""
+        time its end is dated by, but for the read after an action, which stands for one as the
+        action finished. It is this frame's read, and whichever came due meanwhile."""
         if "read" in self._line:
             self._line.remove("read")
         kernel = self.kernel
@@ -765,7 +774,8 @@ class StreamingPolicy:
         if self._count_read(event.error):
             return
         if event.ended:
-            return kernel.end("environment", asked_at, reason=event.reason)
+            at = asked_at if self.current is None else self.current.finished_at
+            return kernel.end("environment", at, reason=event.reason)
         if self._deadline_due:
             return kernel.end("deadline", self.config.duration_s)
         if kernel.ending is not None:
