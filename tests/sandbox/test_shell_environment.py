@@ -469,8 +469,8 @@ def test_a_wall_release_that_keeps_failing_tells_the_shell_from_the_timer_s_thre
 
 
 def test_the_shell_is_told_outside_the_wall_lock():
-    """The shell's thread takes its own lock and then the environment's (sandbox/actions.py
-    _wall_release_due): told under the environment's lock, the two threads could deadlock."""
+    """The callback is the shell's (sandbox/actions.py _wall_release_due): told outside the
+    environment's lock, it cannot hold up an action waiting for that lock."""
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
     env.g = _StuckGuest(clock)

@@ -1,9 +1,9 @@
 """A fake wall-clock environment that takes the place of GuestEnvironment under run_stream.
 
-run_stream (evaluation/runner.py:102-1180) needs capture, execute, tick_index, done and
-wait_until_tick, and reads the optional time_remaining and past_deadline hooks
-(runner.py:15-18). On the wall clock main() hands it a GuestEnvironment (runner.py:1678-1690,
-sandbox/actions.py). This class follows GuestEnvironment's wall-clock branch call for call on the
+run_stream (evaluation/runner.py) needs capture, execute, tick_index, done and
+wait_until_tick, and reads the optional time_remaining and past_deadline hooks (the
+runner's module docstring). On the wall clock main() hands it a GuestEnvironment
+(sandbox/actions.py). This class follows GuestEnvironment's wall-clock branch call for call on the
 episode's fake clock (tests/fake_clock.py), serves the frames of frames.py, and executes nothing:
 each call is appended to ``calls`` in order, tagged with the decision it belongs to. The kernel's
 shell asks check_end instead of done (evaluation/shell.py); what it calls only on the token clock
@@ -29,11 +29,11 @@ from .frames import FrameSource
 @dataclass(frozen=True)
 class Hang:
     """A request the model never answers. The stub holds it until the client closes the
-    connection, which the agent's abort does: runner.py:339-344 calls
+    connection, which the agent's abort does: runner.py _bounded_call calls
     harnesses/default/harness.py:1683-1686, whose runtime closes the driver
     (harnesses/default/context.py:662-687), and the driver closes its HTTP client
     (providers/litellm.py:1033-1044). ``seconds`` is the fake time the runner's bounded wait
-    (runner.py:337) lets pass before it gives up; the clock gets there by itself."""
+    (runner.py _bounded_call) lets pass before it gives up; the clock gets there by itself."""
 
     seconds: float
 
@@ -42,13 +42,13 @@ class FakeEnvironment:
     """GuestEnvironment's wall-clock behavior on a fake clock. ``fps`` is the environment's rate.
 
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
-    into "rejected" (runner.py:571-575). ``failures`` maps a decision to an environment fault,
-    which invalidates the run (runner.py:576-579). ``advance_failures`` maps a decision to a
+    into "rejected" (runner.py _apply). ``failures`` maps a decision to an environment fault,
+    which invalidates the run (runner.py _apply). ``advance_failures`` maps a decision to a
     failure of its post-action wait, which the environment latches and raises again. It stands in
     for GuestEnvironment's token-clock advance (actions.py _advance_clock); the wall-clock wait
     only polls (actions.py wait_until_tick). run_stream catches the exception and still finalizes
-    (runner.py:1246-1258). ``stop_check(env)`` stands for the task's episode_over
-    (runner.py:1773): a true value ends the episode, a string names the reason
+    (runner.py run_stream). ``stop_check(env)`` stands for the task's episode_over
+    (runner.py main): a true value ends the episode, a string names the reason
     (actions.py done). ``reply_latencies[i]`` is the fake time request i takes, and
     ``snapshot_seconds`` the time the evaluation snapshot's read of the task state takes.
     """
@@ -74,7 +74,7 @@ class FakeEnvironment:
         self.fps = fps
         self.max_minutes = max_minutes
         self.d = 1.0 / fps  # as GuestEnvironment's
-        # main() starts the wall clock and sets the deadline from it (runner.py:1670-1674);
+        # main() starts the wall clock and sets the deadline from it (evaluation/runner.py);
         # GuestEnvironment measures ticks from that start (t0).
         self.t0 = clock.time()
         self.deadline = self.t0 + max_minutes * 60
@@ -84,11 +84,11 @@ class FakeEnvironment:
         self.advance_failures = dict(advance_failures or {})
         self.stop_check = stop_check
         self.snapshot_seconds = snapshot_seconds
-        # The task hook run_stream reads through env.task (runner.py:778-788).
+        # The task hook run_stream reads through env.task (runner.py _finalize).
         self.task = types.SimpleNamespace(evaluation_snapshot=self._evaluation_snapshot)
-        self.frame_ages = []  # run_stream appends to it (runner.py:656-658)
+        self.frame_ages = []  # run_stream appends to it (runner.py _apply)
         self.calls: list[dict] = []
-        self.decision = -1  # run_stream captures once per decision (runner.py:846)
+        self.decision = -1  # run_stream captures once per decision (runner.py _decide)
         self.finalizing = False
         self.executions: list[dict] = []
         # What the kernel's shell reads and sets (evaluation/shell.py). On the wall clock an
