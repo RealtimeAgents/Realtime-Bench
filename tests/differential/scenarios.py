@@ -88,10 +88,13 @@ FRAME_RATES = [
         expect=frozenset({"K-a", "K-g"}),
         name="frame_rates-wall-60_1",
     ),
+    # The replay's 0.2 s for decision 1 is 0.21 s here: back at 11/30 s, the kernel's landing
+    # timer (N25) and its periodic read would fall a few ulps apart, and the fake clock's reading
+    # decides whether one step takes both (simulated.ties; R13).
     Script(
         "wall",
         0.9375,
-        _timed(["click", "type:Ada", "click", "click"], [0.1, 0.2, 0.05, 0.5]),
+        _timed(["click", "type:Ada", "click", "click"], [0.1, 0.21, 0.05, 0.5]),
         env_fps=30.0,
         input_fps=7.0,
         expect=frozenset({"K-a", "K-g", "X4"}),
@@ -141,7 +144,7 @@ RUNNER_LOOP = [
         SHORT_S,
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click"),),
         ends_at_s=2.25,
-        expect=frozenset({"KF5d", "X2"}),
+        expect=frozenset({"X2"}),
         name="runner-environment_done_during_reply",
     ),
     Script(
@@ -570,7 +573,7 @@ X12 = [
         _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
         env_fps=8.0,
         failing_reads_s=((1.2, 1.6),),
-        expect=frozenset({"U2", "X2"}),
+        expect=frozenset({"K-n", "U2", "X2"}),
         name="wall-third-failed-read-is-todays-first",
     ),
     # The periodic reads at 1.125, 1.25 and 1.375 s fail while decision 1 waits for its reply:
@@ -634,27 +637,26 @@ LATCHED = [
 # they fail until then (test_named.py, xfail strict), and pass once it is.
 PENDING: dict[str, str] = {}
 
-# KF5d: the task ends at a decision's landing, after its frame was read. The kernel lands the
-# action without a read before it; today's loop reads, finds the end and lands nothing.
+# The task ends at a decision's landing, after its frame was read. The kernel reads before
+# landing on the new reading (N26 (b)), finds the end and lands nothing, as today's loop does;
+# under decision 31's first reading it landed the action (KF5d).
 LANDED = [
-    # A 0.5 s wait lands at 0.5 s and runs out at 1 s, where its timer goes before the periodic
-    # read, and the read after it finds the end.
+    # A 0.5 s wait that would land at 0.5 s.
     Script(
         "wall",
         1.25,
         _timed(["wait:0.5"], [0.5]),
         ends_at_s=0.5,
-        expect=frozenset({"K-g", "KF5d", "X2"}),
+        expect=frozenset({"X2"}),
         name="wall-a-wait-lands-after-the-end",
     ),
-    # A refused click at 0.5 s is read after by nobody; the periodic read at 1 s finds the end
-    # while the decision paces.
+    # A click the guest would refuse at 0.5 s.
     Script(
         "wall",
         2.0,
         (Turn("click", attempts=(Attempt(0.5),), rejected="the guest refused the action"),),
         ends_at_s=0.25,
-        expect=frozenset({"K-g", "KF5d", "X2"}),
+        expect=frozenset({"X2"}),
         name="wall-a-refused-action-lands-after-the-end",
     ),
 ]
@@ -695,28 +697,28 @@ EARLY_END = [
 
 TIMED = [
     # At 1 fps each decision reads at k s, captures 0.01 s later and asks 0.02 s after that; its
-    # reply is back at k + 0.53 s. Today's loop reads again before landing and lands at k + 0.54
-    # s, the kernel at once (U13). The last reply misses the deadline (K-a).
+    # reply is back at k + 0.53 s, and both loops read again before landing it at k + 0.54 s. The
+    # last reply misses the deadline (K-a).
     Script(
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, LATE_REPLY_S]),
         check_s=0.01,
         capture_s=0.02,
-        expect=frozenset({"K-a", "K-g", "U13", "X4"}),
+        expect=frozenset({"K-a", "K-g"}),
         name="wall-reads-and-captures-take-time",
     ),
     # At 4 fps a read takes 0.05 s. Decision 0's reply is back at 0.52 s, during the periodic read
-    # asked at 0.5 s: the kernel takes it at 0.55 s, when that read has returned (K-b), today's
-    # loop at once and lands it after its own read, at 0.57 s (U13). Decision 1's is back at
-    # 1.65 s, between reads.
+    # asked at 0.5 s: the kernel takes it at 0.55 s, when that read has returned, and reads again
+    # before landing it at 0.6 s (K-b); today's loop takes it at once and lands it at 0.57 s.
+    # Decision 1's is back at 1.65 s, between reads.
     Script(
         "wall",
         2.0,
         _timed(["click", "click"], [0.47, 0.6]),
         env_fps=4.0,
         check_s=0.05,
-        expect=frozenset({"K-b", "U13", "X2", "X4"}),
+        expect=frozenset({"K-b", "X2", "X4"}),
         name="wall-a-reply-back-during-a-periodic-read",
     ),
     # The deadline at 1.775 s falls during the periodic read asked at 1.75 s, which returns at
@@ -728,7 +730,7 @@ TIMED = [
         _timed(["click", "click"], [0.5, 0.71]),
         env_fps=4.0,
         check_s=0.05,
-        expect=frozenset({"D47", "K-g", "U13", "X4"}),
+        expect=frozenset({"D47", "K-g", "X4"}),
         name="wall-the-deadline-falls-during-a-read",
     ),
     # wall-third-failed-read-is-todays-first with reads of 0.01 s: the third failed read, the one
@@ -740,18 +742,17 @@ TIMED = [
         env_fps=8.0,
         check_s=0.01,
         failing_reads_s=((1.2, 1.6),),
-        expect=frozenset({"K-g", "U13", "U14", "U2", "X2", "X4"}),
+        expect=frozenset({"K-g", "K-n", "U14", "U2", "X2"}),
         name="wall-a-failed-read-takes-time",
     ),
-    # wall-hold-between-frames with reads and captures that take time: the hold's lease runs
-    # from the kernel's landing, a read's time before today's (U13).
+    # wall-hold-between-frames with reads and captures that take time.
     Script(
         "wall",
         2.5,
         _timed(["hold:shift:0.5", "click", "click"], [0.25, 0.25, 0.25]),
         check_s=0.01,
         capture_s=0.02,
-        expect=frozenset({"U13", "X2", "X4"}),
+        expect=frozenset({"X2"}),
         name="wall-a-hold-and-reads-that-take-time",
     ),
     # wall-ends-during-a-reply with reads and captures that take time: the periodic read asked at
@@ -764,7 +765,7 @@ TIMED = [
         ends_at_s=2.25,
         check_s=0.01,
         capture_s=0.02,
-        expect=frozenset({"K-b", "K-g", "U10", "U13", "X4"}),
+        expect=frozenset({"K-b", "K-g", "U10"}),
         name="wall-ends-during-a-reply-and-reads-take-time",
     ),
 ]
