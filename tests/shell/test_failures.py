@@ -279,6 +279,7 @@ def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
     assert "RuntimeError: advance failed" in record["execution_result"]["error"]
     assert "ActionApplied" not in episode.trace.events()
     assert getattr(episode.env, "_loop_error", None) is None
+    assert not any("decision loop raised" in line for line in episode.logs)
 
 
 def test_the_first_failure_is_the_record_though_the_environment_latched_another_after_it():
@@ -320,6 +321,7 @@ def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
     }
     assert "RuntimeError: advance failed" in episode.trace.payloads("RunInvalidated")[0]["detail"]
     assert "RuntimeError: advance failed" in episode.env._loop_error
+    assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
 @pytest.mark.parametrize(
@@ -345,6 +347,7 @@ def test_a_token_release_or_render_that_raises_invalidates_the_run(world, action
     _finalized(episode, at)
     assert (episode.invalid["category"], episode.invalid["reason"]) == ("environment", reason)
     assert "RuntimeError" in episode.env._loop_error
+    assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
 def test_a_failed_wall_key_release_invalidates_the_run_when_it_happens():
