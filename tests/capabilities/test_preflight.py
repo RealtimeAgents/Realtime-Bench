@@ -490,10 +490,20 @@ def policy_check(config, **values):
                 "observation is for choice APIs"
             ),
         ),
+        (
+            "claude-opus-5",
+            {"tool_call_replay": "tool_transcript"},
+            "The openrouter API cannot replay past tool calls as tool_transcript",
+        ),
+        (
+            "gpt-realtime-2",
+            {"tool_call_replay": "native_tools"},
+            "The openai_realtime API cannot replay past tool calls as native_tools",
+        ),
     ],
     ids=["live-feedback", "digest-feedback", "ledger-role", "reasoning-unsupported",
          "history-form", "screenshot-input", "text-input", "choice-observation",
-         "chat-observation"],
+         "chat-observation", "tool-transcript", "native-tools"],
 )
 def test_context_policy_item(key, values, message):
     fails(policy_check(preset(key), **values), message)
