@@ -206,6 +206,20 @@ def test_loopback_reply_is_never_overtaken_by_a_later_deadline():
     assert clock.monotonic() == 2.25
 
 
+def test_a_loop_that_is_not_running_does_not_keep_time_still():
+    """A loop made and not run yet, or stopped and never closed, can do nothing by itself."""
+    clock = FakeClock()
+    with clock.participant():
+        clock.new_event_loop()
+        stopped = clock.new_event_loop()
+        thread = threading.Thread(target=stopped.run_forever, daemon=True)
+        thread.start()
+        stopped.call_soon_threadsafe(stopped.stop)
+        thread.join()
+        clock.sleep(1.0)
+        assert clock.monotonic() == 1.0
+
+
 def test_a_wait_nothing_can_end_raises():
     clock = FakeClock()
     with clock.participant(), pytest.raises(FakeClockStalled):
