@@ -250,10 +250,13 @@ class RealtimeRuntime:
         with self._state_lock:
             return cancel.is_set() or self._state == RuntimeState.CLOSED
 
-    def record_execution_feedback(self, feedback: str) -> None:
-        if self._turns:
-            self._turns[-1].execution_feedback = feedback
-            self._turns[-1].feedback_wall_ns = self.clock.time_ns()
+    def record_execution_feedback(self, feedback: str, decision: int | None = None) -> None:
+        """Attach an action's execution feedback to the turn of its decision; with no decision,
+        to the newest turn, as the legacy loop reports."""
+        turns = [turn for turn in self._turns if decision is None or turn.decision == decision]
+        if turns:
+            turns[-1].execution_feedback = feedback
+            turns[-1].feedback_wall_ns = self.clock.time_ns()
 
     def accept_turn(self, turn: CanonicalTurn) -> None:
         """Write an accepted generation's turn into the retained history. The write runs on the

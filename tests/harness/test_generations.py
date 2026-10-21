@@ -9,14 +9,26 @@ import json
 import threading
 
 import realtime_framework.providers.registry as catalog
+from realtime_framework.evaluation.kernel.events import Outcome
+from realtime_framework.harnesses.default.prompts import ACTION_RESULT_NOTES
 from tests.replay import scenario_decisions
 from tests.replay.build import build_episode
 from tests.replay.frames import ReplayTask
-from tests.replay.scenario import CLICK_NAME, LONG_SCENARIO, TASK_INSTRUCTION, replies
+from tests.replay.scenario import (
+    CLICK_NAME,
+    LONG_SCENARIO,
+    OUTSIDE_PAGE,
+    TASK_INSTRUCTION,
+    replies,
+)
 from tests.replay.stub import ChatCompletionsStub
 from tests.replay.stub_decisions import DecisionsStub
 from tests.replay.test_chat_completions import MODEL_KEY as CHAT_MODEL_KEY
 from tests.replay.test_chat_completions import chat_completions_config
+from tests.replay.test_openai_realtime import MODEL_KEY as REALTIME_MODEL_KEY
+from tests.replay.test_openai_realtime import realtime_config
+from tests.replay.ws_openai_realtime import RealtimeStub
+from tests.replay.ws_openai_realtime import replies as realtime_replies
 
 WAIT_S = 10.0  # bound on every cross-thread wait; none is reached when the code behaves
 LUNA = "gpt-6-luna-decisions"  # configs/models/gpt-6-luna-decisions.yaml; upstream "openai"
@@ -46,6 +58,25 @@ def _generate(episode, generation: int, decision: int):
     observation = episode.frames.capture(decision)
     budget = episode.budget(observation.tick_number)
     return episode.agent.generate(generation, decision, observation, budget)
+
+
+def _outcome(decision: int, status: str, detail: str = "", **fields) -> Outcome:
+    """The kernel's Commit for ``decision``; the clock fields are not part of the feedback."""
+    return Outcome(
+        decision=decision,
+        status=status,
+        detail=detail,
+        terminal_after_action=False,
+        action_clock_position=float(decision),
+        next_observation_tick=decision + 1,
+        dropped_intermediate_frames=0,
+        post_action_rendered=False,
+        frame_age_s=0.0,
+        token_delay_frames=None,
+        action_output_tokens=None,
+        post_horizon_output_tokens=0,
+        **fields,
+    )
 
 
 def _in_worker(target):
@@ -165,6 +196,79 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
     assert [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")] == [
         "superseded_by_timeout"
     ]
+
+
+def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
+    """AcceptResult writes decision 0, then Commit reports it: its own action record and turn
+    take the outcome, and the next request carries the feedback after decision 0's reply."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            agent.commit(_outcome(0, "rejected", OUTSIDE_PAGE))
+            _generate(episode, 2, 1)
+        finally:
+            episode.finish()
+    record = agent.action_history[0]
+    assert (record["applied"], record["result"]) == (False, "rejected")
+    assert record["executed"] == "wait()" and record["requested"].startswith("click ")
+    feedback = (
+        f"EXECUTION RESULT: actual=wait(); requested={record['requested']}; status=rejected."
+        f" Detail: {OUTSIDE_PAGE}"
+    )
+    assert agent._runtime.turns[0].execution_feedback == feedback
+    messages = json.loads(stub.requests[1].body)["messages"]
+    replied = [m["content"] for m in messages].index(CLICK_NAME)
+    assert messages[replied + 1] == {"role": "user", "content": feedback}
+
+
+def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
+    """OpenAI Realtime, whose feedback opens the next frame. Decision 1's move runs over the
+    per-move cap: the kernel aborts and discards its generation, and reports skipped_timeout for
+    a decision of which nothing was accepted. Decision 0's action record and turn keep their
+    own outcome. The next frame opens with decision 0's feedback, which only the discarded frame
+    carried, then the note that decision 1's move was skipped."""
+    steps = [LONG_SCENARIO[0], LONG_SCENARIO[2]]
+    with RealtimeStub(realtime_replies(steps)) as stub:
+        episode = build_episode(
+            realtime_config(stub.base_url),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=REALTIME_MODEL_KEY,
+        )
+        agent = episode.agent
+        try:
+            stub.wait_for_session_update()
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            agent.commit(_outcome(0, "applied"))
+            record = dict(agent.action_history[0])
+            feedback = agent._runtime.turns[0].execution_feedback
+            agent.abort(2)
+            skipped = _generate(episode, 2, 1)
+            agent.commit(_outcome(1, "skipped_timeout"))
+            agent.discard(2)
+            _generate(episode, 3, 2)
+            agent.accept(3)
+        finally:
+            episode.finish()
+        stub.finish()
+    assert skipped.cancelled
+    assert agent.action_history[0] == record and record["result"] == "applied"
+    assert [r["tick"] for r in agent.action_history] == [1, 2]
+    first, last = agent._runtime.turns
+    assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
+    note = (
+        "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
+        + ACTION_RESULT_NOTES["skipped_timeout"]
+    )
+    prefix = f"{feedback}\n{note}"
+    assert last.observation.feedback_prefix == prefix
+    frames = [text for _, role, text, _ in stub.views[-1] if role == "user" and text]
+    assert frames[-1].startswith(prefix)
 
 
 def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch):

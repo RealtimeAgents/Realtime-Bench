@@ -130,13 +130,6 @@ class VisionAgentBase(StreamingAgent):
     def token_usage(self) -> dict:
         return dict(self._tok)
 
-    def commit_action(self, status: str, detail: str = ""):
-        if not self.action_history:
-            return
-        last = self.action_history[-1]
-        last["applied"] = status == "applied"
-        last["result"] = status
-
     def _system_instruction_text(self, frame_reference_rules: str | None) -> str:
         return gui_system_prompt(
             self.task_instruction,
@@ -1166,6 +1159,8 @@ class DefaultHarness(VisionAgentBase):
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
         self._pending_feedback = ""
+        # Each accepted decision's action record, by its index in action_history.
+        self._decision_actions: dict[int, int] = {}
         self.frames = FrameTable()
         self.interaction_profile = INTERACTION_PROFILES[
             self._context_policy.prompts[self.task_category]  # context policy item 11
@@ -1379,6 +1374,7 @@ class DefaultHarness(VisionAgentBase):
             self._pending_feedback = ""
         self.tick_count += 1
         self._runtime.accept_turn(result.turn)
+        self._decision_actions[generation.decision] = len(self.action_history)
         self.action_history.append({"tick": self.tick_count, **staged.record})
         self._accumulate_usage(result.output.usage)
         self._end_tool_calls(
@@ -1886,15 +1882,38 @@ class DefaultHarness(VisionAgentBase):
         return result, runtime_result.cancelled
 
     def commit_action(self, status: str, detail: str = ""):
-        super().commit_action(status, detail)
-        last = self.action_history[-1] if self.action_history else {}
+        """The legacy loop's report, on the newest action record and turn."""
+        newest = self.action_history[-1] if self.action_history else None
+        feedback = self._report(newest, status, detail)
+        self._pending_feedback = feedback
+        self._runtime.record_execution_feedback(feedback)
+
+    def commit(self, outcome):
+        """Commit: report decision ``outcome.decision`` on its own action record and turn. A
+        decision whose result was never accepted, a move over the per-move cap, has neither: no
+        earlier record changes, and its feedback only opens the next frame, after any feedback
+        the discarded generation's frame carried."""
+        index = self._decision_actions.get(outcome.decision)
+        entry = None if index is None else self.action_history[index]
+        feedback = self._report(entry, outcome.status, outcome.detail)
+        if entry is None:
+            self._pending_feedback = "\n".join(filter(None, (self._pending_feedback, feedback)))
+        else:
+            self._pending_feedback = feedback
+            self._runtime.record_execution_feedback(feedback, outcome.decision)
+
+    def _report(self, entry: dict | None, status: str, detail: str) -> str:
+        """Mark an action record with its outcome, and return the outcome's feedback."""
+        last = entry or {}
         parse_failed = bool(last.get("parse_failed"))
         requested = "invalid_action" if parse_failed else (last.get("executed") or "none")
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
-        if last:
-            last["requested"] = requested
-            last["executed"] = executed
+        if entry is not None:
+            entry["applied"] = status == "applied"
+            entry["result"] = status
+            entry["requested"] = requested
+            entry["executed"] = executed
         feedback = f"EXECUTION RESULT: actual={executed}; requested={requested}; status={status}."
         if detail:
             feedback += f" Detail: {detail}"
@@ -1904,8 +1923,7 @@ class DefaultHarness(VisionAgentBase):
         )
         if note:
             feedback += " " + note
-        self._pending_feedback = feedback
-        self._runtime.record_execution_feedback(feedback)
+        return feedback
 
     def _attempt_scope(self, generation, request, attempt):
         number = {} if generation.number is None else {"generation": generation.number}
