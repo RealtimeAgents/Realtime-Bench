@@ -26,9 +26,12 @@ Cassettes come two ways (stream-plan 4.19). A hand-written script runs on the fa
 our side's times are as exact as the script's, so it gives every client record its time. A
 recording converted from a real run by from_trace compares the order only: the client times of a
 real run include the time our side took to compute, which passes for nothing on the fake clock.
+So when the client does what such a record says before the server messages recorded ahead of it
+are due, those are released then: the client went ahead, it did not send early.
 
 The first difference is a problem, and after it nothing more is released:
-- a message sent early: the next record is a server message that is not due yet;
+- a message sent early: the next record is a server message that is not due yet, and the client
+  record after it has a time;
 - a message that differs from the recording, or one beyond it, or one sent at another time;
 - a connection the recording does not have, or a close where it has more records;
 - at the end, records left unused.
@@ -176,6 +179,8 @@ class Cursor:
             self._pending.setdefault(record["conn"], deque()).append((index, record))
         self._normalize = normalizer
         self._opened = 0
+        # Server records released ahead of their time, which ``release`` hands out first.
+        self._ahead: dict[int, deque] = {}
         self.problems: list[str] = []
 
     @property
@@ -197,9 +202,12 @@ class Cursor:
 
     def receive(self, conn: int, message: dict, now: float) -> None:
         """A message the client sent. The server releases what is due before it reads one, so a
-        server record still next was not due: the client sent this one early."""
+        server record still next was not due: the client sent this one early, unless the record
+        it is matched against has no time."""
         actual = self._normalize(message)
         head = self._head(conn)
+        if head is not None and _server_side(head[1]) and self._go_ahead(conn):
+            head = self._head(conn)
         if head is not None and _server_side(head[1]):
             index, record = head
             self._problem(
@@ -249,8 +257,10 @@ class Cursor:
     def release(self, conn: int, now: float) -> list[dict]:
         """The server records due on ``conn``, in order: messages with this session's ids, and a
         close as recorded."""
-        released = []
-        while not self.failed:
+        if self.failed:
+            return []
+        released = list(self._ahead.pop(conn, ()))
+        while True:
             head = self._head(conn)
             if head is None or not _server_side(head[1]):
                 break
@@ -258,9 +268,7 @@ class Cursor:
             if record["at"] is not None and record["at"] > now + _SLACK_S:
                 break
             self._pending[conn].popleft()
-            if record["dir"] == "s2c":
-                record = {**record, "msg": self._restore(record["msg"])}
-            released.append(record)
+            released.append(self._restored(record))
         return released
 
     def next_due(self, conn: int) -> float | None:
@@ -303,6 +311,24 @@ class Cursor:
                 f"conn {conn} record {index}: {_label(record['dir'], record['msg'])} at"
                 f" t={now:g}, recorded at t={at:g}"
             )
+
+    def _go_ahead(self, conn: int) -> bool:
+        """Release the server records ahead of the next client record, when that has no time: the
+        client went ahead of them in an order-only recording. False when it has one."""
+        pending = self._pending[conn]
+        following = next((record for _, record in pending if not _server_side(record)), None)
+        if following is None or following["at"] is not None:
+            return False
+        ahead = self._ahead.setdefault(conn, deque())
+        while _server_side(pending[0][1]):
+            ahead.append(self._restored(pending.popleft()[1]))
+        return True
+
+    def _restored(self, record: dict) -> dict:
+        """A server record as it is sent: a message with this session's ids."""
+        if record["dir"] != "s2c":
+            return record
+        return {**record, "msg": self._restore(record["msg"])}
 
     def _problem(self, problem: str) -> None:
         if not self.failed:
