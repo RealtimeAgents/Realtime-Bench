@@ -440,7 +440,9 @@ class _Shell:
                 try:
                     rendered = self._env(self.env.render_current_frame)
                 except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
-                    self.post(FrameRendered(error=traceback.format_exc()))
+                    failure = traceback.format_exc()
+                    self._escaped(failure)
+                    self.post(FrameRendered(error=failure))
                 else:
                     self.post(FrameRendered(rendered is not None))
             case Commit(outcome=outcome):
@@ -461,9 +463,14 @@ class _Shell:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
         finalizes; the first traceback is the summary's error (runner.py main)."""
         self.log(f"[default] decision loop raised:\n{failure}")
+        self._escaped(failure)
+        self.post(Invalidated("runner", "run_exception", failure))
+
+    def _escaped(self, failure: str) -> None:
+        """An exception that escaped the legacy loop: the first traceback is the summary's error
+        (runner.py run_stream, main)."""
         if self._loop_error is None:
             self._loop_error = self.env._loop_error = failure
-        self.post(Invalidated("runner", "run_exception", failure))
 
     def _unanswered(self, command, failure: str):
         """The answer to a command whose run raised, so that the kernel, which waits for it, can
@@ -493,11 +500,16 @@ class _Shell:
         return result
 
     def _failure(self, operation, *args) -> str | None:
-        """Run one synchronous environment operation; its error, None when it returned."""
+        """Run one synchronous environment operation; its error, None when it returned. The
+        legacy loop let it escape, except a token wait's own step, which ran inside execute()
+        and failed the action (sandbox/actions.py GuestEnvironment.execute)."""
         try:
             self._env(operation, *args)
         except Exception:  # noqa: BLE001 - the command's answer carries it
-            return traceback.format_exc()
+            failure = traceback.format_exc()
+            if self.policy.phase != "wait":
+                self._escaped(failure)
+            return failure
         return None
 
     def _check_end(self, request: int) -> None:

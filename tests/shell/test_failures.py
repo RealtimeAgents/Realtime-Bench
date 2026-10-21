@@ -294,8 +294,8 @@ def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
 def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
     """The environment latches clock_advance_failed and raises while the clock moves to the
     action time. The step is answered with its error and the kernel gives it the environment's
-    reason (kernel/turns.py _step_failed); the record stays the environment's. Under the runner
-    the exception escaped the loop and became the summary's error; here nothing escapes."""
+    reason (kernel/turns.py _step_failed); the record stays the environment's. The traceback is
+    the summary's error, as under the runner, whose loop the exception escaped."""
     world = World(advance_errors={1: "advance failed"})
     episode = run("token", 3.0, [Reply(0.0, CLICK, output_tokens=100)], world, tokens_per_frame=100)
     _finalized(episode, 0.0)
@@ -305,7 +305,32 @@ def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
         "detail": "advance failed",
     }
     assert "RuntimeError: advance failed" in episode.trace.payloads("RunInvalidated")[0]["detail"]
-    assert getattr(episode.env, "_loop_error", None) is None
+    assert "RuntimeError: advance failed" in episode.env._loop_error
+
+
+@pytest.mark.parametrize(
+    ("world", "action", "at", "reason"),
+    [
+        (
+            World(release_errors={1: "keyup failed"}),
+            Action.hold_key("a", 0.5),
+            1.5,
+            "clock_key_release_failed",
+        ),
+        (World(render_errors={1: "render failed"}), CLICK, 1.0, "frame_render_failed"),
+    ],
+    ids=["release", "render"],
+)
+def test_a_token_release_or_render_that_raises_invalidates_the_run(world, action, at, reason):
+    """Each action lands at tick 1. The hold's lease ends at tick 1.5 on the way to the next
+    frame, and its release raises; or the frame the click committed fails to render. The kernel
+    gives the step the environment's reason (kernel/turns.py _released, _rendered). The
+    traceback is the summary's error, as under the runner, whose loop the exception escaped."""
+    replies = [Reply(0.0, action, output_tokens=100)] * 2
+    episode = run("token", 3.0, replies, world, tokens_per_frame=100)
+    _finalized(episode, at)
+    assert (episode.invalid["category"], episode.invalid["reason"]) == ("environment", reason)
+    assert "RuntimeError" in episode.env._loop_error
 
 
 def test_a_failed_wall_key_release_invalidates_the_run_when_it_happens():
