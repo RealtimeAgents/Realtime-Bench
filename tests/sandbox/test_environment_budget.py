@@ -135,13 +135,13 @@ def _invalid(env, reason: str, operation: str, budget: float = BUDGET) -> None:
 
 def test_an_action_budget_extends_for_text_input_and_holds_as_the_guest_request_does():
     budget = actions.ENVIRONMENT_BUDGET.action_s
-    assert budget == 10.0
-    assert action_timeout(CLICK, budget) == 10.0
+    assert budget == 20.0
+    assert action_timeout(CLICK, budget) == 20.0
     assert action_timeout(Action(ActionType.TYPE, {"text": "Ada"}), budget) == 120.0
-    assert action_timeout(Action(ActionType.HOLD_KEY, {"key": "a"}), budget) == 10.0
-    assert action_timeout(Action(ActionType.HOLD_KEY, {"key": "a", "duration": 8}), budget) == 13.0
-    drag = {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 10}
-    assert action_timeout(Action(ActionType.DRAG, drag), budget) == 15.0
+    assert action_timeout(Action(ActionType.HOLD_KEY, {"key": "a"}), budget) == 20.0
+    assert action_timeout(Action(ActionType.HOLD_KEY, {"key": "a", "duration": 18}), budget) == 23.0
+    drag = {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 20}
+    assert action_timeout(Action(ActionType.DRAG, drag), budget) == 25.0
 
 
 def test_a_run_within_its_budgets_reads_acts_captures_and_freezes(game, monkeypatch):
@@ -329,17 +329,29 @@ def _timed(
 
 
 def test_an_action_and_its_page_barrier_share_one_budget():
-    # The guest answers within the budget and the page barrier never does. Without the shared
-    # budget the barrier's own 8 s CDP timeout would apply.
+    # The guest answers a 12 s drag within the action's 20 s and its own 17 s; the page barrier
+    # never does. Without the shared budget the barrier's own 8 s CDP timeout would apply.
     clock = FakeClock()
-    budget = actions.ENVIRONMENT_BUDGET.action_s
-    guest = _ClockGuest(clock, budget - 5.0)
+    guest = _ClockGuest(clock, 15.0)
     env, _ = _timed(clock, guest, _BarrierTask(clock, 3600.0))
+    drag = Action(ActionType.DRAG, {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 12})
     with clock.participant():
-        assert env.execute(CLICK) == "failed"
-        assert clock.monotonic() == budget
-    _invalid(env, "action_execution_failed", "click action", budget)
-    assert guest.actions == [ActionType.CLICK]
+        assert env.execute(drag) == "failed"
+        assert clock.monotonic() == 20.0
+    _invalid(env, "action_execution_failed", "drag action", 20.0)
+    assert guest.actions == [ActionType.DRAG]
+
+
+def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_10_s():
+    """Each stays within its own timeout (10 s, 8 s); an action has 20 s for both, where it had
+    10 s at first."""
+    clock = FakeClock()
+    env, _ = _timed(clock, _ClockGuest(clock, 5.3), _BarrierTask(clock, 5.0))
+    drag = Action(ActionType.DRAG, {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 5})
+    with clock.participant():
+        assert env.execute(drag) == "applied"
+        assert clock.monotonic() == pytest.approx(10.3)
+    assert getattr(env, "_invalid_run", None) is None
 
 
 def _slow_key_event(clock: FakeClock, task: ClockTask, index: int, seconds: float) -> None:
