@@ -624,3 +624,24 @@ def test_a_failed_reply_the_kernel_accepts_adds_nothing(monkeypatch, clock):
     assert "d3.output" not in agent.driver.calls[-1][2]
     assert agent.token_usage["responses"] == 0
     agent.close()
+
+
+def test_a_reply_aborted_while_a_push_reopens_the_session_is_never_asked_for(monkeypatch, clock):
+    """A push reopens the session an abort closed; the next reply waits for it, and is aborted
+    meanwhile. Once the session is open the reply is not asked for, as a turn is not once
+    abandoned (context.py _run_turn): it would run on the session beside the next one."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_s = 2.0
+    pushed, _ = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    clock.sleep(0.5)
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    replied, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.abort(7)
+    assert clock.wait(replied, 5.0) and clock.wait(pushed, 5.0)
+    assert out["value"].cancelled
+    assert not [call for call in agent.driver.calls if call[0] == "reply"]
+    agent.close()

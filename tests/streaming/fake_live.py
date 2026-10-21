@@ -124,11 +124,13 @@ class FakeLiveDriver(SessionLifecycle):
         self.replies: list[Reply] = []
         self.renewal_required = False
         self.open = False
+        self.connect_s = 0.0  # how long opening a connection takes
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
 
     async def _connect(self, request) -> None:
+        await asyncio.sleep(self.connect_s)
         self._open()
         self.calls.append(("connect", _ids(request.history)))
 
