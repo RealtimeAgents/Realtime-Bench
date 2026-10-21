@@ -9,8 +9,9 @@ as in the production shells. What other threads produce (a generation's result, 
 the wall key-release timer) is posted when the simulated time reaches it.
 
 The world plays GuestEnvironment's part only as far as the kernel sees it: a tap holds the key
-1/60 s per repeat, advancing the token tick in steps of at most one tick (sandbox/actions.py:
-538-548, 240-280), and a tick within 1e-9 of an integer snaps to it (sandbox/actions.py:275-277).
+1/60 s per repeat, advancing the token tick in steps of at most one tick with an end check after
+each (sandbox/actions.py:538-548, 240-280), and a tick within 1e-9 of an integer snaps to it
+(sandbox/actions.py:275-277).
 """
 
 from __future__ import annotations
@@ -100,6 +101,7 @@ class World:
     rejections: dict[int, str] = field(default_factory=dict)  # decision -> the guest's refusal
     execute_errors: dict[int, str] = field(default_factory=dict)  # decision -> environment fault
     check_errors: dict[int, str] = field(default_factory=dict)  # end check (1-based) -> fault
+    tap_check_errors: dict[int, str] = field(default_factory=dict)  # ... inside a key tap
     advance_errors: dict[int, str] = field(default_factory=dict)  # AdvanceClock (1-based) -> fault
     commit_errors: dict[int, str] = field(default_factory=dict)  # decision -> fault
     snapshot_error: str | None = None
@@ -134,6 +136,7 @@ class Simulation:
         self.records: list[Entry] = []
         self.commands: list = []
         self.checks: list[tuple[float, float]] = []  # (semantic, ops) at every end check
+        self.tap_checks: list[float] = []  # the tick at every end check inside a key tap
         self.captures: list[tuple[float, float]] = []  # (tick, timestamp) of every frame
         self.executed: list[tuple[int, float, Action]] = []  # (decision, semantic, action)
         self.advances: list[float] = []  # every AdvanceClock step
@@ -328,10 +331,11 @@ class Simulation:
         self.executed.append((decision, self.semantic(), action))
         error, rejection = world.execute_errors.get(decision), world.rejections.get(decision)
         held: tuple[str, ...] = ()
+        end_checks: list[str | None] = []
         if error is None and rejection is None:
             if self.token and action.action_type is ActionType.KEY:
                 for _ in range(int(action.parameters.get("repeat", 1))):
-                    self._tap()
+                    end_checks += self._tap()
             duration = float(action.parameters.get("duration", 1.0))
             if self.token and action.action_type is ActionType.HOLD_KEY and duration > 1e-9:
                 held = key_identities(action)
@@ -350,15 +354,25 @@ class Simulation:
                 held_keys=held,
                 rejection=rejection,
                 error=error,
+                end_checks=tuple(end_checks),
             )
         )
 
-    def _tap(self) -> None:
-        """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, one tick at most per step
-        (sandbox/actions.py:137, 245-246, 548)."""
+    def _tap(self) -> list[str | None]:
+        """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, one tick at most per step,
+        and the end is checked after each step, within the action's time; a check that sees the
+        end stops the tap (sandbox/actions.py:137, 245-280, 548). A failed check does not: its
+        error goes to the kernel in ActionExecuted.end_checks."""
+        world, reads = self.world, []
         target = self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps)
         while self.tick + 1e-9 < target:
             self.tick = _snap(self.tick + min(1.0, target - self.tick))
+            self.tap_checks.append(self.tick)
+            error = world.tap_check_errors.get(len(self.tap_checks))
+            reads.append(error)
+            if error is None and world.ends_at is not None and self.tick >= world.ends_at:
+                break
+        return reads
 
     def _wall_release(self, key: str, at: float) -> None:
         if self._releases.get(key) != at:

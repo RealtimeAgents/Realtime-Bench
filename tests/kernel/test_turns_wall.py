@@ -614,22 +614,32 @@ def test_the_think_budget_skips_the_decision_then_ends_after_its_commit():
 # ---- invalidations ----------------------------------------------------------------------------
 
 
-def test_a_failed_periodic_check_invalidates_the_run_during_a_generation():
-    world = World(replies=[Reply(5.0, CLICK)], check_errors={3: "state read failed"})
+def _failing(*checks: int) -> dict[int, str]:
+    """End checks (1-based) whose state read fails, each with its own error."""
+    return {check: f"state read {check} failed" for check in checks}
+
+
+def _read_errors(sim: Simulation) -> list:
+    return [event.error for event in _data(sim, "EndChecked")]
+
+
+def test_three_failed_periodic_checks_in_a_row_invalidate_the_run_during_a_generation():
+    # The checks at 1, 2 and 3 s fail; the third invalidates the run with its own error.
+    world = World(replies=[Reply(5.0, CLICK)], check_errors=_failing(2, 3, 4))
     sim = _episode(_wall(10.0), world)
-    invalid = Invalidated("environment", "terminal_state_check_failed", "state read failed")
-    assert _asked(sim) == [0.0, 1.0, 2.0]
+    invalid = Invalidated("environment", "terminal_state_check_failed", "state read 4 failed")
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0]
     assert _data(sim, "RunInvalidated") == [
         {
             "category": "environment",
             "reason": "terminal_state_check_failed",
-            "detail": "state read failed",
+            "detail": "state read 4 failed",
         }
     ]
-    assert _data(sim, "EpisodeEnded") == [{"cause": "invalid", "reason": None, "at": 2.0}]
+    assert _data(sim, "EpisodeEnded") == [{"cause": "invalid", "reason": None, "at": 3.0}]
     assert _data(sim, "GenerationAbandoned") == [{"generation": 1, "reason": "invalid"}]
     assert sim.outcomes == []
-    assert _ended(sim) == ("invalid_run", "invalid", 2.0, 2.0)
+    assert _ended(sim) == ("invalid_run", "invalid", 3.0, 3.0)
     assert sim.termination.invalid == invalid
     _assert_nothing_after_the_end(sim)
 
@@ -637,24 +647,42 @@ def test_a_failed_periodic_check_invalidates_the_run_during_a_generation():
 @pytest.mark.parametrize(
     ("failing", "asked", "status", "terminal", "executed"),
     [
-        (4, [0.0, 1.0, 2.0, 2.25], "invalid_run", False, []),
-        (5, [0.0, 1.0, 2.0, 2.25, 2.25], "applied", True, [(0, 2.25, CLICK)]),
+        ((2, 3, 4), [0.0, 1.0, 2.0, 2.25], "invalid_run", False, []),
+        ((3, 4, 5), [0.0, 1.0, 2.0, 2.25, 2.25], "applied", True, [(0, 2.25, CLICK)]),
     ],
     ids=["before-execution", "after-execution"],
 )
-def test_a_failed_check_around_execution_settles_the_decision(
+def test_a_third_failed_check_in_a_row_around_execution_settles_the_decision(
     failing, asked, status, terminal, executed
 ):
-    world = World(replies=[Reply(2.25, CLICK)], check_errors={failing: "state read failed"})
+    world = World(replies=[Reply(2.25, CLICK)], check_errors=_failing(*failing))
     sim = _episode(_wall(10.0), world)
     assert _asked(sim) == asked
     assert sim.executed == executed
     assert sim.outcomes == [_outcome(0, status, 2.25, 2, 2.25, terminal=terminal)]
     assert _ended(sim) == ("invalid_run", "invalid", 2.25, 2.25)
     assert sim.termination.invalid == Invalidated(
-        "environment", "terminal_state_check_failed", "state read failed"
+        "environment", "terminal_state_check_failed", f"state read {failing[-1]} failed"
     )
     _assert_nothing_after_the_end(sim)
+
+
+@pytest.mark.parametrize(
+    "failing", [(1,), (1, 2), (1, 2, 4, 5)], ids=["one", "two", "two-answer-two"]
+)
+def test_fewer_than_three_failed_checks_in_a_row_leave_the_run_valid(failing):
+    # A failed read answers "not over" and the decision goes on as without it; the answer at 2 s
+    # starts the count over, so the failures right before and after execution are one and two.
+    # The task ends at 3 s, seen by the periodic check filed before the pace move's wake.
+    world = World(replies=[Reply(2.25, CLICK)], ends_at=3.0, check_errors=_failing(*failing))
+    sim = _episode(_wall(10.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.0, 2.25, 2.25, 3.0]
+    assert _read_errors(sim) == [_failing(*failing).get(check) for check in range(1, 7)]
+    assert sim.executed == [(0, 2.25, CLICK)]
+    assert sim.outcomes == [_outcome(0, "applied", 2.25, 3, 2.25, dropped=2)]
+    assert sim.entries("RunInvalidated") == []
+    assert _ended(sim) == ("game_decided", "environment", 3.0, 3.0)
+    assert sim.termination.invalid is None
 
 
 def test_an_invalidation_posted_during_a_generation_ends_the_episode_at_once():

@@ -354,17 +354,27 @@ def test_a_half_second_hold_is_half_env_fps_ticks(rates, up_at):
 
 
 @pytest.mark.parametrize(
-    ("rates", "tapped"),
-    [((1, 1), 1 / 60), ((60, 1), 1.0), ((30, 7), 0.5), ((2, 2), 1 / 30), ((120, 1), 2.0)],
+    ("rates", "tap_checks"),
+    [
+        ((1, 1), [1 / 60]),
+        ((60, 1), [1.0]),
+        ((30, 7), [0.5]),
+        ((2, 2), [1 / 30]),
+        ((120, 1), [1.0, 2.0]),
+    ],
     ids=[*IDS, "120/1"],
 )
-def test_a_key_tap_holds_its_key_a_sixtieth_of_a_second(rates, tapped):
+def test_a_key_tap_holds_its_key_a_sixtieth_of_a_second(rates, tap_checks):
     """A token-clock key tap keeps its key down for one 60 Hz frame at any rate: the environment
-    moves the clock 1/60 * env_fps ticks inside the action, at most one tick a step
-    (sandbox/actions.py:26-28, 548)."""
+    moves the clock 1/60 * env_fps ticks inside the action, at most one tick a step with an end
+    check after each, and hands the checks' reads to the kernel (sandbox/actions.py:26-28, 548)."""
     tap = Action(ActionType.KEY, {"key": "space"})
     sim = _run(_config("token", rates, 10.0), [Reply(latency=0.5, action=tap), NEVER])
     assert sim.executed[0] == (0, 0, tap)
+    assert sim.tap_checks == pytest.approx(tap_checks, abs=1e-9)
+    (executed,) = sim.entries("ActionExecuted")
+    assert executed.data.end_checks == (None,) * len(tap_checks)
+    tapped = tap_checks[-1]
     resolved = sim.entries("ActionResolved")[0]
     assert resolved.data["environment_tick"] == pytest.approx(tapped, abs=1e-9)
     (boundary,) = _boundaries(sim)
