@@ -947,6 +947,38 @@ def test_a_done_or_fail_proposal_becomes_a_wait_without_a_proposal_record(verb):
     )
 
 
+@pytest.mark.parametrize(
+    ("reply", "status", "action", "protocol_failure"),
+    [
+        (Reply(action=CLICK, output_tokens=256), "applied", CLICK, None),
+        (
+            Reply(action=Action(ActionType.DONE), output_tokens=256),
+            "wait",
+            Action.wait(),
+            "unsupported_terminal_action",
+        ),
+        (
+            Reply(action=Action.wait(), output_tokens=256, protocol_failure="empty_action_output"),
+            "wait",
+            Action.wait(),
+            "empty_action_output",
+        ),
+        (_idle(1), "none", None, None),
+    ],
+    ids=["click", "done", "unparsed", "none"],
+)
+def test_the_outcome_names_the_action_the_decision_came_to(reply, status, action, protocol_failure):
+    # The agent's feedback reports what was executed: a DONE is reported as the wait it became,
+    # with the protocol failure that made it one (runner.py:1218-1228).
+    sim = _run(_token(10), reply, _idle(9))
+    outcome = sim.outcomes[0]
+    assert (outcome.status, outcome.action, outcome.protocol_failure) == (
+        status,
+        action,
+        protocol_failure,
+    )
+
+
 def test_a_decisions_records_follow_todays_trace_order():
     # A1 H13 without the records the kernel does not write (runner.py:921-1165, 555-639).
     sim = _run(_token(10), Reply(action=CLICK, output_tokens=300), _idle(8))
