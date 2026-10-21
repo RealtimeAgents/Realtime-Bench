@@ -17,6 +17,7 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Invalidated, Termination
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.reporting import EpisodeTrace
@@ -232,6 +233,63 @@ def test_the_shells_own_failure_on_a_lane_invalidates_the_run_as_a_run_exception
     termination, env, _ = _episode(6.0, ONE_CLICK)
     assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
     assert "fingerprint failed" in env._loop_error
+
+
+def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
+    """N11, as on the turn-based shell: the kernel raises at its step at 2 s, while the click
+    executes and the reply runs. Nothing can be asked of the kernel any more: the shell gives
+    the reply up, takes the snapshot right after the action (4.8), releases the inputs and
+    writes the termination itself. The run is invalid for run_exception."""
+    step = Kernel.step
+
+    def broken(self, semantic, ops=None):
+        if semantic >= 2.0:
+            raise RuntimeError("step broke")
+        return step(self, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+    termination, env, agent = _episode(6.0, ONE_CLICK)
+    assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
+        "invalid_run",
+        2.0,
+        4.275,
+    )
+    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
+    assert env.intervals[-1] == ("snapshot", 3.775, 4.275)
+    assert env.released_at == 4.275
+    assert env._termination == {
+        "stop_reason": "invalid_run",
+        "end_s": 2.0,
+        "snapshot_s": 4.275,
+        "snapshot_delay_s": 2.275,
+    }
+    assert env._invalid_run["reason"] == "run_exception"
+    assert "RuntimeError: step broke" in env._loop_error
+    assert agent.aborted == [(1, 2.0)]
+
+
+def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monkeypatch):
+    """The deadline at 3 s ends the episode and the snapshot waits for the click executing; the
+    kernel raises at the next step. The shell waits for that snapshot instead of taking another,
+    and the end stays the deadline, the first end signal (decision 32)."""
+    step = Kernel.step
+
+    def broken(self, semantic, ops=None):
+        if self.ending is not None:
+            raise RuntimeError("step broke")
+        return step(self, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+    termination, env, _ = _episode(3.0, ONE_CLICK)
+    assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
+        "invalid_run",
+        3.0,
+        4.275,
+    )
+    assert [interval for interval in env.intervals if interval[0] == "snapshot"] == [
+        ("snapshot", 3.775, 4.275)
+    ]
+    assert termination.invalid.reason == "run_exception"
 
 
 def test_a_push_that_raises_any_exception_loses_that_frame_only():
