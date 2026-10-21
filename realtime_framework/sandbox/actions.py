@@ -407,8 +407,10 @@ class GuestEnvironment:
         self._release_clock_keys(keys)
 
     def _clock_key_up(self, identities):
-        """Release these held token-clock keys in one keyUp; a key that is not held is skipped."""
-        selected = [identity for identity in identities if identity in self._held_keys]
+        """Release these held token-clock keys in one keyUp, in the order they were pressed; a key
+        that is not held is skipped."""
+        wanted = set(identities)
+        selected = [identity for identity in self._held_keys if identity in wanted]
         if not selected:
             return
         chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)

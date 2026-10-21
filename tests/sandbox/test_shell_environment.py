@@ -248,6 +248,17 @@ def test_a_release_skips_keys_that_are_not_held():
     assert list(env._held_keys) == ["a"]
 
 
+def test_keys_released_together_go_up_in_the_order_they_were_pressed():
+    """The kernel names them in the order of its leases (evaluation/kernel/turns.py), which can
+    differ from the order of the presses; the game gets the chord the legacy wait sends
+    (_release_expired_clock_keys), and its keyUp events (sandbox/browser/clock.py)."""
+    env, task = _token()
+    env.execute(Action.hold_key("shift+a", 1.0))
+    env.release_keys(("a", "shift"))
+    (up,) = _of(task, "keyUp")
+    assert up["key"] == "shift+a"
+
+
 def test_clock_steps_and_releases_in_the_kernel_s_order_give_the_task_the_legacy_wait_s_events():
     """The kernel ends a step where a lease ends and releases the key after it
     (evaluation/kernel/turns.py _advance); wait_until_tick does both in one call."""
