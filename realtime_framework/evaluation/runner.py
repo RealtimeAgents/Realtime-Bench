@@ -1129,7 +1129,9 @@ def main():
     episode_trace.close()
     if a.interaction_mode == "streaming":
         summ["streaming"] = summarize_streaming(
-            run_dir / "episode_trace.jsonl", (runtime_config or {}).get("streaming")
+            run_dir / "episode_trace.jsonl",
+            (runtime_config or {}).get("streaming"),
+            attempt_id=episode_trace.attempt_id,
         )
     _atomic_write_json(run_dir / "run_summary.json", summ)
     from realtime_framework.evaluation.reporting import finalize_video

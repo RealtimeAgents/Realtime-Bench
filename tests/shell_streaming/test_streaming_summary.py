@@ -74,7 +74,7 @@ def _summary(tmp_path, replies, settings, *, confirms=True, duration_s=8.0):
             log=lambda line: None, trace=trace,
         )
     trace.close()
-    return summarize_streaming(path, settings), env, agent
+    return summarize_streaming(path, settings, attempt_id=trace.attempt_id), env, agent
 
 
 def test_the_summary_counts_frames_actions_and_replies(tmp_path):
@@ -139,8 +139,9 @@ def test_a_session_that_confirms_no_frame_summarizes_none(tmp_path):
 def test_a_run_without_its_configuration_has_no_context_control(tmp_path):
     """A run that failed before its configuration was resolved, and its trace holds no episode."""
     path = tmp_path / "trace.jsonl"
-    EpisodeTrace(path, run_id="s", clock=FakeClock()).close()
-    summary = summarize_streaming(path, None)
+    trace = EpisodeTrace(path, run_id="s", clock=FakeClock())
+    trace.close()
+    summary = summarize_streaming(path, None, attempt_id=trace.attempt_id)
     assert summary["context_control"] is None
     assert (summary["frames"]["captured"], summary["replies"]["started"]) == (0, 0)
 
@@ -181,11 +182,31 @@ def test_the_summary_pairs_each_frame_with_its_own_push(tmp_path):
         kernel("ActionArrived", frame_age_s=age, frame_age_frames=0, rejection=rejection)
     trace.close()
 
-    frames = summarize_streaming(path, OPENAI)["frames"]
+    summary = summarize_streaming(path, OPENAI, attempt_id=trace.attempt_id)
+    frames = summary["frames"]
     assert (frames["captured"], frames["pushed"], frames["push_failed"]) == (12, 11, 1)
     assert (frames["confirmed"], frames["refused"]) == (11, 1)
     push, confirm = frames["capture_to_push_s"], frames["send_to_confirm_s"]
     assert (push["sample_count"], push["min"], push["max"]) == (11, 0.1, 0.1)
     assert (confirm["sample_count"], confirm["complete"], confirm["min"]) == (11, True, 0.2)
-    age = summarize_streaming(path, OPENAI)["actions"]["frame_age_s"]
+    age = summary["actions"]["frame_age_s"]
     assert (age["sample_count"], age["total_decisions"], age["complete"]) == (2, 2, True)
+
+
+def test_the_summary_reads_its_own_run_of_a_trace_written_twice(tmp_path):
+    """A run directory used again appends a new attempt to its trace (reporting.py EpisodeTrace):
+    a run's section counts only the records of its own attempt (low 1)."""
+    path = tmp_path / "trace.jsonl"
+    attempts = []
+    for frames in (3, 2):
+        trace = EpisodeTrace(path, run_id="s", clock=FakeClock())
+        for n in range(frames):
+            data = {"observation_id": f"obs-{n}", "timestamp": float(n), "error": None}
+            trace.emit("KernelRecord", {"kind": "FrameCaptured", "data": data})
+        trace.close()
+        attempts.append(trace.attempt_id)
+    counts = [
+        summarize_streaming(path, OPENAI, attempt_id=attempt)["frames"]["captured"]
+        for attempt in attempts
+    ]
+    assert counts == [3, 2]
