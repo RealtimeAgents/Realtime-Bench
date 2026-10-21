@@ -8,6 +8,7 @@ on; a turn-based action is interpreted against the newest frame.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 # A streaming action whose frame cannot be found is rejected, not executed (phase2.md, 动作的定位依据).
@@ -27,31 +28,63 @@ class FrameRecord:
     captured_at: float
     geometry: dict  # FrameGeometry of the image the model is sent
     marks: dict | None  # the SoM mark map; None when the frame had no inspection
-    # "prepared" until its request or session push went out, then "sent".
+    # "prepared" until its request or session push went out, then "sent"; "dropped" when
+    # streaming gave it up unsent, a newer frame taking its place.
     send_status: str = "prepared"
     sent_unix_s: float | None = None
+    # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
+    # confirmation arrived (OpenAI Realtime's conversation.item.created); "unknown" where the
+    # protocol confirms no frame (Gemini Live). None until the driver says which.
+    ack_status: str | None = None
+    acked_unix_s: float | None = None
 
 
 class FrameTable:
+    """Streaming may enter, send and look up frames on different threads, so each method holds
+    the table's lock."""
+
     def __init__(self) -> None:
         self._frames: dict[int, FrameRecord] = {}
-        self._newest_sent = 0
+        self._dropped = 0
+        self._lock = threading.Lock()
 
     def register(
         self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None
     ) -> FrameRecord:
-        record = FrameRecord(len(self._frames) + 1, observation_id, captured_at, geometry, marks)
-        self._frames[record.frame] = record
-        return record
+        with self._lock:
+            record = FrameRecord(len(self._frames) + 1, observation_id, captured_at, geometry, marks)
+            self._frames[record.frame] = record
+            return record
 
     def record_sent(self, frame: int, sent_unix_s: float) -> None:
-        record = self._frames[frame]
-        record.send_status = "sent"
-        record.sent_unix_s = sent_unix_s
-        self._newest_sent = frame
+        with self._lock:
+            record = self._frames[frame]
+            record.send_status = "sent"
+            record.sent_unix_s = sent_unix_s
+
+    def record_dropped(self, frame: int) -> None:
+        with self._lock:
+            self._frames[frame].send_status = "dropped"
+            self._dropped += 1
+
+    def dropped_count(self) -> int:
+        """The prepared frames given up unsent."""
+        with self._lock:
+            return self._dropped
+
+    def record_acked(self, frame: int, acked_unix_s: float) -> None:
+        with self._lock:
+            record = self._frames[frame]
+            record.ack_status = "acked"
+            record.acked_unix_s = acked_unix_s
+
+    def record_ack_unknown(self, frame: int) -> None:
+        with self._lock:
+            self._frames[frame].ack_status = "unknown"
 
     def latest(self) -> FrameRecord | None:
-        return self._frames.get(len(self._frames))
+        with self._lock:
+            return self._frames.get(len(self._frames))
 
     def locate(self, reference: object) -> tuple[FrameRecord | None, str | None]:
         """The sent frame an action's frame field names, or None and why it cannot be found."""
@@ -59,16 +92,19 @@ class FrameTable:
             return None, MISSING_FRAME
         if type(reference) is not int:
             return None, INVALID_FRAME_SYNTAX
-        record = self._frames.get(reference)
-        if record is None or record.send_status != "sent":
-            return None, FRAME_NOT_IN_TABLE
-        return record, None
+        with self._lock:
+            record = self._frames.get(reference)
+            if record is None or record.send_status != "sent":
+                return None, FRAME_NOT_IN_TABLE
+            return record, None
 
     def age(self, record: FrameRecord, at_unix_s: float) -> dict:
-        """How old a frame is when an action based on it arrives: the frames sent after it, and
-        the seconds since its capture. Streaming runs on the wall clock only, so its frames'
-        capture times are wall time as well."""
-        return {
-            "age_frames": self._newest_sent - record.frame,
-            "age_s": at_unix_s - record.captured_at,
-        }
+        """How old a frame is when an action based on it arrives: the frames sent after it (not
+        those dropped or still unsent), and the seconds since its capture. Streaming runs on the
+        wall clock only, so its frames' capture times are wall time as well."""
+        with self._lock:
+            newer = range(record.frame + 1, len(self._frames) + 1)
+            return {
+                "age_frames": sum(self._frames[n].send_status == "sent" for n in newer),
+                "age_s": at_unix_s - record.captured_at,
+            }
