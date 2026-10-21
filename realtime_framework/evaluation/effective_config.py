@@ -366,7 +366,7 @@ def _probe_runner(request: dict) -> dict:
             "run_stream": {
                 key: loop[key]
                 for key in loop
-                if key not in {"log", "trace", "agent_trace", "clocks"}
+                if key not in {"log", "trace", "agent_trace", "clocks", "inputs_log"}
             },
             "guest_environment": {"tick_seconds": env.d, "clock_mode": env.clock_mode},
             "clock_prompt": adapter.streaming_note,
