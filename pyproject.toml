@@ -85,8 +85,6 @@ extend-select = ["TID251"]
 # task runtimes call (realtime_tasks/game/runtime.py, realtime_tasks/web/runtime.py) without an
 # episode clock.
 "realtime_framework/sandbox/browser/clock.py" = ["TID251"]
-# Replaces time.sleep while it runs runner main() up to the loop to export the configuration.
-"realtime_framework/evaluation/effective_config.py" = ["TID251"]
 
 [tool.setuptools.package-data]
 "realtime_tasks" = ["**/*"]
