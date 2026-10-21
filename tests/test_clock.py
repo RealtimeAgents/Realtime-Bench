@@ -70,6 +70,15 @@ def test_sleep_moves_time_only_when_everyone_waits():
     assert woke == [2.0]
 
 
+def test_a_negative_sleep_is_refused_as_on_the_system_clock():
+    clock = FakeClock()
+    with clock.participant():
+        for sleeper in (SystemClock(), clock):
+            with pytest.raises(ValueError, match="^sleep length must be non-negative$"):
+                sleeper.sleep(-0.5)
+        assert clock.monotonic() == 0.0
+
+
 @pytest.mark.parametrize("made_by", ["clock", "threading"])
 def test_wait_returns_when_another_participant_sets_the_event(made_by):
     clock = FakeClock()
