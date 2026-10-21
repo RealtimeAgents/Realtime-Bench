@@ -941,23 +941,24 @@ class _Shell:
                 if held is not None:
                     held.bound_at = data["at"]
             elif kind == "GenerationAbandoned":
-                self._abandoned_on_a_bound(entry)
+                self._given_up(entry)
             elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
                 self.log(
                     f"[think] deliberation budget exhausted: {self.policy.spent:.1f}s >= "
                     f"{self.config.think_budget_s:g}s -> forfeit"
                 )
 
-    def _abandoned_on_a_bound(self, entry: Entry) -> None:
+    def _given_up(self, entry: Entry) -> None:
         """A generation the kernel gave up on. One whose result came back before and was settled
         keeps the call's own records, written now, ahead of the decision's, and what made that
         result unusable still invalidates the run, as the runner's check of every result did
         (runner.py _apply): the kernel discards the result with its reason. Otherwise one given
         up on at the per-move cap, the wall deadline or the provider watchdog timed out: it is
         logged and recorded as the runner records a call it gave up on (runner.py _run_step),
-        with no usage, which leaves the episode's cost incomplete (decision 48). Only the move
-        over the cap is reported, as skipped (kernel/turns.py on_timer); the other two end the
-        episode and their decision goes unreported."""
+        with no usage, which leaves the episode's cost incomplete (decision 48). One the task's
+        end or an invalidation gave up on is recorded so too, named for what ended the episode
+        (N10). Only the move over the cap is reported, as skipped (kernel/turns.py on_timer);
+        the others end the episode and their decision goes unreported."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
@@ -978,9 +979,15 @@ class _Shell:
                 self.post(held.invalid)
             return
         if bound is None:
-            return
-        # The log names the bound as the runner does (runner.py _move_timeout).
-        if bound == "provider_watchdog":
+            # It ran until the reading the kernel gave it up at.
+            ended = {"environment": "task_end", "invalid": "invalid_run"}[reason]
+            seconds = (
+                entry.ops - held.started_ops
+                if self.token
+                else entry.semantic - held.started_semantic
+            )
+            r = episode_records.abandoned_result(round(seconds, 2), ended)
+        elif bound == "provider_watchdog":
             seconds = held.bound_at - held.started_ops
             r = episode_records.watchdog_result(round(seconds, 2), seconds)
             timeout = self.config.timing.provider_watchdog_s
@@ -991,9 +998,12 @@ class _Shell:
             r = episode_records.timed_out_result(round(seconds, 2), bound)
             capped = bound == "per_move_cap"
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
-        self.log(
-            f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) — discarded"
-        )
+        if bound is not None:
+            # The log names the bound as the runner does (runner.py _move_timeout).
+            self.log(
+                f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
+                "— discarded"
+            )
         result, inference = self._settle(held, r)
         if reason == "per_move_cap":
             self._decision.result = r
