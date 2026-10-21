@@ -44,12 +44,10 @@ CLIENT_END_WAIT_S = 10.0  # real seconds, like websockets' close timeout
 
 
 class CassetteServer:
-    def __init__(
-        self, records: list[dict], clock, *, normalizer=None, tolerance_s=None, origin=0.0
-    ):
+    def __init__(self, records: list[dict], clock, *, normalizer=None, origin=0.0):
         self._clock = clock
         self._origin = origin
-        self.cursor = Cursor(records, normalizer or baseline.Normalizer(), tolerance_s=tolerance_s)
+        self.cursor = Cursor(records, normalizer or baseline.Normalizer())
         # Every connection's thread reads and moves the one cursor.
         self._lock = threading.Lock()
         self._listener = socket.create_server(("127.0.0.1", 0))
