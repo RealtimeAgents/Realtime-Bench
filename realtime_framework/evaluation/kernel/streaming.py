@@ -15,11 +15,13 @@ over or past its deadline, its reply was given up, or the frame it names cannot 
 the provider cancels is withdrawn while its action waits; one that executed is recorded as it ran.
 A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
 is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
-a push its watchdog finds stuck, or pushes failing in a row. Then the next reply starts in the
-same step. The shell runs the abort first, which returns once the agent has cleaned the session up
-and closed it, which fails a push stuck in it, and the next reply rebuilds the session from the
-accepted history (phase2.md, 什么时候触发生成). A session that still takes no frame after that, or
-one that takes none before the first reply, when there is none to give up, invalidates the run.
+a push its watchdog finds stuck, or pushes failing in a row. The shell runs the abort, which
+returns once the agent has cleaned the session up and closed it, which fails a push stuck in it;
+the next reply starts at the first reading after that and rebuilds the session from the accepted
+history (phase2.md, 什么时候触发生成). The rebuilt session starts afresh: the pushes failed before
+count no more, nor does the one the abort fails, and its watchdogs count from then. A session that
+still takes no frame after that, or one that takes none before the first reply, when there is none
+to give up, invalidates the run.
 Only a watchdog finds a session stuck, so one that stops taking frames less than a watchdog before
 the end, or whose rebuilt session has not had a watchdog's time when the end comes, leaves the run
 valid.
@@ -232,7 +234,9 @@ class StreamingPolicy:
         self._capturing = False
         self._pushing: FrameCaptured | None = None
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
-        self._failed_pushes = 0  # in a row
+        self._failed_pushes = 0  # in a row, on this session
+        self._stale_push = False  # the push out was put into a session since given up
+        self._restart = False  # a reply was given up; the next starts once the abort returned
         self._rebuilt = False  # the session was given up for its frames, and none went in since
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
         # The reads, captures and the action waiting that came due while they could not run,
@@ -343,9 +347,14 @@ class StreamingPolicy:
                     "frame_push_stuck",
                     f"a frame push did not answer in {config.push_watchdog_s:g}s",
                 )
-                if kernel.ending is None:
-                    # The push is still out: the rebuilt session has as long again.
-                    self._arm_push_watchdog()
+        elif timer.kind == "aborted" and not self._stopped():
+            # The first reading after the shell ran the abort: the next reply starts now, and it
+            # and a push still out have their whole watchdogs from now.
+            if self._restart:
+                self._restart = False
+                self._start_reply()
+            if self._pushing is not None and self._push_watchdog is None:
+                self._arm_push_watchdog()
         self._report()
 
     def on_end(self) -> None:
@@ -457,6 +466,7 @@ class StreamingPolicy:
     def _pushed(self, event: FramePushed) -> None:
         kernel = self.kernel
         frame, self._pushing = self._pushing, None
+        stale, self._stale_push = self._stale_push, False
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
         # Counted also once the episode is over: every frame captured goes in or is dropped, but
@@ -471,9 +481,9 @@ class StreamingPolicy:
             self._latest = frame
             self._failed_pushes, self._rebuilt = 0, False
             # The first reply waits for the first frame; later ones follow each other.
-            if self.generation is None:
+            if self.generation is None and not self._restart:
                 self._start_reply()
-        else:
+        elif not stale:
             self._failed_pushes += 1
             limit = self.config.push_failure_limit
             if self._failed_pushes >= limit:
@@ -488,7 +498,7 @@ class StreamingPolicy:
     def _session_stuck(self, reason: str, invalid_reason: str, detail: str) -> None:
         """The session takes no frames: give its reply up, so that the next one rebuilds it. The
         run is invalid once a rebuilt session takes none either, or with no reply to give up."""
-        if self._rebuilt or self.generation is None:
+        if self._rebuilt or (self.generation is None and not self._restart):
             return self.kernel.invalidate("provider", invalid_reason, detail)
         self._rebuilt = True
         self._stuck(reason)
@@ -510,7 +520,11 @@ class StreamingPolicy:
         )
 
     def _stuck(self, reason: str) -> None:
-        """Give the reply in flight up and start the next."""
+        """Give the reply in flight up and start the next, which rebuilds the session: no push has
+        failed on it yet, and a push still out went into the old one. The shell runs the abort
+        before it handles anything more, which may take a while: the next reply starts at the
+        first reading after it, unless the deadline has passed by then, and the watchdog of a
+        push still out counts from then too."""
         if self._stopped():
             return
         generation = self._abandon(reason)
@@ -520,7 +534,12 @@ class StreamingPolicy:
         if waiting is not None and waiting.arrival.generation == generation:
             self.waiting = None
             self._resolve(waiting, CANCELLED_GENERATION)
-        self._start_reply()
+        self._failed_pushes, self._stale_push = 0, self._pushing is not None
+        self._restart = True
+        kernel = self.kernel
+        kernel.cancel_timer(self._push_watchdog)
+        self._push_watchdog = None
+        kernel.set_timer("aborted", Clock.OPS, kernel.ops, Priority.CONTROL)
 
     def _abandon(self, reason: str) -> int | None:
         """Give the reply in flight up, if one is; its generation."""

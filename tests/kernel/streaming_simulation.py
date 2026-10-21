@@ -141,6 +141,8 @@ class World:
     check_s: float = 0.0
     execute_s: float = 0.0
     commit_s: float = 0.0
+    # The shell's own thread runs an abort this long, until the agent closed the session.
+    abort_s: float = 0.0
     snapshot_s: float = 0.0
     # The nth (1-based) capture, push or end check -> its own duration, or its fault.
     capture_times: dict[int, float] = field(default_factory=dict)
@@ -496,20 +498,22 @@ class Simulation:
         self.kernel.post(event)
 
     def _abort(self, generation: int) -> None:
-        """An interruptible reply stops handing anything over and hands back its result now.
-        Closing the session fails a push stuck in it."""
+        """An interruptible reply stops handing anything over at once, and hands back its result
+        once the abort returned, ``abort_s`` later on the shell's thread. Closing the session at
+        the end of it fails a push stuck in it."""
         self.aborted.append((generation, self.ops))
         if self._in_flight == generation:
             self._in_flight = None
+        interruptible = self._reply_of[generation].interruptible
+        if interruptible:
+            for entry in self._posts[generation]:
+                entry[2] = lambda: None
+        self._spend(self.world.abort_s)
         if self._stuck_push is not None:
             observation_id, self._stuck_push = self._stuck_push, None
             self._busy.discard("push")
             self.kernel.post(FramePushed(observation_id, self.ops, "the session was closed"))
-        if not self._reply_of[generation].interruptible:
-            return
-        for entry in self._posts[generation]:
-            entry[2] = lambda: None
-        if generation not in self._finished:
+        if interruptible and generation not in self._finished:
             self._later(self.ops, lambda: self._finish(generation, GenerationResult()))
 
     def _execute(self, decision: int, action: Action, release_at: float | None) -> None:
