@@ -11,6 +11,7 @@ beats a start. Wall end checks run every 1/env_fps s, during generations too.
 
 from __future__ import annotations
 
+import random
 from dataclasses import asdict
 
 import pytest
@@ -83,6 +84,19 @@ def _from(sim: Simulation, kind: str) -> list[str]:
     return kinds[kinds.index(kind) :]
 
 
+def _past_the_deadline(sim: Simulation) -> list:
+    """Wall clock: the captures, generations, executions and end checks run at or after the
+    deadline."""
+    if sim.token:
+        return []
+    world = (Capture, StartGeneration, Execute, CheckEnd)
+    return [
+        command
+        for command, at in zip(sim.commands, sim.command_times, strict=True)
+        if isinstance(command, world) and at >= sim.config.duration_s
+    ]
+
+
 def _check_invariants(sim: Simulation) -> None:
     """What every episode keeps, whatever ends it."""
     records, commands = sim.records, sim.commands
@@ -97,6 +111,8 @@ def _check_invariants(sim: Simulation) -> None:
     # Once the episode is over nothing lands, no clock moves and no end check is asked.
     banned = (Capture, StartGeneration, AcceptResult, Execute, AdvanceClock, CheckEnd)
     assert [command for command in commands[ended:] if isinstance(command, banned)] == []
+    # Nor from the wall deadline on, though an answer filed before it may be handled after it.
+    assert _past_the_deadline(sim) == []
     # One generation at a time, and no outcome reported while one is in flight.
     in_flight = None
     for command in commands:
@@ -971,3 +987,54 @@ def test_session_messages_mid_generation_are_numbered_with_no_other_effect():
     assert with_acks.outcomes == without.outcomes
     assert with_acks.outcomes[0].next_observation_tick == 2
     assert with_acks.termination == without.termination
+
+
+# ---- random wall episodes ---------------------------------------------------------------------
+
+
+def _random_wall_episode(seed: int) -> tuple[TurnConfig, World]:
+    """A wall episode whose environment operations and calls take random times, so that answers
+    wait behind synchronous commands and come due around the deadline."""
+    rng = random.Random(seed)
+    duration_s = rng.choice([3.0, 5.0, 6.0, 8.0])
+    actions = [
+        CLICK,
+        Action.wait(rng.choice([0.0, 0.3, 1.0, 2.5, 7.0])),
+        Action(ActionType.KEY, {"key": "a"}),
+        Action.hold_key("b", rng.choice([0.2, 1.0, 3.0])),
+        None,
+    ]
+    replies = [
+        Reply(
+            latency=rng.choice([0.05, 0.3, 0.9, 1.7, 2.6, 4.2, 9.0]),
+            action=rng.choice(actions),
+            interruptible=rng.random() < 0.7,
+            records=tuple((rng.random() * 3, "SessionMessage") for _ in range(rng.randint(0, 2))),
+        )
+        for _ in range(40)
+    ]
+    world = World(
+        replies=replies,
+        ends_at=rng.choice([None, None, rng.random() * duration_s * 1.2]),
+        end_reason=rng.choice([None, "target_reached"]),
+        check_s=rng.choice([0.05, 0.15, 0.3, 0.7]),
+        capture_s=rng.choice([0.0, 0.1, 0.4]),
+        execute_s=rng.choice([0.0, 0.2, 1.3]),
+        commit_s=rng.choice([0.0, 0.1, 0.5]),
+        snapshot_s=rng.choice([0.0, 0.5, 2.0]),
+        start_s=rng.choice([0.0, 0.0, 0.6]),
+    )
+    config = _wall(duration_s, per_move_cap_s=rng.choice([None, None, None, 1.5]))
+    return config, world
+
+
+def test_random_wall_episodes_keep_the_invariants():
+    """Whatever the operations cost, no episode captures, starts, executes or asks anything from
+    the deadline on, and every other invariant holds."""
+    for seed in range(1000):
+        config, world = _random_wall_episode(seed)
+        sim = Simulation(config, world).run()
+        try:
+            _check_invariants(sim)
+        except AssertionError as error:
+            raise AssertionError(f"random wall episode {seed}") from error

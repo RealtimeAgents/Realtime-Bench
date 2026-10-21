@@ -138,6 +138,7 @@ class Simulation:
         self.tick: float = 0
         self.records: list[Entry] = []
         self.commands: list = []
+        self.command_times: list[float] = []  # the semantic time each command was run at
         self.checks: list[tuple[float, float]] = []  # (semantic, ops) at every end check
         self.tap_checks: list[float] = []  # the tick at every end check inside a key tap
         self.captures: list[tuple[float, float]] = []  # (tick, timestamp) of every frame
@@ -226,6 +227,7 @@ class Simulation:
 
     def _run(self, command) -> None:
         self.commands.append(command)
+        self.command_times.append(self.semantic())
         world, kernel = self.world, self.kernel
         match command:
             case Record(entry=entry):
