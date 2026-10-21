@@ -1,6 +1,7 @@
 """One native-streaming episode end to end on the fake clock: a live session replayed from a
 cassette (tests/streaming/clocked_ws.py CassetteServer), the replay's wall-clock environment
-(tests/replay/fake_env.py) and the streaming shell (evaluation/streaming_shell.py).
+(tests/replay/fake_env.py) and the streaming shell (evaluation/streaming_shell.py), which the
+runner's loop runs a streaming episode on (evaluation/runner.py run_stream).
 
 ``run_e2e`` takes the agent from a factory, ``agent_factory(clock, port, trace=trace)``, built
 against the cassette's server on ``port`` with ``trace``, its write entry into the episode trace,
@@ -16,11 +17,9 @@ from dataclasses import dataclass
 
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
-from realtime_framework.evaluation.kernel.events import Termination
-from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.reporting import EpisodeTrace
-from realtime_framework.evaluation.streaming_shell import run_streaming_episode
 from tests.fake_clock import FakeClock
 from tests.replay.fake_env import FakeEnvironment
 from tests.replay.frames import FrameSource, ReplayTask
@@ -37,7 +36,9 @@ SILENCE = bytes(3200)  # 100 ms of 16 kHz PCM, a Gemini Live activity's audio (g
 
 @dataclass
 class Episode:
-    termination: Termination
+    """How the episode ended is left on ``env``, as main() reads it: ``_stop_reason``,
+    ``_termination`` and ``_invalid_run``."""
+
     env: FakeEnvironment
     agent: object
     trace_path: object
@@ -57,9 +58,9 @@ class Episode:
 
 def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=None) -> Episode:
     """One streaming episode on a fresh fake clock: the cassette's server, the agent the factory
-    builds against it, the replay's wall-clock environment at 1 fps and the shell. Then the agent
-    closes, its trace is closed as main() closes it, and the server reports what its cursor
-    found."""
+    builds against it, the replay's wall-clock environment at 1 fps and the runner's loop. Then
+    the agent closes, its trace is closed as main() closes it, and the server reports what its
+    cursor found."""
     clock = FakeClock()
     frames = FrameSource(ReplayTask(), text_observation=False, fps=1.0)
     # A snapshot that takes time: the reply the deadline gives up ends before the episode
@@ -75,14 +76,16 @@ def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=
     with server, real_time_limit(REAL_LIMIT_S, server.drop, clock.monotonic), clock.participant():
         agent = agent_factory(clock, server.port, trace=sink)
         try:
-            termination = run_streaming_episode(
-                agent, env, StreamingConfig(duration_s=duration_s),
-                clocks=Clocks(clock, clock), log=logs.append, trace=trace,
+            timeline = runner.run_stream(
+                agent, env, clock_mode="wall", duration_s=duration_s, env_fps=1.0, input_fps=1.0,
+                log=logs.append, trace=trace, clocks=Clocks(clock, clock),
+                interaction_mode="streaming",
             )  # fmt: skip
+            assert timeline == []  # no turns
         finally:
             agent.close()
     assert close_agent_trace(sink, None) is None
     trace.close()
     validate_episode_trace(path)
     records = [json.loads(line) for line in path.read_text().splitlines()]
-    return Episode(termination, env, agent, path, records, server.finish(), logs)
+    return Episode(env, agent, path, records, server.finish(), logs)
