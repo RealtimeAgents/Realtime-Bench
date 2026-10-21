@@ -8,6 +8,8 @@ without a browser (tests/replay/clock_task.py) records what the environment push
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from realtime_framework.clock import Clocks, FrameClock
@@ -314,3 +316,34 @@ def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
         (2.0, "xdotool keyup -- a"),
         (3.0, "xdotool keyup -- Left"),
     ]
+
+
+# ---- on_invalid -----------------------------------------------------------------------------
+
+
+class _StuckGuest(_Guest):
+    """A guest whose keyup fails, so the key stays physically down."""
+
+    def execute_command(self, command, timeout=30):
+        super().execute_command(command, timeout)
+        if "keyup" in command:
+            return {"returncode": 1, "stderr": "cannot release"}
+        return {"returncode": 0}
+
+
+def test_a_wall_release_that_keeps_failing_tells_the_shell_from_the_timer_s_thread():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _StuckGuest(clock)
+    test_thread = threading.current_thread()
+    told = []
+    env.on_invalid = lambda record: told.append(
+        (clock.monotonic(), record, threading.current_thread() is not test_thread)
+    )
+    with clock.participant():
+        env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
+        clock.sleep(5.0)
+    keyups = [at for at, command in env.g.commands if "keyup" in command]
+    assert keyups == [1.0, 1.5, 2.0, 2.5]
+    assert told == [(2.5, env._invalid_run, True)]
+    assert env._invalid_run["reason"] == "wall_key_release_failed"
