@@ -549,7 +549,7 @@ def test_driver_default_short(live_env, tmp_path):
 
 
 class _SleepRecordingClock(SystemClock):
-    """The driver's clock, whose waits (live.py:497, 600-612) only advance its monotonic time
+    """The driver's clock, whose waits (live.py:500, 606-618) only advance its monotonic time
     and are recorded; everything else is real time."""
 
     def __init__(self):
@@ -567,8 +567,8 @@ class _SleepRecordingClock(SystemClock):
 
 def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
     """On the realtime_input transport (the driver defaults) one video frame follows the last by
-    at least one model-input frame interval (live.py:597-603): 4 s at 0.25 fps. Each video is
-    followed by the 1 s ingestion wait (live.py:611-612), so the wait before the next video is
+    at least one model-input frame interval (live.py:603-609): 4 s at 0.25 fps. Each video is
+    followed by the 1 s ingestion wait (live.py:617-618), so the wait before the next video is
     the other 3 s."""
     clock = _SleepRecordingClock()
     preset = DRIVER_DEFAULT
