@@ -373,6 +373,9 @@ class SessionCore:
         if block.text:
             # Live tool messages do not expose their original thought signatures. Replaying
             # synthetic native calls can stall the next interaction even after setup succeeds.
+            # The transcript keeps each call's and receipt's wire fields: replaying the canonical
+            # action as ordinary model text makes Gemini switch to spoken JSON after the first
+            # visual-history fold, which also loses authoritative response-token usage.
             contents.append(Content(role, (Part(text=block.text),)))
             return contents
         for exchange_index, exchange in enumerate(block.exchanges):
