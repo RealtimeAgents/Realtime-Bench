@@ -354,8 +354,10 @@ class FakeClock:
     # ---- waits ----
 
     def sleep(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("sleep length must be non-negative")
         with self._cond:
-            deadline = self._now + max(0.0, seconds)
+            deadline = self._now + seconds
         self._wait_until(None, deadline)
 
     def event(self) -> threading.Event:
