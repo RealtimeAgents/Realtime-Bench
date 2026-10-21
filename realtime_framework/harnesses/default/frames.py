@@ -33,8 +33,8 @@ class FrameRecord:
     send_status: str = "prepared"
     sent_unix_s: float | None = None
     # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
-    # confirmation arrived (OpenAI Realtime's conversation.item.created); "unknown" where the
-    # protocol confirms no frame (Gemini Live). None until the driver says which.
+    # confirmation arrived (OpenAI Realtime's conversation.item.created or .done); "unknown"
+    # where the protocol confirms no frame (Gemini Live). None until the driver says which.
     ack_status: str | None = None
     acked_unix_s: float | None = None
 
@@ -99,12 +99,15 @@ class FrameTable:
             return record, None
 
     def age(self, record: FrameRecord, at_unix_s: float) -> dict:
-        """How old a frame is when an action based on it arrives: the frames sent after it (not
-        those dropped or still unsent), and the seconds since its capture. Streaming runs on the
-        wall clock only, so its frames' capture times are wall time as well."""
+        """How old a frame is when an action based on it arrives: the frames sent after it by
+        then (not those dropped or still unsent), and the seconds since its capture. Streaming
+        runs on the wall clock only, so its frames' capture times are wall time as well."""
         with self._lock:
-            newer = range(record.frame + 1, len(self._frames) + 1)
+            newer = (self._frames[n] for n in range(record.frame + 1, len(self._frames) + 1))
             return {
-                "age_frames": sum(self._frames[n].send_status == "sent" for n in newer),
+                "age_frames": sum(
+                    other.send_status == "sent" and other.sent_unix_s <= at_unix_s
+                    for other in newer
+                ),
                 "age_s": at_unix_s - record.captured_at,
             }
