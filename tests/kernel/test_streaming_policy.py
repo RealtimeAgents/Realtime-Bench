@@ -696,6 +696,78 @@ def test_a_config_that_would_divide_by_zero_or_never_let_time_pass_is_refused(fi
         StreamingConfig(**({"duration_s": 5.0} | fields))
 
 
+# ---- what a single change to the rules would break --------------------------------------------
+
+
+def test_giving_a_reply_up_leaves_the_action_another_reply_left_waiting():
+    """The first reply ends at 1 with its typing waiting behind its click; the second is given up
+    at 3. The typing is the first reply's and executes after the click."""
+    first = Reply(1.0, calls=(Call(0.25, CLICK, "a", execute_s=3.0), Call(0.5, TYPE, "b")))
+    sim = _run(World(replies=[first]), reply_watchdog_s=2.0)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 2, "reason": "reply_watchdog"}
+    assert sim.statuses() == ["applied", "applied"]
+    assert sim.executed == [(0.25, CLICK), (3.25, TYPE)]
+
+
+def test_the_watchdog_of_a_reply_given_up_does_not_fire_on_the_next():
+    """The push watchdog gives the first reply up at 3; its own watchdog, due at 3.5, goes with it
+    and the second reply runs until the run is found invalid at 5."""
+    sim = _run(World(push_times={2: 100.0}), 10.0, push_watchdog_s=2.0, reply_watchdog_s=3.5)
+    assert sim.data("GenerationAbandoned") == [
+        {"generation": 1, "reason": "push_watchdog"},
+        {"generation": 2, "reason": "invalid"},
+    ]
+
+
+def test_a_reply_result_handled_past_the_deadline_is_not_reported():
+    """The second reply, started at 1 as the first one's feedback goes out, hands a refused action
+    over as it ends at 4.75; that feedback holds the shell until 5.75, when the reply's result,
+    protocol failure and all, is handled past the deadline. The deadline ends the episode first,
+    and nothing reports the result."""
+    second = Reply(3.75, calls=(Call(3.75, CLICK, grounding=MISSING_FRAME),), protocol_failure="p")
+    sim = _run(World(replies=[Reply(1.0), second], commit_s=1.0))
+    assert [o.status for o in sim.outcomes] == ["none", INVALID_GROUNDING_FRAME]
+    assert sim.started == [(1, 0.0), (2, 1.0)]
+
+
+def test_an_action_waiting_behind_one_the_guest_refused_then_executes():
+    calls = (Call(0.25, CLICK, rejection="occluded", execute_s=1.0), Call(0.5, TYPE))
+    sim = _run(World(replies=[Reply(3.0, calls=calls)]))
+    assert sim.statuses() == ["rejected", "applied"]
+    assert sim.executed == [(0.25, CLICK), (1.25, TYPE)]
+    # The typing, waiting since before the read due at 1 came due, goes first once the refused
+    # click is answered; the read after it stands for the grid's.
+    assert sim.checks == [0.0, 1.25, 2.0, 3.0, 4.0]
+
+
+def test_a_frame_repeated_once_the_episode_is_over_invalidates_nothing():
+    """From the capture at 1 on the stream repeats a frame; the third time comes from the capture
+    at 3, which answers at 3.5, after the deadline at 3.25."""
+    sim = _run(World(frozen_from=1, capture_times={4: 0.5}), 3.25)
+    assert len(sim.captures) == 4
+    assert sim.termination.stop_reason == "time_limit"
+
+
+# ---- frame rates ------------------------------------------------------------------------------
+
+
+def test_the_landing_position_is_in_environment_ticks():
+    """At 2 environment frames a second the click landing at 1.25 lands at tick 2.5."""
+    sim = _run(World(replies=[Reply(3.0, calls=(Call(1.25, CLICK),))]), env_fps=2.0)
+    assert sim.outcomes[0].action_clock_position == 2.5
+    assert sim.checks[:4] == [0.0, 0.5, 1.0, 1.25]
+
+
+@pytest.mark.parametrize("input_fps", [30.0, 7.0])
+def test_a_fast_grid_lands_on_every_point_once(input_fps):
+    """At 30 environment frames a second every grid point is read once and every frame point
+    captured once, with nothing dropped; 1/30 s steps do not add up to whole points exactly."""
+    sim = _run(World(), 1.0, env_fps=30.0, input_fps=input_fps)
+    assert len(sim.checks) == 30
+    assert len(sim.captures) == int(input_fps)
+    assert sim.data("FrameDropped") == []
+
+
 def test_reads_due_on_a_fast_grid_do_not_keep_the_captures_out():
     """At 30 environment frames a second a read of 0.5 s finds the next read due when it answers.
     The operations due take the environment in the order they came due, so the capture due since

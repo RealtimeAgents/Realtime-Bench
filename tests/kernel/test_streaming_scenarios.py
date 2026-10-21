@@ -258,24 +258,44 @@ ACTIONS = (
     Action.hold_key("a", 0.75),
     Action(ActionType.DONE),
 )
-TIMES = (0.0, 0.0, 0.25, 0.5, 1.0, 1.5, 3.0)
+# Environment frame rate and input frame rate: equal, apart, and a fast grid.
+RATES = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (30.0, 1.0), (30.0, 7.0))
 
 
-def _random_world(rng: random.Random) -> World:
+def _random_config(rng: random.Random) -> StreamingConfig:
+    env_fps, input_fps = rng.choice(RATES)
+    return StreamingConfig(
+        rng.choice((5.0, 8.0, 12.0)),
+        env_fps=env_fps,
+        input_fps=input_fps,
+        reply_watchdog_s=rng.choice((1.5, 3.0, 30.0)),
+        push_watchdog_s=rng.choice((1.0, 2.5, 10.0)),
+    )
+
+
+def _random_world(rng: random.Random, config: StreamingConfig) -> World:
+    """Captures and pushes are cheap, so replies start and hand actions over most of the time;
+    faults, slow operations and stuck pushes are rare."""
+    duration_s = config.duration_s
+    reads = int(duration_s * config.env_fps) + 8
+
     def rare(value, p=0.1):
         return value if rng.random() < p else None
 
     def faults(n: int, p: float) -> dict:
         return {i: f"fault {i}" for i in range(1, n) if rng.random() < p}
 
-    def slow(n: int, p: float) -> dict:
-        return {i: rng.choice((1.5, 2.5, 4.0, 12.0)) for i in range(1, n) if rng.random() < p}
+    def slow(n: int, p: float, times) -> dict:
+        return {i: rng.choice(times) for i in range(1, n) if rng.random() < p}
 
+    # Now and then the environment wedges for three reads in a row.
+    first = rng.randrange(1, reads)
+    stretch = {i: "wedged" for i in range(first, first + 3)} if rng.random() < 0.1 else {}
     replies, calls_made = [], 0
-    for _ in range(rng.randrange(0, 9)):
+    for _ in range(rng.randrange(0, 16)):
         latency = rng.choice((0.25, 0.5, 1.0, 2.0, 3.0, 5.0))
         calls = []
-        for _ in range(rng.randrange(0, 4)):
+        for _ in range(rng.randrange(0, 5)):
             calls_made += 1
             calls.append(
                 Call(
@@ -285,11 +305,11 @@ def _random_world(rng: random.Random) -> World:
                     grounding=rare(MISSING_FRAME),
                     execute_s=rng.choice((None, 0.25, 1.0, 2.5)),
                     rejection=rare("occluded"),
-                    error=rare("guest down", 0.03),
+                    error=rare("guest down", 0.02),
                 )
             )
         cancellations = []
-        for _ in range(rng.randrange(0, 2)):
+        for _ in range(rng.randrange(0, 3)):
             # A cancellation names calls that came before it.
             at = rng.uniform(0.0, latency)
             ids = [call.call_id for call in calls if call.call_id is not None and call.at <= at]
@@ -300,47 +320,108 @@ def _random_world(rng: random.Random) -> World:
                 latency,
                 tuple(sorted(calls, key=lambda call: call.at)),
                 tuple(cancellations),
-                protocol_failure=rare("no_action_found", 0.3),
-                invalid=rare(Invalidated("provider", "provider_request_failed"), 0.03),
+                protocol_failure=rare("no_action_found", 0.2),
+                invalid=rare(Invalidated("provider", "provider_request_failed"), 0.02),
+                output_tokens=rng.choice((None, 40)),
                 interruptible=rng.random() < 0.7,
             )
         )
     return World(
         replies=replies,
-        ends_at=rare(rng.uniform(0.0, 8.0), 0.4),
+        ends_at=rare(rng.uniform(1.0, duration_s), 0.4),
         end_reason=rare("success", 0.5),
         start_s=rng.choice((0.0, 0.0, 0.3)),
-        posts=((rng.uniform(0.0, 8.0), Invalidated("environment", "x")),)
-        if rng.random() < 0.05
+        posts=((rng.uniform(0.0, duration_s), Invalidated("environment", "x")),)
+        if rng.random() < 0.03
         else (),
-        capture_s=rng.choice(TIMES),
-        push_s=rng.choice(TIMES),
-        check_s=rng.choice(TIMES),
-        execute_s=rng.choice(TIMES),
+        capture_s=rng.choice((0.0, 0.0, 0.125, 0.25)),
+        push_s=rng.choice((0.0, 0.0, 0.125, 0.25)),
+        check_s=rng.choice((0.0, 0.0, 0.125, 0.5)),
+        execute_s=rng.choice((0.0, 0.25, 0.5, 1.0)),
         commit_s=rng.choice((0.0, 0.0, 0.25)),
         snapshot_s=rng.choice((0.0, 0.5)),
-        capture_times=slow(12, 0.1),
-        push_times=slow(12, 0.1),
-        check_times=slow(20, 0.1),
-        capture_errors=faults(12, 0.02),
-        push_errors=faults(12, 0.1),
-        check_errors=faults(20, 0.15),
-        commit_errors=faults(20, 0.02),
-        release_errors={"a": "xdotool failed"} if rng.random() < 0.05 else {},
-        snapshot_error=rare("snapshot failed", 0.05),
-        frozen_from=rare(rng.randrange(0, 6), 0.05),
+        capture_times=slow(reads, 0.02, (1.5, 2.5)),
+        push_times=slow(reads, 0.03, (1.5, 12.0)),
+        check_times=slow(reads, 0.04, (1.5, 2.5, 4.0)),
+        capture_errors=faults(reads, 0.005),
+        push_errors=faults(reads, 0.05),
+        check_errors=faults(reads, 0.06) | stretch,
+        stuck_pushes={rng.randrange(1, 12)} if rng.random() < 0.05 else set(),
+        commit_errors=faults(reads, 0.01),
+        release_errors={"a": "xdotool failed"} if rng.random() < 0.03 else {},
+        snapshot_error=rare("snapshot failed", 0.03),
+        frozen_from=rare(rng.randrange(0, 6), 0.03),
     )
+
+
+def _random_run(seed: int) -> Simulation:
+    rng = random.Random(seed)
+    config = _random_config(rng)
+    return Simulation(config, _random_world(rng, config)).run()
 
 
 @pytest.mark.parametrize("seed", range(300))
 def test_seeded_random_scripts_keep_the_invariants(seed):
-    rng = random.Random(seed)
-    config = StreamingConfig(
-        rng.choice((2.0, 3.0, 5.0, 8.0)),
-        env_fps=rng.choice((1.0, 2.0)),
-        input_fps=rng.choice((0.5, 1.0, 2.0)),
-        reply_watchdog_s=rng.choice((1.5, 3.0, 30.0)),
-        push_watchdog_s=rng.choice((1.0, 2.5, 10.0)),
-    )
-    sim = Simulation(config, _random_world(rng)).run()
-    assert sim.termination is not None
+    """The simulation checks every command as it runs and the whole episode once it ends."""
+    assert _random_run(seed).termination is not None
+
+
+def test_the_random_scripts_reach_the_states_that_matter():
+    """How many of the 300 scripts reach each state; the floors are about half of what they
+    reach, so that a change to the scripts that stops reaching one fails here."""
+    reached: dict[str, int] = dict.fromkeys(COVERAGE, 0)
+    for seed in range(300):
+        sim = _random_run(seed)
+        for state, test in COVERAGE.items():
+            reached[state] += bool(test(sim))
+    floors = {
+        "a reply started": 250,
+        "an action executed": 150,
+        "an action superseded": 70,
+        "a waiting call cancelled": 30,
+        "an action from a reply given up": 30,
+        "a frame that cannot be found": 50,
+        "the task's end": 40,
+        "three failed reads in a row": 4,
+        "a reply's watchdog": 60,
+        "a session rebuilt for its frames": 10,
+        "an end handled past the deadline": 25,
+        "an action that ended the task": 12,
+        "an action the end kept from executing": 30,
+    }
+    assert {state: reached[state] >= floor for state, floor in floors.items()} == dict.fromkeys(
+        floors, True
+    ), reached
+
+
+def _abandoned(sim: Simulation) -> list[str]:
+    return [data["reason"] for data in sim.data("GenerationAbandoned")]
+
+
+COVERAGE = {
+    "a reply started": lambda sim: sim.started,
+    "an action executed": lambda sim: sim.executed,
+    "an action superseded": lambda sim: "superseded" in sim.statuses(),
+    "a waiting call cancelled": lambda sim: "cancelled_call" in sim.statuses(),
+    "an action from a reply given up": lambda sim: "cancelled_generation" in sim.statuses(),
+    "a frame that cannot be found": lambda sim: "invalid_grounding_frame" in sim.statuses(),
+    "the task's end": lambda sim: sim.termination.cause == "environment",
+    "three failed reads in a row": lambda sim: (
+        sim.termination.invalid is not None
+        and sim.termination.invalid.reason == "terminal_state_check_failed"
+    ),
+    "a reply's watchdog": lambda sim: "reply_watchdog" in _abandoned(sim),
+    "a session rebuilt for its frames": lambda sim: (
+        {"push_watchdog", "push_failed"} & set(_abandoned(sim))
+    ),
+    "an end handled past the deadline": lambda sim: (
+        sim.entries("EpisodeEnded")[0].semantic > sim.config.duration_s
+    ),
+    "an action that ended the task": lambda sim: (
+        sim.termination.cause == "environment"
+        and any(data["terminal_after_action"] for data in sim.data("ActionResolved"))
+    ),
+    "an action the end kept from executing": lambda sim: any(
+        status.startswith("not_applied") for status in sim.statuses()
+    ),
+}
