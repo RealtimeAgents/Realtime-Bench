@@ -1,5 +1,5 @@
 """The environment and model-input frame rates may differ; a model's video cap bounds only the
-model-input rate, ModelConfig.fps (providers/preflight.py:132-138).
+model-input rate, ModelConfig.fps (providers/preflight.py check_fps).
 
 runner.main() takes the two as --fps and --model-input-fps. The effective-config export's runner
 probe (evaluation/effective_config.py) runs main() in a fresh interpreter up to its decision loop
@@ -39,7 +39,7 @@ def test_video_cap_reads_the_model_input_rate():
 def runner_cells(tmp_path_factory):
     """Gemini Live through runner.main(): on the wall clock at 2/1, on the token clock at 60/1
     with B=100, and at 2/2, which its cap refuses. Each cell is one task of the probe's run; the
-    arguments are those _trial passes (evaluation/_trial.py:288-314)."""
+    arguments are those _trial passes (evaluation/_trial.py main)."""
     wall = ["--clock", "wall", "--protocol", "wall-clock"]
     token = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
     runs = [
@@ -86,7 +86,9 @@ def test_environment_rate_above_the_cap_starts(runner_cells):
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
-def test_token_clock_charges_b_per_model_input_frame(runner_cells):
+def test_token_clock_is_set_up_with_b_per_model_input_frame(runner_cells):
+    """What main() hands the loop, the prompt and the task clock; the charging itself is
+    test_a_token_run_summary_charges_b_per_model_input_frame's."""
     cell = runner_cells[GAME]
     assert cell["error"] is None
     loop = cell["run_stream"]
@@ -448,8 +450,9 @@ def test_ak_fps_on_a_run_plan_without_a_model_input_rate_sets_both(tmp_path, mon
 
 
 def _trial(model_input_fps, fps=2.0) -> tuple[dict, dict, dict]:
-    """A trial's identity (evaluation/harbor.py:506-520), its request, and the one-task local
-    report whose group carries the identity reporting.report found in the run summary."""
+    """A trial's identity (evaluation/harbor.py ApptainerEnvironment.resolve), its request, and
+    the one-task local report whose group carries the identity reporting.report found in the run
+    summary."""
     task = {
         "suite_id": "public", "suite_version": "1.0", "suite_hash": "0" * 64,
         "harness_version": "1.0", "harness_hash": "1" * 64, "task_id": WEB,
@@ -622,7 +625,7 @@ def test_local_reports_on_runs_from_before_the_split_read_the_environment_rate(t
 
 
 def test_a_leaderboard_submission_needs_both_rates_at_one(tmp_path):
-    """rtbench upload's check of three jobs (evaluation/submission.py:53-76); each one's trial
+    """rtbench upload's check of three jobs (evaluation/submission.py check_runs); each one's trial
     has no report, which counts as a failed task."""
     from realtime_framework.evaluation.submission import SubmissionError, check_runs
 

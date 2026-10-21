@@ -2,10 +2,10 @@
 
 main() passes run_stream the environment tick (delta_s = 1/env fps), the model-input frame in
 environment ticks (frame_ticks = env fps / model-input fps) and the horizon in environment ticks
-(evaluation/runner.py:1713-1715). Frame j is due at j * frame_ticks and observed at the first
-whole tick at or after it; on the finite token clock B is charged per model-input frame, so n
-output tokens advance n / B * frame_ticks ticks and the remaining budget is the remaining
-model-input frames times B (runner.py:493-496, 600-603, 874-881).
+(evaluation/runner.py main). Frame j is due at j * frame_ticks and observed at the first whole
+tick at or after it; on the finite token clock B is charged per model-input frame, so n output
+tokens advance n / B * frame_ticks ticks and the remaining budget is the remaining model-input
+frames times B (run_stream's _apply and _decide).
 
 Token clock: the openrouter agent against the real GuestEnvironment on a task clock
 (token_env.py), at 60/1, 30/7 and 2/2 with a finite B, and at 60/1 in pause mode. Wall clock: the
@@ -47,7 +47,7 @@ from .token_env import TokenEnvironment
 
 BASELINES = Path(__file__).parent / "baselines"
 # On the token clock the decision latency is real time, but δ, the think clock and the capture
-# time GuestEnvironment measures (sandbox/actions.py:191-203) are not masked by loop.py.
+# time GuestEnvironment measures (GuestEnvironment.capture) are not masked by loop.py.
 TOKEN_REAL_TIME_FIELDS = baseline.REAL_TIME_FIELDS | {
     "latency_s",
     "model_latency_s",
@@ -248,7 +248,7 @@ def test_token_clock(case, monkeypatch, tmp_path):
     lifecycle = _lifecycle(env)
     assert [r["remaining_clock_tokens"] for r in lifecycle] == case.remaining
     # Each request's cap is that budget, or the native limit in pause mode
-    # (providers/litellm.py:528-537, 563-565).
+    # (providers/litellm.py transport_output_token_cap).
     assert [json.loads(request.body)["max_tokens"] for request in stub.requests] == [
         NATIVE_OUTPUT_LIMIT if cap is None else cap for cap in case.remaining
     ]
@@ -264,10 +264,18 @@ def test_token_clock(case, monkeypatch, tmp_path):
     assert env._stop_reason == case.stop_reason
     assert env.tick_index() == pytest.approx(min(case.next_ticks[-1], max_ticks))
     # The task clock moved with the environment, never more than one tick per step
-    # (sandbox/actions.py:220).
+    # (GuestEnvironment.wait_until_tick): its world time at each capture is the observation's
+    # tick in seconds, and at the end where the episode stopped.
     advances = [event for event in task.events if event["event"] == "advance"]
     assert all(event["frames"] <= 1.0 + 1e-9 for event in advances)
-    assert task.world_time() == pytest.approx(env.tick_index() / case.env_fps)
+    task_s, at_capture = 0.0, []
+    for call in env.calls:
+        if call["call"] == "task.advance":
+            task_s = call["to_s"]
+        elif call["call"] == "env.capture":
+            at_capture.append(task_s)
+    assert at_capture == pytest.approx([tick / case.env_fps for tick in case.ticks])
+    assert task.world_time() == pytest.approx(min(case.next_ticks[-1], max_ticks) / case.env_fps)
 
     header = {
         "record": "header",
