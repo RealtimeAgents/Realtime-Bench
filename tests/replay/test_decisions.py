@@ -503,8 +503,8 @@ LEDGER_WINDOW = (10024, 1024)
 
 def test_history_overflow_ledger(tmp_path):
     """With every turn archived and the request still over the window, the earliest archived
-    actions give way to a note, ten at a time, and the episode goes on (context policy version
-    7). Before it, decision 28 was invalid without a request."""
+    actions give way to a note, ten at a time, and the episode goes on (context policy item 8).
+    Without the note, decision 28 was invalid without a request."""
     header, records = _play(
         "jev_decisions",
         script.LEDGER_OVERFLOW,

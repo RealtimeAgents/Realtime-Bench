@@ -5,9 +5,8 @@ from __future__ import annotations
 
 Version 1 copied what each code path did before the policy existed; every later version makes
 one change (see CONTEXT_POLICY_VERSION), to one item, except version 2, which changed generic
-LiteLLM's reasoning and verbatim replay (items 6 and 7) together, and version 7, whose
-pressure-archive rule (item 8) writes a fixed text of its own (item 5). A change that alters what
-some model is shown bumps the version; moving a preset from an API row to the model that needs it
+LiteLLM's reasoning and verbatim replay (items 6 and 7) together. A change that alters what some
+model is shown bumps the version; moving a preset from an API row to the model that needs it
 alters nothing shown and keeps it. The values count in the effective run config and therefore in
 its hash. Every item is read from here: retention, feedback placement, the ledger role, reasoning
 and verbatim replay, pressure archiving, the Decision history form, the tool-call replay format,
@@ -45,9 +44,7 @@ from realtime_framework.entity.records import _jsonable
 #    one-option question.
 # 6: text-JSON prompts: "All generated output tokens count." only under a finite B, and frame
 #    texts that stay true on older frames.
-# 7: a request still over the window with every turn archived leaves out the earliest archived
-#    actions, a note in their place, instead of invalidating the decision.
-CONTEXT_POLICY_VERSION = 7
+CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
 LEDGER_OMISSION = "[{count} earlier archived actions were omitted to fit the context window.]"

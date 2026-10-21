@@ -195,8 +195,8 @@ LEDGER_OMISSIONS = (16, 26, 36, 46, 56)  # the decisions that leave out the next
 def test_history_overflow_ledger(tmp_path):
     """As for JEV (test_decisions.py test_history_overflow_ledger): with every turn archived and
     the request still over the window, the ledger message leaves out its earliest actions, ten at
-    a time, behind a note, and every decision sends its request. Before context policy version
-    7, decision 16 was invalid without a request."""
+    a time, behind a note, and every decision sends its request. Without the note, decision 16
+    was invalid without a request."""
     with ChatCompletionsStub(replies(LONG_SCENARIO)) as stub:
         config = chat_completions_config(stub.base_url, stream=False).model_copy(
             update=dict(zip(("context_window_tokens", "context_reserve_tokens"), LEDGER_WINDOW))
