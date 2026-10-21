@@ -680,7 +680,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def official_suite(identity, suite_tasks):
-    """Accept only a released private suite whose content and membership match this checkout."""
+    """Accept only a released private suite whose content and membership match this checkout,
+    run on a released harness."""
+    from realtime_framework.evaluation.config import HARNESS_UNRELEASED
     from realtime_tasks.registry import suite_path
 
     selector = f"{identity['suite_id']}@{identity.get('suite_version')}"
@@ -697,6 +699,12 @@ def official_suite(identity, suite_tasks):
     }
     if manifest.get("suite_hash") != identity["suite_hash"] or suite_tasks != released:
         raise ValueError(f"Official evaluation requires the entire released {selector} suite")
+    harness = identity["harness_version"]
+    if harness.endswith(HARNESS_UNRELEASED):
+        raise ValueError(
+            f"Official evaluation requires a released harness, not harness@{harness}, whose "
+            "sources differ from the hash pyproject.toml locks"
+        )
 
 
 def trial_error_reason(directory):
