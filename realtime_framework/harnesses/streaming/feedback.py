@@ -2,9 +2,10 @@
 (phase2.md, native streaming). The streaming policy commits an outcome for every action, the three
 refusals included, and one for a reply that came to no action (evaluation/kernel/streaming.py).
 
-The text is the turn-based execution result (harnesses/default/harness.py commit_action): what
-ran, what was asked for, and the status. An action that did not run ran nothing; each refusal says
-why, so that the model can tell the action it sent was never applied.
+The text is the turn-based execution result (harnesses/default/harness.py _report): what ran, what
+was asked for, and the status, and a note where a done or fail ran as a wait. An action that did
+not run ran nothing; each refusal says why, so that the model can tell the action it sent was
+never applied.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from realtime_framework.harnesses.default.frames import (
     INVALID_GROUNDING_FRAME,
     MISSING_FRAME,
 )
+from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 
 if TYPE_CHECKING:  # the agent does not import the evaluation package at run time
     from realtime_framework.evaluation.kernel.events import Outcome
@@ -50,7 +52,7 @@ _FRAME_ERRORS = {
 
 
 def action_text(action: Action) -> str:
-    """An action as the action record writes it (harnesses/default/harness.py stream_generate)."""
+    """An action as the action record writes it (harnesses/default/harness.py _action_text)."""
     return action.action_type.value + (f" {action.parameters}" if action.parameters else "")
 
 
@@ -66,4 +68,9 @@ def execution_feedback(outcome: Outcome, requested: str) -> str:
     if outcome.detail:
         text += f" Detail: {outcome.detail}"
     note = _NOTES.get(status) or action_result_note(status)
-    return f"{text} {note}" if note else text
+    if note:
+        text += " " + note
+    # The policy runs a done or fail as a wait (evaluation/kernel/streaming.py _arrived).
+    if status in _RAN and outcome.protocol_failure == "unsupported_terminal_action":
+        text += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
+    return text
