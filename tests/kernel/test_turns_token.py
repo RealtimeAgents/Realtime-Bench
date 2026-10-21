@@ -311,10 +311,10 @@ def test_the_state_is_read_once_a_frame_and_after_every_action():
     assert sim.termination.stop_reason == "tick_limit"
 
 
-def test_a_taps_own_reads_are_the_reads_of_the_frames_it_steps_to():
+def test_a_tap_reads_its_ticks_in_the_environment_and_the_kernel_once_after_it():
     # Paused at 120 fps, fed at 120 fps: a tap at tick 0 steps to 1 and 2 inside the environment,
     # with a read after each. The kernel reads tick 0 at the loop top and tick 2 once after the
-    # tap, and nothing else: tick 1 is the tap's, and decision 1's loop top at 2 reads no more.
+    # tap, and nothing else: decision 1's loop top at 2 reads no more.
     sim = _run(
         _token(10, None, env_fps=120, input_fps=120),
         Reply(action=TAP),
