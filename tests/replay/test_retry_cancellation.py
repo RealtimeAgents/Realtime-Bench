@@ -1,14 +1,15 @@
-"""An aborted decision sends no further request.
+"""An aborted generation sends no further request.
 
-When run_stream's bounded wait expires it keeps the generate worker in ``abandoned`` and calls the
-agent's abort (evaluation/runner.py _bounded_call). DefaultHarness.abort sets the cancel event of
-every generation that has not ended, then has the runtime close the session
-(harnesses/default/context.py RealtimeRuntime.abort). Each generation runs every attempt with its
-own event (RealtimeRuntime.run_turn's ``cancel``) and its retries inside retry_cancellation. Once
-the event is set the backoff ends, no attempt starts (entity/model.py RequestRetry), and an
-attempt already under way sends neither its observation nor its request
-(RealtimeRuntime._run_turn). RetryCancelled unwinds to stream_generate, which returns a stale
-result without an action; nothing reads it, run_stream has moved on.
+The kernel gives up on a generation with AbortGeneration, which the shell runs as the agent's
+abort(generation) (evaluation/shell.py KernelAgent); the legacy run_stream calls abort() when its
+bounded wait expires (evaluation/runner.py _bounded_call). DefaultHarness.abort sets the cancel
+event of that generation, or of every generation that has not ended, then has the runtime close
+the session (harnesses/default/context.py RealtimeRuntime.abort). Each generation runs every
+attempt with its own event (RealtimeRuntime.run_turn's ``cancel``) and its retries inside
+retry_cancellation. Once the event is set the backoff ends, no attempt starts (entity/model.py
+RequestRetry), and an attempt already under way sends neither its observation nor its request
+(RealtimeRuntime._run_turn). RetryCancelled unwinds to generate, which hands back a cancelled
+result without an action. The kernel discards it, and nothing joins the history.
 
 Before this, the next attempt read the epoch afresh, reconnected and kept its reply: a request
 after the abort, and a turn and an action that nobody committed.
@@ -80,15 +81,17 @@ class _GatedBackoff:
         self._wait(clock, cancel, seconds)
 
 
-def _generate_in_worker(agent, observation, k=0):
-    """run_stream's _step (runner.py:917-919) on a daemon thread, as _bounded_call runs it
-    (runner.py:327-336)."""
+GENERATION = 1  # the kernel's number of the generation each agent-level test aborts
+
+
+def _generate_in_worker(episode, observation):
+    """The shell's StartGeneration for decision 0: the agent's generate on a daemon thread."""
     box, done = {}, threading.Event()
+    budget = episode.budget(observation.tick_number)
 
     def worker():
         try:
-            agent.stream_prefill(observation)
-            box["result"] = agent.stream_generate(tick=k)
+            box["pending"] = episode.agent.generate(GENERATION, 0, observation, budget)
         except BaseException as exc:  # noqa: BLE001 - reported by the test
             box["error"] = exc
         finally:
@@ -98,36 +101,44 @@ def _generate_in_worker(agent, observation, k=0):
     return box, done
 
 
-def _abort_like_the_runner(agent) -> None:
-    """_bounded_call's timeout branch calls adapter.abort() (runner.py _bounded_call). Waiting
-    for the cleanup RealtimeRuntime.abort schedules only makes the state below deterministic."""
+def _abort_like_the_kernel(agent) -> None:
+    """The shell runs AbortGeneration as abort(generation). Waiting for the cleanup
+    RealtimeRuntime.abort schedules only makes the state below deterministic."""
     runtime = agent._runtime
-    agent.abort()
+    agent.abort(GENERATION)
     cleanup = runtime._cleanup_future
     assert cleanup is not None
     cleanup.result(timeout=WAIT_S)
     assert runtime._connected is False  # RealtimeRuntime._abort_active
 
 
-def _cancelled(box, done) -> dict:
+def _discarded(agent, box, done) -> None:
+    """The abandoned generation's result is cancelled; the kernel discards it."""
     assert done.wait(WAIT_S), "the abandoned worker never returned"
     assert "error" not in box, repr(box.get("error"))
-    result = box["result"]
-    assert result["stale"] is True and result["action"] is None, result
-    return result
+    pending = box["pending"]
+    assert pending.cancelled, pending
+    assert pending.result["stale"] is True and pending.result["action"] is None, pending.result
+    agent.discard(GENERATION)
 
 
 def _count_calls(target, name: str) -> list:
-    """Wrap an async method; each call records its keyword arguments."""
+    """Wrap an async method; each call records its keyword arguments, and its positional ones
+    under ``args``."""
     calls = []
     original = getattr(target, name)
 
     async def recorded(*args, **kwargs):
-        calls.append(kwargs)
+        calls.append({"args": args, **kwargs})
         return await original(*args, **kwargs)
 
     setattr(target, name, recorded)
     return calls
+
+
+def _requests(calls: list) -> list[tuple]:
+    """Each _run_turn call's kernel generation (its request's), and whether it is cancelled."""
+    return [(call["args"][1].generation, call["cancel"].is_set()) for call in calls]
 
 
 def _trace(run_dir, event: str) -> list[dict]:
@@ -137,7 +148,7 @@ def _trace(run_dir, event: str) -> list[dict]:
 
 def _attempts(run_dir) -> list[tuple]:
     return [
-        (a["scope"]["attempt"], a["outcome"], a.get("stale"))
+        (a["scope"]["attempt"], a["outcome"], a.get("cancelled"))
         for a in _trace(run_dir, "ModelAttemptFinished")
         if a["kind"] == "generation"
     ]
@@ -146,7 +157,7 @@ def _attempts(run_dir) -> list[tuple]:
 def _check_nothing_kept(agent, turns: list) -> None:
     """Only attempt 1 ran, for the generation the abort cancelled; no turn or action joins the
     history."""
-    assert [call["cancel"].is_set() for call in turns] == [True]
+    assert _requests(turns) == [(GENERATION, True)]
     assert agent._runtime.turns == ()
     assert agent.action_history == []
 
@@ -203,9 +214,10 @@ def test_no_attempt_once_cancelled():
 
 
 def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa: F811
-    """Stateless API. Attempt 1 gets HTTP 503 (TRANSIENT, entity/model.py:424-425) and the
-    harness backs off. The runner aborts the agent during the backoff: the wait ends, and the
-    same request is not sent again."""
+    """Stateless API. Attempt 1 gets HTTP 503 (TRANSIENT, entity/model.py classify_http_failure)
+    and the harness backs off. The kernel aborts the generation during the backoff: the wait
+    ends, and the same request is not sent again. The request was recorded under the kernel's
+    generation number."""
     backoff = _GatedBackoff()
     openrouter_env.setattr(model_module, "_backoff", backoff)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
@@ -223,13 +235,12 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
             connects = _count_calls(agent.driver, "connect")
             turns = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            box, done = _generate_in_worker(agent, observation)
+            box, done = _generate_in_worker(episode, observation)
             assert backoff.entered.wait(WAIT_S), "attempt 1 was not retried"
             assert len(stub.requests) == 1
-            _abort_like_the_runner(agent)
+            _abort_like_the_kernel(agent)
             backoff.release.set()
-            _cancelled(box, done)
+            _discarded(agent, box, done)
         finally:
             episode.finish()
     assert stub.unscripted == 0 and stub.unused_replies == 0
@@ -238,16 +249,16 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
     assert connects == []  # no reconnect for the abandoned decision
     _check_nothing_kept(agent, turns)
     sent = [
-        (r["scope"]["decision"], r["scope"]["attempt"])
+        (r["scope"]["decision"], r["scope"]["generation"], r["scope"]["attempt"])
         for r in _trace(tmp_path, "ModelRequestSent")
     ]
-    assert sent == [(0, 1)]
+    assert sent == [(0, GENERATION, 1)]
     assert _attempts(tmp_path) == [(1, "retry", None)]
 
 
 def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     """Stateless API, abort while the request is in flight. The stub holds request 0 until the
-    client closes it; the abort's driver.close() does (providers/litellm.py:1033-1044). The
+    client closes it; the abort's driver.close() does (providers/litellm.py close). The
     failure arrives before any output and is classified TRANSIENT, but the generation is
     cancelled: the backoff returns at once and nothing is sent again. The reply scripted for a
     retry stays unused."""
@@ -279,11 +290,10 @@ def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
             )
             turns = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            box, done = _generate_in_worker(agent, observation)
+            box, done = _generate_in_worker(episode, observation)
             assert arrived.wait(WAIT_S)
-            _abort_like_the_runner(agent)
-            _cancelled(box, done)
+            _abort_like_the_kernel(agent)
+            _discarded(agent, box, done)
         finally:
             episode.finish()
     assert stub.held == [True]  # the abort closed the held request
@@ -335,7 +345,7 @@ def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatc
     assert stub.unscripted == 0 and stub.unused_replies == 1
     assert stub.held == [True]
     assert len(stub.requests) == 1
-    assert [call["cancel"].is_set() for call in turns] == [True]
+    assert _requests(turns) == [(None, True)]  # the legacy loop numbers no generation
     assert commit_statuses(env) == [(0, "skipped_timeout", "")]
     assert [action for *_, action in timeline] == [None]
     requests = [
@@ -364,8 +374,9 @@ def _session_episode(stub, tmp_path):
 
 def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
     """Session API (OpenAI Realtime). Response 1 is dropped with close 1011 before any output, a
-    TRANSIENT failure (providers/openai_realtime.py:233-250), and the harness backs off. The
-    runner aborts during the backoff: no second WebSocket opens and no second response runs."""
+    TRANSIENT failure (providers/openai_realtime.py classify_transport_error), and the harness
+    backs off. The kernel aborts the generation during the backoff: no second WebSocket opens
+    and no second response runs."""
     backoff = _GatedBackoff()
     monkeypatch.setattr(model_module, "_backoff", backoff)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
@@ -376,12 +387,11 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
             connects = _count_calls(agent.driver, "connect")
             turns = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            box, done = _generate_in_worker(agent, observation)
+            box, done = _generate_in_worker(episode, observation)
             assert backoff.entered.wait(WAIT_S), "the dropped response was not retried"
-            _abort_like_the_runner(agent)
+            _abort_like_the_kernel(agent)
             backoff.release.set()
-            _cancelled(box, done)
+            _discarded(agent, box, done)
         finally:
             episode.finish()
         connections = stub.finish()
@@ -397,9 +407,9 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
 
 def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
     """Stateless API. Attempt 1 gets HTTP 503, which leaves the runtime DIRTY
-    (context.py:665-671), so attempt 2 first recovers it (context.py:402-412). The abort lands
-    during that recovery; the attempt then stops before it sends its observation or its request
-    (context.py:482-484)."""
+    (RealtimeRuntime.run_turn), so attempt 2 first recovers it (RealtimeRuntime._ensure_ready).
+    The abort lands during that recovery; the attempt then stops before it sends its observation
+    or its request (RealtimeRuntime._run_turn)."""
     openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
@@ -424,27 +434,25 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
             agent.driver.sync_history = gated_sync
             turns = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            box, done = _generate_in_worker(agent, observation)
+            box, done = _generate_in_worker(episode, observation)
             assert syncing.wait(WAIT_S), "attempt 2 did not recover the runtime"
-            _abort_like_the_runner(agent)
+            _abort_like_the_kernel(agent)
             release.set()
-            _cancelled(box, done)
+            _discarded(agent, box, done)
         finally:
             episode.finish()
     assert stub.unscripted == 0 and stub.unused_replies == 0
     assert len(stub.requests) == 1
-    assert [call["cancel"] for call in turns] == [turns[0]["cancel"]] * 2
-    assert turns[0]["cancel"].is_set()
+    assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None)]
 
 
 def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatch):
     """Session API. Response 1 is dropped, and attempt 2 rebuilds the session through connect()
-    (context.py:402-412; providers/openai_realtime.py:661-671). The abort lands before connect()
-    opens it. connect()'s own attempts run under the decision's retry_cancellation
-    (providers/openai_realtime.py:435-454), so no WebSocket opens and no response runs."""
+    (RealtimeRuntime._ensure_ready). The abort lands before connect() opens it. connect()'s own
+    attempts run under the generation's retry_cancellation (providers/openai_realtime.py
+    connect), so no WebSocket opens and no response runs."""
     monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with RealtimeStub(realtime_replies([STEP]), drop_responses=(1,)) as stub:
         episode = _session_episode(stub, tmp_path)
@@ -462,12 +470,11 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
             agent.driver.connect = gated_connect
             turns = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            box, done = _generate_in_worker(agent, observation)
+            box, done = _generate_in_worker(episode, observation)
             assert connecting.wait(WAIT_S), "attempt 2 did not reconnect"
-            _abort_like_the_runner(agent)
+            _abort_like_the_kernel(agent)
             release.set()
-            _cancelled(box, done)
+            _discarded(agent, box, done)
             # abort()'s state: the abandoned rebuild records no failure and no session state.
             assert agent._runtime.state == RuntimeState.DIRTY
         finally:
@@ -477,8 +484,7 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
     assert stub.violations == [] and stub.unscripted == 0
     assert len(connections) == 1
     assert [r["connection"] for r in responses] == [1]
-    assert [call["cancel"] for call in turns] == [turns[0]["cancel"]] * 2
-    assert turns[0]["cancel"].is_set()
+    assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None)]
     connects = [a for a in _trace(tmp_path, "ModelAttemptFinished") if a["kind"] != "generation"]

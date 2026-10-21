@@ -96,7 +96,7 @@ def _run(driver, run_dir: Path, turns: int):
         for k in range(turns):
             request = GenerationRequest(f"turn-{k}", None, "inf", "wall")
             with trace_scope(phase="decision", decision=k, generation_id=f"turn-{k}", attempt=1):
-                runtime.run_turn(
+                result = runtime.run_turn(
                     [_observation(k)],
                     request,
                     _Collector(),
@@ -106,6 +106,7 @@ def _run(driver, run_dir: Path, turns: int):
                     decision=k,
                     cancel=runtime.clock.event(),
                 )
+            runtime.accept_turn(result.turn)
             history.append({"tick": k + 1, "executed": "wait", "result": "wait"})
     finally:
         with trace_scope(phase="close"):
