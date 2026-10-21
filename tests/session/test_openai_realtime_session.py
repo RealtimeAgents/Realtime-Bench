@@ -662,8 +662,13 @@ def test_a_push_names_its_client_event():
         Push("f2.frame", frame.item_id),
         Push("d1.feedback", feedback.item_id),
     )
-    assert core.frames["f2.frame"].user_item_id == frame.item_id
-    assert core.frames["d1.feedback"].user_item_id == feedback.item_id
+    assert {
+        k: (core.frames[k].user_item_id, core.frames[k].text, core.frames[k].folded)
+        for k in ("f2.frame", "d1.feedback")
+    } == {
+        "f2.frame": (frame.item_id, "frame 2", False),
+        "d1.feedback": (feedback.item_id, "fb1", False),
+    }
     sent(core, [frame, feedback])
     assert core.receive(done(frame.item_id))
     assert (core.delivery[frame.key], core.delivery[feedback.key]) == (
@@ -737,6 +742,41 @@ def test_a_fold_anchors_on_the_items_the_server_made_for_a_reply(output):
         ("delete", second, None, True),
         ("create", "user", "srv_1" if output else placeholder, True),
     ]
+
+
+def test_a_frame_pushed_during_a_reply_folds_where_the_view_has_it():
+    """A frame pushed after the server made a reply's item may follow that item on the server,
+    but the reply is accepted when it ends, so the view has the frame before the reply. Its
+    placeholder goes where the view has it, after the block before it, as a rebuild puts it."""
+    core = streamed(stream("F"), frames=5)
+    core.start_reply("d1.output")
+    created, added, _, finished = response_events()
+    core.receive(created)
+    core.receive(added)
+    acknowledge(core, sent(core, [core.push(streaming_view(stream("FF"), frames=5))]))
+    core.receive(finished)
+    blocks = stream("FFRF")
+    acknowledge(core, sent(core, [core.push(streaming_view(blocks, frames=5))]))
+    item = items_of(core)
+    batch = core.queue_edit(streaming_view(blocks, frames=1))
+    assert item["d1.output"] == "srv_1"
+    assert shape(batch.operations) == [
+        ("delete", item["f1.frame"], None, True),
+        ("create", "user", "root", True),
+        ("delete", item["f2.frame"], None, True),
+        ("create", "user", batch.operations[1].item_id, True),
+    ]
+
+
+def test_a_turn_based_edit_deletes_every_sent_frame_its_view_lacks():
+    """A turn-based edit takes its view as the whole session: a sent frame the view lacks goes,
+    however new. Only a native-streaming edit leaves the frames pushed after its view."""
+    turns = [turn(0, "a0"), turn(1, "a1"), turn(2, "a2")]
+    core = opened(turns)
+    newest = [core.frames["d2.frame"].user_item_id, *core.frames["d2.frame"].assistant_item_ids]
+    batch = core.begin_edit(view(turns[:2]))
+    assert shape(batch.operations) == [("delete", item_id, None, True) for item_id in newest]
+    assert batch.removed == ("d2.frame",)
 
 
 def test_a_streaming_edit_leaves_the_blocks_not_pushed_yet():
