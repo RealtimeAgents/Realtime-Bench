@@ -228,7 +228,8 @@ class _Generation:
     budget: DecisionBudget
     usage_before: dict | None
     started_at: float  # operational time when it started
-    started_semantic: float  # the semantic reading it started at
+    started_semantic: float  # the readings it started at
+    started_ops: float | None
     done: threading.Event  # set once the worker has handed its result back
     result: dict | None = None  # as the worker handed it back
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
@@ -287,6 +288,7 @@ class _Shell:
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._cap_due: float | None = None  # when the per-move cap that fired fell due
+        self._watchdog_due: float | None = None  # when the provider watchdog that fired fell due
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -548,7 +550,7 @@ class _Shell:
             budget,
             usage_before,
             clock.time(),
-            self._now[0],
+            *self._now,
             clock.event(),
         )
         self._generations[held.generation] = held
@@ -628,26 +630,6 @@ class _Shell:
             invalid=episode_records.result_invalid(r, agent, clock_mode),
         )
         return result, inference
-
-    def _timed_out(self, entry: Entry) -> None:
-        """The kernel reports a move over the per-move cap as skipped (kernel/turns.py
-        ``on_timer``); the other generations it gives up on end the episode and their decision
-        goes unreported. The move's records are the runner's of a call it gave up on, unless the
-        call came back before the cap and was settled after it: then they are its own."""
-        held = self._generations[entry.data["generation"]]
-        if held.inference is not None:
-            self._decision.result = held.result
-            return
-        # The cap, however late the shell got to it: the kernel charges the move that much.
-        latency = round(self._cap_due - held.started_semantic, 2)
-        r = episode_records.timed_out_result(latency, entry.data["reason"])
-        result, (chunks, completed) = self._settle(held, r)
-        self._decision.result = r
-        for chunk in chunks:
-            self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
-        self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
-        if result.invalid is not None:  # its trajectory row could not be written
-            self.post(result.invalid)
 
     def _abort(self, generation: int) -> None:
         held = self._generations.get(generation)  # None when its StartGeneration raised
@@ -919,6 +901,8 @@ class _Shell:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
             if kind == "TimerFired" and data["kind"] == "per_move_cap":
                 self._cap_due = data["at"]
+            elif kind == "TimerFired" and data["kind"] == "generation_watchdog":
+                self._watchdog_due = data["at"]
             elif kind == "GenerationAbandoned":
                 self._abandoned_on_a_bound(entry)
             elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
@@ -928,20 +912,43 @@ class _Shell:
                 )
 
     def _abandoned_on_a_bound(self, entry: Entry) -> None:
-        """A generation given up on at the per-move cap or the wall deadline timed out, as the
-        runner logs it (runner.py _run_step); one over the cap is reported as skipped."""
-        reason = entry.data["reason"]
-        if reason not in ("per_move_cap", "deadline"):
-            return
-        held = self._generations[entry.data["generation"]]
-        due = self._cap_due if reason == "per_move_cap" else self.config.duration_s
-        bound = "per_move_cap" if reason == "per_move_cap" else "wall_deadline"
-        self.log(
-            f"[default] k={held.decision} generation TIMED OUT "
-            f"(>{due - held.started_semantic:g}s, {bound}) — discarded"
-        )
+        """A generation given up on at the per-move cap, the wall deadline or the provider
+        watchdog timed out: it is logged and recorded as the runner records a call it gave up on
+        (runner.py _run_step), with no usage, which leaves the episode's cost incomplete
+        (decision 48). Only the move over the cap is reported, as skipped (kernel/turns.py
+        on_timer); the other two end the episode and their decision goes unreported. A call that
+        came back before the bound and was settled after it has its own records instead."""
+        reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if reason == "per_move_cap":
-            self._timed_out(entry)
+            # The bound, however late the shell got to it: the kernel charges the move that much.
+            seconds = self._cap_due - held.started_semantic
+            r = episode_records.timed_out_result(round(seconds, 2), "per_move_cap")
+            bound = "per_move_cap"
+        elif reason == "deadline":
+            seconds = self.config.duration_s - held.started_semantic
+            r = episode_records.timed_out_result(round(seconds, 2), "wall_deadline")
+            bound = "wall_deadline"
+        elif self._watchdog_due is not None:  # the watchdog invalidated the run (on_timer)
+            seconds = self._watchdog_due - held.started_ops
+            r = episode_records.watchdog_result(round(seconds, 2), seconds)
+            bound = "provider_watchdog"
+        else:
+            return
+        self.log(
+            f"[default] k={held.decision} generation TIMED OUT (>{seconds:g}s, {bound}) — discarded"
+        )
+        if held.inference is not None:
+            if reason == "per_move_cap":
+                self._decision.result = held.result
+            return
+        result, (chunks, completed) = self._settle(held, r)
+        if reason == "per_move_cap":
+            self._decision.result = r
+        for chunk in chunks:
+            self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
+        self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
+        if result.invalid is not None and self.kernel.invalid is None:
+            self.post(result.invalid)  # its trajectory row could not be written
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the

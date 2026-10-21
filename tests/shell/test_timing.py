@@ -118,6 +118,27 @@ def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_m
     assert episode.clock.monotonic() == 7.0
 
 
+def test_a_generation_the_watchdog_gave_up_on_is_recorded_as_the_runner_records_it():
+    """Decision 48: the call the 7 s watchdog gave up on leaves the runner's record of it
+    (runner.py _run_step): an InferenceCompleted and a trajectory row naming the watchdog, and a
+    token record without usage."""
+    timing = RunnerTimingConfig(provider_watchdog_s=7.0)
+    episode = run("token", 5.0, [Reply(hang=True)], timing=timing)
+    assert episode.invalid["reason"] == "generation_watchdog_timeout"
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["invalid_reason"], p["latency_s"]) for p in completed] == [
+        (0, "generation_watchdog_timeout", 7.0)
+    ]
+    rows = episode.agent.trajectory
+    assert [(row["decision"], row["invalid_reason"]) for row in rows] == [
+        (0, "generation_watchdog_timeout")
+    ]
+    assert episode.env._token_accounting.summary()["responses"] == 1
+    assert "[default] k=0 generation TIMED OUT (>7s, provider_watchdog) — discarded" in (
+        episode.logs
+    )
+
+
 def test_the_token_watchdog_runs_on_operational_seconds_from_the_environment(monkeypatch, steps):
     """STREAM_PROVIDER_WATCHDOG_S bounds a token-clock generation that never answers. The world
     stands at tick 0 throughout; the watchdog fires 7 operational seconds in, which it can only
