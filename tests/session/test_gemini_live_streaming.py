@@ -590,7 +590,9 @@ def test_a_pushed_frame_goes_on_the_video_stream_then_its_text_and_starts_no_rep
 
     async def run():
         await rig.connect()
+        before = rig.driver.clock.monotonic()
         pushed_frame = await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        written = (before, rig.driver.clock.monotonic())
         delivery = rig.driver._core.delivery[("block", "f1.frame")]
         rig.socket.feed(GO_AWAY)
         await settle()
@@ -599,10 +601,12 @@ def test_a_pushed_frame_goes_on_the_video_stream_then_its_text_and_starts_no_rep
         except RuntimeError as exc:
             refused = str(exc)
         await rig.driver.close()
-        return pushed_frame, delivery, refused
+        return pushed_frame, written, delivery, refused
 
-    pushed_frame, delivery, refused = asyncio.run(run())
-    assert pushed_frame == {"observation_id": "obs-1"}
+    pushed_frame, written, delivery, refused = asyncio.run(run())
+    # The receipt (decision N43): written once both went out; Gemini Live confirms no frame.
+    assert pushed_frame.confirmed_at is None
+    assert written[0] <= pushed_frame.written_at <= written[1]
     video, text = rig.socket.sent
     assert list(video["realtime_input"]) == ["video"]
     assert text == {"realtime_input": {"text": "frame 1"}}

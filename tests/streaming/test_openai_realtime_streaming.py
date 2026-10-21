@@ -30,6 +30,7 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     HistorySyncRequest,
     HistorySyncResult,
+    PushReceipt,
     SessionSeed,
     SyncDisposition,
 )
@@ -878,3 +879,38 @@ def test_a_reply_asked_for_while_one_is_in_progress_raises():
 
     _within(scenario())
     assert [kind for kind, _ in wire.written] == ["response.create"]
+
+
+# The server confirms the pushed frame 0.4 s after it went out.
+CONFIRMED_LATER = [
+    {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+    c2s(SESSION_UPDATE),
+    push(1, 1, 1),
+    item_done(1, None) | {"at": 0.4},
+    {"conn": 1, "dir": "close", "at": None, "msg": {"by": "client", "code": 1000}},
+]
+
+
+def test_a_push_tells_when_its_frame_went_out_and_when_the_server_confirmed_it():
+    """The receipt's times are the driver clock's monotonic readings (decision N43): the frame
+    was written at 0 s, and its conversation.item.done came at 0.4 s."""
+    clock, table = FakeClock(), FrameTable()
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+
+    async def scenario(driver):
+        await driver.connect(ConnectRequest(seed=seed))
+        observation = _observation(1)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        receipt = await driver.push_frame(
+            observation, streaming_view([frame_block(record, observation)], frames=1)
+        )
+        await driver.close()
+        return receipt
+
+    with CassetteServer(CONFIRMED_LATER, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        receipt = run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+    assert receipt == PushReceipt(written_at=0.0, confirmed_at=0.4)

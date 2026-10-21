@@ -25,6 +25,7 @@ from realtime_framework.entity.model import HistorySyncResult
 from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
+from realtime_framework.entity.model import PushReceipt
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
@@ -759,10 +760,13 @@ class GeminiLiveDriver(SessionLifecycle):
         # information; its input usage is audited, never output-charged.
         return self.types.Blob(data=bytes(3200), mime_type="audio/pcm;rate=16000")
 
-    async def push_frame(self, observation: ProviderObservation, history: CanonicalRequest) -> dict:
+    async def push_frame(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> PushReceipt:
         """Streaming: push the history view's newest frame, one the session does not hold yet,
         on the realtime_input video stream and then its text, outside any activity, so that it
-        starts no reply.
+        starts no reply. Its receipt says when both were written; Gemini Live confirms no frame
+        (decision N43).
 
         A push and a trigger hold the session as a connection operation does
         (SessionLifecycle): their messages do not interleave, none goes to a connection being
@@ -786,8 +790,9 @@ class GeminiLiveDriver(SessionLifecycle):
             except BaseException:
                 self._core.send_failed(push.keys)
                 raise
+            written = self.clock.monotonic()
         self._core.sent(push.keys)
-        return {"observation_id": push.observation_id}
+        return PushReceipt(written)
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Streaming: start the next reply with one activity, holding the execution feedback of

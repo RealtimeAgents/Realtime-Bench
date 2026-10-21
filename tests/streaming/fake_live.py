@@ -27,6 +27,7 @@ from realtime_framework.entity.events import (
 from realtime_framework.entity.model import (
     GenerationHandle,
     HistorySyncResult,
+    PushReceipt,
     RealtimeCapabilities,
     SyncDisposition,
 )
@@ -203,14 +204,18 @@ class FakeLiveDriver(SessionLifecycle):
         if self.renewal_required:
             raise RuntimeError("the session requires a renewal before input")
 
-    async def push_frame(self, observation, history) -> dict:
+    async def push_frame(self, observation, history) -> PushReceipt:
         self.calls.append(("push", observation.observation_id, _ids(history)))
         self.views.append(history)
         self._take_input()
         if observation.observation_id in self.failing:
             raise RuntimeError("push failed")
         self._pushes.setdefault(observation.observation_id, asyncio.Event()).set()
-        return {"observation_id": observation.observation_id}
+        return await self._receipt()
+
+    async def _receipt(self) -> PushReceipt:
+        """Written now, and confirmed by no server, as Gemini Live's push."""
+        return PushReceipt(written_at=self.clock.monotonic())
 
     async def request_reply(self, request) -> GenerationHandle:
         self.calls.append(("reply", request.generation, _ids(request.canonical)))
@@ -269,9 +274,17 @@ class FakeLiveDriver(SessionLifecycle):
 
 class TextLiveDriver(FakeLiveDriver):
     """A fake live encoder whose model answers in text, as OpenAI Realtime's does: a closed
-    connection ends a reply's stream with no boundary."""
+    connection ends a reply's stream with no boundary, and the server confirms each pushed
+    frame, ``confirm_s`` after it was written, before the push returns."""
 
     closed_fails_reply = False
+    confirm_s = 0.0
+
+    async def _receipt(self) -> PushReceipt:
+        written = self.clock.monotonic()
+        await asyncio.sleep(self.confirm_s)
+        return PushReceipt(written_at=written, confirmed_at=self.clock.monotonic())
+
     capabilities = RealtimeCapabilities(
         protocol_family="fake_live_text",
         persistent_session=True,

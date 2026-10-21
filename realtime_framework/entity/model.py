@@ -229,6 +229,16 @@ class GenerationRequest:
     generation: int | None = None
 
 
+@dataclass(frozen=True)
+class PushReceipt:
+    """What became of a frame native streaming pushed (decision N43): when it was written on
+    the wire, and when the server confirmed it holds it, None where the protocol confirms no
+    frame; both read on the driver's operational clock (Clock.monotonic)."""
+
+    written_at: float
+    confirmed_at: float | None = None
+
+
 @dataclass
 class GenerationHandle:
     generation_id: str
