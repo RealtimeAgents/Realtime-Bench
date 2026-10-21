@@ -72,7 +72,8 @@ UNAVAILABLE = Failure(503, {"error": {"message": "upstream down", "code": 503}})
 class _GatedBackoff:
     """Wraps the retry executor's backoff (entity/model.py _backoff). It records every delay;
     backoffs before the ``gated``-th return at once. That one sets ``entered`` and waits for
-    ``release`` before the real wait, so the test aborts first."""
+    ``release``, so the test aborts first, then waits as the real backoff, but for longer than
+    any test waits: only the cancellation ends it in time."""
 
     def __init__(self, gated: int = 1):
         self.calls = []
@@ -88,7 +89,7 @@ class _GatedBackoff:
         self.entered.set()
         if not self.release.wait(WAIT_S):
             raise AssertionError("the test never released the backoff")
-        self._wait(clock, cancel, seconds)
+        self._wait(clock, cancel, 3 * WAIT_S)
 
 
 GENERATION = 1  # the kernel's number of the generation each agent-level test aborts
@@ -183,6 +184,13 @@ def _questions(run_dir) -> list[tuple]:
         for a in _trace(run_dir, "ModelAttemptFinished")
         if a["kind"] == "choice_question"
     ]
+
+
+def _inspection_outcomes(run_dir) -> list:
+    """How each observation's inspection ended (sandbox/observation/som.py ToolRuntime.finish);
+    one never finished is written at close without an outcome."""
+    lines = (run_dir / "tool_calls.jsonl").read_text().splitlines()
+    return [json.loads(line).get("outcome") for line in lines]
 
 
 def _check_nothing_kept(agent, turns: list) -> None:
@@ -283,7 +291,8 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
     """Stateless API. Attempt 1 gets HTTP 503 (TRANSIENT, entity/model.py classify_http_failure)
     and the harness backs off. The kernel aborts the generation during the backoff: the wait
     ends, and the same request is not sent again. The request was recorded under the kernel's
-    generation number."""
+    generation number. Discarding the result ends the decision's inspection as
+    superseded_by_timeout (harness.py DefaultHarness._drop)."""
     backoff = _GatedBackoff()
     openrouter_env.setattr(model_module, "_backoff", backoff)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
@@ -319,6 +328,75 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
         for r in _trace(tmp_path, "ModelRequestSent")
     ]
     assert sent == [(0, GENERATION, 1)]
+    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _inspection_outcomes(tmp_path) == ["superseded_by_timeout"]
+
+
+def _stateless_episode(tmp_path):
+    return build_episode(
+        openrouter_config(),
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        model_key=OPENROUTER_MODEL_KEY,
+        **TOKEN_CLOCK,
+    )
+
+
+def test_next_decision_runs_after_an_abort(openrouter_env, tmp_path):  # noqa: F811
+    """Stateless API. Generation 1 is abandoned in its backoff, as above. The abort cancels that
+    generation's own event (DefaultHarness.abort); the next generation, for decision 1 on the
+    same agent, starts with a new one (DefaultHarness._open), so it is not cancelled: it sends its
+    request and returns its action."""
+    backoff = _GatedBackoff()
+    openrouter_env.setattr(model_module, "_backoff", backoff)
+    with OpenRouterStub([UNAVAILABLE, *replies([STEP])], route=ROUTE) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = _stateless_episode(tmp_path)
+        agent = episode.agent
+        try:
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert backoff.entered.wait(WAIT_S), "attempt 1 was not retried"
+            _abort_like_the_kernel(agent)
+            backoff.release.set()
+            _discarded(agent, box, done)
+            observation = episode.frames.capture(1)
+            budget = episode.budget(observation.tick_number)
+            pending = agent.generate(GENERATION + 1, 1, observation, budget)
+            agent.accept(GENERATION + 1)
+        finally:
+            episode.finish()
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert len(stub.requests) == 2
+    assert not pending.cancelled and pending.result.get("invalid_reason") is None
+    assert pending.result["action"] is not None
+    assert len(agent.action_history) == 1
+    assert _attempts(tmp_path) == [(1, "retry", None), (1, "ok", False)]
+
+
+def test_close_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa: F811
+    """Stateless API. Attempt 1 gets HTTP 503 and the harness backs off; the agent is closed, not
+    aborted, during the backoff. close() cancels every generation that has not ended
+    (DefaultHarness.close), so the wait ends and the request is not sent again."""
+    backoff = _GatedBackoff()
+    openrouter_env.setattr(model_module, "_backoff", backoff)
+    with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = _stateless_episode(tmp_path)
+        agent = episode.agent
+        try:
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert backoff.entered.wait(WAIT_S), "attempt 1 was not retried"
+            agent.close()
+            backoff.release.set()
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert len(stub.requests) == 1 and len(backoff.calls) == 1
+    assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None)]
 
 
