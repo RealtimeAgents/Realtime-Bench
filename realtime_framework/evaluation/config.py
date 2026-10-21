@@ -601,14 +601,15 @@ def configuration_sha256(launch: dict) -> str:
     """Hash of the model configuration a Harbor trial resolved (the trial worker's settings).
 
     Harbor's verify and aggregate and the upload compare it between resolution and the run and
-    across runs; an external driver's code identity is part of it.
+    across runs; an external driver's code identity and a streaming run's settings are part of it.
     """
     configuration = {
         "model_config": launch["model_config"],
         "model_revision": launch.get("model_revision"),
     }
-    if "external_driver" in launch:
-        configuration["external_driver"] = launch["external_driver"]
+    for part in ("external_driver", "streaming"):
+        if part in launch:
+            configuration[part] = launch[part]
     return hashlib.sha256(
         json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
