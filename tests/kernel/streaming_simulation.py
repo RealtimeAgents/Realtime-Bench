@@ -662,6 +662,27 @@ class Simulation:
                 data["terminal_after_action"],
                 round(landed * self.config.env_fps, 9),
             )
+        # Every frame captured goes in or is dropped, as the counts say, but the one that froze
+        # the stream and one in a push still out when the run finishes.
+        answered = self.entries("FramePushed")
+        went_in = [entry.data.observation_id for entry in answered if entry.data.error is None]
+        dropped = self.data("FrameDropped")
+        assert (self.policy.frames_pushed, self.policy.dropped_frames) == (
+            len(went_in),
+            len(dropped),
+        )
+        frames = {
+            entry.data.observation_id
+            for entry in self.entries("FrameCaptured")
+            if entry.data.error is None
+        }
+        still_out = {observation for observation, _ in self.pushes} - {
+            entry.data.observation_id for entry in answered
+        }
+        invalid = self.termination.invalid
+        if invalid is None or invalid.reason != "observation_stream_frozen":
+            gone = set(went_in) | {data["observation_id"] for data in dropped} | still_out
+            assert frames <= gone, f"frames {sorted(frames - gone)} neither went in nor dropped"
         # A hold's keys are released its duration after it was pressed.
         for data in self.data("KeyReleaseScheduled"):
             action = outcomes[data["index"]]

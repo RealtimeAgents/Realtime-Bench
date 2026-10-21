@@ -192,8 +192,12 @@ def test_a_capture_that_cannot_keep_up_skips_the_beats_it_misses(tmp_path):
     records = _records(tmp_path)
     dropped = _kernel(records, "FrameDropped")
     captures = [interval for interval in env.intervals if interval[0] == "capture"]
-    assert len(captures) + len(dropped) == 6  # a beat at each whole second before the deadline
-    assert {data["reason"] for data in dropped} == {"capture_busy"}
+    skipped = [data for data in dropped if data["reason"] == "capture_busy"]
+    assert len(captures) + len(skipped) == 6  # a beat at each whole second before the deadline
+    # The frame the last capture brings back at the deadline goes nowhere.
+    assert [(data["observation_id"], data["reason"]) for data in dropped[len(skipped) :]] == [
+        ("obs-3", "ended")
+    ]
     assert [data["dropped"] for data in dropped] == list(range(1, len(dropped) + 1))
 
 

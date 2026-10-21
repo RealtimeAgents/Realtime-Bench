@@ -722,6 +722,15 @@ def test_every_frame_captured_is_pushed_or_counted_as_dropped():
     assert len(sim.captures) == 6
 
 
+def test_a_frame_captured_across_the_end_is_counted_as_dropped():
+    """The capture at 2 takes until 3.5, past the deadline at 3; its frame goes nowhere."""
+    sim = _run(World(capture_times={3: 1.5}), 3.0)
+    assert [(d["observation_id"], d["reason"]) for d in sim.data("FrameDropped")] == [
+        ("obs-2", "ended")
+    ]
+    assert (sim.policy.frames_pushed, sim.policy.dropped_frames) == (2, 1)
+
+
 def test_an_action_answered_past_the_deadline_is_settled_before_the_one_waiting():
     """The click ends at 4.75 as a refused action arrives; that feedback holds the shell until
     5.75, when the click's answer is handled past the deadline and the read after it is made. The
