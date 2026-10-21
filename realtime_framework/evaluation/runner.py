@@ -925,6 +925,8 @@ def main():
         token_accounting,
         pricing=(catalog_entry.pricing if catalog_entry is not None else None),
         provider=(catalog_entry.provider if catalog_entry is not None else None),
+        # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
+        unaccounted="not_accounted_streaming" if a.interaction_mode == "streaming" else None,
     )
     from realtime_framework.evaluation.clock import summarize_model_timing
 
@@ -989,6 +991,25 @@ def main():
             validate_decision_count=False,
         )
         run_metrics["run_metrics_error"] = metrics_error
+    # The trace holds every record the episode wrote, checkpointed above.
+    streaming = None
+    if a.interaction_mode == "streaming":
+        try:
+            streaming = summarize_streaming(
+                run_dir / "episode_trace.jsonl",
+                (runtime_config or {}).get("streaming"),
+                attempt_id=episode_trace.attempt_id,
+            )
+        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
+        except json.JSONDecodeError:
+            invalid_run = invalid_run or {
+                "category": "harness",
+                "reason": "streaming_summary_failed",
+                "detail": traceback.format_exc(),
+            }
+            solved = None
+            run_status = "invalid"
+            stop_reason = "invalid_run"
     effective_model_identity = {
         "adapter": cfg.adapter_type if cfg else requested_model_identity["adapter"],
         "model": requested_model_identity["model"],
@@ -1128,9 +1149,7 @@ def main():
     summ["episode_trace"] = episode_trace.describe()
     episode_trace.close()
     if a.interaction_mode == "streaming":
-        summ["streaming"] = summarize_streaming(
-            run_dir / "episode_trace.jsonl", (runtime_config or {}).get("streaming")
-        )
+        summ["streaming"] = streaming
     _atomic_write_json(run_dir / "run_summary.json", summ)
     from realtime_framework.evaluation.reporting import finalize_video
 

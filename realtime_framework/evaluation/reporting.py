@@ -267,16 +267,21 @@ def _unavailable(summary: dict, reason: str, *, rate_card=None, status="unavaila
 
 
 def summarize_cost(
-    token_accounting: dict | None, *, pricing: dict | None = None, provider: str | None = None
+    token_accounting: dict | None,
+    *,
+    pricing: dict | None = None,
+    provider: str | None = None,
+    unaccounted: str | None = None,
 ) -> dict:
     """Prefer a complete provider invoice amount, otherwise apply a versioned rate card.
 
     A complete rate-card result requires complete provider totals and cache splits. Modality
     details must reconcile unless the catalog explicitly declares a billing modality for the
     unclassified positive remainder; missing data is never silently priced as text.
+    ``unaccounted`` is why a run accounts no response though it made some.
     """
     if not isinstance(token_accounting, dict) or not token_accounting.get("responses"):
-        return _unavailable(token_accounting or {}, "no_inference_responses")
+        return _unavailable(token_accounting or {}, unaccounted or "no_inference_responses")
 
     reported = token_accounting.get("provider_reported_cost") or {}
     reported_total = _amount(reported.get("known_total_usd"))
@@ -785,8 +790,10 @@ STREAMING_SUMMARY_SCHEMA = "realtime_bench.streaming_summary.v1"
 _FRAME_BLOCK = re.compile(r"f\d+\.frame")  # harnesses/streaming/history.py frame_block
 
 
-def summarize_streaming(trace_path, settings: dict | None) -> dict:
-    """The streaming section of a native-streaming run's summary, from its episode trace.
+def summarize_streaming(trace_path, settings: dict | None, *, attempt_id: str) -> dict:
+    """The streaming section of a native-streaming run's summary, from the records of its own
+    attempt (EpisodeTrace.attempt_id) in its episode trace, which a run directory used again holds
+    another attempt's records before.
 
     Frames: those captured and pushed into the session, from the kernel's FrameCaptured and
     FramePushed, and those dropped by reason (FrameDropped). For each frame pushed the agent's
@@ -820,6 +827,8 @@ def summarize_streaming(trace_path, settings: dict | None) -> dict:
     refused = set()  # frame blocks the provider refused
     events = {"KernelRecord", TraceEvent.SESSION_DELIVERY.value, TraceEvent.FRAME_SENT.value}
     for row in rows(trace_path, events):
+        if row["attempt_id"] != attempt_id:
+            continue
         payload = row["payload"]
         if row["event"] == "KernelRecord":
             if payload["kind"] in kernel:
@@ -1838,10 +1847,16 @@ def report(root):
                     streaming = identity["interaction_mode"] == "streaming"
                     if streaming:
                         # A streaming episode has no turns, so it writes no decision lifecycle
-                        # (runner.py run_stream): its run summary's streaming section stands in.
+                        # (runner.py run_stream): its run summary's streaming section stands in,
+                        # which must be the one its own trace, checked above, gives.
                         section = summary["streaming"]
-                        if section.get("schema") != STREAMING_SUMMARY_SCHEMA:
-                            raise ValueError("Invalid streaming section")
+                        trace = summary["episode_trace"]
+                        if section != summarize_streaming(
+                            path.parent / trace["artifact"],
+                            summary["runtime_config"]["streaming"],
+                            attempt_id=trace["attempt_id"],
+                        ):
+                            raise ValueError("Streaming section does not match the episode trace")
                         records = []
                     else:
                         records = [
