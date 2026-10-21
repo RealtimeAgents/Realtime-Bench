@@ -82,8 +82,8 @@ def _gave_up_at(env) -> float:
 def test_reply_after_the_grace_period_is_dropped(tmp_path):
     """Decision 3's reply takes 3 s. The runner gives up at the deadline plus the grace, aborts
     the agent and skips the decision (runner.py:337-345, 405-411, 523); the reply would have come
-    at 6.0 s. The abort closes the request and ends the decision's epoch, so the abandoned worker
-    does not send it again (harnesses/default/harness.py:1163, 1355; entity/model.py:494-503)."""
+    at 6.0 s. The abort closes the request and cancels the decision's generation, so the abandoned
+    worker does not send it again (DefaultHarness.abort; entity/model.py RequestRetry)."""
     env, arrivals = _run_on_fake_environment(tmp_path, replies(FORM), [0.5, 0.5, 0.5, 3.0])
     assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3 + [
         "skipped_timeout"
@@ -97,8 +97,9 @@ def test_reply_after_the_grace_period_is_dropped(tmp_path):
 def test_retry_backoff_past_the_deadline(tmp_path, monkeypatch):
     """Decision 3's request fails twice with HTTP 503 before any output. The harness backs off
     1 s, then 3 s, each +-25% (entity/model.py:367-385). The second backoff would run past the
-    point where the runner gives up; the abort ends the decision's epoch, which ends the backoff
-    then, and the decision is skipped without a third attempt (entity/model.py:494-503)."""
+    point where the runner gives up; the abort cancels the decision's generation, which ends the
+    backoff then, and the decision is skipped without a third attempt (entity/model.py
+    RequestRetry)."""
     backoffs = []
 
     def backoff(clock, cancel, seconds):
