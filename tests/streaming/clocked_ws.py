@@ -39,9 +39,8 @@ from websockets.protocol import CLOSED, OPEN
 from websockets.server import ServerProtocol
 
 from tests import fake_clock
-from tests.replay import baseline
 
-from .ws_cassette import Cursor
+from .ws_cassette import Cursor, RealtimeNormalizer
 
 RECV_BYTES = 65536
 CLIENT_END_WAIT_S = 10.0  # real seconds, like websockets' close timeout
@@ -99,7 +98,7 @@ class CassetteServer:
     def __init__(self, records: list[dict], clock, *, normalizer=None, origin=0.0):
         self._clock = clock
         self._origin = origin
-        self.cursor = Cursor(records, normalizer or baseline.Normalizer())
+        self.cursor = Cursor(records, normalizer or RealtimeNormalizer())
         # Every connection's thread reads and moves the one cursor.
         self._lock = threading.Lock()
         self._listener = socket.create_server(("127.0.0.1", 0))

@@ -209,3 +209,22 @@ def test_a_server_close_is_released_like_a_timed_message():
     assert cursor.next_due(1) == 2.0
     assert cursor.release(1, 2.0) == [_record("close", close, 2.0)]
     assert cursor.finish() == []
+
+
+@pytest.mark.parametrize(
+    ("message", "kind"),
+    [
+        # A pushed frame's item (providers/openai_realtime_session.py:290).
+        ({"type": "conversation.item.create", "item": {"id": "rtb_user_1"}}, "push"),
+        # A cancel (providers/openai_realtime.py:548).
+        ({"type": "response.cancel"}, "cancel"),
+    ],
+)
+def test_a_pushed_frames_and_a_cancels_event_ids_are_our_random_ids(message, kind):
+    normalize = ws_cassette.NORMALIZERS["openai_realtime.ws"]
+    recorded = normalize()({**message, "event_id": f"rtb_{kind}_0a1b2c"})
+    assert recorded["event_id"] == f"<rtb_{kind}-1>"
+    cursor = Cursor([_record("open", at=0.0), _record("c2s", recorded, 0.0)], normalize())
+    cursor.open(0.0)
+    cursor.receive(1, {**message, "event_id": f"rtb_{kind}_9f8e7d"}, 0.0)
+    assert cursor.finish() == []
