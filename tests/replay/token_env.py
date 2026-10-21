@@ -5,7 +5,8 @@ Here that class runs unchanged: its tick, horizon, key leases and waits (sandbox
 ClockTask (clock_task.py) in place of a game's task clock, captures come from the synthetic frames
 of frames.py, and pointer and text actions reach a guest that only records them. Each call
 run_stream makes, and each event of the task clock, is appended to ``calls`` tagged with the
-decision it belongs to, as FakeEnvironment does, so loop.records reads both.
+decision it belongs to, as FakeEnvironment does, so loop.records reads both. The calls the kernel's
+shell makes instead (evaluation/shell.py) are logged the same way.
 """
 
 from __future__ import annotations
@@ -86,9 +87,9 @@ class TokenEnvironment(GuestEnvironment):
         super().wait_until_tick(target)
         self.log("env.wait_until_tick", target=target, from_tick=before, to_tick=self._logical_tick)
 
-    def execute(self, action):
+    def execute(self, action, *, release_at=None):
         before = self._logical_tick
-        status = super().execute(action)
+        status = super().execute(action, release_at=release_at)
         self.log(
             "env.execute",
             action=action_record(action),
@@ -105,6 +106,22 @@ class TokenEnvironment(GuestEnvironment):
         if over:
             self.log("env.done")
         return over
+
+    def check_end(self) -> tuple[bool, str | None]:
+        """Only an end is logged, as by done()."""
+        ended, reason = super().check_end()
+        if ended:
+            self.log("env.check_end", reason=reason)
+        return ended, reason
+
+    def step_clock(self, step) -> None:
+        before = self._logical_tick
+        super().step_clock(step)
+        self.log("env.step_clock", step=step, from_tick=before, to_tick=self._logical_tick)
+
+    def release_keys(self, keys) -> None:
+        self.log("env.release_keys", keys=list(keys))
+        super().release_keys(keys)
 
     def record_lifecycle(self, record: dict) -> None:
         self.log("env.record_lifecycle", record=record)

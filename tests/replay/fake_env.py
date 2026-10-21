@@ -6,7 +6,9 @@ wait_until_tick, and reads the optional time_remaining and past_deadline hooks
 sandbox/actions.py:112-967). This class follows GuestEnvironment's wall-clock branch call for
 call on the episode's fake clock (tests/fake_clock.py), serves the frames of frames.py, and
 executes nothing: each call is appended to ``calls`` in order, tagged with the decision it belongs
-to.
+to. The kernel's shell asks check_end instead of done (evaluation/shell.py); what it calls only on
+the token clock (set_episode_horizon, step_clock, release_keys, render_current_frame) has no
+wall-clock part.
 
 Model latency is scripted here too, since it is wall time: a stub calls ``model_request(index)``
 as its ``on_request`` hook before it answers request ``index`` and sleeps that request's scripted
@@ -90,6 +92,13 @@ class FakeEnvironment:
         self.decision = -1  # run_stream captures once per decision (runner.py:846)
         self.finalizing = False
         self.executions: list[dict] = []
+        # What the kernel's shell reads and sets (evaluation/shell.py). On the wall clock an
+        # execution leases no token-clock key and makes no end check, and here no key-release
+        # timer runs that could invalidate the run.
+        self.last_held_keys: tuple[str, ...] = ()
+        self.last_end_checks: tuple[str | None, ...] = ()
+        self.kernel_counts_reads = False
+        self.on_invalid = None
 
     def log(self, call: str, **fields) -> None:
         self.calls.append(
@@ -174,9 +183,24 @@ class FakeEnvironment:
         self.log("env.done", cause=cause)
         return True
 
+    def check_end(self) -> tuple[bool, str | None]:
+        """GuestEnvironment.check_end, for the kernel's shell: only the task is asked. Only an end
+        is logged."""
+        terminal = self.stop_check(self) if self.stop_check is not None else None
+        if not terminal:
+            return False, None
+        self._episode_over = True
+        reason = terminal if isinstance(terminal, str) else None
+        if reason is not None:
+            self._terminal_reason = reason
+        self.log("env.check_end", reason=reason)
+        return True, reason
+
     # ---- actions (actions.py:805-938) ----
 
-    def execute(self, action):
+    def execute(self, action, *, release_at=None):
+        """``release_at`` is the release time the kernel's shell gives a hold_key; it is recorded
+        when given, since no key is held here."""
         execution = {
             "action": action_record(action),
             "time": self.clock.time(),
@@ -185,6 +209,8 @@ class FakeEnvironment:
             # has asked done() since.
             "episode_over": self._over()[0],
         }
+        if release_at is not None:
+            execution["release_at"] = release_at
         self.executions.append({"decision": self.decision, **execution})
         if action.action_type == ActionType.WAIT:
             # The wall clock sleeps out the wait, cut short at the deadline (actions.py:830-870);
