@@ -349,22 +349,30 @@ def _raise_deeper(depth):
 
 
 class FailingAgent(FakeAgent):
-    """Mapping its output cap to the transport's, which the shell does on its own thread as it
-    starts a generation (episode_records.decision_budget), raises from deep in a call stack, as a
-    driver's can: the traceback runs far past the invalid-run detail's 2000 characters and names
-    the exception last."""
+    """Binding its budget raises from deep in a call stack, as an SDK's can: the traceback runs
+    far past the invalid-run detail's 2000 characters and names the exception last."""
 
-    def transport_output_token_cap(self, provider_cap):
+    def configure_decision(self, budget):
         _raise_deep(40)
 
 
-def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path):
-    """The first decision raises after the loop's first end check: the run is invalid, its detail
-    ends with the exception and the summary's error holds the whole traceback."""
+class FailingPrefillAgent(FakeAgent):
+    """Taking the decision's frame raises, as deep."""
+
+    def stream_prefill(self, observation):
+        _raise_deep(40)
+
+
+@pytest.mark.parametrize("agent_type", [FailingAgent, FailingPrefillAgent])
+def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path, agent_type):
+    """The first decision raises after the loop's first end check, as it binds its budget or
+    takes its frame, which the legacy loop did on its own thread (N30): the run is invalid as the
+    runner's, its detail ends with the exception and the summary's error holds the whole
+    traceback."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "deadline_expired", False)
-    summary = run_main(tmp_path, task, FailingAgent(clock), clock, guest)
+    summary = run_main(tmp_path, task, agent_type(clock), clock, guest)
 
     invalid = summary["invalid_run"]
     assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
