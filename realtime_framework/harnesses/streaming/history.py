@@ -47,7 +47,9 @@ def frame_block(frame: FrameRecord, observation: ProviderObservation) -> Content
     )
 
 
-def output_block(decision: int, text: str, based_on: str | None, wall_ns: int | None) -> ContentBlock:
+def output_block(
+    decision: int, text: str, based_on: str | None, wall_ns: int | None
+) -> ContentBlock:
     """The model output of reply ``decision``, the kernel's number of it (Outcome.decision).
     ``based_on`` is the observation_id of the frame its action names; None when no sent frame
     backs it."""
