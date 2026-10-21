@@ -702,6 +702,84 @@ def test_streaming_frame_rate_cap_plan(streaming_gemini, tmp_path):
     )
 
 
+# Each streaming rule at the entry points the tests above leave out.
+
+STREAMING_CAP = "gemini_live supports at most 1 fps; requested 2"
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["--catalog-model", "my-model"], NOT_LIVE),
+        (["--catalog-model", "gemini-live", "--clock", "token", "--tokens-per-frame", "unlimited"],
+         STREAMING_CLOCK),
+        (["--catalog-model", "gemini-live", "--fps", "2"], STREAMING_CAP),
+    ],
+    ids=["not-live", "pause-clock", "frame-rate-cap"],
+)
+def test_streaming_rules_trial(streaming_gemini, capsys, argv, message):
+    from realtime_framework.evaluation._trial import main
+
+    usage_error(
+        capsys,
+        lambda: main([*argv, "--task", WEB, "--interaction-mode", "streaming", "--dry-run"]),
+        message,
+    )
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["--model", "my-model", "--fps", "1", "--clock", "wall"], NOT_LIVE),
+        (["--model", "gemini-live", "--fps", "1", "--clock", "token", "--tokens-per-frame", "64"],
+         STREAMING_CLOCK),
+        (["--model", "gemini-live", "--fps", "1", "--clock", "token", "--tokens-per-frame",
+          "unlimited"], STREAMING_CLOCK),
+        # The runner's default clock too (runner.py main).
+        (["--model", "gemini-live", "--fps", "1", "--tokens-per-frame", "unlimited"],
+         STREAMING_CLOCK),
+        (["--model", "gemini-live", "--fps", "2", "--clock", "wall"], STREAMING_CAP),
+    ],
+    ids=["not-live", "token-clock", "pause-clock", "default-clock", "frame-rate-cap"],
+)
+def test_streaming_rules_identity(streaming_gemini, argv, message):
+    from realtime_framework.evaluation.config import identity_main
+
+    fails(
+        lambda: identity_main([*argv, "--task", WEB, "--max-minutes", "5", "--protocol",
+                               "wall-clock", "--interaction-mode", "streaming"]),
+        message,
+    )
+
+
+@pytest.mark.parametrize(
+    "key, clock_mode, tokens_per_frame, message",
+    [
+        ("gpt-realtime-2", "wall", None, "The openai_realtime API does not support streaming"),
+        ("gemini-live", "token", 64, STREAMING_CLOCK),
+        ("gemini-live", "token", None, STREAMING_CLOCK),
+    ],
+    ids=["undeclared", "token-clock", "pause-clock"],
+)
+def test_streaming_rules_run_config(streaming_gemini, key, clock_mode, tokens_per_frame, message):
+    fails(
+        lambda: effective_run_config(
+            model_config=preset(key), fps=1.0, max_minutes=5.0, protocol="wall-clock",
+            think_budget_s=None, per_move_cap_s=None, clock_mode=clock_mode,
+            tokens_per_frame=tokens_per_frame, interaction_mode="streaming",
+        ),
+        message,
+    )
+
+
+def test_streaming_undeclared_plan(tmp_path):
+    fails(
+        plan(tmp_path, "models: [gemini-live]\nruntime: {clock_mode: wall, "
+                       "interaction_mode: streaming}\n"),
+        "The gemini_live API does not support streaming",
+    )
+
+
 # Catalog status and reasoning effort (unchanged entry points)
 
 
