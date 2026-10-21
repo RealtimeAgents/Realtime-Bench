@@ -100,8 +100,8 @@ A streaming episode has no turns, so the fields of `run_summary.json` that count
 empty: `decisions`, `avg_delta_ticks`, `dropped_intermediate_frames`,
 `avg_frame_age_at_action_s` and `max_frame_age_at_action_s`, `token_usage` and the metrics drawn
 from the decision lifecycle, which it does not write. Read the `streaming` section instead; the
-accepted replies' tokens are in `adapter_token_usage`. The report validates a streaming run by
-that section.
+accepted replies' tokens are in `adapter_token_usage`. The report scores a streaming run
+only where that section is the one its episode trace gives.
 
 The two live APIs keep a session's context differently, and `context_control` says which way a
 run went. OpenAI Realtime's is exact: the harness keeps the newest `retained_frames` screenshots

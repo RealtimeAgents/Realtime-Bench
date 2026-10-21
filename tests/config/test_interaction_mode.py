@@ -118,7 +118,8 @@ def run_main(tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="
     monkeypatch.setattr(runner, "run_stream", run_stream)
     for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
         monkeypatch.setenv(name, "cpu")  # main() sets both
-    argv = ["--model", GEMINI, "--task", WEB, *(["--clock", clock_mode] if clock_mode else []), *argv]
+    clock_argv = ["--clock", clock_mode] if clock_mode else []
+    argv = ["--model", GEMINI, "--task", WEB, *clock_argv, *argv]
     argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
     with pytest.raises(SystemExit):  # an invalid run is not a scored result
@@ -404,42 +405,82 @@ def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
     return task, request, report
 
 
-# A streaming run summary's section (reporting.summarize_streaming), as far as the report reads it.
-SECTION = {
-    "schema": "realtime_bench.streaming_summary.v1",
-    "context_control": "approximate",
-    "frames": {
-        "captured": 300, "pushed": 290, "push_failed": 1, "dropped": 10,
-        "dropped_by_reason": {"capture_busy": 4, "push_failed": 1, "superseded": 5},
-        "confirmed": 0, "refused": 0,
-    },
-    "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
-    "replies": {"started": 41, "abandoned": {"deadline": 1}},
-}
+# What a short streaming episode leaves in its trace (evaluation/streaming_shell.py,
+# harnesses/streaming/agent.py): three frames captured, two pushed and the third's push failed, on
+# Gemini Live, which confirms none; one click applied; two replies, the second given up at the
+# deadline. Each is (event, kind or None, data).
+EPISODE = [
+    ("KernelRecord", "FrameCaptured", {"observation_id": "obs-1", "timestamp": 0.0, "error": None}),
+    ("FrameSent", None, {
+        "frame": 1, "observation_id": "obs-1", "captured_unix_s": 1000.0, "sent_unix_s": 1000.0,
+        "acked_unix_s": None,
+    }),
+    ("KernelRecord", "FramePushed", {"observation_id": "obs-1", "sent_at": 0.0, "error": None}),
+    ("KernelRecord", "InferenceStarted", {"decision": 0, "generation": 1}),
+    ("KernelRecord", "ActionArrived", {
+        "generation": 1, "frame": 1, "frame_age_s": 0.4, "frame_age_frames": 0, "rejection": None,
+    }),
+    ("KernelRecord", "ActionResolved", {
+        "status": "applied", "arrived_at": 0.4, "started_at": 0.4, "finished_at": 0.5,
+    }),
+    ("KernelRecord", "InferenceStarted", {"decision": 1, "generation": 2}),
+    ("KernelRecord", "FrameCaptured", {"observation_id": "obs-2", "timestamp": 1.0, "error": None}),
+    ("FrameSent", None, {
+        "frame": 2, "observation_id": "obs-2", "captured_unix_s": 1001.0, "sent_unix_s": 1001.0,
+        "acked_unix_s": None,
+    }),
+    ("KernelRecord", "FramePushed", {"observation_id": "obs-2", "sent_at": 1.0, "error": None}),
+    ("KernelRecord", "FrameCaptured", {"observation_id": "obs-3", "timestamp": 2.0, "error": None}),
+    ("KernelRecord", "FramePushed", {"observation_id": "obs-3", "sent_at": None, "error": "lost"}),
+    ("KernelRecord", "FrameDropped", {"observation_id": "obs-3", "reason": "push_failed"}),
+    ("KernelRecord", "GenerationAbandoned", {"generation": 2, "reason": "deadline"}),
+]  # fmt: skip
+TRACE = object()  # _report_root: the streaming section its trace gives
 
 
-def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
-    """A one-task local report root as runner.main() leaves it with --report-root: the identity
-    reporting.prepare_episode_report expects before the run, and a scored run summary of a solved
-    task with that identity, its streaming section ``streaming`` if one. A turn-based run made one
-    decision and wrote its lifecycle; a streaming run makes none, and writes none (runner.py
-    run_stream). The episode trace's own check (reporting._episode_trace_ok) passes, as
-    tests/shell_streaming checks streaming traces. Returns the root."""
-    from realtime_framework.evaluation import reporting
-    from realtime_framework.evaluation.reporting import prepare_episode_report
+def _trace(run, interaction_mode) -> dict:
+    """The episode trace of a finished, scored episode, which passes the report's own check of
+    it (reporting._episode_trace_ok); a streaming one holds EPISODE. Its description."""
+    from realtime_framework.clock import SystemClock
+    from realtime_framework.entity.records import TraceEvent
+    from realtime_framework.evaluation.reporting import EpisodeTrace
 
-    monkeypatch.setattr(reporting, "_episode_trace_ok", lambda path, summary: True)
-    root = tmp_path / "report"
+    trace = EpisodeTrace(run / "episode_trace.jsonl", run_id=WEB, clock=SystemClock())
+    trace.emit(TraceEvent.EPISODE_STARTED, {"interaction_mode": interaction_mode})
+    for event, kind, data in EPISODE if interaction_mode == "streaming" else []:
+        trace.emit(event, {"kind": kind, "data": data} if kind else data)
+    for event in (
+        TraceEvent.SNAPSHOT_FROZEN, TraceEvent.SCORE_PRODUCED, TraceEvent.EPISODE_FINISHED
+    ):
+        trace.emit(event, {})
+    description = trace.describe()
+    trace.close()
+    return description
+
+
+def _report_root(root, interaction_mode, streaming=TRACE, cell="cell"):
+    """A local report root as runner.main() leaves it with --report-root, with one task in
+    ``cell``: the identity reporting.prepare_episode_report expects before the run, and a scored
+    run summary of a solved task with that identity and its episode trace (_trace). A turn-based
+    run made one decision and wrote its lifecycle; a streaming run makes none and writes none
+    (runner.py run_stream), and its summary has the streaming section ``streaming``: by default
+    the one its trace gives (reporting.summarize_streaming), none for None. Returns the root."""
+    from realtime_framework.evaluation.reporting import prepare_episode_report, summarize_streaming
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver
+
     args = types.SimpleNamespace(
         model=GEMINI, model_input_fps=1.0, reasoning_effort="fixed", fps=1.0, max_minutes=5.0,
         mode="default", clock="wall", protocol="wall-clock", seed=42, tokens_per_frame="64",
         think_budget_s=None, per_move_cap_s=None, interaction_mode=interaction_mode, task=WEB,
-        results_dir=str(root / "cell"),
+        results_dir=str(root / cell),
     )
     prepare_episode_report(args)
-    (expected,) = json.loads((root / "cell" / "summary.json").read_text())["runs"]
-    run = root / "cell" / WEB
+    (expected,) = json.loads((root / cell / "summary.json").read_text())["runs"]
+    run = root / cell / WEB
     run.mkdir()
+    runtime_config = {"interaction_mode": interaction_mode}
+    if interaction_mode == "streaming":
+        runtime_config["streaming"] = dict(GeminiLiveDriver.streaming_settings)
     summary = {
         **expected,
         "stop_reason": "game_decided", "run_status": "scored", "invalid_run": None,
@@ -448,9 +489,15 @@ def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
         "verification": {"resolved": True, "evaluation_version": 1},
         "interactables_protocol": "environment_injected_each_observation",
         "token_accounting": {"counts": {"clock_output_tokens": {"responses_with_count": 0}}},
-        "cost_accounting": {},
-    }
-    if streaming is not None:
+        "cost_accounting": {}, "runtime_config": runtime_config,
+        "episode_trace": _trace(run, interaction_mode),
+    }  # fmt: skip
+    if streaming is TRACE and interaction_mode == "streaming":
+        trace = summary["episode_trace"]
+        streaming = summarize_streaming(
+            run / trace["artifact"], runtime_config["streaming"], attempt_id=trace["attempt_id"]
+        )
+    if streaming is not None and streaming is not TRACE:
         summary["streaming"] = streaming
     (run / "run_summary.json").write_text(json.dumps(summary))
     if interaction_mode == "turn_based":
@@ -458,37 +505,35 @@ def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
     return root
 
 
-def test_only_a_streaming_report_has_a_streaming_section(tmp_path, monkeypatch):
+def test_only_a_streaming_report_has_a_streaming_section(tmp_path):
     """reporting.report carries each task's streaming section (reporting.summarize_streaming) and
     sums a streaming group's counts; a turn-based group and its tasks have none."""
     from realtime_framework.evaluation.reporting import report
 
-    (group,) = report(_report_root(tmp_path / "turn_based", monkeypatch, "turn_based"))["groups"]
+    (group,) = report(_report_root(tmp_path / "turn_based", "turn_based"))["groups"]
     assert group["scored"] == 1
     assert "streaming" not in group and "streaming" not in group["tasks"][0]
 
-    root = _report_root(tmp_path / "streaming", monkeypatch, "streaming", SECTION)
+    root = _report_root(tmp_path / "streaming", "streaming")
     (group,) = report(root)["groups"]
     assert group["scored"] == 1
-    assert group["tasks"][0]["streaming"] == SECTION
+    summary = json.loads((root / "cell" / WEB / "run_summary.json").read_text())
+    assert group["tasks"][0]["streaming"] == summary["streaming"]
     assert group["streaming"] == {
         "context_control": "approximate",
         "frames": {
-            "captured": 300, "pushed": 290, "push_failed": 1, "dropped": 10, "confirmed": 0,
-            "refused": 0,
-            "dropped_by_reason": {"capture_busy": 4, "push_failed": 1, "superseded": 5},
+            "captured": 3, "pushed": 2, "push_failed": 1, "dropped": 1, "confirmed": 0,
+            "refused": 0, "dropped_by_reason": {"push_failed": 1},
         },
-        "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
-        "replies": {"started": 41, "abandoned": {"deadline": 1}},
-    }
+        "actions": {"arrived": 1, "outcomes": {"applied": 1}},
+        "replies": {"started": 2, "abandoned": {"deadline": 1}},
+    }  # fmt: skip
 
 
-def test_a_streaming_run_summary_without_its_section_is_not_scored(
-    tmp_path, monkeypatch
-):
+def test_a_streaming_run_summary_without_its_section_is_not_scored(tmp_path):
     from realtime_framework.evaluation.reporting import report
 
-    (group,) = report(_report_root(tmp_path, monkeypatch, "streaming"))["groups"]
+    (group,) = report(_report_root(tmp_path, "streaming", None))["groups"]
     assert (group["scored"], group["invalid"]) == (0, 1)
     (task,) = group["tasks"]
     assert (task["status"], task["error_reason"]) == ("invalid", "result_validation_failed")
@@ -498,7 +543,7 @@ def test_a_streaming_run_summary_without_its_section_is_not_scored(
 
 @pytest.mark.parametrize("interaction_mode", ["turn_based", "streaming"])
 def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
-    environment, tmp_path, monkeypatch, capsys, interaction_mode
+    environment, tmp_path, capsys, interaction_mode
 ):
     """A Harbor trial after its run: the request's options become the trial worker's command and
     settings, which the report's integration reads (wall_clock_launch.json); the runner's expected
@@ -513,8 +558,7 @@ def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
     )
     from realtime_framework.evaluation.reporting import report
 
-    streaming = SECTION if interaction_mode == "streaming" else None
-    root = _report_root(tmp_path, monkeypatch, interaction_mode, streaming)
+    root = _report_root(tmp_path / "report", interaction_mode)
     (expected,) = json.loads((root / "cell" / "summary.json").read_text())["runs"]
     options = RealtimeBenchOptions(interaction_mode=interaction_mode)
     request = {"model": GEMINI, "mode": "default", **options.model_dump(), "catalog_model": GEMINI}
@@ -550,22 +594,53 @@ def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
     assert (group["scored"], group["invalid"]) == (0, 1)
 
 
+def _tamper(section: dict) -> dict:
+    return {**section, "frames": {**section["frames"], "pushed": 10_000}}
+
+
 @pytest.mark.parametrize(
-    "section, decisions",
-    [({**SECTION, "schema": "realtime_bench.streaming_summary.v0"}, 0), (SECTION, 1)],
-    ids=["another-schema", "decisions"],
+    "section, decisions, error",
+    [
+        (lambda s: {**s, "schema": "realtime_bench.streaming_summary.v0"}, 0, "trace"),
+        (_tamper, 0, "trace"),
+        # The run is Gemini Live's, whose context control is approximate.
+        (lambda s: {**s, "context_control": "exact"}, 0, "trace"),
+        (lambda s: {"schema": s["schema"]}, 0, "trace"),
+        (lambda s: None, 0, "trace"),
+        (lambda s: s, 1, "Decision count mismatch"),
+    ],
+    ids=["another-schema", "counts", "context-control", "no-counts", "null", "decisions"],
 )
-def test_a_streaming_run_summary_is_held_to_its_section(tmp_path, monkeypatch, section, decisions):
-    """A streaming row stands on its streaming section, of this schema, and on no decision: the
-    turn-based lifecycle has none to compare (reporting.report)."""
+def test_a_streaming_run_summary_is_held_to_its_trace(tmp_path, section, decisions, error):
+    """A streaming row stands on its streaming section, which must be the one its own trace gives
+    (reporting.summarize_streaming), and on no decision: the turn-based lifecycle has none to
+    compare (reporting.report). A section that is not is no score, whatever its form."""
     from realtime_framework.evaluation.reporting import report
 
-    root = _report_root(tmp_path, monkeypatch, "streaming", section)
+    root = _report_root(tmp_path, "streaming")
     path = root / "cell" / WEB / "run_summary.json"
-    path.write_text(json.dumps({**json.loads(path.read_text()), "decisions": decisions}))
+    summary = json.loads(path.read_text())
+    summary.update(streaming=section(summary["streaming"]), decisions=decisions)
+    path.write_text(json.dumps(summary))
     (group,) = report(root)["groups"]
     assert (group["scored"], group["invalid"]) == (0, 1)
-    assert group["tasks"][0]["error_reason"] == "result_validation_failed"
+    (task,) = group["tasks"]
+    assert task["error_reason"] == "result_validation_failed"
+    if error == "trace":
+        error = "Streaming section does not match the episode trace"
+    assert task["error"] == error
+
+
+def test_a_streaming_section_of_no_form_leaves_the_report_to_the_other_groups(tmp_path):
+    """A section with nothing but its schema invalidates its row; the report goes on, and the
+    turn-based group beside it is scored (reporting.report)."""
+    from realtime_framework.evaluation.reporting import report
+
+    root = tmp_path / "report"
+    _report_root(root, "turn_based", cell="turn_based")
+    _report_root(root, "streaming", {"schema": "realtime_bench.streaming_summary.v1"})
+    groups = {group["interaction_mode"]: group for group in report(root)["groups"]}
+    assert (groups["turn_based"]["scored"], groups["streaming"]["invalid"]) == (1, 1)
 
 
 def test_harbor_verify_compares_the_mode():

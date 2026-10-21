@@ -1842,10 +1842,16 @@ def report(root):
                     streaming = identity["interaction_mode"] == "streaming"
                     if streaming:
                         # A streaming episode has no turns, so it writes no decision lifecycle
-                        # (runner.py run_stream): its run summary's streaming section stands in.
+                        # (runner.py run_stream): its run summary's streaming section stands in,
+                        # which must be the one its own trace, checked above, gives.
                         section = summary["streaming"]
-                        if section.get("schema") != STREAMING_SUMMARY_SCHEMA:
-                            raise ValueError("Invalid streaming section")
+                        trace = summary["episode_trace"]
+                        if section != summarize_streaming(
+                            path.parent / trace["artifact"],
+                            summary["runtime_config"]["streaming"],
+                            attempt_id=trace["attempt_id"],
+                        ):
+                            raise ValueError("Streaming section does not match the episode trace")
                         records = []
                     else:
                         records = [
