@@ -623,9 +623,9 @@ def items_of(core: RealtimeSessionCore) -> dict[str, str]:
 def test_frame_prefix_feedback_goes_into_the_frame_after_it():
     """Under the frame_prefix placement the view puts the feedback since the frame before in
     front of the next frame, as a turn-based frame carries it: a rebuild and a push write it into
-    that frame's item, and when the frame folds the feedback gives way to the placeholder with
-    it, so the next frame's placeholder goes after that frame's. The feedback since the newest
-    frame waits at the end of the view for the next frame, and nothing of it is written yet."""
+    that frame's item, which edits leave alone until the frame folds; then the feedback gives way
+    to the placeholder with it, after the frame before. The feedback since the newest frame waits
+    at the end of the view for the next frame, and nothing of it is written yet."""
     replayed = new_core().replay_streaming(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
     assert [(op.role, op.text) for op in replayed] == [
         ("user", "frame 1"),
@@ -642,16 +642,22 @@ def test_frame_prefix_feedback_goes_into_the_frame_after_it():
     acknowledge(core, sent(core, [pushed]))
     acknowledge(core, sent(core, [core.push(streaming_view(stream("FRFBFF"), 3, "frame_prefix"))]))
     item = items_of(core)
-    batch = core.queue_edit(streaming_view(stream("FRFBFF"), 1, "frame_prefix"))
-    assert shape(batch.operations) == [
+    older = core.queue_edit(streaming_view(stream("FRFBFF"), 2, "frame_prefix"))
+    assert shape(older.operations) == [
         ("delete", item["f1.frame"], None, True),
         ("create", "user", "root", True),
         ("delete", item["f2.frame"], None, True),
         ("create", "user", item["d1.output"], True),
-        ("delete", item["f3.frame"], None, True),
-        ("create", "user", batch.operations[3].item_id, True),
     ]
-    assert {op.text for op in batch.operations if isinstance(op, Create)} == {TEXTS.folded_visual}
+    assert (older.visuals_folded, older.prompts_edited) == (2, 2)
+    acknowledge(core, sent(core, older.operations))
+    core.finish_edit()
+    batch = core.queue_edit(streaming_view(stream("FRFBFF"), 1, "frame_prefix"))
+    assert shape(batch.operations) == [
+        ("delete", item["f3.frame"], None, True),
+        ("create", "user", older.operations[3].item_id, True),
+    ]
+    assert batch.operations[1].text == TEXTS.folded_visual
 
 
 def test_a_push_names_its_client_event():
