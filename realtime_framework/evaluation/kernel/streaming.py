@@ -15,7 +15,8 @@ over or past its deadline, its reply was given up, or the frame it names cannot 
 the provider cancels is withdrawn while its action waits; one that executed is recorded as it ran.
 A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
 is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
-a push its watchdog finds stuck, or pushes failing in a row. The shell runs the abort, which
+a push its watchdog finds stuck, or pushes failing in a row. A push the agent holds until the
+session is renewed (PushHeld) is not stuck, and its watchdog waits. The shell runs the abort, which
 returns once the agent has cleaned the session up and closed it, which fails a push stuck in it;
 the next reply starts at the first reading after that and rebuilds the session from the accepted
 history (phase2.md, 什么时候触发生成). The rebuilt session starts afresh: the pushes failed before
@@ -162,6 +163,27 @@ class FramePushed:
 
 
 @dataclass(frozen=True)
+class PushHeld:
+    """The push waits for the session instead of going in, and is not stuck in it: a session the
+    provider asked to renew takes no frame until the reply on it has ended, as Gemini Live's after
+    a goAway (harnesses/streaming/agent.py ``_push``). Its watchdog waits too, until PushResumed;
+    the reply's own watchdog bounds the wait."""
+
+    observation_id: str | None
+
+    priority: ClassVar[Priority] = Priority.COMPLETION
+
+
+@dataclass(frozen=True)
+class PushResumed:
+    """The push held goes on, the session renewed or about to be: its watchdog counts from now."""
+
+    observation_id: str | None
+
+    priority: ClassVar[Priority] = Priority.COMPLETION
+
+
+@dataclass(frozen=True)
 class ActionArrived:
     """One action of a reply, handed over as soon as it appears: a function call message, or the
     completed text its JSON is parsed from. A reply may hand over several, in order. The agent
@@ -233,6 +255,7 @@ class StreamingPolicy:
         self._latest: FrameCaptured | None = None  # the newest frame pushed
         self._capturing = False
         self._pushing: FrameCaptured | None = None
+        self._push_held = False  # it waits for the session's renewal (PushHeld)
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
         self._failed_pushes = 0  # in a row, on this session
         self._stale_push = False  # the push out was put into a session since given up
@@ -279,6 +302,8 @@ class StreamingPolicy:
                 self._captured(event)
             case FramePushed():
                 self._pushed(event)
+            case PushHeld() | PushResumed():
+                self._held(event)
             case ActionArrived():
                 self._arrived(event)
             case CallsCancelled():
@@ -353,7 +378,7 @@ class StreamingPolicy:
             if self._restart:
                 self._restart = False
                 self._start_reply()
-            if self._pushing is not None and self._push_watchdog is None:
+            if self._pushing is not None and self._push_watchdog is None and not self._push_held:
                 self._arm_push_watchdog()
         self._report()
 
@@ -467,6 +492,7 @@ class StreamingPolicy:
         kernel = self.kernel
         frame, self._pushing = self._pushing, None
         stale, self._stale_push = self._stale_push, False
+        self._push_held = False
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
         # Counted also once the episode is over: every frame captured goes in or is dropped, but
@@ -494,6 +520,19 @@ class StreamingPolicy:
         if self._queued is not None and not self._stopped():
             queued, self._queued = self._queued, None
             self._push(queued)
+
+    def _held(self, event: PushHeld | PushResumed) -> None:
+        """The push out waits for the session's renewal, which is no push stuck: its watchdog
+        waits too, and counts afresh once the push goes on."""
+        pushing = self._pushing
+        if pushing is None or pushing.observation_id != event.observation_id:
+            return
+        kernel = self.kernel
+        kernel.cancel_timer(self._push_watchdog)
+        self._push_watchdog = None
+        self._push_held = isinstance(event, PushHeld)
+        if not self._push_held and not self._stopped():
+            self._arm_push_watchdog()
 
     def _session_stuck(self, reason: str, invalid_reason: str, detail: str) -> None:
         """The session takes no frames: give its reply up, so that the next one rebuilds it. The
