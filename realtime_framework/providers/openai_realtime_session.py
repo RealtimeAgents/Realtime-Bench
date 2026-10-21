@@ -562,7 +562,7 @@ class RealtimeSessionCore:
         for frame_id, planned in batch.frames.items():
             sent = self.frames[frame_id]
             if planned[0] != sent.user_item_id:
-                # The item after the replaced one now follows its replacement.
+                # The replacement took the replaced item's place on the server.
                 for after, before in self._previous.items():
                     if before == sent.user_item_id:
                         self._previous[after] = planned[0]
