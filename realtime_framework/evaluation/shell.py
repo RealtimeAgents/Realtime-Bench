@@ -543,7 +543,7 @@ class _Shell:
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
-        the summary's error (runner.py run_stream, main)."""
+        the summary's error (runner.py _run_stream_legacy, main)."""
         self.log(f"[default] decision loop raised:\n{failure}")
         if self._loop_error is None:
             self._loop_error = self.env._loop_error = failure
@@ -972,9 +972,9 @@ class _Shell:
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
         longer holds, so the shell wraps the episode up without it, as the runner wrapped up a
-        loop that raised (runner.py run_stream, _finalize): the call running is interrupted, the
-        snapshot frozen unless it was, the inputs released and the termination record written.
-        A failure on the way is only logged."""
+        loop that raised (runner.py _run_stream_legacy, _finalize): the call running is
+        interrupted, the snapshot frozen unless it was, the inputs released and the termination
+        record written. A failure on the way is only logged."""
         self._escaped(failure)
         env = self.env
         try:

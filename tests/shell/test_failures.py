@@ -1,6 +1,6 @@
 """How run_episode carries failures to the kernel (evaluation/shell.py), on the fake clock.
 
-An exception the legacy loop let escape it (runner.py run_stream) invalidates the run as
+An exception the legacy loop let escape it (runner.py _run_stream_legacy) invalidates the run as
 runner:run_exception and the episode still finalizes. An invalid run the environment latches
 itself in an operation that returns keeps its own reason: the shell posts it before the
 command's answer, after it when the answer carries the same failure of the action, and the wall
@@ -267,8 +267,8 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     """N11: the kernel raises at the end check at 2 s, during the second call, which never
     answers. Nothing can be asked of the kernel any more: the shell interrupts the call, freezes
     the snapshot, releases the inputs and writes the termination record itself, as the runner
-    wrapped up a loop that raised (runner.py run_stream). The run is invalid: run_exception,
-    its traceback the summary's error, recorded as the runner records it."""
+    wrapped up a loop that raised (runner.py _run_stream_legacy). The run is invalid:
+    run_exception, its traceback the summary's error, recorded as the runner records it."""
     _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 2.0)
     episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])
     _wrapped_up(episode, 2.0)
