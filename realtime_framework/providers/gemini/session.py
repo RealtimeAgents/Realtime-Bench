@@ -13,10 +13,12 @@ with it. Nothing in it awaits, so each call is one transition, in the order of t
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
 <history block id>)`` and ``("tool_response", <call id>)``, each unknown while it is written,
 sent once written, confirmed when the server acknowledges it (only the setup is:
-setupComplete) and unknown when its write failed. A seed is recorded only once the connection
-counts, as sent; its blocks are heard as unknown when its write failed. A resumed session also
-holds what the server restored from the handle, which this record does not list. Each change but
-the start of a write is handed to ``on_delivery``, which the driver writes to the event log.
+setupComplete) and unknown when its write failed. A seed is recorded once the connection
+counts, as sent. When the write of a seed batch failed, the connection never counts: the setup is
+heard as confirmed, the blocks of the batches written before as sent and those of the failed
+batch as unknown. A resumed session also holds what the server restored from the handle, which
+this record does not list. Each change but the start of a write is handed to ``on_delivery``,
+which the driver writes to the event log.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ class Delivery(str, Enum):
 
     SENT = "sent"
     CONFIRMED = "confirmed"
-    UNKNOWN = "unknown"  # the send failed, so the server may or may not have it
+    UNKNOWN = "unknown"  # being written, or its write failed: the server may or may not have it
 
 
 # Keep initial-history WebSocket messages small. HistoryConfig deliberately allows several
@@ -218,6 +220,8 @@ class Connect:
     seeded: tuple[str, ...]  # ids of the history-view blocks the seed replays
     release_grace: bool
     carried: tuple[tuple[str, str], ...]  # (id, text) of the execution feedback the seed replays
+    # The ids of the blocks each seed batch carries, in order; a tool block can span batches.
+    batched: tuple[tuple[str, ...], ...] = ()
 
     @property
     def contents(self) -> int:
@@ -349,12 +353,19 @@ class SessionCore:
         server restores the session from the handle."""
         self.resume_handle = resume_handle
         self.latest_resume_handle = resume_handle
-        contents, seeded = self._seed(history)
+        contents, carriers = self._seed(history)
+        seeded = tuple(dict.fromkeys(block_id for ids in carriers for block_id in ids))
+        batches = tuple(history_batches(contents))
+        batched, start = [], 0
+        for batch in batches:
+            ids = (block_id for ids in carriers[start : start + len(batch)] for block_id in ids)
+            batched.append(tuple(dict.fromkeys(ids)))
+            start += len(batch)
         # Only streaming triggers read what the seed carries.
         items = history.items if history is not None and self.streaming else ()
         return Connect(
             resume_handle,
-            tuple(history_batches(contents)),
+            batches,
             seeded,
             release_grace=replacing or bool(contents),
             carried=tuple(
@@ -362,10 +373,12 @@ class SessionCore:
                 for item in items
                 if item.block.kind == "execution_feedback" and item.block.id in seeded
             ),
+            batched=tuple(batched),
         )
 
-    def _seed(self, history: CanonicalRequest | None) -> tuple[list[Content], tuple[str, ...]]:
-        """The Contents that replay the history view, and the ids of their blocks.
+    def _seed(self, history: CanonicalRequest | None) -> tuple[list[Content], list[tuple]]:
+        """The Contents that replay the history view, and for each the ids of the blocks it
+        carries: a frame's with the feedback prefixed to it, a tool block's in each of its rounds.
 
         The system block travels in the setup instead. In a turn-based view a model output is the
         canonical action of the native call that its turn's tool block carries, so it has no
@@ -378,39 +391,36 @@ class SessionCore:
         meanwhile.
         """
         if history is None:
-            return [], ()
+            return [], []
         texts = history.policy.texts
         prefixes = {} if self.streaming else _frame_prefixes(history)
-        contents, seeded, turn_index = [], [], -1
+        contents, carriers, turn_index = [], [], -1
         for item in history.items:
             block = item.block
             if block.kind == "action_ledger":
                 text = texts.ledger_header + "\n" + block.text
                 contents.append(Content(_ROLES[item.intent.role], (Part(text=text),)))
+                carriers.append((block.id,))
             elif block.kind == "frame":
                 turn_index += 1
                 prefix = prefixes.get(block.id)
                 text = _frame_text(block, prefix)
                 contents.append(_frame_content(_ROLES[item.intent.role], text, block.image))
-                if prefix is not None:
-                    seeded.append(prefix.id)
+                carriers.append((block.id,) if prefix is None else (prefix.id, block.id))
             elif block.kind == "tool_exchange":
                 tool_contents = self._tool_contents(
                     block, _ROLES[item.intent.role], turn_index, texts
                 )
-                if not tool_contents:
-                    continue
                 contents += tool_contents
+                carriers += [(block.id,)] * len(tool_contents)
             elif self.streaming and block.kind in ("model_output", "execution_feedback"):
-                if not block.text:
-                    continue
-                contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
+                if block.text:
+                    contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
+                    carriers.append((block.id,))
             elif _is_feedback(item):
                 contents.append(_feedback_content(item))
-            else:
-                continue
-            seeded.append(block.id)
-        return contents, tuple(seeded)
+                carriers.append((block.id,))
+        return contents, carriers
 
     def _tool_contents(self, block, role: str, turn_index: int, texts) -> list[Content]:
         """One turn's tool rounds: the text spoken before the first call, then the policy's
@@ -526,12 +536,23 @@ class SessionCore:
     def send_failed(self, keys) -> None:
         self._set(keys, Delivery.UNKNOWN)
 
-    def seed_failed(self, connect: Connect) -> None:
-        """A write of the seed failed before the connection counted: what it carried is unknown."""
-        self._on_delivery(
-            Delivery.UNKNOWN.value,
-            [(("block", block_id), block_id) for block_id in connect.seeded],
+    def seed_failed(self, connect: Connect, batch: int) -> None:
+        """The write of seed batch ``batch`` failed, after the server acknowledged the setup,
+        before the connection counted: the setup is confirmed, what the batches before carried
+        alone sent, what this one carried unknown. The batches after it were not written."""
+        failed = connect.batched[batch]
+        written = dict.fromkeys(
+            block_id
+            for ids in connect.batched[:batch]
+            for block_id in ids
+            if block_id not in failed
         )
+        self._on_delivery(Delivery.CONFIRMED.value, [(("setup",), "system")])
+        for state, ids in ((Delivery.SENT, written), (Delivery.UNKNOWN, failed)):
+            if ids:
+                self._on_delivery(
+                    state.value, [(("block", block_id), block_id) for block_id in ids]
+                )
 
     def _set(self, keys, delivery: Delivery) -> None:
         keys = list(keys)

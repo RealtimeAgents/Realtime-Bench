@@ -312,7 +312,9 @@ class GeminiLiveDriver(SessionLifecycle):
         self._trace = trace
 
     def _delivered(self, state: str, contents: list[tuple]) -> None:
-        """What became of writes the core recorded, on the connection opened last."""
+        """What became of writes the core recorded, on the connection opened last: a change
+        recorded once the next connection is open, as of an acknowledgement an abandoned reply
+        wrote late on the old one, is put on the new one."""
         self._record_delivery(state, contents, self._trace_connection)
 
     @staticmethod
@@ -555,6 +557,7 @@ class GeminiLiveDriver(SessionLifecycle):
             # turn_complete=False can cause historical model content to be echoed as new
             # output. HistoryConfig makes this a non-generating initialization boundary.
             # Bound the messages so screenshots do not form one oversized WebSocket frame.
+            index = 0
             try:
                 for index, batch in enumerate(connect.seed):
                     await session.send_client_content(
@@ -562,7 +565,7 @@ class GeminiLiveDriver(SessionLifecycle):
                         turn_complete=index == len(connect.seed) - 1,
                     )
             except BaseException:
-                self._core.seed_failed(connect)
+                self._core.seed_failed(connect, index)
                 raise
         except BaseException as exc:
             try:
