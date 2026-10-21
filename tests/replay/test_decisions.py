@@ -468,12 +468,12 @@ def test_history_overflow_two_blocks(tmp_path):
 
 def test_history_overflow_exhausted(tmp_path):
     """A request still over the window once every turn is archived and every archived action
-    omitted is not sent: the decision is invalid, for its context rather than its provider, and
-    the episode ends (harnesses/default/context.py _run_turn)."""
+    omitted is not sent: the decision is invalid, a provider failure of its own name, and the
+    episode ends (harnesses/default/context.py _run_turn)."""
     header, records = _play_terms(script.TERMS_EXHAUSTED, ARCHIVE_WINDOWS["exhausted"], tmp_path)
     *_, failed = records
     assert failed["step"] == script.TERMS_ARCHIVE_DECISION and failed["requests"] == []
-    assert failed["result"]["invalid_category"] == "harness"
+    assert failed["result"]["invalid_category"] == "provider"
     assert failed["result"]["invalid_reason"] == "context_exceeded_before_request"
     assert failed["result"]["invalid_detail"] == (
         "RequestExceedsContext('Task instructions and current observation exceed context "
