@@ -12,9 +12,7 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation.kernel.events import (
     CheckEnd,
     Commit,
-    FrameRendered,
     FreezeSnapshot,
-    RenderFrame,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from tests.kernel.simulation import Reply, Simulation, World
@@ -61,6 +59,7 @@ def world(script: Script) -> World:
         execute_s=script.execute_s,
         commit_s=script.commit_s,
         snapshot_s=script.snapshot_s,
+        renderer=False,  # the replayed task has none (sandbox/actions.py render_current_frame)
         frozen_from=script.frozen_from,
         rejections={k: t.rejected for k, t in enumerate(script.turns) if t.rejected},
         execute_errors={k: t.fault for k, t in enumerate(script.turns) if t.fault},
@@ -72,11 +71,9 @@ def world(script: Script) -> World:
 
 
 class ScriptedSimulation(Simulation):
-    """The simulation with the replayed world's traits it lacks: a token tap stops at the
-    episode horizon, as GuestEnvironment's does (sandbox/actions.py:240-244, 548); the task ends
-    once the script's ``ends_after`` actions have taken effect; on the wall clock every end check
-    asked within one of the script's ``failing_reads_s`` fails; and it has no renderer, so the
-    render barrier commits no frame (sandbox/actions.py:286-292)."""
+    """The simulation with the replayed world's traits it lacks: the task ends once the script's
+    ``ends_after`` actions have taken effect, and on the wall clock every end check asked within
+    one of the script's ``failing_reads_s`` fails."""
 
     def __init__(self, config, world, script: Script) -> None:
         super().__init__(config, world)
@@ -85,8 +82,6 @@ class ScriptedSimulation(Simulation):
 
     def _execute(self, decision: int, action, release_at) -> None:
         super()._execute(decision, action, release_at)
-        if self.token:
-            self.tick = min(self.tick, self.config.max_ticks)
         world = self.world
         if decision in world.rejections or decision in world.execute_errors:
             return
@@ -98,11 +93,6 @@ class ScriptedSimulation(Simulation):
     def _run(self, command) -> None:
         if isinstance(command, CheckEnd) and self.script.read_fails_at(self.semantic()):
             self.world.check_errors[len(self.checks) + 1] = STATE_READ_FAILED
-        if isinstance(command, RenderFrame):
-            self.commands.append(command)
-            self.renders.append(self.semantic())
-            self.kernel.post(FrameRendered(False))
-            return
         super()._run(command)
 
 
