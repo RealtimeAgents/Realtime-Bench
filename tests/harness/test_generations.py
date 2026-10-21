@@ -50,8 +50,8 @@ LUNA = "gpt-6-luna-decisions"  # configs/models/gpt-6-luna-decisions.yaml; upstr
 JEV = "jev-1.13"  # configs/models/jev-1.13.yaml; upstream "typesafe"
 # The feedback on a move over the per-move cap, of which nothing was accepted.
 NOTE = (
-    "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
-    + ACTION_RESULT_NOTES["skipped_timeout"]
+    "EXECUTION RESULT: status=skipped_timeout. NOTE: a step timed out at the per-move cap before"
+    " your answer arrived; no action was executed."
 )
 
 
@@ -417,6 +417,25 @@ def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
     replied = [m["content"] for m in messages].index(CLICK_NAME)
     assert messages[replied + 1] == {"role": "user", "content": feedback}
     assert messages[-1]["content"][0]["text"].startswith(NOTE + "\n")
+
+
+def test_a_decision_with_no_accepted_answer_reports_no_action(tmp_path):
+    """Commit for decisions of which nothing was accepted names no action and changes no record:
+    a move over the per-move cap says that it timed out, any other status that no action ran."""
+    with ChatCompletionsStub(replies([])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            agent.commit(_outcome(0, "skipped_timeout"))
+            agent.commit(_outcome(1, "none", "no current observation"))
+        finally:
+            episode.finish()
+    other = (
+        "EXECUTION RESULT: status=none. Detail: no current observation NOTE: no answer was"
+        " accepted for a step; no action was executed."
+    )
+    assert agent._unattached_feedback == f"{NOTE}\n{other}"
+    assert (agent.action_history, agent._runtime.turns, stub.requests) == ([], (), [])
 
 
 @pytest.mark.parametrize("api", ["chat", "luna"])

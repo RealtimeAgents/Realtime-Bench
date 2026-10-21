@@ -851,6 +851,8 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
+from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
+from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
@@ -1932,24 +1934,31 @@ class DefaultHarness(VisionAgentBase):
     def commit(self, outcome):
         """Commit: report decision ``outcome.decision`` on its own action record and turn. A
         decision whose result was never accepted, a move over the per-move cap, has neither: no
-        earlier record changes, and its feedback opens the next frame whatever the policy's
-        feedback placement. Where frames carry all feedback, it follows what only the discarded
-        generation's frame carried."""
+        earlier record changes, and its feedback, which names no action, opens the next frame
+        whatever the policy's feedback placement. Where frames carry all feedback, it follows
+        what only the discarded generation's frame carried."""
         index = self._decision_actions.get(outcome.decision)
-        entry = None if index is None else self.action_history[index]
-        # The loop has no terminal actions: the kernel ran a done or fail as this wait.
-        unsupported = outcome.protocol_failure == "unsupported_terminal_action"
-        feedback = self._report(
-            entry, outcome.status, outcome.detail, outcome.action if unsupported else None
-        )
-        if entry is None:
+        if index is None:
+            feedback = f"EXECUTION RESULT: status={outcome.status}."
+            if outcome.detail:
+                feedback += f" Detail: {outcome.detail}"
+            note = UNANSWERED_STEP_NOTES.get(outcome.status, UNANSWERED_STEP_NOTE)
+            feedback += " " + note
             self._pending_feedback = "\n".join(filter(None, (self._pending_feedback, feedback)))
             self._unattached_feedback = "\n".join(
                 filter(None, (self._unattached_feedback, feedback))
             )
-        else:
-            self._pending_feedback = feedback
-            self._runtime.record_execution_feedback(feedback, outcome.decision)
+            return
+        # The loop has no terminal actions: the kernel ran a done or fail as this wait.
+        unsupported = outcome.protocol_failure == "unsupported_terminal_action"
+        feedback = self._report(
+            self.action_history[index],
+            outcome.status,
+            outcome.detail,
+            outcome.action if unsupported else None,
+        )
+        self._pending_feedback = feedback
+        self._runtime.record_execution_feedback(feedback, outcome.decision)
 
     def _report(self, entry: dict | None, status: str, detail: str, replacement=None) -> str:
         """Mark an action record with its outcome, and return the outcome's feedback.
