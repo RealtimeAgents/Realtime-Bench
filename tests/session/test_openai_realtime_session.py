@@ -780,10 +780,10 @@ def test_a_fold_puts_the_placeholder_where_the_frame_was_on_the_server():
     live = Live(stream("F"), frames=5)
     live.reply()
     second = live.reply(end=False)
-    live.deliver([live.core.push(streaming_view(stream("FRB"), frames=5))])
+    live.deliver(live.core.push(streaming_view(stream("FRB"), frames=5)))
     live.end(second)
     for script in ("FRBRF", "FRBRFF"):
-        live.deliver([live.core.push(streaming_view(stream(script), frames=5))])
+        live.deliver(live.core.push(streaming_view(stream(script), frames=5)))
     before = list(live.server.items)
     assert before[1:4] == ["srv_1", "srv_2", live.core.frames["d1.feedback"].user_item_id]
 
@@ -812,10 +812,10 @@ def test_frame_prefix_feedback_goes_into_the_frame_after_it():
 
     live = Live(stream("FRF"), 3, "frame_prefix")
     core = live.core
-    pushed = core.push(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
+    (pushed,) = core.push(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
     assert (pushed.text, core.frames["f3.frame"].text) == ("fb1\nframe 3", "fb1\nframe 3")
     live.deliver([pushed])
-    live.deliver([core.push(streaming_view(stream("FRFBFF"), 3, "frame_prefix"))])
+    live.deliver(core.push(streaming_view(stream("FRFBFF"), 3, "frame_prefix")))
     item, reply_item = items_of(core), live.server.items[1]
     older = core.queue_edit(streaming_view(stream("FRFBFF"), 2, "frame_prefix"))
     assert shape(older.operations) == [
@@ -839,8 +839,8 @@ def test_a_push_names_its_client_event():
     """A pushed block, a frame with its screenshot or an execution feedback, is appended like an
     observed frame, but its create names a client event."""
     core = Live(stream("FR")).core
-    frame = core.push(streaming_view(stream("FRF")))
-    feedback = core.push(streaming_view(stream("FRFB")))
+    (frame,) = core.push(streaming_view(stream("FRF")))
+    (feedback,) = core.push(streaming_view(stream("FRFB")))
     assert [(op.role, op.text, op.image is not None) for op in (frame, feedback)] == [
         ("user", "frame 2", True),
         ("user", "fb1", False),
@@ -866,6 +866,26 @@ def test_a_push_names_its_client_event():
         Delivery.ACKNOWLEDGED,
         Delivery.SENT,
     )
+
+
+def test_a_push_plans_every_block_the_session_lacks():
+    """A push takes the view as a whole: it plans, in the view's order, the item of each frame
+    and feedback the session lacks, so the feedback accepted since the frame before goes out
+    ahead of the frame. A reply's items are the server's, a block the server refused stays out,
+    and a view with nothing new plans nothing."""
+    live = Live(stream("FR"))
+    core = live.core
+    pushed = core.push(streaming_view(stream("FRBF")))
+    assert [(op.block, op.text) for op in pushed] == [
+        ("d1.feedback", "fb1"),
+        ("f2.frame", "frame 2"),
+    ]
+    live.deliver(pushed)
+    assert core.push(streaming_view(stream("FRBF"))) == []
+    (refused,) = core.push(streaming_view(stream("FRBFF")))
+    live.server.refuse.add(refused.item_id)
+    live.deliver([refused])
+    assert core.push(streaming_view(stream("FRBFF"))) == []
 
 
 @pytest.mark.parametrize("frames", [1, 2, 3])
@@ -914,7 +934,7 @@ def test_a_frame_after_a_reply_folds_after_its_last_item(items):
     live.arrive([server(type="response.done", response=response)])
     blocks = stream("FRFF")
     for n in (3, 4):
-        live.deliver([core.push(streaming_view(blocks[:n], frames=5))])
+        live.deliver(core.push(streaming_view(blocks[:n], frames=5)))
     before = list(live.server.items)
 
     batch = core.queue_edit(streaming_view(blocks, frames=1))
@@ -932,10 +952,10 @@ def test_a_frame_pushed_during_a_reply_folds_where_it_was_on_the_server():
     live = Live(stream("F"), frames=5)
     core = live.core
     reply = live.reply(end=False)
-    live.deliver([core.push(streaming_view(stream("FF"), frames=5))])
+    live.deliver(core.push(streaming_view(stream("FF"), frames=5)))
     live.end(reply)
     blocks = stream("FFRF")
-    live.deliver([core.push(streaming_view(blocks, frames=5))])
+    live.deliver(core.push(streaming_view(blocks, frames=5)))
     before = list(live.server.items)
     assert before[1] == "srv_1"
 
@@ -974,7 +994,7 @@ def test_a_streaming_edit_leaves_the_blocks_not_pushed_yet():
     assert list(batch.frames) == ["f1.frame"]
     live.deliver(batch.operations)
     core.finish_edit()
-    assert core.push(view).text == "frame 3"
+    assert [op.text for op in core.push(view)] == ["frame 3"]
     assert list(core.frames) == ["f1.frame", "f2.frame", "f3.frame"]
 
 
@@ -985,7 +1005,7 @@ def test_a_streaming_edit_leaves_the_blocks_pushed_after_the_view():
     live = Live(blocks[:2], frames=5)
     core = live.core
     first = core.frames["f1.frame"].user_item_id
-    pushed = core.push(streaming_view(blocks, frames=5))
+    (pushed,) = core.push(streaming_view(blocks, frames=5))
     live.deliver([pushed])
     batch = core.queue_edit(streaming_view(blocks[:2], frames=1))
     assert shape(batch.operations) == [
@@ -1009,7 +1029,7 @@ def test_an_error_about_a_push_refuses_that_block_alone():
     live = Live(blocks[:2], frames=5)
     core = live.core
     reply = live.reply(end=False)
-    refused = core.push(streaming_view(blocks[:3], frames=5))
+    (refused,) = core.push(streaming_view(blocks[:3], frames=5))
     live.server.refuse.add(refused.item_id)
     (refusal,) = live.send([refused])
     fold = core.queue_edit(streaming_view(blocks[:3], frames=2))
@@ -1029,7 +1049,7 @@ def test_an_error_about_a_push_refuses_that_block_alone():
     assert core.finish_edit() is fold
 
     for n in (4, 5):
-        live.deliver([core.push(streaming_view(blocks[:n], frames=5))])
+        live.deliver(core.push(streaming_view(blocks[:n], frames=5)))
     item, before = items_of(core), list(live.server.items)
     batch = core.queue_edit(streaming_view(blocks, frames=1))
     deletes = [op.item_id for op in batch.operations if isinstance(op, Delete)]
@@ -1043,8 +1063,8 @@ def test_a_push_is_settled_once_acknowledged_or_refused():
     """A pushed block's delivery ends acknowledged, or refused once the server's error names its
     client event, as the server then does not have it; either way the push is settled."""
     core = Live(stream("F")).core
-    acknowledged = core.push(streaming_view(stream("FF")))
-    refused = core.push(streaming_view(stream("FFF")))
+    (acknowledged,) = core.push(streaming_view(stream("FF")))
+    (refused,) = core.push(streaming_view(stream("FFF")))
     sent(core, [acknowledged, refused])
     assert not core.settled(acknowledged) and not core.settled(refused)
     core.receive(done(acknowledged.item_id))
@@ -1067,8 +1087,8 @@ def test_a_pushed_blocks_fate_is_heard_with_its_block():
         lambda state, contents: heard.append((state, contents)),
     )
     blocks = stream("FRFB")
-    frame = core.push(streaming_view(blocks[:3]))
-    feedback = core.push(streaming_view(blocks))
+    _, frame = core.push(streaming_view(blocks[:3]))
+    (feedback,) = core.push(streaming_view(blocks))
     sent(core, [frame, feedback])
     core.receive(done(frame.item_id))
     core.receive(error(feedback.event_id))
@@ -1116,12 +1136,12 @@ def test_a_refused_feedback_is_left_out_of_later_edits():
     the frame after it folds where it is, after the reply before it."""
     live = Live(stream("FFR"), frames=5)
     core = live.core
-    refused = core.push(streaming_view(stream("FFRB"), frames=5))
+    (refused,) = core.push(streaming_view(stream("FFRB"), frames=5))
     live.server.refuse.add(refused.item_id)
     live.deliver([refused])
     assert "d1.feedback" not in core.frames
     for script in ("FFRBF", "FFRBFF"):
-        live.deliver([core.push(streaming_view(stream(script), frames=5))])
+        live.deliver(core.push(streaming_view(stream(script), frames=5)))
     before = list(live.server.items)
     batch = core.queue_edit(streaming_view(stream("FFRBFF"), frames=1))
     anchors = [op.previous_item_id for op in batch.operations if isinstance(op, Create)]
@@ -1142,7 +1162,7 @@ def test_a_queued_edit_waits_for_the_one_before_it():
 
     def pushed(n: int):
         view = streaming_view(blocks[:n], frames=3)
-        live.deliver([core.push(view)])
+        live.deliver(core.push(view))
         return view
 
     first = core.queue_edit(pushed(4))
@@ -1181,7 +1201,7 @@ def test_a_failed_streaming_edit_drops_the_view_kept_behind_it():
     core = live.core
     first = core.queue_edit(streaming_view(blocks[:3], frames=2))
     live.send(first.operations)
-    live.deliver([core.push(streaming_view(blocks, frames=5))])
+    live.deliver(core.push(streaming_view(blocks, frames=5)))
     assert core.queue_edit(streaming_view(blocks, frames=2)) is None
     core.receive(error(first.operations[0].event_id))
     with pytest.raises(RuntimeError, match=r"^Realtime history edit failed: "):
@@ -1198,7 +1218,7 @@ def test_a_fold_while_a_reply_streams_loses_no_event():
     core = live.core
     reply = core.start_reply()
     view = streaming_view(blocks, frames=2)
-    pushed = core.push(view)
+    (pushed,) = core.push(view)
     (push_answer,) = live.send([pushed])
     fold = core.queue_edit(view)
     delete_answer, create_answer = live.send(fold.operations)
@@ -1227,7 +1247,7 @@ def test_the_streaming_reader_records_when_events_came_off_the_wire():
     core = new_core()
     for operation in sent(core, core.replay_streaming(streaming_view(blocks[:1], frames=5))):
         core.receive(done(operation.item_id))
-    pushed = core.push(streaming_view(blocks, frames=5))
+    (pushed,) = core.push(streaming_view(blocks, frames=5))
     sent(core, [pushed])
     reply = core.start_reply()
     created, added, _, finished = response_events()

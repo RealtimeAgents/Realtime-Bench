@@ -385,13 +385,22 @@ class RealtimeSessionCore:
         self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
         return user
 
-    def push(self, history: CanonicalRequest) -> Create:
-        """Plan the user item of a native-streaming history view's newest block, a frame with the
-        feedback in front of it or an execution feedback, as native streaming pushes it while
-        responses and edits are in progress: its create names a client event, so a server error
-        about it refuses this block alone, with the feedback in front of a frame, which is in the
-        frame's item."""
-        return self._push(streaming_blocks(history.items)[-1])
+    def push(self, history: CanonicalRequest) -> list[Create]:
+        """Plan, in the order of the native-streaming history view, the user items of the blocks
+        it holds that the session lacks: each frame, with the feedback in front of it, and each
+        execution feedback the policy makes an item of its own. A reply's items are the server's,
+        and a block the server refused stays out. Native streaming pushes them while replies and
+        edits are in progress, so each create names a client event: a server error about it
+        refuses that block alone, with the feedback in front of a frame, which is in the frame's
+        item."""
+        refused = {push.block_id for push in self.pushes.values() if push.error is not None}
+        return [
+            self._push(frame)
+            for frame in streaming_blocks(history.items)
+            if frame.item.block.kind != "model_output"
+            and frame.id not in self.frames
+            and frame.id not in refused
+        ]
 
     def _push(self, frame: ViewFrame) -> Create:
         user = self._frame_create(frame, event_id=self._new_id("push"))
@@ -560,10 +569,11 @@ class RealtimeSessionCore:
         return batch
 
     def queue_edit(self, history: CanonicalRequest) -> EditBatch | None:
-        """Plan a native-streaming edit to the streaming history view, or keep the view while an
-        edit is not finished: one edit is sent at a time. Returns the batch to send now; None
-        while the view is kept, to be planned by next_edit once that edit is finished, or dropped
-        if it fails."""
+        """Plan a native-streaming edit to the streaming history view, after the push of what it
+        holds that the session lacks, or keep the view while an edit is not finished: one edit is
+        sent at a time. Returns the batch to send now, which waits for the server's answers and
+        then finish_edit even when it has no operation; None while the view is kept, to be
+        planned by next_edit once that edit is finished, or dropped if it fails."""
         self._queued = history
         return self.next_edit()
 
@@ -623,8 +633,9 @@ class RealtimeSessionCore:
         return generation
 
     def start_reply(self) -> Generation:
-        """Register the response native streaming is about to request on the session as it is;
-        it takes its events as start_generation's does."""
+        """Register the response native streaming is about to request on the session as it is,
+        before its response.create goes out and after the push of what the reply should see; it
+        takes its events as start_generation's does."""
         self._generations += 1
         generation = Generation(self._generations, None)
         self._requested.append(generation)
