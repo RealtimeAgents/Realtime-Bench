@@ -52,18 +52,35 @@ def test_the_token_environment_logs_a_clock_step_and_a_key_release():
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
 
 
-def test_the_wall_environment_s_end_check_asks_the_task_and_logs_only_an_end():
-    clock = FakeClock()
+def _wall(clock, **kwargs):
     task = ClockTask(1.0)
-    env = FakeEnvironment(
+    return FakeEnvironment(
         FrameSource(task, text_observation=False, fps=1.0),
         clock,
         fps=1.0,
-        max_minutes=1.0,
         reply_latencies=[],
-        stop_check=_answers(False, "task_success"),
+        **kwargs,
     )
+
+
+def test_the_wall_environment_s_end_check_asks_the_task_and_logs_only_an_end():
+    clock = FakeClock()
+    env = _wall(clock, max_minutes=1.0, stop_check=_answers(False, "task_success"))
     assert env.check_end() == (False, None)
     assert env.check_end() == (True, "task_success")
     assert env._episode_over and env._terminal_reason == "task_success"
     assert _logged(env, "env.check_end") == [{"reason": "task_success"}]
+
+
+def test_the_wall_environment_s_end_check_asks_the_task_past_the_deadline_and_in_an_invalid_run():
+    """As GuestEnvironment.check_end: no deadline is compared and _invalid_run is not read; done()
+    answers both without asking the task."""
+    clock = FakeClock()
+    asked = []
+    env = _wall(clock, max_minutes=1 / 60, stop_check=lambda env: asked.append(clock.monotonic()))
+    env._invalid_run = {"category": "environment", "reason": "action_execution_failed"}
+    with clock.participant():
+        clock.sleep(2.0)
+        assert env.past_deadline() and env.done()
+        assert env.check_end() == (False, None)
+    assert asked == [2.0]
