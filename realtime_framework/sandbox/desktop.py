@@ -230,8 +230,9 @@ def _start_screen_recording(run_dir=None):
 
 def _stop_screen_recording(run_dir: Path, frames_dir: Path, fps: float):
     """Stop the recording (SIGINT so the MP4 is finalized) and copy it out as
-    video.mp4. Falls back to compositing the captured frames if the recording is
-    missing or empty; ``fps`` is their rate, one per decision at the model-input rate."""
+    video.mp4. Falls back to compositing the frames captured once per decision if the
+    recording is missing or empty. ``fps`` is the model-input rate, a ceiling on the decision
+    rate: the composite runs faster than the episode wherever decisions were further apart."""
     out = run_dir / "video.mp4"
     try:
         subprocess.run(
