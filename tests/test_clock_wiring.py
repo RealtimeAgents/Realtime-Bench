@@ -37,6 +37,7 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.registry import create_agent
+from realtime_framework.providers.registry import adapter_class
 
 from .agent_trace.test_http import CANDIDATES, _request
 from .fake_clock import FakeClock
@@ -203,6 +204,31 @@ def _paced_driver(clock, stream, monkeypatch):
 
     monkeypatch.setattr(driver, "_request_kwargs", request_kwargs)
     return driver, built
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "complete"])
+def test_a_litellm_request_without_a_pacing_interval_reads_no_trace(stream, monkeypatch):
+    """Without an interval (the default) pacing does nothing: it reads the driver's trace only
+    for a wait, so a driver not bound to one yet still builds its request."""
+    clock = FakeClock(wall_origin=1000.0)
+    config = ModelConfig(
+        adapter_type="chat_completions",
+        model_name="replay-vlm",
+        api_base_url="http://127.0.0.1:9/v1",
+        api_key="sk-clock-wiring",
+        chat_stream=stream,
+    )
+    driver = adapter_class("chat_completions")(config, clock=clock)
+    built = []
+
+    def request_kwargs(request):
+        built.append(clock.time())
+        raise _Built
+
+    monkeypatch.setattr(driver, "_request_kwargs", request_kwargs)
+    with pytest.raises(_Built):
+        _run(clock, driver.start_generation(None))
+    assert built == [1000.0]
 
 
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "complete"])
