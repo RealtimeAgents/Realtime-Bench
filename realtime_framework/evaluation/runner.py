@@ -53,7 +53,6 @@ from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.clock import token_record
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
-from realtime_framework.sandbox.observation.som import valid_inspection_proof
 
 RUNNER_TIMING = RunnerTimingConfig.from_environ()  # read once, at import
 # Small settle margin added to the wall-clock bound so a well-behaved call that is about to return
@@ -434,34 +433,9 @@ def run_stream(
         """Measure inference -> advance the world -> land the delayed action if still valid."""
         nonlocal tau_prev
         terminal_after_action = False
-        proof = r.get("inspection") if isinstance(r, dict) else None
-        inspection_required = getattr(adapter, "tool_runtime", None) is not None
-        inspection_ok = not inspection_required or valid_inspection_proof(
-            proof,
-            r.get("observation_id"),
-        )
-        if r.get("invalid_reason"):
-            _invalidate(
-                r.get("invalid_category") or "provider",
-                r["invalid_reason"],
-                r.get("invalid_detail"),
-            )
-            return "invalid_run", False, False
-        # A harness-aborted wall-clock call has no returned model decision to inspect. Keep
-        # charging its elapsed time and recording unknown usage, but never mistake this synthetic
-        # timeout for a model response missing its observation-bound inspection proof.
-        harness_wall_timeout = (
-            clock_mode == "wall"
-            and r.get("timed_out")
-            and r.get("action") is None
-            and r.get("harness_timeout_reason") in {"wall_deadline", "per_move_cap"}
-        )
-        if not inspection_ok and not harness_wall_timeout:
-            _invalidate(
-                "tool",
-                "inspection_protocol_error",
-                (proof or {}).get("protocol_error") or (proof or {}).get("status"),
-            )
+        invalid = episode_records.result_invalid(r, adapter, clock_mode)
+        if invalid is not None:
+            _invalidate(invalid.category, invalid.reason, invalid.detail)
             return "invalid_run", False, False
 
         output_tokens = episode_records.frame_output_tokens(r)
@@ -1144,21 +1118,10 @@ def run_stream(
                 "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
             }
         )
-        finalize_decision_audit = getattr(adapter, "finalize_decision_audit", None)
-        if callable(finalize_decision_audit):
-            try:
-                finalize_decision_audit(r)
-            except Exception:
-                failure = traceback.format_exc()
-                log(f"[default] trajectory audit write failed:\n{failure}")
-                _invalidate("harness", "trajectory_write_failed", failure)
-                r.update(
-                    {
-                        "invalid_category": "harness",
-                        "invalid_reason": "trajectory_write_failed",
-                        "invalid_detail": failure,
-                    }
-                )
+        failure = episode_records.finalize_decision_audit(adapter, r)
+        if failure is not None:
+            log(f"[default] trajectory audit write failed:\n{failure}")
+            _invalidate("harness", "trajectory_write_failed", failure)
         action_protocol = r.get("action_protocol") or {}
         proposed = r.get("action")
         if proposed is not None and proposed.action_type in {ActionType.DONE, ActionType.FAIL}:
