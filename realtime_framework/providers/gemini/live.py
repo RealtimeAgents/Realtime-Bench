@@ -13,6 +13,7 @@ from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
+from realtime_framework.entity.events import FunctionCallsCancelled
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
@@ -284,8 +285,10 @@ class GeminiLiveDriver(SessionLifecycle):
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._reading: asyncio.Task | None = None  # streaming: the task reading it
         # Streaming: what the reader read for each reply its events() has not taken yet, by
-        # generation id, until events() is done.
+        # generation id, until events() is done; and the cancellations read between replies,
+        # which the next reply's events() hands over.
         self._replies: dict[str, asyncio.Queue] = {}
+        self._cancelled_between: list[Orphan] = []
         self._trace_connection: str | None = None  # the trace's id of the last connection opened
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
@@ -616,6 +619,9 @@ class GeminiLiveDriver(SessionLifecycle):
                 )
                 if replies is not None:
                     replies.put_nowait(arrived)
+                    continue
+                if isinstance(arrived, Orphan) and arrived.cancelled:
+                    self._cancelled_between.append(arrived)
                     continue
                 # An orphan, or the rest of a reply whose events() already failed.
                 logger.debug(
@@ -1026,6 +1032,17 @@ class GeminiLiveDriver(SessionLifecycle):
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0
+        held, self._cancelled_between = self._cancelled_between, []
+        for orphan in held:
+            sequence += 1
+            yield FunctionCallsCancelled(
+                generation.generation_id,
+                sequence,
+                type(orphan.message).__name__,
+                orphan.cancelled,
+                received_at=orphan.at,
+                connection=orphan.connection,
+            )
         while True:
             received = await self._before_go_away_deadline(take())
             message = received.message
@@ -1083,9 +1100,18 @@ class GeminiLiveDriver(SessionLifecycle):
                     received.control,
                     **numbers,
                 )
-            cancellation = getattr(message, "tool_call_cancellation", None)
-            if cancellation is not None and getattr(cancellation, "ids", None):
-                raise RuntimeError("Gemini cancelled a queued GUI function call")
+            if received.cancelled:
+                if not self.streaming:
+                    raise RuntimeError("Gemini cancelled a queued GUI function call")
+                sequence += 1
+                yield FunctionCallsCancelled(
+                    received.generation_id,
+                    sequence,
+                    raw_type,
+                    received.cancelled,
+                    received_at=received.at,
+                    **numbers,
+                )
             # A transcript delivered with a new call precedes that call's acknowledgement.
             # Keep it with the previous exchange (or initial model text), in provider order.
             for text in self._text_parts(message):
