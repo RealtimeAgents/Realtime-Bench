@@ -891,10 +891,11 @@ class GuestEnvironment:
                 "active_mouse_buttons": sorted(self._held_mouse_buttons),
             }
             if release_at is not None:
-                # The lease this hold set, from the return of its keydown to the release the timer
-                # will send: that keyup lands when its own request does (later on a retry), and a
-                # key an earlier hold keeps down longer goes up at that one's end.
-                result["lease_seconds"] = round(expires_at - pressed_at, 3)
+                # The lease this hold set, from its keydown request to the release the timer will
+                # send: about how long its keys stay down, the keyup's trip to the desktop taking
+                # about as long as the keydown's (longer on a retry). A key an earlier hold keeps
+                # down longer goes up at that one's end.
+                result["lease_seconds"] = round(expires_at - now, 3)
             return result
 
     def _count_as_held_on_the_wall(self, action):
