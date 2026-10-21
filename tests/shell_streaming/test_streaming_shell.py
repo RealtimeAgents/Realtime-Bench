@@ -149,20 +149,37 @@ def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
 
 
+def test_a_snapshot_waits_for_a_slow_capture_alongside_the_action():
+    """N32: the capture at 2 s runs alongside the click and takes 30 s, past the click's budget of
+    20 s (sandbox/guest.py action_timeout) but within its own of 120 s. The snapshot, which holds
+    the gate alone, waits for both: its bound is the larger budget, and the run is valid."""
+
+    def slow_capture(env, clock):
+        env.durations[("capture", 3)] = 30.0
+
+    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_capture)
+    assert env.intervals[4:] == [
+        ("execute", 1.775, 3.775),
+        ("capture", 2.0, 32.0),
+        ("snapshot", 32.0, 32.5),
+    ]
+    assert termination == Termination("time_limit", "deadline", 3.0, 32.5, 3.0, 32.5, None)
+
+
 def test_a_snapshot_the_action_keeps_waiting_past_its_budget_fails():
-    """4.8's bound: the click's budget is 20 s (sandbox/guest.py action_timeout), and this one
-    runs 30 s. The snapshot gives up 20 s after the deadline, and the run is invalid."""
+    """4.8's bound, N32: the larger of the click's budget, 20 s, and a capture's, 120 s; this click
+    runs 130 s. The snapshot gives up 120 s after the deadline, and the run is invalid."""
 
     def slow_action(env, clock):
-        env.durations[("execute", 1)] = 30.0
+        env.durations[("execute", 1)] = 130.0
 
     termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_action)
-    assert ("execute", 1.775, 31.775) in env.intervals
+    assert ("execute", 1.775, 131.775) in env.intervals
     assert "snapshot" not in [name for name, _, _ in env.intervals]
     assert termination.stop_reason == "invalid_run"
     assert termination.snapshot_at is None
     assert termination.invalid.reason == "evaluation_snapshot_failed"
-    assert "the environment was still busy 20s later" in termination.invalid.detail
+    assert "the environment was still busy 120s later" in termination.invalid.detail
     assert env._termination_snapshot_captured is False
     assert env._invalid_run["reason"] == "evaluation_snapshot_failed"
 
