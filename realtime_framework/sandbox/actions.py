@@ -160,6 +160,9 @@ class GuestEnvironment:
         self._wall_timer = None
         self._wall_closed = False
         self._wall_release_failures = 0
+        # Set by the kernel's shell: called with the invalid-run record when the release timer
+        # invalidates the run.
+        self.on_invalid = None
         # Result of pinning the wall display's auto-repeat to AUTOREPEAT_* (set on first use).
         self._wall_autorepeat = None
         self._held_mouse_buttons = set()
@@ -691,6 +694,7 @@ class GuestEnvironment:
             self._wall_holds.pop(identity, None)
 
     def _wall_release_due(self):
+        invalid = None
         with self._wall_lock:
             self._wall_timer = None
             if self._wall_closed:
@@ -713,7 +717,7 @@ class GuestEnvironment:
                     for identity in expired:
                         self._wall_holds.pop(identity, None)
                     if not getattr(self, "_invalid_run", None):
-                        self._invalid_run = {
+                        self._invalid_run = invalid = {
                             "category": "environment",
                             "reason": "wall_key_release_failed",
                             "detail": str(exc),
@@ -722,6 +726,9 @@ class GuestEnvironment:
                     self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
                     return
             self._schedule_wall_release()
+        # On this timer's thread and outside the lock: the callback is the shell's.
+        if invalid is not None and self.on_invalid is not None:
+            self.on_invalid(invalid)
 
     def _schedule_wall_release(self, min_delay=0.0):
         """Arm one timer for the earliest outstanding wall lease (caller holds ``_wall_lock``)."""
