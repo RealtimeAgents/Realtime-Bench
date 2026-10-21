@@ -863,6 +863,27 @@ def test_a_failed_execution_invalidates_and_its_decision_is_still_reported():
     _assert_nothing_after_the_end(sim)
 
 
+def test_a_capture_that_fails_after_the_deadline_still_invalidates():
+    # The loop starts at 2.5 s and the capture runs until 3.5 s, then fails. The deadline is handled
+    # first and ends the episode; the failure still makes the run invalid, as today's loop judges
+    # every failed capture (runner.py _decide).
+    world = World(replies=[], start_s=2.5, capture_s=1.0, capture_errors={1: "screenshot failed"})
+    sim = _episode(_wall(3.0), world)
+    assert sim.captures == [(2, 3.5)]
+    assert sim.entries("InferenceStarted") == []
+    assert sim.kinds()[-5:] == [
+        "EpisodeEnded",
+        "FrameCaptured",
+        "RunInvalidated",
+        "SnapshotFrozen",
+        "Termination",
+    ]
+    assert _ended(sim) == ("invalid_run", "deadline", 3.0, 3.5)
+    assert sim.termination.invalid == Invalidated(
+        "environment", "observation_capture_failed", "screenshot failed"
+    )
+
+
 def test_a_failed_commit_invalidates_and_no_decision_follows():
     replies = [Reply(1.25, CLICK), Reply(1.0, CLICK)]
     sim = _episode(_wall(6.0), World(replies=replies, commit_errors={0: "feedback lost"}))
