@@ -113,12 +113,16 @@ def test_the_run_summary_records_the_mode(tmp_path, monkeypatch):
     assert summary["error"].strip().endswith("RuntimeError: decision loop failed")
     assert summary["interaction_mode"] == "turn_based"
     assert summary["runtime_config"]["interaction_mode"] == "turn_based"
+    assert "streaming" not in summary
 
 
 def test_a_refused_streaming_run_records_the_mode(tmp_path, monkeypatch):
     summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming")
     assert summary["error"].strip().endswith(f"ValueError: {UNSUPPORTED}")
     assert summary["interaction_mode"] == "streaming"
+    # Refused before its configuration was resolved, it pushed no frame.
+    assert summary["streaming"]["context_control"] is None
+    assert summary["streaming"]["frames"]["pushed"] == 0
 
 
 def test_the_report_compares_the_mode(tmp_path):
