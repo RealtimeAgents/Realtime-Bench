@@ -76,6 +76,11 @@ def _kernel(records, kind: str) -> list[dict]:
     ]
 
 
+def test_the_agent_is_told_the_origin_its_arrival_times_count_from():
+    _, env, agent = _episode(1.0, [])
+    assert agent.origin == env.t0
+
+
 def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp_path):
     termination, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path)
     assert env.intervals == [
