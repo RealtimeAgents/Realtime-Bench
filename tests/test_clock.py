@@ -15,6 +15,7 @@ import pytest
 from realtime_framework.clock import FrameClock, SystemClock, episode_clocks
 from realtime_framework.entity.model import TRANSIENT, RequestRetry, TransportFailure
 
+from . import fake_clock
 from .fake_clock import FakeClock, FakeClockStalled, _unacknowledged, wait_delivered
 
 
@@ -224,6 +225,29 @@ def test_a_wait_nothing_can_end_raises():
     clock = FakeClock()
     with clock.participant(), pytest.raises(FakeClockStalled):
         clock.wait(clock.event(), None)
+
+
+def test_a_participant_stuck_in_a_real_wait_raises(monkeypatch):
+    """A participant blocked where the clock cannot see it (a blocking receive, a real lock that
+    another participant holds while it sleeps on the clock) keeps time still. Once nothing has
+    changed for _STALL_REAL_S of real time the waiting test thread raises and names it."""
+    monkeypatch.setattr(fake_clock, "_STALL_REAL_S", 0.2)
+    clock = FakeClock()
+    blocked, released = threading.Event(), threading.Event()
+
+    def stuck():
+        blocked.set()
+        released.wait()
+
+    with clock.participant():
+        clock.start_thread(stuck, name="stuck")
+        blocked.wait()
+        with pytest.raises(FakeClockStalled) as caught:
+            clock.sleep(1.0)
+        released.set()
+    assert str(caught.value) == (
+        "nothing changed for 0.2 s of real time at t=0; time is held by stuck (busy)"
+    )
 
 
 def test_a_thread_that_does_not_take_part_cannot_wait():
