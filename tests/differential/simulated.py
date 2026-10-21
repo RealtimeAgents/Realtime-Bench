@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 
+from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation.kernel.events import (
     CheckEnd,
@@ -18,6 +19,7 @@ from realtime_framework.evaluation.kernel.events import (
     Invalidated,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig
+from realtime_framework.sandbox.actions import TAP_HOLD_S, GuestEnvironment
 from tests.kernel.simulation import Reply, Simulation, World
 
 from .projection import ONCE, Once, Projection, decision, key_releases, wait_record
@@ -80,7 +82,7 @@ class ScriptedSimulation(Simulation):
     itself while execute() returns, reaches the kernel as its answer with the error and then as
     the Invalidated the environment latched, as the shell posts them (decision N6;
     evaluation/shell.py _Shell._execute). A clock step that raises is answered with its error
-    only."""
+    only. A wall hold pressed late is held a while more (decision 38)."""
 
     def __init__(self, config, world, script: Script) -> None:
         super().__init__(config, world)
@@ -91,6 +93,13 @@ class ScriptedSimulation(Simulation):
     def _execute(self, decision: int, action, release_at) -> None:
         world = self.world
         error = world.execute_errors.get(decision)
+        if not self.token and release_at is not None and action.action_type is ActionType.HOLD_KEY:
+            # The environment presses after the action's time and holds at least as long as a
+            # tap, or the hold if shorter (decision 38, N9; sandbox/actions.py
+            # GuestEnvironment._execute_wall_hold).
+            duration = float(action.parameters.get("duration", 1.0))
+            pressed = self.semantic() + world.execute_s
+            release_at = max(release_at, pressed + min(duration, TAP_HOLD_S))
         super()._execute(decision, action, release_at)
         if error is not None:
             self.kernel.post(Invalidated("environment", "action_execution_failed", error))
@@ -272,7 +281,11 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
         "captures": [{"tick": tick, "timestamp": timestamp} for tick, timestamp in sim.captures],
         "checks": [semantic for semantic, _ in sim.checks] if token else None,
         "key_ups": key_releases(
-            [{"at": at * seconds, "keys": keys} for at, _, keys in sim.key_events],
+            [
+                # Under the environment's names for the keys (sandbox/actions.py).
+                {"at": at * seconds, "keys": [GuestEnvironment._key_identity(key) for key in keys]}
+                for at, _, keys in sim.key_events
+            ],
             termination.ended_at * seconds,
         ),
         "aborts": len(sim.aborted),
@@ -290,9 +303,7 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
         "invalidation_records": sim.kinds().count("RunInvalidated"),
         "duplicates": once.again,
     }
-    kernel = (
-        None
-        if token
-        else {"reads": [read for read in sim.reads if read["at"] <= termination.ended_at]}
-    )
+    kernel: dict = {"unaborted": []}
+    if not token:
+        kernel["reads"] = [read for read in sim.reads if read["at"] <= termination.ended_at]
     return Projection("simulation", {"decisions": decisions, "episode": episode}, kernel=kernel)

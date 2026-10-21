@@ -5,8 +5,13 @@ Each rule rewrites the old side's projection into what the new side shows; the r
 order and what is left must match exactly. A rule triggers when it changed something. A script's
 ``expect`` names the rules it may trigger: one it did not name fails the comparison, one it named
 that did not trigger is reported. Rules without a rewrite cannot show between today's loop and the
-simulation; ``seen`` says where they can. U-numbered rules are differences this framework found
-that the list does not have yet.
+simulation; ``seen`` says where they can.
+
+U-numbered rules are differences found after the plan's list: U2 by this framework, put on the
+list by N5 (with U3 and U6, which KF5 and p1b's fix of L3 took up); U10 and U11 by p1b (N10); U13
+and U14 by this framework, not decided yet. KF-numbered ones are kernel-fix's, D47 is p1b's name
+for decision 47; p1c numbers decision 31, KF5 and KF5d here, X18, and the token clock's ticks
+turned into equal floats X17.
 
 The old side's times come from its facts: when each generation started and returned, when each
 decision was resolved, executed and committed, and every end check with its answer. The random
@@ -126,6 +131,15 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
         ]
         problems += differences([expected], completed, f"trace.InferenceCompleted[{k}]")[0]
         problems += differences([], streamed, f"trace.OutputChunkReceived[{k}]")[0]
+    for k in sorted(started - set(synthesized)):
+        a, b = old.beyond["results"].get(k), new.beyond["results"].get(k)
+        problems += differences(a, b, f"results[{k}]")[0]
+    if old.beyond["key_events"] is not None:
+        events = [
+            [event for event in side.beyond["key_events"] if not earlier(end, event["at_s"])]
+            for side in (old, new)
+        ]
+        problems += differences(*events, "key_events")[0]
     # A frame captured for a decision that never started is written or not; what is written of
     # it is a frame's record, as for the others.
     frames = old.beyond["trace"]["ObservationCaptured"], new.beyond["trace"]["ObservationCaptured"]
@@ -203,6 +217,7 @@ def _give_up(p: Projection, notes: dict, k: int, reason: str) -> None:
     ):
         d[name] = None
     d["applied"], d["executed"] = False, []
+    p.beyond["results"].pop(k, None)
 
 
 def _drop_after(p: Projection, k: int) -> None:
@@ -369,12 +384,13 @@ def _kf2(script: Script, p: Projection, notes: dict) -> None:
     (kernel/turns.py TurnConfig); today's loop runs to the float main() computes (runner.py main,
     max_minutes * 60 * env_fps). There an action landing on that tick is applied and checked
     after, the loop captures once more, and the episode completes instead of reaching the tick
-    limit."""
+    limit. kernel-fix 第一轮 第 13 条 made the kernel snap as the environment's clock does and its
+    第 5 节 lists this as KF2; today's loop was left as it was."""
     horizon = script.duration_s / 60 * 60 * script.env_fps
     whole = round(horizon)
     if _wall(script) or not 0 < horizon - whole <= 1e-9:
         return
-    for d in p.decisions.values():
+    for k, d in p.decisions.items():
         resolved = d["resolved"]
         if resolved is None or resolved["status"] != "applied":
             continue
@@ -383,6 +399,7 @@ def _kf2(script: Script, p: Projection, notes: dict) -> None:
         for record in (resolved, d["commit"], d["outcome"]):
             record["status"] = "not_applied_tick_limit"
         d["applied"], d["executed"], d["boundary"] = False, [], None
+        p.beyond["results"].pop(k, None)
         # The check after the execution, one the kernel would make, the last on that tick.
         checks, extras = p.episode["checks"], list(p.facts["check_extras"])
         at = max(i for i, tick in enumerate(checks) if tick == whole and extras[i] is None)
@@ -399,7 +416,8 @@ def _kf5(script: Script, p: Projection, notes: dict) -> None:
     once more after every executed action (decision 31; turns.py TurnPolicy._check_end), and
     asks nothing once the episode is over. Today's loop reads again at the loop top and before
     landing, on a tick an advance step just read (KF5a, KF5b), and at the top after the
-    environment found the end inside an advance (U3, now KF5a)."""
+    environment found the end inside an advance (U3, now KF5a; N5). p1c numbers decision 31
+    X18."""
     _cut_checks(script, p, ("frame", "ended"))
 
 
@@ -458,6 +476,7 @@ def _kf5d(script: Script, p: Projection, notes: dict) -> None:
             resolved["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
             d["applied"] = True
             d["executed"] = [{"at": landed, "action": d["proposed"]}]
+            p.beyond["results"][k] = {}  # as FakeEnvironment answers, its number aside
 
 
 def _landed_wait(
@@ -498,6 +517,7 @@ def _landed_refused(script: Script, p: Projection, k: int, landed: float, period
     for record in (d["resolved"], d["commit"], d["outcome"]):
         record["status"] = "rejected"
     d["commit"]["detail"] = script.turns[k].rejected
+    p.beyond["results"][k] = {"error": script.turns[k].rejected}  # as FakeEnvironment answers
     d["resolved"]["terminal_after_action"] = d["outcome"]["terminal_after_action"] = False
     d["executed"] = [{"at": landed, "action": d["proposed"]}]
     d["boundary"] = {
@@ -561,6 +581,11 @@ def _x12_tap(script: Script, p: Projection, notes: dict) -> None:
         if read not in script.tap_check_errors and ends_at is not None and tick >= ends_at:
             break
     notes["tap_end"] = tick
+    # Its key goes up where it ends, not where today's stopped.
+    stopped = p.facts["taps"][-1][1] / script.env_fps
+    for event in p.beyond["key_events"]:
+        if event.get("call") == "task.keyUp" and abs(event["at_s"] - stopped) <= 1e-6:
+            event["at_s"] = round(tick / script.env_fps, 9)
     k = max(k for k, d in p.decisions.items() if d["executed"])
     p.decisions[k]["resolved"]["environment_tick"] = tick
     p.decisions[k]["outcome"]["next_observation_tick"] = tick
@@ -981,13 +1006,21 @@ def _whole_up(value: float) -> int:
 
 
 def _krel(script: Script, p: Projection, notes: dict) -> None:
-    """A wall hold's lease starts when the kernel sends Execute (turns.py TurnPolicy._pre_checked);
-    today it starts when the environment presses the keys, after its guards (sandbox/actions.py
-    GuestEnvironment._execute_wall_hold)."""
+    """A wall hold's lease starts when the kernel sends Execute (turns.py TurnPolicy._pre_checked),
+    and a press the environment's guards delayed is held at least min(duration, 1/60 s) more
+    (decision 38, N9); today the lease starts when the environment presses the keys
+    (sandbox/actions.py GuestEnvironment._execute_wall_hold)."""
     if not _wall(script) or not script.execute_s:
         return
-    for released in p.episode["key_ups"]:
-        released["at"] = round(released["at"] - script.execute_s, 9)
+    for k, sent in p.facts["executed_at"].items():
+        word = parse(script.turns[k].action)
+        if word.kind != "hold" or not word.seconds:
+            continue
+        pressed = sent + script.execute_s
+        for released in p.episode["key_ups"]:
+            if _same(released["at"], pressed + word.seconds):
+                lease = max(sent + word.seconds, pressed + min(word.seconds, TAP_HOLD_S))
+                released["at"] = round(lease, 9)
 
 
 def _read_under_way(script: Script, at: float) -> float | None:
@@ -1122,7 +1155,7 @@ def _kb_landing(script: Script, p: Projection, notes: dict) -> None:
 def _u2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel writes RunInvalidated for every failure (core.py Kernel.invalidate), also one the
     environment latched itself; today only the runner's own _invalidate writes it
-    (runner.py _invalidate)."""
+    (runner.py _invalidate). On the list by N5."""
     if p.episode["invalid"] is not None and p.episode["invalidation_records"] == 0:
         p.episode["invalidation_records"] = 1
 
@@ -1275,6 +1308,11 @@ RULES = (
         seen="not compared: the agent's event log, and no Decision API is replayed here",
     ),
     Rule("X9", "agent events numbered by the kernel", seen="P1d"),
+    Rule(
+        "X17",
+        "token ticks are equal floats where today's are integers",
+        seen="not compared: the projection compares numbers by value",
+    ),
     Rule("X10", "SessionReleaseWait agent records", seen="P3, live drivers only"),
     Rule(
         "X11",
@@ -1284,7 +1322,9 @@ RULES = (
     Rule(
         "X13",
         "a wall state read is bounded by 10 s",
-        seen="not scripted: replayed reads take the script's time, never 10 s",
+        seen="not observable: the bound is GuestEnvironment.check_end's, and the replayed wall"
+        " environment is a FakeEnvironment that bounds no read; tests/sandbox/"
+        "test_shell_environment.py covers it",
     ),
     Rule(
         "X14",

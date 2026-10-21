@@ -49,8 +49,9 @@ class Projection:
     compared: dict
     facts: dict = field(default_factory=dict)
     beyond: dict | None = None
-    # What the shell and the simulation compare and today's loop does not: on the wall clock
-    # every state read before the snapshot, {"at", "answer"} (decision 31; N29).
+    # What the shell and the simulation compare and today's loop does not: the generations the
+    # kernel gave up on that the shell left running, none; on the wall clock every state read
+    # before the snapshot, {"at", "answer"} (decision 31; N29).
     kernel: dict | None = None
 
     @property
