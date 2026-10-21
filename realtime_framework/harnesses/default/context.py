@@ -156,9 +156,6 @@ class RealtimeRuntime:
         self._compaction_items: list[str] = []
         self._state = RuntimeState.NEW
         self._state_lock = threading.RLock()
-        self._epoch = 0
-        # Set when the current epoch ends; the request units of its generation stop retrying.
-        self._epoch_ended = self.clock.event()
         self._active_generation: GenerationHandle | None = None
         self._connected = False
         self._seed: SessionSeed | None = None
@@ -248,18 +245,10 @@ class RealtimeRuntime:
     def drain_observations(self) -> list:
         return self._buffer.drain()
 
-    def generation_epoch(self) -> int:
+    def _abandoned(self, cancel: threading.Event) -> bool:
+        """Whether the generation of this cancel event was aborted, or the runtime closed."""
         with self._state_lock:
-            return self._epoch
-
-    def epoch_scope(self) -> tuple[int, threading.Event]:
-        """The current epoch and the event abort() or close() sets when it ends."""
-        with self._state_lock:
-            return self._epoch, self._epoch_ended
-
-    def is_current(self, epoch: int) -> bool:
-        with self._state_lock:
-            return epoch == self._epoch and self._state != RuntimeState.CLOSED
+            return cancel.is_set() or self._state == RuntimeState.CLOSED
 
     def record_execution_feedback(self, feedback: str) -> None:
         if self._turns:
@@ -435,7 +424,7 @@ class RealtimeRuntime:
         collector: OutputCollector,
         *,
         action_history: list[dict],
-        epoch: int,
+        cancel: threading.Event,
         request_builder: RequestBuilder,
         decision: int,
     ) -> RuntimeTurnResult:
@@ -483,8 +472,8 @@ class RealtimeRuntime:
 
         if not incoming:
             raise RuntimeError("no current observation")
-        # An abandoned epoch sends neither its observation nor its request.
-        if not self.is_current(epoch):
+        # An aborted generation sends neither its observation nor its request.
+        if self._abandoned(cancel):
             raise RetryCancelled("generation abandoned before its request")
         history = self.history_view(request_builder, executed_action_ledger, incoming)
         input_refs = [
@@ -526,7 +515,7 @@ class RealtimeRuntime:
             compactions += 1
             archived_count += len(archived)
 
-        self._record_generation_prepared(incoming, physical_metadata, epoch)
+        self._record_generation_prepared(incoming, physical_metadata, request.generation)
         self._set_state(RuntimeState.GENERATING)
         provider_call_started_monotonic_ns = self.clock.monotonic_ns()
         provider_call_started_wall_time_ns = self.clock.time_ns()
@@ -590,13 +579,13 @@ class RealtimeRuntime:
                 if self._active_generation is generation:
                     self._active_generation = None
 
-        stale = not self.is_current(epoch)
+        cancelled = self._abandoned(cancel)
         if terminal_history != ProviderHistoryState.EXACT:
             self._record_session_state(
                 "unknown", "generation_terminal_state", terminal_history, request.generation_id
             )
         output = collector.finish()
-        if not stale:
+        if not cancelled:
             incoming[-1].output = output.text
             incoming[-1].output_wall_ns = self.clock.time_ns()
             incoming[-1].output_reasoning = output.reasoning_text
@@ -604,7 +593,7 @@ class RealtimeRuntime:
             incoming[-1].provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
             self._turns.extend(incoming)
 
-        needs_sync = not stale and (
+        needs_sync = not cancelled and (
             terminal_history != ProviderHistoryState.EXACT or reconnect_required
         )
         if needs_sync:
@@ -615,10 +604,10 @@ class RealtimeRuntime:
                 current_generation=generation,
                 force_rebuild=False,
             )
-        elif stale:
-            # abort() already dirtied and scheduled cleanup for this epoch. A newer turn may have
-            # recovered by the time this abandoned worker drains its last event, so it must not
-            # overwrite the newer lifecycle state.
+        elif cancelled:
+            # abort() already dirtied and scheduled cleanup for this generation. A newer turn may
+            # have recovered by the time this abandoned worker drains its last event, so it must
+            # not overwrite the newer lifecycle state.
             sync = HistorySyncResult(
                 SyncDisposition.REBUILT,
                 ProviderHistoryState.UNKNOWN,
@@ -634,7 +623,7 @@ class RealtimeRuntime:
             history_sync=sync,
             terminal_history_state=terminal_history,
             interrupted=False,
-            stale=stale,
+            cancelled=cancelled,
             latency_s=self.clock.monotonic() - started,
             provider_call_latency_s=(finished_monotonic_ns - provider_call_started_monotonic_ns)
             / 1_000_000_000,
@@ -651,8 +640,10 @@ class RealtimeRuntime:
         timeout: float | None,
         request_builder: RequestBuilder,
         decision: int,
-        epoch: int,
+        cancel: threading.Event,
     ) -> RuntimeTurnResult:
+        """One generation. ``cancel`` is its own event; once it is set the generation sends
+        nothing more."""
         try:
             return self._submit(
                 self._run_turn(
@@ -660,14 +651,14 @@ class RealtimeRuntime:
                     request,
                     collector,
                     action_history=action_history,
-                    epoch=epoch,
+                    cancel=cancel,
                     request_builder=request_builder,
                     decision=decision,
                 ),
                 timeout=timeout,
             )
         except Exception:
-            if self.is_current(epoch) and self.state not in {
+            if not self._abandoned(cancel) and self.state not in {
                 RuntimeState.BROKEN,
                 RuntimeState.CLOSED,
             }:
@@ -689,10 +680,10 @@ class RealtimeRuntime:
             self._set_state(RuntimeState.DIRTY)
 
     def abort(self) -> None:
+        """Interrupt whichever generation is generating, close the session and mark it dirty:
+        the next generation reconnects. The caller has already set the cancel event of each
+        generation it aborts, which stops that generation's requests."""
         with self._state_lock:
-            self._epoch += 1
-            self._epoch_ended.set()
-            self._epoch_ended = self.clock.event()
             generation = self._active_generation
             if self._state != RuntimeState.CLOSED:
                 self._state = RuntimeState.DIRTY
@@ -707,8 +698,6 @@ class RealtimeRuntime:
         with self._state_lock:
             if self._state == RuntimeState.CLOSED:
                 return
-            self._epoch += 1
-            self._epoch_ended.set()  # a closed runtime has no current epoch
             self._state = RuntimeState.CLOSED
         loop = self._loop
         if loop is not None and not loop.is_closed():
@@ -870,12 +859,12 @@ class RealtimeRuntime:
         )
         self._record_session_state("exact", "reconnect", ProviderHistoryState.EXACT)
 
-    def _record_generation_prepared(self, incoming, physical_metadata, epoch) -> None:
+    def _record_generation_prepared(self, incoming, physical_metadata, generation) -> None:
         turns = self._turns + incoming
         self._trace.capture(
             TraceEvent.GENERATION_PREPARED,
             {
-                "epoch": epoch,
+                "generation": generation,
                 "observation_id": incoming[-1].observation.observation_id,
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
