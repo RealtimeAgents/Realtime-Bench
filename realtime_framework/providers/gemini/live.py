@@ -312,7 +312,9 @@ class GeminiLiveDriver(SessionLifecycle):
         self._trace = trace
 
     def _delivered(self, state: str, contents: list[tuple]) -> None:
-        """What became of writes the core recorded, on the connection opened last."""
+        """What became of writes the core recorded, on the connection opened last: a change
+        recorded once the next connection is open, as of an acknowledgement an abandoned reply
+        wrote late on the old one, is put on the new one."""
         self._record_delivery(state, contents, self._trace_connection)
 
     @staticmethod

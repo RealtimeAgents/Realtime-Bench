@@ -36,7 +36,7 @@ class Delivery(str, Enum):
 
     SENT = "sent"
     CONFIRMED = "confirmed"
-    UNKNOWN = "unknown"  # the send failed, so the server may or may not have it
+    UNKNOWN = "unknown"  # being written, or its write failed: the server may or may not have it
 
 
 # Keep initial-history WebSocket messages small. HistoryConfig deliberately allows several

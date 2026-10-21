@@ -279,14 +279,20 @@ class SessionLifecycle:
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
 
     def _record_delivery(self, state: str, contents, connection: str | None) -> None:
-        """What became of contents the session core wrote on the trace's ``connection``: sent,
-        confirmed by the server, or unknown once their write failed. Each content is its key in
-        the core's delivery record and the history block it carries, if one."""
+        """What became of contents the session core wrote on the trace's ``connection``, which
+        the connection's SessionMessage records name as their connection_id: sent once the
+        write returned, confirmed or refused by the server, or unknown once the write failed.
+        Each content is its key in the core's delivery record and the history block it carries,
+        None where the key names the content instead (an OpenAI Realtime delete, whose create
+        named the block; a Gemini Live tool response, by its call id). Only what a session core
+        plans is recorded: Gemini Live's setup (as the "system" block), seed, observations,
+        pushes, triggers and tool responses; OpenAI Realtime's item creates and deletes, not
+        the session.update that carries its system instruction."""
         self._trace.capture(
             TraceEvent.SESSION_DELIVERY,
             {
                 "state": state,
-                "connection": connection,
+                "connection_id": connection,
                 "contents": [{"key": list(key), "block": block} for key, block in contents],
             },
         )
