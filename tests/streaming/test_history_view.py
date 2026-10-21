@@ -13,7 +13,12 @@ import pytest
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
-from realtime_framework.entity.request import AnswerRequirements, CallParameters, Intent
+from realtime_framework.entity.request import (
+    AnswerRequirements,
+    BlockTime,
+    CallParameters,
+    Intent,
+)
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.harnesses.streaming.history import (
@@ -22,8 +27,8 @@ from realtime_framework.harnesses.streaming.history import (
     history_view,
     output_block,
 )
-from realtime_framework.providers.gemini.session import _frame_prefixes
-from realtime_framework.providers.openai_realtime_session import history_frames
+from realtime_framework.providers.gemini.session import SessionCore
+from realtime_framework.providers.openai_realtime_session import streaming_blocks
 from realtime_framework.sandbox.observation.som import (
     FRAME_INTERACTABLES_HEADER,
     observation_prompt_with_interactables,
@@ -256,7 +261,9 @@ def test_under_frame_prefix_the_feedback_since_the_newest_frame_waits_at_the_end
         ("d0.output", "in_order", None),
         ("d0.a1.prefix", "frame_prefix", None),
     ]
-    assert waiting.items[-1].block.text == "applied 0"
+    # No frame yet, so no time: it takes its frame's once that frame comes.
+    waiting_prefix = waiting.items[-1].block
+    assert (waiting_prefix.text, waiting_prefix.time) == ("applied 0", BlockTime())
     history.play("RB")
     grown = _view(history.blocks, policy=PREFIX).items[-1].block
     assert (grown.id, grown.attached_to) == ("d0.a1.prefix", None)
@@ -268,6 +275,7 @@ def test_under_frame_prefix_the_feedback_since_the_newest_frame_waits_at_the_end
         ("f2.frame", "in_order", None),
     ]
     assert taken.items[-2].block.text == "applied 0\napplied 1"
+    assert taken.items[-2].block.time == taken.items[-1].block.time
 
 
 def test_the_prefix_block_is_the_turn_based_one():
@@ -297,19 +305,41 @@ def test_under_frame_prefix_a_folded_frame_loses_its_prefix_as_a_turn_based_fold
     assert [item.block.id for item in folded.items] == ["system", "d1.frame"]
 
 
-def test_both_session_cores_read_the_prefix_with_its_frame():
-    """OpenAI Realtime puts a prefix in front of its frame's user item and leaves the one
-    waiting for the next frame alone; Gemini Live's turn-based reader finds each by frame."""
-    view = _view(History().play("FRBFRB").blocks, policy=PREFIX)
-    _, frames = history_frames(view.items)
-    assert [(frame.id, frame.prefix) for frame in frames] == [
+def test_both_session_cores_read_the_prefix_as_native_streaming_does():
+    """OpenAI Realtime's streaming reader puts a prefix in front of its frame's user item and
+    leaves the one waiting for the next frame alone; Gemini Live's streaming seed replays each
+    prefix as a text of its own, where the view has it, the waiting one too."""
+    history = History().play("FRBFRB")
+    view = _view(history.blocks, policy=PREFIX)
+    assert [(item.id, item.prefix) for item in streaming_blocks(view.items)] == [
         ("f1.frame", ""),
+        ("d0.output", ""),
         ("f2.frame", "applied 0"),
+        ("d1.output", ""),
     ]
-    assert {key: block.id for key, block in _frame_prefixes(view).items()} == {
-        "f2.frame": "d0.a1.prefix",
-        None: "d1.a1.prefix",
-    }
+    core = SessionCore(
+        {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
+        streaming=True,
+    )
+    seed = core.connect(view, None, replacing=False)
+    (contents,) = seed.seed
+    frame_1, output_0, _, frame_2, output_1, _ = (block.text for block in history.blocks)
+    assert [part.text for content in contents for part in content.parts if part.text] == [
+        frame_1,
+        output_0,
+        "applied 0",
+        frame_2,
+        output_1,
+        "applied 1",
+    ]
+    assert seed.seeded == (
+        "f1.frame",
+        "d0.output",
+        "d0.a1.prefix",
+        "f2.frame",
+        "d1.output",
+        "d1.a1.prefix",
+    )
 
 
 def test_a_feedback_placement_the_view_does_not_lay_out_is_refused():
