@@ -243,10 +243,15 @@ def test_a_deadline_while_the_check_before_landing_runs_leaves_the_action_unappl
 
 
 def test_the_snapshot_time_is_when_the_shell_took_it_even_when_a_commit_follows():
-    # The deadline settles the decision in hand in the step that freezes the snapshot, so the
-    # commit (0.25 s) runs right after the snapshot is taken at 6.25.
-    world = World(replies=[Reply(5.25, CLICK)], check_s=0.5, commit_s=0.25)
-    sim = _episode(_wall(6.0), world)
+    # The environment at 2 fps: the click at 5.25 s waits for the next observation, input frame 6
+    # at 6 s, and the check due at 5.5 s, the 13th, runs until 6.25 s. The deadline then settles
+    # the decision in the step that freezes the snapshot, so the commit (0.25 s) runs right after
+    # the snapshot is taken at 6.25.
+    world = World(replies=[Reply(5.25, CLICK), Reply(9.0)], commit_s=0.25, check_seconds={13: 0.75})
+    sim = _episode(_wall(6.0, env_fps=2.0), world)
+    assert sim.checks[-1] == (5.5, 5.5)
+    names = _names(_from_end(sim))
+    assert names.index("FreezeSnapshot") < names.index("Commit")
     assert sim.snapshots == [(6.25, 6.25)]
     assert sim.termination.snapshot_at == 6.25
 
@@ -481,6 +486,19 @@ def test_an_end_found_by_the_check_after_execution_keeps_the_action_applied():
     assert _boundaries(sim) == []
     assert _ended(sim) == ("game_decided", "environment", 4.75, 4.75)
     _assert_nothing_after_the_end(sim)
+
+
+def test_an_action_whose_check_after_it_answers_past_the_deadline_is_not_paced():
+    # T = 3. The click back at 2.5 s executes until 2.8 s; the check after it, asked then, answers
+    # "not over" at 3.3 s and is handled first, filed at its asking. Tick 3 is the horizon, so
+    # nothing is paced (runner.py _apply paces only while tick_index() < max_ticks): the decision
+    # commits at once, nothing dropped, and the deadline ends the episode.
+    world = World(replies=[Reply(2.5, CLICK), Reply(9.0)], execute_s=0.3, check_seconds={4: 0.5})
+    sim = _episode(_wall(3.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.0, 2.8]
+    assert _boundaries(sim) == []
+    assert sim.outcomes == [_outcome(0, "applied", 2.5, 3, 2.5)]
+    assert _ended(sim) == ("time_limit", "deadline", 3.0, 3.3)
 
 
 def test_an_end_during_the_next_frame_wait_still_writes_the_boundary_then_commits():
