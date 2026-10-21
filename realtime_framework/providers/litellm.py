@@ -340,7 +340,7 @@ def chat_messages(request) -> tuple[dict, ...]:
             prefix = block.text
         elif block.kind == "frame":
             if block.folded:
-                messages.append({"role": "user", "content": block.text})
+                messages.append({"role": "user", "content": frame_text(prefix, block.text)})
             else:
                 encoded = base64.b64encode(block.image.data).decode("ascii")
                 messages.append(

@@ -72,15 +72,8 @@ def build_request(
 def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
     frame = _frame(policy, turn)
     items = []
-    if turn.observation.feedback_prefix:
-        prefix = ContentBlock(
-            f"d{turn.decision}.prefix",
-            "execution_feedback",
-            "environment",
-            frame.time,
-            text=turn.observation.feedback_prefix,
-            attached_to=frame.id,
-        )
+    prefix = _prefix(turn, frame)
+    if prefix is not None:
         items.append(RequestItem(prefix, Intent("input", "frame_prefix")))
     items.append(RequestItem(frame, Intent("input", "in_order")))
     reasoning = turn.output_reasoning if policy.reasoning_replay else ""
@@ -161,6 +154,21 @@ def _frame(policy: PathPolicy, turn: CanonicalTurn) -> ContentBlock:
     )
     return ContentBlock(
         *header, text=observation.prompt, image=image, observation_id=observation.observation_id
+    )
+
+
+def _prefix(turn: CanonicalTurn, frame: ContentBlock) -> ContentBlock | None:
+    observation = turn.observation
+    text = "\n".join(filter(None, (observation.feedback_prefix, observation.unattached_feedback)))
+    if not text:
+        return None
+    return ContentBlock(
+        f"d{turn.decision}.prefix",
+        "execution_feedback",
+        "environment",
+        frame.time,
+        text=text,
+        attached_to=frame.id,
     )
 
 

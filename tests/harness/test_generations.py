@@ -12,6 +12,8 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.context_policy import LUNA_OBSERVATION_LABEL
+from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.prompts import (
     ACTION_RESULT_NOTES,
@@ -41,6 +43,11 @@ from tests.replay.ws_openai_realtime import replies as realtime_replies
 
 WAIT_S = 10.0  # bound on every cross-thread wait; none is reached when the code behaves
 LUNA = "gpt-6-luna-decisions"  # configs/models/gpt-6-luna-decisions.yaml; upstream "openai"
+# The feedback on a move over the per-move cap, of which nothing was accepted.
+NOTE = (
+    "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
+    + ACTION_RESULT_NOTES["skipped_timeout"]
+)
 
 
 def _luna_episode(stub, run_dir):
@@ -400,15 +407,52 @@ def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
     assert agent.action_history[0] == record and record["result"] == "applied"
     first, last = agent._runtime.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    note = (
-        "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
-        + ACTION_RESULT_NOTES["skipped_timeout"]
-    )
-    assert last.observation.feedback_prefix == note
+    assert (last.observation.feedback_prefix, last.observation.unattached_feedback) == ("", NOTE)
     messages = json.loads(stub.requests[2].body)["messages"]
     replied = [m["content"] for m in messages].index(CLICK_NAME)
     assert messages[replied + 1] == {"role": "user", "content": feedback}
-    assert messages[-1]["content"][0]["text"].startswith(note + "\n")
+    assert messages[-1]["content"][0]["text"].startswith(NOTE + "\n")
+
+
+@pytest.mark.parametrize("api", ["chat", "luna"])
+def test_the_note_outlasts_its_frame_s_screenshot(tmp_path, monkeypatch, api):
+    """Decision 1's move runs over the per-move cap, so decision 2's frame opens with the note.
+    The episode goes on until that frame's screenshot folds (20 are kept; the 21st folds the
+    oldest 10). The note stays before the placeholder, as the feedback after each reply stays."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
+    last = 22
+    if api == "chat":
+        stub = ChatCompletionsStub(replies([LONG_SCENARIO[k] for k in range(last + 1) if k != 1]))
+    else:
+        stub = DecisionsStub(upstream="openai")
+    with stub:
+        episode = _chat_episode(stub, tmp_path) if api == "chat" else _luna_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            for generation, decision in enumerate(range(last + 1), 1):
+                if decision == 1:
+                    agent.abort(generation)
+                    assert _generate(episode, generation, decision).cancelled
+                    agent.commit(_outcome(decision, "skipped_timeout"))
+                    agent.discard(generation)
+                    continue
+                if api == "luna":
+                    stub.load(scenario_decisions.WEB_LONG[decision].script)
+                _generate(episode, generation, decision)
+                agent.accept(generation)
+                agent.commit(_outcome(decision, "applied"))
+            (turn,) = [turn for turn in agent._runtime.turns if turn.decision == 2]
+        finally:
+            episode.finish()
+    assert turn.visual_folded
+    body = json.loads(stub.requests[-1].body)
+    if api == "chat":
+        texts = [message["content"] for message in body["messages"]]
+        assert texts.count(f"{NOTE}\n{FOLDED_VISUAL_PLACEHOLDER}") == 1
+    else:
+        text = "\n".join(entry for entry in body["state"] if isinstance(entry, str))
+        assert text.count(NOTE) == 1
+        assert f"{NOTE}\n{LUNA_OBSERVATION_LABEL}{FOLDED_VISUAL_PLACEHOLDER}" in text
 
 
 def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
@@ -448,11 +492,7 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
     assert [r["tick"] for r in agent.action_history] == [1, 2]
     first, last = agent._runtime.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    note = (
-        "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
-        + ACTION_RESULT_NOTES["skipped_timeout"]
-    )
-    prefix = f"{feedback}\n{note}"
+    prefix = f"{feedback}\n{NOTE}"
     assert last.observation.feedback_prefix == prefix
     frames = [text for _, role, text, _ in stub.views[-1] if role == "user" and text]
     assert frames[-1].startswith(prefix)

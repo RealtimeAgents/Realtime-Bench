@@ -1214,7 +1214,10 @@ class DefaultHarness(VisionAgentBase):
                 prompt = self.interaction_profile.frame_prompt
                 prepared, execution, frame = bind_observation(self, observation, prompt, tick)
                 if index == 0 and prefix:
-                    prepared.feedback_prefix = prefix
+                    if self._context_policy.feedback == "frame_prefix":
+                        prepared.feedback_prefix = prefix
+                    else:
+                        prepared.unattached_feedback = prefix
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
