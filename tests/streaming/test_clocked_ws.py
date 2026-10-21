@@ -8,13 +8,17 @@ fake clock reads their time, and the strict cursor's problems reach the client a
 from __future__ import annotations
 
 import json
+import socket
+import threading
 
 import pytest
 from websockets.exceptions import ConnectionClosedError
 from websockets.sync.client import ClientConnection, connect
 
+from tests import fake_clock
 from tests.fake_clock import FakeClock
 
+from . import clocked_ws
 from .clocked_ws import CassetteServer, clocked_connection
 
 
@@ -160,3 +164,24 @@ def test_a_message_sent_at_another_time_than_the_scripts_is_a_problem():
     assert _replay(records, client_after(1.5)) == [
         "conn 1 record 1: c2s hello at t=1.5, recorded at t=1"
     ]
+
+
+def test_waiting_for_delivery_never_blocks_on_a_read(monkeypatch):
+    """H1: while the client sends, websockets holds its protocol lock (sync/connection.py:1024) and
+    the clocked reader may take the bytes off the socket between the look that finds them and the
+    peek. A blocking peek then waits for bytes that never come, holding that lock."""
+    sock, peer = socket.socketpair()
+    unacknowledged = iter([1, 1])
+    monkeypatch.setattr(fake_clock, "_unacknowledged", lambda fd: next(unacknowledged, 0))
+    monkeypatch.setattr(fake_clock, "_fds_ready", lambda fds: True)  # the reader took the bytes
+    done = threading.Event()
+
+    def wait():
+        clocked_ws.wait_delivered(sock)
+        done.set()
+
+    threading.Thread(target=wait, daemon=True).start()
+    returned = done.wait(2.0)
+    peer.close()  # ends a peek that blocked
+    sock.close()
+    assert returned, "the wait blocked on a read"
