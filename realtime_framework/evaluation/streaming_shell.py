@@ -32,6 +32,7 @@ its coordinate trace, as the action lane read them, are written as ActionExecuti
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import threading
 import traceback
@@ -198,11 +199,17 @@ class _StreamingShell:
     def _raised(self, failure: str) -> None:
         """The shell's own code raised, on its thread or on a lane: the run is invalid and the
         episode still finalizes; the first traceback is the loop error (runner.py main)."""
-        self.log(f"[streaming] shell raised:\n{failure}")
         with self._loop_error_lock:
             if self._loop_error is None:
                 self._loop_error = self.env._loop_error = failure
         self.post(Invalidated("runner", "run_exception", failure))
+        self._say(f"[streaming] shell raised:\n{failure}")
+
+    def _say(self, message: str) -> None:
+        """Log from a thread that owes the kernel an answer: a log that raises (its stdout gone)
+        loses the line, not the answer."""
+        with contextlib.suppress(Exception):
+            self.log(message)
 
     def _handle(self, command) -> None:
         match command:
@@ -325,7 +332,7 @@ class _StreamingShell:
             )
         except BaseException:  # noqa: BLE001 - a failed reply invalidates the run
             failure = traceback.format_exc()
-            self.log(f"[streaming] reply {command.generation} failed:\n{failure}")
+            self._say(f"[streaming] reply {command.generation} failed:\n{failure}")
             r = episode_records.generation_error(round(clock.time() - started, 2), failure)
             result = GenerationResult(invalid=episode_records.result_invalid(r, self.agent, "wall"))
         done.set()
@@ -368,7 +375,8 @@ class _StreamingShell:
     # ---- the end ------------------------------------------------------------------------------
 
     def _freeze(self) -> None:
-        """On a thread of its own: the snapshot, next after the action executing (4.8)."""
+        """The snapshot, next after the action executing (4.8), on its own thread (_freezing). A
+        read that raises fails the snapshot, a cancellation's too."""
         env, clock = self.env, self.clocks.operational
         # The presentation boundary precedes the scorer's snapshot.
         env._active_end_unix_s = clock.time()
@@ -387,11 +395,12 @@ class _StreamingShell:
                     ENVIRONMENT_BUDGET.capture_s,
                 )
             )
+            # Also a BaseException (entity/model.py RetryCancelled).
             try:
                 snapshot = self.lanes.gate.call(
                     self._read_snapshot, snapshotter, turn=turn, wait=wait
                 )
-            except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
+            except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
             else:
                 env._termination_snapshot = snapshot
