@@ -14,6 +14,10 @@ from realtime_framework.entity.actions import normalize_action
 from realtime_framework.sandbox.budget import bounded
 
 
+class GuestRefused(requests.HTTPError):
+    """The guest agent validated an action and refused it (HTTP 4xx from /action)."""
+
+
 def action_timeout(action: Action, timeout: float) -> float:
     """How long the guest may take to execute ``action`` when a plain request has ``timeout``."""
     # Long text input and timed holds run synchronously on the guest; extend the HTTP timeout.
@@ -81,7 +85,7 @@ class GuestClient:
                 message = (resp.json() or {}).get("message")
             except ValueError:
                 message = None
-            raise requests.HTTPError(
+            raise GuestRefused(
                 f"{resp.status_code} guest rejected the action"
                 + (f": {message}" if message else ""),
                 response=resp,

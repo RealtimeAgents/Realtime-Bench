@@ -26,7 +26,7 @@ from realtime_framework.evaluation import runner
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
 from realtime_framework.sandbox.budget import BudgetExceeded, Deadline, operation_budget
-from realtime_framework.sandbox.guest import GuestClient, action_timeout
+from realtime_framework.sandbox.guest import GuestClient, GuestRefused, action_timeout
 from realtime_tasks.game.runtime import _GET_STATE
 from realtime_tasks.types import Task
 
@@ -554,7 +554,8 @@ def test_a_call_s_own_shorter_timeout_applies_inside_an_operation():
 
 def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refusal():
     """The guest answered, so the environment works and was only slow (user decision 35). The
-    refusal is raised as GuestClient raises a 4xx (sandbox/guest.py execute_action)."""
+    refusal is raised as GuestClient raises a 4xx from /action (sandbox/guest.py
+    execute_action)."""
     clock = FakeClock()
     response = requests.Response()
     response.status_code = 400
@@ -563,7 +564,7 @@ def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refus
         def execute_action(self, action: Action) -> dict:
             self.actions.append(action.action_type)
             clock.sleep(25.0)
-            raise requests.HTTPError("400 guest rejected the action", response=response)
+            raise GuestRefused("400 guest rejected the action", response=response)
 
     env, _ = _timed(clock, LateRefusal())
     with clock.participant():
@@ -572,6 +573,42 @@ def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refus
     assert env._last_rejected_by_guest is True
     assert getattr(env, "_invalid_run", None) is None
     assert "guest rejected the action" in env._last_exec_error
+
+
+class _MissingCommandEndpoint:
+    """The guest's command endpoint, which runs xset at once and answers an xdotool keydown with
+    a 404 after ``seconds`` (GuestClient.execute_command raises it from raise_for_status)."""
+
+    def __init__(self, clock: FakeClock, seconds: float):
+        self.clock = clock
+        self.seconds = seconds
+
+    def execute_command(self, command: str, timeout: int = 30) -> dict:
+        if "keydown" not in command:
+            return {"returncode": 0}
+        self.clock.sleep(self.seconds)
+        response = requests.Response()
+        response.status_code = 404
+        raise requests.HTTPError("404 Client Error: NOT FOUND for url: /execute", response=response)
+
+
+@pytest.mark.parametrize("seconds", [0.0, 25.0], ids=["in-time", "after-the-budget"])
+def test_a_4xx_from_the_guest_s_command_endpoint_is_an_environment_failure(seconds):
+    """Only the guest's refusal of an action shows the environment works (user decision 35)."""
+    clock = FakeClock(wall_origin=1_000.0)
+    env = actions.GuestEnvironment(
+        _MissingCommandEndpoint(clock, seconds),
+        1_060.0,
+        _WallTask(),
+        honor_fail=False,
+        clock_mode="wall",
+        wall_start_time=1_000.0,
+        clocks=Clocks(clock, clock),
+    )
+    with clock.participant():
+        assert env.execute(Action.hold_key("a", 1.0)) == "failed"
+    assert env._last_rejected_by_guest is False
+    assert env._invalid_run["reason"] == "action_execution_failed"
 
 
 def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_10_s():
