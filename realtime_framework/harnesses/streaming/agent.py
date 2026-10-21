@@ -798,10 +798,17 @@ class NativeStreamingAgent(VisionAgentBase):
                 with trace_scope(phase="close"):
                     self._execution.run(self._close(), timeout=_SESSION_TIMEOUT_S)
         finally:
-            self._execution.stop()
-            for pushed in self._pushed.values():
-                self._finish_frame(pushed)
-            super().close()
+            try:
+                self._execution.stop()
+                # A reply's worker still in generate(), which stopping the execution thread
+                # wakes, retires its frame meanwhile: it finds none left.
+                with self._lock:
+                    left = list(self._pushed.values())
+                    self._pushed.clear()
+                for pushed in left:
+                    self._finish_frame(pushed)
+            finally:
+                super().close()
 
     async def _close(self) -> None:
         async with self._readying:
