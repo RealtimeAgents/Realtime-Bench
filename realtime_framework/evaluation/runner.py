@@ -46,7 +46,6 @@ from realtime_framework.evaluation.config import DEFAULT_MODE
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
-from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.clock import TokenAccounting
@@ -850,9 +849,6 @@ def run_stream(
             }
         ]
 
-        native_output_limit = getattr(
-            getattr(adapter, "config", None), "native_output_limit", None
-        )
         remaining_clock_tokens = None
         if clock_mode == "token" and tokens_per_frame is not None:
             remaining_clock_tokens = max(
@@ -864,48 +860,10 @@ def run_stream(
             if remaining_clock_tokens <= 0:
                 env.wait_until_tick(max_ticks)
                 return False
-        # None when the model declares no native limit and no token clock bounds the episode.
-        runtime_output_cap = (
-            native_output_limit
-            if remaining_clock_tokens is None
-            else remaining_clock_tokens
-            if native_output_limit is None
-            else min(native_output_limit, remaining_clock_tokens)
+        native_output_limit, budget = episode_records.decision_budget(
+            adapter, remaining_clock_tokens, clock_mode
         )
-        # Bound transports that support a per-turn cap by the episode's remaining charged-token
-        # capacity. Drivers without an exact per-turn cap may still return terminal usage beyond T;
-        # that excess is retained for billing audit but excluded from the episode clock below.
-        if remaining_clock_tokens is not None:
-            provider_output_token_cap = runtime_output_cap
-        else:
-            unbounded_output = bool(getattr(adapter, "supports_unbounded_output", False))
-            provider_output_token_cap = None if unbounded_output else runtime_output_cap
-        transport_cap_mapper = getattr(adapter, "transport_output_token_cap", None)
-        transport_output_cap = (
-            transport_cap_mapper(provider_output_token_cap)
-            if callable(transport_cap_mapper)
-            else provider_output_token_cap
-        )
-        if not (
-            transport_output_cap is None
-            or transport_output_cap == "inf"
-            or (
-                isinstance(transport_output_cap, int)
-                and not isinstance(transport_output_cap, bool)
-                and transport_output_cap > 0
-            )
-        ):
-            raise ValueError(
-                "adapter transport output cap must be None, a positive integer, or 'inf'"
-            )
-        adapter.configure_decision(
-            DecisionBudget(
-                runtime_output_tokens=runtime_output_cap,
-                provider_output_tokens=provider_output_token_cap,
-                transport_output_tokens=transport_output_cap,
-                clock_mode=clock_mode,
-            )
-        )
+        adapter.configure_decision(budget)
 
         def _step(obs=obs, k=k):
             adapter.stream_prefill(obs)
@@ -920,9 +878,9 @@ def run_stream(
                 "observation_tick": getattr(obs, "tick_number", t_k),
                 "observation_batch": observation_batch,
                 "usage_before": usage_before,
-                "runtime_output_token_cap": runtime_output_cap,
-                "provider_output_token_cap": provider_output_token_cap,
-                "transport_output_token_cap": transport_output_cap,
+                "runtime_output_token_cap": budget.runtime_output_tokens,
+                "provider_output_token_cap": budget.provider_output_tokens,
+                "transport_output_token_cap": budget.transport_output_tokens,
                 "native_output_limit": native_output_limit,
             },
         )
@@ -934,14 +892,14 @@ def run_stream(
                 "observation_tick": getattr(obs, "tick_number", t_k),
                 "observation_batch": observation_batch,
                 "observation_timestamp": getattr(obs, "timestamp", None),
-                "decision_output_cap": runtime_output_cap,
+                "decision_output_cap": budget.runtime_output_tokens,
                 "native_output_limit": native_output_limit,
-                "runtime_output_token_cap": runtime_output_cap,
+                "runtime_output_token_cap": budget.runtime_output_tokens,
                 "provider_output_token_cap": r.get(
-                    "provider_output_token_cap", provider_output_token_cap
+                    "provider_output_token_cap", budget.provider_output_tokens
                 ),
                 "transport_output_token_cap": r.get(
-                    "transport_output_token_cap", transport_output_cap
+                    "transport_output_token_cap", budget.transport_output_tokens
                 ),
                 "remaining_clock_tokens": remaining_clock_tokens,
                 "clock_delay_clock": (
@@ -1089,35 +1047,7 @@ def run_stream(
                 "invalid_reason": r.get("invalid_reason"),
             },
         )
-        handoff_cap = int(getattr(adapter, "_frame_handoff_max_tokens", 0) or 0)
-        action_cap = int(
-            getattr(
-                adapter,
-                "_frame_action_max_tokens",
-                runtime_output_cap,
-            )
-            or 0
-        )
-        # A decision that was invalidated before generation (e.g. inspection_protocol_error)
-        # never recomputed the adapter's per-decision caps, so they still describe the previous
-        # decision; auditing them against this decision's allowance would raise spuriously.
-        if (
-            provider_output_token_cap is not None
-            and r.get("invalid_reason") is None
-            and handoff_cap + action_cap > provider_output_token_cap
-        ):
-            raise RuntimeError(
-                f"adapter decision output caps exceed provider transport allowance: "
-                f"handoff={handoff_cap} + action={action_cap} > {provider_output_token_cap}"
-            )
-        r.update(
-            {
-                "handoff_token_cap": handoff_cap,
-                "action_token_cap": action_cap,
-                "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
-                "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
-            }
-        )
+        episode_records.audit_output_caps(adapter, r, budget)
         failure = episode_records.finalize_decision_audit(adapter, r)
         if failure is not None:
             log(f"[default] trajectory audit write failed:\n{failure}")
