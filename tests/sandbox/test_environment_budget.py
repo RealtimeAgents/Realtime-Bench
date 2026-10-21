@@ -572,7 +572,11 @@ def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refus
         assert clock.monotonic() == 25.0
     assert env._last_rejected_by_guest is True
     assert getattr(env, "_invalid_run", None) is None
-    assert "guest rejected the action" in env._last_exec_error
+    # The model is told the guest's words, not that the action took long; the record keeps both.
+    assert env._last_exec_error == "400 guest rejected the action"
+    assert env._last_execution_result["error"] == (
+        "click action took longer than 20 s (GuestRefused: 400 guest rejected the action)"
+    )
 
 
 class _MissingCommandEndpoint:
