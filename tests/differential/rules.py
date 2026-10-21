@@ -9,18 +9,18 @@ simulation; ``seen`` says where they can.
 
 U-numbered rules are differences found after the plan's list: U2 by this framework, put on the
 list by N5 (with U3 and U6, which KF5 and p1b's fix of L3 took up); U7 to U13 by p1b, U10 and U11
-recorded by N10 and N34; U14 by this framework, gone since N44 dated a failed read's end as an
-end a read found (K-g). KF-numbered ones are kernel-fix's, D47 is p1b's name for decision 47; p1c
+recorded by N10 and N34; U14 by this framework, gone since N44 dated a failed read's end as an end
+a read found (K-g). KF-numbered ones are kernel-fix's, D47 is p1b's name for decision 47; p1c
 numbers decision 31, KF5 and KF5d here, X18, and the token clock's ticks turned into equal floats
 X17.
 
 The old side's times come from its facts: when each generation started and returned, when each
 decision was resolved, executed and committed, and every end check with its answer. The random
 scripts' operations take no time, but for reading the evaluation snapshot. Named scripts give
-captures and state reads their time (scenarios.TIMED; N29), and the rules for it (K-b, D47, K-g,
-) hold where a read is shorter than an environment frame, no reply comes back at the
-instant a read is asked, and each decision paces to its next frame: what today's extra reads
-delay is not carried into the next decision.
+captures and state reads their time (scenarios.TIMED; N29), and the rules for it (K-b, D47 and
+K-g) hold where a read is shorter than an environment frame, no reply comes back at the instant a
+read is asked, and each decision paces to its next frame: what today's extra reads delay is not
+carried into the next decision.
 """
 
 from __future__ import annotations
@@ -1160,6 +1160,11 @@ RULES = (
     Rule("K-e", "an escaping fault: the decision in hand is settled and reported", _ke),
     Rule("K-rel", "a wall hold's lease starts at Execute", _krel),
     Rule("K-b", "a result back during a periodic read is taken once it returns", _kb_landing),
+    Rule(
+        "U14",
+        "a failed wall read invalidates the run when it returns, not when asked",
+        seen="no longer: N44 dates the invalidation by the read's asking, as today's loop does",
+    ),
     Rule(
         "K-k",
         "the wall clock does not compare the frame count separately",
