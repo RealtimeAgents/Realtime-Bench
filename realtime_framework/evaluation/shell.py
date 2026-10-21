@@ -22,10 +22,10 @@ since the kernel started; it must be passed, or the kernel would time its watchd
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
 ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, their
 payload completed with the fields the runner writes today. Of the echoes of the events it handled,
-FrameCaptured of a frame that was captured is written as ObservationCaptured (a failed capture
-writes none), GenerationFinished of a result the shell settled as OutputChunkReceived and
-InferenceCompleted, and an agent's AgentRecord under its own kind with the data its trace sink
-gave.
+FrameCaptured of a frame that was captured is written as ObservationCaptured (a failed capture,
+and the frame that shows the stream frozen, write none), GenerationFinished of a result the shell
+settled as OutputChunkReceived and InferenceCompleted, and an agent's AgentRecord under its own
+kind with the data its trace sink gave.
 Every other record (TimerSet, EpisodeEnded, Termination and the other echoes, SnapshotFrozen's too)
 is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the trace holds at most one
 SnapshotFrozen, the one main() writes for a snapshot it took. Every record carries ``kernel_seq``,
@@ -841,7 +841,7 @@ class _Shell:
         kind, data, decision = entry.kind, entry.data, self._decision
         if kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
-        elif kind == "FrameCaptured" and data.error is None:
+        elif kind == "FrameCaptured" and data.error is None and not self._froze():
             self._emit(
                 TraceEvent.OBSERVATION_CAPTURED,
                 episode_records.observation_captured(decision.observation, decision.index),
@@ -912,6 +912,13 @@ class _Shell:
                 self._cap_due = data["at"]
             if kind == "GenerationAbandoned" and data["reason"] == "per_move_cap":
                 self._timed_out(entry)
+
+    def _froze(self) -> bool:
+        """Whether the frame whose echo this is froze the stream: the kernel judged it in the
+        step that handled it (kernel/turns.py _captured), and the runner writes no frame its
+        check stops (runner.py _decide)."""
+        invalid = self.kernel.invalid
+        return invalid is not None and invalid.reason == "observation_stream_frozen"
 
     def _emit(self, event: TraceEvent | str, payload: dict, entry: Entry) -> None:
         if self.trace is None or self._trace_failed:
