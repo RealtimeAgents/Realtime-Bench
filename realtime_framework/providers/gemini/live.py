@@ -644,9 +644,12 @@ class GeminiLiveDriver(SessionLifecycle):
 
     async def _read_on(self, receiver: _Receiver) -> None:
         """Streaming: read every message of the connection as it arrives. A reply's messages go
-        to its events(); an orphan's goAway and resumption update are the core's to keep, its
-        cancellations wait for the next reply's events(), and nothing else of it is taken. A
-        read that fails or is cancelled ends every reply waiting with the receiver's failure."""
+        to its events(); an orphan's goAway and resumption update are the core's to keep, and
+        nothing else of it is taken but its cancellations. Those are held, also past this
+        connection's close, for the next reply's events(), on this connection or a later one: it
+        hands them over first, in its own generation, telling the connection they were read on;
+        their calls, of any earlier reply, are told by id only. A read that fails or is
+        cancelled ends every reply waiting with the receiver's failure."""
         try:
             while True:
                 arrived = await receiver.next()
