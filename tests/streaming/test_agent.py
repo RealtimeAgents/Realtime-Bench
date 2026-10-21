@@ -606,3 +606,21 @@ def test_a_function_call_reply_interrupted_after_its_call_stands_and_its_session
     agent.push(observation(clock, 3))
     assert agent.driver.calls[-2][:2] == ("sync", "runtime_recovery")
     agent.close()
+
+
+def test_a_failed_reply_the_kernel_accepts_adds_nothing(monkeypatch, clock):
+    """The kernel accepts the result of the reply it was waiting for, failed or not
+    (kernel/core.py): a failed one, as a turn's, joins nothing."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(
+        Reply((_click("c1", 0.25, 1), Fail(0.5, RuntimeError("stream broke"))), ends_at=1.0)
+    )
+    with pytest.raises(RuntimeError):
+        agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    agent.push(observation(clock, 3))
+    assert "d3.output" not in agent.driver.calls[-1][2]
+    assert agent.token_usage["responses"] == 0
+    agent.close()
