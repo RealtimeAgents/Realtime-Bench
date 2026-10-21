@@ -657,3 +657,21 @@ def test_every_frame_captured_is_pushed_or_counted_as_dropped():
     ]
     assert (sim.policy.frames_pushed, sim.policy.dropped_frames) == (3, 3)
     assert len(sim.captures) == 6
+
+
+def test_an_action_answered_past_the_deadline_is_settled_before_the_one_waiting():
+    """The click ends at 4.75 as a refused action arrives; that feedback holds the shell until
+    5.75, when the click's answer is handled past the deadline. The click is settled first, with
+    the time it really finished, then the end settles the typing waiting behind it."""
+    calls = (
+        Call(0.5, CLICK, "a", execute_s=4.25),
+        Call(1.0, TYPE, "b"),
+        Call(4.75, CLICK, "c", grounding=MISSING_FRAME),
+    )
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=1.0))
+    assert [(o.call_id, o.status) for o in sim.outcomes] == [
+        ("c", INVALID_GROUNDING_FRAME),
+        ("a", "applied"),
+        ("b", "not_applied_time_limit"),
+    ]
+    assert sim.resolved()[0]["finished_at"] == 4.75
