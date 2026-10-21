@@ -26,8 +26,8 @@ HISTORY_ENV = (
     "STREAM_DETAILED_HISTORY_TURNS",
     "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
 )
-# The runner's grace, drain, freeze and watchdog bounds are read once, at import
-# (RUNNER_TIMING in evaluation/runner.py).
+# The runner's drain, freeze and watchdog bounds are read once, at import (RUNNER_TIMING in
+# evaluation/runner.py), and so is the legacy loop's deadline grace (tests/differential).
 RUNNER_ENV = (
     "STREAM_DEADLINE_GRACE_S",
     "STREAM_ABANDONED_DRAIN_S",

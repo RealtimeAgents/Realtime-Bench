@@ -41,6 +41,7 @@ Runtime invariants:
 from __future__ import annotations
 
 import math
+import os
 import traceback
 
 from realtime_framework.clock import SystemClock
@@ -52,8 +53,9 @@ from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
 
 # Small settle margin added to the wall-clock bound so a well-behaved call that is about to return
-# at the deadline can finish; per-move compute caps receive no grace period.
-DEADLINE_GRACE_S = RUNNER_TIMING.deadline_grace_s
+# at the deadline can finish; per-move compute caps receive no grace period. The kernel has none
+# (K-a), so the runner's timing no longer carries it and the legacy loop reads it itself.
+DEADLINE_GRACE_S = float(os.environ.get("STREAM_DEADLINE_GRACE_S", "2.0"))
 # Bound on waiting out per-move workers a timeout abandoned, before teardown/exit (_drain_abandoned).
 # Sized for one native generate to finish returning, not for a wedged call to recover.
 ABANDONED_DRAIN_S = RUNNER_TIMING.abandoned_drain_s
