@@ -18,6 +18,14 @@ from realtime_framework.entity.config import DecisionBudget
 from .world import CLICK, ORIGIN, Agent, Reply, World, run
 
 HOLD = Action.hold_key("a", 1.25)
+# Chat-completions usage, which the token accounting counts whole.
+USAGE = {
+    "prompt_tokens": 1000,
+    "completion_tokens": 20,
+    "total_tokens": 1020,
+    "prompt_tokens_details": {"cached_tokens": 0},
+    "completion_tokens_details": {"reasoning_tokens": 0},
+}
 WAIT = Action.wait(0.5)
 
 
@@ -429,11 +437,13 @@ def test_a_generation_the_episode_ended_on_is_recorded_as_a_call_given_up_on(
 ):
     """N10: the second call starts at 1 s and never answers. The task's end, seen by the end
     check at 2 s, or the key held from 0.5 s failing to come up at 1.25 s ends the episode
-    during it. As for the deadline (decision 48), the call leaves a record of one given up on:
-    an InferenceCompleted, a trajectory row and a token record without usage, named for what
-    ended the episode. The decision is not reported, and the agent is asked to abort the call
-    and nothing more: closing it discards the generation no one settled (harness.py close)."""
-    replies = [Reply(0.5, action, output_tokens=40), Reply(hang=True)]
+    during it. The call leaves a record of one given up on: an InferenceCompleted and a
+    trajectory row, named for what ended the episode. N34: that record is synthesized, so the
+    episode's token totals leave it out and stay those of the call accepted, complete. The
+    decision is not reported, and the agent is asked to abort the call and nothing more:
+    closing it discards the generation no one settled (harness.py close)."""
+    usage = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    replies = [Reply(0.5, action, fields=usage), Reply(hang=True)]
     episode = run("wall", 3.0, replies, world)
     assert episode.statuses() == ["applied"]
     completed = episode.trace.payloads("InferenceCompleted")
@@ -441,13 +451,14 @@ def test_a_generation_the_episode_ended_on_is_recorded_as_a_call_given_up_on(
         (0, False, False, 0.5),
         (1, True, False, latency),
     ]
+    assert "harness_abort_reason" not in completed[0]
+    assert completed[1]["harness_abort_reason"] == reason
     rows = [(row["decision"], row.get("harness_abort_reason")) for row in episode.agent.trajectory]
     assert rows == [(0, None), (1, reason)]
     summary = episode.env._token_accounting.summary()
-    assert summary["responses"] == 2
-    assert summary["provider_usage_missing_reasons"][f"generation_aborted_at_{reason}"] == 1
-    assert summary["counts"]["provider_output_tokens"]["complete"] is False
-    assert summary["counts"]["provider_output_tokens"]["known_total"] == 40
+    assert summary["responses"] == 1 and summary["provider_usage_missing_reasons"] == {}
+    assert summary["counts"]["provider_output_tokens"]["complete"] is True
+    assert summary["counts"]["provider_output_tokens"]["total"] == 20
     calls = [call for call in episode.agent.calls if call[1] == 2]
     assert calls == [("abort", 2)]
 

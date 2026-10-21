@@ -556,6 +556,8 @@ def inference_completed(r: dict, decision: int, observation_id: str | None) -> d
         "timed_out": bool(r.get("timed_out")),
         "error": bool(r.get("error")),
         "invalid_reason": r.get("invalid_reason"),
+        # Only the synthesized record of a call given up on at the episode's end has it (N34).
+        **({"harness_abort_reason": reason} if (reason := r.get("harness_abort_reason")) else {}),
     }
 
 

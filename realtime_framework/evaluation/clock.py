@@ -208,6 +208,8 @@ def token_record(result):
         details = usage.get("cost_details")
         if isinstance(details, dict):
             record["provider_cost_details"] = details
+    if result.get("harness_abort_reason"):
+        record["harness_abort_reason"] = result["harness_abort_reason"]
     return record
 
 
@@ -235,6 +237,11 @@ class TokenAccounting:
         self.cost_detail_coverage = Counter()
 
     def add(self, record):
+        # A call given up on at the episode's end has a synthesized record and no usage: the
+        # totals stay those of the calls made (N34). One given up on at a bound counts, and
+        # leaves them incomplete (decision 48).
+        if record.get("harness_abort_reason"):
+            return
         self.responses += 1
         for key in COUNTS:
             value = _number(record, key)
@@ -346,6 +353,8 @@ def summarize_model_timing(directory):
     source = "provider_runtime"
     try:
         for row in _rows(directory / "trajectory.jsonl"):
+            if row.get("harness_abort_reason"):
+                continue  # synthesized for a call given up on at the episode's end (N34)
             runtime = row.get("realtime_runtime") or {}
             start = runtime.get("provider_call_started_monotonic_ns")
             duration = row.get("provider_call_wall_latency_s")

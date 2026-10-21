@@ -20,6 +20,7 @@ from realtime_framework.entity.context_policy import (
     LUNA_OBSERVATION_LABEL,
 )
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.prompts import (
@@ -567,6 +568,26 @@ def test_the_generation_an_episode_ends_on_is_discarded_with_its_records(tmp_pat
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
     assert [r["type"] for r in _jsonl(tmp_path / "trajectory.jsonl")] == ["decision_discarded"]
     assert agent.token_usage == usage
+
+
+def test_the_row_of_a_call_the_episodes_end_gave_up_on_names_why(tmp_path):
+    """N34: the shell's record of a call the task's end gave up on is synthesized and has no
+    reply of the harness's; its trajectory row names why, which the model timing reads to
+    leave it out (evaluation/clock.py summarize_model_timing)."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        try:
+            abandoned = episode_records.abandoned_result(0.9, "task_end")
+            episode.agent.finalize_decision_audit({**abandoned, "decision": 0})
+            episode.agent.finalize_decision_audit({"decision": 1, "latency": 0.5})
+        finally:
+            episode.finish()
+    rows = _jsonl(tmp_path / "trajectory.jsonl")
+    assert [(row["decision"], row.get("harness_abort_reason")) for row in rows] == [
+        (0, "task_end"),
+        (1, None),
+    ]
+    assert "harness_abort_reason" not in rows[1]
 
 
 def test_close_discards_the_generation_no_one_settled(tmp_path):
