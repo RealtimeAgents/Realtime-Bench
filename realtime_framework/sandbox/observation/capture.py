@@ -198,7 +198,7 @@ class BrowserSceneCapture:
         """Return keyboard focus to the page; True when it had moved to the browser toolbar."""
         if self.debug_port is None or self._probe_override is not None:
             return False
-        return ensure_page_focus(self.debug_port, target_hint=self._target_hint)
+        return ensure_page_focus(self.debug_port, clock=self.clock, target_hint=self._target_hint)
 
     def _page_rect(self, raw: dict) -> tuple[int, int, int, int] | None:
         metrics = raw.get("metrics") if raw.get("scene", {}).get("status") == "ok" else None

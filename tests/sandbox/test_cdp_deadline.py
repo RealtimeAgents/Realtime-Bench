@@ -13,8 +13,10 @@ import time
 
 import pytest
 
-from realtime_framework.sandbox.browser.cdp import PersistentCDPClient
+from realtime_framework.sandbox.browser import cdp
+from realtime_framework.sandbox.browser.cdp import PersistentCDPClient, ensure_page_focus
 
+from ..fake_clock import FakeClock
 from .fakes import FakeCDP
 
 TIMEOUT = 0.5
@@ -106,3 +108,33 @@ def test_the_lookup_and_the_handshake_share_one_timeout():
     with FakeCDP(json_delay=0.3, handshake_delay=0.3) as fake:
         _times_out(_evaluate(_client(fake)))
         assert fake.commands == []
+
+
+class _UnfocusedPage:
+    """A page whose focus comes back on the given check after Page.bringToFront, or never."""
+
+    def __init__(self, focused_on: int | None):
+        self.focused_on = focused_on
+        self.checks = 0
+
+    def evaluate(self, expression):
+        assert expression == "document.hasFocus()"
+        self.checks += 1
+        return self.checks == self.focused_on
+
+    def call(self, method):
+        assert method == "Page.bringToFront"
+        return {}
+
+
+def test_the_wait_for_the_page_focus_polls_on_the_clock(monkeypatch):
+    """ensure_page_focus checks every 20 ms on the caller's clock for at most its timeout."""
+    clock = FakeClock()
+    pages = iter([_UnfocusedPage(focused_on=4), _UnfocusedPage(focused_on=None)])
+    monkeypatch.setattr(cdp, "client_for", lambda port, target_hint="": next(pages))
+    with clock.participant():
+        assert ensure_page_focus(9222, clock=clock) is True
+        assert clock.monotonic() == pytest.approx(0.04)
+        with pytest.raises(RuntimeError, match="did not regain keyboard focus"):
+            ensure_page_focus(9222, clock=clock)
+        assert clock.monotonic() == pytest.approx(1.04, abs=1e-6)
