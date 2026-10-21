@@ -1506,7 +1506,11 @@ class DefaultHarness(VisionAgentBase):
         started = self.clock.monotonic()
         feedback, unattached = self._pending_feedback, self._unattached_feedback
         # The frame opens with the feedback no frame of an accepted result carried yet: all of
-        # it where the policy places feedback there, otherwise what no turn carries.
+        # it where the policy places feedback there, otherwise what no turn carries. No driver
+        # declares frame_prefix now, and preflight refuses a placement the driver does not
+        # (providers/preflight.py check_context_policy). It stays a placement of the policy:
+        # the streaming view lays it out (harnesses/streaming/history.py), checked against this
+        # turn-based request (tests/streaming/test_history_view.py).
         prefix = feedback if self._context_policy.feedback == "frame_prefix" else unattached
         try:
             prepared, inspection_executions, generation.choice, generation.frame = (

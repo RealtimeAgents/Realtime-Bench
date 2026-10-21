@@ -20,6 +20,7 @@ from realtime_framework.entity.model import (
     InterruptResult,
     ProviderObservation,
     RealtimeCapabilities,
+    RuntimeState,
     SessionSeed,
     SyncDisposition,
 )
@@ -210,3 +211,12 @@ def test_the_sync_after_an_archive_records_the_turns_it_removed():
     assert synced["kind"] == "rebuild"
     assert [turn["decision"] for turn in synced["turns"]] == [0]
     assert ("sync", "history_block_compaction") in rig.driver.log
+
+
+def test_a_runtime_whose_execution_thread_never_started_closes_nothing():
+    """The runner closes an agent whose initialize failed before the execution thread started:
+    no session was opened, and the close asks the session nothing."""
+    rig = _Rig()
+    rig.runtime.close()
+    assert rig.driver.log == []
+    assert rig.runtime.state is RuntimeState.CLOSED
