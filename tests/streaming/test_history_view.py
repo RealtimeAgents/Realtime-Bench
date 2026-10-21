@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import replace
+from itertools import pairwise
 
 import pytest
 
@@ -21,12 +22,17 @@ from realtime_framework.harnesses.streaming.history import (
     history_view,
     output_block,
 )
+from realtime_framework.providers.gemini.session import _frame_prefixes
+from realtime_framework.providers.openai_realtime_session import history_frames
 from realtime_framework.sandbox.observation.som import (
     FRAME_INTERACTABLES_HEADER,
     observation_prompt_with_interactables,
 )
 
 POLICY = current_context_policy().paths["openai_realtime"]
+# The view lays feedback out as the policy places it; the tests take both placements on this row.
+SEPARATE = replace(POLICY, feedback="separate_message")
+PREFIX = replace(POLICY, feedback="frame_prefix")
 SYSTEM = system_block("Fill in the form.", 1_000)
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("gpt-realtime-2", None, None)
@@ -84,9 +90,9 @@ class History:
         return self
 
 
-def _view(blocks, frames=20):
+def _view(blocks, frames=20, policy=SEPARATE):
     return history_view(
-        blocks, policy=POLICY, system=SYSTEM, retained_frames=frames, answer=ANSWER, call=CALL
+        blocks, policy=policy, system=SYSTEM, retained_frames=frames, answer=ANSWER, call=CALL
     )
 
 
@@ -99,7 +105,7 @@ def test_the_view_opens_with_the_system_instruction_and_carries_the_request_part
     assert view.items[0].block is SYSTEM
     assert view.items[0].intent == Intent("instruction", "head")
     assert (view.policy, view.history_form, view.answer, view.call) == (
-        POLICY,
+        SEPARATE,
         "turns",
         ANSWER,
         CALL,
@@ -166,7 +172,7 @@ def test_an_older_frame_is_the_turn_based_fold():
     assert (older.text, older.image, older.folded) == (POLICY.texts.folded_visual, None, True)
 
 
-def test_outputs_and_feedback_stay_where_they_were_accepted():
+def test_separate_feedback_stays_where_it_was_accepted():
     # The first action ran while three newer frames were pushed; its feedback stays after them.
     history = History().play("FRFFFBRFB")
     view = _view(history.blocks, frames=2)
@@ -183,7 +189,7 @@ def test_outputs_and_feedback_stay_where_they_were_accepted():
     assert {item.intent for item in frames} == {Intent("input", "in_order")}
 
 
-def test_every_output_and_feedback_stays_past_the_turn_window():
+def test_every_output_and_separate_feedback_stays_past_the_turn_window():
     # More replies than the turn-based window keeps verbatim; none of them is archived.
     replies = POLICY.turns.keep + POLICY.turns.block + 1
     history = History().play("FRB" * replies)
@@ -201,6 +207,84 @@ def test_a_reply_whose_action_names_no_sent_frame_stays_in_the_view():
     assert (reply.id, reply.based_on) == ("d0.output", None)
 
 
+def _ids(view) -> list[str]:
+    return [item.block.id for item in view.items]
+
+
+def _layout(view) -> list[tuple]:
+    return [(item.block.id, item.intent.position, item.block.attached_to) for item in view.items]
+
+
+def test_under_frame_prefix_the_feedback_since_the_frame_before_opens_the_next_frame():
+    history = History().play("FRRBBF")
+    view = _view(history.blocks, policy=PREFIX)
+    assert _layout(view)[1:] == [
+        ("f1.frame", "in_order", None),
+        ("d0.output", "in_order", None),
+        ("d1.output", "in_order", None),
+        ("f2.prefix", "frame_prefix", "f2.frame"),
+        ("f2.frame", "in_order", None),
+    ]
+    prefix = view.items[4]
+    assert prefix.block.text == "applied 0\napplied 1"
+    assert prefix.intent == Intent("input", "frame_prefix")
+
+
+def test_under_frame_prefix_feedback_after_the_newest_frame_waits_for_the_next_one():
+    history = History().play("FRB")
+    assert _ids(_view(history.blocks, policy=PREFIX)) == [
+        "system",
+        "f1.frame",
+        "d0.output",
+    ]
+    history.play("F")
+    assert "f2.prefix" in _ids(_view(history.blocks, policy=PREFIX))
+
+
+def test_the_prefix_block_is_the_turn_based_one():
+    history = History().play("FRBF")
+    prefix = _view(history.blocks, policy=PREFIX).items[3]
+    observation = replace(_observation(2), feedback_prefix="applied 0")
+    turn = CanonicalTurn(observation=observation, decision=1)
+    expected = build_request(PREFIX, SYSTEM, (turn,), None, ANSWER, CALL).items[1]
+    assert expected.block.id == "d1.prefix"
+    assert replace(prefix.block, id="d1.prefix", attached_to="d1.frame") == expected.block
+    assert prefix.intent == expected.intent
+
+
+def test_under_frame_prefix_a_folded_frame_loses_its_prefix_as_a_turn_based_fold_does():
+    history = History().play("FRBFF")
+    view = _view(history.blocks, frames=1, policy=PREFIX)
+    assert _ids(view) == [
+        "system",
+        "f1.frame",
+        "d0.output",
+        "f2.frame",
+        "f3.frame",
+    ]
+    turn = CanonicalTurn(observation=replace(_observation(2), feedback_prefix="x"), decision=1)
+    turn.fold_visual()
+    folded = build_request(PREFIX, SYSTEM, (turn,), None, ANSWER, CALL)
+    assert [item.block.id for item in folded.items] == ["system", "d1.frame"]
+
+
+def test_both_session_cores_read_the_prefix_with_its_frame():
+    view = _view(History().play("FRBF").blocks, policy=PREFIX)
+    _, frames = history_frames(view.items)
+    assert [(frame.id, frame.prefix) for frame in frames] == [
+        ("f1.frame", ""),
+        ("f2.frame", "applied 0"),
+    ]
+    assert {key: block.id for key, block in _frame_prefixes(view).items()} == {
+        "f2.frame": "f2.prefix"
+    }
+
+
+def test_a_feedback_placement_the_view_does_not_lay_out_is_refused():
+    with pytest.raises(KeyError, match="digest"):
+        _view(History().play("FRBF").blocks, policy=replace(POLICY, feedback="digest"))
+
+
 def _script(rng: random.Random, length: int) -> str:
     """A history that opens with a frame and reports only actions already replied."""
     steps, replies, reported = ["F"], 0, 0
@@ -212,25 +296,59 @@ def _script(rng: random.Random, length: int) -> str:
     return "".join(steps)
 
 
+def _prefixes(accepted) -> dict[str, str]:
+    """Each frame's prefix text by its definition: the feedback accepted since the frame before."""
+    prefixes, since = {}, []
+    for block in accepted:
+        if block.kind == "execution_feedback":
+            since.append(block.text)
+        elif block.kind == "frame":
+            if since:
+                prefixes[block.id] = "\n".join(since)
+            since = []
+    return prefixes
+
+
+@pytest.mark.parametrize("policy", [SEPARATE, PREFIX], ids=["separate", "prefix"])
 @pytest.mark.parametrize("seed", range(6))
-def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed):
+def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed, policy):
     rng = random.Random(seed)
     retained = rng.randint(1, 25)
     history = History().play(_script(rng, 160))
-    previous = None
+    previous: dict = {}
     for count in range(len(history.blocks) + 1):
-        view = _view(history.blocks[:count], frames=retained)
+        accepted = history.blocks[:count]
+        view = _view(accepted, frames=retained, policy=policy)
         blocks = [item.block for item in view.items[1:]]
-        assert [block.id for block in blocks] == [block.id for block in history.blocks[:count]]
         frames = [block for block in blocks if block.kind == "frame"]
         with_screenshot = [frame.id for frame in frames if frame.image is not None]
         assert with_screenshot == [frame.id for frame in frames[-retained:]]
-        assert [b for b in blocks if b.kind != "frame"] == [
-            b for b in history.blocks[:count] if b.kind != "frame"
-        ]
-        if previous is not None:
-            retired = {frame.id for frame in frames if frame.image is None}
-            for before, after in zip(previous, blocks):
-                # A block changes once, when its frame leaves the newest ones.
-                assert after == before or (before.image is not None and after.id in retired)
-        previous = blocks
+        others = [block for block in accepted if block.kind != "execution_feedback"]
+        if policy is SEPARATE:
+            assert [block.id for block in blocks] == [block.id for block in accepted]
+            assert [b for b in blocks if b.kind != "frame"] == [
+                b for b in accepted if b.kind != "frame"
+            ]
+        else:
+            # Frames and outputs keep their order; each prefix comes just before its frame,
+            # which has not folded.
+            prefixes = {b.attached_to: b.text for b in blocks if b.kind == "execution_feedback"}
+            assert [b.id for b in blocks if b.kind != "execution_feedback"] == [
+                b.id for b in others
+            ]
+            for before, after in pairwise(blocks):
+                if before.kind == "execution_feedback":
+                    assert (after.id, after.folded) == (before.attached_to, False)
+            unfolded = {frame.id for frame in frames if not frame.folded}
+            expected = _prefixes(accepted)
+            assert prefixes == {key: expected[key] for key in expected if key in unfolded}
+        # A block changes once, when its frame leaves the newest ones; with it goes its prefix.
+        retired = {frame.id for frame in frames if frame.folded}
+        now = {block.id: block for block in blocks}
+        for block_id, before in previous.items():
+            after = now.get(block_id)
+            if after is None:
+                assert before.kind == "execution_feedback" and before.attached_to in retired
+            else:
+                assert after == before or (not before.folded and block_id in retired)
+        previous = now
