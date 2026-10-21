@@ -920,6 +920,19 @@ def test_the_cleanup_releases_the_keys_of_a_tap_or_a_0_s_hold_that_failed(action
     assert env._held_keys == {}
 
 
+def test_the_cleanup_releases_the_key_of_a_repeated_tap_whose_second_press_failed():
+    """Each repeat of the tap counts its keys as held when it fails, not the first alone."""
+    clock = FakeClock()
+    env, task = _timed(clock)
+    _slow_key_event(clock, task, 2, 60.0, delivered=True)
+    with clock.participant():
+        assert env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3})) == "failed"
+        env.release_inputs()
+    keys = [(event["event"], event["key"]) for event in task.events if event["event"] != "advance"]
+    assert keys == [("keyDown", "space"), ("keyUp", "space")] * 2
+    assert env._held_keys == {}
+
+
 def test_a_failed_tap_of_a_held_key_leaves_its_lease_as_it_was():
     clock = FakeClock()
     env, task = _timed(clock)
@@ -931,11 +944,15 @@ def test_a_failed_tap_of_a_held_key_leaves_its_lease_as_it_was():
 
 
 class _FailingGuest(_DesktopCommands):
-    """The guest, whose action endpoint fails with ``error``."""
+    """The guest, whose action endpoint fails with ``error``; it runs every command at once."""
 
     def __init__(self, clock: FakeClock, error: Exception):
         super().__init__(clock)
         self.error = error
+
+    def execute_command(self, command: str, timeout: int = 30) -> dict:
+        self.commands.append(command)
+        return {"returncode": 0}
 
     def execute_action(self, action: Action) -> dict:
         raise self.error
@@ -976,6 +993,21 @@ def test_the_cleanup_releases_the_keys_of_a_wall_tap_whose_guest_request_failed(
         assert env.execute(action) == "failed"
         env.release_inputs()
     assert [command for command in guest.commands if "keyup" in command] == keyups
+
+
+def test_a_failed_wall_hold_keeps_a_held_key_s_lease_and_skips_keys_xdotool_cannot_name():
+    """'é' has no X keysym, so the hold goes to the guest, which fails; the cleanup can release
+    only the keys xdotool names, and 'a' keeps the lease of the hold that pressed it."""
+    clock = FakeClock(wall_origin=1_000.0)
+    guest = _FailingGuest(clock, requests.ReadTimeout("read timed out"))
+    env = _wall_on(clock, guest)
+    with clock.participant():
+        assert env.execute(Action.hold_key("a", 5.0)) == "applied"
+        assert env.execute(Action.hold_key("a+é", 1.0)) == "failed"
+        held = {identity: item["expires_at"] for identity, item in env._wall_holds.items()}
+        env.release_inputs()
+    assert held == {"a": 1_005.0}
+    assert [command for command in guest.commands if "keyup" in command] == ["xdotool keyup -- a"]
 
 
 @pytest.mark.parametrize("slow", [True, False], ids=["slow", "failing"])
