@@ -91,7 +91,9 @@ def operation_budget(name: str, seconds: float, clock: Clock | None = None):
     try:
         yield
     except Exception as exc:
-        if deadline.overrun() and str(exc) != deadline.message:
+        if deadline.overrun() and not (
+            isinstance(exc, BudgetExceeded) and str(exc) == deadline.message
+        ):
             # One line keeps both, so a truncated failure detail still names the budget.
             raise BudgetExceeded(f"{deadline.message} ({type(exc).__name__}: {exc})") from exc
         raise
