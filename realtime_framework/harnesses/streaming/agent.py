@@ -261,8 +261,8 @@ class NativeStreamingAgent(VisionAgentBase):
     # ---- frames -------------------------------------------------------------------------------
 
     def push(self, observation: Observation) -> None:
-        """Enter the frame in the frame table and put it into the session, readied first. Raises
-        when it did not go in."""
+        """Enter the frame in the frame table and put it into the session, readied first, and
+        record it sent. Raises when it did not go in."""
         value, execution, record = bind_observation(
             self, observation, self.interaction_profile.frame_prompt, observation.tick_number
         )
@@ -274,13 +274,6 @@ class NativeStreamingAgent(VisionAgentBase):
         except BaseException:
             self._finish_inspection(pushed, "push_failed")
             raise
-        self.frames.record_sent(record.frame, self.clock.time())
-        # The kernel's records name the frame by its observation id, the session's by its block:
-        # this ties the two (evaluation/reporting.py summarize_streaming).
-        self._trace.capture(
-            TraceEvent.FRAME_SENT,
-            {"frame": record.frame, "observation_id": observation.metadata.get("observation_id")},
-        )
 
     def _wait_for_renewal(self) -> None:
         """A session the provider asked to renew takes no frame before it is renewed, as Gemini
@@ -306,9 +299,17 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             view = self._view([*self._blocks, block])
         await self.driver.push_frame(pushed.value, view)
+        # On the execution thread, where the reply's messages are read: an action read from
+        # now on finds the frame sent, and counts it in an older frame's age.
         with self._lock:
+            self.frames.record_sent(pushed.record.frame, self.clock.time())
             self._blocks.append(block)
             self._pushed[key] = pushed
+        # The kernel's records name the frame by its observation id, the session's by its block:
+        # this ties the two (evaluation/reporting.py summarize_streaming).
+        self._trace.capture(
+            TraceEvent.FRAME_SENT, {"frame": pushed.record.frame, "observation_id": key}
+        )
 
     # ---- replies ------------------------------------------------------------------------------
 
