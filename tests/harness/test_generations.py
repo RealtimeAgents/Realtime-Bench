@@ -183,8 +183,8 @@ def test_a_discarded_result_writes_no_history(tmp_path):
 
 def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
     """The shell runs StartGeneration on a worker, and the AbortGeneration that follows can come
-    before the worker calls generate(). The generation then starts cancelled: it sends nothing,
-    and its discarded result leaves no history."""
+    before the worker calls generate(). The generation then starts cancelled: it inspects,
+    enters and sends nothing, and its discarded result leaves no history."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
@@ -192,15 +192,14 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
             agent.abort(1)
             pending = _generate(episode, 1, 0)
             agent.discard(1)
+            frame = agent.frames.latest()
         finally:
             episode.finish()
     assert pending.cancelled
     assert pending.result["stale"] is True and pending.result["action"] is None
     assert stub.requests == [] and stub.unused_replies == 1
     assert agent._runtime.turns == () and agent.action_history == []
-    assert [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")] == [
-        "superseded_by_timeout"
-    ]
+    assert frame is None and _jsonl(tmp_path / "tool_calls.jsonl") == []
 
 
 def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
