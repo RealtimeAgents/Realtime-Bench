@@ -353,9 +353,9 @@ def test_a_token_hold_expiring_between_frames_splits_the_step():
 
 def test_a_wall_hold_is_released_by_the_shell_timer_between_frames():
     """按键在两帧之间到期 (wall): a 1 s hold pressed at 0.25 s is due up at 1.25 s, between the frames
-    at 1 s and 2 s. The press carries its release time to the shell, whose own timer lifts the key
-    on time though the shell is busy reporting the outcome from 1 s to 1.5 s; the kernel hears of
-    it after."""
+    at 1 s and 2 s. The press carries its release time to the environment, whose own timer lifts
+    the key on time though the shell is busy reporting the outcome from 1 s to 1.5 s; the kernel
+    hears nothing of a release that worked."""
     hold = Action.hold_key("a", 1.0)
     replies = [Reply(latency=0.25, action=hold), Reply(latency=5.0, action=CLICK)]
     sim = _run(_wall(2.0), World(replies=replies, commit_s=0.5))
@@ -364,9 +364,7 @@ def test_a_wall_hold_is_released_by_the_shell_timer_between_frames():
     assert scheduled.data == {"decision": 0, "at": 1.25}  # pressed at 0.25 s, held 1 s
     assert Execute(0, hold, 1.25) in sim.commands
     assert sim.key_events == [(1.25, "up", ("a",))]
-    (released,) = sim.entries("KeysReleased")
-    (committed,) = sim.entries("OutcomeCommitted")
-    assert released.semantic == committed.semantic == 1.5
+    assert "KeysReleased" not in sim.kinds()
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.next_observation_tick, outcome.frame_age_s) == (
         "applied",

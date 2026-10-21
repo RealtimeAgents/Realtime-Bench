@@ -4,8 +4,8 @@ The first end signal (the deadline, an end the environment reports, an invalidat
 episode at once: the snapshot is frozen, the generation in flight is given up and its late result
 never lands. The environment is asked whether it ended once each environment frame: on the frame
 grid, during generations and waits too, and at the loop top or right before execution only in a
-frame not read yet; it is asked again after every action. Waits, key releases, the next frame and
-the legacy per-move cap are timers.
+frame not read yet; it is asked again after every action. Waits, the next frame and the legacy
+per-move cap are timers; a hold's keys are released by the environment's own timer.
 
 Every expected value is worked out by hand: from today's runner where the kernel keeps its rules
 (evaluation/runner.py, sandbox/actions.py) and from phase2.md (事件内核; 时间和结束判定) where it
@@ -727,10 +727,10 @@ def test_each_hold_carries_the_end_of_its_own_lease_and_the_shell_keeps_the_late
     executes = [c for c in sim.commands if isinstance(c, Execute)]
     assert [(c.decision, c.release_at) for c in executes] == expected
     # The shell, as Execute asks of it, keeps a held key down until its later end
-    # (sandbox/actions.py GuestEnvironment._execute_wall_hold); the simulated shell's timer lifts
-    # "a" at max(4.25, 5.25, 4.75) = 5.25, together with "b".
+    # (sandbox/actions.py GuestEnvironment._execute_wall_hold); the environment's timer lifts "a"
+    # at max(4.25, 5.25, 4.75) = 5.25, together with "b", and the kernel hears nothing of it.
     assert sim.key_events == [(5.25, "up", ("a",)), (5.25, "up", ("b",))]
-    assert len(sim.entries("KeysReleased")) == 2
+    assert "KeysReleased" not in sim.kinds()
 
 
 def test_the_shell_releases_a_key_on_time_while_a_long_execution_runs():
@@ -744,18 +744,18 @@ def test_the_shell_releases_a_key_on_time_while_a_long_execution_runs():
 
 
 def test_a_hold_longer_to_execute_than_to_last_is_released_on_time():
-    # The hold's own execution takes 2 s; the shell's timer, armed right after the press, releases
-    # the key at 1.25 + 0.5 while the execution is still running.
+    # The hold's own execution takes 2 s; the environment's timer, armed right after the press,
+    # releases the key at 1.25 + 0.5 while the execution is still running.
     replies = [Reply(1.25, Action.hold_key("a", 0.5)), Reply(10.0, CLICK)]
     sim = _episode(_wall(6.0), World(replies=replies, execute_s=2.0))
     assert _data(sim, "KeyReleaseScheduled") == [{"decision": 0, "at": 1.75}]
     assert sim.key_events == [(1.75, "up", ("a",))]
 
 
-def test_a_release_the_shells_timer_fails_invalidates_the_run():
-    # The shell's timer cannot lift "a" at 1.25 s, during the second generation, and answers with
-    # the error, as the environment gives up on a wall release after its retries
-    # (sandbox/actions.py GuestEnvironment._wall_release_due).
+def test_a_release_the_environments_timer_fails_invalidates_the_run():
+    # The environment's timer cannot lift "a" at 1.25 s, during the second generation: it gives
+    # up after its retries and reports the invalid run through on_invalid, which the shell posts
+    # (sandbox/actions.py GuestEnvironment._wall_release_due; shell.py).
     replies = [Reply(0.25, Action.hold_key("a", 1.0)), Reply(5.0, CLICK)]
     world = World(replies=replies, release_errors={1: "xdotool keyup failed"})
     sim = _episode(_wall(3.0), world)
@@ -768,6 +768,7 @@ def test_a_release_the_shells_timer_fails_invalidates_the_run():
         }
     ]
     assert _data(sim, "GenerationAbandoned") == [{"generation": 2, "reason": "invalid"}]
+    assert "KeysReleased" not in sim.kinds()
     assert _ended(sim) == ("invalid_run", "invalid", 1.25, 1.25)
     _assert_nothing_after_the_end(sim)
 
