@@ -1713,10 +1713,7 @@ class DefaultHarness(VisionAgentBase):
         else:
             self._attempt_finished(generation, request, len(retry_reasons) + 1, runtime_result)
             # The runtime takes exactly one observation per generation: its own frame.
-            self.frames.record_sent(
-                generation.frame.frame,
-                runtime_result.provider_metadata["provider_call_started_wall_time_ns"] / 1e9,
-            )
+            self.frames.record_sent(generation.frame.frame, self.clock.time())
             if retry_reasons:
                 runtime_result.provider_metadata.update(
                     {
