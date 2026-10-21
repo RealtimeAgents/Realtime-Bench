@@ -36,30 +36,25 @@ def test_a_token_delay_is_recorded_in_input_frames_and_timed_in_environment_tick
 
 
 def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
-    """Three decisions of 0.5 s each at 1 fps, then the 3 s deadline. Between decisions the
-    environment is asked whether the episode ended on the frame grid, besides the loop top and
-    right before and after execution; a wait is the kernel's own timer and never reaches the
-    environment; the hold's keys are released by the environment's timer at the time the kernel
-    gave."""
+    """Three decisions of 0.5 s each at 1 fps, then the 3 s deadline. The environment is asked
+    whether the episode ended once each frame, by the periodic check on the frame grid, and right
+    after every execution; a frame read already is not asked again at the loop top or before an
+    action. A wait is the kernel's own timer and never reaches the environment; the hold's keys
+    are released by the environment's timer at the time the kernel gave."""
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5, HOLD), Reply(0.5, WAIT)])
     env, agent = episode.env, episode.agent
     assert _calls(episode) == [
-        ("check_end", 0.0),
+        ("check_end", 0.0),  # the loop top, the first read of frame 0
         ("capture", 0.0),
-        ("check_end", 0.5),
         ("execute", 0.5),
-        ("check_end", 0.5),
-        ("check_end", 1.0),  # the periodic check
-        ("check_end", 1.0),  # the loop top
+        ("check_end", 0.5),  # after execution
+        ("check_end", 1.0),  # the periodic check; the loop top reads frame 1 no more
         ("capture", 1.0),
-        ("check_end", 1.5),
         ("execute", 1.5),
         ("check_end", 1.5),
         ("check_end", 2.0),
-        ("check_end", 2.0),
         ("capture", 2.0),
-        ("check_end", 2.5),  # right before the wait
-        ("wall_release", 2.75),
+        ("wall_release", 2.75),  # the wait from 2.5 s, in frame 2, read already
         ("snapshot", 3.0),
         ("release_inputs", 3.0),
     ]
@@ -111,8 +106,9 @@ def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
 def test_a_token_episode_advances_releases_and_renders_through_the_environment():
     """2 fps, B = 100 per frame, 2 s: the horizon is tick 4. A decision's n tokens are n / 100
     frames, one tick each; the clock moves in steps of at most one tick, cut where the 0.5 s
-    hold's lease ends (tick 2), with an end check after each step. A landing on the next frame
-    commits its pixels with a render. The last decision's action would land at the horizon."""
+    hold's lease ends (tick 2), with an end check after each step and after each execution, and
+    none at a tick read already. A landing on the next frame commits its pixels with a render.
+    The last decision's action would land at the horizon."""
     replies = [
         Reply(0.0, Action.hold_key("a", 0.5), output_tokens=100),
         Reply(0.0, CLICK, output_tokens=50),
@@ -129,33 +125,25 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
         ("capture", 0, None),
         ("step_clock", 0, 1.0),
         ("check_end", 1, None),
-        ("check_end", 1, None),
         ("execute", 1, None),
         ("check_end", 1, None),
         ("render", 1, None),
-        ("check_end", 1, None),
         ("capture", 1, None),
         ("step_clock", 1, 0.5),
-        ("check_end", 1.5, None),
         ("check_end", 1.5, None),
         ("execute", 1.5, None),
         ("check_end", 1.5, None),
         ("step_clock", 1.5, 0.5),
         ("release_keys", 2, ("a",)),
         ("check_end", 2, None),
-        ("check_end", 2, None),
         ("capture", 2, None),
         ("step_clock", 2, 1.0),
-        ("check_end", 3, None),
         ("check_end", 3, None),
         ("execute", 3, None),
         ("check_end", 3, None),
         ("render", 3, None),
-        ("check_end", 3, None),
         ("capture", 3, None),
         ("step_clock", 3, 1.0),
-        ("check_end", 4, None),
-        ("check_end", 4, None),
         ("check_end", 4, None),
         ("snapshot", 4, None),
         ("release_inputs", 4, None),
@@ -193,9 +181,10 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
 
 
 def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
-    """The runner times an action's resolution when it lands, before the check right before
+    """The runner times an action's resolution when it lands, before any check right before
     execution (runner.py _apply). With end checks of 125 ms the frame age and the resolution
-    time still agree, for an executed action and for a wait the kernel lets pass."""
+    time still agree, for an executed action and for a wait the kernel lets pass. Both land in
+    a frame read already, so nothing is read between landing and execution."""
     episode = run("wall", 4.0, [Reply(0.5), Reply(0.5, Action.wait(1.0))], World(check_s=0.125))
     env = episode.env
     assert episode.statuses() == ["applied", "wait"]
@@ -205,7 +194,7 @@ def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
         age = record["action_resolved_unix_s"] - record["observation_timestamp"]
         assert round(age, 6) == record["frame_age_at_action_s"] == 0.5
     (executed,) = [time for call, time, _ in env.calls if call == "execute"]
-    assert resolved[0] - env.t0 == executed - 0.125  # before the check right before execution
+    assert resolved[0] - env.t0 == executed  # frame 0 was read at the loop top
 
 
 class _SlowTrajectory(Agent):

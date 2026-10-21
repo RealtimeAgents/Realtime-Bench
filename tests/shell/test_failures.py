@@ -49,8 +49,10 @@ def _finalized(episode, at: float) -> None:
 
 
 def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes():
-    """The agent's accept raises at 0.5 s. The decision in hand is settled as invalid_run and
-    reported, the snapshot is frozen, and the whole traceback is the summary's error."""
+    """The agent's accept raises at 0.5 s. The result lands in frame 0, read already, so the
+    execution follows the accept in the same batch of commands and runs: the decision is settled
+    as applied with the episode over and reported, the snapshot is frozen, and the whole
+    traceback is the summary's error."""
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], agent_type=_RaisingAccept)
     _finalized(episode, 0.5)
     assert episode.invalid["category"] == "runner"
@@ -60,7 +62,8 @@ def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes()
     assert "accept broke" in episode.env._loop_error
     raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
     assert len(raised) == 1
-    assert episode.statuses() == ["invalid_run"]
+    assert episode.statuses() == ["applied"]
+    assert episode.agent.outcomes[0].terminal_after_action is True
     assert episode.env.lifecycle[0]["model_latency_s"] == 0.5  # the result it accepted
 
 
@@ -244,15 +247,16 @@ def test_a_failed_wall_key_release_invalidates_the_run_when_it_happens():
     ids=["three-in-a-row", "a-read-between"],
 )
 def test_the_reads_a_tap_makes_count_toward_three_failed_reads_in_a_row(tap_checks, invalid):
-    """Paused at tick 0: the loop top and the check before execution answer, the tap's two reads
-    are passed on as ActionExecuted.end_checks, and the check right after execution fails. Two
-    failed tap reads and that one are three in a row; a tap read that answered starts over."""
-    world = World(tap_checks={0: tap_checks}, check_errors={3: "state read 3"})
+    """Paused at tick 0: the loop top answers, and tick 0 is not read again before execution; the
+    tap's two reads are passed on as ActionExecuted.end_checks, and the check right after
+    execution fails. Two failed tap reads and that one are three in a row; a tap read that
+    answered starts over."""
+    world = World(tap_checks={0: tap_checks}, check_errors={2: "state read 2"})
     episode = run("token", 1.0, [Reply(0.0, TAP)], world)
     assert episode.env.kernel_counts_reads is True
     if invalid:
         assert episode.invalid["reason"] == "terminal_state_check_failed"
-        assert "RuntimeError: state read 3" in episode.invalid["detail"]
+        assert "RuntimeError: state read 2" in episode.invalid["detail"]
         assert episode.statuses() == ["applied"]
         assert episode.agent.outcomes[0].terminal_after_action is True
     else:
@@ -282,10 +286,10 @@ def test_a_tap_read_that_saw_the_end_ends_the_episode_by_the_tasks_reason():
     episode ends there by the task's reason; the check that would follow execution, scripted to
     fail, is never asked."""
     world = World(
-        tap_checks={0: ((True, "target_reached", None),)}, check_errors={3: "state read 3"}
+        tap_checks={0: ((True, "target_reached", None),)}, check_errors={2: "state read 2"}
     )
     episode = run("token", 1.0, [Reply(0.0, TAP)], world)
-    assert [call for call, _, _ in episode.env.calls].count("check_end") == 2
+    assert [call for call, _, _ in episode.env.calls].count("check_end") == 1
     assert episode.invalid is None
     assert episode.env._stop_reason == "target_reached"
     assert episode.statuses() == ["applied"]

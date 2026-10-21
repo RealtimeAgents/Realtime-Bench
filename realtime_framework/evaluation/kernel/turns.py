@@ -9,6 +9,11 @@ stay inside the generation, as today: a Decision call asks all its questions the
 interrupted between them, and Gemini Live acknowledges tool calls there; the kernel only numbers
 their records and discards a result that comes back after an abort.
 
+The state is read at most once a frame, and once more after every action: the token clock reads
+the frame each step of a move comes to, the wall clock each environment frame when it begins;
+the loop top and the check before landing read only a frame not read yet. A tap's own reads, in
+the environment, are the reads of the frames it steps to.
+
 The three clocks differ in five places: the bound on one call, the action time, whether the clock
 moves to the action time before landing, the finite-B allowance, and the frame age. Frame times use
 both rates (phase2.md, 帧率): B counts tokens per input frame, observations sit on the input-frame
@@ -193,6 +198,7 @@ class TurnPolicy:
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
         self._asked: dict[int, float] = {}  # end checks out: request -> semantic time asked
         self._failed_reads = 0  # state reads failed in a row
+        self._read_frame: float | None = None  # the frame of the last state read (_frame)
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
@@ -505,8 +511,11 @@ class TurnPolicy:
         if self.phase is not _Phase.EXECUTE:
             return
         d, kernel = self.decision, self.kernel
-        # A tap's end checks were made before the action finished. One that saw the end ends the
-        # episode where the tap stopped, by the task's reason; no check follows.
+        # A tap's end checks were made before the action finished, the last on the frame it
+        # stopped at. One that saw the end ends the episode there, by the task's reason; no
+        # check follows.
+        if event.end_checks:
+            self._read_frame = self._frame()
         for ended, reason, error in event.end_checks:
             if self._count_read(error):
                 break
@@ -534,7 +543,7 @@ class TurnPolicy:
         if self.kernel.ending is not None:
             return self._resolve(status, terminal_after_action=True)
         self.phase = _Phase.POST_CHECK
-        self._check_end(lambda: self._resolve(status))
+        self._check_end(lambda: self._resolve(status), after_action=True)
 
     def _lease(self, keys: tuple[str, ...]) -> None:
         """Token clock: a hold keeps each key down until its lease ends, and a held key is only
@@ -713,10 +722,15 @@ class TurnPolicy:
 
     # ---- end checks -------------------------------------------------------------------------
 
-    def _check_end(self, then: Callable | None) -> None:
-        """Ask whether the episode is over; ``then`` runs when it is not."""
+    def _check_end(self, then: Callable | None, *, after_action: bool = False) -> None:
+        """Ask whether the episode is over; ``then`` runs when it is not. The state is read at
+        most once a frame, besides once after every action: a frame read already is not asked
+        again, and ``then`` runs at once."""
         if then is not None and self._past_deadline():
             return
+        if not after_action and self._read_frame == self._frame():
+            return None if then is None else then()
+        self._read_frame = self._frame()
         request = self.kernel.request()
         self._asked[request] = self.kernel.semantic
         if then is not None:
@@ -724,7 +738,8 @@ class TurnPolicy:
         self.kernel.emit(CheckEnd(request))
 
     def _schedule_end_check(self) -> None:
-        # The wall clock is checked at the environment frame rate, during generations too.
+        # The wall clock's world comes to a new environment frame at each of these; the state is
+        # read then, during generations too, unless that frame was read already.
         fps = self.config.env_fps
         at = (_floor(self.kernel.semantic * fps) + 1) / fps
         self.kernel.set_timer("end_check", Clock.SEMANTIC, at, Priority.START)
@@ -821,6 +836,11 @@ class TurnPolicy:
         then()
 
     # ---- clock arithmetic -------------------------------------------------------------------
+
+    def _frame(self) -> float:
+        """The frame a state read reads: on the token clock the position, which every step of a
+        move makes a new frame; on the wall clock the environment frame."""
+        return self.kernel.semantic if self.token else self._tick()
 
     def _tick(self) -> float:
         """The environment tick: the token clock itself, or whole wall frames since the origin."""

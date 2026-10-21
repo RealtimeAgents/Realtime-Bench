@@ -79,13 +79,15 @@ class _SlowTrajectory(Agent):
 
 def test_a_result_is_filed_when_it_came_back_not_when_it_was_settled():
     """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after. It is
-    handled as of its return, so its action is proposed; the deadline then comes before the
-    check right before execution and the action is not applied, as the runner's check at
-    landing decides (runner.py _land_action)."""
+    handled as of its return, so its action is proposed, and it lands in frame 2, read at 2 s,
+    so nothing is read before execution: the kernel, at the reading taken before the settling,
+    executes it, and the shell runs it once the result is settled, 5 ms past the deadline. (The
+    runner's check at landing would leave it unapplied, runner.py _land_action.)"""
     episode = run("wall", 3.0, [Reply(2.995)], agent_type=_SlowTrajectory)
-    assert episode.statuses() == ["not_applied_time_limit"]
+    assert episode.statuses() == ["applied"]
     assert [p["decision"] for p in episode.trace.payloads("ActionProposed")] == [0]
-    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+    executed = [time for call, time, _ in episode.env.calls if call == "execute"]
+    assert executed == [pytest.approx(3.005)]
 
 
 def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_moved():
