@@ -27,7 +27,9 @@ SYSTEM = system_block("SYSTEM", None)
 LEDGER = ledger_block('{"decision":1}', 1, None)
 
 
-def turn(k, prompt="FRAME", *, output="", feedback="", prefix="", **refs) -> CanonicalTurn:
+def turn(
+    k, prompt="FRAME", *, output="", feedback="", prefix="", unattached="", **refs
+) -> CanonicalTurn:
     observation = ProviderObservation(
         observation=Observation(b"raw", 100.0 + k, float(k), {"observation_id": f"o{k}"}),
         prompt=prompt,
@@ -36,6 +38,7 @@ def turn(k, prompt="FRAME", *, output="", feedback="", prefix="", **refs) -> Can
         image_detail="auto",
         geometry={},
         feedback_prefix=prefix,
+        unattached_feedback=unattached,
     )
     return CanonicalTurn(
         observation=observation,
@@ -158,6 +161,33 @@ def test_action_digest():
     # A stale first decision leaves no turn: the audit summary still renders the system text.
     assert tuple(render_digest(request("jev_decisions", []), compact_ledger=False)) == (
         {"role": "system", "content": "SYSTEM"},
+    )
+
+
+def test_action_digest_keeps_what_a_frame_opened_with():
+    """The feedback on a decision of which nothing was accepted opens the next frame: before the
+    current observation, even when no earlier turn exists, then as its own digest entry before
+    that frame's action."""
+    frames = {
+        k: "Choose." + FRAME_INTERACTABLES_HEADER + json.dumps({"observation_id": f"o{k}"})
+        for k in (2, 3)
+    }
+    (_, current) = render_digest(
+        request("jev_decisions", [turn(2, frames[2], unattached="N1")]), compact_ledger=False
+    )
+    assert current == {
+        "role": "user",
+        "content": 'N1\nCurrent observation: {"observation_id": "o2"}',
+    }
+    older = turn(2, frames[2], output="A2", feedback="F2", unattached="N1")
+    canonical = request("jev_decisions", [older, turn(3, frames[3])])
+    history = [
+        {"observation_id": "o2", "execution_feedback": "N1"},
+        {"observation_id": "o2", "action": "A2", "execution_feedback": "F2"},
+    ]
+    assert tuple(render_digest(canonical, compact_ledger=False))[1:] == (
+        {"role": "user", "content": "Recent action and feedback history: " + json.dumps(history)},
+        {"role": "user", "content": 'Current observation: {"observation_id": "o3"}'},
     )
 
 

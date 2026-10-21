@@ -89,12 +89,13 @@ def transcript_state(transcript: tuple[list, list[str]], extra: dict) -> list:
 
 def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
     """JEV's history: the system text, the archived ledger, a digest of the older turns' actions
-    and feedback, and the current observation. Older screenshots, SoM and choices are not resent.
+    and feedback, and the current observation after the feedback its frame opens with. Older
+    screenshots, SoM and choices are not resent.
 
     The ledger is sent compacted; the trajectory summary shows it as the runtime keeps it.
     """
     texts = request.policy.texts
-    messages, history = [], []
+    messages, history, prefix = [], [], ""
     for item in request.items:
         block = item.block
         if block.kind == "system_instruction":
@@ -117,6 +118,13 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
             messages.append({"role": JEV_ROLES[item.intent.role], "content": content})
         elif block.kind == "model_output":
             history.append({"observation_id": block.based_on, "action": block.text})
+        elif item.intent.position == "frame_prefix":
+            prefix = block.text + "\n"
+        elif block.kind == "execution_feedback" and block.observation_id is not None:
+            # What an older frame opened with: the feedback on a decision no turn records.
+            history.append(
+                {"observation_id": block.observation_id, "execution_feedback": block.text}
+            )
         elif block.kind == "execution_feedback":
             history[-1]["execution_feedback"] = block.text
         elif block.kind == "frame":
@@ -135,7 +143,9 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
             messages.append(
                 {
                     "role": JEV_ROLES[item.intent.role],
-                    "content": texts.jev_current_prefix + json.dumps(current, ensure_ascii=False),
+                    "content": prefix
+                    + texts.jev_current_prefix
+                    + json.dumps(current, ensure_ascii=False),
                 }
             )
     return messages

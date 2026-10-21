@@ -8,6 +8,7 @@ role and placement; encoders only translate the result.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.model import CanonicalTurn
@@ -119,15 +120,24 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
 
 
 def _digest_items(policy: PathPolicy, turns: tuple[CanonicalTurn, ...]) -> list[RequestItem]:
-    """Older turns contribute their action and feedback only; the newest one is the frame."""
+    """Older turns contribute their action and feedback only, after the feedback their frame
+    opened with; the newest one is the frame."""
     if not turns:
         return []
     items = []
     for turn in turns[:-1]:
+        prefix = _prefix(turn, _frame(policy, turn))
+        if prefix is not None:
+            opened = replace(prefix, observation_id=turn.observation.observation_id)
+            items.append(RequestItem(opened, Intent("input", "digest")))
         if turn.output or turn.execution_feedback:
             items.append(RequestItem(_output(turn), Intent("model", "digest")))
             items.append(RequestItem(_feedback(turn), Intent("input", "digest")))
-    items.append(RequestItem(_frame(policy, turns[-1]), Intent("input", "in_order")))
+    frame = _frame(policy, turns[-1])
+    prefix = _prefix(turns[-1], frame)
+    if prefix is not None:
+        items.append(RequestItem(prefix, Intent("input", "frame_prefix")))
+    items.append(RequestItem(frame, Intent("input", "in_order")))
     return items
 
 
