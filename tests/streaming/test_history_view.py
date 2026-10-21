@@ -1,7 +1,6 @@
 """The native-streaming history view (harnesses/streaming/history.py): the newest frames keep their
-screenshots, older frames take the retention's form, and every output and feedback stays in the
-order it was accepted, under its own id; or, under the archive retention, the oldest replies
-leave for the action ledger as turn-based turns do."""
+screenshots, older frames fold as turn-based frames do, and every output and feedback stays in the
+order it was accepted, under its own id."""
 
 from __future__ import annotations
 
@@ -11,14 +10,12 @@ from dataclasses import replace
 import pytest
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import Retention, current_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters, Intent
-from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.harnesses.streaming.history import (
-    StreamingRetention,
     feedback_block,
     frame_block,
     history_view,
@@ -58,7 +55,6 @@ class History:
     def __init__(self) -> None:
         self.table = FrameTable()
         self.blocks: list = []
-        self.actions: dict[str, tuple[dict, ...]] = {}  # each reply's action records
         self.frames = 0
         self.generations = 0
         self.reported = 0
@@ -74,17 +70,7 @@ class History:
         if based_on == "newest":
             based_on = next(b.observation_id for b in reversed(self.blocks) if b.kind == "frame")
         text = f'{{"action": "click", "target": "P1", "frame": {self.frames}}}'
-        block = output_block(self.generations, text, based_on, 2_000 + self.generations)
-        self.blocks.append(block)
-        self.actions[block.id] = (
-            {
-                "tick": self.generations,
-                "observation_tick": self.frames,
-                "requested": "click",
-                "executed": "click",
-                "result": "applied",
-            },
-        )
+        self.blocks.append(output_block(self.generations, text, based_on, 2_000))
 
     def feedback(self) -> None:
         self.reported += 1
@@ -98,15 +84,9 @@ class History:
         return self
 
 
-def _view(blocks, frames=20, replies="all", actions=None, policy=POLICY):
+def _view(blocks, frames=20):
     return history_view(
-        blocks,
-        policy=policy,
-        system=SYSTEM,
-        retention=StreamingRetention(frames=frames, replies=replies),
-        actions=actions or {},
-        answer=ANSWER,
-        call=CALL,
+        blocks, policy=POLICY, system=SYSTEM, retained_frames=frames, answer=ANSWER, call=CALL
     )
 
 
@@ -186,6 +166,17 @@ def test_outputs_and_feedback_stay_where_they_were_accepted():
     assert {item.intent for item in frames} == {Intent("input", "in_order")}
 
 
+def test_every_output_and_feedback_stays_past_the_turn_window():
+    # More replies than the turn-based window keeps verbatim; none of them is archived.
+    replies = POLICY.turns.keep + POLICY.turns.block + 1
+    history = History().play("FRB" * replies)
+    view = _view(history.blocks)
+    texts = [item.block for item in view.items if item.block.kind != "frame"]
+    assert texts[0] is SYSTEM
+    assert texts[1:] == [block for block in history.blocks if block.kind != "frame"]
+    assert all(item.block.kind != "action_ledger" for item in view.items)
+
+
 def test_a_reply_whose_action_names_no_sent_frame_stays_in_the_view():
     history = History().play("F")
     history.reply(based_on=None)
@@ -226,171 +217,3 @@ def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed):
                 # A block changes once, when its frame leaves the newest ones.
                 assert after == before or (before.image is not None and after.id in retired)
         previous = blocks
-
-
-SMALL_WINDOW = replace(POLICY, turns=Retention(keep=3, block=2))
-
-
-def _kept(view, kind=None):
-    return [
-        item.block.id
-        for item in view.items
-        if item.block.kind not in ("system_instruction", "action_ledger")
-        and (kind is None or item.block.kind == kind)
-    ]
-
-
-def _ledger(view):
-    return next((item for item in view.items if item.block.kind == "action_ledger"), None)
-
-
-def test_all_text_keeps_every_reply_past_the_turn_window():
-    history = History().play("FR" * 61)
-    view = _view(history.blocks, actions=history.actions)
-    assert len(_kept(view, "model_output")) == 61
-    assert _ledger(view) is None
-
-
-@pytest.mark.parametrize(
-    ("replies", "kept"), [(50, 50), (51, 41), (60, 50), (61, 41), (75, 45)]
-)
-def test_the_archive_cycles_replies_as_the_turn_window_cycles_turns(replies, kept):
-    # The maintained window keeps 41 to 50 turns (entity/config.py
-    # effective_detailed_history_policy).
-    assert POLICY.turns == Retention(keep=50, block=10)
-    history = History().play("FR" * replies)
-    view = _view(history.blocks, replies="archive", actions=history.actions)
-    assert _kept(view, "model_output") == [
-        f"g{n}.output" for n in range(replies - kept + 1, replies + 1)
-    ]
-
-
-def test_archived_replies_leave_with_their_feedback_and_the_older_frames_before_them():
-    history = History().play("FRFRBFRBFR")
-    view = _view(
-        history.blocks, frames=2, replies="archive", actions=history.actions, policy=SMALL_WINDOW
-    )
-    assert _kept(view) == ["f3.frame", "g3.output", "f4.frame", "g4.output"]
-    ledger = _ledger(view)
-    assert view.items[1] is ledger
-    assert ledger.intent == Intent(POLICY.ledger_role, "after_head")
-    archived = history.actions["g1.output"] + history.actions["g2.output"]
-    assert (ledger.block.text, ledger.block.revision) == (executed_action_ledger(archived), 2)
-    # The fourth reply took the window past three replies.
-    assert ledger.block.time.wall_ns == 2_004
-
-
-def test_the_ledger_keeps_its_time_while_the_replies_archived_after_have_no_actions():
-    history = History().play("FRFR")
-    for _ in range(4):
-        history.play("FR")
-        history.actions[history.blocks[-1].id] = ()
-    view = _view(
-        history.blocks, frames=2, replies="archive", actions=history.actions, policy=SMALL_WINDOW
-    )
-    # Six replies archive four; the fourth reply archived the two that had actions.
-    ledger = _ledger(view).block
-    assert _kept(view, "model_output") == ["g5.output", "g6.output"]
-    archived = history.actions["g1.output"] + history.actions["g2.output"]
-    assert (ledger.text, ledger.revision) == (executed_action_ledger(archived), 2)
-    assert ledger.time.wall_ns == 2_004
-
-
-def test_there_is_no_ledger_while_no_archived_reply_has_actions():
-    history = History().play("FR" * 4)
-    for reply in ("g1.output", "g2.output"):
-        history.actions[reply] = ()
-    view = _view(
-        history.blocks, frames=2, replies="archive", actions=history.actions, policy=SMALL_WINDOW
-    )
-    assert _kept(view, "model_output") == ["g3.output", "g4.output"]
-    assert _ledger(view) is None
-
-
-def test_an_older_frame_accepted_after_the_last_archived_reply_stays():
-    history = History().play("FRFRBFRBFR")
-    view = _view(
-        history.blocks, frames=1, replies="archive", actions=history.actions, policy=SMALL_WINDOW
-    )
-    assert _kept(view) == ["f3.frame", "g3.output", "f4.frame", "g4.output"]
-    assert [block.folded for block in _frames(view)] == [True, False]
-
-
-def test_an_archive_takes_an_older_frame_a_kept_reply_is_based_on():
-    # Replies outrun frames: the third and fourth answer frame 2, pushed before the second reply
-    # that the archive takes, so the view opens with a reply whose frame has left.
-    history = History().play("FFRRRRF")
-    view = _view(
-        history.blocks, frames=1, replies="archive", actions=history.actions, policy=SMALL_WINDOW
-    )
-    assert _kept(view) == ["g3.output", "g4.output", "f3.frame"]
-    assert view.items[2].block.based_on == "o2"
-
-
-def test_feedback_that_arrives_after_its_reply_was_archived_leaves_with_it():
-    history = History().play("FRFRFRFRBBB")
-    view = _view(
-        history.blocks, frames=4, replies="archive", actions=history.actions, policy=SMALL_WINDOW
-    )
-    assert _kept(view, "model_output") == ["g3.output", "g4.output"]
-    assert _kept(view, "execution_feedback") == ["g3.feedback"]
-
-
-def test_the_newest_frames_are_never_archived():
-    history = History().play("FFFFFRRRR")
-    view = _view(
-        history.blocks,
-        frames=5,
-        replies="archive",
-        actions=history.actions,
-        policy=replace(POLICY, turns=Retention(keep=1, block=1)),
-    )
-    assert _kept(view) == [f"f{n}.frame" for n in range(1, 6)] + ["g4.output"]
-    assert all(frame.image is not None for frame in _frames(view))
-
-
-@pytest.mark.parametrize("seed", range(6))
-def test_each_longer_history_only_adds_to_the_archive(seed):
-    rng = random.Random(seed)
-    keep = rng.randint(2, 8)
-    policy = replace(POLICY, turns=Retention(keep=keep, block=rng.randint(1, keep)))
-    retained = rng.randint(1, 12)
-    history = History().play(_script(rng, 160))
-    archived: set[str] = set()
-    ledger_text = ""
-    for count in range(len(history.blocks) + 1):
-        accepted = history.blocks[:count]
-        view = _view(
-            accepted,
-            frames=retained,
-            replies="archive",
-            actions=history.actions,
-            policy=policy,
-        )
-        kept = _kept(view)
-        assert not archived & set(kept)
-        archived |= {block.id for block in accepted} - set(kept)
-        newest = [block.id for block in accepted if block.kind == "frame"][-retained:]
-        assert [frame.id for frame in _frames(view) if frame.image is not None] == newest
-        outputs = [block.id for block in accepted if block.kind == "model_output"]
-        replies, kept_replies = len(outputs), len(_kept(view, "model_output"))
-        if replies > policy.turns.keep:
-            assert policy.turns.keep - policy.turns.block < kept_replies <= policy.turns.keep
-        else:
-            assert kept_replies == replies
-        # The oldest replies leave with their feedback and the older frames accepted before
-        # the last of them.
-        gone = set(outputs[: replies - kept_replies])
-        last = max((n for n, block in enumerate(accepted) if block.id in gone), default=-1)
-        assert kept == [
-            block.id
-            for n, block in enumerate(accepted)
-            if block.id not in gone
-            and block.attached_to not in gone
-            and not (block.kind == "frame" and block.id not in newest and n < last)
-        ]
-        ledger = _ledger(view)
-        text = "" if ledger is None else ledger.block.text
-        assert text.startswith(ledger_text)
-        assert len(text.splitlines()) == replies - kept_replies
-        ledger_text = text
