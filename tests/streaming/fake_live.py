@@ -44,13 +44,15 @@ EXACT, CONTAMINATED = ProviderHistoryState.EXACT, ProviderHistoryState.CONTAMINA
 @dataclass(frozen=True)
 class Call:
     """A function call message ``at`` seconds into the reply, or, ``after_push``, at the instant
-    that observation's push went out."""
+    that observation's push went out; handed over ``late`` seconds after it came off the wire,
+    as a reader's queue may."""
 
     at: float
     call_id: str
     name: str
     arguments: dict
     after_push: str | None = None
+    late: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,8 @@ class FakeLiveDriver(SessionLifecycle):
                     gid, sequence, call_ids=message.call_ids, received_at=received
                 )
             elif isinstance(message, Call):
+                if message.late and not await self._until(received + message.late):
+                    return
                 yield FunctionCall(
                     gid,
                     sequence,

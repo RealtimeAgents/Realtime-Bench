@@ -36,8 +36,10 @@ CLICK = Action(ActionType.CLICK, {"x": 1, "y": 2})
 ONE_CLICK = [Reply(1.6, (Call(0.9, CLICK, "c0"),))]
 
 
-def _episode(duration_s, replies, *, tmp_path=None, env_setup=None, log=None, logs=None):
-    clock = FakeClock()
+def _episode(
+    duration_s, replies, *, tmp_path=None, env_setup=None, log=None, logs=None, wall_origin=0.0
+):
+    clock = FakeClock(wall_origin)
     env, agent = FakeEnv(clock), FakeAgent(clock, replies)
     if env_setup is not None:
         env_setup(env, clock)
@@ -77,8 +79,13 @@ def _kernel(records, kind: str) -> list[dict]:
 
 
 def test_the_agent_is_told_the_origin_its_arrival_times_count_from():
-    _, env, agent = _episode(1.0, [])
-    assert agent.origin == env.t0
+    """The episode's start on the wall clock, which is not the clock's zero."""
+
+    def start_at_the_clock(env, clock):
+        env.t0 = clock.time()
+
+    _, env, agent = _episode(1.0, [], wall_origin=1000.0, env_setup=start_at_the_clock)
+    assert agent.origin == env.t0 == 1000.0
 
 
 def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp_path):
