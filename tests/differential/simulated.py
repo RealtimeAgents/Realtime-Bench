@@ -238,7 +238,8 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
                 "next_observation_tick": outcome.next_observation_tick,
                 "dropped_intermediate_frames": outcome.dropped_intermediate_frames,
                 "post_action_rendered": outcome.post_action_rendered,
-                # The lifecycle record keeps six decimals (evaluation/episode_records.py:543).
+                # The lifecycle record keeps six decimals (evaluation/episode_records.py
+                # lifecycle_record).
                 "frame_age_s": None
                 if outcome.frame_age_s is None
                 else round(outcome.frame_age_s, 6),

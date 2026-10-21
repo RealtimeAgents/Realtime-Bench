@@ -62,8 +62,8 @@ def _draw(rng: random.Random, seed: int) -> Script:
             start = rng.randint(1, 12)
             fields["check_errors"] = tuple(range(start, start + rng.randint(1, 4)))
         # The environment cuts a tap where a lease ends and the simulation does not
-        # (tests/kernel/simulation.py:14-16), so reads inside taps are numbered alike only
-        # without holds.
+        # (tests/kernel/simulation.py module docstring), so reads inside taps are numbered alike
+        # only without holds.
         if rng.random() < 0.06 and all(parse(turn.action).kind != "hold" for turn in turns):
             start = rng.randint(1, 3)
             fields["tap_check_errors"] = tuple(range(start, start + rng.randint(1, 2)))

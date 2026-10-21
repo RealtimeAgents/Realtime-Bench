@@ -98,7 +98,7 @@ def _ended(script: Script, reached: bool, applied: int):
 
 class _Latched:
     """Logs when the run's invalid-run value is first latched, by the environment itself or by
-    the runner (evaluation/runner.py:197-208)."""
+    the runner (evaluation/runner.py _invalidate)."""
 
     @property
     def _invalid_run(self):
@@ -114,11 +114,13 @@ class _Latched:
 class WallEnvironment(_Latched, FakeEnvironment):
     """FakeEnvironment with the script's operation times, end and frozen stream, and the parts
     of GuestEnvironment's wall clock the kernel sees: holds released by a timer when their lease
-    ends (sandbox/actions.py:667-775) and the wait record (actions.py:863-903).
+    ends (sandbox/actions.py GuestEnvironment._execute_wall_hold, _schedule_wall_release,
+    _wall_release_due) and the wait record (actions.py GuestEnvironment.execute).
 
     A capture reads its tick when it starts and is stamped when it returns, an end check reads
     the task when it is asked and returns after its time, and an action takes its time before it
-    takes effect, so a hold's lease starts after it (actions.py:746)."""
+    takes effect, so a hold's lease starts after it
+    (actions.py GuestEnvironment._execute_wall_hold)."""
 
     def __init__(self, frames, clock, script: Script):
         super().__init__(
@@ -164,7 +166,7 @@ class WallEnvironment(_Latched, FakeEnvironment):
         reads = cause not in ("invalid_run", "deadline")  # the task's state is read
         if reads and self.script.read_fails_at(asked):
             # GuestEnvironment latches a failed read and answers that the episode is over
-            # (sandbox/actions.py:1004-1010).
+            # (sandbox/actions.py GuestEnvironment.done).
             self._invalid_run = {
                 "category": "environment",
                 "reason": "terminal_state_check_failed",
@@ -316,8 +318,9 @@ class _Guest:
 class TokenWorld(_Latched, TokenEnvironment):
     """TokenEnvironment with the script's end, failed state reads and advances, refusals and
     faults, and a log of every end check and key release with the tick it happened at. The step,
-    the end check and the releases a tap makes inside execute (sandbox/actions.py:548) are logged
-    apart and not counted: the kernel's world moves the tick of a tap without them."""
+    the end check and the releases a tap makes inside execute (sandbox/actions.py
+    GuestEnvironment._execute_clock_key) are logged apart and not counted: the kernel's world moves
+    the tick of a tap without them."""
 
     def __init__(self, frames, task: _Task, script: Script):
         self.script = script
@@ -348,7 +351,8 @@ class TokenWorld(_Latched, TokenEnvironment):
         if read in blind and not self._saw_end:
             # A blind read stands for a failure the kernel takes as "not ended"; once an end
             # check has seen the end, the kernel reads no more, and today's loop reads the task as
-            # it is. A tap's reads tell the kernel only their failures (turns.py:471-474).
+            # it is. A tap's reads tell the kernel only their failures
+            # (turns.py TurnPolicy._executed).
             return None
         ends_at = self.script.ends_at_s
         reached = ends_at is not None and self._logical_tick >= ends_at * self.fps
@@ -511,8 +515,8 @@ def _requests(stub) -> list[dict]:
 
 def _drive(episode, env, script, driver, config, clocks, now) -> None:
     """Run the episode under ``driver``, recording what the agent is told and when it is
-    aborted; then drain the abandoned workers and close as main() does (evaluation/runner.py:
-    1531-1537)."""
+    aborted; then drain the abandoned workers and close as main() does
+    (evaluation/runner.py main)."""
     agent = episode.agent
     commit_action, abort = agent.commit_action, agent.abort
 
@@ -546,7 +550,7 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
 class _FrozenFrames:
     """The frame source, repeating one frame's identity (observation id, tick, screenshot) from
     capture ``frozen_from`` on, each stamped when it is captured: a producer replaying one frame
-    (evaluation/runner.py:71-106)."""
+    (evaluation/runner.py ObservationStreamWatchdog)."""
 
     def __init__(self, frames, frozen_from: int):
         self._frames = frames
