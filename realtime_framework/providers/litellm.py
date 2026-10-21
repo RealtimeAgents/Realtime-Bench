@@ -68,21 +68,24 @@ _END = object()
 
 
 # Helpers
-def pace_request(clock, trace) -> None:
+def pace_request(owner) -> None:
     """Apply the optional process-wide minimum interval between provider requests.
 
-    A wait is written to ``trace`` before it starts, as the session encoders record theirs
-    (providers/session_lifecycle.py _record_wait). Like RequestRetry's backoff, it ends once the
-    generation is abandoned (the enclosing retry_cancellation), and RetryCancelled stops the
-    request unsent.
+    ``owner`` is the driver. A wait runs on its clock and is written to its trace before it
+    starts, as the session encoders record theirs (providers/session_lifecycle.py _record_wait).
+    Only a wait reads the trace, which the harness binds as it builds the driver
+    (harnesses/default/harness.py _setup_backend). Like RequestRetry's backoff, the wait ends
+    once the generation is abandoned (the enclosing retry_cancellation), and RetryCancelled stops
+    the request unsent.
     """
     interval = float(os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0"))
     if interval <= 0:
         return
+    clock = owner.clock
     with _REQUEST_GATE:
         wait = _LAST_REQUEST_AT[0] + interval - clock.time()
         if wait > 0:
-            trace.capture(
+            owner._trace.capture(
                 TraceEvent.SESSION_WAIT,
                 {
                     "wait": "request_pacing",
@@ -682,7 +685,7 @@ class LiteLLMDriver:
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if not self._stream_enabled():
             return await self._start_complete_response(request)
-        await asyncio.to_thread(pace_request, self.clock, self._trace)
+        await asyncio.to_thread(pace_request, self)
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
         response = await self._sdk.acompletion(**kwargs)
@@ -929,7 +932,7 @@ class LiteLLMDriver:
     # ---- complete responses ----------------------------------------------------------------
 
     async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        await asyncio.to_thread(pace_request, self.clock, self._trace)
+        await asyncio.to_thread(pace_request, self)
         raw = {}
         # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
         logged = LoggerCapture(self) if self.protocol.client is None else None
