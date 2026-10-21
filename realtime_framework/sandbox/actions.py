@@ -17,6 +17,8 @@ from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
 from realtime_framework.entity.config import EnvironmentBudgetConfig
+from realtime_framework.sandbox.budget import BudgetExceeded
+from realtime_framework.sandbox.budget import Deadline
 from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.guest import GuestRefused
 from realtime_framework.sandbox.guest import action_timeout
@@ -600,7 +602,9 @@ class GuestEnvironment:
 
     def _count_as_held(self, parts):
         """Keys whose press or release failed may still be down on the page: count them as held,
-        so that the cleanup releases them (a key held already keeps its lease)."""
+        so that the cleanup releases them (a key held already keeps its lease). A key that was up
+        gets that keyUp as an event too, but the cleanup comes after the scored snapshot is
+        frozen."""
         for identity, wire in parts:
             self._held_keys.setdefault(
                 identity, {"wire": wire, "expires_at_tick": self._logical_tick}
@@ -889,21 +893,30 @@ class GuestEnvironment:
                 "active_mouse_buttons": sorted(self._held_mouse_buttons),
             }
             if release_at is not None:
-                # The lease this hold set, from the return of its keydown to the release the timer
-                # will send: that keyup lands when its own request does (later on a retry), and a
-                # key an earlier hold keeps down longer goes up at that one's end.
-                result["lease_seconds"] = round(expires_at - pressed_at, 3)
+                # The lease this hold set, from its keydown request to the release the timer will
+                # send: about how long its keys stay down, the keyup's trip to the desktop taking
+                # about as long as the keydown's (longer on a retry). A key an earlier hold keeps
+                # down longer goes up at that one's end.
+                result["lease_seconds"] = round(expires_at - now, 3)
             return result
 
     def _count_as_held_on_the_wall(self, action):
         """The keys of an action whose press or release failed may still be down on the desktop:
         count those xdotool can name as held, so that the cleanup releases them (a key held
-        already keeps its lease)."""
+        already keeps its lease). The X server drops the release of a key that is up."""
         try:
             parts, _ = self._key_chord(action)
         except ValueError:
             return
-        with self._wall_lock:
+        # The release timer may hold the lock for its guest request: wait no longer than the
+        # action's budget lasts, and record nothing without it (the run is invalid already).
+        try:
+            left = Deadline(None, "wall lock").remaining()
+        except BudgetExceeded:
+            left = 0.0
+        if not self._wall_lock.acquire(timeout=-1 if left is None else left):
+            return
+        try:
             now = self.clocks.semantic.time()
             for identity, wire in parts:
                 keysym = _xdotool_keysym(identity)
@@ -911,6 +924,8 @@ class GuestEnvironment:
                     self._wall_holds.setdefault(
                         identity, {"wire": wire, "keysym": keysym, "expires_at": now}
                     )
+        finally:
+            self._wall_lock.release()
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
@@ -969,10 +984,14 @@ class GuestEnvironment:
         (GuestRefused), if ``exc`` is one.
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
-        unexpected parameters, ...) and answers 400. That is the model's action being
+        unexpected parameters, ...) and answers 400 on /action. That is the model's action being
         rejected, not an environment failure, so it must not invalidate the run. A refusal that
-        comes after the action's budget ran out is one too: the BudgetExceeded keeps it as its
-        cause. A 4xx from another endpoint does not show that the environment works.
+        comes after the action's budget ran out is one too, and the BudgetExceeded keeps it as its
+        cause: the guest's late answer still shows that the guest works; the runtime's own
+        refusal comes late only after a wait for the wall lock, which is not the action's fault,
+        though it means the release timer's keyup was slow. A 4xx from another endpoint, such as
+        the /execute of the xdotool commands, does not show that the environment works, and the
+        run is invalid.
         """
         for error in (exc, exc.__cause__):
             if isinstance(error, (ActionRejected, GuestRefused)):
