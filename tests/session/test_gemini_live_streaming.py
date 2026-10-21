@@ -899,6 +899,37 @@ def test_each_message_is_traced_under_the_reply_it_was_read_for():
     ]
 
 
+def test_nothing_read_after_a_reply_is_traced_under_it_however_it_ended():
+    """What the reader reads after a reply is in no reply's scope, also when its events() was
+    closed before its end, or when its trigger failed and it never came."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([]))
+        with trace_scope(phase="decision", generation=1):
+            events = rig.driver.events(await rig.driver.request_reply(request))
+            rig.socket.feed(call("call-0"))
+            await anext(events)
+            await events.aclose()
+        rig.socket.feed(TURN_COMPLETE, update("handle-1"))
+        await settle()
+        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        with trace_scope(phase="decision", generation=2), pytest.raises(RuntimeError):
+            await rig.driver.request_reply(replace(request, generation_id="turn-1"))
+        rig.socket.feed(update("handle-2"))
+        await settle()
+        await rig.driver.close()
+
+    asyncio.run(run())
+    assert rig.socket.read_scopes == [
+        ("toolCall", {"phase": "decision", "generation": 1}),
+        ("serverContent", {"phase": "decision", "generation": 1}),
+        ("sessionResumptionUpdate", None),
+        ("sessionResumptionUpdate", None),
+    ]
+
+
 def test_nothing_goes_out_once_the_reader_failed():
     """A reader that failed with no reply waiting leaves a connection that takes nothing: a push
     and a reply raise its failure before anything is written."""

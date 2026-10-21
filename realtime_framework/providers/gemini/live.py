@@ -654,6 +654,8 @@ class GeminiLiveDriver(SessionLifecycle):
         try:
             while True:
                 arrived = await receiver.next()
+                if isinstance(arrived, Received) and arrived.ends:
+                    enter_trace_scope(None)  # until the next reply hands its own over
                 reply = (
                     self._replies.get(arrived.generation_id)
                     if isinstance(arrived, Received)
@@ -662,8 +664,6 @@ class GeminiLiveDriver(SessionLifecycle):
                 if reply is not None:
                     reply.messages.put_nowait(arrived)
                     reply.ended = reply.ended or arrived.ends
-                    if arrived.ends:
-                        enter_trace_scope(None)  # until the next reply hands its own over
                     continue
                 if isinstance(arrived, Orphan) and arrived.cancelled:
                     self._cancelled_between.append(arrived)
@@ -817,6 +817,7 @@ class GeminiLiveDriver(SessionLifecycle):
                 self._core.unresumable()
                 abandoned = self._replies.pop(request.generation_id)
                 self._cancelled_between[:0] = abandoned.held
+                self._reading_context.run(enter_trace_scope, None)
                 raise
             self._activity_open = False
         self._core.sent(trigger.keys)
