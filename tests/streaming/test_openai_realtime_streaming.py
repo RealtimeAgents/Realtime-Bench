@@ -180,9 +180,15 @@ def test_a_failed_read_ends_the_streaming_reader_and_raises_in_every_waiter():
             asyncio.create_task(session.receive_until(lambda: reply.events)) for _ in range(2)
         ]
         connection.queue.put(failure)
-        return await asyncio.gather(*waiters, return_exceptions=True)
+        raised = await asyncio.gather(*waiters, return_exceptions=True)
+        ended = session._reader.done()
+        connection.queue.put(_clean_close())  # ends a reader that went on reading
+        return raised, ended, session
 
-    assert all(raised is failure for raised in _within(scenario()))
+    raised, ended, session = _within(scenario())
+    assert all(each is failure for each in raised)
+    assert ended
+    assert session.failure is failure
 
 
 def test_an_event_the_core_fails_on_ends_the_streaming_reader_and_raises_in_every_waiter():
