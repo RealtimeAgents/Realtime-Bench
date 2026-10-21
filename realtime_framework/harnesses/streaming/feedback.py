@@ -23,7 +23,7 @@ from realtime_framework.harnesses.default.frames import (
 )
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 
-if TYPE_CHECKING:  # the agent does not import the evaluation package at run time
+if TYPE_CHECKING:
     from realtime_framework.evaluation.kernel.events import Outcome
 
 # The statuses of an action that ran: one the environment applied, and a wait, which ends where it

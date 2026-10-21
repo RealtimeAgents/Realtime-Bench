@@ -36,6 +36,7 @@ import asyncio
 import json
 import threading
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import (
@@ -73,7 +74,6 @@ from realtime_framework.entity.request import (
     CanonicalRequest,
     ContentBlock,
 )
-from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import ActionArrived, CallsCancelled
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
@@ -92,6 +92,9 @@ from realtime_framework.harnesses.streaming.history import (
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
+
+if TYPE_CHECKING:
+    from realtime_framework.evaluation.kernel.events import Outcome
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
