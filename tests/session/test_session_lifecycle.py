@@ -201,6 +201,20 @@ def test_close_waits_for_the_abort_for_a_while(interrupt_s, log):
     assert rig.encoder.log == log
 
 
+def test_a_close_its_caller_gives_up_on_still_closes():
+    """RealtimeRuntime.close gives driver.close 5 s (context.py:723), less than close waits for
+    a stuck abort. Cancelled while it waits, close still closes the connection."""
+    with _rig() as rig:
+        rig.encoder.interrupt_s = 60.0
+        abort = rig.thread.submit(rig.encoder.abort(GENERATION))
+        with pytest.raises(TimeoutError):
+            rig.thread.run(rig.encoder.close(), timeout=5.0)
+        rig.run(asyncio.sleep(0))  # the loop takes the cancellation first
+        assert rig.encoder.log == [("interrupt", "turn-0"), ("close", 5.0)]
+        assert not rig.encoder._connected
+        assert rig.clock.wait(abort, 100.0)  # the abort ends when its interrupt does
+
+
 def test_a_dirty_session_is_rebuilt_by_a_recovery_sync():
     """A failed generation leaves the session dirty; the recovery sync rebuilds it from the
     history and returns what the sync did, which ``record`` saw first."""
