@@ -536,12 +536,11 @@ def test_driver_default_short(live_env, tmp_path):
             assert parts[0]["thoughtSignature"] == "skip_thought_signature_validator"
             assert all("thoughtSignature" not in part for part in parts[1:])
     # realtime_input waits after each video; a later video waits out the frame interval first,
-    # unless a new connection came between. The two reads after the goAway are bounded by it.
+    # unless a new connection came between. The reads after the goAway wait for its deadline.
     assert session_waits(tmp_path / "run") == [
         "video_ingestion",
         "video_interval",
         "video_ingestion",
-        "go_away_deadline",
         "go_away_deadline",
         "connection_close",
         "session_release",
@@ -638,7 +637,6 @@ def test_resume_failure_short(live_env, tmp_path):
     # The resume closes the old connection and waits the release; its refused setup is closed by
     # google-genai, and the replay that follows waits the release again.
     assert session_waits(tmp_path / "run") == [
-        "go_away_deadline",
         "go_away_deadline",
         "connection_close",
         "session_release",

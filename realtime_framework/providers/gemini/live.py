@@ -276,6 +276,8 @@ class GeminiLiveDriver(SessionLifecycle):
         self._core = SessionCore(self.options)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
+        # The goAway deadline the trace has a wait for, on the open connection.
+        self._go_away_wait_recorded: float | None = None
         self._connect_metadata: dict = {}
 
     def _client_for_slot(self, index: int):
@@ -473,6 +475,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._receiver = None
         self._activity_open = False
         self._last_video_sent_at = None
+        self._go_away_wait_recorded = None
         self._core.closed()
         if cm is not None:
             self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
@@ -548,7 +551,10 @@ class GeminiLiveDriver(SessionLifecycle):
         if deadline is None:
             return await operation
         remaining = max(0.0, deadline - self.clock.monotonic())
-        self._record_wait("go_away_deadline", remaining, until=deadline)
+        # One wait until the deadline, however many reads it bounds; none once it has passed.
+        if remaining > 0 and deadline != self._go_away_wait_recorded:
+            self._go_away_wait_recorded = deadline
+            self._record_wait("go_away_deadline", remaining, until=deadline)
         try:
             return await self.clock.wait_for(operation, remaining)
         except asyncio.TimeoutError:

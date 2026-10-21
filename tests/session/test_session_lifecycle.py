@@ -35,6 +35,7 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.records import UNTRACED, TraceEvent, current_trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
+from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
 from tests.fake_clock import FakeClock
@@ -729,8 +730,9 @@ class _TickingClock(RecordingClock):
         return round(self.monotonic() * S)
 
 
-def test_gemini_live_bounds_each_read_by_the_one_go_away_deadline():
-    """The reads after a goAway wait until the same deadline, whenever each starts."""
+def test_gemini_live_records_a_go_away_deadline_once():
+    """The reads after a goAway all wait until its deadline: one wait, recorded before the first
+    of them, which ends at the deadline itself."""
     transcript = {"serverContent": {"outputTranscription": {"text": "partial"}}}
     rig = Rig("gemini-3.8-live", [[{"goAway": {"timeLeft": "30s"}}, transcript, TURN_COMPLETE]])
     trace = _Trace()
@@ -743,7 +745,19 @@ def test_gemini_live_bounds_each_read_by_the_one_go_away_deadline():
 
     asyncio.run(run())
     deadline = round(rig.driver._core.go_away_deadline * S)
-    assert [(wait, until) for wait, _, until in trace.waits] == [
-        ("go_away_deadline", deadline),
-        ("go_away_deadline", deadline),
-    ]
+    assert [(wait, until) for wait, _, until in trace.waits] == [("go_away_deadline", deadline)]
+
+
+def test_gemini_live_records_no_wait_for_a_go_away_deadline_already_past():
+    """A goAway with less time left than the close margin leaves nothing to wait for: the next
+    read fails at once and the driver closes the connection, which is the only wait recorded."""
+    rig = Rig("gemini-3.8-live", [[{"goAway": {"timeLeft": "1s"}}, HANG]])
+    trace = _traced(rig)
+
+    async def run():
+        await rig.connect()
+        with pytest.raises(live.GoAwayDeadlineExceeded):
+            await drain(rig.driver.events(await rig.start("turn-0")))
+
+    asyncio.run(run())
+    assert trace.waits == [("connection_close", 1.0, 101 * S)]
