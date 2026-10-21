@@ -1,7 +1,8 @@
 """The Gemini Live session core (providers/gemini/session.py), driven directly: no driver, no
 WebSocket.
 
-The history views come from the request builder, as the runtime builds them; the server messages
+The history views come from the request builder, as the runtime builds them, and for native
+streaming from the streaming history view (harnesses/streaming/history.py); the server messages
 are google-genai's LiveServerMessage, built from the wire JSON the replay stub sends
 (tests/replay/ws_gemini_live.py).
 """
@@ -168,6 +169,22 @@ def clean_turn(core: SessionCore, generation_id: str, handle: str, *messages) ->
     start_turn(core, generation_id)
     for received in (update(handle), *messages, server_content(turnComplete=True)):
         receive(core, received)
+
+
+def start_reply(core: SessionCore, generation_id: str, blocks=None) -> None:
+    """A streaming reply: the newest of the accepted ``blocks`` pushed, a trigger, then the
+    generation."""
+    history = streaming_view(blocks or [pushed(0)])
+    core.push(history)
+    core.trigger(history)
+    core.start_generation(generation_id)
+
+
+def clean_reply(core: SessionCore, generation_id: str, handle: str) -> None:
+    """A streaming reply read as it arrives: a resumption update, then turnComplete."""
+    start_reply(core, generation_id)
+    for received in (update(handle), server_content(turnComplete=True)):
+        arrive(core, received)
 
 
 def frame_content(k: int, text: str | None = None) -> Content:
@@ -563,7 +580,7 @@ def test_a_reply_message_arrives_as_received():
     """While a generation's reply is being read, arrived() applies a message as received() does."""
     core = session_core(streaming=True)
     connected(core)
-    start_turn(core, "turn-0")
+    start_reply(core, "turn-0")
     received = arrive(core, update("handle-0"))
     assert isinstance(received, Received)
     assert (received.connection, received.generation, received.generation_id) == (1, 1, "turn-0")
@@ -577,7 +594,7 @@ def test_a_message_carries_the_time_it_was_read():
     calls it carries arrived."""
     core = session_core(streaming=True)
     connected(core)
-    start_turn(core, "turn-0")
+    start_reply(core, "turn-0")
     call = message({"toolCall": {"functionCalls": [{"id": "call-0", "name": "click", "args": {}}]}})
     assert arrive(core, call, now=12.5).at == 12.5
     assert receive(core, server_content(turnComplete=True), now=13.0).at == 13.0
@@ -589,7 +606,7 @@ def test_an_orphan_go_away_asks_for_a_new_connection():
     deadline, as it does in a reply."""
     core = session_core(streaming=True)
     connected(core)
-    clean_turn(core, "turn-0", "handle-0")
+    clean_reply(core, "turn-0", "handle-0")
     orphan = arrive(core, go_away("30s"), now=100.0)
     assert isinstance(orphan, Orphan)
     assert (orphan.connection, orphan.control) == (1, GO_AWAY_RECONNECT)
@@ -604,8 +621,8 @@ def test_an_orphan_resumption_update_is_the_latest_handle():
     resumes with; an unresumable update leaves the last resumable one."""
     core = session_core(streaming=True)
     connected(core)
-    clean_turn(core, "turn-0", "handle-0")
-    core.observe(view([turn(1)]))
+    clean_reply(core, "turn-0", "handle-0")
+    core.push(streaming_view([pushed(0), pushed(1)]))
     assert arrive(core, update("handle-1")).control == {}
     arrive(core, update(None))
     assert core.latest_resume_handle == "handle-1"
@@ -623,7 +640,7 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     not end the reply."""
     core = session_core(streaming=True)
     connected(core)
-    start_turn(core, "turn-0")
+    start_reply(core, "turn-0")
     core.calls_received([("call-0", "click"), ("call-1", "key")])
     core.acknowledging()
     core.acknowledgement_sent()
@@ -636,48 +653,48 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     orphan = arrive(core, CANCELLATION)
     assert (orphan.cancelled, orphan.control) == (("call-1", "call-0"), {})
 
-    start_turn(core, "turn-1")
-    connected(core, view([turn(0)]))
+    start_reply(core, "turn-1")
+    connected(core, streaming_view([pushed(0)]))
     assert core.received(1, CANCELLATION, 0.0).cancelled == ("call-1", "call-0")
 
 
 def test_streaming_resumes_with_the_latest_resumable_handle():
-    """A frame pushed while a reply runs drops the handle a turn-based session would promote: on
-    a goAway it rebuilds, and a streaming session resumes with the latest handle the server
-    called resumable, through later frames and unresumable updates."""
-    clean, latest = session_core(), session_core(streaming=True)
+    """A streaming goAway renewal resumes with the latest handle the server called resumable,
+    through the frames pushed after it, unresumable updates and an interrupted reply, where a
+    turn-based session rebuilds; a forced rebuild, or another reason, rebuilds."""
+    core = session_core(streaming=True)
+    connected(core)
+    start_reply(core, "turn-0", [pushed(1)])
+    arrive(core, update("handle-1"))
+    core.push(streaming_view([pushed(1), pushed(2)]))  # the next frame, while the reply runs
+    for received in (
+        update(None),
+        go_away(),
+        server_content(interrupted=True),
+        server_content(turnComplete=True),
+    ):
+        arrive(core, received)
     renewal = {"force_rebuild": False, "generation_clean": True}
-    for core in (clean, latest):
-        connected(core)
-        clean_turn(core, "turn-0", "handle-0")
-        assert core.resume_handle_for("go_away", **renewal) == "handle-0"  # the modes agree here
-        start_turn(core, "turn-1")
-        receive(core, update("handle-1"))
-        core.observe(view([turn(1)]))  # the next frame, pushed while the reply runs
-        receive(core, update(None))
-        receive(core, go_away())
-        receive(core, server_content(turnComplete=True))
-    assert clean.resume_handle_for("go_away", **renewal) is None
-    assert latest.resume_handle_for("go_away", **renewal) == "handle-1"
-    assert latest.resume_handle_for("go_away", force_rebuild=False, generation_clean=False) == (
+    assert core.resume_handle_for("go_away", **renewal) == "handle-1"
+    assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=False) == (
         "handle-1"
     )
-    assert latest.resume_handle_for("go_away", force_rebuild=True, generation_clean=True) is None
-    assert latest.resume_handle_for("history_block_compaction", **renewal) is None
+    assert core.resume_handle_for("go_away", force_rebuild=True, generation_clean=True) is None
+    assert core.resume_handle_for("history_block_compaction", **renewal) is None
 
-    connected(latest, resume_handle="handle-resumed")
-    assert latest.resume_handle_for("go_away", **renewal) == "handle-resumed"
-    arrive(latest, update("handle-2"))  # between replies
-    assert latest.resume_handle_for("go_away", **renewal) == "handle-2"
-    connected(latest, view([turn(0)]))  # a rebuild has no handle until the server sends one
-    assert latest.resume_handle_for("go_away", **renewal) is None
+    connected(core, resume_handle="handle-resumed")
+    assert core.resume_handle_for("go_away", **renewal) == "handle-resumed"
+    arrive(core, update("handle-2"))  # between replies
+    assert core.resume_handle_for("go_away", **renewal) == "handle-2"
+    connected(core, streaming_view([pushed(1)]))  # a rebuild has no handle until one comes
+    assert core.resume_handle_for("go_away", **renewal) is None
 
 
 def test_an_orphan_from_a_closed_connection_changes_nothing():
     core = session_core(streaming=True)
     connected(core)
-    clean_turn(core, "turn-0", "handle-0")
-    connected(core, view([turn(0)]))
+    clean_reply(core, "turn-0", "handle-0")
+    connected(core, streaming_view([pushed(0)]))
     for message in (update("handle-1"), go_away()):
         orphan = core.arrived(1, message, 0.0)
         assert (orphan.connection, orphan.control) == (1, {})
