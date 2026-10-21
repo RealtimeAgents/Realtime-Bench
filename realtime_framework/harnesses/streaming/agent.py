@@ -2,18 +2,20 @@
 StreamingKernelAgent) for a live session that frames go into as they are captured, and whose
 replies hand their actions over as they come off the wire (phase2.md, native streaming).
 
-The agent keeps the content blocks the session should hold, in the order it accepted them, and
+The agent keeps the content blocks the session should hold, in the order they came to it, and
 gives every push and connection operation the view they make (history.py), so that a session
 rebuilt from the view holds what the live one did. Every driver operation runs on the agent's one
 execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py). Each
 push and each reply readies the session first, and renews the connection the provider asked to
 renew, except a push while a reply is on the session: readying it then would close the reply's
 connection, or rebuild the session without the reply's output. A push the session refuses until
-it is renewed, as Gemini Live's after a goAway, waits for that reply instead.
+it is renewed, as Gemini Live's after a goAway, waits for that reply instead, at a gate of its
+own; whether it waits is decided on the execution thread, where the goAway is read.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and records
 it as sent once the driver put it into the session. A frame whose push failed keeps its number and
-stays out of the view (frames.py).
+stays out of the view (frames.py). As a turn-based history does, the agent holds a screenshot only
+while the view keeps it, and a frame only while a reply may start on it or is on it.
 
 A reply starts on the view. Each function call is parsed as its message is read, against the frame
 it names, and posted to the kernel with the time its message came off the wire, in semantic
@@ -36,6 +38,7 @@ import asyncio
 import json
 import threading
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import (
@@ -63,6 +66,7 @@ from realtime_framework.entity.model import (
     ProviderObservation,
     RetryCancelled,
     SessionSeed,
+    SyncDisposition,
     retry_cancellation,
 )
 from realtime_framework.entity.records import TraceEvent, trace_scope
@@ -72,7 +76,6 @@ from realtime_framework.entity.request import (
     CanonicalRequest,
     ContentBlock,
 )
-from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import ActionArrived, CallsCancelled
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
@@ -92,8 +95,14 @@ from realtime_framework.harnesses.streaming.history import (
 )
 from realtime_framework.providers.registry import adapter_class
 
+if TYPE_CHECKING:
+    from realtime_framework.evaluation.kernel.events import Outcome
+
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
+# How long an abort or close waits on the execution thread: longer than the session waits for
+# an abort's cleanup, with time to close after (RealtimeRuntime.close).
+_SESSION_TIMEOUT_S = 15.0
 # The boundaries that end a reply, whose provider history state is the session's after it.
 _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
 
@@ -156,18 +165,20 @@ class NativeStreamingAgent(VisionAgentBase):
         # The episode's operational clock; on the wall clock it is the semantic one as well.
         self.clock = clock or SystemClock()
         self._lock = threading.Lock()  # the blocks and the replies; the shell's threads share them
-        # Held, on the execution thread, while a push readies the session and while a reply
-        # readies it and is asked for: no push reopens the session between the two.
+        # Held, on the execution thread, while a push readies the session, while a reply
+        # readies it and is asked for, and while close() closes it: no push reopens the session
+        # between a reply's two steps, or once it is closed.
         self._readying = asyncio.Lock()
+        self._closed = False
+        self._session_known: str | None = None  # the last SessionStateChanged's state
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
         # The replies on the session: asked for, and not yet accepted, discarded or aborted.
         # Readying the session under one would close its connection, or rebuild the session
-        # without its output. ``_off_session`` is set while there is none.
+        # without its output. Each push waiting for them holds a gate, opened once none is.
         self._on_session: set[int] = set()
-        self._off_session = self.clock.event()
-        self._off_session.set()
+        self._gates: list[threading.Event] = []
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
         # What each action asked for (action_text), by its outcome's (decision, call id).
         self._requested: dict[tuple[int, str], str] = {}
@@ -253,17 +264,80 @@ class NativeStreamingAgent(VisionAgentBase):
         )
 
     def _record_session(self, sync, result=None, error=None) -> None:
-        """The ``record`` of a session operation (SessionLifecycle): a HistoryChanged for each
-        sync it ran and for a reopened session."""
+        """The ``record`` of a session operation (SessionLifecycle), as a turn's
+        (RealtimeRuntime._record_reconnect, _record_sync): a HistoryChanged for a reopened
+        session, and for each sync, of the kind the driver's result reports; and what that left
+        of the provider's context."""
+        if sync is None:
+            self._history_changed("rebuild", "recovery", {"reason": "reconnect"})
+            self._session_state("exact", "reconnect", ProviderHistoryState.EXACT)
+            return
+        metadata = result.provider_metadata if result is not None else {}
+        trigger = "recovery" if sync.reason == "runtime_recovery" else "provider"
+        if metadata.get("session_resumed"):
+            kind = "session_resumed"
+        elif metadata.get("resume_error"):
+            kind, trigger = "resume_fallback", "fallback"
+        elif metadata.get("history_in_place_edit_fallback"):
+            kind, trigger = "in_place_edit_fallback", "fallback"
+        elif result is not None and (
+            result.disposition == SyncDisposition.REBUILT
+            or metadata.get("history_session_reconnected")
+        ):
+            kind = "rebuild"
+        else:
+            kind = "sync"
+        self._history_changed(
+            kind,
+            trigger,
+            {
+                "reason": sync.reason,
+                "force_rebuild": sync.force_rebuild,
+                "disposition": result.disposition.value if result is not None else None,
+                "history_state": result.history_state.value if result is not None else None,
+                "detail": result.detail if result is not None else None,
+                "provider_metadata": metadata,
+            },
+            error=repr(error)[:500] if error is not None else None,
+        )
+        if result is None:
+            self._session_state("unknown", f"sync_error:{sync.reason}", None)
+        elif kind == "session_resumed":
+            # Exact for the driver, but restored from the resume handle, not sent on this
+            # connection.
+            self._session_state("unknown", "session_resumed", result.history_state)
+        elif result.history_state == ProviderHistoryState.EXACT:
+            self._session_state("exact", f"sync:{sync.reason}", result.history_state)
+        else:
+            self._session_state("unknown", f"sync:{sync.reason}", result.history_state)
+
+    def _history_changed(self, kind: str, trigger: str, sync: dict, **fields) -> None:
         self._trace.capture(
             TraceEvent.HISTORY_CHANGED,
             {
-                "kind": "reconnect" if sync is None else "sync",
-                "reason": None if sync is None else sync.reason,
-                "force_rebuild": None if sync is None else sync.force_rebuild,
-                "disposition": None if result is None else result.disposition.value,
-                "history_state": None if result is None else result.history_state.value,
-                "error": None if error is None else repr(error)[:500],
+                "kind": kind,
+                "trigger": trigger,
+                "policy_item": None,
+                "policy_version": self._context_policy.version,
+                "sync": sync,
+                **fields,
+            },
+        )
+
+    def _session_state(self, state, cause, provider_state, generation_id=None) -> None:
+        """Record when the provider's context becomes unknown, or exact again, as a turn's
+        session does (RealtimeRuntime._record_session_state)."""
+        if state == self._session_known:
+            return
+        self._session_known = state
+        self._trace.capture(
+            TraceEvent.SESSION_STATE_CHANGED,
+            {
+                "protocol_family": self.driver.capabilities.protocol_family,
+                "state": state,
+                "cause": cause,
+                "provider_history_state": provider_state.value if provider_state else None,
+                "generation_id": generation_id,
             },
         )
 
@@ -276,32 +350,33 @@ class NativeStreamingAgent(VisionAgentBase):
             self, observation, self.interaction_profile.frame_prompt, observation.tick_number
         )
         pushed = _Pushed(record, value, execution)
+        key = observation.metadata.get("observation_id")
         try:
             with trace_scope(phase="push", observation_id=value.observation_id):
-                self._wait_for_renewal()
-                self._execution.run(self._push(observation.metadata.get("observation_id"), pushed))
+                while (gate := self._execution.run(self._push(key, pushed))) is not None:
+                    self.clock.wait(gate, None)
         except BaseException:
             self._finish_inspection(pushed, "push_failed")
             raise
 
-    def _wait_for_renewal(self) -> None:
-        """A session the provider asked to renew takes no frame before it is renewed, as Gemini
-        Live's after a goAway, and renewing it would end the reply on it: the frame waits, on
-        the push lane, until that reply is accepted, discarded or aborted. The frames captured
-        meanwhile wait in the policy's slot, not counted as failed pushes."""
-        while (
-            self.driver.capabilities.connection_renewal and self.driver.connection_renewal_reason()
-        ):
-            with self._lock:
-                if not self._on_session:
-                    return
-            self.clock.wait(self._off_session, None)
+    async def _push(self, key: str | None, pushed: _Pushed) -> threading.Event | None:
+        """Put the frame in, or, when it has to wait, the gate to wait at before trying again.
 
-    async def _push(self, key: str | None, pushed: _Pushed) -> None:
+        A session the provider asked to renew takes no frame before it is renewed, as Gemini
+        Live's after a goAway, and renewing it would end the reply on it: the frame waits until
+        that reply is off the session. That is decided here, on the execution thread, where the
+        reader applies a goAway, and the gate opens once the reply is off (_off), whatever goes
+        on the session after it. The frames captured meanwhile wait in the policy's slot, not
+        counted as failed pushes."""
         async with self._readying:
+            self._stop_if_closed()
             with self._lock:
                 view = self._view()
                 on_session = bool(self._on_session)
+                if on_session and self._renewal_due():
+                    gate = self.clock.event()
+                    self._gates.append(gate)
+                    return gate
             if not on_session:
                 await self._ready(view, renew=True)
         block = frame_block(pushed.record, pushed.value)
@@ -321,6 +396,12 @@ class NativeStreamingAgent(VisionAgentBase):
             TraceEvent.FRAME_SENT, {"frame": pushed.record.frame, "observation_id": key}
         )
         self._retire()
+        return None
+
+    def _renewal_due(self) -> bool:
+        return bool(
+            self.driver.capabilities.connection_renewal and self.driver.connection_renewal_reason()
+        )
 
     def _release_folded(self) -> None:
         """Let go of the screenshot of the frame the newest push folded, as a turn-based history
@@ -400,9 +481,14 @@ class NativeStreamingAgent(VisionAgentBase):
         if renew:
             await self.driver.renew(self._seed, view, self._record_session)
 
+    def _stop_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("the streaming agent is closed")
+
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
         try:
             async with self._readying:
+                self._stop_if_closed()
                 with self._lock:
                     view = self._view()
                 await self._ready(view, renew=True)
@@ -422,7 +508,6 @@ class NativeStreamingAgent(VisionAgentBase):
                 )
                 with self._lock:
                     self._on_session.add(reply.generation)
-                    self._off_session.clear()
             async for event in self.driver.events(reply.handle):
                 self._take(reply, event)
             if not reply.cancel.is_set():
@@ -443,6 +528,9 @@ class NativeStreamingAgent(VisionAgentBase):
         reply's action is parsed whatever the end, from the text that came."""
         if reply.terminal != ProviderHistoryState.EXACT:
             self.driver.mark_dirty()
+            self._session_state(
+                "unknown", "generation_terminal_state", reply.terminal, reply.handle.generation_id
+            )
         if self._answer.action_channel == "function_call":
             # A call already handed over fixed its action: an interruption after it stands once
             # the terminal usage came.
@@ -542,26 +630,43 @@ class NativeStreamingAgent(VisionAgentBase):
             self._generation_of[call_id] = reply.generation
         self._post(arrival)
 
-    def abort(self, generation: int) -> None:
-        """AbortGeneration: give the reply up, interrupt it and close the session, and return
-        once that is done, which fails a push stuck in the session. The next push or reply opens
-        the session again from the view."""
+    def abort(self, generation: int | None = None) -> None:
+        """AbortGeneration: give the reply up, whichever is on for None (KernelAgent.abort),
+        interrupt it and close the session, and return once that is done, which fails a push
+        stuck in the session. The next push or reply opens the session again from the view."""
         with self._lock:
+            if generation is None:
+                on = [
+                    number for number, reply in self._replies.items() if not reply.cancel.is_set()
+                ]
+                if not on:
+                    return
+                generation = on[-1]
             reply = self._replies.get(generation)
             if reply is None:
                 self._aborted_early.add(generation)
             else:
                 reply.cancel.set()
         with trace_scope(phase="abort", generation=generation):
-            self._execution.run(self.driver.abort(None if reply is None else reply.handle))
+            self._execution.run(
+                self.driver.abort(None if reply is None else reply.handle),
+                timeout=_SESSION_TIMEOUT_S,
+            )
         with self._lock:
             self._off(generation)
 
     def _off(self, generation: int) -> None:
-        """The reply is no longer on the session; the caller holds the lock."""
+        """The reply is no longer on the session: once none is, open the gates of the pushes
+        that waited for it. The caller holds the lock."""
         self._on_session.discard(generation)
         if not self._on_session:
-            self._off_session.set()
+            self._open_gates()
+
+    def _open_gates(self) -> None:
+        """The caller holds the lock."""
+        for gate in self._gates:
+            gate.set()
+        self._gates.clear()
 
     def accept(self, generation: int) -> None:
         """AcceptResult: the reply's output joins the view where it began, and its usage the
@@ -647,11 +752,30 @@ class NativeStreamingAgent(VisionAgentBase):
     # ---- the end ------------------------------------------------------------------------------
 
     def close(self):
+        """Give up the replies left, which the kernel neither accepts nor discards once the
+        episode ended, as DefaultHarness.close discards them; close the session once no push is
+        readying it, and take no push or reply after; then stop the execution thread."""
+        with self._lock:
+            left = list(self._replies.values())
+            self._replies.clear()
+        for reply in left:
+            reply.cancel.set()
+            self._log_reply(reply, "reply_discarded")
         try:
-            with trace_scope(phase="close"):
-                self._execution.run(self.driver.close())
-            self._execution.stop()
+            # The runner closes an agent whose initialize failed, before or after the execution
+            # thread started; one that never started has no session to close.
+            if self._execution.running:
+                with trace_scope(phase="close"):
+                    self._execution.run(self._close(), timeout=_SESSION_TIMEOUT_S)
         finally:
+            self._execution.stop()
             for pushed in self._pushed.values():
                 self._finish_frame(pushed)
             super().close()
+
+    async def _close(self) -> None:
+        async with self._readying:
+            self._closed = True
+            with self._lock:
+                self._open_gates()  # a push waiting at one tries again and finds the agent closed
+            await self.driver.close()
