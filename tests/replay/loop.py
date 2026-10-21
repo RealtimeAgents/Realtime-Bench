@@ -165,7 +165,8 @@ def check_wall_clock_properties(env: FakeEnvironment, stop_reason: str) -> None:
     """phase1.md, 回放测试: on the wall clock no action runs after the deadline, no action runs
     twice, and the episode ends for the right reason. The task's end is known once a state read
     sees it, and the kernel reads right before landing an action unless it read at that same
-    reading (kernel/turns.py _read_already): no action runs once the task has decided."""
+    reading (kernel/turns.py _read_already): no action runs once the task has decided, nor after
+    a read has seen the end."""
     for execution in env.executions:
         assert execution["time"] < env.deadline, f"executed after the deadline: {execution}"
         assert execution["episode_over"] is None, f"executed after the episode: {execution}"

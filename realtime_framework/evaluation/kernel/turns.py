@@ -16,7 +16,9 @@ read only a tick not read yet; a tap's own reads, in the environment, are the re
 it steps to. On the wall clock the periodic check, during generations too, and the loop top read
 only an environment frame not read yet, the periodic check the frame it is handled in; the check
 before landing reads unless the state was read at that same reading, as real time moves on
-within a frame.
+within a frame. A periodic check an execution delays is left to the check right after the
+action, or, for a refused action, which gets none, made when the refusal is handled. A check left
+out for a read made already goes on once that read has answered.
 
 The three clocks differ in five places: the bound on one call, the action time, whether the clock
 moves to the action time before landing, the finite-B allowance, and the frame age. Frame times use
@@ -900,8 +902,7 @@ class TurnPolicy:
         the same position, which every step of a move makes new. On the wall clock it is the same
         environment frame, except right before landing, where it must be the same reading: real
         time moves on within a frame, and an end since keeps the action from landing, as the
-        runner reads right before it executes (legacy_loop.py _land_action). Without ``or
-        before_landing`` the check before landing too reads once a frame."""
+        legacy loop reads right before it executes (legacy_loop.py _land_action)."""
         last = self._read_at
         if last is None:
             return False

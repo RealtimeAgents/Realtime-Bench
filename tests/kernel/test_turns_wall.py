@@ -1064,19 +1064,11 @@ def test_fewer_than_three_failed_checks_in_a_row_leave_the_run_valid(failing):
     assert sim.termination.invalid is None
 
 
-@pytest.mark.parametrize(
-    ("world", "asked"),
-    [
-        # The click at 2.25 s is read before and after its execution, which takes no time: both
-        # at 2.25 s.
-        (
-            World(replies=[Reply(2.25, CLICK), Reply(100.0)]),
-            [0.0, 1.0, 2.0, 2.25, 2.25],
-        ),
-    ],
-    ids=["around-an-execution"],
-)
-def test_failed_reads_at_one_instant_count_in_the_order_they_were_made(world, asked):
+def test_failed_reads_at_one_instant_count_in_the_order_they_were_made():
+    # The click at 2.25 s is read before and after its execution, which takes no time: both at
+    # 2.25 s.
+    world = World(replies=[Reply(2.25, CLICK), Reply(100.0)])
+    asked = [0.0, 1.0, 2.0, 2.25, 2.25]
     # The reads before and after the last two at one instant fail, the earlier of those two
     # answers and the later fails: failures in a row 1, 2, 0, 1, so the run stays valid. A failed
     # read is no end and is handled in its turn, not ahead of an earlier answer (phase2.md,
