@@ -15,9 +15,12 @@ says otherwise.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation.kernel.events import (
     AcceptResult,
     Capture,
@@ -1083,4 +1086,44 @@ def test_a_frozen_stream_invalidates_on_the_third_identical_frame():
         }
     ]
     assert _ended(sim) == ("invalid_run", "invalid", 4.25, 4.25)
+    _assert_nothing_after_the_end(sim)
+
+
+FREEZE_ON_THE_SECOND = dataclasses.replace(RunnerTimingConfig(), observation_freeze_n=2)
+
+
+@pytest.mark.parametrize(
+    ("config", "world", "cause", "ended_at"),
+    [
+        # T = 4.5: the second frame is captured from 4 s to 4.75 s, and its answer, filed then,
+        # comes after the deadline's.
+        (
+            _wall(4.5, timing=FREEZE_ON_THE_SECOND),
+            World(replies=[Reply(2.4)] * 6, frozen_from=0, start_s=0.6, capture_s=0.75),
+            "deadline",
+            4.5,
+        ),
+        # T = 5 at 2 fps: the second frame is captured from 4 s to 4.6 s, across the boundary at
+        # 4.5 s, whose check runs first, until 5.2 s; the answer filed at 4.6 s comes first.
+        (
+            _wall(5.0, env_fps=2.0, timing=FREEZE_ON_THE_SECOND),
+            World(replies=[Reply(2.9)] * 6, frozen_from=0, capture_s=0.6, check_seconds={10: 0.6}),
+            "invalid",
+            pytest.approx(5.2),
+        ),
+    ],
+    ids=["answer-filed-after-the-deadline", "answer-filed-before-it"],
+)
+def test_a_frame_that_freezes_the_stream_invalidates_the_run_also_past_the_deadline(
+    config, world, cause, ended_at
+):
+    """A frame captured under way at the deadline is judged like any other: today's loop judges
+    every frame it captured (runner.py _decide, _accept_observation), as the kernel judges every
+    failed capture. Where its answer is filed only changes which end comes first."""
+    sim = _episode(config, world)
+    assert len(sim.captures) == 2
+    termination = sim.termination
+    assert (termination.stop_reason, termination.cause) == ("invalid_run", cause)
+    assert termination.ended_at == ended_at
+    assert termination.invalid.reason == "observation_stream_frozen"
     _assert_nothing_after_the_end(sim)
