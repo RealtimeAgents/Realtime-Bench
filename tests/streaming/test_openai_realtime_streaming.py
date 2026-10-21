@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import threading
 from functools import partial
 from types import SimpleNamespace
 
@@ -251,6 +252,62 @@ class _FailingManager:
 
     def __exit__(self, *exc_info) -> None:
         raise RuntimeError("close failed")
+
+
+class _StuckConnection:
+    """A connection whose writes block on a socket that does not drain, until it is closed; its
+    close_socket() closes it, which fails every write stuck in it."""
+
+    def __init__(self) -> None:
+        self._open = threading.Event()
+        self._connection = self
+
+    def write(self) -> None:
+        if not self._open.wait(timeout=5):
+            raise AssertionError("the socket was never closed")
+        raise ConnectionClosedError(None, None)
+
+    def close_socket(self) -> None:
+        self._open.set()
+
+
+class _StuckManager:
+    """The SDK's connection manager whose close blocks on the same undraining socket."""
+
+    def __init__(self, connection: _StuckConnection) -> None:
+        self.connection = connection
+
+    def __exit__(self, *exc_info) -> None:
+        self.connection._open.wait(timeout=5)
+
+
+def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatch):
+    """A push stuck in a write that does not drain holds the session. An abort's close waits on
+    the same write until its bound, then drops the socket under it: the push fails, the close
+    returns, and the session is freed for the next ensure_ready to rebuild."""
+    monkeypatch.setattr(openai_realtime, "_CONNECTION_CLOSE_TIMEOUT_S", 0.05)
+
+    writing = threading.Event()
+
+    def stuck_write(conn, operation):
+        writing.set()
+        conn.write()
+
+    async def scenario():
+        driver, connection = _offline_driver(streaming=True), _StuckConnection()
+        session = _Session(1, connection, new_core())
+        driver._session, driver._conn, driver._cm = session, connection, _StuckManager(connection)
+        driver._send = stuck_write
+        view = streaming_view(stream("F"))
+        push = asyncio.ensure_future(driver.push_frame(_observation(1), view))
+        await until(writing.is_set)
+        await driver.abort(None)
+        (failure,) = await asyncio.gather(push, return_exceptions=True)
+        return failure, driver._session, driver._connected
+
+    failure, left_session, connected = _within(scenario())
+    assert isinstance(failure, ConnectionClosedError)
+    assert left_session is None and connected is False
 
 
 class _SocketConnection(_FakeConnection):
