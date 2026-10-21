@@ -220,3 +220,62 @@ def test_a_wall_hold_reports_no_held_keys():
     with clock.participant():
         assert env.execute(Action.hold_key("arrowleft", 1.0)) == "applied"
     assert env.last_held_keys == ()
+
+
+# ---- release_keys ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["left", "arrowleft"])
+def test_a_release_finds_the_keys_by_the_identities_their_hold_reported(key):
+    env, task = _token()
+    env.execute(Action.hold_key(f"shift+{key}", 1.0))
+    env.release_keys(env.last_held_keys)
+    (up,) = _of(task, "keyUp")
+    assert up["key"] == f"shift+{key}"
+    assert env._held_keys == {} and env._repeat_key is None
+
+
+def test_a_release_skips_keys_that_are_not_held():
+    env, task = _token()
+    env.execute(Action.hold_key("a+b", 1.0))
+    env.release_keys(("b", "c"))
+    env.release_keys(("c",))
+    (up,) = _of(task, "keyUp")
+    assert (up["key"], up["held_modifiers"]) == ("b", [])
+    assert list(env._held_keys) == ["a"]
+
+
+def test_clock_steps_and_releases_in_the_kernel_s_order_give_the_task_the_legacy_wait_s_events():
+    """The kernel ends a step where a lease ends and releases the key after it
+    (evaluation/kernel/turns.py _advance); wait_until_tick does both in one call."""
+    legacy, legacy_task = _token()
+    shell, shell_task = _token()
+    for env in (legacy, shell):
+        assert env.execute(Action.hold_key("left", 1.5)) == "applied"
+    legacy.wait_until_tick(3)
+    shell.step_clock(1.0)
+    shell.step_clock(0.5)
+    shell.release_keys(shell.last_held_keys)
+    shell.step_clock(1.0)
+    shell.step_clock(0.5)
+    assert shell_task.events == legacy_task.events
+    assert [event["event"] for event in shell_task.events] == [
+        "keyDown",
+        "advance",
+        "advance",
+        "keyUp",
+        "advance",
+        "advance",
+    ]
+
+
+def test_a_key_release_fails_past_its_budget():
+    clock = FakeClock()
+    env, task = _token(clocks=Clocks(FrameClock(1.0), clock))
+    env.execute(Action.hold_key("a", 1.0))
+    task.clock_key_event = lambda *args, **kwargs: clock.sleep(11.0)
+    with (
+        clock.participant(),
+        pytest.raises(BudgetExceeded, match="key release took longer than 10 s"),
+    ):
+        env.release_keys(("a",))

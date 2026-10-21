@@ -371,6 +371,14 @@ class GuestEnvironment:
             if identity in self._held_keys and identity not in exclude
         ]
 
+    def release_keys(self, keys):
+        """Token clock, for the kernel's shell: release these held keys, by identity, whose lease
+        ended; a key that is not held is skipped."""
+        with operation_budget(
+            "key release", ENVIRONMENT_BUDGET.action_s, clock=self.clocks.operational
+        ):
+            self._release_clock_keys(keys)
+
     def _release_clock_keys(self, identities=None):
         selected = (
             list(self._held_keys)
