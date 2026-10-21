@@ -1,4 +1,5 @@
-"""Each environment operation fails once it runs past its overall budget, and the run is invalid.
+"""Each environment operation fails once it runs past its overall budget, and the run is invalid;
+only the key release at the cleanup after the outcome is latched leaves the run as it was.
 
 The real run_stream drives the real GuestEnvironment (sandbox/actions.py). Its GuestClient talks to
 FakeGuest; a real catalog game (realtime_tasks/game/runtime.py) reads its state, advances the token
@@ -193,6 +194,14 @@ def test_a_slow_action_fails_within_its_budget(budgets):
     _spent_the_budget(elapsed)
 
 
+def _until_the_release_is_in_flight(guest: FakeGuest) -> None:
+    """Wait until the release timer's keyup request has reached the guest."""
+    deadline = time.monotonic() + 5.0
+    while not any("keyup" in command["command"] for command in guest.commands):
+        assert time.monotonic() < deadline, "the release timer sent no keyup"
+        time.sleep(0.01)
+
+
 def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
     # The release timer holds the lock on the wall holds during its guest request
     # (sandbox/actions.py _wall_release_due), and the action reads the holds under that lock.
@@ -200,10 +209,9 @@ def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        assert env.execute(Action.hold_key("a", 1.0)) == "applied"
         guest.command_delay = 3 * BUDGET
-        while not any("keyup" in command["command"] for command in guest.commands):
-            time.sleep(0.01)
+        _until_the_release_is_in_flight(guest)
         started = time.monotonic()
         status = env.execute(Action(ActionType.KEY, {"key": "c"}))
         elapsed = time.monotonic() - started
@@ -212,6 +220,25 @@ def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
     _invalid(env, "action_execution_failed", "key action")
     assert elapsed >= BUDGET
     assert guest.actions == []
+
+
+def test_a_wall_action_waiting_for_the_lock_after_the_guest_answered_fails(budgets):
+    # The release timer sends its keyup while the guest runs the click; the hold snapshot the
+    # click's result carries then waits for the lock.
+    budgets(action_s=2.0)
+    with FakeGuest() as guest:
+        env = _wall_environment(guest)
+        assert env.execute(Action.hold_key("a", 0.5)) == "applied"
+        guest.command_delay = 2.0
+        guest.action_delay = 1.2
+        started = time.monotonic()
+        status = env.execute(CLICK)
+        elapsed = time.monotonic() - started
+        env.release_inputs()
+    assert status == "failed"
+    _invalid(env, "action_execution_failed", "click action", 2.0)
+    assert elapsed >= 2.0
+    assert len(guest.actions) == 1
 
 
 def test_a_wall_xdotool_command_gets_what_is_left_of_the_action_s_budget(budgets):
@@ -494,8 +521,9 @@ def test_text_input_and_a_timed_action_have_their_extended_budget(action, second
 
 
 def test_a_call_s_own_shorter_timeout_applies_inside_an_operation():
-    """A window probe gives up after its own 8 s (sandbox/browser/cdp.py _probe_one) and the
-    capture goes on without it (sandbox/observation/capture.py _probe)."""
+    """The capture's probe stands for a window probe, which gives up after its own 8 s
+    (sandbox/browser/cdp.py _probe_one) while the capture goes on without it
+    (sandbox/observation/capture.py _probe)."""
     clock = FakeClock()
 
     class ProbingCapture:
@@ -614,15 +642,18 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
 
 
 @pytest.mark.parametrize(
-    ("release", "error"),
+    ("release", "error", "seconds"),
     [
         pytest.param(
-            lambda clock: _sandbox_call(clock, 60.0), "key release took longer", id="slow"
+            lambda clock: _sandbox_call(clock, 60.0),
+            "key release took longer than 10 s",
+            10.0,
+            id="slow",
         ),
-        pytest.param(lambda clock: 1 / 0, "division by zero", id="failing"),
+        pytest.param(lambda clock: 1 / 0, "division by zero", 0.0, id="failing"),
     ],
 )
-def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, error):
+def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, error, seconds):
     """release_inputs runs once run_stream has latched the outcome, and the runner only logs its
     failure (evaluation/runner.py _finalize); main() would still take an invalid run latched here
     for the run's."""
@@ -632,7 +663,9 @@ def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, e
     env.execute(Action.hold_key("a", 5.0))
     env.execute(Action(ActionType.MOUSE_DOWN, {"button": "left"}))
     task.clock_key_event = lambda *args, **kwargs: release(clock)
-    with clock.participant(), pytest.raises(Exception, match=error):
-        env.release_inputs()
+    with clock.participant():
+        with pytest.raises(Exception, match=error):
+            env.release_inputs()
+        assert clock.monotonic() == seconds
     assert getattr(env, "_invalid_run", None) is None
     assert guest.actions == [ActionType.MOUSE_DOWN, ActionType.MOUSE_UP]
