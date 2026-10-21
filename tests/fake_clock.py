@@ -18,6 +18,9 @@ builder there) is routed to that executor instead of anyio's own worker threads.
 
 When every participant waits and nothing is due, nothing can happen any more. A thread that joined
 with ``participant()`` and is waiting then raises FakeClockStalled instead of hanging the test.
+It also raises when nothing on the clock has changed for _STALL_REAL_S of real time: a participant
+is stuck in a wait the clock cannot see (a blocking receive, a real lock another participant holds
+while it sleeps on the clock), and the error names what keeps time still.
 """
 
 from __future__ import annotations
@@ -45,12 +48,16 @@ import anyio.to_thread
 # checks again (a socket it waits for, bytes in flight). It never decides when virtual time moves.
 _SOCKET_POLL_S = 0.005
 _RECHECK_S = 0.05
+# Real seconds a waiting primary participant lets pass with no change on the clock (time moving, a
+# participant starting, stopping, waiting or waking) before it raises FakeClockStalled.
+_STALL_REAL_S = 30.0
 _SO_NWRITE = 0x1024  # macOS: bytes in the send buffer the peer has not acknowledged
 _anyio_run_sync = anyio.to_thread.run_sync
 
 
-class FakeClockStalled(RuntimeError):
-    pass
+class FakeClockStalled(BaseException):
+    """Time cannot move. Not an Exception, so code under test that handles its own failures with
+    ``except Exception`` (run_stream does) lets it reach the test."""
 
 
 def _unacknowledged(fd: int) -> int:
@@ -273,6 +280,7 @@ class FakeClock:
         self._timers: list[tuple[float, int, _Timer]] = []
         self._sequence = itertools.count()
         self._stalled: FakeClockStalled | None = None
+        self._changed_at = time.monotonic()
 
     # ---- reads ----
 
@@ -326,11 +334,13 @@ class FakeClock:
         waiter = _Waiter(name, primary=primary)
         with self._cond:
             self._waiters.append(waiter)
+            self._changed()
         return waiter
 
     def _unregister(self, waiter: _Waiter) -> None:
         with self._cond:
             self._waiters.remove(waiter)
+            self._changed()
             self._settle()
 
     def _current(self) -> _Waiter:
@@ -382,6 +392,7 @@ class FakeClock:
     ) -> bool:
         with self._cond:
             waiter = self._current()
+            self._changed()
             try:
                 while True:
                     if ready is not None and ready():
@@ -396,9 +407,15 @@ class FakeClock:
                     if self._runnable(waiter) or (self._stalled is not None and waiter.primary):
                         continue
                     self._cond.wait(poll_s)
+                    if waiter.primary and time.monotonic() - self._changed_at > _STALL_REAL_S:
+                        raise FakeClockStalled(
+                            f"nothing changed for {_STALL_REAL_S:g} s of real time at "
+                            f"t={self._now:g}; time is held by " + ", ".join(self._holding())
+                        )
             finally:
                 waiter.waiting, waiter.ready, waiter.deadline = False, None, None
                 waiter.in_flight = None
+                self._changed()
 
     def _notify(self) -> None:
         with self._cond:
@@ -441,20 +458,25 @@ class FakeClock:
     def _loop_starts(self, state: _LoopState) -> None:
         with self._cond:
             state.running = state.ran = True
+            self._changed()
 
     def _loop_stops(self, state: _LoopState) -> None:
         with self._cond:
             state.running = False
+            self._changed()
             self._settle()
 
     def _loop_waits(self, state: _LoopState, timeout: float | None) -> None:
         with self._cond:
             state.waiting = True
             state.deadline = None if timeout is None else self._now + timeout
+            self._changed()
             self._settle()
 
     def _loop_runs(self, state: _LoopState) -> None:
         with self._cond:
+            if state.waiting:
+                self._changed()
             state.waiting = False
             state.woken = False
             state.deadline = None
@@ -463,6 +485,7 @@ class FakeClock:
         with self._cond:
             if state in self._loops:
                 self._loops.remove(state)
+                self._changed()
                 self._settle()
 
     # ---- moving time ----
@@ -472,24 +495,33 @@ class FakeClock:
             waiter.deadline is not None and waiter.deadline <= self._now
         )
 
-    def _quiescent(self) -> bool:
+    def _holding(self):
+        """Each participant that keeps time still, and why."""
         for waiter in self._waiters:
-            if not waiter.waiting or self._runnable(waiter):
-                return False
-            if waiter.in_flight is not None and waiter.in_flight():
-                return False
+            if not waiter.waiting:
+                yield f"{waiter.name} (busy)"
+            elif self._runnable(waiter):
+                yield f"{waiter.name} (due)"
+            elif waiter.in_flight is not None and waiter.in_flight():
+                yield f"{waiter.name} (bytes in flight)"
         for state in self._loops:
             if not state.running:
                 if state.woken and not state.ran:
-                    return False
-                continue
-            if not state.waiting or state.woken:
-                return False
-            if state.deadline is not None and state.deadline <= self._now:
-                return False
-            if state.io_pending():
-                return False
-        return True
+                    yield f"{state.name} (not started, with a callback)"
+            elif not state.waiting:
+                yield f"{state.name} (busy)"
+            elif state.woken:
+                yield f"{state.name} (woken)"
+            elif state.deadline is not None and state.deadline <= self._now:
+                yield f"{state.name} (due)"
+            elif state.io_pending():
+                yield f"{state.name} (I/O pending)"
+
+    def _quiescent(self) -> bool:
+        return next(self._holding(), None) is None
+
+    def _changed(self) -> None:
+        self._changed_at = time.monotonic()
 
     def _settle(self) -> None:
         """Move time to the earliest deadline if every participant waits (caller holds the lock)."""
@@ -510,6 +542,7 @@ class FakeClock:
                 self._cond.notify_all()
             return
         self._now = max(self._now, min(deadlines))
+        self._changed()
         self._fire_due_timers()
         for state in self._loops:
             if state.deadline is not None and state.deadline <= self._now:
