@@ -1,12 +1,12 @@
 """A fake wall-clock environment that takes the place of GuestEnvironment under run_stream.
 
 run_stream, the kernel's shell (evaluation/shell.py), needs capture, execute, check_end and
-tick_index, and the parts of the environment its ShellEnvironment protocol names; what it calls
-only on the token clock (set_episode_horizon, step_clock, release_keys, render_current_frame) has
-no wall-clock part. The legacy loop (runner.py _run_stream_legacy) asks done instead of check_end,
-paces with wait_until_tick and reads the optional time_remaining and past_deadline hooks. On the
-wall clock main() hands it a GuestEnvironment (sandbox/actions.py). This class follows
-GuestEnvironment's wall-clock branch call for call on the episode's fake clock
+tick_index, and the parts of the environment its ShellEnvironment protocol names; what it calls only
+on the token clock (set_episode_horizon, step_clock, release_keys, render_current_frame) has no
+wall-clock part. The legacy loop (tests/differential/legacy_loop.py _run_stream_legacy) asks done
+instead of check_end, paces with wait_until_tick and reads the optional time_remaining and
+past_deadline hooks. On the wall clock main() hands it a GuestEnvironment (sandbox/actions.py). This
+class follows GuestEnvironment's wall-clock branch call for call on the episode's fake clock
 (tests/fake_clock.py), serves the frames of frames.py, and executes nothing: each call is appended
 to ``calls`` in order, tagged with the decision it belongs to.
 

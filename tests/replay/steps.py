@@ -1,7 +1,7 @@
 """Drive scripted decisions straight into an agent, in the order the legacy turn loop calls it.
 
-Per decision the loop (runner.py _run_stream_legacy) captures a frame, binds the budget, prefills
-and generates (its _decide), hands the result to the agent's trajectory writer
+Per decision the loop (tests/differential/legacy_loop.py _run_stream_legacy) captures a frame, binds
+the budget, prefills and generates (its _decide), hands the result to the agent's trajectory writer
 (episode_records.py finalize_decision_audit) and reports the execution result (its _apply and
 _commit). Its own clock, deadline and action execution are not reproduced: each step's status and
 detail are scripted.
