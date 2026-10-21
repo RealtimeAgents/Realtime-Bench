@@ -1,11 +1,12 @@
 """Replay baselines for run_stream's own decision loop on the wall clock.
 
-The real run_stream (evaluation/runner.py:102-1180) drives the chat_completions agent from
-build_episode against FakeEnvironment (fake_env.py), all on one fake clock (tests/fake_clock.py):
-it moves only when the runner, its workers, the agent's event loop and the stub all wait, so each
-episode runs the same way every time. Each baseline records, decision by decision, the runner's
-calls into the environment, its trace events, the commit statuses the agent receives, the action
-lifecycle records and the runner log, then the stop reason and the agent's history. Record with
+The real run_stream, the event kernel's shell (evaluation/shell.py), drives the chat_completions
+agent from build_episode against FakeEnvironment (fake_env.py), all on one fake clock
+(tests/fake_clock.py): it moves only when the shell, its workers, the agent's event loop and the
+stub all wait, so each episode runs the same way every time. Each baseline records, decision by
+decision, the shell's calls into the environment, its trace events (the kernel's records among
+them), the commit statuses the agent receives, the action lifecycle records and the runner log,
+then the stop reason and the agent's history. Record with
 ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it each run is compared with
 tests/replay/baselines/.
 """
@@ -20,7 +21,6 @@ from unittest import mock
 
 import pytest
 
-from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.reporting import episode_outcome, summarize_run_metrics
 from realtime_framework.harnesses.default.harness import DefaultHarness
 
@@ -40,7 +40,7 @@ BASELINES = Path(__file__).parent / "baselines"
 
 # Most replies take half a frame. Decisions 12 and 40 span frame boundaries and decision 21 lands
 # exactly on one; LONG_SCENARIO's waits (decisions 5, 33, 56) add their durations. Decision 59
-# starts at 63.0 s and replies at 63.875 s, after the 63.75 s deadline (LATE_REPLY_S).
+# starts at 63.0 s and would reply at 63.875 s, after the 63.75 s deadline (LATE_REPLY_S).
 LONG_LATENCIES = [
     {3: 0.25, 8: 0.75, 12: 2.5, 21: 1.0, 26: 0.25, 40: 1.75, 47: 0.75, 59: 0.875}.get(k, 0.5)
     for k in range(len(LONG_SCENARIO))
@@ -48,8 +48,8 @@ LONG_LATENCIES = [
 LONG_MAX_MINUTES = 1.0625
 # Short cases: a 3.75 s episode at 1 fps, with decisions at 0, 1, 2 and 3 s.
 SHORT_MAX_MINUTES = 0.0625
-# A reply to a decision at 3.0 s that lands after the deadline but before tick 4, so only the
-# deadline checks stop it, not the tick limit (runner.py:526-531).
+# A reply to a decision at 3.0 s that would land after the 3.75 s deadline but before tick 4: the
+# kernel gives the generation up at the deadline (kernel/turns.py on_timer).
 LATE_REPLY_S = 0.875
 
 TYPE_ADA = Step('{"action": "type", "text": "Ada"}')
@@ -150,9 +150,10 @@ def long_run(request, tmp_path_factory):
 def test_long_scenario_properties(long_run):
     check_wall_clock_properties(long_run.env, "time_limit")
     assert len(long_run.stub.requests) == len(LONG_SCENARIO)
-    # run_stream reports the statuses and details steps.py scripts for the same replies.
+    # run_stream reports the statuses and details steps.py scripts for the same replies, but for
+    # the last decision's: the kernel gives its generation up at the deadline, unreported.
     assert commit_statuses(long_run.env) == [
-        (k, step.status, step.detail) for k, step in enumerate(LONG_SCENARIO)
+        (k, step.status, step.detail) for k, step in enumerate(LONG_SCENARIO[:-1])
     ]
 
 
@@ -176,7 +177,7 @@ class Case:
     name: str
     steps: list[Step]
     latencies: list
-    statuses: list[str]  # the status run_stream commits for each decision
+    statuses: list[str]  # the status run_stream commits for each decision it reports
     executed: list[str]  # the action types the environment executes, in order
     stop_reason: str
     env: dict = field(default_factory=dict)
@@ -184,32 +185,33 @@ class Case:
     held: tuple[bool, ...] = ()
 
 
-# The runner waits time_remaining + DEADLINE_GRACE_S for a decision (runner.py:307-309, 337).
+# The kernel gives a generation up at the deadline, without grace (kernel/turns.py on_timer).
 # Decision 3 starts at 3.0 s with 0.75 s left.
-BOUNDED_WAIT_S = 0.75 + runner.DEADLINE_GRACE_S
+DEADLINE_WAIT_S = 0.75
 
 CASES = [
-    # The reply to decision 3 lands at 3.875 s, after the deadline: not executed
-    # (runner.py:526-527).
+    # The reply to decision 3 would land at 3.875 s. At the 3.75 s deadline the kernel gives the
+    # generation up: nothing is executed and the decision is not reported.
     Case(
         "late_reply",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT), Step(CLICK_AGREE)],
         [0.5, 0.5, 0.5, LATE_REPLY_S],
-        ["applied", "applied", "applied", "not_applied_time_limit"],
+        ["applied", "applied", "applied"],
         ["click", "type", "click"],
         "time_limit",
     ),
-    # DONE becomes WAIT (runner.py:1143-1153) and the episode goes on to the deadline.
+    # DONE becomes WAIT (kernel/turns.py _accept), whose time the kernel lets pass, and the
+    # episode goes on to the deadline.
     Case(
         "done_reply",
         [Step(CLICK_NAME), Step('{"action": "done"}'), Step(CLICK_SUBMIT), Step(CLICK_AGREE)],
         [0.5, 0.5, 0.5, LATE_REPLY_S],
-        ["applied", "wait", "applied", "not_applied_time_limit"],
-        ["click", "wait", "click"],
+        ["applied", "wait", "applied"],
+        ["click", "click"],
         "time_limit",
     ),
-    # The third applied action decides the task; run_stream stops at once (runner.py:545,
-    # 1175-1176) and latches the task's reason (runner.py:795-796).
+    # The third applied action decides the task, which the end check right after it finds: the
+    # episode stops at once with the task's reason (kernel/turns.py _executed).
     Case(
         "environment_done",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
@@ -219,32 +221,34 @@ CASES = [
         "task_completed",
         env={"stop_check": _decided_after(3, "task_completed")},
     ),
-    # The task is decided at 2.25 s, while decision 2 waits for its reply: the action is not
-    # executed (runner.py:528-529) and the reason defaults to game_decided (runner.py:796).
+    # The task is decided at 2.25 s, while decision 2 waits for its reply. Frame 2 was read at
+    # 2.0 s, so no read comes before the action (kernel/turns.py _check_end): it is executed at
+    # 2.5 s, the read right after it sees the end, and the reason defaults to game_decided
+    # (kernel/core.py _finish).
     Case(
         "environment_done_during_reply",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
         [0.5, 0.5, 0.5],
-        ["applied", "applied", "not_applied_terminal"],
-        ["click", "type"],
+        ["applied", "applied", "applied"],
+        ["click", "type", "click"],
         "game_decided",
         env={"stop_check": lambda env: env.clock.time() >= env.t0 + 2.25},
     ),
-    # Decision 3's reply never comes. The bounded wait expires, the agent is aborted and the
-    # decision is skipped (runner.py:337-345, 395-411, 523). The abort closes the held request
-    # and cancels the decision's generation, so the abandoned worker does not send it again
-    # (DefaultHarness.abort; entity/model.py RequestRetry).
+    # Decision 3's reply never comes. At the deadline the kernel gives the generation up and the
+    # agent is aborted (shell.py _abort); the decision is not reported. The abort closes the held
+    # request and cancels the decision's generation, so the abandoned worker does not send it
+    # again (DefaultHarness.abort; entity/model.py RequestRetry).
     Case(
         "bounded_call_timeout",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
-        [0.5, 0.5, 0.5, Hang(BOUNDED_WAIT_S)],
-        ["applied", "applied", "applied", "skipped_timeout"],
+        [0.5, 0.5, 0.5, Hang(DEADLINE_WAIT_S)],
+        ["applied", "applied", "applied"],
         ["click", "type", "click"],
         "time_limit",
         requests=4,
         held=(True,),
     ),
-    # A fault that is not the guest refusing the action invalidates the run (runner.py:538-541).
+    # A fault that is not the guest refusing the action invalidates the run (shell.py _execute).
     Case(
         "environment_failure",
         [Step(CLICK_NAME), TYPE_ADA],
@@ -285,14 +289,17 @@ def test_short_case_baseline(short_run):
     _compare(case.name, run, {"stream": True})
 
 
-# An exception that escapes the decision loop still ends the episode through _finalize
-# (runner.py:1246-1258): the snapshot is frozen, the stop reason latched and the run invalid.
-# These are property tests; an escaped exception's traceback names files and lines.
+# An exception a command of the shell raises still ends the episode (shell.py _run): the run is
+# invalid, the snapshot is frozen and the stop reason latched. These are property tests; an
+# escaped exception's traceback names files and lines.
 
 
 def _check_finalized(run: Run, *, at: float, raised: str) -> None:
     check_wall_clock_properties(run.env, "invalid_run")
-    assert [call["call"] for call in run.env.calls if call["finalizing"]] == [
+    # Between them the kernel writes its records of the snapshot and the termination.
+    assert [
+        call["call"] for call in run.env.calls if call["finalizing"] and call["call"] != "trace"
+    ] == [
         "task.evaluation_snapshot",
         "env.release_inputs",
     ]
@@ -310,40 +317,65 @@ def _check_finalized(run: Run, *, at: float, raised: str) -> None:
     ), logged
 
 
-def test_environment_exception_is_finalized(tmp_path):
-    """Decision 1's wait for the next frame fails at 1.5 s, latched and raised by the
-    environment: the run keeps the environment's reason."""
+def test_two_failed_state_reads_in_a_row_leave_the_run_valid(tmp_path):
+    """The state is read at 0 s, after decision 0's action at 0.5 s, at frame 1 (1.0 s) and
+    after decision 1's action at 1.5 s. The reads at 0.5 s and 1.0 s fail; the one at 1.5 s
+    answers and starts the count over. A failed read short of three in a row answers "not over"
+    (kernel/turns.py READ_FAILURE_LIMIT), and the episode runs to the deadline."""
+    run = _run(
+        tmp_path,
+        [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT), Step(CLICK_AGREE)],
+        [0.5, 0.5, 0.5, LATE_REPLY_S],
+        stream=True,
+        max_minutes=SHORT_MAX_MINUTES,
+        read_failures=frozenset({2, 3}),
+    )
+    check_wall_clock_properties(run.env, "time_limit")
+    assert getattr(run.env, "_invalid_run", None) is None
+    assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"] * 3
+    failed = [call["failed"] for call in run.env.calls if "failed" in call]
+    assert failed == [2, 3]
+
+
+def test_a_third_failed_state_read_in_a_row_invalidates_the_run(tmp_path):
+    """The read after decision 1's action at 1.5 s fails too, the third in a row: the run is
+    invalid with the environment's terminal_state_check_failed, and decision 1, whose read after
+    the action the end cut short, is reported as applied."""
     run = _run(
         tmp_path,
         [Step(CLICK_NAME), TYPE_ADA],
         [0.5, 0.5],
         stream=True,
         max_minutes=SHORT_MAX_MINUTES,
-        advance_failures={1: "page clock did not advance"},
+        read_failures=frozenset({2, 3, 4}),
     )
-    assert run.env._invalid_run == {
-        "category": "environment",
-        "reason": "clock_advance_failed",
-        "detail": "page clock did not advance",
-    }
-    # The wait comes before the commit (runner.py:642, 708), so decision 1 is never committed.
-    assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
-    _check_finalized(run, at=1.5, raised="RuntimeError: page clock did not advance")
+    check_wall_clock_properties(run.env, "invalid_run")
+    invalid = run.env._invalid_run
+    assert (invalid["category"], invalid["reason"]) == (
+        "environment",
+        "terminal_state_check_failed",
+    )
+    assert invalid["detail"].rstrip().endswith("RuntimeError: state read 4 failed")
+    assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"] * 2
+    assert run.env._termination["end_s"] == 1.5
 
 
 def test_agent_exception_is_finalized(tmp_path):
-    """The agent raises as decision 1 binds its budget at 1.0 s (runner.py:973), before anything
-    is latched: the runner invalidates the run itself."""
-    configure_decision = DefaultHarness.configure_decision
-    budgets = []
+    """The agent raises as the shell binds decision 1's budget at 1.0 s, on the shell's thread
+    (shell.py _start_generation), before anything is latched: the shell invalidates the run
+    itself. The generation it was starting is given up, so decision 1 is never committed."""
+    transport_output_token_cap = DefaultHarness.transport_output_token_cap
+    caps = []
 
-    def failing_configure_decision(agent, budget):
-        budgets.append(budget)
-        if len(budgets) == 2:
+    def failing_transport_output_token_cap(agent, provider_cap):
+        caps.append(provider_cap)
+        if len(caps) == 2:
             raise RuntimeError("budget rejected")
-        return configure_decision(agent, budget)
+        return transport_output_token_cap(agent, provider_cap)
 
-    with mock.patch.object(DefaultHarness, "configure_decision", failing_configure_decision):
+    with mock.patch.object(
+        DefaultHarness, "transport_output_token_cap", failing_transport_output_token_cap
+    ):
         run = _run(
             tmp_path,
             [Step(CLICK_NAME)],

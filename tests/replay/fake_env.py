@@ -1,13 +1,14 @@
 """A fake wall-clock environment that takes the place of GuestEnvironment under run_stream.
 
-run_stream (evaluation/runner.py) needs capture, execute, tick_index, done and
-wait_until_tick, and reads the optional time_remaining and past_deadline hooks (the
-runner's module docstring). On the wall clock main() hands it a GuestEnvironment
-(sandbox/actions.py). This class follows GuestEnvironment's wall-clock branch call for call on the
-episode's fake clock (tests/fake_clock.py), serves the frames of frames.py, and executes nothing:
-each call is appended to ``calls`` in order, tagged with the decision it belongs to. The kernel's
-shell asks check_end instead of done (evaluation/shell.py); what it calls only on the token clock
-(set_episode_horizon, step_clock, release_keys, render_current_frame) has no wall-clock part.
+run_stream, the kernel's shell (evaluation/shell.py), needs capture, execute, check_end and
+tick_index, and the parts of the environment its ShellEnvironment protocol names; what it calls
+only on the token clock (set_episode_horizon, step_clock, release_keys, render_current_frame) has
+no wall-clock part. The legacy loop (runner.py _run_stream_legacy) asks done instead of check_end,
+paces with wait_until_tick and reads the optional time_remaining and past_deadline hooks. On the
+wall clock main() hands it a GuestEnvironment (sandbox/actions.py). This class follows
+GuestEnvironment's wall-clock branch call for call on the episode's fake clock
+(tests/fake_clock.py), serves the frames of frames.py, and executes nothing: each call is appended
+to ``calls`` in order, tagged with the decision it belongs to.
 
 Model latency is scripted here too, since it is wall time: a stub calls ``model_request(index)``
 as its ``on_request`` hook before it answers request ``index`` and sleeps that request's scripted
@@ -29,11 +30,11 @@ from .frames import FrameSource
 @dataclass(frozen=True)
 class Hang:
     """A request the model never answers. The stub holds it until the client closes the
-    connection, which the agent's abort does: runner.py _bounded_call calls
-    harnesses/default/harness.py:1683-1686, whose runtime closes the driver
-    (harnesses/default/context.py:662-687), and the driver closes its HTTP client
-    (providers/litellm.py:1033-1044). ``seconds`` is the fake time the runner's bounded wait
-    (runner.py _bounded_call) lets pass before it gives up; the clock gets there by itself."""
+    connection, which the agent's abort does: the shell calls it when the kernel gives the
+    generation up (shell.py _abort), DefaultHarness.abort cancels the generation and aborts the
+    runtime, which closes the driver (harnesses/default/context.py), and the driver closes its
+    HTTP client (providers/litellm.py). ``seconds`` is the fake time until the kernel gives up, at
+    the deadline; the clock gets there by itself."""
 
     seconds: float
 
@@ -42,14 +43,11 @@ class FakeEnvironment:
     """GuestEnvironment's wall-clock behavior on a fake clock. ``fps`` is the environment's rate.
 
     ``rejections`` maps a decision to the guest's refusal of its action, which run_stream turns
-    into "rejected" (runner.py _apply). ``failures`` maps a decision to an environment fault,
-    which invalidates the run (runner.py _apply). ``advance_failures`` maps a decision to a
-    failure of its post-action wait, which the environment latches and raises again. It stands in
-    for GuestEnvironment's token-clock advance (actions.py _advance_clock); the wall-clock wait
-    only polls (actions.py wait_until_tick). run_stream catches the exception and still finalizes
-    (runner.py run_stream). ``stop_check(env)`` stands for the task's episode_over
-    (runner.py main): a true value ends the episode, a string names the reason
-    (actions.py done). ``reply_latencies[i]`` is the fake time request i takes, and
+    into "rejected" (shell.py _execute). ``failures`` maps a decision to an environment fault,
+    which invalidates the run. ``stop_check(env)`` stands for the task's episode_over, which
+    main() passes: a true value ends the episode, a string names the reason
+    (GuestEnvironment.check_end). ``read_failures`` are the end checks, counted from 1, whose
+    read of the task state fails. ``reply_latencies[i]`` is the fake time request i takes, and
     ``snapshot_seconds`` the time the evaluation snapshot's read of the task state takes.
     """
 
@@ -65,8 +63,8 @@ class FakeEnvironment:
         reply_latencies: list,
         rejections: dict[int, str] | None = None,
         failures: dict[int, str] | None = None,
-        advance_failures: dict[int, str] | None = None,
         stop_check=None,
+        read_failures: frozenset[int] = frozenset(),
         snapshot_seconds: float = 0.0,
     ):
         self.frames = frames
@@ -74,21 +72,22 @@ class FakeEnvironment:
         self.fps = fps
         self.max_minutes = max_minutes
         self.d = 1.0 / fps  # as GuestEnvironment's
-        # main() starts the wall clock and sets the deadline from it (evaluation/runner.py);
+        # main() starts the wall clock and sets the deadline from it (runner.py main);
         # GuestEnvironment measures ticks from that start (t0).
         self.t0 = clock.time()
         self.deadline = self.t0 + max_minutes * 60
         self.reply_latencies = list(reply_latencies)
         self.rejections = dict(rejections or {})
         self.failures = dict(failures or {})
-        self.advance_failures = dict(advance_failures or {})
         self.stop_check = stop_check
+        self.read_failures = read_failures
+        self.end_checks = 0
         self.snapshot_seconds = snapshot_seconds
-        # The task hook run_stream reads through env.task (runner.py _finalize).
+        # The task hook run_stream reads through env.task (shell.py _read_snapshot).
         self.task = types.SimpleNamespace(evaluation_snapshot=self._evaluation_snapshot)
-        self.frame_ages = []  # run_stream appends to it (runner.py _apply)
+        self.frame_ages = []  # run_stream appends to it (shell.py _commit)
         self.calls: list[dict] = []
-        self.decision = -1  # run_stream captures once per decision (runner.py _decide)
+        self.decision = -1  # run_stream captures once per decision
         self.finalizing = False
         self.executions: list[dict] = []
         # What the kernel's shell reads and sets (evaluation/shell.py). On the wall clock an
@@ -119,21 +118,12 @@ class FakeEnvironment:
         return self.clock.time() >= self.deadline
 
     def wait_until_tick(self, target) -> None:
-        """GuestEnvironment polls until tick_index() reaches ``target`` or the deadline passes;
-        tick_index() is an integer, so a fractional target waits for the next whole tick. The
-        fake lands on the tick exactly, without the 30 ms polling step: on the first clock
-        reading whose tick_index() reaches it, which for a tick that is not a whole number of
-        seconds can lie a few ulps past t0 + tick * d."""
+        """The legacy loop's pace. GuestEnvironment polls until tick_index() reaches ``target`` or
+        the deadline passes; tick_index() is an integer, so a fractional target waits for the next
+        whole tick. The fake lands on the tick exactly, without the 30 ms polling step: on the
+        first clock reading whose tick_index() reaches it, which for a tick that is not a whole
+        number of seconds can lie a few ulps past t0 + tick * d."""
         before = self.clock.time()
-        if self.decision in self.advance_failures:
-            message = self.advance_failures[self.decision]
-            self._invalid_run = {
-                "category": "environment",
-                "reason": "clock_advance_failed",
-                "detail": message,
-            }
-            self.log("env.wait_until_tick", target=target, failed=message)
-            raise RuntimeError(message)
         if self.tick_index() < target and before < self.deadline:
             self.clock.sleep(min(self.t0 + math.ceil(target) * self.d, self.deadline) - before)
             while self.tick_index() < target and self.clock.time() < self.deadline:
@@ -184,7 +174,11 @@ class FakeEnvironment:
 
     def check_end(self) -> tuple[bool, str | None]:
         """GuestEnvironment.check_end, for the kernel's shell: only the task is asked. Only an end
-        is logged."""
+        and a failed read are logged."""
+        self.end_checks += 1
+        if self.end_checks in self.read_failures:
+            self.log("env.check_end", failed=self.end_checks)
+            raise RuntimeError(f"state read {self.end_checks} failed")
         terminal = self.stop_check(self) if self.stop_check is not None else None
         if not terminal:
             return False, None

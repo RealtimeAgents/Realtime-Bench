@@ -41,8 +41,11 @@ Runtime invariants:
 import math as math, traceback as traceback
 
 from realtime_framework.clock import SystemClock
+from realtime_framework.clock import episode_clocks
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.config import DEFAULT_MODE
+from realtime_framework.evaluation.kernel.turns import TurnConfig
+from realtime_framework.evaluation.shell import run_episode
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
@@ -103,6 +106,45 @@ def _whole_up(value):
 def run_stream(
     adapter,
     env,
+    *,
+    clock_mode="token",
+    duration_s=60.0,
+    env_fps=1.0,
+    input_fps=1.0,
+    tokens_per_frame=None,
+    think_budget_s=None,
+    per_move_cap_s=None,
+    log=print,
+    trace=None,
+    clocks=None,
+):
+    """Run one episode on the event kernel's shell (shell.run_episode) and return its timeline.
+    The horizon in world seconds and the two frame rates are main()'s own values: the kernel's
+    frame arithmetic takes the rates, which tick lengths would give back only to within an ulp.
+    ``clocks`` are the episode's (realtime_framework/clock.py), real ones when omitted."""
+    config = TurnConfig(
+        clock_mode,
+        duration_s,
+        env_fps,
+        input_fps,
+        tokens_per_frame,
+        think_budget_s,
+        per_move_cap_s,
+        timing=RUNNER_TIMING,
+    )
+    return run_episode(
+        adapter,
+        env,
+        config,
+        clocks=clocks or episode_clocks(clock_mode, env_fps),
+        log=log,
+        trace=trace,
+    )
+
+
+def _run_stream_legacy(
+    adapter,
+    env,
     delta_s=1.0,
     frame_ticks=1.0,
     max_ticks=60,
@@ -114,7 +156,8 @@ def run_stream(
     trace=None,
     clock=None,
 ):
-    """``clock`` is the episode's operational clock (realtime_framework/clock.py), real time when
+    """The turn loop main() ran before the kernel's shell, kept only to be run side by side with
+    it. ``clock`` is the episode's operational clock (realtime_framework/clock.py), real time when
     omitted; on the wall clock it is also the semantic clock ``env`` reads."""
     clock = clock or SystemClock()
     if clock_mode not in {"token", "wall"}:
@@ -889,7 +932,6 @@ sys.path.insert(0, str(ROOT))
 
 import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
-from realtime_framework.clock import episode_clocks
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
@@ -1428,16 +1470,16 @@ def main():
             timeline = run_stream(
                 agent,
                 env,
-                delta_s=1.0 / env_fps,
-                frame_ticks=env_fps / model_input_fps,
-                max_ticks=a.max_minutes * 60 * env_fps,
-                log=lambda m: print(m, flush=True),
+                clock_mode=a.clock,
+                duration_s=a.max_minutes * 60,
+                env_fps=env_fps,
+                input_fps=model_input_fps,
+                tokens_per_frame=tokens_per_frame,
                 think_budget_s=think_budget,
                 per_move_cap_s=per_move_cap,
-                clock_mode=a.clock,
-                tokens_per_frame=tokens_per_frame,
+                log=lambda m: print(m, flush=True),
                 trace=episode_trace,
-                clock=clocks.operational,
+                clocks=clocks,
             )
             error = getattr(env, "_loop_error", None)
         finally:

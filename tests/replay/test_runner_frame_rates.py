@@ -293,6 +293,73 @@ def test_token_clock(case, monkeypatch, tmp_path):
     _compare(f"token-{case.name}", header, actual)
 
 
+@pytest.mark.usefixtures("openrouter_env")
+def test_a_failed_clock_advance_keeps_the_environment_s_reason(monkeypatch, tmp_path):
+    """60/1, B=160: decision 0's 80 tokens land its tab at tick 30, and the task clock fails to
+    advance from 0.75 s (tick 45) on, as the world moves to frame 1. GuestEnvironment latches
+    clock_advance_failed and raises (GuestEnvironment.step_clock); the shell logs the exception
+    and keeps it as the summary's error, as the legacy loop let it escape, and answers the step
+    with it (shell.py _failure). The kernel gives it the environment's reason (kernel/turns.py
+    _step_failed), so the run keeps it. The episode still ends through the snapshot, and then the
+    decision in hand is reported."""
+    entry = catalog.get(OPENROUTER_MODEL_KEY)
+    config = catalog.to_model_config(
+        OPENROUTER_MODEL_KEY, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]
+    )
+    task = ClockTask(
+        60.0,
+        runner.task_clock_tokens_per_frame(160, 60.0, 1.0),
+        advance_fails=(0.75, "page clock did not advance"),
+    )
+    with OpenRouterStub([reply(TAB, 80)], route=ROUTE) as stub:
+        monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = build_episode(
+            config,
+            tmp_path,
+            task=task,
+            instruction=TASK_INSTRUCTION,
+            model_key=OPENROUTER_MODEL_KEY,
+            clock_mode="token",
+            tokens_per_frame=160,
+            env_fps=60.0,
+        )
+        env = TokenEnvironment(episode.frames, task, max_minutes=0.09375)
+        run_loop(episode, env)
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert env._invalid_run == {
+        "category": "environment",
+        "reason": "clock_advance_failed",
+        "detail": "page clock did not advance",
+    }
+    assert [status for _, status, _ in commit_statuses(env)] == ["applied"]
+    # The kernel freezes the snapshot before it reports the decision in hand.
+    assert [
+        call["call"] for call in env.calls if call["finalizing"] and call["call"] != "trace"
+    ] == [
+        "task.evaluation_snapshot",
+        "agent.commit",
+        "env.record_lifecycle",
+        "trace.checkpoint",
+        "runner.log",
+        "env.release_inputs",
+    ]
+    assert env._termination_snapshot_captured
+    assert env._termination == {
+        "stop_reason": "invalid_run",
+        "end_s": 0.75,
+        "snapshot_s": 0.75,
+        "snapshot_delay_s": 0.0,
+    }
+    logged = [call["line"] for call in env.calls if call["call"] == "runner.log"]
+    assert any(
+        line.startswith("[invalid-run] environment:clock_advance_failed")
+        and line.rstrip().endswith("RuntimeError: page clock did not advance")
+        for line in logged
+    ), logged
+    assert any(line.startswith("[default] decision loop raised:") for line in logged)
+    assert "RuntimeError: page clock did not advance" in env._loop_error
+
+
 @dataclass(frozen=True)
 class WallCase:
     name: str
@@ -303,6 +370,7 @@ class WallCase:
     latencies: list[float]
     ticks: list
     times: list  # the observation's seconds into the episode
+    # Expected for each decision the shell reports: a generation the deadline cuts is not.
     action_ticks: list
     statuses: list
     next_ticks: list
@@ -313,7 +381,8 @@ class WallCase:
 
 WALL_CASES = [
     # 60/1, deadline 3.75 s: one frame a second, 60 ticks. Decision 1 replies after 1.25 s, at
-    # tick 135, past frame 2: frame 3 at 3 s. Decision 2's reply arrives after the deadline.
+    # tick 135, past frame 2: frame 3 at 3 s. Decision 2's reply would arrive after the deadline,
+    # where the kernel gives the generation up.
     WallCase(
         "60_1",
         60.0,
@@ -323,14 +392,14 @@ WALL_CASES = [
         [0.5, 1.25, 0.875],
         ticks=[0, 60, 180],
         times=[0.0, 1.0, 3.0],
-        action_ticks=[30, 135, 232.5],
-        statuses=["applied", "applied", "not_applied_time_limit"],
-        next_ticks=[60, 180, 232],
-        dropped=[0, 1, 0],
+        action_ticks=[30, 135],
+        statuses=["applied", "applied"],
+        next_ticks=[60, 180],
+        dropped=[0, 1],
     ),
     # 30/7, deadline 0.9375 s = 28.125 ticks: frames observed at ticks 0, 5, 9, 13, 18, 22, 26.
     # Decision 1 replies at tick 11, past frame 2 (8.57): frame 3, tick 13. Decision 3's reply
-    # arrives after the deadline.
+    # would arrive after the deadline.
     WallCase(
         "30_7",
         30.0,
@@ -340,12 +409,13 @@ WALL_CASES = [
         [0.1, 0.2, 0.05, 0.5],
         ticks=[0, 5, 13, 18],
         times=[0.0, 1 / 6, 13 / 30, 0.6],
-        action_ticks=[3, 11, 14.5, 33],
-        statuses=["applied", "applied", "applied", "not_applied_time_limit"],
-        next_ticks=[5, 13, 18, 33],
-        dropped=[0, 1, 0, 0],
+        action_ticks=[3, 11, 14.5],
+        statuses=["applied", "applied", "applied"],
+        next_ticks=[5, 13, 18],
+        dropped=[0, 1, 0],
     ),
-    # 2/2, deadline 1.875 s = 3.75 ticks, one frame per tick.
+    # 2/2, deadline 1.875 s = 3.75 ticks, one frame per tick. Decision 2's reply would arrive
+    # after the deadline.
     WallCase(
         "2_2",
         2.0,
@@ -355,10 +425,10 @@ WALL_CASES = [
         [0.25, 0.75, 0.5],
         ticks=[0, 1, 3],
         times=[0.0, 0.5, 1.5],
-        action_ticks=[0.5, 2.5, 4],
-        statuses=["applied", "applied", "not_applied_time_limit"],
-        next_ticks=[1, 3, 4],
-        dropped=[0, 1, 0],
+        action_ticks=[0.5, 2.5],
+        statuses=["applied", "applied"],
+        next_ticks=[1, 3],
+        dropped=[0, 1],
     ),
 ]
 

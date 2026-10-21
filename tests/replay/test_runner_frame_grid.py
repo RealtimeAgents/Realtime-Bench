@@ -2,11 +2,12 @@
 
 Frame k is due at k * env fps / model-input fps ticks and observed at the first whole tick at or
 after it; on the finite token clock the remaining budget is the remaining model-input frames times
-B, and an action whose complete response lands past the horizon is not applied (run_stream's
-docstring in evaluation/runner.py). run_stream computes these in floats, with tolerances in
-_frame_at, _whole_up and the remaining budget; the cases here sit where an exact answer and a
-float without that tolerance part. A scripted agent answers each decision with an action and its
-output tokens; the environment is GuestEnvironment on a task clock (token_env.py).
+B, and an action whose complete response lands past the horizon is not applied (the module
+docstring of evaluation/runner.py). The event kernel computes these in floats, with tolerances in
+_floor, _ceil and the remaining allowance (evaluation/kernel/turns.py); the cases here sit where
+an exact answer and a float computed without those tolerances can part. A scripted agent answers
+each decision with an action and its output tokens; the environment is GuestEnvironment on a task
+clock (token_env.py).
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ from __future__ import annotations
 import math
 from fractions import Fraction
 
+from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.model import PendingDecision
 from realtime_framework.evaluation import runner
 
 from .clock_task import ClockTask
@@ -23,25 +26,30 @@ from .token_env import TokenEnvironment
 
 
 class ScriptedAgent:
-    """What run_stream calls on an adapter. Each decision takes the next ``(action, output
-    tokens)`` of the script; a decision past its end fails the generation, which ends the run."""
+    """What the shell calls on an agent (evaluation/shell.py KernelAgent). Each generation takes
+    the next ``(action, output tokens)`` of the script; a decision past its end fails the
+    generation, which ends the run."""
 
     def __init__(self, script: list[tuple[Action | None, int]]):
         self.script = list(script)
         self.statuses: list[str] = []
 
-    def configure_decision(self, budget) -> None:
-        pass
-
-    def stream_prefill(self, observation) -> None:
-        pass
-
-    def stream_generate(self, tick: int) -> dict:
+    def generate(self, generation, decision, observation, budget) -> PendingDecision:
         action, output_tokens = self.script.pop(0)
-        return {"action": action, "latency": 0.0, "provider_output_tokens": output_tokens}
+        result = {"action": action, "latency": 0.0, "provider_output_tokens": output_tokens}
+        return PendingDecision(generation, decision, result)
 
-    def commit_action(self, status: str, detail: str = "") -> None:
-        self.statuses.append(status)
+    def accept(self, generation) -> None:
+        pass
+
+    def discard(self, generation) -> None:
+        pass
+
+    def commit(self, outcome) -> None:
+        self.statuses.append(outcome.status)
+
+    def abort(self, generation=None) -> None:
+        pass
 
 
 def run(
@@ -59,13 +67,13 @@ def run(
     runner.run_stream(
         agent,
         env,
-        delta_s=1.0 / env_fps,
-        frame_ticks=env_fps / model_input_fps,
-        max_ticks=max_minutes * 60 * env_fps,
-        log=lambda line: None,
         clock_mode="token",
+        duration_s=max_minutes * 60,
+        env_fps=env_fps,
+        input_fps=model_input_fps,
         tokens_per_frame=tokens_per_frame,
-        clock=env.clock,
+        log=lambda line: None,
+        clocks=Clocks(env.clock, env.clock),
     )
     return env, agent
 
@@ -81,9 +89,10 @@ def lifecycle(env: TokenEnvironment) -> list[dict]:
 def test_pause_mode_observes_every_model_input_frame_at_the_first_tick_at_or_after_it():
     """9/7 in pause mode, horizon 3.28125 s = 29.53125 ticks: frames 0 to 22, then frame 23
     (29.57) is past the horizon. With nothing to do the world moves one frame per decision. Frame 2
-    (2.57) is the first observed at a tick (3) closer to the next frame than to its own; frame 7 is
+    (2.57) is the first observed at a tick (3) closer to the next frame than to its own. Frame 7 is
     due on tick 9, which 9 / (9/7) puts a float below frame 7; frame 21 is due on tick 27, which
-    21 * (9/7) puts a float above it."""
+    21 * (9/7) puts a float above. The kernel's ticks * 7 / 9 and frames * 9 / 7 give both
+    exactly (kernel/turns.py _frames, _ticks)."""
     frames = 23
     env, agent = run(9.0, 7.0, None, 0.0546875, [(None, 0)] * frames)
     assert captured_ticks(env) == [math.ceil(Fraction(9 * k, 7)) for k in range(frames)]

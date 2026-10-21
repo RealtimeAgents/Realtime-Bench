@@ -15,12 +15,22 @@ from realtime_tasks.types import Task
 
 
 class ClockTask(Task):
+    """``advance_fails`` is ``(world seconds, message)``: from that time on the clock fails to
+    advance, as a game page's can."""
+
     task_id = "replay-clock"
     category = "browser_game"
 
-    def __init__(self, fps: float, tokens_per_frame: int | None = None):
+    def __init__(
+        self,
+        fps: float,
+        tokens_per_frame: int | None = None,
+        *,
+        advance_fails: tuple[float, str] | None = None,
+    ):
         self.events: list[dict] = []
         self.on_event = None
+        self.advance_fails = advance_fails
         self.configure_clock("token", fps, tokens_per_frame)
         self.activate_clock()
 
@@ -34,6 +44,9 @@ class ClockTask(Task):
 
     def advance_clock(self, frames: float = 1, key_events=()):
         before = self.world_time()
+        if self.advance_fails is not None and before >= self.advance_fails[0] - 1e-9:
+            self._event({"event": "advance_failed", "at_s": before})
+            raise RuntimeError(self.advance_fails[1])
         snapshot = super().advance_clock(frames)
         self._event(
             {

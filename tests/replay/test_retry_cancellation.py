@@ -1,8 +1,8 @@
 """An aborted generation sends no further request.
 
 The kernel gives up on a generation with AbortGeneration, which the shell runs as the agent's
-abort(generation) (evaluation/shell.py KernelAgent); the legacy run_stream calls abort() when its
-bounded wait expires (evaluation/runner.py _bounded_call). DefaultHarness.abort sets the cancel
+abort(generation) (evaluation/shell.py KernelAgent); the legacy loop calls abort() when its
+bounded wait expires (evaluation/runner.py _run_stream_legacy). DefaultHarness.abort sets the cancel
 event of that generation, or of every generation that has not ended, then has the runtime close
 the session (harnesses/default/context.py RealtimeRuntime.abort). Each generation runs every
 attempt with its own event (RealtimeRuntime.run_turn's ``cancel``) and its retries inside
@@ -37,7 +37,6 @@ from realtime_framework.entity.model import (
     TransportFailure,
     retry_cancellation,
 )
-from realtime_framework.evaluation import runner
 
 from ..fake_clock import FakeClock
 from .build import build_episode
@@ -503,13 +502,12 @@ def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
-def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatch):
-    """The real run_stream and _bounded_call on a 0.5 s wall-clock episode. Decision 0's request
-    never comes back; the bounded wait (0.5 s, the grace set to 0 to keep it short) expires, the
-    decision is committed as skipped_timeout and the episode ends. The abort closes the request
-    and cancels the decision's generation, so the abandoned worker does not send it again: the
-    stub sees one request, and neither a turn nor an action is left behind."""
-    monkeypatch.setattr(runner, "DEADLINE_GRACE_S", 0.0)
+def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path):
+    """The real run_stream on a 0.5 s wall-clock episode. Decision 0's request never comes back;
+    at the deadline the kernel gives the generation up, the shell aborts the agent (shell.py
+    _abort) and the episode ends without reporting the decision. The abort closes the request
+    and ends the epoch, so the abandoned worker does not send it again: the stub sees one
+    request, and neither a turn nor an action is left behind."""
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     env_box = []
     with (
@@ -542,9 +540,9 @@ def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatc
     assert stub.unscripted == 0 and stub.unused_replies == 1
     assert stub.held == [True]
     assert len(stub.requests) == 1
-    assert _requests(turns) == [(None, True)]  # the legacy loop numbers no generation
-    assert commit_statuses(env) == [(0, "skipped_timeout", "")]
-    assert [action for *_, action in timeline] == [None]
+    assert _requests(turns) == [(1, True)]
+    assert commit_statuses(env) == []
+    assert timeline == []
     requests = [
         (call["request"], call["hang"], call["finalizing"])
         for call in env.calls

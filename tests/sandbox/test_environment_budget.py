@@ -22,7 +22,9 @@ import requests
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import MAX_ACTION_DURATION, Action, ActionType, Observation
-from realtime_framework.evaluation import runner
+from realtime_framework.entity.harness import StreamingAgent
+from realtime_framework.evaluation import runner, shell
+from realtime_framework.evaluation.kernel.turns import READ_FAILURE_LIMIT
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
 from realtime_framework.sandbox.budget import BudgetExceeded, Deadline, operation_budget
@@ -45,14 +47,18 @@ TAP = Action(ActionType.KEY, {"key": "space"})
 DRAG_PATH = {"x1": 0, "y1": 0, "x2": 5, "y2": 5}
 
 
-class ScriptedAgent:
-    """What run_stream calls on an adapter (runner.py:973-984, 473-478); always the same action."""
+class ScriptedAgent(StreamingAgent):
+    """An adapter run through StreamingAgent's legacy turn (entity/harness.py); always the same
+    action."""
 
     def __init__(self, action: Action):
         self.action = action
         self.statuses: list[str] = []
 
-    def configure_decision(self, budget) -> None:
+    def initialize(self, task_instruction, initial_observation) -> None:
+        pass
+
+    def discard_pending_observations(self) -> None:
         pass
 
     def stream_prefill(self, observation) -> None:
@@ -66,8 +72,10 @@ class ScriptedAgent:
 
 
 def _token_clock(task: Task) -> Task:
-    """The task clock the runner configures before it builds the environment (runner.py:1624)."""
+    """The task clock the runner configures (runner.py main) and activates (runner.py
+    set_up_agent) before it builds the environment."""
     task.configure_clock("token", 1.0)
+    task.activate_clock()
     return task
 
 
@@ -78,7 +86,7 @@ def budgets(monkeypatch):
     def shrink(**fields):
         value = replace(actions.ENVIRONMENT_BUDGET, **fields)
         monkeypatch.setattr(actions, "ENVIRONMENT_BUDGET", value)
-        monkeypatch.setattr(runner, "ENVIRONMENT_BUDGET", value)
+        monkeypatch.setattr(shell, "ENVIRONMENT_BUDGET", value)
 
     return shrink
 
@@ -141,12 +149,12 @@ def _run(env, action: Action = CLICK) -> tuple[ScriptedAgent, float]:
     taken."""
     agent = ScriptedAgent(action)
     started = time.monotonic()
-    runner.run_stream(agent, env, max_ticks=3, log=lambda line: None, clock_mode="token")
+    runner.run_stream(agent, env, duration_s=3.0, log=lambda line: None, clock_mode="token")
     return agent, time.monotonic() - started
 
 
-def _spent_the_budget(elapsed: float) -> None:
-    assert BUDGET - 0.05 <= elapsed < BUDGET + SLACK, elapsed
+def _spent_the_budget(elapsed: float, operations: int = 1) -> None:
+    assert operations * BUDGET - 0.05 <= elapsed < operations * BUDGET + SLACK, elapsed
 
 
 def _invalid(env, reason: str, operation: str, budget: float = BUDGET) -> None:
@@ -317,7 +325,7 @@ def test_a_state_read_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, 
             holder.join(5)
     _invalid(env, "terminal_state_check_failed", "state read")
     assert fake.commands == []
-    _spent_the_budget(elapsed)
+    _spent_the_budget(elapsed, READ_FAILURE_LIMIT)
 
 
 def test_a_clock_advance_with_a_slow_connect_fails_within_its_budget(budgets, game, monkeypatch):
@@ -430,7 +438,7 @@ def _run_on(clock: FakeClock, env) -> ScriptedAgent:
     """Three decisions of run_stream on ``clock``, each clicking."""
     agent = ScriptedAgent(CLICK)
     runner.run_stream(
-        agent, env, max_ticks=3, log=lambda line: None, clock_mode="token", clock=clock
+        agent, env, duration_s=3.0, log=lambda line: None, clock_mode="token", clocks=env.clocks
     )
     return agent
 
@@ -446,8 +454,10 @@ def _swallowing_the_timeout(clock: FakeClock) -> None:
 
 def test_a_state_read_whose_task_swallows_the_timeout_fails_within_its_budget():
     """The game then raises its own error (realtime_tasks/game/runtime.py episode_over), which
-    the read reports past its budget. That unrelated CDP events do not restart the call's timeout
-    is test_cdp_deadline.py's."""
+    the read reports past its budget. The run is invalid at the third failed read in a row
+    (kernel/turns.py READ_FAILURE_LIMIT): the reads before the decision and before its click
+    answer that the episode goes on, and the one after the click invalidates the run. That
+    unrelated CDP events do not restart the call's timeout is test_cdp_deadline.py's."""
     clock = FakeClock()
 
     def episode_over():
@@ -457,10 +467,10 @@ def test_a_state_read_whose_task_swallows_the_timeout_fails_within_its_budget():
     env, _ = _timed(clock, _ClockGuest(), stop_check=episode_over)
     with clock.participant():
         agent = _run_on(clock, env)
-        assert clock.monotonic() == 120.0
+        assert clock.monotonic() == READ_FAILURE_LIMIT * 120.0
     _invalid(env, "terminal_state_check_failed", "state read", 120.0)
     assert env._invalid_run["detail"].rstrip().endswith("returned no state)")
-    assert agent.statuses == []
+    assert agent.statuses == ["applied"]
 
 
 def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget():

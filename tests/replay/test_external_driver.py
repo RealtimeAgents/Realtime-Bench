@@ -236,8 +236,8 @@ def test_external_driver_full_episode(external, tmp_path, capsys):
 
 
 def test_external_driver_through_run_stream(external, tmp_path):
-    """The same episode through the runner's own decision loop (evaluation/runner.py run_stream)
-    on the wall clock, against the fake environment of test_runner_loop.py on its fake clock."""
+    """The same episode through run_stream, the event kernel's shell (evaluation/shell.py), on the
+    wall clock, against the fake environment of test_runner_loop.py on its fake clock."""
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     environments = []
     with (
@@ -270,8 +270,10 @@ def test_external_driver_through_run_stream(external, tmp_path):
         run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
     check_wall_clock_properties(env, "time_limit")
+    # The statuses steps.py scripts, but for the last decision's: its reply would come after the
+    # deadline, where the kernel gives the generation up, unreported (kernel/turns.py on_end).
     assert commit_statuses(env) == [
-        (k, step.status, step.detail) for k, step in enumerate(LONG_SCENARIO)
+        (k, step.status, step.detail) for k, step in enumerate(LONG_SCENARIO[:-1])
     ]
 
 
@@ -396,7 +398,7 @@ def test_preflight_reads_the_external_declaration(external, capsys):
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")
     fails(lambda: catalog.get("ext-bad"), f"ext-bad.yaml: endpoint.api {message}")
-    # The runner's --adapter path (evaluation/runner.py:1548-1554) gets the same message.
+    # The runner's --adapter path (evaluation/runner.py main) gets the same message.
     fails(lambda: catalog.adapter_class(api), message)
 
 

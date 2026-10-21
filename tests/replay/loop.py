@@ -1,17 +1,17 @@
 """Drive the real run_stream with an agent from build_episode against a FakeEnvironment on the
 wall clock or a TokenEnvironment on the token clock.
 
-run_stream gets the arguments main() passes (evaluation/runner.py:1710-1721), with the
-environment's clock as its clock: on the wall clock the fake clock (tests/fake_clock.py), so its
-bounded wait, its workers, action timestamps, frame ages and the deadline all run on one clock.
-After the loop the abandoned workers are drained (runner.py:1814-1819) and the agent is closed
-(runner.py:1820-1827), in main()'s order. main() would also call the agent's start_episode
-(runner.py:1691-1693), which no agent defines.
+run_stream gets the arguments main() passes (evaluation/runner.py main), with the environment's
+clock as its clocks: on the wall clock the fake clock (tests/fake_clock.py), so the kernel's shell,
+its workers, action timestamps, frame ages and the deadline all run on one clock. After the loop
+the abandoned workers are drained and the agent is closed, in main()'s order. main() would also
+call the agent's start_episode, which no agent defines.
 
 On the wall clock any agent build_episode returns on the same clock can be driven, given a stub
 that serves on that clock and calls ``env.model_request`` as its ``on_request`` hook (see
-fake_env.py); the calling thread takes part in the clock. On the token clock run_stream's clock is
-TokenEnvironment's, whose recorded times stay at the origin (token_env.py).
+fake_env.py); the calling thread takes part in the clock. On the token clock run_stream's
+operational clock is TokenEnvironment's, whose recorded times and readings stay at the origin
+(token_env.py).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from realtime_framework.clock import Clocks
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import runner
 
@@ -26,31 +27,33 @@ from . import baseline
 from .build import Episode
 from .fake_env import FakeEnvironment
 
-# Values derived from the agent's real-time decision latency (harnesses/default/harness.py:1168,
-# 1500), on top of the fields baseline.REAL_TIME_FIELDS already masks. On the token clock the last
-# two come from the output tokens instead.
+# Values derived from the agent's real-time decision latency (harnesses/default/harness.py
+# stream_generate), on top of the fields baseline.REAL_TIME_FIELDS already masks. On the token
+# clock the last two come from the output tokens instead.
 REAL_TIME_FIELDS = baseline.REAL_TIME_FIELDS | {
-    "latency_s",  # InferenceCompleted copies the decision latency (runner.py:1062)
-    "model_latency_s",  # so does the lifecycle record (runner.py:699)
-    "deliberation_ticks",  # the timeline's latency / delta_s (runner.py:502-503, 764)
-    "think_spent",  # the sum of decision latencies (runner.py:431, 777)
+    "latency_s",  # InferenceCompleted copies the decision latency (episode_records.py)
+    "model_latency_s",  # so does the lifecycle record (episode_records.py lifecycle_record)
+    "deliberation_ticks",  # the timeline's latency times the env fps (shell.py _commit)
+    "think_spent",  # the sum of decision latencies (kernel/turns.py _accept)
 }
-LOGGED_DELIBERATION = re.compile(r"δ=\S+")  # that latency in the decision log (runner.py:766)
+LOGGED_DELIBERATION = re.compile(r"δ=\S+")  # that latency in the decision log (shell.py _commit)
 
-# Lifecycle statuses of a decision whose action reached env.execute (runner.py:532-546).
-EXECUTED = {"applied", "wait", "rejected"}
+# Lifecycle statuses of a decision whose action reached env.execute. A wait is not one: the
+# kernel lets its time pass (kernel/turns.py _start_wait).
+EXECUTED = {"applied", "rejected"}
 
 
 class RecordingTrace:
-    """Stands in for EpisodeTrace (runner.py:1464) and keeps each payload as EpisodeTrace
-    serializes it (evaluation/reporting.py:2028-2040)."""
+    """Stands in for EpisodeTrace (runner.py main) and keeps each record as EpisodeTrace
+    serializes it (evaluation/reporting.py EpisodeTrace.emit): the payload and the kernel's
+    fields beside it."""
 
     def __init__(self, env: FakeEnvironment):
         self._env = env
 
-    def emit(self, event, payload=None):
+    def emit(self, event, payload=None, **fields):
         name = event.value if isinstance(event, TraceEvent) else str(event)
-        self._env.log("trace", event=name, payload=_jsonable(payload or {}))
+        self._env.log("trace", event=name, payload=_jsonable(payload or {}), **_jsonable(fields))
 
     def checkpoint(self):
         self._env.log("trace.checkpoint")
@@ -61,17 +64,17 @@ def run_loop(episode: Episode, env) -> list:
 
     ``env`` is a FakeEnvironment on the wall clock or a TokenEnvironment (token_env.py) on the
     token clock. Its ``fps`` is the environment's rate and the agent's config.fps the
-    model-input rate, as main() passes them (runner.py:1713-1715)."""
+    model-input rate, as main() passes them."""
     if episode.clock_mode != env.clock_mode:
         raise ValueError(f"a {env.clock_mode}-clock environment for a {episode.clock_mode} episode")
     agent = episode.agent
-    commit_action = agent.commit_action
+    commit = agent.commit
 
-    def recording_commit(status, detail=""):
-        env.log("agent.commit_action", status=status, detail=detail)
-        return commit_action(status, detail)
+    def recording_commit(outcome):
+        env.log("agent.commit", status=outcome.status, detail=outcome.detail)
+        return commit(outcome)
 
-    agent.commit_action = recording_commit  # what run_stream reports (runner.py:434-443, 674)
+    agent.commit = recording_commit  # what the shell reports (shell.py _commit)
 
     def log(line):
         if episode.clock_mode == "wall":  # the token clock's δ comes from the output tokens
@@ -82,16 +85,16 @@ def run_loop(episode: Episode, env) -> list:
         return runner.run_stream(
             agent,
             env,
-            delta_s=1.0 / env.fps,
-            frame_ticks=env.fps / agent.config.fps,
-            max_ticks=env.max_minutes * 60 * env.fps,
-            log=log,
+            clock_mode=episode.clock_mode,
+            duration_s=env.max_minutes * 60,
+            env_fps=env.fps,
+            input_fps=agent.config.fps,
+            tokens_per_frame=episode.tokens_per_frame,
             think_budget_s=None,
             per_move_cap_s=None,
-            clock_mode=episode.clock_mode,
-            tokens_per_frame=episode.tokens_per_frame,
+            log=log,
             trace=RecordingTrace(env),
-            clock=env.clock,
+            clocks=Clocks(env.clock, env.clock),
         )
     finally:
         env._drain_abandoned()
@@ -109,7 +112,7 @@ def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:
     out.append(
         {
             "record": "outcome",
-            # Latched by _finalize (runner.py:772-812).
+            # Left on env by the shell (shell.py _freeze, _finish).
             "stop_reason": env._stop_reason,
             "termination": env._termination,
             "invalid_run": getattr(env, "_invalid_run", None),
@@ -142,7 +145,7 @@ def _strip(call: dict) -> dict:
 
 
 def resolved(env: FakeEnvironment) -> dict[int, dict]:
-    """Each decision's ActionResolved payload (runner.py:573-585)."""
+    """Each decision's ActionResolved payload (episode_records.py action_resolved)."""
     return {
         call["decision"]: call["payload"]
         for call in env.calls
@@ -154,17 +157,26 @@ def commit_statuses(env: FakeEnvironment) -> list[tuple[int, str, str]]:
     return [
         (call["decision"], call["status"], call["detail"])
         for call in env.calls
-        if call["call"] == "agent.commit_action"
+        if call["call"] == "agent.commit"
     ]
 
 
 def check_wall_clock_properties(env: FakeEnvironment, stop_reason: str) -> None:
     """phase1.md, 回放测试: on the wall clock no action runs after the deadline, no action runs
-    twice, and the episode ends for the right reason. An action that arrives once the task has
-    decided the episode counts as late too."""
+    twice, and the episode ends for the right reason. The task's end is known once a state read
+    sees it, and the kernel reads at most once a frame and once after every action
+    (kernel/turns.py _check_end): an action that arrives after the task decided, in a frame
+    already read, still runs, but none runs once a read has seen the end."""
     for execution in env.executions:
         assert execution["time"] < env.deadline, f"executed after the deadline: {execution}"
-        assert execution["episode_over"] is None, f"executed after the episode: {execution}"
+        over = execution["episode_over"]
+        assert over in {None, "task"}, f"executed after the episode: {execution}"
+    seen = next(
+        (i for i, c in enumerate(env.calls) if c["call"] == "env.check_end" and "failed" not in c),
+        len(env.calls),
+    )
+    late = [c for c in env.calls[seen:] if c["call"] == "env.execute"]
+    assert not late, f"executed after a state read saw the end: {late}"
     per_decision = Counter(execution["decision"] for execution in env.executions)
     assert all(count == 1 for count in per_decision.values()), f"executed twice: {per_decision}"
     after_loop = [c for c in env.calls if c["call"] == "env.execute" and c["finalizing"]]
