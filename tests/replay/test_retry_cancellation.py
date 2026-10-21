@@ -328,7 +328,7 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
         for r in _trace(tmp_path, "ModelRequestSent")
     ]
     assert sent == [(0, GENERATION, 1)]
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
     assert _inspection_outcomes(tmp_path) == ["superseded_by_timeout"]
 
 
@@ -372,7 +372,7 @@ def test_next_decision_runs_after_an_abort(openrouter_env, tmp_path):  # noqa: F
     assert not pending.cancelled and pending.result.get("invalid_reason") is None
     assert pending.result["action"] is not None
     assert len(agent.action_history) == 1
-    assert _attempts(tmp_path) == [(1, "retry", None), (1, "ok", False)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None), (1, "ok", False)]
 
 
 def test_close_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa: F811
@@ -397,7 +397,7 @@ def test_close_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
     assert stub.unscripted == 0 and stub.unused_replies == 0
     assert len(stub.requests) == 1 and len(backoff.calls) == 1
     assert agent._runtime.turns == () and agent.action_history == []
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
 def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
@@ -447,7 +447,7 @@ def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     assert failure == TransportFailure(TRANSIENT), error
     assert len(backoff.calls) == 1
     _check_nothing_kept(agent, turns)
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
 def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path, monkeypatch):
@@ -546,7 +546,7 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
     assert [r["connection"] for r in responses] == [1]
     assert connects == [] and len(backoff.calls) == 1
     _check_nothing_kept(agent, turns)
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
 def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
@@ -589,7 +589,7 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
     assert len(stub.requests) == 1
     assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent._runtime.turns == () and agent.action_history == []
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
 def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatch):
@@ -631,7 +631,7 @@ def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatc
     assert [r["connection"] for r in responses] == [1]
     assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent._runtime.turns == () and agent.action_history == []
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
     assert _connects(tmp_path) == [("initialize", 1, "ok"), ("decision", 1, "cancelled")]
 
 
@@ -663,7 +663,7 @@ def test_session_abort_during_connect_backoff(tmp_path, monkeypatch):
     assert [c["rejected"] for c in connections] == [None, 503]
     assert len(backoff.calls) == 2
     assert agent._runtime.turns == () and agent.action_history == []
-    assert _attempts(tmp_path) == [(1, "retry", None)]
+    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
     assert _connects(tmp_path) == [
         ("initialize", 1, "ok"),
         ("decision", 1, "retry"),
@@ -747,6 +747,7 @@ def test_decision_abort_during_question_backoff(tmp_path, monkeypatch):
     assert len(backoff.calls) == 1
     assert agent._runtime.turns == () and agent.action_history == []
     assert _questions(tmp_path) == [(0, 0, 1, "retry"), (0, 0, 2, "cancelled")]
+    assert _attempts(tmp_path) == [(1, "cancelled", None)]  # the turn the question was in
 
 
 def test_decision_abort_between_questions(tmp_path, monkeypatch):
@@ -784,3 +785,4 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
     assert len(stub.requests) == 2 and stub.unscripted == 0 and stub.unload() == 4
     assert len(agent._runtime.turns) == len(agent.action_history) == 1
     assert _questions(tmp_path) == [(0, 0, 1, "ok"), (1, 0, 1, "ok"), (1, 1, 1, "cancelled")]
+    assert _attempts(tmp_path) == [(1, "ok", False), (1, "cancelled", None)]
