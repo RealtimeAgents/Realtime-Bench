@@ -16,9 +16,9 @@ provider_options.
 An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
 then its own. A preset comes from one of two places. A row's applies to every model of its API:
 Luna's (openai_decisions) and JEV's (jev_decisions). A model config's (ModelConfig.context_preset,
-from its YAML) applies to that model alone and takes the place of its row's: Kimi K3's, so other
-moonshot models keep the standard values. The pre-run checks hold each resolved policy against
-what the API declares (providers/preflight.py check_context_policy).
+from its YAML, one of MODEL_PRESETS) applies to that model alone and takes the place of its row's:
+Kimi K3's, so other moonshot models keep the standard values. The pre-run checks hold each
+resolved policy against what the API declares (providers/preflight.py check_context_policy).
 """
 
 from collections.abc import Mapping
@@ -214,6 +214,8 @@ PRESETS = {
     # (configs/models/kimi-k3.yaml) and other moonshot models send no reasoning back.
     "kimi_k3": {"reasoning_replay": True},
 }
+# The presets a model config may name; Luna's and JEV's belong to their API rows.
+MODEL_PRESETS = ("kimi_k3",)
 
 
 def current_context_policy() -> ContextPolicy:

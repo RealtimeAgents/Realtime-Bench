@@ -77,7 +77,7 @@ import yaml
 
 from functools import lru_cache
 
-from realtime_framework.entity.context_policy import PRESETS
+from realtime_framework.entity.context_policy import MODEL_PRESETS
 
 
 _LITELLM = "realtime_framework.providers.litellm:"
@@ -316,8 +316,8 @@ def load_definitions(directory):
         definition["defaults"]["reasoning_effort"] = effort
         if "context_preset" in value:
             preset = value["context_preset"]
-            if not isinstance(preset, str) or preset not in PRESETS:
-                raise ValueError(f"{filename}: context_preset must be one of {list(PRESETS)}")
+            if not isinstance(preset, str) or preset not in MODEL_PRESETS:
+                raise ValueError(f"{filename}: context_preset must be one of {list(MODEL_PRESETS)}")
             definition["defaults"]["context_preset"] = preset
         result.append((filename, definition))
     return result

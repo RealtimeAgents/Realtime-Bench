@@ -78,10 +78,11 @@ records the resolved preset, limit included, so results with different settings 
 ### Context preset
 
 `context_preset` (top level, optional) names a set of context-policy values the model takes in
-place of the standard ones (`PRESETS` in `realtime_framework/entity/context_policy.py`).
-`configs/models/kimi-k3.yaml` sets `kimi_k3`, which sends K3's past reasoning back, as Kimi
-requires for K3; other moonshot models leave it out and send none. A preset the API cannot render
-is refused before the run, and the run records the preset with its configuration.
+place of the standard ones. A model can name only `kimi_k3` (`MODEL_PRESETS` in
+`realtime_framework/entity/context_policy.py`), which sends K3's past reasoning back, as Kimi
+requires for K3: `configs/models/kimi-k3.yaml` sets it, and other moonshot models leave it out and
+send none. A preset the API cannot render is refused before the run, and the run records the
+preset with its configuration.
 
 ## Add a model API
 

@@ -20,6 +20,7 @@ from realtime_framework.entity.config import (
 )
 from realtime_framework.entity.context_policy import (
     FIXED_TEXTS,
+    MODEL_PRESETS,
     PRESETS,
     current_context_policy,
 )
@@ -90,6 +91,9 @@ def test_presets():
             assert getattr(path, item) == value, (path.api, item)
     models = {key: catalog.get(key).defaults.get("context_preset") for key in catalog.CATALOG}
     assert {key: preset for key, preset in models.items() if preset} == {"kimi-k3": "kimi_k3"}
+    # A preset is either the rows' or the models' (the catalog loader refuses the rows').
+    assert MODEL_PRESETS == ("kimi_k3",)
+    assert set(PRESETS) - set(MODEL_PRESETS) == {"luna", "jev"}
 
 
 def test_model_preset():
@@ -97,7 +101,8 @@ def test_model_preset():
     preset's items, then the row's own."""
     k3 = POLICY.for_path("moonshot", {}, "kimi_k3")
     assert k3 == replace(POLICY.paths["moonshot"], preset="kimi_k3", reasoning_replay=True)
-    # The row's own feedback placement wins over JEV's digest.
+    # The row's own feedback placement wins over JEV's digest. No model YAML can name jev
+    # (MODEL_PRESETS); this pins the order for_path applies.
     jev = POLICY.for_path("openai_realtime", {}, "jev")
     assert (jev.preset, jev.feedback, jev.observation) == (
         "jev",
