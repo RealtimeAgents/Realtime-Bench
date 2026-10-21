@@ -1,11 +1,11 @@
 """Replay baselines for run_stream when the environment and model-input frame rates are not 1/1.
 
-main() passes run_stream the environment tick (delta_s = 1/env fps), the model-input frame in
-environment ticks (frame_ticks = env fps / model-input fps) and the horizon in environment ticks
-(evaluation/runner.py main). Frame j is due at j * frame_ticks and observed at the first whole
-tick at or after it; on the finite token clock B is charged per model-input frame, so n output
-tokens advance n / B * frame_ticks ticks and the remaining budget is the remaining model-input
-frames times B (run_stream's _apply and _decide).
+main() passes run_stream the episode's length in seconds and both frame rates (evaluation/runner.py
+main); the kernel takes a model-input frame as env fps / model-input fps environment ticks
+(kernel/turns.py TurnPolicy._ticks) and the horizon in environment ticks (TurnConfig.max_ticks).
+Frame j is due at j frames and observed at the first whole tick at or after it; on the finite
+token clock B is charged per model-input frame, so n output tokens advance n / B frames and the
+remaining budget is the remaining model-input frames times B.
 
 Token clock: the openrouter agent against the real GuestEnvironment on a task clock
 (token_env.py), at 60/1, 30/7 and 2/2 with a finite B, and at 60/1 in pause mode. Wall clock: the
@@ -300,8 +300,9 @@ def test_a_failed_clock_advance_keeps_the_environment_s_reason(monkeypatch, tmp_
     clock_advance_failed and raises (GuestEnvironment.step_clock); the shell logs the exception
     and keeps it as the summary's error, as the legacy loop let it escape, and answers the step
     with it (shell.py _failure). The kernel gives it the environment's reason (kernel/turns.py
-    _step_failed), so the run keeps it. The episode still ends through the snapshot, and then the
-    decision in hand is reported."""
+    _step_failed), and the shell keeps the environment's own record of it (shell.py _terminate),
+    so the run keeps it. The episode still ends through the snapshot, and then the decision in
+    hand is reported."""
     entry = catalog.get(OPENROUTER_MODEL_KEY)
     config = catalog.to_model_config(
         OPENROUTER_MODEL_KEY, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]

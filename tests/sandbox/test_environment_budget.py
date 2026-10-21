@@ -478,13 +478,15 @@ def _swallowing_the_timeout(clock: FakeClock) -> None:
 
 def test_a_state_read_whose_task_swallows_the_timeout_fails_within_its_budget():
     """The game then raises its own error (realtime_tasks/game/runtime.py episode_over), which
-    the read reports past its budget. The run is invalid at the third failed read in a row
-    (kernel/turns.py READ_FAILURE_LIMIT): the reads before the decision and before its click
-    answer that the episode goes on, and the one after the click invalidates the run. That
+    the read reports past its budget. The state is read once a frame and once after every action
+    (X18): before the decision at tick 0, after its click, still at tick 0, and at tick 1, where
+    the third failed read in a row invalidates the run (kernel/turns.py READ_FAILURE_LIMIT). That
     unrelated CDP events do not restart the call's timeout is test_cdp_deadline.py's."""
     clock = FakeClock()
+    read_at = []
 
     def episode_over():
+        read_at.append(env.tick_index())
         _swallowing_the_timeout(clock)
         raise RuntimeError("game state backend returned no state")
 
@@ -495,6 +497,7 @@ def test_a_state_read_whose_task_swallows_the_timeout_fails_within_its_budget():
     _invalid(env, "terminal_state_check_failed", "state read", 120.0)
     assert env._invalid_run["detail"].rstrip().endswith("returned no state)")
     assert agent.statuses == ["applied"]
+    assert read_at == [0, 0, 1]
 
 
 def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget():
