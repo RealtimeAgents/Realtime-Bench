@@ -1,6 +1,6 @@
 """What one decision leaves on the record: its output caps and their audit, what its result is
 annotated with, the output tokens its clock is charged with and its token accounting, whether its
-result is usable, and the action as the trace keeps it.
+result is usable, and the payloads of its trace events.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -10,6 +10,7 @@ by side still compares it (phase2.md, 怎么验证).
 
 from __future__ import annotations
 
+import hashlib
 import traceback
 
 from realtime_framework.entity.actions import Action, Observation
@@ -75,12 +76,23 @@ def usage_snapshot(adapter) -> dict | None:
         return None
 
 
+def _observation_batch(observation: Observation) -> list[dict]:
+    """The frames a decision observes, as its records list them: the one it captured."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    return [
+        {
+            "observation_id": metadata.get("observation_id"),
+            "tick": observation.tick_number,
+            "timestamp": observation.timestamp,
+        }
+    ]
+
+
 def annotate_result(
     r: dict,
     *,
     decision: int,
     observation: Observation,
-    observation_batch: list[dict],
     native_output_limit: int | None,
     budget: DecisionBudget,
     remaining_clock_tokens: int | None,
@@ -97,7 +109,7 @@ def annotate_result(
             "decision": decision,
             "observation_id": metadata.get("observation_id"),
             "observation_tick": observation.tick_number,
-            "observation_batch": observation_batch,
+            "observation_batch": _observation_batch(observation),
             "observation_timestamp": observation.timestamp,
             "decision_output_cap": budget.runtime_output_tokens,
             "native_output_limit": native_output_limit,
@@ -319,6 +331,9 @@ def frame_output_tokens(r: dict) -> int | None:
     return clock_output_tokens(r)[0]
 
 
+# ---- trace payloads ---------------------------------------------------------------------------
+
+
 def action_record(action: Action | None) -> dict | None:
     """An action as the trace and the lifecycle record keep it."""
     if action is None:
@@ -328,4 +343,163 @@ def action_record(action: Action | None) -> dict | None:
         "parameters": action.parameters,
         "coordinate_space": action.coordinate_space,
         "coordinate_transform": action.coordinate_transform,
+    }
+
+
+def observation_captured(observation: Observation, decision: int) -> dict:
+    """The ObservationCaptured payload of a captured frame."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    return {
+        "decision": decision,
+        "observation_id": metadata.get("observation_id"),
+        "tick": observation.tick_number,
+        "timestamp": observation.timestamp,
+        "screenshot_sha256": metadata.get("screenshot_sha256")
+        or hashlib.sha256(observation.screenshot or b"").hexdigest(),
+        "capture_latency_s": metadata.get("capture_latency_s"),
+        "interactables_status": (metadata.get("interactables") or {})
+        .get("scene", {})
+        .get("status"),
+    }
+
+
+def inference_started(
+    observation: Observation,
+    decision: int,
+    usage_before: dict | None,
+    native_output_limit: int | None,
+    budget: DecisionBudget,
+) -> dict:
+    """The InferenceStarted payload: the frame, the adapter's usage before the generation and the
+    decision's output caps."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    return {
+        "decision": decision,
+        "observation_id": metadata.get("observation_id"),
+        "observation_tick": observation.tick_number,
+        "observation_batch": _observation_batch(observation),
+        "usage_before": usage_before,
+        "runtime_output_token_cap": budget.runtime_output_tokens,
+        "provider_output_token_cap": budget.provider_output_tokens,
+        "transport_output_token_cap": budget.transport_output_tokens,
+        "native_output_limit": native_output_limit,
+    }
+
+
+def output_chunks(r: dict, decision: int, observation_id: str | None) -> list[dict]:
+    """One OutputChunkReceived payload per chunk of the result's output; the raw reply is one final
+    chunk when the adapter reports no chunks."""
+    chunks = r.get("output_chunks")
+    if not isinstance(chunks, list):
+        chunks = (
+            [{"content": r.get("raw"), "final": True}] if r.get("raw") not in {None, ""} else []
+        )
+    payloads = []
+    for chunk_index, chunk in enumerate(chunks):
+        chunk_record = chunk if isinstance(chunk, dict) else {"content": str(chunk)}
+        payloads.append(
+            {
+                "decision": decision,
+                "observation_id": observation_id,
+                "chunk_index": chunk_index,
+                "final": bool(chunk_record.get("final", chunk_index == len(chunks) - 1)),
+                "content": chunk_record.get("content", ""),
+                "channel": chunk_record.get("channel"),
+                "output_tokens": chunk_record.get("output_tokens"),
+                "native_token_count": chunk_record.get("native_token_count"),
+                "function_call": chunk_record.get("function_call"),
+                "transport_event": chunk_record.get("transport_event"),
+                # The trace event itself is appended after inference completes. These fields are
+                # captured synchronously when the collector receives the provider event.
+                "received_wall_time_ns": chunk_record.get("received_wall_time_ns"),
+                "received_monotonic_ns": chunk_record.get("received_monotonic_ns"),
+                "receive_timestamp_source": chunk_record.get(
+                    "receive_timestamp_source", "unavailable"
+                ),
+                "trace_recorded_after_inference": True,
+            }
+        )
+    return payloads
+
+
+def inference_completed(r: dict, decision: int, observation_id: str | None) -> dict:
+    """The InferenceCompleted payload: the result's latencies, usage, token accounting, caps,
+    response status and failure flags."""
+    return {
+        "decision": decision,
+        "observation_id": observation_id,
+        "latency_s": r.get("latency"),
+        "latency_compatibility_scope": (
+            "observation_preparation_through_complete_response_processing"
+        ),
+        "decision_wall_latency_s": r.get("decision_wall_latency_s"),
+        "provider_call_wall_latency_s": r.get("provider_call_wall_latency_s"),
+        "runtime_turn_wall_latency_s": r.get("runtime_turn_wall_latency_s"),
+        "provider_ttft_s": r.get("provider_ttft_s"),
+        "provider_ttft_source": r.get("provider_ttft_source"),
+        "provider_ttft_missing_reason": r.get("provider_ttft_missing_reason"),
+        "latency_clock": "wall_monotonic",
+        "usage": r.get("usage"),
+        "frame_usage": r.get("frame_usage"),
+        "token_accounting": r.get("token_accounting"),
+        "provider_output_tokens": r.get("provider_output_tokens"),
+        "provider_reasoning_output_tokens": r.get("provider_reasoning_output_tokens"),
+        "provider_visible_output_tokens": r.get("provider_visible_output_tokens"),
+        "provider_audio_output_tokens": r.get("provider_audio_output_tokens"),
+        "provider_token_normalization_schema": r.get("provider_token_normalization_schema"),
+        "provider_token_semantics": r.get("provider_token_semantics"),
+        "clock_output_tokens": r.get("clock_output_tokens"),
+        "clock_output_tokens_source": r.get("clock_output_tokens_source"),
+        "remaining_clock_tokens": r.get("remaining_clock_tokens"),
+        "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
+        "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
+        "provider_output_token_cap": r.get("provider_output_token_cap"),
+        "transport_output_token_cap": r.get("transport_output_token_cap"),
+        "provider_response_status": r.get("provider_response_status"),
+        "provider_response_status_reason": r.get("provider_response_status_reason"),
+        "stale": bool(r.get("stale")),
+        "timed_out": bool(r.get("timed_out")),
+        "error": bool(r.get("error")),
+        "invalid_reason": r.get("invalid_reason"),
+    }
+
+
+def action_proposed(r: dict, decision: int, observation_id: str | None) -> dict:
+    """The ActionProposed payload: the result's action with the model's thinking and the action
+    protocol it was parsed under."""
+    return {
+        "decision": decision,
+        "observation_id": observation_id,
+        "action": action_record(r.get("action")),
+        "thinking": r.get("thinking"),
+        "protocol": r.get("action_protocol") or {},
+        "action_output_tokens": r.get("action_output_tokens"),
+    }
+
+
+def action_resolved(
+    *,
+    decision: int,
+    observation_id: str | None,
+    action: Action | None,
+    status: str,
+    terminal_after_action: bool,
+    action_clock_position: float,
+    action_resolved_unix_s: float,
+    environment_tick: float,
+    execution_result,
+    coordinate_trace,
+) -> dict:
+    """The ActionResolved payload, which ActionApplied repeats for an action that landed."""
+    return {
+        "decision": decision,
+        "observation_id": observation_id,
+        "action": action_record(action),
+        "status": status,
+        "terminal_after_action": terminal_after_action,
+        "action_clock_position": action_clock_position,
+        "action_resolved_unix_s": action_resolved_unix_s,
+        "environment_tick": environment_tick,
+        "execution_result": execution_result,
+        "coordinate_trace": coordinate_trace,
     }
