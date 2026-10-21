@@ -111,7 +111,7 @@ class Kernel:
             # 时间和结束判定).
             at = self.semantic
             if isinstance(event, EndChecked):
-                at = self._asked.pop(event.request, at)
+                at = self._asked.get(event.request, at)
             self.agenda.add(Clock.SEMANTIC, at, event.priority, event)
         due = self.agenda.pop({Clock.SEMANTIC: self.semantic, Clock.OPS: self.ops})
         if due is None:
@@ -127,6 +127,8 @@ class Kernel:
             self._log(item.kind if isinstance(item, AgentRecord) else type(item).__name__, item)
             if self.termination is None:
                 self._dispatch(item)
+            if isinstance(item, EndChecked):
+                self._asked.pop(item.request, None)
         if (
             self.termination is None
             and self.ending is not None
@@ -149,6 +151,10 @@ class Kernel:
         request = next(self._requests)
         self._asked[request] = self.semantic
         return request
+
+    def asked_at(self, request: int) -> float:
+        """The semantic reading a request was made at, until its answer has been handled."""
+        return self._asked[request]
 
     def set_timer(self, kind: str, clock: Clock, at: float, priority: Priority, /, **data) -> int:
         """Record the intended wake-up first, then ask the shell for it."""

@@ -196,7 +196,6 @@ class TurnPolicy:
         # Token-clock key leases in press order: key -> release tick.
         self.leases: dict[str, float] = {}
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
-        self._asked: dict[int, float] = {}  # end checks out: request -> semantic time asked
         self._failed_reads = 0  # state reads failed in a row
         self._read_frame: float | None = None  # the frame of the last state read (_frame)
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
@@ -744,7 +743,6 @@ class TurnPolicy:
             return None if then is None else then()
         self._read_frame = self._frame()
         request = self.kernel.request()
-        self._asked[request] = self.kernel.semantic
         if then is not None:
             self._awaited = (request, then)
         self.kernel.emit(CheckEnd(request))
@@ -757,8 +755,8 @@ class TurnPolicy:
         self.kernel.set_timer("end_check", Clock.SEMANTIC, at, Priority.START)
 
     def _end_checked(self, event: EndChecked) -> None:
-        asked_at = self._asked.pop(event.request)
         kernel = self.kernel
+        asked_at = kernel.asked_at(event.request)
         if kernel.ending is not None:
             return
         if self._count_read(event.error):
