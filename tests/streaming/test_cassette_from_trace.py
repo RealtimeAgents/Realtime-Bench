@@ -14,6 +14,7 @@ import json
 import time
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.records import UNTRACED, TraceEvent
@@ -64,22 +65,24 @@ def _realtime(stub, connection, message):
     ]
 
 
-def _record_session(run_dir):
-    """Two turns in real time against the stub, traced; the stub's one connection and the text
-    deltas the driver read."""
+def _record_session(run_dir, answer=_realtime):
+    """Two turns in real time against a stub that answers with ``answer``, traced; the stub's one
+    connection and the text deltas the driver read."""
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette")
     # The runner records the episode origin before the agent's first frame (runner.py:1410-1419).
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
-    with WsStub(_realtime) as stub:
-        clock = SystemClock()
-        loop = clock.new_event_loop()
-        try:
-            deltas = loop.run_until_complete(run_turns(driver_for(stub.port, clock, sink), 2))
-        finally:
-            loop.close()
-    assert close_agent_trace(sink, None) is None
-    trace.close()
+    try:
+        with WsStub(answer) as stub:
+            clock = SystemClock()
+            loop = clock.new_event_loop()
+            try:
+                deltas = loop.run_until_complete(run_turns(driver_for(stub.port, clock, sink), 2))
+            finally:
+                loop.close()
+    finally:
+        assert close_agent_trace(sink, None) is None
+        trace.close()
     (connection,) = stub.connections
     return connection, deltas
 
@@ -218,3 +221,31 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_replays(tmp_path):
     released += cursor.release(1, 1e9)
     assert [r["msg"] for r in released] == received
     assert cursor.finish() == []
+
+
+def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path):
+    """M3: the trace records no close (providers/capture.py:303-331), so the stub's close in the
+    second reply is not in the cassette. The replayed driver waits for that reply until the fake
+    clock's limit, and the server names the connection it was left with."""
+
+    def closes_in_the_second_reply(stub, connection, message):
+        if (
+            message is not None
+            and message["type"] == "response.create"
+            and len([m for m in connection.received if json.loads(m)["type"] == "response.create"])
+            == 2
+        ):
+            return None  # WsStub closes the connection with 1011
+        return _realtime(stub, connection, message)
+
+    with pytest.raises(ConnectionClosedError):
+        _record_session(tmp_path, closes_in_the_second_reply)
+    records = ws_cassette.from_trace(tmp_path)
+    assert "close" not in [r["dir"] for r in records]
+    clock = FakeClock()
+    with CassetteServer(records, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        with pytest.raises(AssertionError, match="the coroutine did not finish"):
+            run_on_fake_clock(clock, run_turns(driver, 2), timeout=30.0)
+    assert server.finish() == [ws_cassette.LEFT_OPEN.format(conn=1)]
