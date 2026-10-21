@@ -304,6 +304,33 @@ def test_a_wall_wait_ends_at_the_deadline_however_late_the_deadline_is_handled()
     assert sim.termination == Termination("time_limit", "deadline", 3.5, 4.0, 4.0, 4.0, None)
 
 
+@pytest.mark.parametrize(
+    ("duration_s", "ended"),
+    [(3.5, ("time_limit", 3.5, True)), (10.0, ("time_limit", 10.0, False))],
+    ids=["deadline-after-its-time", "no-deadline-near"],
+)
+def test_a_wall_wait_lasts_its_own_time_however_late_its_end_is_handled(duration_s, ended):
+    """A 2.65 s WAIT from 0.75 s is due at 3.4 s, but the check due at 3 s, the fifth, runs until
+    3.75 s, and only then is the wait's end handled. It lasted its own time, 2.65 s, not until it
+    was handled, though that is past a deadline at 3.5 s."""
+    world = World(
+        replies=[Reply(latency=0.75, action=Action.wait(2.65)), Reply(30.0)],
+        check_seconds={5: 0.75},
+    )
+    sim = _run(_wall(duration_s), world)
+    assert sim.checks[:5] == [(0.0, 0.0), (0.75, 0.75), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]
+    (resolved,) = sim.entries("ActionResolved")
+    assert resolved.data["execution_result"] == {
+        "duration_simulated_seconds": 2.65,
+        "requested_duration_simulated_seconds": 2.65,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": False,
+    }
+    stop_reason, ended_at, terminal = ended
+    assert (resolved.data["status"], resolved.data["terminal_after_action"]) == ("wait", terminal)
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == (stop_reason, ended_at)
+
+
 def test_a_wall_wait_the_tasks_end_cuts_short_lasts_until_the_end_is_dated():
     """A 5 s WAIT from 1.25 s (the reply came back at 1 s, on the frame boundary, and frame 1 was
     read first). The task ends from 2.5 s; the check asked at 3 s answers so at 3.25 s, and the

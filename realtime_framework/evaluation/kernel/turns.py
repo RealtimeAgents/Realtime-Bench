@@ -593,10 +593,17 @@ class TurnPolicy:
             d.execution_result = {"error": d.failed}
             return self._resolve("invalid_run")
         started, duration = d.wait
-        # The wait lasts until the end, though the end can be handled later, behind a synchronous
-        # command: today's sleep(min(duration, remaining)) stops at the deadline.
+        # The wait lasts until its own time or the end, whichever comes first, though either can
+        # be handled later, behind a synchronous command: today's sleep(min(duration, remaining))
+        # stops at the deadline.
         ending = self.kernel.ending
-        until = self.kernel.semantic if ending is None else min(self.kernel.semantic, ending.at)
+        if self.token:
+            due = started + duration * config.env_fps
+        else:
+            due = started / config.env_fps + duration
+        until = min(self.kernel.semantic, due)
+        if ending is not None:
+            until = min(until, ending.at)
         position = until if self.token else until * config.env_fps
         elapsed = round(max(0.0, (position - started) / config.env_fps), 9)
         horizon_truncates = self.token and started + duration * config.env_fps > (
