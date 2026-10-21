@@ -52,7 +52,7 @@ class Turn:
     def latency_s(self) -> float:
         """Seconds from the generation's start to its result, when it has one: the attempts'
         own times and, after each failed one, the shared retry policy's nominal backoff
-        (entity/model.py:387-405). Today's backoff is jittered by up to a quarter, so a script
+        (entity/model.py:401-419). Today's backoff is jittered by up to a quarter, so a script
         with retries compares only where that cannot matter, such as a reply past the deadline
         either way."""
         failed = sum(attempt.status is not None for attempt in self.attempts)
