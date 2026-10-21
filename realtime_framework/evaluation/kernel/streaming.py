@@ -372,8 +372,9 @@ class StreamingPolicy:
     def _proceed(self) -> None:
         """Start what came due, in that order, as far as what is out lets it: a read waits for
         the capture and the action out, and a capture and an action for the read out. A read
-        that waits for a capture holds back what came due after it, so that reads on a fast grid
-        and captures take turns; one that waits for an action does not, so that frames keep
+        that waits for a capture holds back what came due after it, and a capture waiting goes
+        before the next read once a read answers, so that reads and captures take turns however
+        slow either is; a read that waits for an action holds nothing back, so that frames keep
         coming during it. The action waiting may have gone meanwhile, withdrawn or given up. Past
         the deadline only the read after an action goes, which the end waits for."""
         if self._stopped():
@@ -796,6 +797,9 @@ class StreamingPolicy:
         if self.current is not None:
             after, self.current = self.current, None
             self._resolve(after, "applied")
+        if "capture" in self._line:
+            self._line.remove("capture")
+            self._line.insert(0, "capture")
         self._proceed()
 
     def _frame(self) -> int:

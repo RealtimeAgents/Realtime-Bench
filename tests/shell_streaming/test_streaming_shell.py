@@ -81,15 +81,16 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
         ("capture", 1.5, 1.75),
         # The beats at 2 s and 3 s are captured alongside the action. The reads due then hold
         # the gate alone, so they wait for the action, and the read right after the action
-        # stands for them and settles it. Then the read due at 4 s, and the capture due with it;
-        # the beat at 5 s finds that capture out and is skipped.
+        # stands for them and settles it. Then the capture due at 4 s and the read due with it
+        # take turns, as do those at 5 s.
         ("capture", 2.0, 2.25),
         ("capture", 3.0, 3.25),
         ("execute", 1.775, 3.775),
         ("check_end", 3.775, 4.275),
-        ("check_end", 4.275, 4.775),
-        ("capture", 4.775, 5.025),
-        ("check_end", 5.025, 5.525),
+        ("capture", 4.275, 4.525),
+        ("check_end", 4.525, 5.025),
+        ("capture", 5.025, 5.275),
+        ("check_end", 5.275, 5.775),
         ("snapshot", 6.0, 6.5),
     ]
     # During the action, frames went out and the next reply started on one captured meanwhile.
@@ -119,8 +120,7 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
     )
     assert env.released_at == 6.5
     records = _records(tmp_path)
-    # No beat skipped during the action; the one at 5 s found a capture out.
-    assert [data["reason"] for data in _kernel(records, "FrameDropped")] == ["capture_busy"]
+    assert _kernel(records, "FrameDropped") == []  # no beat skipped
     (execution,) = [r["payload"] for r in records if r["event"] == "ActionExecution"]
     assert execution == {
         "decision": 0,
