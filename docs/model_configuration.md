@@ -136,7 +136,8 @@ driver as a [model API](#add-a-model-api).
    `server_context="none"` for a stateless API. Each optional-method flag you set
    (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
    `maps_output_cap`) needs its method. The driver runs under the `chat_completions` context
-   policy: with `request_size_estimation`, the runtime asks `request_context_status(request)`
+   policy, with the model's [context preset](#context-preset) if it names one. With
+   `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
    window; without a declared window the method returns
    `{"pressure": False, "counter": "unconfigured"}`.

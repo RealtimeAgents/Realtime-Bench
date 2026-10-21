@@ -430,6 +430,17 @@ def test_external_endpoint_rejected(external, api, endpoint, message):
     fails(lambda: catalog.get("ext-bad"), message)
 
 
+def test_model_defaults_preset_checked_as_the_yaml(external, monkeypatch):
+    """A context preset from the driver's model_defaults is refused as one in the YAML is."""
+    write_model(external.models, key="ext-preset")
+    driver = catalog.adapter_class(TARGET)
+    monkeypatch.setattr(driver, "model_defaults", {"replay-vlm": {"context_preset": "kimi-k3"}})
+    fails(
+        lambda: catalog.get("ext-preset"),
+        "ext-preset.yaml: context_preset must be one of ['kimi_k3']",
+    )
+
+
 def test_registered_drivers_meet_the_contract():
     """External drivers are checked against the contract every registered driver meets."""
     for api, target in catalog.APIS.items():

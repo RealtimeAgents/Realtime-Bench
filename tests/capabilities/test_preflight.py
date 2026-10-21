@@ -627,12 +627,13 @@ def test_reasoning_effort_of_a_choice_api(capsys, tmp_path):
     "endpoint, preset",
     [
         ("{api: moonshot, model: kimi-k3}", "kimi-k3"),  # the catalog key's spelling
+        ("{api: moonshot, model: kimi-k3}", "[kimi_k3]"),
         # Luna's and JEV's presets belong to their API rows, in their own models' YAMLs too.
         ("{api: openrouter, model: openai/x, upstream_provider: openai}", "luna"),
         ("{api: openai_decisions, model: openai/x, upstream_provider: openai}", "luna"),
         ("{api: jev_decisions, model: typesafe/x}", "jev"),
     ],
-    ids=["misspelt", "luna-on-chat", "luna", "jev"],
+    ids=["misspelt", "list", "luna-on-chat", "luna", "jev"],
 )
 def test_context_preset_of_a_model_yaml(tmp_path, endpoint, preset):
     models = tmp_path / "models"

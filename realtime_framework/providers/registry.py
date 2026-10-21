@@ -315,10 +315,11 @@ def load_definitions(directory):
             )
         definition["defaults"]["reasoning_effort"] = effort
         if "context_preset" in value:
-            preset = value["context_preset"]
-            if not isinstance(preset, str) or preset not in MODEL_PRESETS:
-                raise ValueError(f"{filename}: context_preset must be one of {list(MODEL_PRESETS)}")
-            definition["defaults"]["context_preset"] = preset
+            definition["defaults"]["context_preset"] = value["context_preset"]
+        # The YAML's preset, else the one the driver's model_defaults gave (merged above).
+        defaults = definition["defaults"]
+        if "context_preset" in defaults and defaults["context_preset"] not in MODEL_PRESETS:
+            raise ValueError(f"{filename}: context_preset must be one of {list(MODEL_PRESETS)}")
         result.append((filename, definition))
     return result
 
