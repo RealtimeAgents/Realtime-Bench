@@ -546,9 +546,9 @@ class StreamingPolicy:
         kernel.emit(Execute(a.decision, action, release_at))
 
     def _executed(self, event: ActionExecuted) -> None:
+        """Settle the action before an end it brings settles the one waiting, so that the agent
+        hears of the two in that order."""
         kernel = self.kernel
-        # Past the deadline the action ran across it: the end comes first.
-        self._apply_deadline()
         a, self._executing = self.current, False
         # When the action took the environment and returned, as the lane read them; a run that
         # raised before it was read has neither.
@@ -556,21 +556,23 @@ class StreamingPolicy:
             a.finished_at = kernel.semantic
         else:
             a.started_at, a.finished_at = event.started_at, event.finished_at
-        # A refusal or a failure leaves its own execution record (sandbox/actions.py:817).
+        # A refusal or a failure leaves its own execution record (GuestEnvironment.execute).
         a.execution_result = event.result
         if event.error is not None:
             self.current = None
-            kernel.invalidate("environment", "action_execution_failed", event.error)
-            return self._resolve(a, "invalid_run")
+            self._resolve(a, "invalid_run")
+            return kernel.invalidate("environment", "action_execution_failed", event.error)
         if event.rejection is not None:
             # A refused action changed nothing to read, as on the turn-based clock.
             self.current = None
             self._resolve(a, "rejected", event.rejection)
             return self._proceed()
-        if kernel.ending is not None:
-            # The end came while it ran and froze the snapshot after it: it is the last action.
+        if kernel.ending is not None or kernel.semantic >= self.config.duration_s:
+            # The end came while it ran, or comes now that the deadline has passed, and the
+            # snapshot waits for it: it is the last action.
             self.current = None
-            return self._resolve(a, "applied", terminal_after_action=True)
+            self._resolve(a, "applied", terminal_after_action=True)
+            return self._apply_deadline()
         # An action can end the task at once: the read after it settles it (decision 31).
         self._ask()
 

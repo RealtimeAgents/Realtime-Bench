@@ -87,6 +87,7 @@ LATE_RECORDS = {
     "ResultDiscarded",
     "RunInvalidated",
 }
+OUTCOME_RECORDS = {TraceEvent.ACTION_RESOLVED.value, TraceEvent.ACTION_APPLIED.value}
 
 
 @dataclass(frozen=True)
@@ -641,8 +642,15 @@ class Simulation:
                     data["started_at"] is not None and data["started_at"] <= entry.semantic
                 )
         # Past the deadline nothing is decided before the deadline ends the episode, but an
-        # arrival's record, a stale result and an invalidation that comes first.
-        end = self.entries("EpisodeEnded")[0].seq
+        # arrival's record, a stale result, an invalidation that comes first, and the outcome of
+        # an action that finished before the deadline.
+        end, deadline = self.entries("EpisodeEnded")[0].seq, self.config.duration_s
         for entry in records[: end - 1]:
-            if entry.semantic >= self.config.duration_s and isinstance(entry.data, dict):
-                assert entry.kind in LATE_RECORDS, entry
+            if entry.semantic < deadline or not isinstance(entry.data, dict):
+                continue
+            ran = (
+                entry.data.get("finished_at") is not None and entry.data["finished_at"] <= deadline
+            )
+            if entry.kind in OUTCOME_RECORDS and ran:
+                continue
+            assert entry.kind in LATE_RECORDS, entry
