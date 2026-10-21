@@ -518,8 +518,9 @@ class RealtimeSessionCore:
             self._on_delivery("sent", [(operation.key, operation.block)])
 
     def send_failed(self, operation: Operation) -> None:
-        """The write failed: the operation stays unknown."""
-        self._on_delivery("unknown", [(operation.key, operation.block)])
+        """The write failed: the operation stays unknown, unless the server confirmed it."""
+        if self.delivery[operation.key] is Delivery.UNKNOWN:
+            self._on_delivery("unknown", [(operation.key, operation.block)])
 
     def settled(self, operation: Operation) -> bool:
         """Whether the server acknowledged an operation, or refused it as a push."""
