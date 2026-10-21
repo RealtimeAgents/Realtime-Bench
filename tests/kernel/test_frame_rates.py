@@ -65,22 +65,22 @@ def _boundaries(sim: Simulation) -> list[dict]:
 
 
 def _today_remaining(max_ticks: float, t_k: float, tokens_per_frame: int) -> int:
-    return max(0, math.floor((max_ticks - t_k) * tokens_per_frame + 1e-9))  # runner.py:868-869
+    return max(0, math.floor((max_ticks - t_k) * tokens_per_frame + 1e-9))  # runner.py _decide
 
 
 def _today_tau(t_k: float, tokens: int, tokens_per_frame: int) -> float:
-    return t_k + tokens / tokens_per_frame  # runner.py:491, 508
+    return t_k + tokens / tokens_per_frame  # runner.py _apply
 
 
 def _today_next(t_k: float, tau: float, tick: float, max_ticks: float) -> float:
-    action_end = max(tau, tick)  # runner.py:600-606
+    action_end = max(tau, tick)  # runner.py _apply
     rounded = round(action_end)
     boundary = int(rounded) if abs(action_end - rounded) < 1e-9 else math.ceil(action_end)
     return min(max(math.floor(t_k) + 1, boundary), max_ticks)
 
 
 def _today_dropped(t_k: float, post_after: float) -> int:
-    crossed = max(0, math.floor(post_after + 1e-9) - math.floor(t_k))  # runner.py:624-625
+    crossed = max(0, math.floor(post_after + 1e-9) - math.floor(t_k))  # runner.py _apply
     return max(0, crossed - 1)
 
 
@@ -388,7 +388,8 @@ def test_a_half_second_hold_is_half_env_fps_ticks(rates, up_at):
 def test_a_key_tap_holds_its_key_a_sixtieth_of_a_second(rates, tap_checks):
     """A token-clock key tap keeps its key down for one 60 Hz frame at any rate: the environment
     moves the clock 1/60 * env_fps ticks inside the action, at most one tick a step with an end
-    check after each, and hands the checks' reads to the kernel (sandbox/actions.py:26-28, 548)."""
+    check after each, and hands the checks' reads to the kernel (sandbox/actions.py TAP_HOLD_S,
+    GuestEnvironment._execute_clock_key)."""
     tap = Action(ActionType.KEY, {"key": "space"})
     sim = _run(_config("token", rates, 10.0), [Reply(latency=0.5, action=tap), NEVER])
     assert sim.executed[0] == (0, 0, tap)
