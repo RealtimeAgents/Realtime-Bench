@@ -416,9 +416,10 @@ SECTION = {
 def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
     """A one-task local report root as runner.main() leaves it with --report-root: the identity
     reporting.prepare_episode_report expects before the run, and a scored run summary of a solved
-    task with that identity, its streaming section ``streaming`` if one. The episode trace's own
-    check (reporting._episode_trace_ok) passes, as tests/shell_streaming checks streaming traces.
-    Returns the root."""
+    task with that identity, its streaming section ``streaming`` if one. A turn-based run made one
+    decision and wrote its lifecycle; a streaming run makes none, and writes none (runner.py
+    run_stream). The episode trace's own check (reporting._episode_trace_ok) passes, as
+    tests/shell_streaming checks streaming traces. Returns the root."""
     from realtime_framework.evaluation import reporting
     from realtime_framework.evaluation.reporting import prepare_episode_report
 
@@ -437,7 +438,8 @@ def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
     summary = {
         **expected,
         "stop_reason": "game_decided", "run_status": "scored", "invalid_run": None,
-        "error": None, "solved": True, "outcome": "pass", "decisions": 1,
+        "error": None, "solved": True, "outcome": "pass",
+        "decisions": 0 if interaction_mode == "streaming" else 1,
         "verification": {"resolved": True, "evaluation_version": 1},
         "interactables_protocol": "environment_injected_each_observation",
         "token_accounting": {"counts": {"clock_output_tokens": {"responses_with_count": 0}}},
@@ -446,7 +448,8 @@ def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
     if streaming is not None:
         summary["streaming"] = streaming
     (run / "run_summary.json").write_text(json.dumps(summary))
-    (run / "action_lifecycle.jsonl").write_text(json.dumps({"decision": 0}) + "\n")
+    if interaction_mode == "turn_based":
+        (run / "action_lifecycle.jsonl").write_text(json.dumps({"decision": 0}) + "\n")
     return root
 
 
@@ -540,6 +543,24 @@ def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
     path.write_text(json.dumps({**json.loads(path.read_text()), "interaction_mode": other}))
     (group,) = report(root)["groups"]
     assert (group["scored"], group["invalid"]) == (0, 1)
+
+
+@pytest.mark.parametrize(
+    "section, decisions",
+    [({**SECTION, "schema": "realtime_bench.streaming_summary.v0"}, 0), (SECTION, 1)],
+    ids=["another-schema", "decisions"],
+)
+def test_a_streaming_run_summary_is_held_to_its_section(tmp_path, monkeypatch, section, decisions):
+    """A streaming row stands on its streaming section, of this schema, and on no decision: the
+    turn-based lifecycle has none to compare (reporting.report)."""
+    from realtime_framework.evaluation.reporting import report
+
+    root = _report_root(tmp_path, monkeypatch, "streaming", section)
+    path = root / "cell" / WEB / "run_summary.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "decisions": decisions}))
+    (group,) = report(root)["groups"]
+    assert (group["scored"], group["invalid"]) == (0, 1)
+    assert group["tasks"][0]["error_reason"] == "result_validation_failed"
 
 
 def test_harbor_verify_compares_the_mode():
