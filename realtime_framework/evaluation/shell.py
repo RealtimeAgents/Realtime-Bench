@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from realtime_framework.clock import Clocks
-from realtime_framework.entity.actions import Action, Observation
+from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
@@ -709,7 +709,11 @@ class _Shell:
     def _commit(self, outcome: Outcome) -> None:
         env, decision, config = self.env, self._decision, self.config
         r = decision.result
-        if outcome.protocol_failure == "unsupported_terminal_action":
+        # The loop has no terminal actions: the record of a proposed DONE or FAIL says so, also
+        # when the move went over the per-move cap and the kernel named no protocol failure
+        # (kernel/turns.py _accept).
+        proposed = r.get("action")
+        if proposed is not None and proposed.action_type in (ActionType.DONE, ActionType.FAIL):
             r["action_protocol"] = episode_records.terminal_wait_protocol(
                 r.get("action_protocol") or {}
             )
@@ -880,8 +884,12 @@ class _Shell:
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
             if data["phase"] == "inference_to_action":
                 # The action lands: the runner times its resolution here, whatever comes of it
-                # (runner.py _apply).
-                decision.landed_at = self.clocks.operational.time()
+                # (runner.py _apply). On the wall clock that is the reading the kernel landed it
+                # at, which its frame age counts from too (kernel/turns.py _approached); on the
+                # token clock it is when the clock got to the action time.
+                decision.landed_at = (
+                    self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
+                )
             self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
