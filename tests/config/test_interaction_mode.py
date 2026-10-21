@@ -269,6 +269,79 @@ def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
     return task, request, report
 
 
+def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
+    """A one-task local report root as runner.main() leaves it with --report-root: the identity
+    reporting.prepare_episode_report expects before the run, and a scored run summary of a solved
+    task with that identity, its streaming section ``streaming`` if one. The episode trace's own
+    check (reporting._episode_trace_ok) passes, as tests/shell_streaming checks streaming traces.
+    Returns the root."""
+    from realtime_framework.evaluation import reporting
+    from realtime_framework.evaluation.reporting import prepare_episode_report
+
+    monkeypatch.setattr(reporting, "_episode_trace_ok", lambda path, summary: True)
+    root = tmp_path / "report"
+    args = types.SimpleNamespace(
+        model=GEMINI, model_input_fps=1.0, reasoning_effort="fixed", fps=1.0, max_minutes=5.0,
+        mode="default", clock="wall", protocol="wall-clock", seed=42, tokens_per_frame="64",
+        think_budget_s=None, per_move_cap_s=None, interaction_mode=interaction_mode, task=WEB,
+        results_dir=str(root / "cell"),
+    )
+    prepare_episode_report(args)
+    (expected,) = json.loads((root / "cell" / "summary.json").read_text())["runs"]
+    run = root / "cell" / WEB
+    run.mkdir()
+    summary = {
+        **expected,
+        "stop_reason": "game_decided", "run_status": "scored", "invalid_run": None,
+        "error": None, "solved": True, "outcome": "pass", "decisions": 1,
+        "verification": {"resolved": True, "evaluation_version": 1},
+        "interactables_protocol": "environment_injected_each_observation",
+        "token_accounting": {"counts": {"clock_output_tokens": {"responses_with_count": 0}}},
+        "cost_accounting": {},
+    }
+    if streaming is not None:
+        summary["streaming"] = streaming
+    (run / "run_summary.json").write_text(json.dumps(summary))
+    (run / "action_lifecycle.jsonl").write_text(json.dumps({"decision": 0}) + "\n")
+    return root
+
+
+def test_only_a_streaming_report_has_a_streaming_section(streaming_gemini, tmp_path, monkeypatch):
+    """reporting.report carries each task's streaming section (reporting.summarize_streaming) and
+    sums a streaming group's counts; a turn-based group and its tasks have none."""
+    from realtime_framework.evaluation.reporting import report
+
+    (group,) = report(_report_root(tmp_path / "turn_based", monkeypatch, "turn_based"))["groups"]
+    assert group["scored"] == 1
+    assert "streaming" not in group and "streaming" not in group["tasks"][0]
+
+    section = {
+        "schema": "realtime_bench.streaming_summary.v1",
+        "context_control": "approximate",
+        "frames": {
+            "captured": 300, "pushed": 290, "push_failed": 1, "dropped": 10,
+            "dropped_by_reason": {"capture_busy": 4, "push_failed": 1, "superseded": 5},
+            "confirmed": 0, "refused": 0,
+        },
+        "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
+        "replies": {"started": 41, "abandoned": {"deadline": 1}},
+    }
+    root = _report_root(tmp_path / "streaming", monkeypatch, "streaming", section)
+    (group,) = report(root)["groups"]
+    assert group["scored"] == 1
+    assert group["tasks"][0]["streaming"] == section
+    assert group["streaming"] == {
+        "context_control": "approximate",
+        "frames": {
+            "captured": 300, "pushed": 290, "push_failed": 1, "dropped": 10, "confirmed": 0,
+            "refused": 0,
+            "dropped_by_reason": {"capture_busy": 4, "push_failed": 1, "superseded": 5},
+        },
+        "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
+        "replies": {"started": 41, "abandoned": {"deadline": 1}},
+    }
+
+
 def test_harbor_verify_compares_the_mode():
     from realtime_framework.evaluation.harbor import verify
 

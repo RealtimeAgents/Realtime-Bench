@@ -1672,6 +1672,33 @@ def distribution(values, unit, total):
     )
 
 
+_FRAME_COUNTS = ("captured", "pushed", "push_failed", "dropped", "confirmed", "refused")
+
+
+def _streaming_totals(scored) -> dict:
+    """A streaming group's counts, summed over its scored tasks' streaming sections
+    (summarize_streaming), and its context control, which its runtime configuration fixes."""
+    sections = [row["streaming"] for row in scored]
+    frames, dropped, outcomes, abandoned = Counter(), Counter(), Counter(), Counter()
+    arrived = started = 0
+    for section in sections:
+        frames.update({name: section["frames"][name] for name in _FRAME_COUNTS})
+        dropped.update(section["frames"]["dropped_by_reason"])
+        arrived += section["actions"]["arrived"]
+        outcomes.update(section["actions"]["outcomes"])
+        started += section["replies"]["started"]
+        abandoned.update(section["replies"]["abandoned"])
+    return {
+        "context_control": sections[0]["context_control"] if sections else None,
+        "frames": {
+            **{name: frames[name] for name in _FRAME_COUNTS},
+            "dropped_by_reason": dict(sorted(dropped.items())),
+        },
+        "actions": {"arrived": arrived, "outcomes": dict(sorted(outcomes.items()))},
+        "replies": {"started": started, "abandoned": dict(sorted(abandoned.items()))},
+    }
+
+
 def prepare_episode_report(args):
     """Record expected identity before execution, independently of the resulting summary."""
     from realtime_framework.evaluation.config import config_fingerprint, effective_run_config
@@ -1850,6 +1877,8 @@ def report(root):
                         charged_tokens=known if len(known) == len(tokens) else [],
                         charged_tokens_complete=complete,
                     )
+                    if "streaming" in summary:
+                        row["streaming"] = summary["streaming"]
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     row["error"] = str(exc)
                     if row["outcome"] != "error":
@@ -1921,6 +1950,11 @@ def report(root):
                     [v for row in scored for v in row["wall_latency_s"]], "seconds", total_decisions
                 ),
                 "charged_tokens": token_distribution,
+                **(
+                    {"streaming": _streaming_totals(scored)}
+                    if json.loads(identity_json)["interaction_mode"] == "streaming"
+                    else {}
+                ),
                 "tasks": rows,
             }
         )
