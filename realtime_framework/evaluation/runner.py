@@ -448,6 +448,10 @@ def run_stream(
             # runtime's complete emitted-token count. Protocol delimiters are part of those counts.
             action_output_tokens = output_tokens
             d_ticks = action_output_tokens / tokens_per_frame * frame_ticks
+            if r.get("post_horizon_output_tokens"):
+                # The complete response lands past the horizon. The count charged, the allowance
+                # rounded down to a whole token, can place it just short of the horizon.
+                d_ticks = float(max_ticks) - float(t_k)
             deliberation_s = d_ticks * delta_s
         elif clock_mode == "token":
             action_output_tokens = output_tokens
@@ -771,12 +775,9 @@ def run_stream(
 
         remaining_clock_tokens = None
         if clock_mode == "token" and tokens_per_frame is not None:
-            remaining_clock_tokens = max(
-                0,
-                math.floor(
-                    (float(max_ticks) - float(t_k)) / frame_ticks * tokens_per_frame + 1e-9
-                ),
-            )
+            allowance = (float(max_ticks) - float(t_k)) / frame_ticks * tokens_per_frame
+            # Float noise grows with the allowance; at a large B it is past a fixed 1e-9.
+            remaining_clock_tokens = max(0, math.floor(allowance + max(1e-9, allowance * 1e-12)))
             if remaining_clock_tokens <= 0:
                 env.wait_until_tick(max_ticks)
                 return False
