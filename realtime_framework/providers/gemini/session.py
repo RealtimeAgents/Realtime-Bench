@@ -625,12 +625,15 @@ class SessionCore:
         self.sending(("tool_response", call_id) for call_id, _ in pending)
         return pending
 
-    def acknowledgement_sent(self) -> None:
-        self.sent(("tool_response", call_id) for call_id, _ in self.pending_calls)
+    def acknowledgement_sent(self, calls: tuple[tuple, ...]) -> None:
+        """The acknowledgement of ``calls`` (acknowledging) was written, also if an abort closed
+        the connection meanwhile."""
+        self.sent(("tool_response", call_id) for call_id, _ in calls)
         self.pending_calls.clear()
 
-    def acknowledgement_failed(self) -> None:
-        self.send_failed(("tool_response", call_id) for call_id, _ in self.pending_calls)
+    def acknowledgement_failed(self, calls: tuple[tuple, ...]) -> None:
+        """Its write failed: still pending, the next acknowledgement answers them again."""
+        self.send_failed(("tool_response", call_id) for call_id, _ in calls)
 
     # ---- reads -----------------------------------------------------------------------------
 

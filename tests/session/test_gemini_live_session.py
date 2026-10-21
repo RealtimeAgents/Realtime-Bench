@@ -547,8 +547,7 @@ def test_each_change_in_delivery_is_heard_with_its_block():
     frame = core.observe(view([turn(0), turn(1), turn(2)]))
     core.send_failed(frame.keys)
     core.calls_received([("call-1", "click")])
-    core.acknowledging()
-    core.acknowledgement_sent()
+    core.acknowledgement_sent(core.acknowledging())
     seed = [(("block", "d0.frame"), "d0.frame"), (("block", "d0.tools"), "d0.tools")]
     assert heard == [
         ("unknown", seed),
@@ -557,6 +556,26 @@ def test_each_change_in_delivery_is_heard_with_its_block():
         ("sent", [(("block", "d1.frame"), "d1.frame")]),
         ("unknown", [(("block", "d2.frame"), "d2.frame")]),
         ("sent", [(("tool_response", "call-1"), None)]),
+    ]
+
+
+def test_an_acknowledgement_written_as_its_connection_closes_is_still_heard():
+    """What became of an acknowledgement's write is heard for the calls it answered, also when
+    an abort closed the connection while it was written."""
+    heard = []
+    core = SessionCore(
+        {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
+        on_delivery=lambda state, contents: heard.append((state, contents)),
+    )
+    for call_id, write in (("call-0", core.acknowledgement_sent), ("call-1", None)):
+        connected(core)
+        core.calls_received([(call_id, "click")])
+        acknowledged = core.acknowledging()
+        core.closed()
+        (write or core.acknowledgement_failed)(acknowledged)
+    assert heard[1::2] == [
+        ("sent", [(("tool_response", "call-0"), None)]),
+        ("unknown", [(("tool_response", "call-1"), None)]),
     ]
 
 
@@ -582,12 +601,15 @@ def test_observation_and_acknowledgement_delivery():
     core.calls_received([("call-0", "click")])
     core.calls_received([("call-1", "key")])
     # One queued acknowledgement answers every call still pending.
-    assert core.acknowledging() == (("call-0", "click"), ("call-1", "key"))
+    acknowledged = core.acknowledging()
+    assert acknowledged == (("call-0", "click"), ("call-1", "key"))
     assert core.delivery[("tool_response", "call-1")] == Delivery.UNKNOWN
-    core.acknowledgement_failed()  # still pending: the next acknowledgement answers them again
+    # Still pending: the next acknowledgement answers them again.
+    core.acknowledgement_failed(acknowledged)
     assert core.delivery[("tool_response", "call-0")] == Delivery.UNKNOWN
-    assert core.acknowledging() == (("call-0", "click"), ("call-1", "key"))
-    core.acknowledgement_sent()
+    acknowledged = core.acknowledging()
+    assert acknowledged == (("call-0", "click"), ("call-1", "key"))
+    core.acknowledgement_sent(acknowledged)
     assert core.delivery[("tool_response", "call-0")] == Delivery.SENT
     assert core.acknowledging() == ()
 
@@ -863,8 +885,7 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     connected(core)
     start_reply(core, "turn-0")
     core.calls_received([("call-0", "click")])
-    core.acknowledging()
-    core.acknowledgement_sent()
+    core.acknowledgement_sent(core.acknowledging())
     core.calls_received([("call-1", "key")])
     written = dict(core.delivery)
     received = receive(core, CANCELLATION)

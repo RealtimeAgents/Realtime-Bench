@@ -1153,6 +1153,7 @@ class GeminiLiveDriver(SessionLifecycle):
                     )
                 # Acknowledge every pending call as queued; the next observation carries its
                 # execution result.
+                acknowledged = self._core.acknowledging()
                 function_responses = [
                     self.types.FunctionResponse(
                         id=call_id,
@@ -1160,7 +1161,7 @@ class GeminiLiveDriver(SessionLifecycle):
                         response=dict(generation.opaque),
                         **self._core.tool_response_options,
                     )
-                    for call_id, name in self._core.acknowledging()
+                    for call_id, name in acknowledged
                 ]
                 # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
                 # prevents its acknowledgement from triggering another model generation while
@@ -1170,9 +1171,9 @@ class GeminiLiveDriver(SessionLifecycle):
                         session.send_tool_response(function_responses=function_responses),
                     )
                 except BaseException:
-                    self._core.acknowledgement_failed()
+                    self._core.acknowledgement_failed(acknowledged)
                     raise
-                self._core.acknowledgement_sent()
+                self._core.acknowledgement_sent(acknowledged)
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)
                 completed_refs["native_tool_exchanges"].append(
