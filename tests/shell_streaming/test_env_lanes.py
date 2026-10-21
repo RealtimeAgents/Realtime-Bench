@@ -7,6 +7,8 @@ answer reached the kernel's inbox.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType, Observation
@@ -58,7 +60,7 @@ def test_each_command_is_answered_once_the_gate_lets_it_run():
     ]
     assert events == [
         (0.75, FrameCaptured("obs-1", 0.0, 0.75)),
-        (2.0, ActionExecuted(0, result={"executed": "click"})),
+        (2.0, ActionExecuted(0, result={"executed": "click"}, started_at=0.0, finished_at=2.0)),
         (2.5, EndChecked(7, False, None)),
     ]
     assert executed == [Executed(0, {"x": 1}, 0.0, 2.0)]
@@ -67,8 +69,8 @@ def test_each_command_is_answered_once_the_gate_lets_it_run():
 @pytest.mark.parametrize(
     ("by_guest", "answer"),
     [
-        (True, ActionExecuted(3, result={"error": "HTTP 400"}, rejection="HTTP 400")),
-        (False, ActionExecuted(3, result={"error": "HTTP 400"}, error="HTTP 400")),
+        (True, ActionExecuted(3, {"error": "HTTP 400"}, rejection="HTTP 400")),
+        (False, ActionExecuted(3, {"error": "HTTP 400"}, error="HTTP 400")),
     ],
 )
 def test_a_guest_refusal_is_a_rejection_and_any_other_failure_an_error(by_guest, answer):
@@ -87,7 +89,8 @@ def test_a_guest_refusal_is_a_rejection_and_any_other_failure_an_error(by_guest,
         lanes.execute(Execute(3, CLICK), lambda record: None)
         (event,) = [event for _, event in inbox.wait_for(1)]
     lanes.close()
-    assert event == answer
+    # The answer also says when the action held the gate and when it returned.
+    assert event == replace(answer, started_at=0.0, finished_at=2.0)
 
 
 def test_an_invalid_run_the_environment_latched_is_posted_once_before_the_answer():
@@ -110,7 +113,7 @@ def test_an_invalid_run_the_environment_latched_is_posted_once_before_the_answer
     assert inbox.events == [
         (0.75, FrameCaptured("obs-1", 0.0, 0.75)),
         (1.0, Invalidated("environment", "action_execution_failed", "guest")),
-        (2.0, ActionExecuted(0, result={"executed": "click"})),
+        (2.0, ActionExecuted(0, result={"executed": "click"}, started_at=0.0, finished_at=2.0)),
     ]
 
 
@@ -333,7 +336,7 @@ def test_an_action_never_reports_what_the_one_before_left():
     lanes.close()
     env.execute = plain
     assert [record.coordinate_trace for record in executed] == [{"x": 1}, None]
-    assert events[1] == ActionExecuted(1, result=None)
+    assert events[1] == ActionExecuted(1, result=None, started_at=2.0, finished_at=4.0)
 
 
 def test_an_action_starts_when_it_holds_the_gate():
@@ -343,9 +346,10 @@ def test_an_action_starts_when_it_holds_the_gate():
         lanes.check_end(CheckEnd(1))
         clock.sleep(0.125)
         lanes.execute(Execute(0, CLICK), executed.append)
-        inbox.wait_for(2)
+        events = [event for _, event in inbox.wait_for(2)]
     lanes.close()
     assert executed == [Executed(0, {"x": 1}, 0.5, 2.5)]
+    assert (events[1].started_at, events[1].finished_at) == (0.5, 2.5)
 
 
 def test_an_invalid_run_latched_before_the_lanes_began_is_not_theirs_to_post():
