@@ -54,8 +54,17 @@ class Text:
 
 
 @dataclass(frozen=True)
+class Fail:
+    """The reply's stream raises ``error`` ``at`` seconds into it."""
+
+    at: float
+    error: Exception
+
+
+@dataclass(frozen=True)
 class Reply:
-    """A reply's messages, in order, and when it ends, seconds after it started."""
+    """A reply's messages, in order, and when it ends, seconds after it started. Closing the
+    connection fails it."""
 
     messages: tuple = ()
     ends_at: float = 0.0
@@ -92,18 +101,30 @@ class FakeLiveDriver(SessionLifecycle):
         self._trace = trace
 
     async def _connect(self, request) -> None:
-        self.open = True
+        self._open()
         self.calls.append(("connect", _ids(request.history)))
 
     async def _sync_history(self, request) -> HistorySyncResult:
-        self.open = True
+        self._open()
         self.calls.append(("sync", request.reason, _ids(request.history)))
         return HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT)
+
+    def _open(self) -> None:
+        self.open, self._closed = True, asyncio.Event()
 
     async def _close_current(self) -> None:
         if self.open:
             self.open = False
+            self._closed.set()
             self.calls.append(("close",))
+
+    async def _until(self, at: float) -> None:
+        """Wait until ``at`` on the clock; raise once the connection is closed."""
+        try:
+            await asyncio.wait_for(self._closed.wait(), max(0.0, at - self.clock.monotonic()))
+        except TimeoutError:
+            return
+        raise ConnectionError("connection closed")
 
     async def interrupt(self, generation):
         self.calls.append(("interrupt", generation.generation_id))
@@ -125,9 +146,11 @@ class FakeLiveDriver(SessionLifecycle):
     async def events(self, generation: GenerationHandle):
         reply, start = generation.opaque, self.clock.monotonic()
         for sequence, message in enumerate(reply.messages, 1):
-            await asyncio.sleep(start + message.at - self.clock.monotonic())
+            await self._until(start + message.at)
             received = self.clock.monotonic()
             gid = generation.generation_id
+            if isinstance(message, Fail):
+                raise message.error
             if isinstance(message, Call):
                 yield FunctionCall(
                     gid,
@@ -139,7 +162,7 @@ class FakeLiveDriver(SessionLifecycle):
                 )
             else:
                 yield TextDelta(gid, sequence, text=message.text)
-        await asyncio.sleep(start + reply.ends_at - self.clock.monotonic())
+        await self._until(start + reply.ends_at)
         if reply.usage is not None:
             yield UsageSnapshot(generation.generation_id, 0, usage=reply.usage)
         yield GenerationBoundary(generation.generation_id, 0, kind="turn_complete")

@@ -42,6 +42,7 @@ from realtime_framework.entity.model import (
     PendingDecision,
     ProviderObservation,
     SessionSeed,
+    retry_cancellation,
 )
 from realtime_framework.entity.records import TraceEvent, trace_scope
 from realtime_framework.entity.request import (
@@ -91,6 +92,7 @@ class _Reply:
     generation: int
     decision: int
     own: _Pushed  # the frame it started on
+    cancel: threading.Event = field(default_factory=threading.Event)  # set once it is aborted
     handle: GenerationHandle | None = None
     text: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
@@ -117,6 +119,7 @@ class NativeStreamingAgent(VisionAgentBase):
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
+        self._aborted_early: set[int] = set()  # aborted before their worker started generate()
         # What each action asked for (action_text), by its outcome's (decision, call id).
         self._requested: dict[tuple[int, str], str] = {}
         super().__init__(config, log_dir, trace=trace)
@@ -253,14 +256,29 @@ class NativeStreamingAgent(VisionAgentBase):
                 generation, decision, self._pushed[observation.metadata.get("observation_id")]
             )
             self._replies[generation] = reply
+            if generation in self._aborted_early:
+                self._aborted_early.remove(generation)
+                reply.cancel.set()
         started = self.clock.monotonic()
-        with trace_scope(phase="decision", decision=decision, generation=generation):
-            self._execution.run(self._reply(reply, budget))
+        outcome = "completed"
+        try:
+            with (
+                trace_scope(phase="decision", decision=decision, generation=generation),
+                retry_cancellation(reply.cancel),
+            ):
+                self._execution.run(self._reply(reply, budget))
+        except BaseException:
+            if not reply.cancel.is_set():
+                self._finish_inspection(reply.own, "reply_failed", raw_action_output=reply.output)
+                raise
+            outcome = "cancelled"
         latency = self.clock.monotonic() - started
         self._finish_inspection(
-            reply.own, "completed", action_latency_s=latency, raw_action_output=reply.output
+            reply.own, outcome, action_latency_s=latency, raw_action_output=reply.output
         )
-        return PendingDecision(generation, decision, self._result(reply, latency))
+        return PendingDecision(
+            generation, decision, self._result(reply, latency), reply.cancel.is_set()
+        )
 
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
         with self._lock:
@@ -274,9 +292,16 @@ class NativeStreamingAgent(VisionAgentBase):
             canonical=view,
             generation=reply.generation,
         )
-        reply.handle = await self.driver.request_reply(request)
-        async for event in self.driver.events(reply.handle):
-            self._take(reply, event)
+        try:
+            reply.handle = await self.driver.request_reply(request)
+            async for event in self.driver.events(reply.handle):
+                self._take(reply, event)
+        except Exception:
+            # The session may hold some of the reply, which the view does not: the next push or
+            # reply rebuilds it (SessionLifecycle.ensure_ready). The encoder's goAway deadline
+            # passing during the reply raises too: an incomplete reply is no result.
+            self.driver.mark_dirty()
+            raise
         if self._answer.action_channel == "text_json":
             # The encoder does not tell when the text was completed: the reply's end stands in.
             self._arrived(reply, reply.output, TEXT_CALL, self.clock.monotonic())
@@ -334,6 +359,19 @@ class NativeStreamingAgent(VisionAgentBase):
                 "none" if action is None else action_text(action)
             )
         self._post(arrival)
+
+    def abort(self, generation: int) -> None:
+        """AbortGeneration: give the reply up, interrupt it and close the session, and return
+        once that is done, which fails a push stuck in the session. The next push or reply opens
+        the session again from the view."""
+        with self._lock:
+            reply = self._replies.get(generation)
+            if reply is None:
+                self._aborted_early.add(generation)
+            else:
+                reply.cancel.set()
+        with trace_scope(phase="abort", generation=generation):
+            self._execution.run(self.driver.abort(None if reply is None else reply.handle))
 
     def accept(self, generation: int) -> None:
         """AcceptResult: the reply's output joins the view, and its usage the episode's."""
