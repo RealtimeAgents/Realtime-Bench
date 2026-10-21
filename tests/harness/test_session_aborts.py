@@ -3,18 +3,61 @@ replay WebSocket stub): what the abandoned generation leaves to the next one."""
 
 from __future__ import annotations
 
+import json
 import threading
 
+import realtime_framework.entity.model as model_module
 from tests.replay.build import build_episode
 from tests.replay.frames import ReplayTask
 from tests.replay.scenario import CLICK_NAME, TASK_INSTRUCTION
 from tests.replay.steps import Step
 from tests.replay.test_openai_realtime import MODEL_KEY, realtime_config
-from tests.replay.ws_openai_realtime import RealtimeStub
+from tests.replay.ws_openai_realtime import Connection, RealtimeStub
 from tests.replay.ws_openai_realtime import replies as realtime_replies
 
 WAIT_S = 10.0  # bound on every cross-thread wait; none is reached when the code behaves
 STEP = Step(CLICK_NAME)
+
+
+class _FaultStub(RealtimeStub):
+    """Refuses the upgrades numbered in ``refused`` with HTTP 503, and ends the responses
+    numbered in ``incomplete`` as ``incomplete`` with no output items, which leaves the session
+    for a rebuild (providers/openai_realtime.py ``_sync_history``)."""
+
+    def __init__(self, *args, refused=(), incomplete=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self._refused, self._incomplete = set(refused), set(incomplete)
+
+    def _upgrade(self, websocket, request):
+        with self._lock:
+            number = len(self.connections) + 1
+            if number in self._refused:
+                headers = request.headers
+                self.connections.append(
+                    Connection(
+                        number=number,
+                        url=f"ws://{headers['Host']}{request.path}",
+                        header_names=[name for name, _ in headers.raw_items()],
+                        authorization=headers.get("Authorization"),
+                        rejected=503,
+                        finished=True,
+                    )
+                )
+                self._lock.notify_all()
+                return websocket.respond(503, "stub unavailable\n")
+        return super()._upgrade(websocket, request)
+
+    def _respond(self, connection):
+        number = len(self.responses) + 1
+        answers, close = super()._respond(connection)
+        if number in self._incomplete:
+            added = ("response.output_item.added", "response.output_item.done")
+            answers = [answer for answer in answers if answer["type"] not in added]
+            done = answers[-1]["response"]
+            done["status"] = "incomplete"
+            done["status_details"] = {"type": "incomplete", "reason": "max_output_tokens"}
+            done["output"] = []
+        return answers, close
 
 
 def _episode(stub, run_dir):
@@ -86,6 +129,62 @@ def _after_the_abort_runs(runtime) -> None:
         pass
 
     runtime._submit(barrier())
+
+
+def _trace(run_dir, event: str) -> list[dict]:
+    lines = (run_dir / "episode_trace.jsonl").read_text().splitlines()
+    return [e["payload"] for e in map(json.loads, lines) if e["event"] == event]
+
+
+def test_an_abort_in_the_sync_after_a_generation_keeps_its_usage(tmp_path, monkeypatch):
+    """Response 2 completes, but as incomplete without output items, so the sync after the
+    generation rebuilds the session; the stub refuses that upgrade and the connect backs off.
+    The kernel aborts generation 2 in that backoff. The generation itself ran: its attempt is
+    recorded as cancelled with its usage, and its provider usage as stale, and nothing of it
+    joins the history."""
+    entered, release = threading.Event(), threading.Event()
+    backoff = model_module._backoff
+
+    def held(clock, cancel, seconds):
+        entered.set()
+        assert release.wait(WAIT_S)
+        backoff(clock, cancel, seconds)
+
+    monkeypatch.setattr(model_module, "_backoff", held)
+    replies = realtime_replies([STEP, STEP])
+    with _FaultStub(replies, refused=(2,), incomplete=(2,)) as stub:
+        episode = _episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            stub.wait_for_session_update()
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            box, done = _in_worker(lambda: _generate(episode, 2, 1))
+            assert entered.wait(WAIT_S), "the sync after generation 2 did not back off"
+            agent.abort(2)
+            release.set()
+            abandoned = _joined(box, done)
+            agent.discard(2)
+            turns, history = agent._runtime.turns, list(agent.action_history)
+            usage = agent.token_usage
+        finally:
+            episode.finish()
+        connections = stub.finish()
+    assert abandoned.cancelled and abandoned.result["action"] is None
+    assert [c["rejected"] for c in connections] == [None, 503]
+    generation = [
+        (a["scope"]["generation"], a["outcome"], a["usage"] is not None)
+        for a in _trace(tmp_path, "ModelAttemptFinished")
+        if a["kind"] == "generation"
+    ]
+    assert generation == [(1, "ok", True), (2, "cancelled", True)]
+    provider = [
+        (u["tick"], u["stale"], u["status"])
+        for u in map(json.loads, (tmp_path / "provider-usage.jsonl").read_text().splitlines())
+    ]
+    assert provider == [(0, False, "reported"), (1, True, "reported")]
+    assert [turn.decision for turn in turns] == [0] and len(history) == 1
+    assert usage["responses"] == 1
 
 
 def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
