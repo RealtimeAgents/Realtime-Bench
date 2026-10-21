@@ -737,9 +737,9 @@ class _Shell:
         _bounded_call). The late result of a generation the kernel gave up on goes back as it
         came, to be discarded: the runner never handled one either. One back before a bound the
         kernel then handled first, busy as the shell was, is settled all the same: the kernel
-        discards it, and its records are its own. A failure in the steps the legacy loop ran on
-        its own thread (DecisionSetupError) invalidates the run as one that escaped that loop,
-        before the kernel gets the result."""
+        discards it, and its records are its own. A failure to bind the budget, which the legacy
+        loop did on its own thread (DecisionSetupError), invalidates the run as one that escaped
+        that loop, before the kernel gets the result."""
         for _ in range(count):
             held = self._returned.popleft()
             if held.escaped is not None:
@@ -784,6 +784,8 @@ class _Shell:
         )
         # The clock's count is the result's own: an agent that holds its result adds its usage
         # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
+        # A legacy turn's result that names none has none, though its usage grew as it generated:
+        # the agents create_agent makes name theirs (harnesses/registry.py).
         episode_records.account_tokens(r, held.remaining, self.env)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:
