@@ -146,6 +146,23 @@ def test_each_action_of_a_reply_has_its_own_feedback():
     ]
 
 
+def test_a_frame_output_and_feedback_are_the_turn_based_blocks_but_for_their_ids():
+    frame, output, feedback = History().play("FRB").blocks
+    turn = CanonicalTurn(
+        observation=_observation(1),
+        decision=0,
+        output=output.text,
+        output_wall_ns=2_000,
+        execution_feedback="applied 0",
+        feedback_wall_ns=3_000,
+    )
+    request = build_request(SEPARATE, SYSTEM, (turn,), None, ANSWER, CALL)
+    turn_frame, turn_output, turn_feedback = (item.block for item in request.items[1:])
+    assert replace(frame, id=turn_frame.id) == turn_frame
+    assert output == turn_output
+    assert replace(feedback, id=turn_feedback.id) == turn_feedback
+
+
 def test_only_the_newest_frames_keep_their_screenshots():
     history = History().play("F" * 30)
     frames = _frames(_view(history.blocks, frames=20))
