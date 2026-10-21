@@ -118,7 +118,7 @@ class _StreamingShell:
         self.log, self.trace = log, trace
         self.kernel = Kernel(StreamingPolicy(config))
         clock = clocks.operational
-        self.lanes = EnvLanes(env, self.post, clock)
+        self.lanes = EnvLanes(env, self.post, clock, raised=self._raised)
         self._push_lane = Lane("push", self.post, clock)
         self._wake = clock.event()
         self._now = 0.0  # the reading of the last step
@@ -130,6 +130,7 @@ class _StreamingShell:
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
+        self._loop_error_lock = threading.Lock()  # lanes raise on threads of their own
         self._termination: Termination | None = None
 
     def run(self) -> Termination:
@@ -177,13 +178,19 @@ class _StreamingShell:
             self._handle(command)
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             failure = traceback.format_exc()
-            self.log(f"[streaming] shell raised:\n{failure}")
-            if self._loop_error is None:
-                self._loop_error = self.env._loop_error = failure
-            self.post(Invalidated("runner", "run_exception", failure))
+            self._raised(failure)
             answer = self._unanswered(command, failure)
             if answer is not None:
                 self.post(answer)
+
+    def _raised(self, failure: str) -> None:
+        """The shell's own code raised, on its thread or on a lane: the run is invalid and the
+        episode still finalizes; the first traceback is the loop error (runner.py main)."""
+        self.log(f"[streaming] shell raised:\n{failure}")
+        with self._loop_error_lock:
+            if self._loop_error is None:
+                self._loop_error = self.env._loop_error = failure
+        self.post(Invalidated("runner", "run_exception", failure))
 
     def _handle(self, command) -> None:
         match command:
