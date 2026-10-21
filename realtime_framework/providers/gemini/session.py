@@ -199,8 +199,8 @@ class Received:
 class Orphan:
     """One server message that no generation's reply takes, as the core applied it (arrived).
 
-    Its goAway still asks for a new connection and its resumption update is still the candidate,
-    promoted at a clean boundary; read from a closed connection, it changes nothing.
+    Its goAway still asks for a new connection and its resumption update is still the latest
+    handle; read from a closed connection, it changes nothing.
     """
 
     connection: int  # the connection it was read from
@@ -216,29 +216,6 @@ class _Generation:
     interrupted: bool = False
 
 
-# Resumption rules: the handle a sync resumes with, or None to rebuild from the history.
-
-
-def resume_at_clean_boundary(
-    core: SessionCore, reason: str, *, force_rebuild: bool, generation_clean: bool
-) -> str | None:
-    """Only a goAway renewal after a clean interaction resumes, with the handle promoted at that
-    boundary."""
-    if reason == "go_away" and not force_rebuild and core.last_turn_clean and generation_clean:
-        return core.resume_handle
-    return None
-
-
-def resume_latest_handle(
-    core: SessionCore, reason: str, *, force_rebuild: bool, generation_clean: bool
-) -> str | None:
-    """A goAway renewal resumes with the latest handle the server called resumable, whatever was
-    sent or read after it: the session it restores may lack input or output the history has."""
-    if reason == "go_away" and not force_rebuild:
-        return core.latest_resume_handle
-    return None
-
-
 class SessionCore:
     """The Live session as this client wrote it, across the connections that carry it.
 
@@ -252,11 +229,12 @@ class SessionCore:
     handle, goAway or clean boundary is taken from it.
     """
 
-    def __init__(self, options: dict, *, resumption=resume_at_clean_boundary):
+    def __init__(self, options: dict, *, streaming: bool = False):
         """``options`` are the driver's resolved Live options (live.py live_options);
-        ``resumption`` is the rule resume_handle_for applies."""
+        ``streaming``: native streaming drives the session, pushing frames, triggering replies
+        and reading every message as it arrives."""
         self._completion_signal = options["completion_signal"]
-        self._resumption = resumption
+        self.streaming = streaming
         # What a queued acknowledgement adds to each function response, and so each replayed
         # receipt that did not store its own.
         self.tool_response_options = (
@@ -274,7 +252,7 @@ class SessionCore:
         self.go_away_deadline: float | None = None  # on the driver's monotonic clock
         self.resume_handle: str | None = None  # promoted at a clean interaction boundary
         # Since the connection was planned: the latest handle the server called resumable, else
-        # the one the connection resumes.
+        # the one the connection resumes. Streaming resumes with it.
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         self.last_turn_clean = False
@@ -302,8 +280,10 @@ class SessionCore:
     def _seed(self, history: CanonicalRequest | None) -> tuple[list[Content], tuple[str, ...]]:
         """The Contents that replay the history view, and the ids of their blocks.
 
-        The system block travels in the setup instead. A model output is the canonical action of
-        the native call that its turn's tool block carries, so it has no Content of its own.
+        The system block travels in the setup instead. In a turn-based view a model output is the
+        canonical action of the native call that its turn's tool block carries, so it has no
+        Content of its own. The streaming view (harnesses/streaming/history.py) has no tool blocks:
+        each reply's output and each execution feedback is a text Content, in the view's order.
         """
         if history is None:
             return [], ()
@@ -329,6 +309,8 @@ class SessionCore:
                 if not tool_contents:
                     continue
                 contents += tool_contents
+            elif self.streaming and block.kind in ("model_output", "execution_feedback"):
+                contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
             else:
                 continue
             seeded.append(block.id)
@@ -415,11 +397,16 @@ class SessionCore:
         self.go_away_deadline = None
 
     def resume_handle_for(self, reason: str, *, force_rebuild: bool, generation_clean: bool):
-        """The handle a sync resumes with, or None to rebuild from the history, by the core's
-        resumption rule: by default only a goAway renewal after a clean interaction resumes."""
-        return self._resumption(
-            self, reason, force_rebuild=force_rebuild, generation_clean=generation_clean
-        )
+        """The handle a sync resumes with, or None to rebuild from the history. Only a goAway
+        renewal resumes: turn-based only after a clean interaction, with the handle promoted at
+        it; streaming, which has few clean boundaries, with the latest handle the server called
+        resumable, whatever was sent or read after it, so the session it restores may lack input
+        or output the history has."""
+        if self.streaming:
+            return self.latest_resume_handle if reason == "go_away" and not force_rebuild else None
+        if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
+            return self.resume_handle
+        return None
 
     # ---- writes ----------------------------------------------------------------------------
 
@@ -452,9 +439,6 @@ class SessionCore:
         return observation
 
     def interrupt_sent(self) -> None:
-        """The interrupt is an input: no handle resumes the session until a turn completes
-        cleanly."""
-        self.last_turn_clean = False
         self.resume_handle = None
 
     def calls_received(self, calls: list[tuple]) -> None:
@@ -533,26 +517,14 @@ class SessionCore:
     def arrived(self, connection: int, message, now: float) -> Received | Orphan:
         """Apply one server message as a reader that reads every message as it arrives does
         (streaming): as received() does while a generation's reply is being read on
-        ``connection``, else as an orphan. An orphan's goAway asks for a new connection, and its
-        resumption update is promoted when the session is at a clean boundary: no observation or
-        interrupt sent, and no output read, since the last clean completion, seed or resume.
-
-        Output that no generation takes (an acknowledgement can prompt a reply of its own) is not
-        in the history, so it ends the boundary as an observation does.
-        """
+        ``connection``, else as an orphan, whose goAway still asks for a new connection and whose
+        resumption update is still the latest handle."""
         received = self.received(connection, message, now)
         if received is not None:
             return received
-        if connection != self.connection:
-            return Orphan(connection, message, {}, _cancelled(message))
-        if (
-            getattr(message, "server_content", None) is not None
-            or getattr(message, "tool_call", None) is not None
-        ):
-            self.last_turn_clean = False
-            self.resume_handle = None
-            self.candidate_resume_handle = None
-        control = self._control(message, clean=self.last_turn_clean, now=now)
+        control = (
+            self._control(message, clean=False, now=now) if connection == self.connection else {}
+        )
         return Orphan(connection, message, control, _cancelled(message))
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
