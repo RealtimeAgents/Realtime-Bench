@@ -10,6 +10,7 @@ native-streaming agent; any other API, or the token clock, refuses it before the
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import types
@@ -422,6 +423,60 @@ def test_each_step_passes_streaming_on(
     assert settings["plan"]["runtime"]["interaction_mode"] == "streaming"
     runner_argv, _ = _trial_command(settings["plan"])
     assert runner_argv[runner_argv.index("--interaction-mode") + 1] == "streaming"
+
+
+def _trial_launch(capsys, interaction_mode) -> dict:
+    """The trial worker's settings for a Harbor request in this mode (evaluation/harbor.py
+    resolve), which the configuration hash is of."""
+    from realtime_framework.evaluation import _trial
+    from realtime_framework.evaluation.harbor import ApptainerEnvironment, RealtimeBenchOptions
+
+    options = RealtimeBenchOptions(interaction_mode=interaction_mode)
+    request = {"model": GEMINI, "mode": "default", **options.model_dump(), "catalog_model": GEMINI}
+    task = {
+        "suite_id": "public", "task_id": WEB,
+        **{
+            field: request[field]
+            for field in ("fps", "model_input_fps", "interaction_mode", "duration_minutes", "seed")
+        },
+    }
+    environment_ = types.SimpleNamespace(python="python", lane=1, task=task)
+    command = ApptainerEnvironment._runner_command(environment_, {**request, "task": task})
+    assert _trial.main([*command[3:], "--dry-run"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_a_streaming_trial_hashes_the_streaming_settings_its_run_records(
+    environment, monkeypatch, capsys
+):
+    """Harbor's verify and aggregate compare the configuration hash (evaluation/config.py
+    configuration_sha256): a streaming trial's holds the settings its run records
+    (effective_run_config), so a job that runs two of them shows it; a turn-based trial's launch
+    and hash are as they were (N47)."""
+    from realtime_framework.evaluation.config import configuration_sha256
+
+    turn_based = _trial_launch(capsys, "turn_based")
+    assert "streaming" not in turn_based
+    before = {"model_config": turn_based["model_config"], "model_revision": None}
+    assert configuration_sha256(turn_based) == hashlib.sha256(
+        json.dumps(before, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    streaming = _trial_launch(capsys, "streaming")
+    assert streaming["streaming"] == {
+        "compression_trigger_tokens": 65_536, "compression_target_tokens": 32_768,
+    }
+    resolve = catalog.to_model_config
+    monkeypatch.setattr(
+        catalog, "to_model_config",
+        lambda *args, **kwargs: resolve(*args, **kwargs).model_copy(
+            update={"streaming": {"compression_target_tokens": 16_384}}
+        ),
+    )
+    edited = _trial_launch(capsys, "streaming")
+    assert edited["streaming"] == {**streaming["streaming"], "compression_target_tokens": 16_384}
+    assert edited["model_config"] == streaming["model_config"] == turn_based["model_config"]
+    assert configuration_sha256(edited) != configuration_sha256(streaming)
 
 
 def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
