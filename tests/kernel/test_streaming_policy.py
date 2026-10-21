@@ -342,31 +342,6 @@ def test_a_failed_reply_invalidates_the_run():
     assert sim.outcomes == []
 
 
-def test_a_push_not_answered_gives_the_reply_up_and_the_next_one_starts():
-    """The second push runs from 1 to 6. Its watchdog fires at 3: the reply in flight is given up
-    and the next starts on the newest frame pushed, the first."""
-    world = World(push_times={2: 5.0})
-    sim = _run(world, 7.0, push_watchdog_s=2.0)
-    assert sim.started == [(1, 0.0), (2, 3.0)]
-    assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "push_watchdog"}
-    assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-0"
-    assert sim.aborted == [(1, 3.0), (2, 7.0)]
-    assert sim.discarded[0] == 1
-    # Captures at 2 to 5 wait for the push; each newer one drops the one before.
-    assert [d["observation_id"] for d in sim.data("FrameDropped")] == ["obs-2", "obs-3", "obs-4"]
-    assert sim.pushes[2] == ("obs-5", 3)
-
-
-def test_a_push_stuck_before_the_first_reply_gives_nothing_up():
-    sim = _run(World(push_times={1: 12.0}), 5.0, push_watchdog_s=2.0)
-    assert sim.started == []
-    assert "GenerationAbandoned" not in sim.kinds()
-    assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.0)
-
-
-# ---- end checks ---------------------------------------------------------------------------------
-
-
 def test_one_end_check_is_out_at_a_time_and_one_due_meanwhile_is_asked_when_it_answers():
     """The first read takes 2.5 s; the checks due at 1 and 2 are asked once, when it answers."""
     sim = _run(World(check_times={1: 2.5}))
@@ -585,3 +560,61 @@ def test_an_action_that_arrives_while_the_end_waits_for_a_read_is_settled_by_tha
     assert sim.executed == []
     assert sim.statuses() == ["not_applied_terminal"]
     assert sim.termination.cause == "environment"
+
+
+# ---- frames that do not go into the session ------------------------------------------------------
+
+
+def test_a_push_stuck_until_the_reply_is_given_up_recovers_with_the_rebuilt_session():
+    """The second push hangs until the session is closed. Its watchdog gives the reply up at 3;
+    closing the session fails that push, the frame waiting goes in, and the run goes on."""
+    sim = _run(World(stuck_pushes={2}), 6.0, push_watchdog_s=2.0)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "push_watchdog"}
+    assert sim.started[:2] == [(1, 0.0), (2, 3.0)]
+    assert [frame for _, frame in sim.pushes] == [1, 2, 3, 4, 5, 6]
+    assert sorted(sim.sent) == [1, 3, 4, 5, 6]
+    assert sim.termination.stop_reason == "time_limit"
+
+
+def test_a_push_still_stuck_after_the_session_was_rebuilt_invalidates_the_run():
+    """The second push never answers. The reply is given up at 3, and the next starts on the newest
+    frame that went in; at 5 no frame has gone in since, and the run is invalid. Meanwhile each
+    frame captured drops the one waiting before it."""
+    sim = _run(World(push_times={2: 100.0}), 20.0, push_watchdog_s=2.0)
+    assert sim.started == [(1, 0.0), (2, 3.0)]
+    assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-0"
+    assert [data["observation_id"] for data in sim.data("FrameDropped")] == ["obs-2", "obs-3"]
+    assert _ended(sim)[:3] == ("invalid_run", "invalid", 5.0)
+    assert sim.termination.invalid.reason == "frame_push_stuck"
+
+
+def test_a_push_stuck_before_the_first_reply_invalidates_the_run():
+    """There is no reply to give up, so no session to rebuild."""
+    sim = _run(World(push_times={1: 12.0}), 5.0, push_watchdog_s=2.0)
+    assert sim.started == []
+    assert _ended(sim)[:3] == ("invalid_run", "invalid", 2.0)
+    assert sim.termination.invalid.reason == "frame_push_stuck"
+
+
+def test_pushes_failing_in_a_row_rebuild_the_session_and_a_frame_that_goes_in_ends_it():
+    """Pushes 2 to 4 fail: the third failure in a row, at 3, gives the reply up; push 5 goes in."""
+    errors = {2: "item rejected", 3: "item rejected", 4: "item rejected"}
+    sim = _run(World(push_errors=errors), 6.0)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "push_failed"}
+    assert sim.started[:2] == [(1, 0.0), (2, 3.0)]
+    assert sim.termination.invalid is None
+
+
+def test_pushes_that_keep_failing_after_the_rebuild_invalidate_the_run():
+    errors = {n: "item rejected" for n in range(2, 8)}
+    sim = _run(World(push_errors=errors), 10.0)
+    assert sim.started == [(1, 0.0), (2, 3.0)]
+    assert _ended(sim)[:3] == ("invalid_run", "invalid", 6.0)
+    assert sim.termination.invalid.reason == "frame_push_failed"
+
+
+def test_every_push_failing_before_the_first_reply_invalidates_the_run():
+    sim = _run(World(push_errors={1: "x", 2: "x", 3: "x"}), 5.0)
+    assert sim.started == []
+    assert _ended(sim)[:3] == ("invalid_run", "invalid", 2.0)
+    assert sim.termination.invalid.reason == "frame_push_failed"
