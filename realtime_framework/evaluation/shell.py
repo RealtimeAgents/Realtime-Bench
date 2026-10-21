@@ -711,8 +711,6 @@ class _Shell:
             observation=held.observation,
             native_output_limit=held.native_output_limit,
             budget=budget,
-            remaining_clock_tokens=held.remaining,
-            clock_mode=clock_mode,
             tokens_per_frame=self.config.tokens_per_frame,
         )
         usage_after = episode_records.usage_snapshot(agent)
@@ -843,7 +841,6 @@ class _Shell:
                 episode_records.lifecycle_record(
                     r,
                     decision=outcome.decision,
-                    observation_tick=r["observation_tick"],
                     clock_mode=config.clock_mode,
                     frame_age_s=outcome.frame_age_s,
                     action_clock_position=outcome.action_clock_position,

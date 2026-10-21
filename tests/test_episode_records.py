@@ -95,15 +95,13 @@ def test_usage_snapshot_copies_a_mapping_or_reports_none():
     assert episode_records.usage_snapshot(_Usage(broken)) is None
 
 
-def _annotate(r, budget, remaining, clock_mode, tokens_per_frame):
+def _annotate(r, budget, tokens_per_frame):
     episode_records.annotate_result(
         r,
         decision=3,
         observation=OBSERVATION,
         native_output_limit=128_000,
         budget=budget,
-        remaining_clock_tokens=remaining,
-        clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
     )
     return r
@@ -111,7 +109,7 @@ def _annotate(r, budget, remaining, clock_mode, tokens_per_frame):
 
 def test_a_result_is_annotated_with_its_observation_caps_and_clock():
     budget = DecisionBudget(2_560, 2_560, "inf", "token")
-    r = _annotate({"action": None, "latency": 1.25}, budget, 2_560, "token", 256)
+    r = _annotate({"action": None, "latency": 1.25}, budget, 256)
     _exactly(
         r,
         {
@@ -127,7 +125,6 @@ def test_a_result_is_annotated_with_its_observation_caps_and_clock():
             "runtime_output_token_cap": 2_560,
             "provider_output_token_cap": 2_560,
             "transport_output_token_cap": "inf",
-            "remaining_clock_tokens": 2_560,
             "clock_delay_clock": "simulated_token_clock",
             "clock_delay_definition": "complete_clock_output_tokens_divided_by_tokens_per_frame",
         },
@@ -136,12 +133,12 @@ def test_a_result_is_annotated_with_its_observation_caps_and_clock():
 
 def test_the_clock_definitions_follow_the_clock_mode():
     budget = DecisionBudget(None, None, None, "token")
-    r = _annotate({}, budget, None, "token", None)
+    r = _annotate({}, budget, None)
     assert (r["clock_delay_clock"], r["clock_delay_definition"]) == (
         "simulated_token_clock",
         "paused_environment_no_generation_delay",
     )
-    r = _annotate({}, DecisionBudget(None, None, None, "wall"), None, "wall", None)
+    r = _annotate({}, DecisionBudget(None, None, None, "wall"), None)
     assert (r["clock_delay_clock"], r["clock_delay_definition"]) == (
         "wall_clock",
         "complete_decision_wall_latency",
@@ -157,7 +154,7 @@ def test_caps_and_a_response_status_the_adapter_reports_are_kept():
         "provider_response_status_reason": "length",
         "realtime_runtime": runtime,
     }
-    _annotate(r, budget, None, "wall", None)
+    _annotate(r, budget, None)
     assert r["provider_output_token_cap"] == 2_048 and r["transport_output_token_cap"] is None
     assert r["provider_response_status"] == "incomplete"
     assert r["provider_response_status_reason"] == "length"
@@ -651,7 +648,6 @@ def test_action_resolved_records_what_became_of_the_action():
 def _lifecycle(r, clock_mode="token", **outcome):
     fields = {
         "decision": 3,
-        "observation_tick": 3.0,
         "clock_mode": clock_mode,
         "frame_age_s": 1.23456789,
         "action_clock_position": 4.5,
@@ -764,7 +760,7 @@ def test_the_lifecycle_record_joins_the_settled_result_and_the_outcome():
 
 def test_the_wall_clock_lifecycle_record_measures_the_frame_age_in_wall_time():
     record = _lifecycle(
-        {},
+        {"observation_tick": 3.0},
         "wall",
         frame_age_s=None,
         action=None,

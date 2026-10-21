@@ -162,15 +162,14 @@ def annotate_result(
     observation: Observation,
     native_output_limit: int | None,
     budget: DecisionBudget,
-    remaining_clock_tokens: int | None,
-    clock_mode: str,
     tokens_per_frame: int | None,
 ) -> None:
     """Add to a generation result what its decision was given: the observation, the output caps
-    (provider and transport caps the adapter reports stay), the clock allowance and how the clock
-    delays the action; and the provider's response status from the runtime metadata when the
-    result has none."""
+    (provider and transport caps the adapter reports stay) and how the clock delays the action;
+    and the provider's response status from the runtime metadata when the result has none. The
+    clock allowance is account_tokens'."""
     metadata = getattr(observation, "metadata", {}) or {}
+    clock_mode = budget.clock_mode
     r.update(
         {
             "decision": decision,
@@ -187,7 +186,6 @@ def annotate_result(
             "transport_output_token_cap": r.get(
                 "transport_output_token_cap", budget.transport_output_tokens
             ),
-            "remaining_clock_tokens": remaining_clock_tokens,
             "clock_delay_clock": (
                 "simulated_token_clock" if clock_mode == "token" else "wall_clock"
             ),
@@ -609,7 +607,6 @@ def lifecycle_record(
     r: dict,
     *,
     decision: int,
-    observation_tick: float,
     clock_mode: str,
     frame_age_s: float | None,
     action_clock_position: float,
@@ -635,7 +632,7 @@ def lifecycle_record(
         "generation_id": (r.get("realtime_runtime") or {}).get("generation_id"),
         "observation_id": r.get("observation_id"),
         "observation_batch": r.get("observation_batch"),
-        "observation_tick": observation_tick,
+        "observation_tick": r["observation_tick"],
         "observation_timestamp": r.get("observation_timestamp"),
         "frame_age_at_action_s": round(frame_age_s, 6) if frame_age_s is not None else None,
         "frame_age_clock": "simulated_token_clock" if clock_mode == "token" else "wall_clock",
