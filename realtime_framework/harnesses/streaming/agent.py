@@ -18,7 +18,9 @@ it names, and posted to the kernel with the time its message came off the wire, 
 seconds from the episode's origin; one whose frame cannot be found arrives refused. One that is no
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
 the reply ended. A call the provider cancels, of this reply or an earlier one, is withdrawn under
-the generation it came in, once its action was posted.
+the generation it came in, once its action was posted. A reply ends as a turn does: a provider
+fault fails it, a session it leaves other than exact is rebuilt before it is used again, and a
+function call reply must complete.
 
 An accepted reply's output joins the view; a discarded one adds nothing. Each outcome the kernel
 commits joins it as its execution feedback (feedback.py), where the policy places it.
@@ -41,6 +43,9 @@ from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
+    GenerationBoundary,
+    ProviderError,
+    ProviderHistoryState,
     TextDelta,
     UsageSnapshot,
 )
@@ -82,6 +87,8 @@ from realtime_framework.providers.registry import adapter_class
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
+# The boundaries that end a reply, whose provider history state is the session's after it.
+_TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
 
 
 @dataclass(frozen=True)
@@ -107,6 +114,12 @@ class _Reply:
     reasoning: list[str] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)  # each function call, as its JSON action
     usage: dict | None = None
+    # Its terminal boundaries, as a turn's (RealtimeRuntime._run_turn): the provider history
+    # state of the last, and whether a turn_complete, with its usage, or an interrupted came.
+    terminal: ProviderHistoryState = ProviderHistoryState.UNKNOWN
+    complete: bool = False
+    terminal_usage: bool = False
+    interrupted: bool = False
     protocol_failure: str | None = None  # the first
     based_on: str | None = None  # the observation id of the frame its first action names
 
@@ -325,13 +338,30 @@ class NativeStreamingAgent(VisionAgentBase):
             reply.handle = await self.driver.request_reply(request)
             async for event in self.driver.events(reply.handle):
                 self._take(reply, event)
+            if not reply.cancel.is_set():
+                self._ended(reply)
         except Exception:
             # The session may hold some of the reply, which the view does not: the next push or
             # reply rebuilds it (SessionLifecycle.ensure_ready). The encoder's goAway deadline
             # passing during the reply raises too: an incomplete reply is no result.
             self.driver.mark_dirty()
             raise
-        if self._answer.action_channel == "text_json":
+
+    def _ended(self, reply: _Reply) -> None:
+        """The reply's stream ended, as a turn's does (RealtimeRuntime._run_turn): a session it
+        left other than exact is rebuilt from the view before it is used again, and a function
+        call reply that did not complete is no result (FunctionCallTurnCollector.finish). A text
+        reply's action is parsed whatever the end, from the text that came."""
+        if reply.terminal != ProviderHistoryState.EXACT:
+            self.driver.mark_dirty()
+        if self._answer.action_channel == "function_call":
+            # A call already handed over fixed its action: an interruption after it stands once
+            # the terminal usage came.
+            if not reply.complete or (
+                reply.interrupted and not (reply.calls and reply.terminal_usage)
+            ):
+                raise RuntimeError("native tool accounting requires a complete reply")
+        elif self._answer.action_channel == "text_json":
             # The encoder does not tell when the text was completed: the reply's end stands in.
             self._arrived(reply, reply.output, TEXT_CALL, self.clock.monotonic())
 
@@ -341,6 +371,17 @@ class NativeStreamingAgent(VisionAgentBase):
             (reply.reasoning if event.channel == "reasoning" else reply.text).append(event.text)
         elif isinstance(event, UsageSnapshot):
             reply.usage = event.usage
+        elif isinstance(event, ProviderError):
+            # A provider fault, not the model's: the run cannot be scored, as a turn's.
+            if event.fatal:
+                raise RuntimeError(event.detail)
+        elif isinstance(event, GenerationBoundary):
+            if event.kind in _TERMINAL:
+                reply.terminal = event.history_state
+            reply.complete |= event.kind == "turn_complete"
+            reply.interrupted |= event.kind == "interrupted"
+            if event.kind == "turn_complete":
+                reply.terminal_usage = bool(event.metadata.get("terminal_usage_received"))
         elif isinstance(event, FunctionCall):
             try:
                 action = canonical_function_action(
