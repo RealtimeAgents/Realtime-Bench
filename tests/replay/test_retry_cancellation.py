@@ -149,7 +149,9 @@ def _count_calls(target, name: str) -> list:
 
 
 def _requests(calls: list) -> list[tuple]:
-    """Each _run_turn call's kernel generation (its request's), and whether it is cancelled."""
+    """Each _run_turn call's kernel generation (its request's), and whether its cancel event is
+    set by now. That a later generation has its own event is tested on the agent
+    (tests/harness/test_generations.py)."""
     return [(call["args"][1].generation, call["cancel"].is_set()) for call in calls]
 
 
@@ -195,8 +197,8 @@ def _inspection_outcomes(run_dir) -> list:
 
 
 def _check_nothing_kept(agent, turns: list) -> None:
-    """Only attempt 1 ran, for the generation the abort cancelled; no turn or action joins the
-    history."""
+    """Only attempt 1 ran; its request names the aborted generation, whose cancel event is set.
+    No turn or action joins the history."""
     assert _requests(turns) == [(GENERATION, True)]
     assert agent._runtime.turns == ()
     assert agent.action_history == []
@@ -553,8 +555,10 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
 def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
     """Stateless API. Attempt 1 gets HTTP 503, which leaves the runtime DIRTY
     (RealtimeRuntime.run_turn), so attempt 2 first recovers it (RealtimeRuntime._ensure_ready).
-    The abort lands during that recovery; the attempt then stops before it sends its observation
-    or its request (RealtimeRuntime._run_turn)."""
+    The abort lands during that recovery. The recovery closes what it rebuilt once it returns,
+    and the attempt stops there (RealtimeRuntime._sync): it sends no observation and no request.
+    _run_turn's own checks before each are tested on the agent
+    (tests/harness/test_generations.py)."""
     openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
@@ -578,6 +582,7 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
 
             agent.driver.sync_history = gated_sync
             turns = _count_calls(agent._runtime, "_run_turn")
+            sends = _count_calls(agent.driver, "send_observation")
             observation = episode.frames.capture(0)
             box, done = _generate_in_worker(episode, observation)
             assert syncing.wait(WAIT_S), "attempt 2 did not recover the runtime"
@@ -587,7 +592,7 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
         finally:
             episode.finish()
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    assert len(stub.requests) == 1
+    assert len(stub.requests) == 1 and len(sends) == 1  # attempt 1's
     assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
