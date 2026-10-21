@@ -1128,6 +1128,38 @@ def test_a_reply_is_read_on_the_connection_it_started_on():
     assert rig.live.sockets[1].sent == [] and left == {}
 
 
+def test_a_call_handed_over_after_a_reconnect_is_no_call_of_the_new_connection():
+    """A call read before a reconnect, which its reply hands over after it, is pending on the
+    connection it was read on only: the new one's records hold none of it, and the next reply
+    there answers only its own call."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        old = await rig.driver.request_reply(request)
+        rig.socket.feed(call("call-0"))
+        await settle()
+        await rig.connect()
+        with pytest.raises(RuntimeError):
+            await drain(rig.driver.events(old))
+        records = (list(rig.driver._core.pending_calls), dict(rig.driver._core.delivery))
+        new = await rig.driver.request_reply(replace(request, generation_id="turn-1"))
+        rig.socket.feed(call("call-1"), TURN_COMPLETE)
+        await drain(rig.driver.events(new))
+        await rig.driver.close()
+        return records
+
+    pending, delivery = asyncio.run(run())
+    assert pending == [] and ("tool_response", "call-0") not in delivery
+    answered = [
+        [response["id"] for response in message["tool_response"]["functionResponses"]]
+        for message in rig.socket.sent
+        if wire(message) == "tool_response"
+    ]
+    assert answered == [["call-1"]]
+
+
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
     rig = Rig()
 
