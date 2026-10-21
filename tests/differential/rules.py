@@ -1288,6 +1288,37 @@ RULES = (
         seen="not observable: FakeEnvironment lands on whole ticks (fake_env.py wait_until_tick)",
     ),
     Rule("U2", "an environment-latched failure is written as RunInvalidated", _u2),
+    Rule(
+        "N22",
+        "a failed wait step's error is the traceback",
+        seen="normalized to its message in projection.wait_record, for the simulation too",
+    ),
+    Rule(
+        "U7",
+        "a result of a step over the per-move cap that is unusable is reported skipped_timeout",
+        seen="not scripted: no replayed trajectory row fails to be written (p1b 第四轮 L3)",
+    ),
+    Rule(
+        "U8",
+        "a frozen frame after another invalidation is written as captured",
+        seen="not scripted: no replayed wall release fails while a frame is captured",
+    ),
+    Rule(
+        "U9",
+        "a result settled past the per-move cap, or filed late, is skipped_timeout",
+        seen="not scripted: the replay settles a result in no time, and no named script has a"
+        " read under way when the cap falls (D47 covers the deadline)",
+    ),
+    Rule(
+        "KF7",
+        "a result back before the deadline and settled past it is discarded",
+        seen="not scripted: the replay settles a result in no time",
+    ),
+    Rule(
+        "U12",
+        "the records of an exception the shell caught",
+        seen="not scripted: no replayed kernel, policy or state reading raises",
+    ),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
     Rule(
         "X3",

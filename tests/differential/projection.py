@@ -107,7 +107,8 @@ def ends_the_run(answer: str | None) -> bool:
 def wait_record(record: dict | None) -> dict | None:
     """A wait's execution record, None for a wait that did not land. A failed step's error is
     its message: the shell answers it with the traceback (evaluation/shell.py _Shell._failure),
-    the environment with the message (sandbox/actions.py GuestEnvironment._execution_failed)."""
+    the environment with the message (sandbox/actions.py GuestEnvironment._execution_failed), an
+    expected difference (N22; rules.py)."""
     error = None if record is None else record.get("error")
     if error is None:
         return None if record is None else dict(record)
