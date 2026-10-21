@@ -5,7 +5,9 @@ replies hand their actions over as they come off the wire (phase2.md, native str
 The agent keeps the content blocks the session should hold, in the order it accepted them, and
 gives every push and connection operation the view they make (history.py), so that a session
 rebuilt from the view holds what the live one did. Every driver operation runs on the agent's one
-execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py).
+execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py). Each
+push and each reply readies the session first, and renews the connection the provider asked to
+renew, except a push while a reply is on: renewing would end it.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and records
 it as sent once the driver put it into the session. A frame whose push failed keeps its number and
@@ -235,7 +237,11 @@ class NativeStreamingAgent(VisionAgentBase):
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
         with self._lock:
             view = self._view()
-        await self.driver.ensure_ready(self._seed, view, self._record_session)
+            # Renewing the connection would end a reply on it, and one that ended is renewed
+            # from once its output is accepted: meanwhile a session that asked to be renewed
+            # refuses the frame.
+            replying = bool(self._replies)
+        await self._ready(view, renew=not replying)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
@@ -280,10 +286,17 @@ class NativeStreamingAgent(VisionAgentBase):
             generation, decision, self._result(reply, latency), reply.cancel.is_set()
         )
 
+    async def _ready(self, view: CanonicalRequest, *, renew: bool) -> None:
+        """Ready the session from ``view``, and renew it if the provider asked for that and
+        ``renew``."""
+        await self.driver.ensure_ready(self._seed, view, self._record_session)
+        if renew:
+            await self.driver.renew(self._seed, view, self._record_session)
+
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
         with self._lock:
             view = self._view()
-        await self.driver.ensure_ready(self._seed, view, self._record_session)
+        await self._ready(view, renew=True)
         request = GenerationRequest(
             generation_id=f"streaming-{reply.generation}",
             provider_output_token_cap=budget.provider_output_tokens,

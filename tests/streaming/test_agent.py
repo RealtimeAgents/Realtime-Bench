@@ -356,3 +356,54 @@ def test_a_reply_that_fails_partway_raises_and_the_session_is_rebuilt_before_it_
         ("push", "obs-3", ("system", "f1.frame", "f2.frame", "f3.frame")),
     ]
     agent.close()
+
+
+def test_a_renewal_the_provider_asked_for_runs_before_the_next_push(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    _two_frames(agent, clock)
+    agent.driver.renewal_required = True
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2:] == [
+        ("sync", "go_away", ("system", "f1.frame", "f2.frame")),
+        ("push", "obs-3", ("system", "f1.frame", "f2.frame", "f3.frame")),
+    ]
+    agent.close()
+
+
+def test_after_a_go_away_during_a_reply_pushes_fail_until_it_is_accepted_and_renewed(
+    monkeypatch, clock
+):
+    """Renewing the connection would end the reply, and the session takes no input meanwhile:
+    those frames are lost. Once the reply's output is in the view, the next push renews."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=2.0))
+    done, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.driver.renewal_required = True
+    with pytest.raises(RuntimeError, match="requires a renewal"):
+        agent.push(observation(clock, 3))
+    assert clock.wait(done, 2.0)
+    assert not out["value"].cancelled
+    agent.accept(7)
+    agent.push(observation(clock, 4))
+    assert agent.driver.calls[-2:] == [
+        ("sync", "go_away", ("system", "f1.frame", "f2.frame", "d3.output")),
+        ("push", "obs-4", ("system", "f1.frame", "f2.frame", "d3.output", "f4.frame")),
+    ]
+    agent.close()
+
+
+def test_a_reply_starts_on_a_renewed_session(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.renewal_required = True
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    agent.generate(7, 3, frame, BUDGET)
+    assert agent.driver.calls[-2:] == [
+        ("sync", "go_away", ("system", "f1.frame", "f2.frame")),
+        ("reply", 7, ("system", "f1.frame", "f2.frame")),
+    ]
+    agent.close()
