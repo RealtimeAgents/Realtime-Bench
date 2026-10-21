@@ -66,9 +66,11 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     PendingDecision,
     ProviderObservation,
+    RequestRetry,
     RetryCancelled,
     SessionSeed,
     SyncDisposition,
+    TransportFailureError,
     retry_cancellation,
 )
 from realtime_framework.entity.records import TraceEvent, trace_scope
@@ -177,6 +179,9 @@ class NativeStreamingAgent(VisionAgentBase):
         # between a reply's two steps, or once it is closed.
         self._readying = asyncio.Lock()
         self._closed = False
+        # Set once close() starts: a push readying the session then gives up, its backoff
+        # included, instead of holding the lock close() waits for.
+        self._closing = self.clock.event()
         self._session_known: str | None = None  # the last SessionStateChanged's state
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
@@ -359,7 +364,10 @@ class NativeStreamingAgent(VisionAgentBase):
         pushed = _Pushed(record, value, execution)
         key = observation.metadata.get("observation_id")
         try:
-            with trace_scope(phase="push", observation_id=value.observation_id):
+            with (
+                trace_scope(phase="push", observation_id=value.observation_id),
+                retry_cancellation(self._closing),
+            ):
                 while (gate := self._execution.run(self._push(key, pushed))) is not None:
                     # Held for the session's renewal, which is no push stuck in it.
                     self._post(PushHeld(key))
@@ -506,10 +514,49 @@ class NativeStreamingAgent(VisionAgentBase):
 
     async def _ready(self, view: CanonicalRequest, *, renew: bool) -> None:
         """Ready the session from ``view``, and renew it if the provider asked for that and
-        ``renew``."""
-        await self.driver.ensure_ready(self._seed, view, self._record_session)
-        if renew:
-            await self.driver.renew(self._seed, view, self._record_session)
+        ``renew``. A failure the driver takes as transient is tried again under the shared
+        retry policy (decision 39), as a turn's connect is: nothing was generated on it yet. Each
+        attempt starts over from the session's state, which a failed one left closed or broken,
+        so the next opens it again from ``view``."""
+
+        async def attempt(number: int) -> None:
+            await self.driver.ensure_ready(self._seed, view, self._record_session)
+            if renew:
+                await self.driver.renew(self._seed, view, self._record_session)
+            if number > 1:
+                self._ready_finished(number, "ok")
+
+        def record(number, exc, failure, delay):
+            self._ready_finished(
+                number, "failed" if delay is None else "retry", exc, failure, delay
+            )
+            if delay is None:
+                raise TransportFailureError(failure, exc, number - 1) from exc
+
+        frames = [item.block.id for item in view.items if item.block.kind == "frame"]
+        await RequestRetry(
+            f"{frames[-1] if frames else 'empty'}:ready",
+            self.driver.classify_transport_error,
+            record,
+            cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
+            clock=self.clock,
+        ).run_async(attempt)
+
+    def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
+        """One ModelAttemptFinished per readying attempt after the first, as a connect's
+        (OpenAIRealtimeDriver._connect_finished): each that failed, the one that succeeded after
+        them, and one a cancellation stopped."""
+        with trace_scope(ready_attempt=number):
+            self._trace.capture(
+                TraceEvent.MODEL_ATTEMPT_FINISHED,
+                {
+                    "kind": "session_ready",
+                    "outcome": outcome,
+                    "failure_kind": failure.kind if failure is not None else None,
+                    "error": repr(error)[:500] if error is not None else None,
+                    "retry_delay_s": delay,
+                },
+            )
 
     def _stop_if_closed(self) -> None:
         if self._closed:
@@ -785,6 +832,7 @@ class NativeStreamingAgent(VisionAgentBase):
         """Give up the replies left, which the kernel neither accepts nor discards once the
         episode ended, as DefaultHarness.close discards them; close the session once no push is
         readying it, and take no push or reply after; then stop the execution thread."""
+        self._closing.set()
         with self._lock:
             left = list(self._replies.values())
             self._replies.clear()

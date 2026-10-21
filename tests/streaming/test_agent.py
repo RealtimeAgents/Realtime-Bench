@@ -11,6 +11,7 @@ from dataclasses import replace
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import CallsCancelled
@@ -1028,3 +1029,92 @@ def test_closing_while_a_reply_thread_retires_its_frame_finishes_every_frame(
     assert clock.wait(replied, 5.0)
     assert sorted(row[0] for row in runtime.rows) == ["obs-1", "obs-2", "obs-3"]
     assert runtime.closed
+
+
+# ---- reopening the session under the shared retry policy (decision 39) -------------------------
+
+
+def _ready_attempts(trace) -> list[tuple]:
+    return [
+        (r["outcome"], r["failure_kind"])
+        for r in trace.of(TraceEvent.MODEL_ATTEMPT_FINISHED)
+        if r["kind"] == "session_ready"
+    ]
+
+
+def test_a_reply_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, clock):
+    """An abort closed the session; reopening it for the next reply meets a transient failure
+    once. Nothing was generated yet, so it is tried again after the shared backoff, as a turn's
+    connect is, and the reply goes on (review-final-streaming 中-4)."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ConnectionError("1011 internal error")]
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    pending = agent.generate(7, 3, frame, BUDGET)
+    assert not pending.cancelled
+    assert agent.driver.connect_attempts == 3  # the episode's first, the failed one, the retry
+    assert [call[:2] for call in agent.driver.calls][-2:] == [
+        ("connect", ("system", "f1.frame", "f2.frame")),
+        ("reply", 7),
+    ]
+    assert _ready_attempts(trace) == [("retry", TRANSIENT), ("ok", None)]
+    agent.close()
+
+
+def test_a_push_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ConnectionError("1011 internal error")]
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-1][:2] == ("push", "obs-3")
+    agent.close()
+
+
+def test_a_session_that_keeps_failing_to_reopen_fails_the_reply_once_the_retries_are_spent(
+    monkeypatch, clock
+):
+    """Four attempts, as the shared policy allows (decision 39), then the reply fails as an
+    exhausted transport failure."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ConnectionError("down")] * 4
+    with pytest.raises(TransportFailureError):
+        agent.generate(7, 3, frame, BUDGET)
+    assert _ready_attempts(trace) == [("retry", TRANSIENT)] * 3 + [("failed", TRANSIENT)]
+    assert not [call for call in agent.driver.calls if call[0] == "reply"]
+    agent.close()
+
+
+def test_a_session_that_fails_to_reopen_for_good_is_not_tried_again(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ValueError("bad key")]
+    with pytest.raises(TransportFailureError):
+        agent.generate(7, 3, frame, BUDGET)
+    assert agent.driver.connect_attempts == 2
+    agent.close()
+
+
+def test_closing_ends_a_push_waiting_to_try_reopening_the_session_again(monkeypatch, clock):
+    """A push waits out the backoff between attempts to reopen the session when the episode
+    closes the agent: close does not wait for the attempts left, and the push fails."""
+    agent = make_agent(monkeypatch, clock)
+    _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ConnectionError("down")] * 3
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    clock.sleep(0.5)
+    started = clock.monotonic()
+    agent.close()
+    assert clock.monotonic() - started < 0.5
+    assert clock.wait(pushed, 1.0)
+    assert "error" in pushing
