@@ -45,8 +45,21 @@ def test_a_superseded_action_ran_nothing_and_says_a_newer_one_took_its_place():
     assert outcome.status == "superseded"
     assert execution_feedback(outcome, action_text(TYPE)) == (
         "EXECUTION RESULT: actual=none; requested=type {'text': 'hi'}; status=superseded. "
-        "NOTE: this action was NOT executed: a newer action arrived while another one was "
-        "executing and took its place."
+        "NOTE: this action was NOT executed: while it waited to execute, a newer action took "
+        "its place."
+    )
+
+
+def test_an_action_whose_call_the_provider_cancelled_ran_nothing_and_says_so():
+    """The click executes from 0.5 to 2 and the typing waits; the provider cancels its call at
+    1.5."""
+    reply = Reply(4.0, calls=(Call(0.5, CLICK, "a"), Call(1.0, TYPE, "b")))
+    world = World(replies=[replace(reply, cancellations=((1.5, ("b",)),))], execute_s=1.5)
+    outcome = _outcomes(world)["b"]
+    assert outcome.status == "cancelled_call"
+    assert execution_feedback(outcome, action_text(TYPE)) == (
+        "EXECUTION RESULT: actual=none; requested=type {'text': 'hi'}; status=cancelled_call. "
+        "NOTE: this action was NOT executed because the model service cancelled its call."
     )
 
 

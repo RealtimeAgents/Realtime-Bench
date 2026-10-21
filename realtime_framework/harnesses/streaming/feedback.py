@@ -29,16 +29,20 @@ if TYPE_CHECKING:  # the agent does not import the evaluation package at run tim
 # The statuses of an action that ran: one the environment applied, and a wait, which ends where it
 # arrives (evaluation/kernel/streaming.py).
 _RAN = {"applied", "wait"}
-# The policy's statuses of an action a newer one took the place of (SUPERSEDED) and of one whose
-# reply was given up (CANCELLED_GENERATION), and of a reply that came to no action with no protocol
+# The policy's statuses of an action a newer one took the place of while it waited (SUPERSEDED),
+# of one whose reply was given up (CANCELLED_GENERATION), of one whose call the provider cancelled
+# while it waited (CANCELLED_CALL), and of a reply that came to no action with no protocol
 # failure.
 _NOTES = {
     "superseded": (
-        "NOTE: this action was NOT executed: a newer action arrived while another one was "
-        "executing and took its place."
+        "NOTE: this action was NOT executed: while it waited to execute, a newer action took its "
+        "place."
     ),
     "cancelled_generation": (
         "NOTE: this action was NOT executed because the reply it came in was cancelled."
+    ),
+    "cancelled_call": (
+        "NOTE: this action was NOT executed because the model service cancelled its call."
     ),
     "none": "NOTE: your reply had no valid action, so nothing was executed.",
 }
