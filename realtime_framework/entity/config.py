@@ -141,8 +141,8 @@ class EnvironmentBudgetConfig:
     # failed reads in a row invalidate the run, so a wedged environment ends it in about 30 s.
     wall_state_read_s: float = 10.0
     clock_advance_s: float = 120.0  # advance or render one token-clock step; the CDP call default
-    # Read the scored snapshot at the freeze. Other single state reads time out at 8 s; a web task's
-    # snapshot is two such reads (state and evaluation), so the freeze allows both.
+    # Read the scored snapshot at the freeze. The snapshot is valid when the whole read ends within
+    # 16 s; no single read of it has a hard 8 s cap. How late it was is in the termination record.
     snapshot_read_s: float = 16.0
 
 
