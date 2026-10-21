@@ -29,10 +29,10 @@ the refusals included, is committed to the agent as its feedback.
 
 Captures, reads and actions run on lanes of their own, but the shell lets only one of them at a
 time into the environment (evaluation/env_lanes.py EnvGate). The policy keeps one out at a time
-itself, and once it is answered starts the next one due: a read, then a capture, then the action
-waiting. So each takes the environment when it is sent: a read samples the task, and an action
-presses its keys, at the time the policy sent it, which is the time the policy judges it by. A grid
-point that comes while another operation is out is taken once that one is answered.
+itself: what comes due meanwhile, a grid point's read or capture or an action arriving, waits, and
+once the operation out is answered the one that came due first goes, as the gate would take them.
+So each takes the environment when it is sent: a read samples the task, and an action presses its
+keys, at the time the policy sent it, which is the time the policy judges it by.
 
 The kernel freezes the snapshot at the first end signal. An action executing then finishes first:
 the shell takes the snapshot next after it, bounded by the action's budget, as the turn-based shell
@@ -214,13 +214,14 @@ class StreamingPolicy:
         self._calls: dict[tuple[int, str], _Action] = {}  # (generation, call id) -> its action
         self._latest: FrameCaptured | None = None  # the newest frame pushed
         self._capturing = False
-        self._capture_due = False  # a grid point came while another operation was out
         self._pushing: FrameCaptured | None = None
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
         self._failed_pushes = 0  # in a row
         self._rebuilt = False  # the session was given up for its frames, and none went in since
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
-        self._check_due = False  # a read came due while another operation was out
+        # The reads, captures and the action waiting that came due while another operation was
+        # out, in the order they came due.
+        self._line: list[str] = []
         self._read_frame: int | None = None  # the environment frame read last
         self._deadline_due = False  # the deadline passed while a read asked before it was out
         self._failed_reads = 0  # state reads failed in a row
@@ -251,7 +252,8 @@ class StreamingPolicy:
         kernel.set_timer("deadline", Clock.SEMANTIC, self.config.duration_s, Priority.CONTROL)
         self._schedule("end_check", self.config.env_fps)
         self._schedule("next_frame", self.config.input_fps)
-        self._check_due = self._capture_due = True
+        self._due("read")
+        self._due("capture")
         self._proceed()
 
     def on_event(self, event) -> None:
@@ -307,7 +309,7 @@ class StreamingPolicy:
         elif timer.kind == "end_check":
             if not self._stopped():
                 if self._frame() != self._read_frame:
-                    self._check_due = True
+                    self._due("read")
                     self._proceed()
                 self._schedule("end_check", config.env_fps)
         elif timer.kind == "next_frame":
@@ -316,11 +318,11 @@ class StreamingPolicy:
                 fps = config.input_fps
                 for _ in range(_floor(kernel.semantic * fps) - _floor(timer.at * fps)):
                     self._drop(None, "late")
-                if self._capturing or self._capture_due:
+                if self._capturing or "capture" in self._line:
                     # The capture before is still under way or waiting: this one is skipped.
                     self._drop(None, "capture_busy")
                 else:
-                    self._capture_due = True
+                    self._due("capture")
                     self._proceed()
                 self._schedule("next_frame", fps)
         elif timer.kind == "reply_watchdog":
@@ -350,7 +352,8 @@ class StreamingPolicy:
         if self._queued is not None:
             self._drop(self._queued.observation_id, "ended")
             self._queued = None
-        self._check_due = self._capture_due = self._deadline_due = False
+        self._line.clear()
+        self._deadline_due = False
         if self.current is not None and not self._executing:
             after, self.current = self.current, None
             self._resolve(after, "applied", terminal_after_action=True)
@@ -364,20 +367,24 @@ class StreamingPolicy:
 
     # ---- the environment ----------------------------------------------------------------------
 
+    def _due(self, operation: str) -> None:
+        if operation not in self._line:
+            self._line.append(operation)
+
     def _proceed(self) -> None:
-        """Start the next environment operation due once none is out: a read, then a capture,
-        then the action waiting."""
-        if self._busy or self._stopped():
-            return
-        if self._check_due:
-            return self._ask()
-        if self._capture_due:
-            self._capture_due = False
-            self._capturing = True
-            return self.kernel.emit(Capture())
-        if self.waiting is not None:
-            waiting, self.waiting = self.waiting, None
-            self._execute(waiting)
+        """Start the operation that came due first once none is out, as the shell's gate takes
+        them first come first served, so that reads due on a fast grid cannot keep a capture out.
+        The action waiting may have gone meanwhile, withdrawn or given up."""
+        while self._line and not self._busy and not self._stopped():
+            operation = self._line.pop(0)
+            if operation == "read":
+                self._ask()
+            elif operation == "capture":
+                self._capturing = True
+                self.kernel.emit(Capture())
+            elif self.waiting is not None:
+                waiting, self.waiting = self.waiting, None
+                self._execute(waiting)
 
     # ---- frames -----------------------------------------------------------------------------
 
@@ -535,6 +542,8 @@ class StreamingPolicy:
         if self.waiting is not None:
             self.waiting.superseded_by = a.index
             self._resolve(self.waiting, SUPERSEDED)
+        else:
+            self._due("action")
         self.waiting = a
 
     def _execute(self, a: _Action) -> None:
@@ -733,7 +742,8 @@ class StreamingPolicy:
     def _ask(self) -> None:
         """Read the state now: no other operation is out, so the read samples the task now, the
         time its end is dated by. It is this frame's read, and whichever came due meanwhile."""
-        self._check_due = False
+        if "read" in self._line:
+            self._line.remove("read")
         kernel = self.kernel
         self._read_frame = self._frame()
         request = kernel.request()
