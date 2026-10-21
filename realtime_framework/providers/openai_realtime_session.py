@@ -6,9 +6,10 @@ item creates and deletes that bring the server there, and it records what became
 unknown while it is written, sent once the write returned, acknowledged once the server
 confirmed it. Each server event the driver reads is handed to ``receive``, in the order the
 connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
-settles the in-place edit waiting for it, a response event joins its generation. Sending and
-receiving are the driver's; it reads only while something waits for an event, so what arrives
-after the last wait reaches the core with the next read.
+settles the in-place edit waiting for it, an error about a frame native streaming pushed refuses
+that frame alone, a response event joins its generation. Sending and receiving are the driver's;
+it reads only while something waits for an event, so what arrives after the last wait reaches the
+core with the next read.
 """
 
 from __future__ import annotations
@@ -80,6 +81,16 @@ class SentFrame:
     text: str
     folded: bool
     assistant_item_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Push:
+    """A frame native streaming pushed: the frame block id, its user item id, and the server error
+    that refused the item's create, if one did."""
+
+    frame_id: str
+    item_id: str
+    error: object | None = None
 
 
 @dataclass(frozen=True)
@@ -165,7 +176,9 @@ class RealtimeSessionCore:
     ``new_id(kind)`` names each planned client item and client event. The mirror takes in a plan
     as it is made, before the driver sends it (an in-place edit only once it is acknowledged), so
     after a failed send it is ahead of the server; the session is not used again then, as the
-    runtime reconnects or rebuilds (harnesses/default/context.py).
+    runtime reconnects or rebuilds (harnesses/default/context.py). A pushed frame the server
+    refuses leaves the mirror, and the session goes on without it; the history views it is edited
+    to must leave the frame out too, or they cannot be reached in place.
     """
 
     def __init__(self, new_id: Callable[[str], str]):
@@ -177,11 +190,15 @@ class RealtimeSessionCore:
         self.ledger_text = ""
         # Every operation handed to the connection, by Operation.key.
         self.delivery: dict[tuple[str, str], Delivery] = {}
+        # Every frame native streaming pushed, by the client event of its create.
+        self.pushes: dict[str, Push] = {}
         # The in-place edit waiting for the server: its operations not yet confirmed, and the
         # error that failed it.
         self._edit: EditBatch | None = None
         self._unconfirmed: set[tuple[str, str]] = set()
         self._edit_error = None
+        # The history view a native-streaming edit keeps until the edit before it is finished.
+        self._queued: CanonicalRequest | None = None
         # The responses in progress. The server answers each response.create with a
         # response.created in the order it received them, so a requested response waits here for
         # its id; every later event of a response names that id.
@@ -265,10 +282,39 @@ class RealtimeSessionCore:
         self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
         return user
 
-    def in_place_problem(self, history: CanonicalRequest) -> str | None:
+    def push(self, history: CanonicalRequest) -> Create:
+        """Plan the user item of the newest frame as native streaming pushes it, while responses
+        and edits are in progress: its create names a client event, so a server error about it
+        refuses this frame alone. The history ends with it."""
+        frame = history_frames(history.items)[1][-1]
+        user = self._frame_create(frame, event_id=self._new_id("push"))
+        self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
+        self.pushes[user.event_id] = Push(frame.id, user.item_id)
+        return user
+
+    def _covered(self, frames: list[ViewFrame]) -> tuple[list[ViewFrame], set[str]]:
+        """Split a history view made while frames are pushed at the newest frame both the view
+        and the mirror hold. An edit covers the view's frames up to that one. The view's frames
+        after it are not in the mirror, not pushed yet or refused, and the mirror's frames after
+        it were pushed after the view was made: the edit leaves both alone. With no frame in
+        common, the mirror's frames the view dropped cannot be told from those pushed after it,
+        so the edit leaves them all; the next edit that shares a frame drops the old ones."""
+        held = [index for index, frame in enumerate(frames) if frame.id in self.frames]
+        if not held:
+            return [], set(self.frames)
+        order = list(self.frames)
+        newest = order.index(frames[held[-1]].id)
+        return frames[: held[-1] + 1], set(order[newest + 1 :])
+
+    def in_place_problem(self, history: CanonicalRequest, *, pushing: bool = False) -> str | None:
         """Why the history view cannot be reached by editing this conversation, if it cannot.
-        Checked before the first operation is sent, so a refused edit sends nothing."""
-        for frame in history_frames(history.items)[1]:
+        Checked before the first operation is sent, so a refused edit sends nothing. With
+        ``pushing`` (native streaming pushes frames while views are made), the frames the edit
+        leaves to their pushes are not checked."""
+        frames = history_frames(history.items)[1]
+        if pushing:
+            frames = self._covered(frames)[0]
+        for frame in frames:
             sent = self.frames.get(frame.id)
             if sent is None:
                 return "retained turn is missing its provider user item ID"
@@ -276,24 +322,32 @@ class RealtimeSessionCore:
                 return "provider visual state cannot be unfolded in place"
         return None
 
-    def begin_edit(self, history: CanonicalRequest) -> EditBatch:
+    def begin_edit(self, history: CanonicalRequest, *, pushing: bool = False) -> EditBatch:
         """Plan one in-place edit to the history view, which then waits for the server to
-        confirm each of its operations."""
+        confirm each of its operations. With ``pushing`` it leaves out the frames newer than the
+        newest one the view and the mirror both hold."""
         ledger, frames = history_frames(history.items)
-        batch = self._edit_batch(ledger, frames, history.policy.texts)
+        newer: set[str] = set()
+        if pushing:
+            frames, newer = self._covered(frames)
+        batch = self._edit_batch(ledger, frames, history.policy.texts, newer)
         self._edit, self._edit_error = batch, None
         self._unconfirmed = {op.key for op in batch.operations}
         return batch
 
     def _edit_batch(
-        self, ledger: RequestItem | None, frames: list[ViewFrame], texts: FixedTexts
+        self,
+        ledger: RequestItem | None,
+        frames: list[ViewFrame],
+        texts: FixedTexts,
+        newer: set[str],
     ) -> EditBatch:
         """Plan one in-place edit from the history view, in send order: delete the items of sent
-        frames the view no longer holds, replace the ledger if its text changed, then replace each
-        user item whose text changed or whose screenshot folded, after the item before it. Every
-        operation names its client event."""
+        frames the view no longer holds, except those pushed after it (``newer``), replace the
+        ledger if its text changed, then replace each user item whose text changed or whose
+        screenshot folded, after the item before it. Every operation names its client event."""
         operations: list[Operation] = []
-        retained = {frame.id for frame in frames}
+        retained = {frame.id for frame in frames} | newer
         for frame_id, sent in self.frames.items():
             if frame_id not in retained:
                 for item_id in (sent.user_item_id, *sent.assistant_item_ids):
@@ -388,9 +442,31 @@ class RealtimeSessionCore:
         for frame_id in batch.removed:
             del self.frames[frame_id]
         for frame_id, planned in batch.frames.items():
-            sent = self.frames[frame_id]
-            sent.user_item_id, sent.text, sent.folded = planned
+            # A frame whose push the server refused while the edit waited has left the mirror.
+            # The edit neither changed it nor anchored on it, or the server would have failed it.
+            sent = self.frames.get(frame_id)
+            if sent is not None:
+                sent.user_item_id, sent.text, sent.folded = planned
         return batch
+
+    def queue_edit(self, history: CanonicalRequest) -> EditBatch | None:
+        """Plan a native-streaming edit to the history view, leaving out the frames newer than the
+        newest one the view and the session both hold, or keep the view while an edit is not
+        finished: one edit is sent at a time. Returns the batch to send now, if any."""
+        self._queued = history
+        return self.next_edit()
+
+    def next_edit(self) -> EditBatch | None:
+        """Plan the view a native-streaming edit kept, once the edit before it is finished. Only
+        the newest view kept is planned, as each is the whole session wanted. A view the session
+        cannot reach in place raises before anything is planned, and is dropped."""
+        if self._edit is not None or self._queued is None:
+            return None
+        history, self._queued = self._queued, None
+        problem = self.in_place_problem(history, pushing=True)
+        if problem is not None:
+            raise RuntimeError(f"Realtime history edit refused: {problem}")
+        return self.begin_edit(history, pushing=True)
 
     def start_generation(self, frame_id: str) -> Generation:
         """Register the response about to be requested for a sent frame. The first
@@ -402,7 +478,7 @@ class RealtimeSessionCore:
 
     def receive(self, event) -> bool:
         """Apply one server event of this connection, in arrival order. Returns whether a state
-        took it: an operation it confirms, or the edit or response it is about."""
+        took it: an operation it confirms, or the push, edit or response it is about."""
         kind = getattr(event, "type", "")
         if kind in _CREATE_ACKS:
             return self._confirm(("create", str(getattr(getattr(event, "item", None), "id", ""))))
@@ -411,6 +487,12 @@ class RealtimeSessionCore:
         if kind == "error":
             error = getattr(event, "error", None)
             event_id = getattr(error, "event_id", None)
+            push = self.pushes.get(event_id)
+            if push is not None:
+                # The server did not make the frame's item.
+                push.error = error
+                del self.frames[push.frame_id]
+                return True
             edit = self._edit
             about_edit = edit is not None and event_id in edit.client_events
             taken = False
