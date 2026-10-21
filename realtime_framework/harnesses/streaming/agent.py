@@ -94,6 +94,9 @@ from realtime_framework.providers.registry import adapter_class
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
+# How long an abort or close waits on the execution thread: longer than the session waits for
+# an abort's cleanup, with time to close after (RealtimeRuntime.close).
+_SESSION_TIMEOUT_S = 15.0
 # The boundaries that end a reply, whose provider history state is the session's after it.
 _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
 
@@ -156,9 +159,11 @@ class NativeStreamingAgent(VisionAgentBase):
         # The episode's operational clock; on the wall clock it is the semantic one as well.
         self.clock = clock or SystemClock()
         self._lock = threading.Lock()  # the blocks and the replies; the shell's threads share them
-        # Held, on the execution thread, while a push readies the session and while a reply
-        # readies it and is asked for: no push reopens the session between the two.
+        # Held, on the execution thread, while a push readies the session, while a reply
+        # readies it and is asked for, and while close() closes it: no push reopens the session
+        # between a reply's two steps, or once it is closed.
         self._readying = asyncio.Lock()
+        self._closed = False
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
@@ -299,6 +304,7 @@ class NativeStreamingAgent(VisionAgentBase):
 
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
         async with self._readying:
+            self._stop_if_closed()
             with self._lock:
                 view = self._view()
                 on_session = bool(self._on_session)
@@ -400,9 +406,14 @@ class NativeStreamingAgent(VisionAgentBase):
         if renew:
             await self.driver.renew(self._seed, view, self._record_session)
 
+    def _stop_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("the streaming agent is closed")
+
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
         try:
             async with self._readying:
+                self._stop_if_closed()
                 with self._lock:
                     view = self._view()
                 await self._ready(view, renew=True)
@@ -553,7 +564,10 @@ class NativeStreamingAgent(VisionAgentBase):
             else:
                 reply.cancel.set()
         with trace_scope(phase="abort", generation=generation):
-            self._execution.run(self.driver.abort(None if reply is None else reply.handle))
+            self._execution.run(
+                self.driver.abort(None if reply is None else reply.handle),
+                timeout=_SESSION_TIMEOUT_S,
+            )
         with self._lock:
             self._off(generation)
 
@@ -647,11 +661,28 @@ class NativeStreamingAgent(VisionAgentBase):
     # ---- the end ------------------------------------------------------------------------------
 
     def close(self):
+        """Give up the replies left, which the kernel neither accepts nor discards once the
+        episode ended, as DefaultHarness.close discards them; close the session once no push is
+        readying it, and take no push or reply after; then stop the execution thread."""
+        with self._lock:
+            left = list(self._replies.values())
+            self._replies.clear()
+        for reply in left:
+            reply.cancel.set()
+            self._log_reply(reply, "reply_discarded")
         try:
-            with trace_scope(phase="close"):
-                self._execution.run(self.driver.close())
-            self._execution.stop()
+            # The runner closes an agent whose initialize failed, before or after the execution
+            # thread started; one that never started has no session to close.
+            if self._execution.running:
+                with trace_scope(phase="close"):
+                    self._execution.run(self._close(), timeout=_SESSION_TIMEOUT_S)
         finally:
+            self._execution.stop()
             for pushed in self._pushed.values():
                 self._finish_frame(pushed)
             super().close()
+
+    async def _close(self) -> None:
+        async with self._readying:
+            self._closed = True
+            await self.driver.close()

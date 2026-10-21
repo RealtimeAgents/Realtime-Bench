@@ -4,6 +4,7 @@ the view each connection operation is given."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -823,3 +824,37 @@ def test_feedback_says_what_the_model_asked_for_not_what_ran(monkeypatch, clock)
     feedback = agent.driver.views[-1].items[-2].block
     assert (feedback.id, feedback.text) == ("d0.text.feedback", execution_feedback(outcome, asked))
     agent.close()
+
+
+# ---- the end -----------------------------------------------------------------------------------
+
+
+def test_closing_ends_a_reply_the_episode_left_with_a_discarded_row(monkeypatch, clock, tmp_path):
+    """After Termination the kernel sends no AcceptResult or DiscardResult (kernel/core.py): a
+    reply still on is given up at close and written as discarded, as DefaultHarness.close
+    discards the generations left."""
+    agent = make_agent(monkeypatch, clock, log_dir=tmp_path)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 1),), ends_at=1.0))
+    agent.generate(7, 3, frame, BUDGET)
+    agent.close()
+    rows = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
+    assert [(row["type"], row["generation"]) for row in rows] == [("reply_discarded", 7)]
+
+
+def test_closing_while_a_push_reopens_the_session_closes_what_it_opened(monkeypatch, clock):
+    """The push's reopen is under way when the episode closes the agent: close waits for it and
+    closes the session it opened, whether the frame went in first or not."""
+    agent = make_agent(monkeypatch, clock)
+    _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_s = 2.0
+    pushed, _ = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    clock.sleep(0.5)
+    agent.close()
+    assert not agent.driver.open
+    operations = [call[0] for call in agent.driver.calls]
+    assert operations[-1] == "close"
+    assert operations.index("connect", 1) < len(operations) - 1
+    assert clock.wait(pushed, 1.0)
