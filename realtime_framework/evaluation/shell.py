@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from realtime_framework.clock import Clocks
-from realtime_framework.entity.actions import Action, Observation
+from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
@@ -709,7 +709,11 @@ class _Shell:
     def _commit(self, outcome: Outcome) -> None:
         env, decision, config = self.env, self._decision, self.config
         r = decision.result
-        if outcome.protocol_failure == "unsupported_terminal_action":
+        # The loop has no terminal actions: the record of a proposed DONE or FAIL says so, also
+        # when the move went over the per-move cap and the kernel named no protocol failure
+        # (kernel/turns.py _accept).
+        proposed = r.get("action")
+        if proposed is not None and proposed.action_type in (ActionType.DONE, ActionType.FAIL):
             r["action_protocol"] = episode_records.terminal_wait_protocol(
                 r.get("action_protocol") or {}
             )
