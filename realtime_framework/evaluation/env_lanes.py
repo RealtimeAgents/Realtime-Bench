@@ -21,6 +21,13 @@ action lane reads after it (actions.py:930-941, 978-1063). So a capture and an a
 gate and run at once, and new frames come in while a long action runs (phase2.md, native
 streaming). An end check, the snapshot and the release of the inputs hold it alone.
 
+Sharing the gate is not sharing the browser's connection. A CDP call's timeout spends the wait for
+its session's lock (sandbox/browser/cdp.py PersistentCDPClient), which the action's page barriers
+and focus check hold on the session every caller shares; so the capture's DOM and AX probes run on
+a session of their own on the same page (decision N33), which the lanes open. Still one at a time:
+the page runs the two sessions' scripts in turn, and the task's own check of a captured frame
+(``captured_frame_is_current``) stays on the shared session.
+
 A lane takes its place in the gate's line when it is given the command, so the environment runs
 the kernel's commands in the order the kernel sent them, also those it sent in one step to two
 lanes. One kind goes out of turn: while an action holds the gate, a capture goes past what waits to
@@ -79,6 +86,8 @@ from realtime_framework.evaluation.kernel.events import (
 
 # What an operation needs of the gate: a capture and an action share it, the rest hold it alone.
 CAPTURE, ACTION, ALONE = "capture", "action", "alone"
+# The CDP session of the captures' probes (sandbox/browser/cdp.py client_for).
+CAPTURE_CDP_SESSION = "capture"
 
 
 class EnvGate:
@@ -257,6 +266,8 @@ class EnvLanes:
         self.env = env
         self._clock = clock
         self._raised = raised
+        if env.scene_capture is not None:  # None for a desktop task
+            env.scene_capture.cdp_session = CAPTURE_CDP_SESSION
         self.gate = EnvGate(env, post, clock)
         self._capture = Lane("capture", post, clock, self.gate, CAPTURE)
         self._action = Lane("action", post, clock, self.gate, ACTION)

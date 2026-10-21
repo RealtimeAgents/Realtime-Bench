@@ -118,6 +118,9 @@ class BrowserSceneCapture:
             self.spec = {**self.spec, "__text_observation": True}
         self.desktop_size = desktop_size
         self._probe_override = probe
+        # The CDP session of the DOM and AX probes (browser/cdp.py client_for): the shared one,
+        # unless a capture runs alongside the actions and must not wait for their calls.
+        self.cdp_session = ""
         self._lock = threading.Lock()
         self._sequence = 0
         self._target_hint = self._infer_target_hint(task)
@@ -168,6 +171,7 @@ class BrowserSceneCapture:
                 spec=payload["spec"],
                 desktop_size=tuple(payload["desktop_size"]),
                 include_ax_tree=include_ax_tree,
+                session=self.cdp_session,
             )
             if not isinstance(value, dict):
                 raise RuntimeError("CDP helper returned a non-object")
