@@ -23,6 +23,8 @@ from realtime_framework.providers.gemini.session import (
     Part,
     Received,
     SessionCore,
+    resume_at_clean_boundary,
+    resume_latest_handle,
 )
 
 GO_AWAY_RECONNECT = {
@@ -33,12 +35,17 @@ GO_AWAY_RECONNECT = {
 QUEUED = {"status": "queued"}
 
 
-def session_core(completion_signal="turn_complete", tool_response_scheduling="when_idle"):
+def session_core(
+    completion_signal="turn_complete",
+    tool_response_scheduling="when_idle",
+    resumption=resume_at_clean_boundary,
+):
     return SessionCore(
         {
             "completion_signal": completion_signal,
             "tool_response_scheduling": tool_response_scheduling,
-        }
+        },
+        resumption=resumption,
     )
 
 
@@ -537,6 +544,35 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     start_turn(core, "turn-1")
     connected(core, view([turn(0)]))
     assert core.received(1, CANCELLATION, 0.0).cancelled == ("call-1", "call-0")
+
+
+def test_the_latest_handle_rule_resumes_without_a_clean_boundary():
+    """A frame pushed while a reply runs drops the handle the default rule would promote: on a
+    goAway it rebuilds, and resume_latest_handle resumes with the latest handle the server
+    called resumable, through later frames and unresumable updates."""
+    clean, latest = session_core(), session_core(resumption=resume_latest_handle)
+    renewal = {"force_rebuild": False, "generation_clean": True}
+    for core in (clean, latest):
+        connected(core)
+        clean_turn(core, "turn-0", "handle-0")
+        assert core.resume_handle_for("go_away", **renewal) == "handle-0"  # the rules agree here
+        start_turn(core, "turn-1")
+        receive(core, update("handle-1"))
+        core.observe(view([turn(1)]))  # the next frame, pushed while the reply runs
+        receive(core, update(None))
+        receive(core, go_away())
+        receive(core, server_content(turnComplete=True))
+    assert clean.last_turn_clean and clean.resume_handle_for("go_away", **renewal) is None
+    assert latest.resume_handle_for("go_away", **renewal) == "handle-1"
+    assert latest.resume_handle_for("go_away", force_rebuild=True, generation_clean=True) is None
+    assert latest.resume_handle_for("history_block_compaction", **renewal) is None
+
+    connected(latest, resume_handle="handle-1")
+    assert latest.resume_handle_for("go_away", **renewal) == "handle-1"  # the one it resumed
+    arrive(latest, update("handle-2"))  # between replies
+    assert latest.resume_handle_for("go_away", **renewal) == "handle-2"
+    connected(latest, view([turn(0)]))  # a rebuild has no handle until the server sends one
+    assert latest.resume_handle_for("go_away", **renewal) is None
 
 
 def test_an_orphan_from_a_closed_connection_changes_nothing():

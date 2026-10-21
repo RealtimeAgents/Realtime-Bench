@@ -215,6 +215,29 @@ class _Generation:
     interrupted: bool = False
 
 
+# Resumption rules: the handle a sync resumes with, or None to rebuild from the history.
+
+
+def resume_at_clean_boundary(
+    core: SessionCore, reason: str, *, force_rebuild: bool, generation_clean: bool
+) -> str | None:
+    """Only a goAway renewal after a clean interaction resumes, with the handle promoted at that
+    boundary."""
+    if reason == "go_away" and not force_rebuild and core.last_turn_clean and generation_clean:
+        return core.resume_handle
+    return None
+
+
+def resume_latest_handle(
+    core: SessionCore, reason: str, *, force_rebuild: bool, generation_clean: bool
+) -> str | None:
+    """A goAway renewal resumes with the latest handle the server called resumable, whatever was
+    sent or read after it: the session it restores may lack input or output the history has."""
+    if reason == "go_away" and not force_rebuild:
+        return core.latest_resume_handle
+    return None
+
+
 class SessionCore:
     """The Live session as this client wrote it, across the connections that carry it.
 
@@ -228,9 +251,11 @@ class SessionCore:
     handle, goAway or clean boundary is taken from it.
     """
 
-    def __init__(self, options: dict):
-        """``options`` are the driver's resolved Live options (live.py live_options)."""
+    def __init__(self, options: dict, *, resumption=resume_at_clean_boundary):
+        """``options`` are the driver's resolved Live options (live.py live_options);
+        ``resumption`` is the rule resume_handle_for applies."""
         self._completion_signal = options["completion_signal"]
+        self._resumption = resumption
         # What a queued acknowledgement adds to each function response, and so each replayed
         # receipt that did not store its own.
         self.tool_response_options = (
@@ -247,6 +272,9 @@ class SessionCore:
         self.pending_calls: list[tuple] = []
         self.go_away_deadline: float | None = None  # on the driver's monotonic clock
         self.resume_handle: str | None = None  # promoted at a clean interaction boundary
+        # Since the connection was planned: the latest handle the server called resumable, else
+        # the one the connection resumes.
+        self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         self.last_turn_clean = False
         # The generation whose reply is being read, by connection, until the reply ends.
@@ -261,6 +289,7 @@ class SessionCore:
         from the history view (None for an empty session). A resume carries no history: the
         server restores the session from the handle."""
         self.resume_handle = resume_handle
+        self.latest_resume_handle = resume_handle
         contents, seeded = self._seed(history)
         return Connect(
             resume_handle,
@@ -385,11 +414,11 @@ class SessionCore:
         self.go_away_deadline = None
 
     def resume_handle_for(self, reason: str, *, force_rebuild: bool, generation_clean: bool):
-        """The handle a sync resumes with, or None to rebuild from the history. Only a goAway
-        renewal after a clean interaction resumes."""
-        if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
-            return self.resume_handle
-        return None
+        """The handle a sync resumes with, or None to rebuild from the history, by the core's
+        resumption rule: by default only a goAway renewal after a clean interaction resumes."""
+        return self._resumption(
+            self, reason, force_rebuild=force_rebuild, generation_clean=generation_clean
+        )
 
     # ---- writes ----------------------------------------------------------------------------
 
@@ -523,6 +552,7 @@ class SessionCore:
                 self.candidate_resume_handle = None
             elif getattr(update, "new_handle", None):
                 self.candidate_resume_handle = update.new_handle
+                self.latest_resume_handle = update.new_handle
         # Resumption updates often arrive before the final server-content message. Promote the
         # latest candidate only at a clean turn boundary; a handle captured mid-generation may not
         # represent the complete provider turn.
