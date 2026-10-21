@@ -833,10 +833,10 @@ class GuestEnvironment:
         """Press the chord now and release it when the lease expires; never block the loop.
 
         The lease lasts ``duration`` from the press, or to ``release_at`` (semantic seconds since
-        the origin) when the kernel's shell gives it. A press delayed to or past that time keeps
-        its keys down at least min(duration, TAP_HOLD_S) more after its keydown returned:
-        TAP_HOLD_S is the token clock's tap, 1/60 s (the guest's wall-clock tap is 1/30 s), and a
-        press never holds longer late than on time.
+        the origin) when the kernel's shell gives it, but at least min(duration, TAP_HOLD_S)
+        after its keydown returned, past that time when the press came that late: TAP_HOLD_S is
+        the token clock's tap, 1/60 s (the guest's wall-clock tap is 1/30 s), and a press never
+        holds longer late than on time.
         """
         parts, chord = self._key_chord(action)
         duration = float(action.parameters.get("duration", 1.0))
@@ -1083,9 +1083,10 @@ class GuestEnvironment:
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
             ):
-                # On the wall clock the key checks, the hold, the re-press after a guest tap and
-                # the hold snapshot below wait for _wall_lock, which the release timer holds
-                # during its guest request.
+                # On the wall clock the key and scroll checks, the hold, the re-press after a guest
+                # tap and the hold snapshot below wait for _wall_lock, which the release timer
+                # holds during its guest request; after a failed guest request, counting its keys
+                # as held waits for it only while the budget lasts.
                 self._reject(action)
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
