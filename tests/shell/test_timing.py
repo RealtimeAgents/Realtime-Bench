@@ -14,7 +14,7 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation import shell
 from realtime_framework.evaluation.kernel.core import Kernel
 
-from .world import Agent, Reply, World, run
+from .world import CLICK, Agent, Reply, World, run
 
 
 @pytest.fixture
@@ -86,6 +86,18 @@ def test_a_result_is_filed_when_it_came_back_not_when_it_was_settled():
     assert episode.statuses() == ["not_applied_time_limit"]
     assert [p["decision"] for p in episode.trace.payloads("ActionProposed")] == [0]
     assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+
+
+def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_moved():
+    """The first decision's 1000 tokens move the world to tick 10; the next call never answers.
+    The watchdog's 7 s are operational, so it fires 7 s into that call though the tick is past
+    7 (the shell waits on the operational reading for it)."""
+    replies = [Reply(0.0, CLICK, output_tokens=1000), Reply(hang=True)]
+    timing = RunnerTimingConfig(provider_watchdog_s=7.0)
+    episode = run("token", 30.0, replies, tokens_per_frame=100, timing=timing)
+    assert episode.invalid["reason"] == "generation_watchdog_timeout"
+    assert episode.env._termination["end_s"] == 10.0
+    assert episode.clock.monotonic() == 7.0
 
 
 def test_the_token_watchdog_runs_on_operational_seconds_from_the_environment(monkeypatch, steps):

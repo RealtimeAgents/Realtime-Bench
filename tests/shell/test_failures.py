@@ -260,6 +260,23 @@ def test_the_reads_a_tap_makes_count_toward_three_failed_reads_in_a_row(tap_chec
         assert episode.env._stop_reason == "tick_limit"
 
 
+class _ExecuteRaises(Environment):
+    """Breaks the protocol: execute() raises instead of returning "failed"."""
+
+    def execute(self, action, *, release_at=None):
+        raise RuntimeError("execute broke")
+
+
+def test_a_command_the_kernel_waits_for_is_answered_though_it_raised():
+    """The kernel settles a decision by the answer to its Execute; one whose run raised is
+    answered with its failure, so the episode still finalizes (kernel/core.py)."""
+    episode = run("wall", 3.0, [Reply(0.5)], env_type=_ExecuteRaises)
+    _finalized(episode, 0.5)
+    assert episode.invalid["reason"] == "run_exception"
+    assert "RuntimeError: execute broke" in episode.env._loop_error
+    assert episode.statuses() == ["invalid_run"]
+
+
 def test_a_failed_end_check_alone_does_not_end_the_episode():
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], World(check_errors={2: "slow read"}))
     assert episode.invalid is None
