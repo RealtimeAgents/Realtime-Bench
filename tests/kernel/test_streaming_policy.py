@@ -694,3 +694,13 @@ def test_a_config_that_would_divide_by_zero_or_never_let_time_pass_is_refused(fi
     """A watchdog of no time gives replies up at one instant forever; a rate of 0 divides by 0."""
     with pytest.raises(ValueError):
         StreamingConfig(**({"duration_s": 5.0} | fields))
+
+
+def test_reads_due_on_a_fast_grid_do_not_keep_the_captures_out():
+    """At 30 environment frames a second a read of 0.5 s finds the next read due when it answers.
+    The operations due take the environment in the order they came due, so the capture due since
+    the start goes first at 0.5, and each capture due at a whole second goes after the read
+    then out."""
+    sim = _run(World(check_s=0.5), 3.0, env_fps=30.0)
+    assert sim.captures == [0.5, 1.5, 2.5]
+    assert sim.started == [(1, 0.5)]
