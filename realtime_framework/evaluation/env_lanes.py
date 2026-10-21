@@ -41,8 +41,9 @@ the environment right after the action, before the next action can change what i
 those times go to the shell as Executed before the answer. An end check's is EndChecked. A command
 whose run raised is answered with the error, as the turn-based shell answers one.
 
-End checks run on a lane of their own (stream-plan 4.9): the policy may send an Execute while a
-state read, up to 10 s on the wall clock, is out, and the two take the gate in turn.
+End checks run on a lane of their own (stream-plan 4.9). The streaming policy sends one only
+while no capture or action is out, and neither while one is out (kernel/streaming.py ``_proceed``),
+so an end check does not wait behind them for the gate; the gate holds it alone all the same.
 
 At the end the snapshot waits for the action executing to finish (stream-plan 4.8) and goes
 right after it: ``freeze_turn`` gives it the place in the gate's line next after that action,
@@ -131,12 +132,15 @@ class EnvGate:
                 self._grant()
 
     def latched(self, record: dict) -> None:
-        """Post the invalid-run record the environment latched itself, unless it was posted."""
+        """Post the invalid-run record the environment latched itself, unless it was posted.
+        Posted under the mutex: an operation that finds the record claimed must not post its
+        answer before the claim's post. The kernel's inbox takes no gate lock, so no lock is
+        taken the other way round."""
         with self._mutex:
             if record is self._posted:
                 return
             self._posted = record
-        self._post(Invalidated(record["category"], record["reason"], record.get("detail")))
+            self._post(Invalidated(record["category"], record["reason"], record.get("detail")))
 
     def _grant(self) -> None:
         """Give the gate to the waiters that may have it now, in line order (caller holds the
