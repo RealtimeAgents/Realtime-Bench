@@ -14,6 +14,7 @@ from realtime_framework.harnesses.default.parsing import _literal_object
 from realtime_framework.harnesses.default.parsing import unique_object
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.usage import normalize_provider_token_usage
 from realtime_framework.entity.actions import ActionTranslator
@@ -692,6 +693,9 @@ from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
+from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
+from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import bind_action
 from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
@@ -815,7 +819,6 @@ from dataclasses import replace as replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.harnesses.default.parsing import resolve_action_output
-from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import GenerationOutput
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import PendingDecision
@@ -851,9 +854,6 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
-from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
-from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
-from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
@@ -1066,7 +1066,6 @@ class _Staged:
     result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
-    protocol_failure: str | None = None
     # Its trajectory row, which finalize_decision_audit writes from the result.
     audit: dict | None = None
 
@@ -1335,14 +1334,13 @@ class DefaultHarness(VisionAgentBase):
         )
         return generation
 
-    def _close(self, generation: _Generation) -> None:
+    def _close(
+        self, generation: _Generation | None = None, number: int | None = None
+    ) -> _Generation:
+        """End a generation: the legacy loop's ``generation``, or the kernel's ``number``."""
         with self._generations_lock:
-            self._generations.remove(generation)
-
-    def _take(self, number: int) -> _Generation:
-        """End the kernel's generation ``number``."""
-        with self._generations_lock:
-            (generation,) = [g for g in self._generations if g.number == number]
+            if generation is None:
+                (generation,) = [g for g in self._generations if g.number == number]
             self._generations.remove(generation)
         return generation
 
@@ -1374,10 +1372,10 @@ class DefaultHarness(VisionAgentBase):
         return PendingDecision(generation, decision, result, cancelled, state.staged)
 
     def accept(self, generation: int) -> None:
-        self._write(self._take(generation))
+        self._write(self._close(number=generation))
 
     def discard(self, generation: int) -> None:
-        self._drop(self._take(generation))
+        self._drop(self._close(number=generation))
 
     def stream_generate(self, tick=0):
         """The legacy loop's decision on the newest prefilled frame. Its result is written at
@@ -1416,7 +1414,7 @@ class DefaultHarness(VisionAgentBase):
         self.action_history.append({"tick": self.tick_count, **staged.record})
         self._accumulate_usage(result.output.usage)
         self._end_tool_calls(
-            staged, "action_protocol_error" if staged.protocol_failure else "completed"
+            staged, "action_protocol_error" if staged.record["protocol_failure"] else "completed"
         )
 
     def _drop(self, generation: _Generation) -> None:
@@ -1792,7 +1790,6 @@ class DefaultHarness(VisionAgentBase):
                 "protocol_failure": action_protocol.get("protocol_failure"),
                 "parse_mode": action_protocol.get("parse_mode"),
             },
-            action_protocol.get("protocol_failure"),
         )
 
         token_fields = dict(output.token_fields)
@@ -2073,6 +2070,7 @@ class DefaultHarness(VisionAgentBase):
         if generation is None:
             scope = {"decision": self._trace_decision}
         else:
+            # A generation aborted before its worker started generate() has no decision yet.
             scope = {"decision": aborted[0].decision if aborted else None, "generation": generation}
         with trace_scope(phase="abort", **scope):
             self._runtime.abort()
