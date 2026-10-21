@@ -331,7 +331,9 @@ def _probe_runner(request: dict) -> dict:
     }
 
     argparse.ArgumentParser.error = _reject
-    time.sleep = lambda seconds: None
+    # Skips main()'s setup waits, which its real clocks make through time.sleep: main() runs here
+    # only up to its decision loop, to export the configuration.
+    time.sleep = lambda seconds: None  # noqa: TID251
     for name in ("build_image_if_needed", "start_container", "_start_screensaver_keepalive"):
         setattr(desktop, name, lambda *args, **kwargs: None)
     desktop._start_screen_recording = lambda run_dir=None: False
