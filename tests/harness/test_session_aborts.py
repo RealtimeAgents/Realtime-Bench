@@ -187,6 +187,33 @@ def test_an_abort_in_the_sync_after_a_generation_keeps_its_usage(tmp_path, monke
     assert usage["responses"] == 1
 
 
+def test_closing_the_runtime_abandons_a_generation_that_reopens_the_session(tmp_path):
+    """The runtime closes while generation 2's second attempt reopens the session, before the
+    agent cancelled anything: the generation is abandoned all the same, and the connection it
+    opened after the close is closed again."""
+    with RealtimeStub(realtime_replies([STEP, STEP]), drop_responses=(2,)) as stub:
+        episode = _episode(stub, tmp_path)
+        agent, runtime = episode.agent, episode.agent._runtime
+        try:
+            stub.wait_for_session_update()
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            entered, release = _hold_the_next_open(agent.driver.client.realtime)
+            box, done = _in_worker(lambda: _generate(episode, 2, 1))
+            assert entered.wait(WAIT_S), "the second attempt opened no session"
+            runtime.close()
+            release.set()
+            abandoned = _joined(box, done)
+            left = (agent.driver._connected, agent.driver._conn)
+        finally:
+            episode.finish()
+        connections = stub.finish()
+    assert abandoned.cancelled
+    # The driver holds no connection: the one the reopen made is closed.
+    assert left == (False, None)
+    assert len(connections) == 2 and stub.violations == []
+
+
 def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
     """Response 2 is dropped before any output, so generation 2's second attempt rebuilds the
     session (the driver's ensure_ready). The kernel aborts generation 2 before the rebuild's
