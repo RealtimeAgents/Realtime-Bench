@@ -84,8 +84,8 @@ def test_wall_clock_merges_the_schedules_and_compares_times():
     agenda = Agenda(merged=True)
     agenda.add(OPS, 3.0, Priority.CONTROL, "per-move cap")
     agenda.add(SEMANTIC, 1.0, Priority.START, "next frame")
-    agenda.add(OPS, 1.0, Priority.COMPLETION, "backoff over")
-    assert _drain(agenda, 3.0) == ["backoff over", "next frame", "per-move cap"]
+    agenda.add(OPS, 1.0, Priority.COMPLETION, "operational entry")
+    assert _drain(agenda, 3.0) == ["operational entry", "next frame", "per-move cap"]
 
 
 def test_cancelled_timers_never_come_due():

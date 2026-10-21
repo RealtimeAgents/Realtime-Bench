@@ -2,7 +2,8 @@
 
 A timer belongs to one clock and comes due only by that clock's reading. The semantic schedule
 holds what falls due in world time (the deadline, the next frame); the operational schedule holds
-watchdogs, backoff and pacing. Within one schedule entries run by time, then priority, then the
+the watchdogs. An encoder's own waits (backoff, pacing) stay in the encoder, on the operational
+clock, and are not filed here. Within one schedule entries run by time, then priority, then the
 order they were filed in. Entries of different schedules are never compared by time, only by
 priority and filing order. On the wall clock the two clocks are one, and so are the schedules.
 
