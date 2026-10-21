@@ -28,6 +28,9 @@ The first difference is a problem, and after it nothing more is released:
 - a message that differs from the recording, or one beyond it;
 - a connection the recording does not have, or a close where it has more records;
 - at the end, records left unused.
+
+from_trace converts what an episode trace recorded of a live session into a cassette, so that a
+smoke test's run becomes a recording.
 """
 
 from __future__ import annotations
@@ -37,9 +40,14 @@ import re
 from collections import deque
 from pathlib import Path
 
+from realtime_framework.evaluation.agent_trace import load_body
 from tests.replay import baseline
+from tests.replay.ws_gemini_live import WireNormalizer
 
 DIRECTIONS = ("open", "c2s", "s2c", "close")
+# The normalizer of each live channel's messages: the drivers' trace channels
+# (providers/openai_realtime.py:186-188, providers/gemini/live.py:270).
+NORMALIZERS = {"openai_realtime.ws": baseline.Normalizer, "gemini_live.ws": WireNormalizer}
 _PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
 # A timed record is due once the clock reads its time to within this: a wait until it ends at
 # ``now + (at - now)`` on the clock, which can round one ulp short of ``at``.
@@ -57,6 +65,52 @@ def read(path: Path) -> list[dict]:
     for record in records:
         assert record.keys() == {"conn", "dir", "at", "msg"}, record
         assert record["dir"] in DIRECTIONS, record
+    return records
+
+
+def from_trace(run_dir: Path) -> list[dict]:
+    """The cassette of the live session in ``run_dir``'s episode trace.
+
+    The agent trace records each message a driver sends just before it writes it, and each one it
+    receives when it reads it, with the connection that carried it (providers/capture.py:266-370),
+    in the order they were captured (evaluation/agent_trace.py:179-196); the bodies are in the
+    blob pack. A message's ``at`` is its capture's wall time less the episode origin the runner
+    records in ActiveLoopStarted (evaluation/runner.py:1407-1419), which on the wall clock is
+    semantic time. A retried run appends attempts; the last one with that record is taken.
+
+    The trace records no handshake (providers/capture.py:8-9) and no close: the recording
+    connection captures handshake failures, sends and receives only (capture.py:303-331). So a
+    connection opens when its first message is captured, and the cassette has no closes. The
+    failed handshakes and sends the trace does record have no cassette form yet and raise.
+    """
+    events = [
+        json.loads(line)
+        for line in (run_dir / "episode_trace.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    started = [event for event in events if event["event"] == "ActiveLoopStarted"][-1]
+    if started["payload"]["clock_mode"] != "wall":
+        raise ValueError("capture times are semantic time on the wall clock only")
+    origin_ns = round(started["payload"]["start_unix_s"] * 1e9)
+    messages = [
+        event["payload"]
+        for event in events
+        if event["event"] == "SessionMessage" and event["attempt_id"] == started["attempt_id"]
+    ]
+    (channel,) = {message["channel"] for message in messages}
+    normalize = NORMALIZERS[channel]()
+    numbers: dict[str, int] = {}
+    records = []
+    for message in messages:
+        if message["direction"] == "lifecycle":
+            raise ValueError(f"no cassette form for a {message['message_type']} record")
+        at = round((message["captured_wall_time_ns"] - origin_ns) / 1e9, 6)
+        conn = numbers.get(message["connection_id"])
+        if conn is None:
+            conn = numbers[message["connection_id"]] = len(numbers) + 1
+            records.append({"conn": conn, "dir": "open", "at": at, "msg": None})
+        body = json.loads(load_body(run_dir / "episode_blobs.pack", message["body"]))
+        direction = "c2s" if message["direction"] == "client" else "s2c"
+        records.append({"conn": conn, "dir": direction, "at": at, "msg": normalize(body)})
     return records
 
 
