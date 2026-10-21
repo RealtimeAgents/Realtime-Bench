@@ -38,8 +38,10 @@ raised is answered with the error, as the turn-based shell answers one.
 End checks run on a lane of their own (stream-plan 4.9): the policy may send an Execute while a
 state read, up to 10 s on the wall clock, is out, and the two take the gate in turn.
 
-At the end the snapshot waits for the action executing to finish (stream-plan 4.8): the lanes say
-which one executes (``executing``) and when it is done (``action_done``).
+At the end the snapshot waits for the action executing to finish (stream-plan 4.8) and goes
+right after it: ``freeze_turn`` gives it the place in the gate's line next after that action,
+ahead of the reads that were waiting, as the turn-based shell takes it right after the action on
+its one thread.
 """
 
 from __future__ import annotations
@@ -74,24 +76,37 @@ class EnvGate:
         self._waiting: deque[threading.Event] = deque()  # one per waiter, in the order it asked
         self._posted: dict | None = None
 
-    def reserve(self) -> threading.Event:
-        """A place in the gate's line, which ``call`` waits for."""
+    def reserve(self, *, after: threading.Event | None = None, ahead=False) -> threading.Event:
+        """A place in the gate's line, which ``call`` waits for: at its end, or ``ahead`` of
+        every other waiter but ``after`` while that one waits."""
         turn = self._clock.event()
         with self._mutex:
-            if self._held:
-                self._waiting.append(turn)
-            else:
+            if not self._held:
                 self._held = True
                 turn.set()
+            elif not ahead:
+                self._waiting.append(turn)
+            elif after is not None and after in self._waiting:
+                self._waiting.insert(self._waiting.index(after) + 1, turn)
+            else:
+                self._waiting.appendleft(turn)
         return turn
 
-    def call(self, operation: Callable[..., Any], *args, turn: threading.Event | None = None):
+    def call(
+        self,
+        operation: Callable[..., Any],
+        *args,
+        turn: threading.Event | None = None,
+        wait: float | None = None,
+    ):
         """Run one environment operation under the gate once its ``turn`` comes, a place it takes
-        now unless one is given. An invalid run the environment latched itself, with its own
-        reason, goes to the kernel before the operation returns."""
+        now unless one is given; TimeoutError when it does not come within ``wait`` seconds. An
+        invalid run the environment latched itself, with its own reason, goes to the kernel
+        before the operation returns."""
         turn = self.reserve() if turn is None else turn
         # The holder hands the gate on by setting the next turn.
-        self._clock.wait(turn, None)
+        if not self._clock.wait(turn, wait) and not self._leave(turn):
+            raise TimeoutError(f"the environment was still busy {wait:g}s later")
         try:
             latched = getattr(self._env, "_invalid_run", None)
             try:
@@ -118,6 +133,14 @@ class EnvGate:
             else:
                 self._held = False
 
+    def _leave(self, turn: threading.Event) -> bool:
+        """Leave the line after a wait ran out; True when the gate came to ``turn`` meanwhile."""
+        with self._mutex:
+            if turn.is_set():
+                return True
+            self._waiting.remove(turn)
+            return False
+
 
 class Lane:
     """One thread that runs one command at a time and posts the answer each one returns."""
@@ -133,16 +156,20 @@ class Lane:
         self._ready = clock.event()
         clock.start_thread(self._run, name=f"env-lane-{name}")
 
-    def submit(self, command: Callable[..., object]) -> None:
+    def submit(self, command: Callable[..., object]) -> threading.Event | None:
         """Run ``command`` next; it returns the answer to post and never raises. On the gate, the
-        lane takes its place in the gate's line now and passes it as ``command(turn)``."""
+        lane takes its place in the gate's line now, passes it as ``command(turn)`` and returns
+        it."""
+        turn = None
         with self._mutex:
             assert not self._closed, f"the {self.name} lane is closed"
             assert self._command is None, f"the {self.name} lane is still running a command"
             if self._gate is not None:
-                command = functools.partial(command, self._gate.reserve())
+                turn = self._gate.reserve()
+                command = functools.partial(command, turn)
             self._command = command
         self._ready.set()
+        return turn
 
     def close(self) -> None:
         """End the thread once the command it runs, if any, is answered."""
@@ -188,8 +215,7 @@ class EnvLanes:
         self._action = Lane("action", post, clock, self.gate)
         self._end_check = Lane("end-check", post, clock, self.gate)
         self.executing: Execute | None = None  # the command the action lane runs
-        self._idle = clock.event()  # set while no action executes
-        self._idle.set()
+        self._executing_turn: threading.Event | None = None  # its place at the gate
 
     def capture(self, captured: Callable[[Observation], FrameCaptured]) -> None:
         """Capture: answer with ``captured(observation)``, which the lane calls."""
@@ -214,16 +240,16 @@ class EnvLanes:
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
                 return ActionExecuted(command.decision, error=traceback.format_exc())
             finally:
-                self.executing = None
-                self._idle.set()
+                self.executing = self._executing_turn = None
 
         self.executing = command
-        self._idle.clear()
-        self._action.submit(run)
+        self._executing_turn = self._action.submit(run)
 
-    def action_done(self, wait: float) -> bool:
-        """Whether no action executes, or the one that does finishes within ``wait`` seconds."""
-        return self._clock.wait(self._idle, wait)
+    def freeze_turn(self) -> tuple[threading.Event, Execute | None]:
+        """The snapshot's place at the gate, next after the action executing, ahead of every other
+        operation waiting; and that action, None when none executes."""
+        executing, turn = self.executing, self._executing_turn
+        return self.gate.reserve(after=turn, ahead=True), executing
 
     def check_end(self, command: CheckEnd) -> None:
         def run(turn):

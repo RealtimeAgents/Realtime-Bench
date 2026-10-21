@@ -21,81 +21,10 @@ from realtime_framework.evaluation.kernel.events import (
 )
 from tests.fake_clock import FakeClock
 
+from .fakes import FakeEnv, Inbox
+
 CLICK = Action(ActionType.CLICK, {"x": 1, "y": 2})
 INVALID = {"category": "environment", "reason": "action_execution_failed", "detail": "guest"}
-
-
-class FakeEnv:
-    """The ShellEnvironment fields the lanes read, and operations that each take a set time."""
-
-    def __init__(self, clock, *, capture_s=0.25, execute_s=2.0, check_s=0.5):
-        self.clock = clock
-        self.seconds = {"capture": capture_s, "execute": execute_s, "check_end": check_s}
-        self.intervals: list[tuple[str, float, float]] = []
-        self.running = 0
-        self.overlapped = False
-        self.captures = 0
-        self.fail: set[str] = set()
-        self._invalid_run = None
-        self._last_exec_error = None
-        self._last_rejected_by_guest = False
-        self._last_execution_result = None
-        self._last_coordinate_trace = None
-        self.last_held_keys = ()
-        self.last_end_checks = ()
-        self.during: dict = {}  # name -> what an operation does halfway through
-
-    def _operate(self, name: str) -> None:
-        self.running += 1
-        self.overlapped |= self.running > 1
-        start = self.clock.monotonic()
-        try:
-            self.clock.sleep(self.seconds[name] / 2)
-            self.during.pop(name, lambda: None)()
-            self.clock.sleep(self.seconds[name] / 2)
-            if name in self.fail:
-                raise RuntimeError(f"{name} failed")
-        finally:
-            self.running -= 1
-            self.intervals.append((name, start, self.clock.monotonic()))
-
-    def capture(self) -> Observation:
-        self._operate("capture")
-        # What a later operation leaves behind: an action read after it would see this.
-        self._last_exec_error, self._last_rejected_by_guest = None, False
-        self._last_execution_result = {"left": "by a capture"}
-        self.captures += 1
-        return Observation(b"", self.clock.time(), 0, {"observation_id": f"obs-{self.captures}"})
-
-    def execute(self, action, *, release_at=None) -> str:
-        self._operate("execute")
-        self._last_coordinate_trace = {"x": action.parameters["x"]}
-        self._last_execution_result = {"executed": action.action_type.value}
-        return "applied"
-
-    def check_end(self) -> tuple[bool, str | None]:
-        self._operate("check_end")
-        return False, None
-
-
-class Inbox:
-    """The kernel's inbox as the lanes see it: each event posted, with the time it came."""
-
-    def __init__(self, clock):
-        self.clock = clock
-        self.events: list[tuple[float, object]] = []
-        self._arrived = clock.event()
-
-    def post(self, event) -> None:
-        self.events.append((self.clock.monotonic(), event))
-        self._arrived.set()
-
-    def wait_for(self, count: int) -> list[tuple[float, object]]:
-        while len(self.events) < count:
-            self._arrived.clear()
-            if len(self.events) < count:
-                assert self.clock.wait(self._arrived, 60.0), f"only {len(self.events)} events"
-        return self.events
 
 
 def _frame(observation: Observation) -> FrameCaptured:
@@ -236,20 +165,34 @@ def test_an_operation_that_raises_is_answered_with_its_error():
     assert (events[1].decision, events[2].request, executed) == (4, 9, [])
 
 
-def test_the_action_lane_says_when_the_action_it_runs_is_done():
-    clock, _, inbox, lanes = _lanes()
-    done = []
+def test_the_snapshot_goes_next_after_the_action_executing_ahead_of_the_reads_waiting():
+    clock, env, inbox, lanes = _lanes()
     with clock.participant():
-        assert lanes.action_done(0.0) and lanes.executing is None
         command = Execute(0, CLICK)
         lanes.execute(command, lambda record: None)
-        assert lanes.executing is command
-        done.append((lanes.action_done(0.5), clock.monotonic()))
-        done.append((lanes.action_done(5.0), clock.monotonic()))
-        inbox.wait_for(1)
+        clock.sleep(0.5)
+        lanes.capture(_frame)  # waits for the action
+        turn, executing = lanes.freeze_turn()
+        assert executing is command
+        snapshot = lanes.gate.call(env.task.evaluation_snapshot, turn=turn)
+        inbox.wait_for(2)
     lanes.close()
-    assert done == [(False, 0.5), (True, 2.0)]
+    assert snapshot == {"score": 1}
+    assert env.intervals == [("execute", 0.0, 2.0), ("snapshot", 2.0, 2.5), ("capture", 2.5, 2.75)]
     assert lanes.executing is None
+
+
+def test_a_turn_that_does_not_come_in_time_leaves_the_line():
+    clock, env, inbox, lanes = _lanes()
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        turn, _ = lanes.freeze_turn()
+        with pytest.raises(TimeoutError, match="still busy 0.5s later"):
+            lanes.gate.call(env.task.evaluation_snapshot, turn=turn, wait=0.5)
+        lanes.capture(_frame)  # takes the gate after the action, nothing ahead of it
+        inbox.wait_for(2)
+    lanes.close()
+    assert env.intervals == [("execute", 0.0, 2.0), ("capture", 2.0, 2.25)]
 
 
 @pytest.mark.parametrize("check_first", [True, False])
