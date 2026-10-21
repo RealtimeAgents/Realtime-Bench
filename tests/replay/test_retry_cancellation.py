@@ -671,6 +671,42 @@ def test_session_abort_during_connect_backoff(tmp_path, monkeypatch):
     ]
 
 
+def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkeypatch):
+    """Session API. An abort closes the session, and the next decision reconnects
+    (RealtimeRuntime._ensure_ready); every upgrade is refused (HTTP 503). connect() makes the
+    shared policy's four attempts and raises TransportFailureError with its retries spent, which
+    classify_transport_error passes on (providers/openai_realtime.py), so the turn is not retried
+    on top of it: four connects in all, not four per turn attempt."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    refused = tuple(range(2, 20))  # more than four turn attempts of four connects would take
+    with RealtimeStub(realtime_replies([STEP]), reject_upgrades=refused) as stub:
+        episode = _session_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            stub.wait_for_session_update()
+            agent.abort()  # no generation is under way: it only closes the session
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            observation = episode.frames.capture(0)
+            budget = episode.budget(observation.tick_number)
+            pending = agent.generate(GENERATION, 0, observation, budget)
+            agent.discard(GENERATION)
+        finally:
+            episode.finish()
+        connections = stub.finish()
+    assert stub.violations == [] and stub.unscripted == 0
+    assert [c["rejected"] for c in connections] == [None] + [503] * 4
+    assert not pending.cancelled
+    assert pending.result["invalid_reason"] == "provider_unavailable"
+    assert _attempts(tmp_path) == [(1, "failed", None)]
+    assert _connects(tmp_path) == [
+        ("initialize", 1, "ok"),
+        ("decision", 1, "retry"),
+        ("decision", 2, "retry"),
+        ("decision", 3, "retry"),
+        ("decision", 4, "failed"),
+    ]
+
+
 LUNA = "gpt-6-luna-decisions"  # configs/models/gpt-6-luna-decisions.yaml
 
 
