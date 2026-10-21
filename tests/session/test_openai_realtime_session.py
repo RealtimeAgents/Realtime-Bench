@@ -535,10 +535,23 @@ def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message") 
     instruction, then every block in order, every reply and feedback kept (decision 4.6), the
     frames older than the newest ``frames`` folded to the turn-based placeholder (decision 23),
     and the feedback where the policy's ``feedback`` places it: as its own block, or with the
-    feedback since the frame before in front of the next frame, which loses it when it folds."""
+    feedback since the frame before in front of the next frame, which loses it when it folds,
+    the feedback since the newest frame waiting at the end."""
     framed = [index for index, block in enumerate(blocks) if block.kind == "frame"]
     older = set(framed[: max(0, len(framed) - frames)])
     items, pending = [RequestItem(SYSTEM, Intent("instruction", "head"))], []
+
+    def prefix(frame):
+        block = ContentBlock(
+            pending[0].id.removesuffix("feedback") + "prefix",
+            "execution_feedback",
+            "environment",
+            BlockTime() if frame is None else frame.time,
+            text="\n".join(waiting.text for waiting in pending),
+            attached_to=None if frame is None else frame.id,
+        )
+        return RequestItem(block, Intent("input", "frame_prefix"))
+
     for index, block in enumerate(blocks):
         if feedback == "frame_prefix" and block.kind == "execution_feedback":
             pending.append(block)
@@ -546,19 +559,13 @@ def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message") 
         if index in older:
             block = replace(block, text=TEXTS.folded_visual, image=None, folded=True)
         elif block.kind == "frame" and pending:
-            prefix = ContentBlock(
-                block.id.removesuffix("frame") + "prefix",
-                "execution_feedback",
-                "environment",
-                block.time,
-                text="\n".join(waiting.text for waiting in pending),
-                attached_to=block.id,
-            )
-            items.append(RequestItem(prefix, Intent("input", "frame_prefix")))
+            items.append(prefix(block))
         if block.kind == "frame":
             pending = []
         role = "model" if block.kind == "model_output" else "input"
         items.append(RequestItem(block, Intent(role, "in_order")))
+    if pending:
+        items.append(prefix(None))
     return CanonicalRequest(POLICY, "turns", tuple(items), ANSWER, CALL)
 
 
@@ -617,7 +624,8 @@ def test_frame_prefix_feedback_goes_into_the_frame_after_it():
     """Under the frame_prefix placement the view puts the feedback since the frame before in
     front of the next frame, as a turn-based frame carries it: a rebuild and a push write it into
     that frame's item, and when the frame folds the feedback gives way to the placeholder with
-    it, so the next frame's placeholder goes after that frame's."""
+    it, so the next frame's placeholder goes after that frame's. The feedback since the newest
+    frame waits at the end of the view for the next frame, and nothing of it is written yet."""
     replayed = new_core().replay_streaming(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
     assert [(op.role, op.text) for op in replayed] == [
         ("user", "frame 1"),
@@ -625,6 +633,8 @@ def test_frame_prefix_feedback_goes_into_the_frame_after_it():
         ("user", "frame 2"),
         ("user", "fb1\nframe 3"),
     ]
+    waiting = new_core().replay_streaming(streaming_view(stream("FRFB"), 3, "frame_prefix"))
+    assert [op.text for op in waiting] == ["frame 1", "r1", "frame 2"]
 
     core = streamed(stream("FRF"), 3, "frame_prefix")
     pushed = core.push(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
