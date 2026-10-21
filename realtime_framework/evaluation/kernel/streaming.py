@@ -20,6 +20,9 @@ same step. The shell runs the abort first, which returns once the agent has clea
 and closed it, which fails a push stuck in it, and the next reply rebuilds the session from the
 accepted history (phase2.md, 什么时候触发生成). A session that still takes no frame after that, or
 one that takes none before the first reply, when there is none to give up, invalidates the run.
+Only a watchdog finds a session stuck, so one that stops taking frames less than a watchdog before
+the end, or whose rebuilt session has not had a watchdog's time when the end comes, leaves the run
+valid.
 
 The state is read at most once an environment frame, at the frame's grid point, during replies too,
 and once more right after every action executed: that read settles the action, as the one that
