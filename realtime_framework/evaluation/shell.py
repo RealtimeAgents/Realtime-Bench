@@ -136,7 +136,9 @@ class ShellEnvironment(Protocol):
     def execute(self, action: Action, *, release_at: float | None = None) -> str:
         """Run one action and return its status as today. Never a wait: the kernel lets a wait's
         time pass itself. On the wall clock a hold_key's keys are released at ``release_at``,
-        semantic seconds since the origin, unless a key is already held until later."""
+        semantic seconds since the origin, unless a key is already held until later; a press
+        delayed to or past ``release_at`` keeps its keys down min(duration, 1/60 s) more after its
+        keydown returned."""
 
     def check_end(self) -> tuple[bool, str | None]:
         """Ask the task whether the episode is over: ``(ended, reason)``. Only the task is asked:
