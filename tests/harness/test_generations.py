@@ -1,6 +1,6 @@
 """DefaultHarness as the event kernel's agent (evaluation/shell.py KernelAgent), on the replay
 stubs: a generation writes no history, AcceptResult writes it, DiscardResult drops it, and an
-abort cancels only the generation it names."""
+abort cancels only the generation it names (test_an_abort_names_one_generation)."""
 
 from __future__ import annotations
 
@@ -129,6 +129,61 @@ def _jsonl(path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def _trace(run_dir, event: str) -> list[dict]:
+    rows = map(json.loads, (run_dir / "episode_trace.jsonl").read_text().splitlines())
+    return [row["payload"] for row in rows if row["event"] == event]
+
+
+def _hold_after_the_reply(driver):
+    """Let each reply stream to its end, then hold it until ``release`` is set: an abort can
+    land once the reply is back and before the runtime reads its cancel event. ``entered`` is
+    set once one waits."""
+    entered, release = threading.Event(), threading.Event()
+    events = driver.events
+
+    def held(generation):
+        async def stream():
+            async for event in events(generation):
+                yield event
+            if not release.is_set():
+                entered.set()
+                await asyncio.to_thread(release.wait, WAIT_S)
+
+        return stream()
+
+    driver.events = held
+    return entered, release
+
+
+def _hold_the_frame(agent, decision: int):
+    """Hold ``decision``'s generation once it has prepared its frame, until ``release`` is set;
+    ``entered`` is set once it waits."""
+    entered, release = threading.Event(), threading.Event()
+    prepare = agent._prepare_observations
+
+    def held(observations, tick, prefix=""):
+        prepared = prepare(observations, tick, prefix)
+        if tick == decision:
+            entered.set()
+            release.wait(WAIT_S)
+        return prepared
+
+    agent._prepare_observations = held
+    return entered, release
+
+
+def _count_calls(target, name: str) -> list:
+    """Wrap an async method; each call records its arguments."""
+    calls, original = [], getattr(target, name)
+
+    async def recorded(*args, **kwargs):
+        calls.append((args, kwargs))
+        return await original(*args, **kwargs)
+
+    setattr(target, name, recorded)
+    return calls
+
+
 def _hold_questions(driver):
     """Hold each Choice question before it is posted until ``release`` is set; ``entered`` is
     set once one waits."""
@@ -229,7 +284,8 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
 def test_an_abort_before_the_reply_sends_no_request(tmp_path):
     """Stateless chat. The kernel aborts generation 1 after its observation step and before its
     request goes out. The abort closes the HTTP client; the generation does not open a new one
-    for its request but stops before its reply, so the stub sees no request."""
+    for its request but stops before its reply, so the stub sees no request. Its tool call ends
+    as superseded."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
@@ -258,6 +314,192 @@ def test_an_abort_before_the_reply_sends_no_request(tmp_path):
     assert pending.cancelled
     assert stub.requests == [] and stub.unused_replies == 1
     assert agent._runtime.turns == () and agent.action_history == []
+    outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
+    assert outcomes == ["superseded_by_timeout"]
+
+
+@pytest.mark.parametrize("where", ["ready", "retention"])
+def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
+    """The kernel aborts generation 1 once its session is ready, or while the retention policy
+    runs for it (RealtimeRuntime._run_turn). Aborted first, it applies no retention policy to
+    the shared history; in either case it sends no observation and no request."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent, runtime = episode.agent, episode.agent._runtime
+        entered, release = threading.Event(), threading.Event()
+        ensure_ready, retained = runtime._ensure_ready, runtime._retained
+        sends = _count_calls(agent.driver, "send_observation")
+        retentions = []
+
+        async def ready(*args):
+            await ensure_ready(*args)
+            if where == "ready":
+                entered.set()
+                await asyncio.to_thread(release.wait, WAIT_S)
+
+        def retaining(*args):
+            retentions.append(args)
+            if where == "retention":
+                entered.set()
+                release.wait(WAIT_S)
+            return retained(*args)
+
+        runtime._ensure_ready, runtime._retained = ready, retaining
+        try:
+            box, done = _in_worker(lambda: _generate(episode, 1, 0))
+            assert entered.wait(WAIT_S), f"generation 1 never reached {where}"
+            agent.abort(1)
+            release.set()
+            pending = _joined(box, done)
+            agent.discard(1)
+        finally:
+            episode.finish()
+    assert pending.cancelled and stub.requests == [] and sends == []
+    assert len(retentions) == (where == "retention")
+
+
+def test_an_abort_after_the_reply_keeps_nothing(tmp_path):
+    """Generation 1's reply is back when the kernel aborts it, before the runtime has read its
+    cancel event: generate() reports it cancelled and without an action. Its attempt is
+    recorded cancelled, its provider usage stale, its tool call superseded and its trajectory
+    row discarded; the frame it prepared names its generation."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            entered, release = _hold_after_the_reply(agent.driver)
+            box, done = _in_worker(lambda: _generate(episode, 1, 0))
+            assert entered.wait(WAIT_S), "generation 1 got no reply"
+            agent.abort(1)
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            release.set()
+            pending = _joined(box, done)
+            agent.discard(1)
+            agent.finalize_decision_audit(pending.result)
+        finally:
+            episode.finish()
+    assert len(stub.requests) == 1
+    assert pending.cancelled and pending.result["action"] is None
+    assert agent._runtime.turns == () and agent.action_history == []
+    attempts = [a for a in _trace(tmp_path, "ModelAttemptFinished") if a["kind"] == "generation"]
+    assert [(a["outcome"], a["cancelled"]) for a in attempts] == [("cancelled", True)]
+    assert [p["generation"] for p in _trace(tmp_path, "GenerationPrepared")] == [1]
+    assert [u["stale"] for u in _jsonl(tmp_path / "provider-usage.jsonl")] == [True]
+    outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
+    assert outcomes == ["superseded_by_timeout"]
+    assert [r["type"] for r in _jsonl(tmp_path / "trajectory.jsonl")] == ["decision_discarded"]
+
+
+def test_the_legacy_loop_drops_a_reply_its_abort_cancelled(tmp_path):
+    """The legacy loop's bounded wait expires once the reply is back, before the runtime has
+    read its cancel event: stream_generate hands the result back stale and writes nothing."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            entered, release = _hold_after_the_reply(agent.driver)
+            observation = episode.frames.capture(0)
+            agent.configure_decision(episode.budget(observation.tick_number))
+            agent.stream_prefill(observation)
+            box, done = _in_worker(lambda: agent.stream_generate(tick=0))
+            assert entered.wait(WAIT_S), "decision 0 got no reply"
+            agent.abort()
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            release.set()
+            result = _joined(box, done)
+        finally:
+            episode.finish()
+    assert len(stub.requests) == 1
+    assert result["stale"] is True and result["action"] is None
+    assert agent._runtime.turns == () and agent.action_history == []
+
+
+def test_a_generation_requests_with_its_budget(tmp_path):
+    """generate() hands its budget's provider and transport caps and its clock mode to the
+    request; the transport cap is the request's max_tokens."""
+    seen = []
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        start = agent.driver.start_generation
+
+        async def recorded(request):
+            caps = (request.provider_output_token_cap, request.transport_output_token_cap)
+            seen.append((*caps, request.clock_mode))
+            return await start(request)
+
+        agent.driver.start_generation = recorded
+        try:
+            observation = episode.frames.capture(0)
+            budget = DecisionBudget(None, 777, 778, "wall")
+            assert episode.budget(observation.tick_number) != budget
+            agent.generate(1, 0, observation, budget)
+            agent.accept(1)
+        finally:
+            episode.finish()
+    assert seen == [(777, 778, "wall")]
+    assert json.loads(stub.requests[0].body)["max_tokens"] == 778
+
+
+def test_an_abort_names_one_generation(tmp_path):
+    """Generation 1 is aborted while it prepares its frame, and it is still running when the
+    kernel aborts generation 2, whose worker has not started generate() yet. That abort names
+    generation 2 alone, so generation 2 starts cancelled, and generation 1 stops before its
+    request: the stub sees none."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            entered, release = _hold_the_frame(agent, 0)
+            box, done = _in_worker(lambda: _generate(episode, 1, 0))
+            assert entered.wait(WAIT_S), "generation 1 prepared no frame"
+            agent.abort(1)
+            agent.abort(2)
+            second = _generate(episode, 2, 1)
+            release.set()
+            first = _joined(box, done)
+            agent.discard(2)
+            agent.discard(1)
+        finally:
+            episode.finish()
+    assert first.cancelled and second.cancelled
+    assert stub.requests == [] and stub.unused_replies == 2
+
+
+def test_close_cancels_a_generation_in_flight(tmp_path):
+    """close() at the end of the episode cancels the generations that have not ended: one still
+    preparing its frame then stops before its request and comes back cancelled."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            entered, release = _hold_the_frame(agent, 0)
+            box, done = _in_worker(lambda: _generate(episode, 1, 0))
+            assert entered.wait(WAIT_S), "generation 1 prepared no frame"
+            agent.close()
+            release.set()
+            pending = _joined(box, done)
+        finally:
+            episode.finish()
+    assert pending.cancelled and pending.result["action"] is None
+    assert stub.requests == []
+
+
+def test_an_accepted_reply_that_is_no_action_ends_its_tool_call_as_such(tmp_path):
+    """A reply that is not one valid action is accepted as the wait the loop runs for it; its
+    record is marked a parse failure and its tool call ends as an action protocol error."""
+    with ChatCompletionsStub(replies([LONG_SCENARIO[6]])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            _generate(episode, 1, 0)
+            agent.accept(1)
+        finally:
+            episode.finish()
+    (record,) = agent.action_history
+    assert record["parse_failed"] and record["protocol_failure"]
+    outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
+    assert outcomes == ["action_protocol_error"]
 
 
 def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
@@ -325,17 +567,7 @@ def test_a_late_abandoned_generation_leaves_the_next_its_action_cap(tmp_path):
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
-            entered, release = threading.Event(), threading.Event()
-            prepare = agent._prepare_observations
-
-            def held(observations, tick, prefix=""):
-                prepared = prepare(observations, tick, prefix)
-                if tick == 0:
-                    entered.set()
-                    release.wait(WAIT_S)
-                return prepared
-
-            agent._prepare_observations = held
+            entered, release = _hold_the_frame(agent, 0)
             first, second = episode.frames.capture(0), episode.frames.capture(1)
             box, done = _in_worker(
                 lambda: agent.generate(1, 0, first, DecisionBudget(None, 111, None, "wall"))
@@ -356,29 +588,36 @@ def test_a_late_abandoned_generation_leaves_the_next_its_action_cap(tmp_path):
 
 
 def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
-    """AcceptResult writes decision 0, then Commit reports it: its own action record and turn
-    take the outcome, and the next request carries the feedback after decision 0's reply."""
-    with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
+    """AcceptResult writes decisions 0 and 1 before Commit reports either. Each outcome goes to
+    its own decision's action record and turn, not to the newest, and the next request carries
+    each feedback after its own reply."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:3])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
             _generate(episode, 1, 0)
             agent.accept(1)
-            agent.commit(_outcome(0, "rejected", OUTSIDE_PAGE))
             _generate(episode, 2, 1)
+            agent.accept(2)
+            agent.commit(_outcome(0, "rejected", OUTSIDE_PAGE))
+            agent.commit(_outcome(1, "applied"))
+            _generate(episode, 3, 2)
         finally:
             episode.finish()
-    record = agent.action_history[0]
-    assert (record["applied"], record["result"]) == (False, "rejected")
-    assert record["executed"] == "wait()" and record["requested"].startswith("click ")
-    feedback = (
-        f"EXECUTION RESULT: actual=wait(); requested={record['requested']}; status=rejected."
-        f" Detail: {OUTSIDE_PAGE}"
-    )
-    assert agent._runtime.turns[0].execution_feedback == feedback
-    messages = json.loads(stub.requests[1].body)["messages"]
-    replied = [m["content"] for m in messages].index(CLICK_NAME)
-    assert messages[replied + 1] == {"role": "user", "content": feedback}
+    first, second = agent.action_history
+    assert (first["applied"], first["result"]) == (False, "rejected")
+    assert first["executed"] == "wait()" and first["requested"].startswith("click ")
+    assert (second["applied"], second["result"]) == (True, "applied")
+    rejected = f"requested={first['requested']}; status=rejected. Detail: {OUTSIDE_PAGE}"
+    applied = f"actual={second['executed']}; requested={second['executed']}; status=applied."
+    feedback = [
+        f"EXECUTION RESULT: actual=wait(); {rejected}",
+        f"EXECUTION RESULT: {applied}",
+    ]
+    assert [turn.execution_feedback for turn in agent._runtime.turns] == feedback
+    texts = [m["content"] for m in json.loads(stub.requests[2].body)["messages"]]
+    for reply, text in zip((CLICK_NAME, LONG_SCENARIO[1].reply), feedback, strict=True):
+        assert texts[texts.index(reply) + 1] == text
 
 
 @pytest.mark.parametrize(
@@ -516,6 +755,7 @@ def test_the_note_outlasts_its_frame_s_screenshot(tmp_path, monkeypatch, api):
     if api == "chat":
         texts = [message["content"] for message in body["messages"]]
         assert texts.count(f"{NOTE}\n{FOLDED_VISUAL_PLACEHOLDER}") == 1
+        assert json.dumps(texts).count(NOTE) == 1
     else:
         text = "\n".join(entry for entry in body["state"] if isinstance(entry, str))
         assert text.count(NOTE) == 1
@@ -559,12 +799,13 @@ def test_jev_opens_the_next_observation_with_the_note(tmp_path, monkeypatch):
 
 
 def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
-    """OpenAI Realtime, whose feedback opens the next frame. Decision 1's move runs over the
-    per-move cap: the kernel aborts and discards its generation, and reports skipped_timeout for
-    a decision of which nothing was accepted. Decision 0's action record and turn keep their
-    own outcome. The next frame opens with decision 0's feedback, which only the discarded frame
-    carried, then the note that decision 1's move was skipped."""
-    steps = [LONG_SCENARIO[0], LONG_SCENARIO[2]]
+    """OpenAI Realtime, whose feedback opens the next frame. Decision 1's frame opens with
+    decision 0's feedback, and its reply is back when its move runs over the per-move cap: the
+    kernel aborts and discards its generation, and reports skipped_timeout for a decision of
+    which nothing was accepted. Decision 0's action record and turn keep their own outcome. The
+    next frame opens with decision 0's feedback, which only the discarded frame carried, then
+    the note that decision 1's move was skipped."""
+    steps = [LONG_SCENARIO[0], LONG_SCENARIO[2], LONG_SCENARIO[3]]
     with RealtimeStub(realtime_replies(steps)) as stub:
         episode = build_episode(
             realtime_config(stub.base_url),
@@ -581,8 +822,13 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
             agent.commit(_outcome(0, "applied"))
             record = dict(agent.action_history[0])
             feedback = agent._runtime.turns[0].execution_feedback
+            entered, release = _hold_after_the_reply(agent.driver)
+            box, done = _in_worker(lambda: _generate(episode, 2, 1))
+            assert entered.wait(WAIT_S), "decision 1 got no reply"
             agent.abort(2)
-            skipped = _generate(episode, 2, 1)
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            release.set()
+            skipped = _joined(box, done)
             agent.commit(_outcome(1, "skipped_timeout"))
             agent.discard(2)
             _generate(episode, 3, 2)
@@ -590,7 +836,8 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
         finally:
             episode.finish()
         stub.finish()
-    assert skipped.cancelled
+    assert skipped.cancelled and skipped.staged.result is not None
+    assert skipped.staged.observation.feedback_prefix == feedback
     assert agent.action_history[0] == record and record["result"] == "applied"
     assert [r["tick"] for r in agent.action_history] == [1, 2]
     first, last = agent._runtime.turns
