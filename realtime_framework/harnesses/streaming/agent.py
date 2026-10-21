@@ -399,16 +399,17 @@ class NativeStreamingAgent(VisionAgentBase):
             self._pushed[key] = pushed
             self._release_folded()
         # The kernel's records name the frame by its observation id, the session's by its block:
-        # this ties the two (evaluation/reporting.py summarize_streaming).
+        # this ties the two, with the row's capture, send and confirmation on one clock
+        # (evaluation/reporting.py summarize_streaming).
+        record = pushed.record
         self._trace.capture(
             TraceEvent.FRAME_SENT,
             {
                 "frame": frame,
                 "observation_id": key,
-                "sent_monotonic_ns": round(receipt.written_at * 1e9),
-                "confirmed_monotonic_ns": (
-                    None if receipt.confirmed_at is None else round(receipt.confirmed_at * 1e9)
-                ),
+                "captured_unix_s": record.captured_at,
+                "sent_unix_s": record.sent_unix_s,
+                "acked_unix_s": record.acked_unix_s,
             },
         )
         self._retire()
