@@ -33,10 +33,8 @@ change what it read (``_last_exec_error``, ``_last_rejected_by_guest``, ``_last_
 to the shell as Executed before the answer. An end check's is EndChecked. A command whose run
 raised is answered with the error, as the turn-based shell answers one.
 
-End checks run on a lane of their own (``own_end_check_lane``): the policy may send an Execute
-while a state read, up to 10 s on the wall clock, is out, and the action runs once the read lets go
-of the gate. With False they share the action lane, and the policy waits for one before it sends
-the other (stream-plan 4.9, not decided yet).
+End checks run on a lane of their own (stream-plan 4.9): the policy may send an Execute while a
+state read, up to 10 s on the wall clock, is out, and the two take the gate in turn.
 """
 
 from __future__ import annotations
@@ -167,13 +165,13 @@ class EnvLanes:
     """The capture, action and end-check lanes of one streaming episode, behind one gate.
     ``clock`` is the operational clock; ``post`` hands an event to the kernel (Kernel.post)."""
 
-    def __init__(self, env, post: Callable[[object], None], clock, *, own_end_check_lane=True):
+    def __init__(self, env, post: Callable[[object], None], clock):
         self.env = env
         self._clock = clock
         self.gate = EnvGate(env, post, clock)
         self._capture = Lane("capture", post, clock)
         self._action = Lane("action", post, clock)
-        self._end_check = Lane("end-check", post, clock) if own_end_check_lane else self._action
+        self._end_check = Lane("end-check", post, clock)
 
     def capture(self, captured: Callable[[Observation], FrameCaptured]) -> None:
         """Capture: answer with ``captured(observation)``, which the lane calls."""
@@ -211,7 +209,7 @@ class EnvLanes:
         self._end_check.submit(run)
 
     def close(self) -> None:
-        for lane in {self._capture, self._action, self._end_check}:
+        for lane in (self._capture, self._action, self._end_check):
             lane.close()
 
     def _act(self, command: Execute) -> tuple[ActionExecuted, Executed]:

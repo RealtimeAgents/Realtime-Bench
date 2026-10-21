@@ -102,10 +102,10 @@ def _frame(observation: Observation) -> FrameCaptured:
     return FrameCaptured(observation.metadata["observation_id"], 0.0, observation.timestamp)
 
 
-def _lanes(**kwargs):
+def _lanes():
     clock = FakeClock()
     env, inbox = FakeEnv(clock), Inbox(clock)
-    return clock, env, inbox, EnvLanes(env, inbox.post, clock, **kwargs)
+    return clock, env, inbox, EnvLanes(env, inbox.post, clock)
 
 
 def test_lanes_run_one_operation_at_a_time_in_the_order_they_asked_for_the_gate():
@@ -209,14 +209,11 @@ def test_a_lane_takes_one_command_at_a_time():
     assert [event.decision for _, event in inbox.events] == [0, 1]
 
 
-def test_end_checks_can_share_the_action_lane():
-    clock, _, inbox, lanes = _lanes(own_end_check_lane=False)
+def test_an_end_check_on_its_own_lane_is_taken_while_an_action_runs():
+    clock, _, inbox, lanes = _lanes()
     with clock.participant():
         lanes.execute(Execute(0, CLICK), lambda record: None)
-        with pytest.raises(AssertionError, match="action lane is still running"):
-            lanes.check_end(CheckEnd(1))
-        inbox.wait_for(1)
-        lanes.check_end(CheckEnd(1))
+        lanes.check_end(CheckEnd(1))  # no assertion: the end-check lane is free
         events = inbox.wait_for(2)
     lanes.close()
     assert events[1] == (2.5, EndChecked(1, False, None))
