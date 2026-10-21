@@ -123,10 +123,11 @@ def test_a_reply_with_a_protocol_failure_says_what_could_not_run_and_leaves_its_
     outcomes = _outcomes(World(replies=[Reply(1.0, calls=calls, protocol_failure=failure)]), 1.5)
     outcome = outcomes[None]
     assert (outcome.status, outcome.protocol_failure) == ("none", failure)
+    # The outcome does not say whether the reply handed any action over.
     assert execution_feedback(outcome, "none") == (
         "EXECUTION RESULT: actual=none; requested=none; status=none. "
         f"NOTE: your reply held something that could not be executed ({failure}); nothing ran "
-        "for it, and each action the reply handed over has its own feedback."
+        "for it. Actions the reply handed over, if any, have their own feedback."
     )
     if calls:
         assert execution_feedback(outcomes["a"], action_text(CLICK)).endswith("status=applied.")
