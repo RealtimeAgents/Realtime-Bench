@@ -208,6 +208,11 @@ class Cursor:
     def failed(self) -> bool:
         return bool(self.problems)
 
+    @property
+    def left(self) -> int:
+        """The records not used yet."""
+        return sum(map(len, self._pending.values()))
+
     # ---- what the client does ----------------------------------------------------------------
 
     def open(self, now: float) -> int | None:

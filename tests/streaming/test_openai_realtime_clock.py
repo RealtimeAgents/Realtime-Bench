@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -71,15 +72,23 @@ def test_without_the_clocked_connection_the_fake_clock_never_moves():
 
 
 def test_a_replay_stuck_in_real_time_fails_instead_of_hanging():
-    """A participant blocked in real I/O keeps the fake clock still and from finding the stall;
-    the real-time limit fails the run instead."""
-    clock, blocked = FakeClock(), threading.Event()
+    """A coroutine busy in real time over and over keeps the fake clock still and, as things keep
+    changing on it, from finding the stall; the real-time limit cancels the run instead."""
+    clock = FakeClock()
 
-    async def stuck():
-        await asyncio.to_thread(blocked.wait)  # a thread the clock started, busy for good
+    async def spinning():
+        while True:
+            await asyncio.to_thread(time.sleep, 0.01)  # a thread the clock started, busy
 
-    try:
-        with pytest.raises(AssertionError, match="did not finish within 1 real second"):
-            run_on_fake_clock(clock, stuck(), real_limit_s=1.0)
-    finally:
-        blocked.set()
+    failures = []
+
+    def run():
+        try:
+            run_on_fake_clock(clock, spinning(), real_limit_s=1.0)
+        except AssertionError as exc:
+            failures.append(str(exc))
+
+    runner = threading.Thread(target=run, daemon=True)
+    runner.start()
+    runner.join(10.0)
+    assert failures == ["the replay made no progress for 1 real second(s)"]
