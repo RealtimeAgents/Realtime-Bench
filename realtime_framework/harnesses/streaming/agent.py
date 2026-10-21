@@ -180,7 +180,8 @@ class NativeStreamingAgent(VisionAgentBase):
             fps=float(self.config.fps),
             answer=self._answer,
         )
-        # Until the frame count is a setting of its own (stream-plan 4.12): the encoder's, else
+        # The encoder's streaming setting (ModelConfig.streaming over its defaults); one that
+        # keeps no frame count of its own, as Gemini Live leaves its context to the server, takes
         # the policy's.
         self._retained = self.driver.streaming_settings.get(
             "retained_frames", self._context_policy.visuals.keep

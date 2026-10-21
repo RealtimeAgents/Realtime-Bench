@@ -133,14 +133,16 @@ def setup_message(config) -> dict:
 
 class Rig:
     """A GeminiLiveDriver for ``model`` on fed connections, in native streaming unless
-    ``streaming`` is False; ``log`` holds its waits."""
+    ``streaming`` is False, with the model YAML's ``streaming_settings``; ``log`` holds its
+    waits."""
 
-    def __init__(self, model: str = MODEL, *, streaming: bool = True):
+    def __init__(self, model: str = MODEL, *, streaming: bool = True, streaming_settings=None):
         self.log: list = []
         config = ModelConfig(
             adapter_type="gemini_live",
             model_name=model,
             api_key="replay-dummy-key",
+            streaming=streaming_settings or {},
             **live.GeminiLiveDriver.model_defaults.get(model, {}),
         )
         self.driver = live.GeminiLiveDriver(
@@ -248,6 +250,25 @@ def test_a_streaming_setup_compresses_the_context_and_lets_a_trigger_not_interru
     assert "realtimeInputConfig" not in turn_based_setup  # the preset's client_content
     assert setup["sessionResumption"] == turn_based_setup["sessionResumption"]
     assert "gemini_live_context_window_compression" not in turn_based.driver._connect_metadata
+
+
+def test_a_model_yaml_sets_the_compression_thresholds_the_setup_sends():
+    """The model YAML's streaming settings replace the driver's defaults they name
+    (ModelConfig.streaming); the connection records the values it set up with."""
+    rig = Rig(streaming_settings={"compression_trigger_tokens": 100_000})
+
+    async def run():
+        await rig.connect()
+        await rig.driver.close()
+
+    asyncio.run(run())
+    settings = {**live.GeminiLiveDriver.streaming_settings, "compression_trigger_tokens": 100_000}
+    assert rig.driver.streaming_settings == settings
+    assert setup_message(rig.live.configs[0])["contextWindowCompression"] == {
+        "trigger_tokens": 100_000,
+        "sliding_window": {"target_tokens": settings["compression_target_tokens"]},
+    }
+    assert rig.driver._connect_metadata["gemini_live_context_window_compression"] == settings
 
 
 def test_a_go_away_and_a_handle_with_no_reply_in_flight_renew_by_resuming_the_latest():

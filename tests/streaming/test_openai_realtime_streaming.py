@@ -32,7 +32,7 @@ from realtime_framework.entity.records import UNTRACED
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.streaming.history import frame_block
-from realtime_framework.providers.openai_realtime import _Session
+from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver, _Session
 from realtime_framework.providers.openai_realtime_session import Delete
 from tests.fake_clock import FakeClock
 from tests.replay import baseline
@@ -208,6 +208,16 @@ def test_a_failed_close_cancels_the_reader_and_ends_its_waiters():
     cancelled, (raised,) = _within(scenario())
     assert cancelled
     assert isinstance(raised, ConnectionError)
+
+
+def test_a_model_yaml_sets_the_frames_the_session_keeps():
+    """The model YAML's streaming settings replace the driver's defaults they name
+    (ModelConfig.streaming); the native-streaming agent reads the frame count off the driver."""
+    driver = _offline_driver(streaming=True)
+    assert driver.streaming_settings == OpenAIRealtimeDriver.streaming_settings
+    config = driver.config.model_copy(update={"streaming": {"retained_frames": 5}})
+    assert OpenAIRealtimeDriver(config, streaming=True).streaming_settings == {"retained_frames": 5}
+    assert OpenAIRealtimeDriver.streaming_settings == {"retained_frames": 20}
 
 
 def test_a_streaming_sync_rebuilds_the_session():

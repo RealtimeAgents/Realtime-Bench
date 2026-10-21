@@ -225,10 +225,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         litellm_provider="openai",
     )
     model_defaults: ClassVar[dict[str, dict]] = {}
-    # Native streaming only (interaction_mode "streaming"), recorded in the run configuration: a
-    # frame older than the newest retained_frames folds in place, as a turn-based one does. A
-    # placeholder (the turn-based visual budget, 20 s at 1 fps) until a smoke test measures what a
-    # frame costs against the model's context.
+    # The API's native-streaming settings: a frame older than the newest retained_frames folds in
+    # place, as a turn-based one does. A placeholder, the turn-based visual budget (20 s at
+    # 1 fps), until a smoke test measures what a frame costs against the model's context
+    # (docs/streaming_smoke_test.md). A model YAML's streaming settings replace those they name
+    # (ModelConfig.streaming); a driver holds the values it runs with.
     streaming_settings: ClassVar[dict] = {"retained_frames": 20}
 
     def __init__(self, config, *, clock=None, streaming: bool = False):
@@ -237,6 +238,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         self.config = config
         self.clock = clock or SystemClock()
         self.streaming = streaming
+        self.streaming_settings = {**self.streaming_settings, **config.streaming}
         load_project_secrets()
         key = config.api_key or os.environ.get(config.api_key_env or "OPENAI_API_KEY")
         if not key:
