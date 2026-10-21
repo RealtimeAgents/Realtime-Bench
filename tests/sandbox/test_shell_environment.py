@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from realtime_framework.clock import Clocks, FrameClock
-from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.sandbox.actions import GuestEnvironment
 from realtime_framework.sandbox.budget import BudgetExceeded
 
@@ -19,6 +19,18 @@ from ..fake_clock import FakeClock
 from ..replay.clock_task import ClockTask
 
 ORIGIN = 1_000.0
+
+
+class _Guest:
+    """Runs no command; records each with the virtual time it ran at."""
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.commands = []
+
+    def execute_command(self, command, timeout=30):
+        self.commands.append((self.clock.monotonic(), command))
+        return {"returncode": 0}
 
 
 class _WallTask:
@@ -30,7 +42,7 @@ class _WallTask:
 
 def _wall(clock, horizon_s=60.0, **kwargs):
     return GuestEnvironment(
-        None,
+        _Guest(clock),
         ORIGIN + horizon_s,
         _WallTask(),
         clock_mode="wall",
@@ -169,3 +181,42 @@ def test_a_failed_clock_step_raises_and_latches_the_advance_failure():
         env.step_clock(1.0)
     assert env._invalid_run["reason"] == "clock_advance_failed"
     assert env.tick_index() == 0
+
+
+# ---- last_held_keys -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["left", "arrowleft"])
+def test_a_token_hold_reports_the_identities_of_its_keys(key):
+    """The kernel ends a lease by these identities, so they carry the environment's aliases."""
+    env, _ = _token()
+    assert env.execute(Action.hold_key(f"shift+{key}", 1.0)) == "applied"
+    assert env.last_held_keys == ("shift", "arrowleft")
+
+
+def test_a_token_hold_that_extends_a_held_key_reports_it_too():
+    env, task = _token()
+    env.execute(Action.hold_key("a", 2.0))
+    assert env.execute(Action.hold_key("a+b", 1.0)) == "applied"
+    assert env.last_held_keys == ("a", "b")
+    assert [event["key"] for event in _of(task, "keyDown")] == ["a", "b"]
+
+
+def test_only_a_token_hold_that_lasts_reports_held_keys():
+    env, _ = _token()
+    env.execute(Action.hold_key("a", 1.0))
+    for action in (
+        Action.hold_key("b", 0.0),
+        Action(ActionType.KEY, {"key": "c"}),
+        Action.wait(1.0),
+    ):
+        assert env.execute(action) in {"applied", "wait"}
+        assert env.last_held_keys == ()
+
+
+def test_a_wall_hold_reports_no_held_keys():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    with clock.participant():
+        assert env.execute(Action.hold_key("arrowleft", 1.0)) == "applied"
+    assert env.last_held_keys == ()

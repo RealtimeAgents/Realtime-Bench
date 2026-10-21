@@ -151,6 +151,9 @@ class GuestEnvironment:
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
+        # The identities of the keys the last execute() leased with a hold_key, for the kernel's
+        # shell, which ends the leases itself.
+        self.last_held_keys = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
         self._wall_holds = {}
         self._wall_lock = threading.RLock()
@@ -623,6 +626,7 @@ class GuestEnvironment:
             for identity, _ in new_parts:
                 if identity not in MODIFIER_KEYS:
                     self._start_autorepeat(identity)
+            self.last_held_keys = tuple(identity for identity, _ in parts)
         return {
             "logical_key": chord,
             "effective_chord": "+".join(
@@ -867,6 +871,7 @@ class GuestEnvironment:
 
     def execute(self, action):
         """Apply one action and return its lifecycle status to the scheduler."""
+        self.last_held_keys = ()
         action_type = action.action_type
         if action_type in (ActionType.DONE, ActionType.FAIL):
             if self.honor_fail:
