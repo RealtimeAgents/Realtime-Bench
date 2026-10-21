@@ -1,15 +1,16 @@
 """The conversation of one OpenAI Realtime connection as the driver keeps it, without I/O.
 
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
-assistant items after it, and the archived-action ledger item. From a history view it plans the
-item creates and deletes that bring the server there, and it records what became of each one:
-unknown while it is written, sent once the write returned, acknowledged once the server
-confirmed it. Each server event the driver reads is handed to ``receive``, in the order the
-connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
-settles the in-place edit waiting for it, an error about a frame native streaming pushed refuses
-that frame alone, a response event joins its generation. Sending and receiving are the driver's;
-it reads only while something waits for an event, so what arrives after the last wait reaches the
-core with the next read.
+assistant items after it, and the archived-action ledger item; in native streaming, an item for
+each block of the streaming history view, a frame, a reply's output or an execution feedback, in
+the order the agent accepted them. From a history view it plans the item creates and deletes that
+bring the server there, and it records what became of each one: unknown while it is written, sent
+once the write returned, acknowledged once the server confirmed it. Each server event the driver
+reads is handed to ``receive``, in the order the connection delivered it, which passes it to the
+state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, an
+error about a frame native streaming pushed refuses that frame alone, a response event joins its
+generation. Sending and receiving are the driver's; it reads only while something waits for an
+event, so what arrives after the last wait reaches the core with the next read.
 """
 
 from __future__ import annotations
@@ -156,6 +157,13 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
     return ledger, frames
 
 
+def streaming_blocks(items) -> list[RequestItem]:
+    """Read a native-streaming history view (harnesses/streaming/history.py): its blocks in the
+    order the agent accepted them, frames, replies' outputs and execution feedback, each one item
+    of the session."""
+    return [item for item in items if item.intent.position == "in_order"]
+
+
 @dataclass
 class Generation:
     """One response on this connection: its number on the connection, the frame it answers (in
@@ -186,7 +194,8 @@ class RealtimeSessionCore:
     def __init__(self, new_id: Callable[[str], str]):
         self._new_id = new_id
         # The conversation as the driver last wrote it, which each history view is diffed
-        # against: every frame block id with its items, and the archived-action ledger item.
+        # against: every frame block id with its items (in native streaming, every frame and
+        # feedback block id), and the archived-action ledger item.
         self.frames: dict[str, SentFrame] = {}
         self.ledger_item_id: str | None = None
         self.ledger_text = ""
@@ -229,15 +238,11 @@ class RealtimeSessionCore:
             event_id,
         )
 
-    def _output_create(self, frame: ViewFrame) -> Create | None:
-        """The assistant item of the model output that answered a frame, if it has one."""
-        if frame.output is None:
+    def _output_create(self, output: RequestItem | None) -> Create | None:
+        """The assistant item of a model output, if there is one."""
+        if output is None:
             return None
-        return Create(
-            self._new_id("assistant"),
-            ROLES[frame.output.intent.role],
-            frame.output.block.text,
-        )
+        return Create(self._new_id("assistant"), ROLES[output.intent.role], output.block.text)
 
     def _ledger_create(
         self,
@@ -269,7 +274,7 @@ class RealtimeSessionCore:
             self.ledger_item_id, self.ledger_text = create.item_id, ledger.block.text
         for frame in frames:
             user = self._frame_create(frame)
-            assistant = self._output_create(frame)
+            assistant = self._output_create(frame.output)
             operations += [user] if assistant is None else [user, assistant]
             self.frames[frame.id] = SentFrame(
                 user.item_id,
@@ -277,6 +282,24 @@ class RealtimeSessionCore:
                 frame.item.block.folded,
                 [] if assistant is None else [assistant.item_id],
             )
+        return operations
+
+    def replay_streaming(self, history: CanonicalRequest | None) -> list[Create]:
+        """Plan a new session's items from a native-streaming history view (None for an empty
+        session), one per block in order: a frame's user item, a folded one the placeholder
+        without its screenshot; a reply's assistant item, none for an empty output as a turn's
+        has none; an execution feedback's user item. The mirror becomes the session they make."""
+        operations: list[Create] = []
+        for item in [] if history is None else streaming_blocks(history.items):
+            block = item.block
+            if block.kind == "model_output":
+                assistant = self._output_create(item if block.text else None)
+                self.outputs[block.id] = [] if assistant is None else [assistant.item_id]
+                operations += [] if assistant is None else [assistant]
+            else:
+                user = self._frame_create(ViewFrame(item))
+                self.frames[block.id] = SentFrame(user.item_id, block.text, block.folded)
+                operations.append(user)
         return operations
 
     def observe(self, history: CanonicalRequest) -> Create:
@@ -408,7 +431,7 @@ class RealtimeSessionCore:
         output: delete them, then append its assistant item. The response answered the history
         view's newest frame."""
         _, frames = history_frames(history.items)
-        replacement = self._output_create(frames[-1])
+        replacement = self._output_create(frames[-1].output)
         operations: list[Operation] = [Delete(item_id) for item_id in output_item_ids]
         if replacement is not None:
             operations.append(replacement)
