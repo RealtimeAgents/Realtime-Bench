@@ -712,13 +712,14 @@ def test_a_push_stuck_after_the_rebuild_with_the_end_before_its_watchdog_leaves_
 
 
 @pytest.mark.parametrize(
-    "errors",
-    [{2: "item rejected", 4: "item rejected"}, {4: "item rejected", 5: "item rejected"}],
+    "failed",
+    [(2, 4), (4, 5), (2, 4, 5)],
 )
-def test_a_session_rebuilt_for_a_stuck_push_counts_its_own_failed_pushes_only(errors):
+def test_a_session_rebuilt_for_a_stuck_push_counts_its_own_failed_pushes_only(failed):
     """The third push hangs; its watchdog gives the reply up at 4, and the abort fails that push.
     It was the old session's, as was a failure before it: the rebuilt session has failed one or
     two pushes, not three in a row, and the run goes on."""
+    errors = dict.fromkeys(failed, "item rejected")
     sim = _run(World(push_errors=errors, stuck_pushes={3}), 12.0, push_watchdog_s=2.0)
     assert [data["reason"] for data in sim.data("GenerationAbandoned")] == [
         "push_watchdog",
