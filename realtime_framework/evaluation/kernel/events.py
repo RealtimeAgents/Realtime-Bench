@@ -296,9 +296,9 @@ class Execute:
 
     On the wall clock a hold_key carries ``release_at``: the shell's own timer releases the keys
     it presses then, armed right after the press and outside the kernel, so no later command
-    releases them. A key already held until later keeps its later release, and a press delayed to
-    or past ``release_at`` keeps its keys down min(duration, 1/60 s) more after its keydown
-    returned (sandbox/actions.py _execute_wall_hold)."""
+    releases them. A key already held until later keeps its later release, and a press keeps its
+    keys down at least min(duration, 1/60 s) after its keydown returned, past ``release_at``
+    when the press came that late (sandbox/actions.py _execute_wall_hold)."""
 
     decision: int
     action: Action
