@@ -779,43 +779,60 @@ def test_a_streaming_edit_leaves_the_blocks_pushed_after_the_view():
 
 def test_an_error_about_a_push_refuses_that_block_alone():
     """With a reply in progress and an edit waiting, an error naming a push's client event
-    refuses that block: it leaves the mirror, and the reply and the edit go on. A later view
-    that still holds the block cannot be reached in place, and nothing is planned; one that
-    leaves it out can."""
-    blocks = stream("FFFF")
+    refuses that block: it leaves the mirror, and the reply and the edit go on. Later edits take
+    the refused frame as the server does, as absent: the view still holds it, the edit leaves it
+    out, and the frame after it folds after the item before it."""
+    blocks = stream("FFFFF")
     core = streamed(blocks[:2], frames=5)
     reply = core.start_reply("d1.output")
     refused = core.push(streaming_view(blocks[:3], frames=5))
     sent(core, [refused])
     fold = core.queue_edit(streaming_view(blocks[:3], frames=2))
     sent(core, fold.operations)
+    created, added, text, finished = response_events()
+    assert core.receive(created)
 
     refusal = error(refused.event_id)
     assert core.receive(refusal)
     assert core.pushes[refused.event_id].error is refusal.error
-    assert core.delivery[refused.key] == Delivery.SENT
     assert list(core.frames) == ["f1.frame", "f2.frame"]
-    assert list(reply.events) == []
     assert not core.edit_answered
+    for event in (added, text, finished):
+        assert core.receive(event)
+    assert list(reply.events) == [created, added, text, finished]
     acknowledge(core, fold.operations)
     assert core.finish_edit() is fold
-    # An error that names no client event still reaches the reply.
-    unnamed = error(None)
-    assert core.receive(unnamed)
-    assert list(reply.events) == [unnamed]
 
-    sent(core, [core.push(streaming_view(blocks, frames=5))])
-    with pytest.raises(
-        RuntimeError,
-        match=r"^Realtime history edit refused: retained block is missing its provider item ID$",
-    ):
-        core.queue_edit(streaming_view(blocks, frames=2))
-    assert core.next_edit() is None
-    without = [block for block in blocks if block.id != "f3.frame"]
-    batch = core.queue_edit(streaming_view(without, frames=1))
+    for n in (4, 5):
+        acknowledge(core, sent(core, [core.push(streaming_view(blocks[:n], frames=5))]))
+    item = items_of(core)
+    batch = core.queue_edit(streaming_view(blocks, frames=1))
     assert shape(batch.operations) == [
-        ("delete", core.frames["f2.frame"].user_item_id, None, True),
-        ("create", "user", fold.operations[1].item_id, True),
+        ("delete", item["f2.frame"], None, True),
+        ("create", "user", item["f1.frame"], True),
+        ("delete", item["f4.frame"], None, True),
+        ("create", "user", batch.operations[1].item_id, True),
+    ]
+
+
+def test_a_refused_feedback_is_left_out_of_later_edits():
+    """Feedback pushed as its own item and refused leaves the session as a refused frame does:
+    the frame after it folds after the reply before it."""
+    core = streamed(stream("FFR"), frames=5)
+    refused = core.push(streaming_view(stream("FFRB"), frames=5))
+    sent(core, [refused])
+    assert core.receive(error(refused.event_id))
+    for script in ("FFRBF", "FFRBFF"):
+        acknowledge(core, sent(core, [core.push(streaming_view(stream(script), frames=5))]))
+    item = items_of(core)
+    batch = core.queue_edit(streaming_view(stream("FFRBFF"), frames=1))
+    assert shape(batch.operations) == [
+        ("delete", item["f1.frame"], None, True),
+        ("create", "user", "root", True),
+        ("delete", item["f2.frame"], None, True),
+        ("create", "user", batch.operations[1].item_id, True),
+        ("delete", item["f3.frame"], None, True),
+        ("create", "user", item["d1.output"], True),
     ]
 
 

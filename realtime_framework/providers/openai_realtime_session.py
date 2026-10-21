@@ -199,8 +199,8 @@ class RealtimeSessionCore:
     as it is made, before the driver sends it (an in-place edit only once it is acknowledged), so
     after a failed send it is ahead of the server; the session is not used again then, as the
     runtime reconnects or rebuilds (harnesses/default/context.py). A pushed block the server
-    refuses leaves the mirror, and the session goes on without it; the history views it is edited
-    to must leave the block out too, or they cannot be reached in place.
+    refuses leaves the mirror, and the session goes on without it: native-streaming edits leave
+    it out of the views they plan from.
     """
 
     def __init__(self, new_id: Callable[[str], str]):
@@ -480,30 +480,25 @@ class RealtimeSessionCore:
 
     def next_edit(self) -> EditBatch | None:
         """Plan the view a native-streaming edit kept, once the edit before it is finished. Only
-        the newest view kept is planned, as each is the whole session wanted. A view the session
-        cannot reach in place raises before anything is planned, and is dropped."""
+        the newest view kept is planned, as each is the whole session wanted."""
         if self._edit is not None or self._queued is None:
             return None
         history, self._queued = self._queued, None
-        blocks = self._held_blocks(history)
-        if not all(self._holds(frame.item.block) for frame in blocks):
-            # The view still holds a block whose push the server refused.
-            raise RuntimeError(
-                "Realtime history edit refused: retained block is missing its provider item ID"
-            )
-        return self._begin(self._fold_batch(blocks))
+        return self._begin(self._fold_batch(self._held_blocks(history)))
+
+    def _held_blocks(self, history: CanonicalRequest) -> list[ViewFrame]:
+        """The native-streaming view's blocks an edit covers: those up to the newest one the
+        session holds, except the blocks whose push the server refused, which the server does
+        not have. The view's blocks after the newest held one are not pushed yet; the session's
+        blocks the view lacks were pushed after it was made, as a view keeps every block it once
+        had (decision 4.6). The edit leaves them all alone."""
+        refused = {push.block_id for push in self.pushes.values() if push.error is not None}
+        blocks = [frame for frame in streaming_blocks(history.items) if frame.id not in refused]
+        held = [index for index, frame in enumerate(blocks) if self._holds(frame.item.block)]
+        return blocks[: held[-1] + 1] if held else []
 
     def _holds(self, block) -> bool:
         return block.id in (self.outputs if block.kind == "model_output" else self.frames)
-
-    def _held_blocks(self, history: CanonicalRequest) -> list[ViewFrame]:
-        """A native-streaming view's blocks up to the newest one the session holds, which an edit
-        covers. The view's blocks after it are not pushed yet, or were refused; the session's
-        blocks the view lacks were pushed after it was made, as a view keeps every block it once
-        had (decision 4.6). The edit leaves both alone."""
-        blocks = streaming_blocks(history.items)
-        held = [index for index, frame in enumerate(blocks) if self._holds(frame.item.block)]
-        return blocks[: held[-1] + 1] if held else []
 
     def _fold_batch(self, blocks: list[ViewFrame]) -> EditBatch:
         """Plan one native-streaming edit from the blocks it covers, in send order: replace each
