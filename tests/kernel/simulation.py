@@ -100,6 +100,7 @@ class World:
     execute_s: float = 0.0
     accept_s: float = 0.0
     advance_s: float = 0.0
+    release_s: float = 0.0  # a ReleaseKeys
     commit_s: float = 0.0
     snapshot_s: float = 0.0
     renderer: bool = True  # whether the task commits a frame at the token render barrier
@@ -286,7 +287,9 @@ class Simulation:
                     self.tick = _snap(self.tick + step)
                 kernel.post(ClockStepped(error))
             case ReleaseKeys(keys=keys):
-                kernel.post(KeysReleased(keys, self._release(keys)))
+                error = self._release(keys)
+                self._spend(world.release_s)
+                kernel.post(KeysReleased(keys, error))
             case RenderFrame():
                 self.renders.append(self.semantic())
                 kernel.post(FrameRendered(world.renderer))
