@@ -41,18 +41,20 @@ the first failed read invalidates the run as today.
 from __future__ import annotations
 
 import heapq
+import json
 import threading
 import traceback
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
-from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
@@ -192,6 +194,7 @@ def run_episode(
     clocks: Clocks,
     log: Callable[[str], object] = print,
     trace=None,
+    inputs_log: Path | None = None,
 ) -> list[tuple]:
     """Run one episode on the kernel; return its timeline, ``(k, t_k, d_ticks, tau_k, action)``
     for each decision it reported. Build ``config`` with ``timing=RUNNER_TIMING``: TurnConfig's
@@ -201,8 +204,12 @@ def run_episode(
     reason and the termination record in world seconds (``_stop_reason``, ``_termination``), the
     frozen snapshot (``_termination_snapshot*``, ``_active_end_unix_s``), ``_invalid_run``,
     ``_loop_error``, ``_think_spent``, ``_dropped_intermediate_frames``, ``_stream_frozen`` and
-    the drain of abandoned workers (``_drain_abandoned``)."""
-    return _Shell(agent, env, config, clocks, log, trace).run()
+    the drain of abandoned workers (``_drain_abandoned``).
+
+    ``inputs_log`` records what the kernel was given, one JSON line for each call that handled
+    something: its readings and the events the step took from the inbox. A new kernel fed the
+    same reproduces the episode's log (phase2.md, 怎么验证)."""
+    return _Shell(agent, env, config, clocks, log, trace, inputs_log).run()
 
 
 @dataclass
@@ -249,9 +256,10 @@ def _invalid_record(invalid: Invalidated) -> dict:
 
 
 class _Shell:
-    def __init__(self, agent, env, config: TurnConfig, clocks: Clocks, log, trace) -> None:
+    def __init__(self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, inputs_log):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
         self.log, self.trace = log, trace
+        self._inputs_log = inputs_log
         self.token = config.clock_mode == "token"
         self.policy = TurnPolicy(config)
         self.kernel = Kernel(self.policy)
@@ -259,6 +267,10 @@ class _Shell:
         self._origin = clocks.operational.monotonic()
         self._now: tuple[float, float | None] = (0.0, None)  # the readings of the last step
         self._wake = clocks.operational.event()
+        # A post and the step that takes it from the inbox, in one order.
+        self._inbox = threading.Lock()
+        self._posted: list = []  # posted since the last step
+        self._inputs = None  # the open inputs log
         self._timers: list[float] = []  # heap of when the timers the kernel set come due
         self._returned: deque[_Generation] = deque()  # results the workers handed back
         self._generations: dict[int, _Generation] = {}
@@ -281,8 +293,18 @@ class _Shell:
         env.kernel_counts_reads = True
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
+        if self._inputs_log is None:
+            self._loop()
+        else:
+            with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
+                self._loop()
+        return self.timeline
+
+    def _loop(self) -> None:
         self._now = self._read()
-        self._run_all(self.kernel.start(*self._now))
+        commands = self.kernel.start(*self._now)
+        self._record_inputs("start", [])
+        self._run_all(commands)
         while not self._finished:
             # Cleared before the step takes the inbox: a post the step misses sets it again.
             self._wake.clear()
@@ -291,12 +313,29 @@ class _Shell:
                 self._sleep()
             else:
                 self._run_all(commands)
-        return self.timeline
 
     def post(self, event) -> None:
         """Hand the kernel an event, from any thread, and wake the shell."""
-        self.kernel.post(event)
+        with self._inbox:
+            self.kernel.post(event)
+            self._posted.append(event)
         self._wake.set()
+
+    def _record_inputs(self, call: str, events: list) -> None:
+        if self._inputs is None:
+            return
+        semantic, ops = self._now
+        line = {
+            "call": call,
+            "semantic": semantic,
+            "ops": ops,
+            "events": [{"event": type(event).__name__, **_jsonable(event)} for event in events],
+        }
+        try:
+            self._inputs.write(json.dumps(line) + "\n")
+        except Exception:  # noqa: BLE001 - a replay aid; the episode goes on without it
+            self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
+            self._inputs = None
 
     # ---- clocks -------------------------------------------------------------------------------
 
@@ -307,8 +346,13 @@ class _Shell:
 
     def _step(self):
         self._settle_returned()
-        self._now = self._read()
-        return self.kernel.step(*self._now)
+        with self._inbox:
+            self._now = self._read()
+            commands = self.kernel.step(*self._now)
+            taken, self._posted = self._posted, []
+        if commands is not None:  # a step that took an event always handles something
+            self._record_inputs("step", taken)
+        return commands
 
     def _sleep(self) -> None:
         """Wait for a post or for the next timer. A timer the kernel cancelled stays in the heap
