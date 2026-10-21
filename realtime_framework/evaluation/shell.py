@@ -241,7 +241,7 @@ class _Decision:
     generation: _Generation | None = None
     # Its settled result: the one the kernel accepted, or the call it gave up on at the cap.
     result: dict | None = None
-    executed_at: float | None = None  # operational time right before its Execute
+    landed_at: float | None = None  # operational time when its action came to land
     coordinate_trace: Any = None
     resolved: dict | None = None  # its ActionResolved payload
 
@@ -665,7 +665,6 @@ class _Shell:
         env, decision = self.env, self._decision
         env._last_execution_result = None
         env._last_coordinate_trace = None
-        decision.executed_at = self.clocks.operational.time()
         status = self._env(env.execute, command.action, release_at=command.release_at)
         rejection = error = None
         if status == "failed":
@@ -828,17 +827,18 @@ class _Shell:
                 entry,
             )
         elif kind == TraceEvent.ACTION_RESOLVED.value:
-            executed = decision.executed_at is not None
+            # The record of an unusable result has no landing, clock position or tick
+            # (kernel/turns.py _unusable).
+            landed = decision.landed_at is not None
             decision.resolved = episode_records.action_resolved(
                 decision=data["decision"],
                 observation_id=data["observation_id"],
                 action=data["action"],
                 status=data["status"],
                 terminal_after_action=data["terminal_after_action"],
-                # The record of an unusable result has neither (kernel/turns.py _unusable).
                 action_clock_position=data.get("action_clock_position"),
                 action_resolved_unix_s=(
-                    decision.executed_at if executed else self.clocks.operational.time()
+                    decision.landed_at if landed else self.clocks.operational.time()
                 ),
                 environment_tick=data.get("environment_tick"),
                 execution_result=data.get("execution_result"),
@@ -848,6 +848,10 @@ class _Shell:
         elif kind == TraceEvent.ACTION_APPLIED.value:
             self._emit(TraceEvent.ACTION_APPLIED, decision.resolved, entry)
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
+            if data["phase"] == "inference_to_action":
+                # The action lands: the runner times its resolution here, whatever comes of it
+                # (runner.py _apply).
+                decision.landed_at = self.clocks.operational.time()
             self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
