@@ -582,9 +582,9 @@ def _slow_key_event(clock: FakeClock, task: ClockTask, index: int, seconds: floa
     record = task.clock_key_event
 
     def clock_key_event(event_type, key, auto_repeat=False, held_modifiers=()):
-        if len(sent) == index:
-            _sandbox_call(clock, seconds)
         sent.append(event_type)
+        if len(sent) == index + 1:
+            _sandbox_call(clock, seconds)
         record(event_type, key, auto_repeat=auto_repeat, held_modifiers=held_modifiers)
 
     task.clock_key_event = clock_key_event
@@ -662,6 +662,21 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
         assert clock.monotonic() == budget
     _invalid(env, "clock_key_release_failed", "key release", budget)
     assert env.tick_index() == 0.5
+
+
+def test_a_key_whose_release_failed_stays_held_and_the_cleanup_releases_it_again():
+    """The page may still have it down. A release that only came back late makes the cleanup's
+    keyUp a second one, which a key already up ignores."""
+    clock = FakeClock()
+    env, task = _timed(clock)
+    env.execute(Action.hold_key("a", 0.5))
+    _slow_key_event(clock, task, 0, 60.0)
+    with clock.participant():
+        assert env.execute(Action.wait(1.0)) == "failed"
+        assert list(env._held_keys) == ["a"]
+        env.release_inputs()
+    assert [event["key"] for event in task.events if event["event"] == "keyUp"] == ["a"]
+    assert env._held_keys == {}
 
 
 @pytest.mark.parametrize(
