@@ -122,8 +122,12 @@ class EnvironmentBudgetConfig:
     """Overall time budget in seconds of each environment operation (sandbox/budget.py).
 
     The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in
-    evaluation/runner.py. Running past a budget fails the operation and invalidates the run, except
-    at the cleanup after the outcome is latched (release_inputs), whose failure is only logged.
+    evaluation/runner.py. Running past a budget fails the operation and, as a rule, invalidates
+    the run. The exceptions: the guest's refusal of an action that arrives after the action's
+    budget is still a refusal; a state read the kernel counts fails only that read, and three
+    failed reads in a row invalidate the run; at the cleanup after the outcome is latched
+    (release_inputs), where only a game's key releases under the token clock have a budget, a
+    failure is only logged.
     """
 
     # Execute one action through the guest or xdotool, from its checks to the page's action

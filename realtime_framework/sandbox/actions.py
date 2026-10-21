@@ -18,6 +18,7 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
 from realtime_framework.entity.config import EnvironmentBudgetConfig
 from realtime_framework.sandbox.budget import operation_budget
+from realtime_framework.sandbox.guest import GuestRefused
 from realtime_framework.sandbox.guest import action_timeout
 from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
 
@@ -920,27 +921,26 @@ class GuestEnvironment:
             self._release_mouse_inputs()
 
     @staticmethod
-    def _rejected_by_guest(exc) -> bool:
-        """True when the guest agent refused the action as malformed (HTTP 4xx).
+    def _guest_refusal(exc):
+        """The guest agent's refusal of the action as malformed (GuestRefused), if ``exc`` is one.
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
         unexpected parameters, ...) and answers 400. That is the model's action being
         rejected, not an environment failure, so it must not invalidate the run. A refusal that
         arrives after the action's budget ran out is the guest's too: the BudgetExceeded keeps it
-        as its cause.
+        as its cause. A 4xx from another endpoint does not show that the environment works.
         """
         for error in (exc, exc.__cause__):
-            status = getattr(getattr(error, "response", None), "status_code", None)
-            if isinstance(status, int) and 400 <= status < 500:
-                return True
-        return False
+            if isinstance(error, GuestRefused):
+                return error
+        return None
 
     def _execution_failed(self, exc):
         self.failed += 1
-        self._last_exec_error = str(exc)
-        self._last_rejected_by_guest = self._rejected_by_guest(exc) or isinstance(
-            exc, ActionRejected
-        )
+        refusal = self._guest_refusal(exc)
+        # The model is told the guest's own words; the execution result keeps the whole failure.
+        self._last_exec_error = str(exc if refusal is None else refusal)
+        self._last_rejected_by_guest = refusal is not None or isinstance(exc, ActionRejected)
         if not self._last_rejected_by_guest and not getattr(self, "_invalid_run", None):
             self._invalid_run = {
                 "category": "environment",
@@ -1020,8 +1020,9 @@ class GuestEnvironment:
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
             ):
-                # On the wall clock some checks and the hold snapshot below wait for _wall_lock,
-                # which the release timer holds during its guest request.
+                # On the wall clock the key checks, the hold, the re-press after a guest tap and
+                # the hold snapshot below wait for _wall_lock, which the release timer holds
+                # during its guest request.
                 self._reject(action)
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
