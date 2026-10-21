@@ -5,7 +5,8 @@ FakeClock implements realtime_framework.clock.Clock. Its participants are the th
 (new_event_loop) and threads that join with ``participant()``. A participant is either busy or
 waiting for a condition: an Event from event() to be set, a Future to be done, a socket to turn
 readable (wait_readable), or a deadline. When every participant waits and no condition holds, the
-clock jumps to the earliest deadline and wakes what is due.
+clock jumps to the earliest deadline and wakes what is due. Waits that end at the same instant end
+in no set order, except that one may ask to go first (sleep).
 
 An event loop waits while it sits in select with nothing ready, and while it is not running (made
 and not run yet, or stopped and not closed). A thread-safe callback, a ready socket, a pending
@@ -110,6 +111,7 @@ class _Waiter:
         self.ready = None
         self.in_flight = None
         self.deadline = None
+        self.first = False
 
 
 class _LoopState:
@@ -281,6 +283,7 @@ class FakeClock:
         self._sequence = itertools.count()
         self._stalled: FakeClockStalled | None = None
         self._changed_at = time.monotonic()
+        self._first_at: float | None = None  # when the last first sleep ended
 
     # ---- reads ----
 
@@ -353,12 +356,14 @@ class FakeClock:
 
     # ---- waits ----
 
-    def sleep(self, seconds: float) -> None:
+    def sleep(self, seconds: float, *, first: bool = False) -> None:
+        """``first``: at the instant this sleep ends, no other wait that ends then returns before
+        this thread, and what it sets going, wait again."""
         if seconds < 0:
             raise ValueError("sleep length must be non-negative")
         with self._cond:
             deadline = self._now + seconds
-        self._wait_until(None, deadline)
+        self._wait_until(None, deadline, first=first)
 
     def event(self) -> threading.Event:
         return _Event(self)
@@ -390,7 +395,13 @@ class FakeClock:
         )
 
     def _wait_until(
-        self, ready, deadline: float | None, *, in_flight=None, poll_s: float = _RECHECK_S
+        self,
+        ready,
+        deadline: float | None,
+        *,
+        in_flight=None,
+        poll_s: float = _RECHECK_S,
+        first: bool = False,
     ) -> bool:
         with self._cond:
             waiter = self._current()
@@ -399,14 +410,21 @@ class FakeClock:
                 while True:
                     if ready is not None and ready():
                         return True
+                    held = False
                     if deadline is not None and self._now >= deadline:
-                        return False
+                        held = not first and self._held(waiter)
+                        if not held:
+                            if first:
+                                self._first_at = self._now
+                            return False
                     if self._stalled is not None and waiter.primary:
                         raise self._stalled
                     waiter.waiting, waiter.ready, waiter.deadline = True, ready, deadline
-                    waiter.in_flight = in_flight
+                    waiter.in_flight, waiter.first = in_flight, first
                     self._settle()
-                    if self._runnable(waiter) or (self._stalled is not None and waiter.primary):
+                    if (self._runnable(waiter) and not held) or (
+                        self._stalled is not None and waiter.primary
+                    ):
                         continue
                     self._cond.wait(poll_s)
                     if waiter.primary and time.monotonic() - self._changed_at > _STALL_REAL_S:
@@ -416,8 +434,24 @@ class FakeClock:
                         )
             finally:
                 waiter.waiting, waiter.ready, waiter.deadline = False, None, None
-                waiter.in_flight = None
+                waiter.in_flight, waiter.first = None, False
                 self._changed()
+
+    def _held(self, waiter: _Waiter) -> bool:
+        """Whether ``waiter``'s wait, which ends now, waits for a first sleep that ends now too:
+        until that sleep has ended and everything but the waits it holds waits again."""
+        if any(w.first and w.waiting and w.deadline <= self._now for w in self._waiters):
+            return True
+        if self._first_at != self._now:
+            return False
+        for w in self._waiters:
+            if w is waiter:
+                continue
+            held = w.waiting and not w.first and w.deadline is not None and w.deadline <= self._now
+            busy = not w.waiting or self._runnable(w) or (w.in_flight is not None and w.in_flight())
+            if busy and not held:
+                return True
+        return next(self._loops_holding(), None) is not None
 
     def _notify(self) -> None:
         with self._cond:
@@ -506,6 +540,9 @@ class FakeClock:
                 yield f"{waiter.name} (due)"
             elif waiter.in_flight is not None and waiter.in_flight():
                 yield f"{waiter.name} (bytes in flight)"
+        yield from self._loops_holding()
+
+    def _loops_holding(self):
         for state in self._loops:
             if not state.running:
                 if state.woken and not state.ran:

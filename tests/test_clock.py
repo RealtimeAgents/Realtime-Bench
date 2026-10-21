@@ -222,6 +222,44 @@ def test_loopback_reply_is_never_overtaken_by_a_later_deadline():
     assert clock.monotonic() == 2.25
 
 
+def test_a_first_sleep_goes_before_the_waits_that_end_with_it():
+    """A server thread answers over loopback after a first sleep of 1 s, and the client takes 0.1
+    s of real time to record the answer; the test's own wait times out at 1 s too. It returns only
+    once the answer is recorded and everything waits again."""
+    clock = FakeClock()
+    recorded = []
+    with clock.participant(), socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+
+        def serve():
+            assert clock.wait_readable(server)
+            connection, _ = server.accept()
+            with connection:
+                assert connection.recv(5) == b"hello"
+                clock.sleep(1.0, first=True)
+                connection.sendall(b"world")
+                wait_delivered(connection)
+
+        loop = _running_loop(clock)
+
+        async def ask():
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(b"hello")
+            await writer.drain()
+            reply = await reader.read(5)
+            time.sleep(0.1)  # noqa: ASYNC251 - the loop stays busy in real time, as on a long reply
+            recorded.append((reply, loop.time()))
+            writer.close()
+
+        clock.start_thread(serve)
+        asyncio.run_coroutine_threadsafe(ask(), loop)
+        assert clock.wait(clock.event(), 1.0) is False
+        assert recorded == [(b"world", 1.0)] and clock.monotonic() == 1.0
+        loop.call_soon_threadsafe(loop.stop)
+
+
 def test_a_loop_that_is_not_running_does_not_keep_time_still():
     """A loop made and not run yet, or stopped and never closed, can do nothing by itself."""
     clock = FakeClock()
