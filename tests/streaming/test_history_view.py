@@ -341,6 +341,17 @@ def test_an_older_frame_accepted_after_the_last_archived_reply_stays():
     assert [block.folded for block in _frames(view)] == [True, False]
 
 
+def test_an_archive_takes_an_older_frame_a_kept_reply_is_based_on():
+    # Replies outrun frames: the third and fourth answer frame 2, pushed before the second reply
+    # that the archive takes, so the view opens with a reply whose frame has left.
+    history = History().play("FFRRRRF")
+    view = _view(
+        history.blocks, frames=1, replies="archive", actions=history.actions, policy=SMALL_WINDOW
+    )
+    assert _kept(view) == ["g3.output", "g4.output", "f3.frame"]
+    assert view.items[2].block.based_on == "o2"
+
+
 def test_feedback_that_arrives_after_its_reply_was_archived_leaves_with_it():
     history = History().play("FRFRFRFRBBB")
     view = _view(
@@ -385,15 +396,25 @@ def test_each_longer_history_only_adds_to_the_archive(seed):
         kept = _kept(view)
         assert not archived & set(kept)
         archived |= {block.id for block in accepted} - set(kept)
-        assert kept == [block.id for block in accepted if block.id not in archived]
         newest = [block.id for block in accepted if block.kind == "frame"][-retained:]
         assert [frame.id for frame in _frames(view) if frame.image is not None] == newest
-        replies = sum(block.kind == "model_output" for block in accepted)
-        kept_replies = len(_kept(view, "model_output"))
+        outputs = [block.id for block in accepted if block.kind == "model_output"]
+        replies, kept_replies = len(outputs), len(_kept(view, "model_output"))
         if replies > policy.turns.keep:
             assert policy.turns.keep - policy.turns.block < kept_replies <= policy.turns.keep
         else:
             assert kept_replies == replies
+        # The oldest replies leave with their feedback and the older frames accepted before
+        # the last of them.
+        gone = set(outputs[: replies - kept_replies])
+        last = max((n for n, block in enumerate(accepted) if block.id in gone), default=-1)
+        assert kept == [
+            block.id
+            for n, block in enumerate(accepted)
+            if block.id not in gone
+            and block.attached_to not in gone
+            and not (block.kind == "frame" and block.id not in newest and n < last)
+        ]
         ledger = _ledger(view)
         text = "" if ledger is None else ledger.block.text
         assert text.startswith(ledger_text)
