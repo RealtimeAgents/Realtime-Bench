@@ -71,6 +71,17 @@ def test_without_the_clocked_connection_the_fake_clock_never_moves():
         loop.close()
 
 
+def test_a_run_leaves_no_task_pending():
+    """A task left pending when the loop closes is destroyed pending, which asyncio logs."""
+    left = []
+
+    async def leaves_one():
+        left.append(asyncio.ensure_future(asyncio.Event().wait()))
+
+    run_on_fake_clock(FakeClock(), leaves_one())
+    assert left[0].cancelled()
+
+
 def test_a_replay_stuck_in_real_time_fails_instead_of_hanging():
     """A coroutine busy in real time over and over keeps the fake clock still and, as things keep
     changing on it, from finding the stall; the real-time limit cancels the run instead."""
