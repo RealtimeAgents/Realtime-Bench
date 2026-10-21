@@ -63,6 +63,7 @@ from realtime_framework.entity.model import (
     ProviderObservation,
     RetryCancelled,
     SessionSeed,
+    SyncDisposition,
     retry_cancellation,
 )
 from realtime_framework.entity.records import TraceEvent, trace_scope
@@ -164,6 +165,7 @@ class NativeStreamingAgent(VisionAgentBase):
         # between a reply's two steps, or once it is closed.
         self._readying = asyncio.Lock()
         self._closed = False
+        self._session_known: str | None = None  # the last SessionStateChanged's state
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
@@ -258,17 +260,80 @@ class NativeStreamingAgent(VisionAgentBase):
         )
 
     def _record_session(self, sync, result=None, error=None) -> None:
-        """The ``record`` of a session operation (SessionLifecycle): a HistoryChanged for each
-        sync it ran and for a reopened session."""
+        """The ``record`` of a session operation (SessionLifecycle), as a turn's
+        (RealtimeRuntime._record_reconnect, _record_sync): a HistoryChanged for a reopened
+        session, and for each sync, of the kind the driver's result reports; and what that left
+        of the provider's context."""
+        if sync is None:
+            self._history_changed("rebuild", "recovery", {"reason": "reconnect"})
+            self._session_state("exact", "reconnect", ProviderHistoryState.EXACT)
+            return
+        metadata = result.provider_metadata if result is not None else {}
+        trigger = "recovery" if sync.reason == "runtime_recovery" else "provider"
+        if metadata.get("session_resumed"):
+            kind = "session_resumed"
+        elif metadata.get("resume_error"):
+            kind, trigger = "resume_fallback", "fallback"
+        elif metadata.get("history_in_place_edit_fallback"):
+            kind, trigger = "in_place_edit_fallback", "fallback"
+        elif result is not None and (
+            result.disposition == SyncDisposition.REBUILT
+            or metadata.get("history_session_reconnected")
+        ):
+            kind = "rebuild"
+        else:
+            kind = "sync"
+        self._history_changed(
+            kind,
+            trigger,
+            {
+                "reason": sync.reason,
+                "force_rebuild": sync.force_rebuild,
+                "disposition": result.disposition.value if result is not None else None,
+                "history_state": result.history_state.value if result is not None else None,
+                "detail": result.detail if result is not None else None,
+                "provider_metadata": metadata,
+            },
+            error=repr(error)[:500] if error is not None else None,
+        )
+        if result is None:
+            self._session_state("unknown", f"sync_error:{sync.reason}", None)
+        elif kind == "session_resumed":
+            # Exact for the driver, but restored from the resume handle, not sent on this
+            # connection.
+            self._session_state("unknown", "session_resumed", result.history_state)
+        elif result.history_state == ProviderHistoryState.EXACT:
+            self._session_state("exact", f"sync:{sync.reason}", result.history_state)
+        else:
+            self._session_state("unknown", f"sync:{sync.reason}", result.history_state)
+
+    def _history_changed(self, kind: str, trigger: str, sync: dict, **fields) -> None:
         self._trace.capture(
             TraceEvent.HISTORY_CHANGED,
             {
-                "kind": "reconnect" if sync is None else "sync",
-                "reason": None if sync is None else sync.reason,
-                "force_rebuild": None if sync is None else sync.force_rebuild,
-                "disposition": None if result is None else result.disposition.value,
-                "history_state": None if result is None else result.history_state.value,
-                "error": None if error is None else repr(error)[:500],
+                "kind": kind,
+                "trigger": trigger,
+                "policy_item": None,
+                "policy_version": self._context_policy.version,
+                "sync": sync,
+                **fields,
+            },
+        )
+
+    def _session_state(self, state, cause, provider_state, generation_id=None) -> None:
+        """Record when the provider's context becomes unknown, or exact again, as a turn's
+        session does (RealtimeRuntime._record_session_state)."""
+        if state == self._session_known:
+            return
+        self._session_known = state
+        self._trace.capture(
+            TraceEvent.SESSION_STATE_CHANGED,
+            {
+                "protocol_family": self.driver.capabilities.protocol_family,
+                "state": state,
+                "cause": cause,
+                "provider_history_state": provider_state.value if provider_state else None,
+                "generation_id": generation_id,
             },
         )
 
@@ -454,6 +519,9 @@ class NativeStreamingAgent(VisionAgentBase):
         reply's action is parsed whatever the end, from the text that came."""
         if reply.terminal != ProviderHistoryState.EXACT:
             self.driver.mark_dirty()
+            self._session_state(
+                "unknown", "generation_terminal_state", reply.terminal, reply.handle.generation_id
+            )
         if self._answer.action_channel == "function_call":
             # A call already handed over fixed its action: an interruption after it stands once
             # the terminal usage came.
