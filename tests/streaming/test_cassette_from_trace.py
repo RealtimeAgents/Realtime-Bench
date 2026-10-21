@@ -111,8 +111,9 @@ def test_a_traced_session_becomes_a_cassette_that_replays_on_the_fake_clock(tmp_
     clock = FakeClock()
     with CassetteServer(records, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        connection = driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         replayed = run_on_fake_clock(clock, run_turns(driver, 2))
+    assert connection.opened == 1
     assert server.finish() == []
     assert server.paths == ["/v1/realtime?model=gpt-realtime-2"]
     assert [text for text, _ in replayed] == [text for text, _ in recorded] == list(REPLY_TEXTS)

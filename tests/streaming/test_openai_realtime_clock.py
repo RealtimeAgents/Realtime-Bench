@@ -39,8 +39,9 @@ def test_the_driver_receives_each_message_when_the_fake_clock_reads_its_time():
     clock = FakeClock()
     with CassetteServer(ws_cassette.read(CASSETTE), clock) as server:
         driver = driver_for(server.port, clock, UNTRACED)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        connection = driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         deltas = run_on_fake_clock(clock, run_turns(driver, 1))
+    assert connection.opened == 1
     # Every send, the close at 1.0 s included, happened at its recorded time.
     assert server.finish() == []
     assert deltas == [('{"action": ', 0.5), ('"wait"}', 0.8)]
@@ -66,3 +67,18 @@ def test_without_the_clocked_connection_the_fake_clock_never_moves():
         loop.call_soon_threadsafe(loop.stop)
         thread.join()
         loop.close()
+
+
+def test_a_replay_stuck_in_real_time_fails_instead_of_hanging():
+    """A participant blocked in real I/O keeps the fake clock still and from finding the stall;
+    the real-time limit fails the run instead."""
+    clock, blocked = FakeClock(), threading.Event()
+
+    async def stuck():
+        await asyncio.to_thread(blocked.wait)  # a thread the clock started, busy for good
+
+    try:
+        with pytest.raises(AssertionError, match="did not finish within 1 real second"):
+            run_on_fake_clock(clock, stuck(), real_limit_s=1.0)
+    finally:
+        blocked.set()
