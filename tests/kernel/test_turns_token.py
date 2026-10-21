@@ -789,6 +789,79 @@ def test_a_move_over_the_per_move_cap_is_skipped_but_still_moves_the_clock(
     )
 
 
+# ---- failed state reads -----------------------------------------------------------------------
+
+
+def _tap_episode(checks: tuple[int, ...] = (), taps: tuple[int, ...] = ()) -> Simulation:
+    """A tap landing at tick 1 (n = 256), then a decision that idles to T = 10. End checks 1 to 6
+    are the loop top at 0, after the approach step to 1, before the tap, after it at 1 + 1/60,
+    after the pace step to 2 and the next loop top; the tap checks once inside, at 1 + 1/60.
+    ``checks`` and ``taps`` name the reads that fail."""
+    return _run(
+        _token(10),
+        Reply(action=TAP, output_tokens=256),
+        _idle(8),
+        check_errors={check: f"check {check} failed" for check in checks},
+        tap_check_errors={tap: f"tap check {tap} failed" for tap in taps},
+    )
+
+
+@pytest.mark.parametrize(
+    ("checks", "taps"),
+    [((1,), ()), ((1, 2), ()), ((2, 3, 4, 5), ()), ((3,), (1,))],
+    ids=["one", "two", "the-tap-answers", "one-in-the-tap"],
+)
+def test_fewer_than_three_failed_reads_in_a_row_leave_the_run_valid(checks, taps):
+    # A failed read answers "not over" and the episode goes on as without it. The tap's own read
+    # counts like any other: an answer starts the count over, a failure adds to it.
+    sim = _tap_episode(checks, taps)
+    assert _asked(sim) == _asked(_tap_episode())
+    assert sim.tap_checks == [1 + 1 / 60]
+    assert [outcome.status for outcome in sim.outcomes] == ["applied", "none"]
+    assert sim.entries("RunInvalidated") == []
+    assert (sim.termination.stop_reason, sim.termination.invalid) == ("tick_limit", None)
+
+
+@pytest.mark.parametrize(
+    ("checks", "taps", "asked", "outcomes", "ended_at", "detail"),
+    [
+        # Before the tap, then inside it: the run is invalid as the tap's result arrives, and the
+        # tap is settled as applied and terminal without the check after it.
+        ((2, 3), (1,), [0, 1, 1], [("applied", True)], 1 + 1 / 60, "tap check 1 failed"),
+        # Before the tap, inside it and right after it.
+        ((3, 4), (1,), [0, 1, 1, 1 + 1 / 60], [("applied", True)], 1 + 1 / 60, "check 4 failed"),
+        # After the tap, after the pace step and at the next loop top, which settles nothing.
+        ((4, 5, 6), (), [0, 1, 1, 1 + 1 / 60, 2, 2], [("applied", False)], 2, "check 6 failed"),
+    ],
+    ids=["in-the-tap", "around-the-tap", "after-the-tap"],
+)
+def test_the_third_failed_read_in_a_row_invalidates_the_run(
+    checks, taps, asked, outcomes, ended_at, detail
+):
+    sim = _tap_episode(checks, taps)
+    assert _asked(sim) == asked
+    assert sim.executed == [(0, 1, TAP)]
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == outcomes
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", ended_at)
+    assert termination.invalid == Invalidated("environment", "terminal_state_check_failed", detail)
+
+
+def test_a_tap_that_sees_the_end_stops_and_the_check_after_it_ends_the_episode():
+    # Paused at 120 fps, a tap at tick 0 is two ticks. The task ends at tick 1, which the tap's
+    # first check sees: the environment stops there (sandbox/actions.py:279-280), and the check
+    # right after execution, at the same tick, reports the end. The loop top and the check before
+    # the tap are at 0.
+    sim = _run(
+        _token(10, None, env_fps=120), Reply(action=TAP), ends_at=1, end_reason="target_reached"
+    )
+    assert sim.tap_checks == [1]
+    assert _asked(sim) == [0, 0, 1]
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
+    assert sim.termination.stop_reason == "target_reached"
+    assert sim.termination.ended_at == 1
+
+
 # ---- the finite-B allowance and missing usage -------------------------------------------------
 
 
