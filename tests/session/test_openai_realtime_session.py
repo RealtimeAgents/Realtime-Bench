@@ -153,6 +153,73 @@ def test_observe_adds_the_newest_frame():
     assert core.frames["d1.frame"].assistant_item_ids == []
 
 
+# The policy with each action's execution feedback as its own block (context policy item 3).
+SEPARATE = replace(POLICY, feedback="separate_message")
+
+
+def fed(k: int, output: str = "", feedback: str = "") -> CanonicalTurn:
+    """Decision k with the execution feedback on its action."""
+    decided = turn(k, output)
+    decided.execution_feedback = feedback
+    return decided
+
+
+def separate_view(turns, ledger: str = ""):
+    return build_request(
+        SEPARATE, SYSTEM, tuple(turns), ledger_block(ledger, 1, None), ANSWER, CALL
+    )
+
+
+def test_replay_puts_each_feedback_item_after_its_frame_s_output():
+    turns = [fed(0, "a0", "F0"), fed(1, "", "F1"), turn(2)]
+    core = new_core()
+    operations = core.replay(separate_view(turns))
+    assert [(op.role, op.text) for op in operations] == [
+        ("user", "frame 0"),
+        ("assistant", "a0"),
+        ("user", "F0"),
+        ("user", "frame 1"),
+        ("user", "F1"),
+        ("user", "frame 2"),
+    ]
+    _, assistant0, feedback0, _, feedback1, _ = operations
+    assert feedback0.item_id.startswith("rtb_feedback_")
+    assert {k: (f.assistant_item_ids, f.feedback_item_id) for k, f in core.frames.items()} == {
+        "d0.frame": ([assistant0.item_id], feedback0.item_id),
+        "d1.frame": ([], feedback1.item_id),
+        "d2.frame": ([], None),
+    }
+
+
+def test_the_feedback_on_the_last_action_goes_ahead_of_the_next_frame():
+    """The feedback reaches the history once the action ran, after its frame was sent: the next
+    observation sends it first, at the end of the conversation, and only once."""
+    core = new_core()
+    sent(core, core.replay(separate_view([turn(0, "a0")])))
+    history = separate_view([fed(0, "a0", "F0"), turn(1)])
+    (feedback,) = core.new_feedback(history)
+    user = core.observe(history)
+    assert shape([feedback, user]) == [("create", "user", None, False)] * 2
+    assert (feedback.text, user.text) == ("F0", "frame 1")
+    assert core.frames["d0.frame"].feedback_item_id == feedback.item_id
+    assert core.new_feedback(separate_view([fed(0, "a0", "F0"), turn(1, "a1"), turn(2)])) == []
+
+
+def test_an_edit_deletes_an_archived_frame_s_feedback_and_anchors_after_a_kept_one():
+    turns = [fed(0, "a0", "F0"), fed(1, "a1", "F1"), turn(2, "a2")]
+    core = new_core()
+    for operation in sent(core, core.replay(separate_view(turns))):
+        core.receive(done(operation.item_id))
+    held = {k: (f.user_item_id, f.feedback_item_id) for k, f in core.frames.items()}
+    turns[2].fold_visual()
+    batch = core.begin_edit(separate_view(turns[1:], ledger="L"))
+    assert ("delete", held["d0.frame"][1], None, True) in shape(batch.operations)
+    # The folded frame 2 goes back after frame 1's feedback item.
+    *_, delete2, create2 = shape(batch.operations)
+    assert delete2 == ("delete", held["d2.frame"][0], None, True)
+    assert create2 == ("create", "user", held["d1.frame"][1], True)
+
+
 def test_fold_in_place_waits_for_every_ack_in_any_order():
     turns = [turn(0, "a0"), turn(1, "a1"), turn(2, "a2")]
     core = opened(turns)

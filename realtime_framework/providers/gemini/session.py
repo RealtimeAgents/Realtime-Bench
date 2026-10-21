@@ -47,7 +47,8 @@ _GO_AWAY_CLOSE_MARGIN_S = 2.0
 # this sentinel for deterministic client-injected function-call history.
 REPLAY_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 
-# Content roles for the request intents this session carries (ledger, frame; tool exchange).
+# Content roles for the request intents this session carries (ledger, frame, feedback; tool
+# exchange).
 _ROLES = {"input": "user", "model": "model"}
 
 
@@ -71,18 +72,25 @@ class Content:
 
 @dataclass(frozen=True)
 class Observation:
-    """The newest frame of a history view as one input: the frame's execution feedback, then its
-    prompt, with its screenshot; and the delivery keys of the blocks it carries."""
+    """The newest frame of a history view as one input: first the execution feedback on the
+    action before it that the session does not hold yet, each its own Content (``feedback``);
+    then the frame, the feedback prefixed to it, then its prompt, with its screenshot; and the
+    delivery keys of the blocks it carries."""
 
     role: str
     text: str
     image: FrameImage | None
     observation_id: str
     keys: tuple[tuple, ...]
+    feedback: tuple[Content, ...] = ()
 
     @property
     def content(self) -> Content:
         return _frame_content(self.role, self.text, self.image)
+
+    @property
+    def contents(self) -> tuple[Content, ...]:
+        return (*self.feedback, self.content)
 
 
 @dataclass(frozen=True)
@@ -132,6 +140,15 @@ def _frame_text(frame, prefix) -> str:
 def _frame_content(role: str, text: str, image: FrameImage | None) -> Content:
     parts = (Part(text=text),) if image is None else (Part(text=text), Part(image=image))
     return Content(role, parts)
+
+
+def _is_feedback(item) -> bool:
+    """An action's execution feedback on its own, not prefixed to a frame."""
+    return item.block.kind == "execution_feedback" and item.intent.position != "frame_prefix"
+
+
+def _feedback_content(item) -> Content:
+    return Content(_ROLES[item.intent.role], (Part(text=item.block.text),))
 
 
 def history_batches(history: list[Content], limit: int = HISTORY_CONTENTS_PER_MESSAGE) -> list:
@@ -328,7 +345,8 @@ class SessionCore:
 
         The system block travels in the setup instead. In a turn-based view a model output is the
         canonical action of the native call that its turn's tool block carries, so it has no
-        Content of its own. The streaming view (harnesses/streaming/history.py) has no tool blocks:
+        Content of its own; an execution feedback of its own is a text Content after the turn's
+        tool rounds. The streaming view (harnesses/streaming/history.py) has no tool blocks:
         each reply's output and each execution feedback, whether its own block or one in front of
         a frame, is a text Content, in the view's order, as a trigger carries feedback, and a
         frame is its own text, as a push sends it.
@@ -359,6 +377,8 @@ class SessionCore:
                 contents += tool_contents
             elif self.streaming and block.kind in ("model_output", "execution_feedback"):
                 contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
+            elif _is_feedback(item):
+                contents.append(_feedback_content(item))
             else:
                 continue
             seeded.append(block.id)
@@ -473,16 +493,29 @@ class SessionCore:
 
     def observe(self, history: CanonicalRequest) -> Observation:
         """Plan the history view's newest frame, after its feedback, as one input, and record it
-        as being written: no handle resumes the session until its turn completes cleanly."""
-        current = next(item for item in reversed(history.items) if item.block.kind == "frame")
+        as being written: no handle resumes the session until its turn completes cleanly.
+
+        Of the separate feedback, only that of the turn before the frame can be new: the session
+        holds every earlier turn's, sent before the frames after it, seeded or resumed. It is
+        new unless this connection was seeded with it."""
+        frames = [index for index, item in enumerate(history.items) if item.block.kind == "frame"]
+        current = history.items[frames[-1]]
         frame = current.block
         prefix = _frame_prefixes(history).get(frame.id)
+        previous_turn = history.items[frames[-2] + 1 : frames[-1]] if len(frames) > 1 else ()
+        feedback = [
+            item
+            for item in previous_turn
+            if _is_feedback(item) and ("block", item.block.id) not in self.delivery
+        ]
         observation = Observation(
             _ROLES[current.intent.role],
             _frame_text(frame, prefix),
             frame.image,
             frame.observation_id,
-            tuple(("block", block.id) for block in (frame, prefix) if block is not None),
+            tuple(("block", item.block.id) for item in feedback)
+            + tuple(("block", block.id) for block in (frame, prefix) if block is not None),
+            tuple(_feedback_content(item) for item in feedback),
         )
         self.last_turn_clean = False
         self.resume_handle = None

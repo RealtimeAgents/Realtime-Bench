@@ -568,7 +568,8 @@ class GeminiLiveDriver(SessionLifecycle):
     async def send_observation(
         self, observation: ProviderObservation, history: CanonicalRequest
     ) -> dict:
-        """Send the history view's newest frame, after its feedback, as one input activity."""
+        """Send the history view's newest frame, after the feedback the session does not hold
+        yet, as one input activity."""
         if self._core.renewal_required:
             raise RuntimeError(
                 "Gemini Live requires canonical history synchronization before input"
@@ -580,13 +581,14 @@ class GeminiLiveDriver(SessionLifecycle):
             raise RuntimeError("Gemini Live input activity is already open")
         frame = self._core.observe(history)
         if self.options["input_transport"] == "client_content":
-            # Send the screenshot with its grounding text in one Content that triggers generation
-            # after any seeded history has been ingested. A realtime text trigger mixed with
-            # synthetic silent audio can create a second user activity (including hallucinated
-            # speech) and leave synchronous tools unfinished.
+            # Send the screenshot with its grounding text in one Content, after the feedback
+            # Contents, in one message that triggers generation after any seeded history has been
+            # ingested. A realtime text trigger mixed with synthetic silent audio can create a
+            # second user activity (including hallucinated speech) and leave synchronous tools
+            # unfinished.
             try:
                 await session.send_client_content(
-                    turns=self._content(frame.content),
+                    turns=[self._content(content) for content in frame.contents],
                     turn_complete=True,
                 )
             except BaseException:
@@ -616,6 +618,10 @@ class GeminiLiveDriver(SessionLifecycle):
             self._last_video_sent_at = self.clock.monotonic()
             # Let media ingestion catch up before the corresponding SoM text arrives.
             await self._wait("video_ingestion", 1.0)
+            # Realtime input has no Contents: each feedback goes as its own text, before the
+            # frame's.
+            for content in frame.feedback:
+                await session.send_realtime_input(text=content.parts[0].text)
             await session.send_realtime_input(text=frame.text)
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.

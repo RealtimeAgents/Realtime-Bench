@@ -1,17 +1,18 @@
 """The conversation of one OpenAI Realtime connection as the driver keeps it, without I/O.
 
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
-assistant items after it, and the archived-action ledger item; in native streaming, an item for
-each block of the streaming history view, a frame, a reply's output or an execution feedback, in
-the order the agent accepted them, feedback placed in front of a frame going into the frame's
-item. From a history view it plans the item creates and deletes that bring the server there, and
-it records what became of each one: unknown while it is written, sent once the write returned,
-acknowledged once the server confirmed it. Each server event the driver reads is handed to
-``receive``, in the order the connection delivered it, which passes it to the state it belongs
-to: an acknowledgement or error settles the in-place edit waiting for it, an error about a block
-native streaming pushed refuses that block alone, a response event joins its generation. Sending
-and receiving are the driver's; it reads only while something waits for an event, so what
-arrives after the last wait reaches the core with the next read.
+assistant items after it and the execution-feedback item after those, and the archived-action
+ledger item; in native streaming, an item for each block of the streaming history view, a frame,
+a reply's output or an execution feedback, in the order the agent accepted them, feedback placed
+in front of a frame going into the frame's item. From a history view it plans the item creates
+and deletes that bring the server there, and it records what became of each one: unknown while it
+is written, sent once the write returned, acknowledged once the server confirmed it. Each server
+event the driver reads is handed to ``receive``, in the order the connection delivered it, which
+passes it to the state it belongs to: an acknowledgement or error settles the in-place edit
+waiting for it, an error about a block native streaming pushed refuses that block alone, a
+response event joins its generation. Sending and receiving are the driver's; it reads only while
+something waits for an event, so what arrives after the last wait reaches the core with the next
+read.
 """
 
 from __future__ import annotations
@@ -85,6 +86,7 @@ class SentFrame:
     text: str
     folded: bool
     assistant_item_ids: list[str] = field(default_factory=list)
+    feedback_item_id: str | None = None
 
 
 @dataclass
@@ -126,12 +128,14 @@ class EditBatch:
 
 @dataclass(frozen=True)
 class ViewFrame:
-    """One frame of a history view, with the frame prefix before it and the output after it; of
-    a native-streaming view, one block, a frame with the prefix before it."""
+    """One frame of a history view, with the frame prefix before it, and the output and the
+    execution feedback after it; of a native-streaming view, one block, a frame with the prefix
+    before it."""
 
     item: RequestItem
     prefix: str = ""
     output: RequestItem | None = None
+    feedback: RequestItem | None = None
 
     @property
     def id(self) -> str:
@@ -158,6 +162,8 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
             prefix = ""
         elif block.kind == "model_output":
             frames[-1] = replace(frames[-1], output=item)
+        elif block.kind == "execution_feedback":
+            frames[-1] = replace(frames[-1], feedback=item)
     return ledger, frames
 
 
@@ -262,6 +268,16 @@ class RealtimeSessionCore:
             return None
         return Create(self._new_id("assistant"), ROLES[output.intent.role], output.block.text)
 
+    def _feedback_create(self, frame: ViewFrame) -> Create | None:
+        """The item of the execution feedback on a frame's action, if the frame has one."""
+        if frame.feedback is None:
+            return None
+        return Create(
+            self._new_id("feedback"),
+            ROLES[frame.feedback.intent.role],
+            frame.feedback.block.text,
+        )
+
     def _ledger_create(
         self,
         ledger: RequestItem,
@@ -282,8 +298,8 @@ class RealtimeSessionCore:
 
     def replay(self, history: CanonicalRequest | None) -> list[Create]:
         """Plan a new session's items from the history view (None for an empty session): the
-        ledger, then each frame's user item and its output's assistant item. The mirror becomes
-        the session they make."""
+        ledger, then each frame's user item, its output's assistant item and its feedback item.
+        The mirror becomes the session they make."""
         ledger, frames = (None, []) if history is None else history_frames(history.items)
         operations: list[Create] = []
         if ledger is not None:
@@ -293,12 +309,14 @@ class RealtimeSessionCore:
         for frame in frames:
             user = self._frame_create(frame)
             assistant = self._output_create(frame.output)
-            operations += [user] if assistant is None else [user, assistant]
+            feedback = self._feedback_create(frame)
+            operations += [create for create in (user, assistant, feedback) if create is not None]
             self.frames[frame.id] = SentFrame(
                 user.item_id,
                 frame.text,
                 frame.item.block.folded,
                 [] if assistant is None else [assistant.item_id],
+                None if feedback is None else feedback.item_id,
             )
         return operations
 
@@ -318,6 +336,20 @@ class RealtimeSessionCore:
                 operations += [] if assistant is None else [assistant]
             else:
                 operations.append(self._push(frame))
+        return operations
+
+    def new_feedback(self, history: CanonicalRequest) -> list[Create]:
+        """Plan the feedback items of the sent frames whose action's execution feedback the
+        history view now holds and the conversation does not yet: they belong to the newest
+        frames sent, so each goes at the end. The history ends with the frame to observe next."""
+        operations = []
+        for frame in history_frames(history.items)[1][:-1]:
+            sent = self.frames[frame.id]
+            if sent.feedback_item_id is None:
+                feedback = self._feedback_create(frame)
+                if feedback is not None:
+                    sent.feedback_item_id = feedback.item_id
+                    operations.append(feedback)
         return operations
 
     def observe(self, history: CanonicalRequest) -> Create:
@@ -390,6 +422,8 @@ class RealtimeSessionCore:
             if frame_id not in retained:
                 for item_id in (sent.user_item_id, *sent.assistant_item_ids):
                     operations.append(Delete(item_id, self._new_id("delete")))
+                if sent.feedback_item_id is not None:
+                    operations.append(Delete(sent.feedback_item_id, self._new_id("delete")))
 
         ledger_text = "" if ledger is None else ledger.block.text
         ledger_item_id = self.ledger_item_id
@@ -418,7 +452,9 @@ class RealtimeSessionCore:
             user_item_id = replacement[-1].item_id if replacement else sent.user_item_id
             sent_frames[frame.id] = (user_item_id, frame.text, folded)
             assistant_item_ids = sent.assistant_item_ids
-            previous_item_id = assistant_item_ids[-1] if assistant_item_ids else user_item_id
+            previous_item_id = sent.feedback_item_id or (
+                assistant_item_ids[-1] if assistant_item_ids else user_item_id
+            )
         return EditBatch(
             tuple(operations),
             ledger_item_id,

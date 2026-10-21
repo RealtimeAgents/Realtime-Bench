@@ -419,6 +419,62 @@ def test_a_streaming_rebuild_replays_the_feedback_waiting_for_the_next_frame():
     assert trigger.inputs[1] == RealtimeInput("text", text="EXECUTION RESULT: missed")
 
 
+def fed(k: int, feedback: str) -> CanonicalTurn:
+    """Decision k with the execution feedback on its action."""
+    decided = turn(k)
+    decided.execution_feedback = feedback
+    return decided
+
+
+def separate_view(turns):
+    """view() under the policy with each action's feedback as its own block (item 3)."""
+    policy = replace(
+        current_context_policy().for_path("gemini_live", {"history_format": "native_tools"}, None),
+        feedback="separate_message",
+    )
+    return build_request(
+        policy,
+        system_block("system instruction", None),
+        tuple(turns),
+        None,
+        AnswerRequirements("function_call", "standard_vlm"),
+        CallParameters("gemini-live", None, None),
+    )
+
+
+def feedback_content(text: str) -> Content:
+    return Content("user", (Part(text=text),))
+
+
+def test_seed_replays_each_feedback_after_its_turn_s_tool_rounds():
+    connect = plan(session_core(), separate_view([fed(0, "F0"), turn(1)]))
+    contents = [content for batch in connect.seed for content in batch]
+    assert contents[3] == feedback_content("F0")
+    # Frame, call, receipt and feedback of turn 0; frame, call and receipt of turn 1.
+    roles = ["user", "model", "user", "user", "user", "model", "user"]
+    assert [content.role for content in contents] == roles
+    assert contents[4] == frame_content(1)
+    assert "d0.feedback" in connect.seeded
+
+
+def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
+    core = session_core()
+    connected(core)
+    frame = core.observe(separate_view([fed(0, "F0"), turn(1)]))
+    assert frame.contents == (feedback_content("F0"), frame_content(1))
+    assert frame.keys == (("block", "d0.feedback"), ("block", "d1.frame"))
+    assert all(core.delivery[key] == Delivery.SENT for key in frame.keys)
+
+    # A connection seeded with it already holds it.
+    connected(core, separate_view([fed(0, "F0")]))
+    assert core.observe(separate_view([fed(0, "F0"), turn(1)])).feedback == ()
+
+    # A resumed session holds the earlier turns' feedback: only the last turn's is new.
+    connected(core, resume_handle="handle-1")
+    frame = core.observe(separate_view([fed(0, "F0"), fed(1, "F1"), turn(2)]))
+    assert frame.feedback == (feedback_content("F1"),)
+
+
 def test_observation_and_acknowledgement_delivery():
     core = session_core()
     connected(core)
