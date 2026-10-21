@@ -1015,13 +1015,17 @@ class GuestEnvironment:
 
         Unlike done(), no deadline is compared and ``_invalid_run`` is neither read nor written: a
         failed read raises, and the kernel counts it (evaluation/shell.py). An end is latched in
-        ``_episode_over`` and ``_terminal_reason`` as done() latches it.
+        ``_episode_over`` and ``_terminal_reason`` as done() latches it. On the wall clock one
+        read has its own, shorter budget.
         """
         if self.stop_check is None:
             return False, None
-        with operation_budget(
-            "state read", ENVIRONMENT_BUDGET.state_read_s, clock=self.clocks.operational
-        ):
+        budget = (
+            ENVIRONMENT_BUDGET.state_read_s
+            if self.clock_mode == "token"
+            else ENVIRONMENT_BUDGET.wall_state_read_s
+        )
+        with operation_budget("state read", budget, clock=self.clocks.operational):
             terminal = self.stop_check()
         if not terminal:
             return False, None
