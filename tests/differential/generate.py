@@ -3,11 +3,13 @@
 
 Scripts take the acceptance frame rates (1/1, 60/1, 30/7, 2/2) and put times and token counts on
 the points where the rules turn: whole input frames, half and quarter frames, the deadline, B and
-its multiples. They leave out what the rules do not compare one by one: retries, end checks that
-fail, operations that take time on the wall clock (each named script that needs one says so), and
-wall replies near the deadline plus today's 2 s grace or the per-move cap, where today's bounded
-wait and the reply would fall due at one instant (wave2-plan.md, R13); the cap and the think
-budget appear on the token clock only. Random scripts may show any expected
+its multiples. On the token clock they fail runs of end checks and reads inside taps, which X12
+counts. They leave out what the rules do not compare one by one: retries, wall reads that fail
+(where the kernel's periodic reads and today's fall at one instant, the order is not today's to
+show; named scripts cover them), operations that take time on the wall clock (each named script
+that needs one says so), and wall replies near the deadline plus today's 2 s grace or the per-move
+cap, where today's bounded wait and the reply would fall due at one instant (wave2-plan.md, R13);
+the cap and the think budget appear on the token clock only. Random scripts may show any expected
 difference; only what no rule explains fails them.
 """
 
@@ -45,8 +47,18 @@ def generate(seed: int) -> Script:
     if clock == "wall":
         if rng.random() < 0.3:
             fields["snapshot_s"] = rng.choice((0.25, 0.5, 1.5))
-    elif rng.random() < 0.04:
-        fields["advance_errors"] = (rng.randint(1, 8),)
+    else:
+        if rng.random() < 0.1:
+            start = rng.randint(1, 12)
+            fields["check_errors"] = tuple(range(start, start + rng.randint(1, 4)))
+        # The environment cuts a tap where a lease ends and the simulation does not
+        # (tests/kernel/simulation.py:14-16), so reads inside taps are numbered alike only
+        # without holds.
+        if rng.random() < 0.06 and all(parse(turn.action).kind != "hold" for turn in turns):
+            start = rng.randint(1, 3)
+            fields["tap_check_errors"] = tuple(range(start, start + rng.randint(1, 2)))
+        if rng.random() < 0.04:
+            fields["advance_errors"] = (rng.randint(1, 8),)
     if clock == "token":  # in simulated seconds, so no reply can race them
         if rng.random() < 0.08:
             fields["per_move_cap_s"] = rng.choice((0.5, 1.0, 1.5)) * frame
@@ -144,6 +156,7 @@ def _smaller(script: Script):
         ("ends_after", None),
         ("ends_at_s", None),
         ("check_errors", ()),
+        ("tap_check_errors", ()),
         ("advance_errors", ()),
         ("snapshot_error", None),
         ("snapshot_s", 0.0),
