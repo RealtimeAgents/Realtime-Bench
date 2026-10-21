@@ -22,6 +22,7 @@ from .fake_live import (
     Cancel,
     Error,
     Fail,
+    GoAway,
     Reply,
     Text,
     TextLiveDriver,
@@ -402,28 +403,49 @@ def test_a_renewal_the_provider_asked_for_runs_before_the_next_push(monkeypatch,
     agent.close()
 
 
-def test_after_a_go_away_during_a_reply_pushes_fail_until_it_is_accepted_and_renewed(
-    monkeypatch, clock
-):
-    """Renewing the connection would end the reply, and the session takes no input meanwhile:
-    those frames are lost. Once the reply's output is in the view, the next push renews."""
+def test_after_a_go_away_during_a_reply_a_push_waits_for_it_and_then_renews(monkeypatch, clock):
+    """Renewing the connection would end the reply, and the session takes no input before it is
+    renewed: the push waits until the reply is accepted, renews from the view that holds it, and
+    goes in then."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2), GoAway(0.5)), ends_at=2.0))
+    replied, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    assert clock.wait(replied, 2.0)
+    assert not out["value"].cancelled
+    clock.sleep(0.5)
+    assert not pushed.is_set()
+    agent.accept(7)
+    assert clock.wait(pushed, 1.0)
+    assert "error" not in pushing
+    assert agent.driver.calls[-2:] == [
+        ("sync", "go_away", ("system", "f1.frame", "f2.frame", "d3.output")),
+        ("push", "obs-3", ("system", "f1.frame", "f2.frame", "d3.output", "f3.frame")),
+    ]
+    agent.close()
+
+
+def test_a_push_while_a_reply_is_on_does_not_rebuild_the_session_under_it(monkeypatch, clock):
+    """A session left dirty during a reply, as a failed fold leaves OpenAI Realtime's, is rebuilt
+    once the reply is accepted: rebuilding it under the reply would close the reply's
+    connection."""
     agent = make_agent(monkeypatch, clock)
     agent.bind_inbox(lambda event: None, ORIGIN)
     frame = _two_frames(agent, clock)
     agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=2.0))
-    done, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    replied, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
     clock.sleep(0.5)
-    agent.driver.renewal_required = True
-    with pytest.raises(RuntimeError, match="requires a renewal"):
-        agent.push(observation(clock, 3))
-    assert clock.wait(done, 2.0)
-    assert not out["value"].cancelled
+    agent.driver.mark_dirty()
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-1][:2] == ("push", "obs-3")
+    assert clock.wait(replied, 2.0)
+    assert "value" in out
     agent.accept(7)
     agent.push(observation(clock, 4))
-    assert agent.driver.calls[-2:] == [
-        ("sync", "go_away", ("system", "f1.frame", "f2.frame", "d3.output")),
-        ("push", "obs-4", ("system", "f1.frame", "f2.frame", "d3.output", "f4.frame")),
-    ]
+    assert agent.driver.calls[-2][:2] == ("sync", "runtime_recovery")
     agent.close()
 
 

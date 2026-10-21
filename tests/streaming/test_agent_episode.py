@@ -20,7 +20,7 @@ from realtime_framework.evaluation.streaming_shell import _StreamingShell, run_s
 from tests.fake_clock import FakeClock
 from tests.shell_streaming.fakes import FakeEnv
 
-from .fake_live import Call, Reply, make_agent, screenshot
+from .fake_live import Call, GoAway, Reply, make_agent, screenshot
 
 
 class _Env(FakeEnv):
@@ -105,3 +105,42 @@ def test_every_kernel_command_comes_to_its_agent_call_and_encoder_operation(monk
         assert [c[1] for c in agent.driver.calls if c[0] == operation] == [
             c[1] for c in expected if c[0] == kind
         ], operation
+
+
+def test_a_go_away_during_a_long_reply_leaves_it_to_finish_and_renews_after_it(monkeypatch):
+    """Gemini Live's goAway comes 1 s into a reply that goes on 8 s more. The frames captured
+    meanwhile wait for the reply instead of failing, so the reply is not given up and its click
+    executes; once it is accepted the connection is renewed, by resuming."""
+    clock, records = FakeClock(), []
+    record = _StreamingShell._record
+
+    def recording(shell, entry):
+        records.append(entry)
+        record(shell, entry)
+
+    monkeypatch.setattr(_StreamingShell, "_record", recording)
+    click = Call(0.5, "c1", "click", {"x": 10, "y": 20, "button": "left", "frame": 1})
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock)
+        agent.driver.replies += [Reply((click, GoAway(1.0)), ends_at=9.0)]
+        agent.driver.replies += [Reply(ends_at=1.0)] * 20
+        env = _Env(clock)
+        env.seconds["execute"] = 0.25
+        run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=14.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+        agent.close()
+    assert not env._invalid_run
+    abandoned = [e.data for e in records if e.kind == "GenerationAbandoned"]
+    assert all(data["reason"] == "deadline" for data in abandoned), abandoned
+    dropped = [e.data["reason"] for e in records if e.kind == "FrameDropped"]
+    assert "push_failed" not in dropped, dropped
+    assert ("c1", "applied") in [(a["call_id"], a["result"]) for a in agent.action_history]
+    calls = [c[:2] for c in agent.driver.calls]
+    assert ("interrupt", "streaming-1") not in calls
+    renewal = calls.index(("sync", "go_away"))
+    assert calls.index(("go_away", "streaming-1")) < renewal < calls.index(("reply", 2))

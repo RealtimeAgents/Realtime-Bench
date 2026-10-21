@@ -83,6 +83,14 @@ class Error:
 
 
 @dataclass(frozen=True)
+class GoAway:
+    """The server asks for a new connection ``at`` seconds into the reply: from then on the
+    session takes no input until it is renewed."""
+
+    at: float
+
+
+@dataclass(frozen=True)
 class Reply:
     """A reply's messages, in order, and when it ends, seconds after it started, with its usage
     and the boundaries it ends with: a turn_complete, exact unless an interrupted came before it;
@@ -130,11 +138,14 @@ class FakeLiveDriver(SessionLifecycle):
         self._trace = trace
 
     async def _connect(self, request) -> None:
+        # Opening a connection closes the one before, as both live drivers' _connect does.
+        await self._close_current()
         await asyncio.sleep(self.connect_s)
         self._open()
         self.calls.append(("connect", _ids(request.history)))
 
     async def _sync_history(self, request) -> HistorySyncResult:
+        await self._close_current()
         self._open()
         self.calls.append(("sync", request.reason, _ids(request.history)))
         return HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT)
@@ -191,7 +202,10 @@ class FakeLiveDriver(SessionLifecycle):
             received = self.clock.monotonic()
             if isinstance(message, Fail):
                 raise message.error
-            if isinstance(message, Error):
+            if isinstance(message, GoAway):
+                self.calls.append(("go_away", generation.generation_id))
+                self.renewal_required = True
+            elif isinstance(message, Error):
                 yield ProviderError(gid, sequence, detail=message.detail, fatal=message.fatal)
             elif isinstance(message, Cancel):
                 yield FunctionCallsCancelled(
