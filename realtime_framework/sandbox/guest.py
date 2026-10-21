@@ -50,13 +50,19 @@ class GuestClient:
         valid, reason = validate_action(action)
         if not valid:
             raise ValueError(f"invalid GUI action: {reason}")
+        # Not in an episode: GuestEnvironment.execute (sandbox/actions.py) applies WAIT, DONE and
+        # FAIL itself and never sends them here.
         if action.action_type == ActionType.WAIT:
             duration = float(action.parameters.get("duration", 0.0))
             if duration:
-                time.sleep(duration)
-            return {"status": "ok", "timestamp": time.time(), "duration_seconds": duration}
+                time.sleep(duration)  # noqa: TID251
+            return {
+                "status": "ok",
+                "timestamp": time.time(),  # noqa: TID251
+                "duration_seconds": duration,
+            }
         if action.action_type in (ActionType.DONE, ActionType.FAIL):
-            return {"status": "ok", "timestamp": time.time()}
+            return {"status": "ok", "timestamp": time.time()}  # noqa: TID251
 
         desktop_action, coordinate_trace = normalize_action(action)
         payload = {
@@ -97,9 +103,10 @@ class GuestClient:
         return resp.json()
 
     def wait_until_ready(self, max_wait: float = 60.0, poll_interval: float = 2.0) -> bool:
-        start = time.time()
-        while time.time() - start < max_wait:
+        # Before the episode: the runner waits for the guest server while it sets up.
+        start = time.time()  # noqa: TID251
+        while time.time() - start < max_wait:  # noqa: TID251
             if self.health_check():
                 return True
-            time.sleep(poll_interval)
+            time.sleep(poll_interval)  # noqa: TID251
         return False
