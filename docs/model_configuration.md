@@ -158,7 +158,8 @@ driver as a [model API](#add-a-model-api).
    (`context_exceeded_before_request`). Without a declared window the method returns
    `{"pressure": False, "counter": "unconfigured"}`. The flag, not the method, decides this: a
    driver that implements `request_context_status` without declaring `request_size_estimation`
-   is refused when its YAML is loaded.
+   is refused when its YAML is loaded, and so is a persistent session that declares it: the
+   runtime archives the history a stateless request carries, not a session's.
 2. Install the package into the environment that runs the benchmark, for example
    `uv pip install -e /path/to/your-driver`. `PYTHONPATH` is not enough: each Harbor trial runs
    with `PYTHONPATH` set to this repository.

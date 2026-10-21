@@ -569,10 +569,6 @@ class RealtimeRuntime:
             # The count can suspend (a "vllm" counter): by now the history may be the next
             # generation's, which an aborted one must not archive or cut.
             self._stop_if_abandoned(cancel, "its pressure archive")
-            if self.capabilities.persistent_session:
-                raise RuntimeError(
-                    "Request exceeds physical context; driver must implement native context compaction"
-                )
             if not self._turns:
                 # Every turn is archived: leave out the earliest archived actions, a block at a
                 # time, before the request is given up.

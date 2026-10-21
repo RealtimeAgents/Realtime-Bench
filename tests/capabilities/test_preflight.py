@@ -857,6 +857,22 @@ def test_context_status_needs_its_declaration():
     )
 
 
+def test_a_session_declares_no_request_estimate():
+    """The runtime archives the history a stateless request carries when it does not fit; a
+    persistent session holds its own, so a driver that declares both is refused at load."""
+    driver = catalog.adapter_class("chat_completions")
+    session = type(
+        "Session",
+        (driver,),
+        {"capabilities": replace(driver.capabilities, persistent_session=True)},
+    )
+    fails(
+        lambda: catalog._check_driver("ext.chat:Session", session),
+        "'ext.chat:Session' declares request_size_estimation on a persistent session, whose "
+        "context the runtime cannot archive",
+    )
+
+
 # The protocol role each encoder sends the archived-action ledger in, by the ledger's intent role
 # (entity/request.py Role): a chat message (providers/litellm.py chat_messages), a Realtime
 # conversation item (openai_realtime_session.py) or a Live content (gemini/session.py).
