@@ -584,7 +584,12 @@ class TurnPolicy:
             d.execution_result = {"error": d.failed}
             return self._resolve("invalid_run")
         started, duration = d.wait
-        elapsed = round(max(0.0, (self._position() - started) / config.env_fps), 9)
+        # The wait lasts until the end, though the end can be handled later, behind a synchronous
+        # command: today's sleep(min(duration, remaining)) stops at the deadline.
+        ending = self.kernel.ending
+        until = self.kernel.semantic if ending is None else min(self.kernel.semantic, ending.at)
+        position = until if self.token else until * config.env_fps
+        elapsed = round(max(0.0, (position - started) / config.env_fps), 9)
         horizon_truncates = self.token and started + duration * config.env_fps > (
             config.max_ticks + 1e-9
         )
@@ -592,7 +597,6 @@ class TurnPolicy:
         # The wall deadline cuts a wait as today's sleep does, which flags neither truncation
         # (sandbox/actions.py GuestEnvironment.execute); the task's end or an invalidation cuts it
         # on either clock.
-        ending = self.kernel.ending
         by_deadline = ending is not None and ending.cause == "deadline"
         d.execution_result = {
             "duration_simulated_seconds": elapsed,
