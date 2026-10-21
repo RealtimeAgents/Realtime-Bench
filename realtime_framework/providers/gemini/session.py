@@ -2,9 +2,9 @@
 
 From a history view the core plans what the session is sent: the contents that seed a new
 connection and the input of each observation, as neutral Contents and Parts, and each frame
-native streaming pushes, as realtime inputs. GeminiLiveDriver (live.py) turns them into
-google-genai types, writes and reads the WebSocket and reads the clock, and reports back what it
-wrote and received. The core keeps the session state and answers with
+native streaming pushes and each reply it triggers, as realtime inputs. GeminiLiveDriver
+(live.py) turns them into google-genai types, writes and reads the WebSocket and reads the clock,
+and reports back what it wrote and received. The core keeps the session state and answers with
 the operations to perform: how to open the next connection and what to seed on it, whether a sync
 resumes or rebuilds, which tool calls to acknowledge and which the server cancels, which
 connection and generation a server message belongs to and whether that generation's output ends
@@ -104,6 +104,16 @@ class Push:
     inputs: tuple[RealtimeInput, ...]
     observation_id: str | None
     keys: tuple[tuple, ...]  # the delivery key of its frame block
+
+
+@dataclass(frozen=True)
+class Trigger:
+    """A reply's start as native streaming sends it: one activity on realtime_input, not a client
+    turn_complete. It holds the execution feedback no seed or trigger has carried into the session
+    yet, and the silent audio an activity must hold."""
+
+    inputs: tuple[RealtimeInput, ...]
+    keys: tuple[tuple, ...]  # the delivery keys of the feedback blocks it carries
 
 
 def _frame_prefixes(history: CanonicalRequest) -> dict:
@@ -278,6 +288,9 @@ class SessionCore:
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         self.last_turn_clean = False
+        # The history blocks a seed or a trigger carried into the session, by id, across
+        # connections: a rebuild replaces them with its seed, a resume keeps them.
+        self.carried: set[str] = set()
         # The generation whose reply is being read, by connection, until the reply ends.
         self.replies: dict[int, _Generation] = {}
 
@@ -408,6 +421,8 @@ class SessionCore:
         self.connection = self._connections
         self.delivery = {("setup",): Delivery.CONFIRMED}
         self.sending(("block", block_id) for block_id in connect.seeded)
+        if connect.resume_handle is None:
+            self.carried = set(connect.seeded)
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -471,6 +486,29 @@ class SessionCore:
         )
         self.sending(push.keys)
         return push
+
+    def trigger(self, history: CanonicalRequest) -> Trigger:
+        """Plan the activity that starts a streaming session's next reply, with the history
+        view's execution feedback not carried into the session yet, and record that feedback as
+        being written."""
+        feedback = [
+            item.block
+            for item in history.items
+            if item.block.kind == "execution_feedback" and item.block.id not in self.carried
+        ]
+        text = "\n".join(block.text for block in feedback)
+        trigger = Trigger(
+            (
+                RealtimeInput("activity_start"),
+                *((RealtimeInput("text", text=text),) if feedback else ()),
+                RealtimeInput("audio_carrier"),
+                RealtimeInput("activity_end"),
+            ),
+            tuple(("block", block.id) for block in feedback),
+        )
+        self.carried.update(block.id for block in feedback)
+        self.sending(trigger.keys)
+        return trigger
 
     def interrupt_sent(self) -> None:
         self.resume_handle = None
