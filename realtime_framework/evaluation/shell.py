@@ -910,8 +910,29 @@ class _Shell:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
             if kind == "TimerFired" and data["kind"] == "per_move_cap":
                 self._cap_due = data["at"]
-            if kind == "GenerationAbandoned" and data["reason"] == "per_move_cap":
-                self._timed_out(entry)
+            elif kind == "GenerationAbandoned":
+                self._abandoned_on_a_bound(entry)
+            elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
+                self.log(
+                    f"[think] deliberation budget exhausted: {self.policy.spent:.1f}s >= "
+                    f"{self.config.think_budget_s:g}s -> forfeit"
+                )
+
+    def _abandoned_on_a_bound(self, entry: Entry) -> None:
+        """A generation given up on at the per-move cap or the wall deadline timed out, as the
+        runner logs it (runner.py _run_step); one over the cap is reported as skipped."""
+        reason = entry.data["reason"]
+        if reason not in ("per_move_cap", "deadline"):
+            return
+        held = self._generations[entry.data["generation"]]
+        due = self._cap_due if reason == "per_move_cap" else self.config.duration_s
+        bound = "per_move_cap" if reason == "per_move_cap" else "wall_deadline"
+        self.log(
+            f"[default] k={held.decision} generation TIMED OUT "
+            f"(>{due - held.started_semantic:g}s, {bound}) — discarded"
+        )
+        if reason == "per_move_cap":
+            self._timed_out(entry)
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the

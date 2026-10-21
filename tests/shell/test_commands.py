@@ -304,7 +304,8 @@ def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_
     ]
     assert [echo.generation for echo in echoes] == [1]
     assert episode.env._token_accounting.summary()["responses"] == 2
-    assert episode.logs[0].endswith("-> skipped_timeout TIMEOUT")
+    reported = next(line for line in episode.logs if " -> " in line)
+    assert reported.endswith("-> skipped_timeout TIMEOUT")
 
 
 def _decisions(payloads: list[dict]) -> list:
@@ -339,6 +340,17 @@ def test_a_move_over_the_cap_took_the_cap_though_the_shell_saw_it_late():
     assert episode.timeline[0][2] == 1.5
     (timed_out,) = [p for p in episode.trace.payloads("InferenceCompleted") if p["decision"] == 0]
     assert timed_out["latency_s"] == 1.5
+
+
+def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
+    """The runner's lines for them (runner.py _run_step, _mark_budget_exhausted)."""
+    capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.5)
+    assert "[default] k=0 generation TIMED OUT (>1.5s, per_move_cap) — discarded" in capped.logs
+    cut = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])
+    assert "[default] k=1 generation TIMED OUT (>2s, wall_deadline) — discarded" in cut.logs
+    spent = run("wall", 5.0, [Reply(1.0), Reply(1.0)], think_budget_s=1.5)
+    assert spent.env._stop_reason == "think_budget"
+    assert "[think] deliberation budget exhausted: 2.0s >= 1.5s -> forfeit" in spent.logs
 
 
 def test_a_result_the_deadline_beat_while_the_shell_was_busy_leaves_no_records():
