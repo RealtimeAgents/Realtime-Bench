@@ -355,11 +355,16 @@ class ReleaseInputs:
 
 @dataclass(frozen=True)
 class Termination:
-    """How the episode ended. Reports and metrics read this, not the clock after teardown."""
+    """How the episode ended. Reports and metrics read this, not the clock after teardown.
+
+    Semantic times are environment ticks on the token clock and seconds since the origin on the
+    wall clock; the shell writes them as world seconds in the run's termination record."""
 
     stop_reason: str
     cause: str  # the first end signal
-    ended_at: float  # semantic time by rule: the deadline, the horizon or the answering check
+    # Semantic time by rule: the deadline, the horizon, the answering check, or the time of the
+    # first end signal's handling for the other causes; a later invalidation leaves it unchanged.
+    ended_at: float
     snapshot_at: float | None  # semantic time the snapshot was taken; None when it failed
     ops_ended_at: float
     ops_snapshot_at: float | None
