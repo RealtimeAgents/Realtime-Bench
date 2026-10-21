@@ -84,6 +84,16 @@ requires for K3: `configs/models/kimi-k3.yaml` sets it, and other moonshot model
 send none. A preset the API cannot render is refused before the run, and the run records the
 preset with its configuration.
 
+The run records each context-policy value as the policy sets it, and two of them say what the
+policy allows rather than what the run does. Pressure archiving is on for every API, but it runs
+only where the driver estimates its requests (`request_size_estimation`) and the model has a
+context window (`context_window_tokens`, from the driver's model defaults or
+`BENCHMARK_CONTEXT_WINDOW_TOKENS`). A driver without roles, as the Decisions APIs are, places the
+archived-action ledger by position and header, whatever ledger role the policy gives. Whether
+either takes effect is not recorded on its own: it follows from the driver code, which the harness
+fingerprint covers (an external driver's identity, for an external driver), and from the model
+configuration, which the run hash covers.
+
 ## Add a model API
 
 A model that needs a new wire protocol gets a driver:

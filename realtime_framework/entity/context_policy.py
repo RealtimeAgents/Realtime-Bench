@@ -20,6 +20,13 @@ Luna's (openai_decisions) and JEV's (jev_decisions). A model config's (ModelConf
 from its YAML, one of MODEL_PRESETS) applies to that model alone and takes the place of its row's:
 Kimi K3's, so other moonshot models keep the standard values. The pre-run checks hold each
 resolved policy against what the API declares (providers/preflight.py check_context_policy).
+
+Two values say what the policy allows, not what a run does. Pressure archiving (item 8) is on for
+every API, and it acts only where the encoder estimates its requests and the model config has a
+context window (ModelConfig.context_window_tokens). An encoder without roles (Luna, JEV) is given
+the ledger role (item 4) but places the ledger by position and header. Whether either takes
+effect is not recorded on its own: the driver code decides it, which the harness fingerprint (or
+an external driver's identity) covers, and so does the model config, which the run hash covers.
 """
 
 from collections.abc import Mapping
@@ -118,7 +125,7 @@ class PathPolicy:
     turns: Retention  # 2 turn retention; archived actions form the ledger
     feedback: Literal["separate_message", "frame_prefix", "digest"]  # 3 execution feedback
     # 4 role of the archived-action ledger; an encoder without roles places it by position and
-    # header (RealtimeCapabilities.labels_instead_of_roles)
+    # header (RealtimeCapabilities.labels_instead_of_roles), and the value has no effect there
     ledger_role: Literal["instruction", "input"]
     texts: FixedTexts  # 5 placeholder and fixed texts
     reasoning_replay: bool  # 6 send past reasoning back
@@ -126,8 +133,9 @@ class PathPolicy:
     # output, and no encoder can do otherwise
     verbatim_replay: bool
     # 8 before each request, archive the oldest turns while it exceeds the declared context
-    # window, then, with no turn left, leave out the earliest archived actions; it applies where
-    # the API declares an estimate of its requests (RealtimeCapabilities.request_size_estimation)
+    # window, then, with no turn left, leave out the earliest archived actions. On allows it; it
+    # acts only where the API declares an estimate of its requests
+    # (RealtimeCapabilities.request_size_estimation) and the model config has a window
     pressure_archive: bool
     decision_history: DecisionHistory | None  # 9 Decision history form
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
