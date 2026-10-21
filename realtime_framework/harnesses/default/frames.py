@@ -36,6 +36,8 @@ class FrameRecord:
     marks: dict | None  # the SoM mark map; None when the frame had no inspection
     # "prepared" until its request or session push went out, then "sent".
     send_status: str = "prepared"
+    # When it was recorded sent: a pushed frame once its push went out; a turn's frame once its
+    # generation came back, retries and all (harness.py). Only streaming's age() reads it.
     sent_unix_s: float | None = None
     # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
     # confirmation arrived (OpenAI Realtime's conversation.item.created or .done); "unknown"
