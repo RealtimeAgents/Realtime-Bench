@@ -40,6 +40,7 @@ class World:
     """What the environment does. Decisions and calls count from 0, end checks from 1."""
 
     ends_at: float | None = None  # the task reports its end from this semantic time on
+    ends_after: int | None = None  # ... or once this many actions have been applied
     end_reason: str | None = None
     capture_s: float = 0.0
     check_s: float = 0.0
@@ -88,6 +89,7 @@ class Environment:
         self.calls: list[tuple] = []  # (call, semantic time, details)
         self.decision = -1
         self.checks = 0
+        self.applied = 0
         self.advances = 0
         self.horizon = None
         self._frozen = None
@@ -142,8 +144,10 @@ class Environment:
         self.log("check_end", check=self.checks)
         if self.checks in self.world.check_errors:
             raise RuntimeError(self.world.check_errors[self.checks])
-        ends_at = self.world.ends_at
-        ended = ends_at is not None and self.semantic() >= ends_at
+        ends_at, ends_after = self.world.ends_at, self.world.ends_after
+        ended = (ends_at is not None and self.semantic() >= ends_at) or (
+            ends_after is not None and self.applied >= ends_after
+        )
         return ended, self.world.end_reason if ended else None
 
     def execute(self, action: Action, *, release_at: float | None = None) -> str:
@@ -168,6 +172,7 @@ class Environment:
             )
         self._last_execution_result = {"executed": decision}
         self._last_coordinate_trace = {"decision": decision}
+        self.applied += 1
         return "applied"
 
     def _failed(self, message: str, *, by_guest: bool) -> str:
