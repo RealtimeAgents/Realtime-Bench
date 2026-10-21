@@ -921,26 +921,27 @@ class GuestEnvironment:
             self._release_mouse_inputs()
 
     @staticmethod
-    def _guest_refusal(exc):
-        """The guest agent's refusal of the action as malformed (GuestRefused), if ``exc`` is one.
+    def _refusal(exc):
+        """The refusal of the model's action, the runtime's (ActionRejected) or the guest agent's
+        (GuestRefused), if ``exc`` is one.
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
         unexpected parameters, ...) and answers 400. That is the model's action being
         rejected, not an environment failure, so it must not invalidate the run. A refusal that
-        arrives after the action's budget ran out is the guest's too: the BudgetExceeded keeps it
-        as its cause. A 4xx from another endpoint does not show that the environment works.
+        comes after the action's budget ran out is one too: the BudgetExceeded keeps it as its
+        cause. A 4xx from another endpoint does not show that the environment works.
         """
         for error in (exc, exc.__cause__):
-            if isinstance(error, GuestRefused):
+            if isinstance(error, (ActionRejected, GuestRefused)):
                 return error
         return None
 
     def _execution_failed(self, exc):
         self.failed += 1
-        refusal = self._guest_refusal(exc)
-        # The model is told the guest's own words; the execution result keeps the whole failure.
+        refusal = self._refusal(exc)
+        # The model is told the refusal's own words; the execution result keeps the whole failure.
         self._last_exec_error = str(exc if refusal is None else refusal)
-        self._last_rejected_by_guest = refusal is not None or isinstance(exc, ActionRejected)
+        self._last_rejected_by_guest = refusal is not None
         if not self._last_rejected_by_guest and not getattr(self, "_invalid_run", None):
             self._invalid_run = {
                 "category": "environment",

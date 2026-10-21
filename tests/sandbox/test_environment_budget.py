@@ -228,6 +228,26 @@ def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
     assert guest.actions == []
 
 
+def test_a_wall_shortcut_refused_after_its_budget_went_on_the_lock_is_still_refused(budgets):
+    """Coordinator's decision N19, as user decision 35: the refusal says the environment works.
+    The model is told why, without the budget's words."""
+    budgets(action_s=BUDGET)
+    with FakeGuest() as guest:
+        env = _wall_environment(guest)
+        assert env.execute(Action.hold_key("a", 1.0)) == "applied"
+        guest.command_delay = 3 * BUDGET
+        _until_the_release_is_in_flight(guest)
+        status = env.execute(Action(ActionType.KEY, {"key": "ctrl+l"}))
+        env.release_inputs()
+    assert status == "failed"
+    assert env._last_rejected_by_guest is True
+    assert getattr(env, "_invalid_run", None) is None
+    assert env._last_exec_error.startswith("browser shortcut 'ctrl+l' is disabled")
+    assert env._last_execution_result["error"].startswith(
+        f"key action took longer than {BUDGET:g} s (ActionRejected: browser shortcut"
+    )
+
+
 def test_a_wall_action_waiting_for_the_lock_after_the_guest_answered_fails(budgets):
     # The release timer sends its keyup while the guest runs the click; the hold snapshot the
     # click's result carries then waits for the lock.
