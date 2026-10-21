@@ -231,10 +231,15 @@ class _Generation:
     started_semantic: float  # the readings it started at
     started_ops: float | None
     done: threading.Event  # set once the worker has handed its result back
+    # When its own bound falls due: the wall clock's per-move cap, in semantic seconds, or the
+    # token clock's watchdog, in operational seconds; None without one.
+    bound_at: float | None = None
+    returned_at: float | None = None  # the reading on the bound's clock when it came back
     result: dict | None = None  # as the worker handed it back
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
+    invalid: Invalidated | None = None  # why the settled result is unusable, if it is
 
 
 @dataclass
@@ -287,8 +292,6 @@ class _Shell:
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
-        self._cap_due: float | None = None  # when the per-move cap that fired fell due
-        self._watchdog_due: float | None = None  # when the provider watchdog that fired fell due
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -319,18 +322,19 @@ class _Shell:
         while not self._finished:
             # Cleared before the step takes the inbox: a post the step misses sets it again.
             self._wake.clear()
-            # The results back before the reading are settled only once nothing else is due by
-            # then: a deadline or a cap that came first gives their generation up, and a result
-            # the kernel will not take leaves no record. One back later waits for the next
-            # reading. The kernel gets them at the reading after the settling, which takes time
-            # in the world too: a deadline that came meanwhile goes first, and nothing lands after
-            # it (phase2.md, 时间和结束判定).
+            # The results back before the reading are settled first; one back later waits for
+            # the next reading. On the wall clock the kernel gets them at the reading after the
+            # settling, which takes time in the world too: a deadline that came meanwhile goes
+            # first, and nothing lands after it (phase2.md, 时间和结束判定). The token clock's
+            # world stands still meanwhile; a new reading would only let the operational
+            # watchdog overtake a result back before it.
             returned = len(self._returned)
             now = self._read()
-            commands = self._step(now)
-            if commands is None and returned:
+            if returned:
                 self._settle_returned(returned)
-                commands = self._step(self._read())
+                if not self.token:
+                    now = self._read()
+            commands = self._step(now)
             if commands is None:
                 self._sleep()
             else:
@@ -571,25 +575,41 @@ class _Shell:
             held.result = episode_records.generation_error(latency, failure)
             self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
         finally:
+            semantic, ops = self._read()
+            held.returned_at = ops if self.token else semantic
             self._returned.append(held)
             held.done.set()
             self._wake.set()
 
     def _settle_returned(self, count: int) -> None:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
-        them to the kernel. The late result of a generation the kernel gave up on goes back as it
-        came, to be discarded: the runner never handled one either."""
+        them to the kernel. One back after a bound on its generation fell due waits for the
+        kernel to give the generation up, as the runner's bounded wait did (runner.py
+        _bounded_call). The late result of a generation the kernel gave up on goes back as it
+        came, to be discarded: the runner never handled one either. One back before a bound the
+        kernel then handled first, busy as the shell was, is settled all the same: the kernel
+        discards it, and its records are its own."""
         for _ in range(count):
             held = self._returned.popleft()
             if self.kernel.generation != held.generation:
                 self.post(GenerationFinished(held.generation, GenerationResult()))
+                continue
+            if self._late(held):
+                self._returned.append(held)
                 continue
             try:
                 result, held.inference = self._settle(held, held.result)
             except Exception:  # noqa: BLE001 - as an exception that escaped the legacy loop
                 self._raised(traceback.format_exc())
             else:
+                held.invalid = result.invalid
                 self.post(GenerationFinished(held.generation, result))
+
+    def _late(self, held: _Generation) -> bool:
+        """Whether a bound on the generation, its own or the wall deadline, fell due before its
+        result came back; the kernel handles one due at the same time first too."""
+        bounds = [held.bound_at] if self.token else [held.bound_at, self.config.duration_s]
+        return any(at is not None and at <= held.returned_at for at in bounds)
 
     def _settle(self, held: _Generation, r: dict) -> tuple[GenerationResult, tuple]:
         """The result's annotations, usage, token accounting, cap audit and trajectory row, in
@@ -839,10 +859,7 @@ class _Shell:
                 entry,
             )
         elif kind == "GenerationFinished" and self._generations[data.generation].inference:
-            chunks, completed = self._generations[data.generation].inference
-            for chunk in chunks:
-                self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
-            self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
+            self._emit_inference(self._generations[data.generation].inference, entry)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
             self._emit(
                 TraceEvent.ACTION_PROPOSED,
@@ -899,10 +916,11 @@ class _Shell:
             self._emit(TraceEvent.RUN_INVALIDATED, _invalid_record(invalid), entry)
         else:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
-            if kind == "TimerFired" and data["kind"] == "per_move_cap":
-                self._cap_due = data["at"]
-            elif kind == "TimerFired" and data["kind"] == "generation_watchdog":
-                self._watchdog_due = data["at"]
+            if kind == "TimerSet" and data["kind"] in ("per_move_cap", "generation_watchdog"):
+                # Set right after the generation it bounds; None when its StartGeneration raised.
+                held = self._generations.get(self.kernel.generation)
+                if held is not None:
+                    held.bound_at = data["at"]
             elif kind == "GenerationAbandoned":
                 self._abandoned_on_a_bound(entry)
             elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
@@ -912,43 +930,63 @@ class _Shell:
                 )
 
     def _abandoned_on_a_bound(self, entry: Entry) -> None:
-        """A generation given up on at the per-move cap, the wall deadline or the provider
-        watchdog timed out: it is logged and recorded as the runner records a call it gave up on
-        (runner.py _run_step), with no usage, which leaves the episode's cost incomplete
-        (decision 48). Only the move over the cap is reported, as skipped (kernel/turns.py
-        on_timer); the other two end the episode and their decision goes unreported. A call that
-        came back before the bound and was settled after it has its own records instead."""
+        """A generation the kernel gave up on. One whose result came back before and was settled
+        keeps the call's own records, written now, ahead of the decision's, and what made that
+        result unusable still invalidates the run, as the runner's check of every result did
+        (runner.py _apply): the kernel discards the result with its reason. Otherwise one given
+        up on at the per-move cap, the wall deadline or the provider watchdog timed out: it is
+        logged and recorded as the runner records a call it gave up on (runner.py _run_step),
+        with no usage, which leaves the episode's cost incomplete (decision 48). Only the move
+        over the cap is reported, as skipped (kernel/turns.py on_timer); the other two end the
+        episode and their decision goes unreported."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
-        if reason == "per_move_cap":
-            # The bound, however late the shell got to it: the kernel charges the move that much.
-            seconds = self._cap_due - held.started_semantic
-            r = episode_records.timed_out_result(round(seconds, 2), "per_move_cap")
-            bound = "per_move_cap"
-        elif reason == "deadline":
-            seconds = self.config.duration_s - held.started_semantic
-            r = episode_records.timed_out_result(round(seconds, 2), "wall_deadline")
-            bound = "wall_deadline"
-        elif self._watchdog_due is not None:  # the watchdog invalidated the run (on_timer)
-            seconds = self._watchdog_due - held.started_ops
-            r = episode_records.watchdog_result(round(seconds, 2), seconds)
+        if held is None:
+            return  # its StartGeneration raised
+        bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
+        if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
             bound = "provider_watchdog"
-        else:
-            return
-        self.log(
-            f"[default] k={held.decision} generation TIMED OUT (>{seconds:g}s, {bound}) — discarded"
-        )
         if held.inference is not None:
+            self._emit_inference(held.inference, entry)
+            held.inference = None  # its echo writes nothing more
             if reason == "per_move_cap":
                 self._decision.result = held.result
+            if bound is not None:
+                self.log(
+                    f"[default] k={held.decision} generation back in "
+                    f"{held.result['latency']:g}s, settled past its {bound} — discarded"
+                )
+            if held.invalid is not None and self.kernel.invalid is None:
+                self.post(held.invalid)
             return
-        result, (chunks, completed) = self._settle(held, r)
+        if bound is None:
+            return
+        # The log names the bound as the runner does (runner.py _move_timeout).
+        if bound == "provider_watchdog":
+            seconds = held.bound_at - held.started_ops
+            r = episode_records.watchdog_result(round(seconds, 2), seconds)
+            timeout = self.config.timing.provider_watchdog_s
+        else:
+            # The bound, however late the shell got to it: the kernel charges the move that much.
+            due = held.bound_at if bound == "per_move_cap" else self.config.duration_s
+            seconds = due - held.started_semantic
+            r = episode_records.timed_out_result(round(seconds, 2), bound)
+            capped = bound == "per_move_cap"
+            timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
+        self.log(
+            f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) — discarded"
+        )
+        result, inference = self._settle(held, r)
         if reason == "per_move_cap":
             self._decision.result = r
+        self._emit_inference(inference, entry)
+        if result.invalid is not None and self.kernel.invalid is None:
+            self.post(result.invalid)  # its trajectory row could not be written
+
+    def _emit_inference(self, inference: tuple[list[dict], dict], entry: Entry) -> None:
+        chunks, completed = inference
         for chunk in chunks:
             self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
         self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
-        if result.invalid is not None and self.kernel.invalid is None:
-            self.post(result.invalid)  # its trajectory row could not be written
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the
