@@ -327,6 +327,10 @@ def _ki(script: Script, p: Projection, notes: dict) -> None:
     termination = p.episode["termination"]
     if termination["stop_reason"] != "think_budget":
         return
+    if not _wall(script):
+        if p.facts["ended_by"] == "task":
+            termination["stop_reason"] = script.end_reason or "game_decided"
+        return
     found = _kernel_end(script, p)
     if found is None:
         return
@@ -334,6 +338,32 @@ def _ki(script: Script, p: Projection, notes: dict) -> None:
     notes["ended"] = (at, k)
     termination["stop_reason"] = script.end_reason or "game_decided"
     _end_at(script, p, notes, k, at)
+
+
+def _kd(script: Script, p: Projection, notes: dict) -> None:
+    """Token clock: nothing advances after the first end signal (turns.py:546-552, 249). Today a
+    decision skipped before landing (no action, over the budget) skips the check before landing,
+    so after an end found while moving to its action time it still paces to the next frame
+    (runner.py:564-569, 639-648), and the end is dated where that pacing stopped."""
+    ended_at = p.facts["ended_at"]
+    if _wall(script) or ended_at is None:
+        return
+    seconds = 1.0 / script.env_fps
+    for k, d in p.decisions.items():
+        boundary = d["boundary"]
+        if (
+            boundary is None
+            or not p.facts["ended_before_commit"].get(k)
+            or earlier(boundary["from"] * seconds, ended_at)
+        ):
+            continue
+        d["boundary"] = None
+        d["outcome"]["next_observation_tick"] = boundary["from"]
+        d["outcome"]["dropped_intermediate_frames"] = 0
+        termination = p.episode["termination"]
+        termination["end_s"] = round(ended_at, 9)
+        if termination["snapshot_s"] is not None:
+            termination["snapshot_s"] = round(ended_at, 9)
 
 
 def _ka(script: Script, p: Projection, notes: dict) -> None:
@@ -584,6 +614,7 @@ RULES = (
     Rule("K-b", "the wall clock checks the end every 1/env_fps s", _kb),
     Rule("K-c", "a wall wait is a timer the end interrupts", _kc),
     Rule("K-i", "think budget and the task's end: the first names the reason", _ki),
+    Rule("K-d", "nothing advances after the first end signal", _kd),
     Rule("K-a", "the wall deadline is a timer without grace", _ka),
     Rule(
         "K-m",
@@ -597,11 +628,6 @@ RULES = (
     Rule("K-n", "a failed read before landing is invalid_run, not not_applied_terminal", _kn),
     Rule("K-e", "an escaping fault: the decision in hand is settled and reported", _ke),
     Rule("K-rel", "a wall hold's lease starts at Execute", _krel),
-    Rule(
-        "K-d",
-        "nothing advances after the first end signal",
-        seen="not found: today's loop never advances past an end it was told of",
-    ),
     Rule(
         "K-k",
         "the wall clock does not compare the frame count separately",

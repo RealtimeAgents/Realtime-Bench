@@ -367,6 +367,30 @@ PER_RULE = [
         expect=frozenset({"K-e", "U2"}),
         name="token-advance-fails-while-pacing",
     ),
+    # K-d: decision 0's 384 tokens are 1.5 s, past the 1 s per-move cap, so it places no action;
+    # the task ends at tick 1, found on the way to the action time. Today the decision still
+    # paces to the frame at tick 2.
+    Script(
+        "token",
+        4.0,
+        _tokens([("click", 384)] + [("click", 50)] * 3),
+        tokens_per_frame=256,
+        per_move_cap_s=1.0,
+        ends_at_s=1.0,
+        expect=frozenset({"K-d", "U3", "X2"}),
+        name="token-skipped-decision-after-the-end",
+    ),
+    # K-i on the token clock: the same, with the think budget run out instead of the cap.
+    Script(
+        "token",
+        4.0,
+        _tokens([("click", 384)] + [("click", 50)] * 3),
+        tokens_per_frame=256,
+        think_budget_s=0.5,
+        ends_at_s=1.0,
+        expect=frozenset({"K-d", "K-i", "U3", "X2"}),
+        name="token-think-budget-and-the-end",
+    ),
     # The task ends at 0.75 s, found by the check after the pacing step to tick 1.
     Script(
         "token",
