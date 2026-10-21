@@ -741,9 +741,10 @@ class _Shell:
             self.post(Invalidated("harness", "action_lifecycle_write_failed", failure))
         self._checkpoint()
         t_k, tau, action = r["observation_tick"], outcome.action_clock_position, outcome.action
-        # On the wall clock the delay is the decision's latency (kernel/turns.py _accept).
+        # The token delay is in input frames; on the wall clock the delay is the decision's
+        # latency (kernel/turns.py _accept).
         d_ticks = (
-            outcome.token_delay_frames
+            outcome.token_delay_frames * config.env_fps / config.input_fps
             if self.token
             else max(0.0, r.get("latency") or 0.0) * config.env_fps
         )
