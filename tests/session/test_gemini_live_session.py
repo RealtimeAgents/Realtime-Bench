@@ -334,16 +334,16 @@ def test_a_streaming_rebuild_skips_an_empty_reply_output():
 
 def test_a_streaming_frame_is_pushed_as_video_then_its_text():
     """A pushed frame is a video frame and then its text, with no activity around them and
-    nothing between them; it counts as sent once handed to the connection."""
+    nothing between them; it counts as sent once written."""
     core = session_core(streaming=True)
     connected(core)
     push = core.push(streaming_view([pushed(1), pushed(2)]))
     video = RealtimeInput("video", image=frame_content(2).parts[1].image)
     assert push.inputs == (video, RealtimeInput("text", text="frame 2"))
     assert (push.observation_id, push.keys) == ("obs-2", (("block", "f2.frame"),))
-    assert core.delivery[("block", "f2.frame")] == Delivery.SENT
-    core.send_failed(push.keys)
     assert core.delivery[("block", "f2.frame")] == Delivery.UNKNOWN
+    core.sent(push.keys)
+    assert core.delivery[("block", "f2.frame")] == Delivery.SENT
 
 
 @pytest.mark.parametrize("placement", PLACEMENTS)
@@ -378,7 +378,7 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last(pla
         "frame_prefix": (("block", "d2.prefix"),),
     }[placement]
     assert trigger == Trigger((start, text, carrier, end), keys)
-    assert core.delivery[keys[-1]] == Delivery.SENT
+    assert core.delivery[keys[-1]] == Delivery.UNKNOWN  # until written
     assert core.trigger(streaming_view(blocks, placement=placement)).keys == ()
 
     connected(core, resume_handle="handle-0")
@@ -518,7 +518,7 @@ def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
     frame = core.observe(separate_view([fed(0, "F0"), turn(1)]))
     assert frame.contents == (feedback_content("F0"), frame_content(1))
     assert frame.keys == (("block", "d0.feedback"), ("block", "d1.frame"))
-    assert all(core.delivery[key] == Delivery.SENT for key in frame.keys)
+    assert all(core.delivery[key] == Delivery.UNKNOWN for key in frame.keys)
 
     # A connection seeded with it already holds it.
     connected(core, separate_view([fed(0, "F0")]))
@@ -532,23 +532,30 @@ def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
 
 def test_each_change_in_delivery_is_heard_with_its_block():
     """on_delivery hears what the event log records: the setup confirmed and the seed sent once
-    the connection is up, each observation and acknowledgement sent as it is handed over, and
-    unknown once a send failed."""
+    the connection is up, the seed unknown when it failed before, each observation and
+    acknowledgement sent once written, nothing while it is written, and unknown once a write
+    failed."""
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
         on_delivery=lambda state, contents: heard.append((state, contents)),
     )
+    core.seed_failed(plan(core, view([turn(0)])))
     connected(core, view([turn(0)]))
     frame = core.observe(view([turn(0), turn(1)]))
+    core.sent(frame.keys)
+    frame = core.observe(view([turn(0), turn(1), turn(2)]))
     core.send_failed(frame.keys)
     core.calls_received([("call-1", "click")])
     core.acknowledging()
+    core.acknowledgement_sent()
+    seed = [(("block", "d0.frame"), "d0.frame"), (("block", "d0.tools"), "d0.tools")]
     assert heard == [
+        ("unknown", seed),
         ("confirmed", [(("setup",), "system")]),
-        ("sent", [(("block", "d0.frame"), "d0.frame"), (("block", "d0.tools"), "d0.tools")]),
+        ("sent", seed),
         ("sent", [(("block", "d1.frame"), "d1.frame")]),
-        ("unknown", [(("block", "d1.frame"), "d1.frame")]),
+        ("unknown", [(("block", "d2.frame"), "d2.frame")]),
         ("sent", [(("tool_response", "call-1"), None)]),
     ]
 
@@ -564,7 +571,9 @@ def test_observation_and_acknowledgement_delivery():
     )
     assert frame.content == frame_content(1, "EXECUTION RESULT: ok\nframe 1")
     assert frame.keys == (("block", "d1.frame"), ("block", "d1.prefix"))
-    # Sent once handed to the connection; unknown when the send fails.
+    # Unknown while it is written, sent once written; unknown when the write fails.
+    assert all(core.delivery[key] == Delivery.UNKNOWN for key in frame.keys)
+    core.sent(frame.keys)
     assert all(core.delivery[key] == Delivery.SENT for key in frame.keys)
     core.send_failed(frame.keys)
     assert all(core.delivery[key] == Delivery.UNKNOWN for key in frame.keys)
@@ -574,7 +583,7 @@ def test_observation_and_acknowledgement_delivery():
     core.calls_received([("call-1", "key")])
     # One queued acknowledgement answers every call still pending.
     assert core.acknowledging() == (("call-0", "click"), ("call-1", "key"))
-    assert core.delivery[("tool_response", "call-1")] == Delivery.SENT
+    assert core.delivery[("tool_response", "call-1")] == Delivery.UNKNOWN
     core.acknowledgement_failed()  # still pending: the next acknowledgement answers them again
     assert core.delivery[("tool_response", "call-0")] == Delivery.UNKNOWN
     assert core.acknowledging() == (("call-0", "click"), ("call-1", "key"))

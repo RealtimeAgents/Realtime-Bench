@@ -34,7 +34,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
 )
-from realtime_framework.entity.records import UNTRACED
+from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
@@ -442,6 +442,57 @@ def test_observation_delivery(model, failing):
     asyncio.run(run())
     expected = Delivery.SENT if failing is None else Delivery.UNKNOWN
     assert rig.driver._core.delivery[("block", "d0.frame")] == expected
+
+
+class DeliveryLog:
+    """The SessionDelivery events the driver writes: each state, the blocks, and how many
+    messages the socket had taken by then."""
+
+    def __init__(self, socket: FakeSocket):
+        self.socket = socket
+        self.events: list[tuple] = []
+
+    def capture(self, event, payload, **_) -> None:
+        if event == TraceEvent.SESSION_DELIVERY:
+            blocks = [content["block"] for content in payload["contents"]]
+            self.events.append((payload["state"], blocks, len(self.socket.sent)))
+
+
+@pytest.mark.parametrize(
+    ("model", "messages"),
+    [("gemini-3.8-live", 1), ("replay-gemini-live", 5)],
+    ids=["client-content", "realtime"],
+)
+def test_an_observation_counts_as_sent_once_written(model, messages):
+    """The observation's blocks are sent once the last message carrying them went out: its
+    client content, or its activity's end."""
+    rig = Rig(model, [[]])
+    log = DeliveryLog(rig.live.sockets[0])
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        await rig.driver.send_observation(None, rig.view([frame_turn(0)]))
+
+    asyncio.run(run())
+    assert log.events == [("confirmed", ["system"], 0), ("sent", ["d0.frame"], messages)]
+
+
+def test_a_seed_that_failed_is_unknown():
+    """A seed whose write failed leaves its blocks unknown; the connection never counted."""
+    rig = Rig("gemini-3.8-live", [[]])
+    socket = rig.live.sockets[0]
+    socket.fail = lambda message: "client_content" in message
+    log = DeliveryLog(socket)
+    rig.driver.bind_trace(log)
+
+    async def run():
+        history = rig.view([frame_turn(0)])
+        with pytest.raises(ConnectionClosedError):
+            await rig.driver.connect(ConnectRequest(seed=rig.seed, history=history))
+
+    asyncio.run(run())
+    assert log.events == [("unknown", ["d0.frame"], 0)]
 
 
 TRANSCRIPT = {"serverContent": {"outputTranscription": {"text": "partial"}}}
