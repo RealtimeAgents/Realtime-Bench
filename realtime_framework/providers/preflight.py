@@ -249,6 +249,13 @@ def check_context_policy(driver, policy, config) -> None:
     form = "turns" if policy.decision_history is None else policy.decision_history.form
     if form != _HISTORY_FORMS[capabilities.history_replay]:
         raise ValueError(f"The {api} API cannot replay history as {form}")
+    if (
+        policy.tool_call_replay is not None
+        and policy.tool_call_replay not in capabilities.tool_call_replay
+    ):
+        raise ValueError(
+            f"The {api} API cannot replay past tool calls as {policy.tool_call_replay}"
+        )
     if (policy.observation == "observation_json_text") != (
         capabilities.observation_modality == "text"
     ):
