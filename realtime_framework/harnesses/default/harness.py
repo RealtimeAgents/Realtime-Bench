@@ -860,6 +860,7 @@ from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_AC
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
+from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
@@ -935,7 +936,8 @@ class _GenerationOutputCollector:
 
 def bind_observation(agent, observation, prompt, tick):
     """Prepare one capture for the model, attach its read-only interactables and enter it in the
-    frame table. Under streaming the frame's number is drawn on the screenshot."""
+    frame table, whose record of it comes back too. Under streaming the frame's number is drawn
+    on the screenshot."""
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
     observation.metadata = metadata
@@ -983,16 +985,17 @@ def bind_observation(agent, observation, prompt, tick):
     if agent.interaction_mode == "streaming":
         value.image_bytes = render_frame_number(value.image_bytes, frame.frame)
         value.mime_type = "image/png"
-    return value, execution
+    return value, execution, frame
 
 
-def parse_grounded_action(agent, text, execution, arrived_unix_s):
+def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
     """Parse one action from model output and interpret it against its frame-table entry: the
     frame's marks resolve its element references and its geometry binds its coordinates.
 
     A streaming action names its frame, however old, and is rejected (no action) when that frame
-    cannot be found; the frame and its age are recorded. A turn-based action uses the newest
-    frame. ``execution`` is the decision's inspection; its tool trace records the resolution.
+    cannot be found; the frame and its age are recorded. A turn-based action uses ``own_frame``,
+    the one its generation sent: an abandoned generation may enter its frame later. ``execution``
+    is the decision's inspection; its tool trace records the resolution.
     """
     frames = agent.frames
     streaming = agent.interaction_mode == "streaming"
@@ -1005,7 +1008,7 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s):
             frame, error = frames.locate(reference)
         else:
             parsed, reference = agent.interaction_profile.parse_action(agent, body), None
-            frame, error = frames.latest(), None
+            frame, error = own_frame, None
         if parsed is None:
             return None
         if frame is not None:
@@ -1020,7 +1023,7 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s):
 
     resolution = resolve_action_output(text, parse_and_ground, framed=streaming)
     action_protocol = resolution.metadata()
-    frame = frames.latest()
+    frame = own_frame
     if streaming and resolution.valid:
         frame, reference, error = next(
             (f, r, e) for a, f, r, e in candidates if a is resolution.action
@@ -1080,6 +1083,7 @@ class _Generation:
     cancel: threading.Event  # set by abort() and close(); the runtime stops the generation
     # (ChoiceRequirements, SelectionMaterial) of its observation, for its requests.
     choice: tuple | None = None
+    frame: FrameRecord | None = None  # its observation's frame-table record
     staged: _Staged | None = None
 
 
@@ -1201,12 +1205,14 @@ class DefaultHarness(VisionAgentBase):
         return None if provider_cap is None else int(provider_cap)
 
     def _prepare_observations(self, observations, tick, prefix=""):
+        """The prepared observations, their inspections, the newest one's answer options, and
+        the newest one's frame-table record: the frame the action is based on."""
         prepared_values = []
         inspections = []
         try:
             for index, observation in enumerate(observations):
                 prompt = self.interaction_profile.frame_prompt
-                prepared, execution = bind_observation(self, observation, prompt, tick)
+                prepared, execution, frame = bind_observation(self, observation, prompt, tick)
                 if index == 0 and prefix:
                     prepared.feedback_prefix = prefix
                 prepared_values.append(prepared)
@@ -1233,7 +1239,7 @@ class DefaultHarness(VisionAgentBase):
                     frame_prompt=self.interaction_profile.frame_prompt,
                     game=self.task_category == "browser_game",
                 )
-        return prepared_values, inspections, choice
+        return prepared_values, inspections, choice, frame
 
     def _answer_requirements(self) -> AnswerRequirements:
         channel = self.driver.capabilities.action_channel
@@ -1453,10 +1459,8 @@ class DefaultHarness(VisionAgentBase):
         # it where the policy places feedback there, otherwise what no turn carries.
         prefix = feedback if self._context_policy.feedback == "frame_prefix" else unattached
         try:
-            prepared, inspection_executions, generation.choice = self._prepare_observations(
-                observations,
-                tick,
-                prefix,
+            prepared, inspection_executions, generation.choice, generation.frame = (
+                self._prepare_observations(observations, tick, prefix)
             )
         except Exception as exc:  # noqa: BLE001 - preparation faults become invalid-run metadata
             latency = self.clock.monotonic() - started
@@ -1649,9 +1653,9 @@ class DefaultHarness(VisionAgentBase):
             pass
         else:
             self._attempt_finished(generation, request, len(retry_reasons) + 1, runtime_result)
-            # The runtime takes exactly one observation per generation: the newest frame.
+            # The runtime takes exactly one observation per generation: its own frame.
             self.frames.record_sent(
-                self.frames.latest().frame,
+                generation.frame.frame,
                 runtime_result.provider_metadata["provider_call_started_wall_time_ns"] / 1e9,
             )
             if retry_reasons:
@@ -1732,7 +1736,7 @@ class DefaultHarness(VisionAgentBase):
                 action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
             action, action_protocol = parse_grounded_action(
-                self, output.text, newest_execution, self.clock.time()
+                self, output.text, newest_execution, self.clock.time(), generation.frame
             )
         thinking = output.reasoning_text
         serialization = output.token_fields.get("action_serialization")
