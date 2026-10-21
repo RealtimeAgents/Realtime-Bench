@@ -214,9 +214,9 @@ def test_a_server_close_is_released_like_a_timed_message():
 @pytest.mark.parametrize(
     ("message", "kind"),
     [
-        # A pushed frame's item (providers/openai_realtime_session.py:290).
+        # A pushed frame's item (providers/openai_realtime_session.py RealtimeSessionCore._push).
         ({"type": "conversation.item.create", "item": {"id": "rtb_user_1"}}, "push"),
-        # A cancel (providers/openai_realtime.py:548).
+        # A cancel (providers/openai_realtime.py OpenAIRealtimeDriver.interrupt).
         ({"type": "response.cancel"}, "cancel"),
     ],
 )

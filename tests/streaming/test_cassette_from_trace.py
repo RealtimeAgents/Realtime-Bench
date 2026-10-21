@@ -145,7 +145,7 @@ def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
     trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="cassette", clock=clock)
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
     sink = AgentTraceSink(trace, tmp_path / "episode_blobs.pack", clock=clock)
-    # As providers/capture.py:318-325 records a write that raised.
+    # As providers/capture.py sync_ws_connection's send records a write that raised.
     sink.capture(
         TraceEvent.SESSION_MESSAGE,
         {
@@ -238,11 +238,11 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_its_cursor_follows(
 
 
 def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path):
-    """M3: the trace records no close (providers/capture.py:303-331), so the stub's close in the
-    second reply is not in the cassette. The replayed driver waits for that reply on the open
-    connection until the fake clock's limit. Given up there, it closes the connection as its
-    cleanup (openai_session.py run_on_fake_clock), after the connection's last record, which a
-    recording without closes allows. A client that never closed it would be reported as having
+    """M3: the trace records no close (providers/capture.py sync_ws_connection), so the stub's
+    close in the second reply is not in the cassette. The replayed driver waits for that reply on
+    the open connection until the fake clock's limit. Given up there, it closes the connection as
+    its cleanup (openai_session.py run_on_fake_clock), after the connection's last record, which
+    a recording without closes allows. A client that never closed it would be reported as having
     left it open (test_clocked_ws.py)."""
 
     def closes_in_the_second_reply(stub, connection, message):

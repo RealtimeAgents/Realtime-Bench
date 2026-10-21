@@ -4,7 +4,7 @@ The calls are the ones RealtimeRuntime (harnesses/default/context.py) makes in s
 run_turn for a turn of the legacy loop: connect, then per turn send_observation with the history
 ending in the turn's frame, start_generation with the same history, and every event of the
 generation; then close. The history is the request builder's
-(harnesses/default/request.py:43), as tests/agent_trace/test_ws.py builds it.
+(harnesses/default/request.py build_request), as tests/agent_trace/test_ws.py builds it.
 """
 
 from __future__ import annotations
