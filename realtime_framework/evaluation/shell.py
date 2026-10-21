@@ -468,14 +468,14 @@ class _Shell:
 
     def _raised(self, failure: str) -> None:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
-        finalizes; the first traceback is the summary's error (runner.py main)."""
-        self.log(f"[default] decision loop raised:\n{failure}")
+        finalizes."""
         self._escaped(failure)
         self.post(Invalidated("runner", "run_exception", failure))
 
     def _escaped(self, failure: str) -> None:
-        """An exception that escaped the legacy loop: the first traceback is the summary's error
-        (runner.py run_stream, main)."""
+        """An exception that escaped the legacy loop: it is logged, and the first traceback is
+        the summary's error (runner.py run_stream, main)."""
+        self.log(f"[default] decision loop raised:\n{failure}")
         if self._loop_error is None:
             self._loop_error = self.env._loop_error = failure
 
