@@ -1059,7 +1059,8 @@ class _Staged:
     """What accepting a generation's result writes into the history. Discarding it only ends
     its tool calls and records the usage of a result that came back."""
 
-    feedback: str  # the pending feedback its frame carried
+    feedback: str  # the pending feedback when it started
+    unattached: str  # and the part of it that no turn carries
     inspections: list  # its observation's tool calls, still open
     result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
     observation: ProviderObservation | None = None  # the frame its action is based on
@@ -1165,6 +1166,9 @@ class DefaultHarness(VisionAgentBase):
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
         self._pending_feedback = ""
+        # The feedback on decisions of which nothing was accepted: no turn carries it, so the
+        # next frame opens with it whatever the policy's feedback placement.
+        self._unattached_feedback = ""
         # Each accepted decision's action record, by its index in action_history.
         self._decision_actions: dict[int, int] = {}
         self.frames = FrameTable()
@@ -1198,15 +1202,15 @@ class DefaultHarness(VisionAgentBase):
             return self.driver.transport_output_token_cap(provider_cap)
         return None if provider_cap is None else int(provider_cap)
 
-    def _prepare_observations(self, observations, tick, feedback=""):
+    def _prepare_observations(self, observations, tick, prefix=""):
         prepared_values = []
         inspections = []
         try:
             for index, observation in enumerate(observations):
                 prompt = self.interaction_profile.frame_prompt
                 prepared, execution = bind_observation(self, observation, prompt, tick)
-                if index == 0 and feedback and self._context_policy.feedback == "frame_prefix":
-                    prepared.feedback_prefix = feedback
+                if index == 0 and prefix:
+                    prepared.feedback_prefix = prefix
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
@@ -1389,6 +1393,8 @@ class DefaultHarness(VisionAgentBase):
         self._record_provider_usage(result, staged.observation, generation.decision, stale=False)
         if self._pending_feedback == staged.feedback:
             self._pending_feedback = ""
+        if self._unattached_feedback == staged.unattached:
+            self._unattached_feedback = ""
         self.tick_count += 1
         self._runtime.accept_turn(result.turn)
         self._decision_actions[generation.decision] = len(self.action_history)
@@ -1442,12 +1448,15 @@ class DefaultHarness(VisionAgentBase):
                 "invalid_detail": "no current observation",
             }, False
         started = self.clock.monotonic()
-        feedback = self._pending_feedback
+        feedback, unattached = self._pending_feedback, self._unattached_feedback
+        # The frame opens with the feedback no frame of an accepted result carried yet: all of
+        # it where the policy places feedback there, otherwise what no turn carries.
+        prefix = feedback if self._context_policy.feedback == "frame_prefix" else unattached
         try:
             prepared, inspection_executions, generation.choice = self._prepare_observations(
                 observations,
                 tick,
-                feedback,
+                prefix,
             )
         except Exception as exc:  # noqa: BLE001 - preparation faults become invalid-run metadata
             latency = self.clock.monotonic() - started
@@ -1634,7 +1643,7 @@ class DefaultHarness(VisionAgentBase):
             with retry_cancellation(generation.cancel):
                 runtime_result = retry.run(send)
         except RetryCancelled:
-            generation.staged = _Staged(feedback, inspection_executions)
+            generation.staged = _Staged(feedback, unattached, inspection_executions)
             return self._cancelled_result(self.clock.monotonic() - started), True
         except Exception:  # noqa: BLE001, S110 - record() kept the final failure
             pass
@@ -1748,6 +1757,7 @@ class DefaultHarness(VisionAgentBase):
             executed = _action_text(action)
         generation.staged = _Staged(
             feedback,
+            unattached,
             inspection_executions,
             runtime_result,
             action_observation,
@@ -1902,8 +1912,9 @@ class DefaultHarness(VisionAgentBase):
     def commit(self, outcome):
         """Commit: report decision ``outcome.decision`` on its own action record and turn. A
         decision whose result was never accepted, a move over the per-move cap, has neither: no
-        earlier record changes, and its feedback only opens the next frame, after any feedback
-        the discarded generation's frame carried."""
+        earlier record changes, and its feedback opens the next frame whatever the policy's
+        feedback placement. Where frames carry all feedback, it follows what only the discarded
+        generation's frame carried."""
         index = self._decision_actions.get(outcome.decision)
         entry = None if index is None else self.action_history[index]
         # The loop has no terminal actions: the kernel ran a done or fail as this wait.
@@ -1913,6 +1924,9 @@ class DefaultHarness(VisionAgentBase):
         )
         if entry is None:
             self._pending_feedback = "\n".join(filter(None, (self._pending_feedback, feedback)))
+            self._unattached_feedback = "\n".join(
+                filter(None, (self._unattached_feedback, feedback))
+            )
         else:
             self._pending_feedback = feedback
             self._runtime.record_execution_feedback(feedback, outcome.decision)
