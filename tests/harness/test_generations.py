@@ -12,6 +12,7 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.context_policy import (
     JEV_CURRENT_PREFIX,
     JEV_HISTORY_PREFIX,
@@ -19,6 +20,7 @@ from realtime_framework.entity.context_policy import (
 )
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.evaluation.kernel.events import Outcome
+from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.prompts import (
     ACTION_RESULT_NOTES,
     UNSUPPORTED_TERMINAL_ACTION_FEEDBACK,
@@ -312,6 +314,45 @@ def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
     assert [click.parameters["x"], click.parameters["y"]] == own_frame.marks["P3"]["point"]
     assert click.coordinate_transform == own_frame.geometry
     assert (own_frame.send_status, late_frame.send_status) == ("sent", "prepared")
+
+
+def test_a_late_abandoned_generation_leaves_the_next_its_action_cap(tmp_path):
+    """The runner audits the agent's action cap once it has a result
+    (episode_records.py audit_output_caps), and only for the newest generation. Generation 1 is
+    aborted while it prepares its frame and returns after generation 2, whose cap differs. The
+    agent keeps generation 2's cap."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            entered, release = threading.Event(), threading.Event()
+            prepare = agent._prepare_observations
+
+            def held(observations, tick, prefix=""):
+                prepared = prepare(observations, tick, prefix)
+                if tick == 0:
+                    entered.set()
+                    release.wait(WAIT_S)
+                return prepared
+
+            agent._prepare_observations = held
+            first, second = episode.frames.capture(0), episode.frames.capture(1)
+            box, done = _in_worker(
+                lambda: agent.generate(1, 0, first, DecisionBudget(None, 111, None, "wall"))
+            )
+            assert entered.wait(WAIT_S), "generation 1 prepared no frame"
+            agent.abort(1)
+            accepted = agent.generate(2, 1, second, DecisionBudget(None, 222, None, "wall"))
+            agent.accept(2)
+            release.set()
+            abandoned = _joined(box, done)
+            agent.discard(1)
+        finally:
+            episode.finish()
+    assert abandoned.cancelled and not accepted.cancelled
+    limit = agent.config.native_output_limit
+    assert native_output_limit(limit, 111) != native_output_limit(limit, 222)
+    assert agent._frame_action_max_tokens == native_output_limit(limit, 222)
 
 
 def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
