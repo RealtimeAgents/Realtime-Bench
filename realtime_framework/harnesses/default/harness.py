@@ -1614,6 +1614,8 @@ class DefaultHarness(VisionAgentBase):
                 return run_once(collector)
 
         def classify(exc):
+            if isinstance(exc, RequestExceedsContext):  # the harness's own; a retry cannot fit
+                return TransportFailure(FATAL)
             if callable(classifier):
                 try:
                     return classifier(exc)

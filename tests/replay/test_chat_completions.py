@@ -16,6 +16,8 @@ from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import LEDGER_OMISSION
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.entity.model import TRANSIENT
+from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation.agent_trace import load_body
 
@@ -249,3 +251,43 @@ def test_history_overflow_ledger(tmp_path):
     assert not problems, f"{len(problems)} difference(s) from {path.name}:\n" + "\n".join(
         problems[:60]
     )
+
+
+def test_context_exceeded_before_request(tmp_path, monkeypatch):
+    """A chat request that does not fit the window even with nothing retained is not sent, and
+    the decision is invalid as context_exceeded_before_request. The harness raised it, so the
+    driver's classifier is not asked: even one that calls every error transient gets no retry."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        # Below the first request's estimate of 9459 (test_history_overflow_ledger).
+        config = chat_completions_config(stub.base_url, stream=False).model_copy(
+            update={"context_window_tokens": 6096, "context_reserve_tokens": 1000}
+        )
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+        )
+        monkeypatch.setattr(
+            episode.agent.driver,
+            "classify_transport_error",
+            lambda exc: TransportFailure(TRANSIENT),
+        )
+        try:
+            observation = episode.frames.capture(0)
+            episode.agent.configure_decision(episode.budget(observation.tick_number))
+            episode.agent.stream_prefill(observation)
+            result = episode.agent.stream_generate(tick=0)
+        finally:
+            episode.finish()
+    assert stub.requests == [] and stub.unused_replies == 1
+    assert (result["invalid_category"], result["invalid_reason"]) == (
+        "provider",
+        "context_exceeded_before_request",
+    )
+    trace = (tmp_path / "episode_trace.jsonl").read_text()
+    attempts = [
+        e["payload"]
+        for e in map(json.loads, trace.splitlines())
+        if e["event"] == "ModelAttemptFinished"
+    ]
+    assert [(a["outcome"], a["invalid_reason"]) for a in attempts] == [
+        ("failed", "context_exceeded_before_request")
+    ]
