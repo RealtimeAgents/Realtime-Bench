@@ -38,12 +38,15 @@ class Deadline:
     """One absolute deadline shared by every wait of a call, never later than its operation's.
 
     ``seconds=None`` leaves only the operation's deadline, if any. ``clock`` defaults to the
-    operation's clock, or the system clock outside an operation.
+    operation's clock, or the system clock outside an operation; inside one it must be the
+    operation's.
     """
 
     def __init__(self, seconds: float | None, what: str, clock: Clock | None = None):
         self.operation = _OPERATION.get()
         # Both deadlines must be read on one clock to be compared.
+        if clock is not None and self.operation is not None and clock is not self.operation.clock:
+            raise ValueError(f"{what} is timed on another clock than its operation")
         self.clock = clock or (
             self.operation.clock if self.operation is not None else SystemClock()
         )

@@ -4,10 +4,12 @@ semantic FrameClock, which only advancing the environment moves."""
 
 from __future__ import annotations
 
+import pytest
+
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, GuestEnvironment
-from realtime_framework.sandbox.budget import Deadline
+from realtime_framework.sandbox.budget import Deadline, operation_budget
 
 from .fake_clock import FakeClock
 from .replay.clock_task import ClockTask
@@ -98,6 +100,32 @@ def test_an_environment_operation_is_timed_on_the_operational_clock():
     invalid = env._invalid_run
     assert invalid["reason"] == "terminal_state_check_failed"
     assert invalid["detail"].rstrip().endswith("BudgetExceeded: state read took longer than 120 s")
+
+
+def test_the_clocks_must_fit_the_clock_mode():
+    """On the wall clock world time is real time, so both clocks are one; under the token clock
+    the frame counter steps by the task's tick."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    with pytest.raises(ValueError, match="^the wall clock reads one clock for world and real time$"):
+        GuestEnvironment(
+            _Guest(clock),
+            ORIGIN + 10.0,
+            _WallTask(),
+            clock_mode="wall",
+            wall_start_time=ORIGIN,
+            clocks=Clocks(clock, FakeClock()),
+        )
+    with pytest.raises(ValueError, match=r"^the frame clock counts 1 s frames, the task 0.0333"):
+        GuestEnvironment(
+            None, None, ClockTask(30.0), clock_mode="token", clocks=Clocks(FrameClock(1.0), clock)
+        )
+
+
+def test_a_deadline_inside_an_operation_is_read_on_its_clock():
+    with operation_budget("click action", 10.0, clock=FakeClock()), pytest.raises(
+        ValueError, match="^CDP call is timed on another clock than its operation$"
+    ):
+        Deadline(1.0, "CDP call", clock=FakeClock())
 
 
 def test_token_world_time_moves_only_when_the_environment_advances():
