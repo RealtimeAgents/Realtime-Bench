@@ -110,8 +110,16 @@ A model that needs a new wire protocol gets a driver:
    real time. Stateless APIs make `connect` and `sync_history`
    no-ops and send the canonical request (`GenerationRequest.canonical`,
    `realtime_framework/entity/request.py`) in their own format; session APIs send each
-   observation and keep native history. Build HTTP clients with the hooks in
-   `realtime_framework/providers/capture.py`, so every request and response is recorded.
+   observation and keep native history. A session API (`persistent_session`) also manages its
+   session: the runtime calls its `ensure_ready` before each generation, `synchronize` after the
+   retained history changed, `renew`, `repair` after each generation, `abort` and `mark_dirty`,
+   and reads its `state`. Inherit `SessionLifecycle`
+   (`realtime_framework/providers/session_lifecycle.py`) for these: it implements them, with
+   `connect`, `sync_history` and `close`, over your `_connect`, `_sync_history`,
+   `_close_current` and `interrupt`; it reads `self.clock`, writes its records to the trace
+   `bind_trace` gave you, kept as `self._trace`, and `_wait` records a wait and takes it. Build
+   HTTP clients with the hooks in `realtime_framework/providers/capture.py`, so every request and
+   response is recorded.
 2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
    timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
    which optional methods it implements, and what it can render of the context policy: `roles`,
@@ -149,8 +157,10 @@ driver as a [model API](#add-a-model-api).
    `("instruction", "input", "model")`), `feedback_placements=("separate_message",)` and
    `server_context="none"` for a stateless API. Each optional-method flag you set
    (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
-   `maps_output_cap`) needs its method. The driver runs under the `chat_completions` context
-   policy, with the model's [context preset](#context-preset) if it names one. With
+   `maps_output_cap`) needs its method, and `persistent_session` needs `ensure_ready`,
+   `synchronize`, `renew`, `repair`, `abort` and `mark_dirty`. The driver runs under the
+   `chat_completions` context policy, with the model's [context preset](#context-preset) if it
+   names one. With
    `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
    window. With no turn left, the earliest archived actions give way to a note in the ledger,

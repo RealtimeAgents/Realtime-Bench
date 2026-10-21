@@ -2,9 +2,10 @@
 
 A session encoder keeps one provider session open across generations. Whether that session can
 take the next generation, and the cleanup an abort leaves behind for the next use to wait for, do
-not depend on the protocol: SessionLifecycle keeps both, and readies or aborts the session through
-the encoder's own connection operations. It also records the encoder's waits on the clock, and
-takes the ones the encoder makes of its own accord.
+not depend on the protocol: SessionLifecycle keeps both, and readies, renews, repairs or aborts the
+session through the encoder's own connection operations. It also records the encoder's waits on
+the clock, and takes the ones the encoder makes of its own accord. StatelessSession presents a
+stateless driver the same way, so the runtime drives every driver alike.
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ from realtime_framework.entity.model import (
     HistorySyncRequest,
     HistorySyncResult,
     RetryCancelled,
+    RuntimeState,
     SessionSeed,
     SyncDisposition,
+    retry_cancel_event,
 )
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
@@ -35,11 +38,22 @@ class SessionLifecycle:
     """A live encoder's session: connected or not, dirty or not, and the last abort's cleanup.
 
     The session is connected once connect() opened it or a sync left it exact, and no longer once
-    close() or abort() closed it or a sync raised an Exception or broke it. A connected session
-    is dirty when the provider may hold what the canonical history does not: a generation on it
-    failed (mark_dirty), a sync left it neither exact nor broken, or a sync was cut short
-    (RetryCancelled, a cancelled task). A connection that an operation closes on its way (the one
-    a connect replaces, one past its goAway deadline) changes neither.
+    close() or abort() closed it or a sync raised an Exception or broke it; the last two leave it
+    broken until it is opened again. A connected session is dirty when the provider may hold what
+    the canonical history does not: a generation on it failed or was aborted (mark_dirty), a sync
+    left it neither exact nor broken, or a sync was cut short (RetryCancelled, a cancelled task).
+    A connection that an operation closes on its way (the one a connect replaces, one past its
+    goAway deadline) changes neither.
+
+    The runtime readies the session before each generation (ensure_ready), brings it to the
+    retained history after the history changed (synchronize), renews the connection the provider
+    asked to (renew), repairs it after a generation (repair), and aborts it (abort). One of these
+    operations runs at a time. Each runs for one generation, the one whose retry_cancellation it
+    runs in: once that generation is abandoned it does not start, and what it opened or rebuilt
+    meanwhile is closed again, because the abort that came during it closed what was open before.
+    ``record(sync, result=None, error=None)`` sees what each did before it returns or raises: the
+    sync's HistorySyncRequest with its result or the exception it raised, or None for a reopened
+    session.
 
     Every timed wait the encoder takes on the clock is written to the trace before it starts
     (_record_wait), once: what it waits for, how long, and until which time on the operational
@@ -52,30 +66,43 @@ class SessionLifecycle:
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one, and ``interrupt(generation)``; ``clock``, the operational clock; and ``_trace``,
-    which bind_trace sets.
+    is one, and ``interrupt(generation)``; ``capabilities``, with
+    ``connection_renewal_reason()`` where they declare connection_renewal; ``clock``, the
+    operational clock; and ``_trace``, which bind_trace sets.
     """
 
     _connected = False
     _dirty = False
+    _broken = False
     _cleanup: asyncio.Task | None = None
+    _lock: asyncio.Lock | None = None
+
+    @property
+    def state(self) -> RuntimeState:
+        """READY when the session can take the next generation as it is; BROKEN when the last
+        sync broke it; otherwise DIRTY, to be rebuilt or reopened first."""
+        if self._broken:
+            return RuntimeState.BROKEN
+        if self._connected and not self._dirty:
+            return RuntimeState.READY
+        return RuntimeState.DIRTY
 
     async def connect(self, request: ConnectRequest) -> None:
         await self._connect(request)
-        self._connected, self._dirty = True, False
+        self._connected, self._dirty, self._broken = True, False, False
 
     async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         # Dirty until the sync reports: one cut short may have closed the connection already.
-        self._dirty = True
+        self._dirty, self._broken = True, False
         try:
             result = await self._sync_history(request)
         except Exception:
-            self._connected = False
+            self._connected, self._broken = False, True
             raise
         if result.history_state == ProviderHistoryState.EXACT:
             self._connected, self._dirty = True, False
         elif result.disposition in {SyncDisposition.UNSUPPORTED, SyncDisposition.BROKEN}:
-            self._connected = False
+            self._connected, self._broken = False, True
         else:
             self._dirty = True
         return result
@@ -90,8 +117,8 @@ class SessionLifecycle:
             await self._close_current()
 
     def mark_dirty(self) -> None:
-        """A generation on the session failed: the next ensure_ready rebuilds the session if it
-        is still connected."""
+        """A generation on the session failed, or is being aborted: the next ensure_ready
+        rebuilds the session if it is still connected."""
         self._dirty = True
 
     async def ensure_ready(
@@ -103,26 +130,69 @@ class SessionLifecycle:
         """Make the session ready for the next generation, once the last abort's cleanup is done.
 
         A ready session is left as it is. A closed one is reopened with ``history``. A dirty one
-        is rebuilt from ``history`` by a runtime_recovery sync, whose result is returned.
-        ``record(sync, result=None, error=None)`` sees what was done before this returns or
-        raises: the recovery's HistorySyncRequest with its result or the exception it raised, or
-        None for a reopened session. A failed reopen raises unrecorded.
+        is rebuilt from ``history`` by a runtime_recovery sync, whose result is returned; a
+        recovery that does not leave it exact raises. A failed reopen raises unrecorded.
         """
         await self._settle()
-        if self._connected and not self._dirty:
-            return None
-        if not self._connected:
+        async with self._session_lock():
+            if self._connected and not self._dirty:
+                return None
+            self._stop_if_abandoned("its session")
+            if self._connected:
+                result = await self._sync(
+                    HistorySyncRequest(seed, "runtime_recovery", history, force_rebuild=True),
+                    record,
+                )
+                if result.history_state != ProviderHistoryState.EXACT:
+                    raise RuntimeError(f"provider history recovery failed: {result.detail}")
+                return result
             await self.connect(ConnectRequest(seed=seed, history=history))
             record(None)
+            await self._release_if_abandoned()
             return None
-        sync = HistorySyncRequest(seed, "runtime_recovery", history, force_rebuild=True)
-        try:
-            result = await self.sync_history(sync)
-        except Exception as exc:
-            record(sync, error=exc)
-            raise
-        record(sync, result)
+
+    async def synchronize(
+        self, request: HistorySyncRequest, record: Callable[..., None]
+    ) -> HistorySyncResult:
+        """Bring the session to the retained history after the history changed (a fold or an
+        archive); a sync that does not leave it exact raises."""
+        async with self._session_lock():
+            result = await self._sync(request, record)
+        if result.history_state != ProviderHistoryState.EXACT:
+            raise RuntimeError(f"history synchronization failed: {result.detail}")
         return result
+
+    async def renew(
+        self, seed: SessionSeed, history: CanonicalRequest, record: Callable[..., None]
+    ) -> HistorySyncResult | None:
+        """Renew the connection once the provider asked for it (connection_renewal_reason), from
+        ``history``; a renewal that does not leave the session exact raises. None when no renewal
+        is due."""
+        reason = (
+            self.connection_renewal_reason() if self.capabilities.connection_renewal else None
+        )
+        if not reason:
+            return None
+        async with self._session_lock():
+            result = await self._sync(HistorySyncRequest(seed, reason, history), record)
+        if result.history_state != ProviderHistoryState.EXACT:
+            raise RuntimeError(f"connection renewal failed: {result.detail}")
+        return result
+
+    async def repair(
+        self,
+        request: HistorySyncRequest,
+        terminal_history: ProviderHistoryState,
+        reconnect_required: bool,
+        record: Callable[..., None],
+    ) -> HistorySyncResult | None:
+        """After a generation that came back: when its end left the provider's history other than
+        exact, or it asked to reconnect, sync the session to ``request.history``, which already
+        holds the generation's turn. None when there is nothing to repair."""
+        if terminal_history == ProviderHistoryState.EXACT and not reconnect_required:
+            return None
+        async with self._session_lock():
+            return await self._sync(request, record)
 
     async def abort(self, generation: GenerationHandle | None) -> None:
         """Interrupt ``generation`` (None when none had started), then close the connection, as
@@ -130,6 +200,38 @@ class SessionLifecycle:
         _CLEANUP_WAIT_S; a later abort takes its place as the one they wait for."""
         self._cleanup = asyncio.ensure_future(self._interrupt_and_close(generation))
         await asyncio.wait({self._cleanup})
+
+    def _session_lock(self) -> asyncio.Lock:
+        # Made on first use, on the execution thread's loop, which every operation runs on.
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def _sync(
+        self, request: HistorySyncRequest, record: Callable[..., None]
+    ) -> HistorySyncResult:
+        """One sync, under the session lock its caller holds."""
+        self._stop_if_abandoned("its sync")
+        try:
+            result = await self.sync_history(request)
+        except Exception as exc:
+            record(request, error=exc)
+            raise
+        record(request, result)
+        await self._release_if_abandoned()
+        return result
+
+    @staticmethod
+    def _stop_if_abandoned(before: str) -> None:
+        if _abandoned():
+            raise RetryCancelled(f"generation abandoned before {before}")
+
+    async def _release_if_abandoned(self) -> None:
+        """An abort that came while this connected or synced closed what was open then, not the
+        session this opened or rebuilt: close that too, so the next generation opens its own."""
+        if _abandoned():
+            await self._interrupt_and_close(None)
+            raise RetryCancelled("generation abandoned while it readied its session")
 
     async def _interrupt_and_close(self, generation: GenerationHandle | None) -> None:
         if generation is not None:
@@ -141,7 +243,7 @@ class SessionLifecycle:
             await self._close_current()
         except Exception:  # noqa: BLE001, S110 - the session is closed below all the same
             pass
-        self._connected = False
+        self._connected, self._broken = False, False
 
     async def _settle(self, timeout: float | None = None) -> None:
         """Wait for the last abort's cleanup; one still running after ``timeout`` seconds is
@@ -183,3 +285,36 @@ class SessionLifecycle:
             TraceEvent.SESSION_WAIT,
             {"wait": wait, "seconds": seconds, "until_monotonic_ns": until_ns},
         )
+
+
+def _abandoned() -> bool:
+    """Whether the generation this context's operations belong to was abandoned."""
+    return retry_cancel_event().is_set()
+
+
+class StatelessSession(SessionLifecycle):
+    """A stateless driver as a session: its connect, sync_history and close stand for the
+    connection operations. Nothing on the provider side outlives a request, but the runtime
+    readies, aborts and closes it as it does a live session's; a driver whose abort closed its
+    client makes a new one when the next generation connects again."""
+
+    def __init__(self, driver, *, clock, trace):
+        self.driver = driver
+        self.capabilities = driver.capabilities
+        self.clock = clock
+        self._trace = trace
+
+    async def _connect(self, request: ConnectRequest) -> None:
+        await self.driver.connect(request)
+
+    async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+        return await self.driver.sync_history(request)
+
+    async def _close_current(self) -> None:
+        await self.driver.close()
+
+    async def interrupt(self, generation: GenerationHandle):
+        return await self.driver.interrupt(generation)
+
+    def connection_renewal_reason(self) -> str | None:
+        return self.driver.connection_renewal_reason()

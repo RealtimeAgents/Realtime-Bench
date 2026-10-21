@@ -23,11 +23,15 @@ from realtime_framework.entity.model import (
     TRANSIENT,
     TRANSPORT_RETRY,
     ConnectRequest,
+    Deployment,
     GenerationHandle,
     GenerationRequest,
     HistorySyncRequest,
     HistorySyncResult,
+    InterruptResult,
+    RealtimeCapabilities,
     RetryCancelled,
+    RuntimeState,
     SessionSeed,
     SyncDisposition,
     TransportFailure,
@@ -35,9 +39,10 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.records import UNTRACED, TraceEvent, current_trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
+from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
-from realtime_framework.providers.session_lifecycle import SessionLifecycle
+from realtime_framework.providers.session_lifecycle import SessionLifecycle, StatelessSession
 from tests.fake_clock import FakeClock
 
 from .test_gemini_live_receive import (
@@ -59,31 +64,45 @@ EXACT = HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT, "
 
 class _Encoder(SessionLifecycle):
     """Connection operations that log what they are asked, at the clock's time. ``syncs`` holds
-    what each sync returns, or raises; an interrupt takes ``interrupt_s`` and then raises
-    ``interrupt_error``, if set; a close raises ``close_error`` and a connect ``connect_error``,
-    if set."""
+    what each sync returns, or raises; a connect takes ``connect_s``; an interrupt takes
+    ``interrupt_s`` and then raises ``interrupt_error``, if set; a close raises ``close_error``
+    and a connect ``connect_error``, if set. ``during`` runs in the middle of each connect and
+    sync. ``renewal`` is what connection_renewal_reason returns."""
+
+    capabilities = RealtimeCapabilities(
+        "replay_session", persistent_session=True, connection_renewal=True
+    )
 
     def __init__(self, clock: FakeClock):
         self.clock = clock
         self._trace = UNTRACED
         self.log: list[tuple] = []
         self.syncs: list = []
+        self.connect_s = 0.0
         self.interrupt_s = 0.0
         self.interrupt_error: Exception | None = None
         self.close_error: Exception | None = None
         self.connect_error: Exception | None = None
+        self.during = lambda: None
+        self.renewal: str | None = None
 
     async def _connect(self, request):
         self.log.append(("connect", request.history, self.clock.monotonic()))
+        await self.clock.sleep_async(self.connect_s)
+        self.during()
         if self.connect_error is not None:
             raise self.connect_error
 
     async def _sync_history(self, request):
         self.log.append(("sync", request.reason, request.force_rebuild, request.history))
+        self.during()
         outcome = self.syncs.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
+    def connection_renewal_reason(self):
+        return self.renewal
 
     async def _close_current(self):
         self.log.append(("close", self.clock.monotonic()))
@@ -354,6 +373,250 @@ def test_a_wait_runs_on_the_clock_and_a_cancel_ends_it():
         with pytest.raises(RetryCancelled, match="during the session_release wait$"):
             waiting.result()
         assert rig.clock.monotonic() == 2.5
+
+
+# ---- what the runtime asks of the session around each generation --------------------------
+
+CONTAMINATED = HistorySyncResult(
+    SyncDisposition.REBUILT, ProviderHistoryState.CONTAMINATED, "replayed"
+)
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        ("recovery", "provider history recovery failed: replayed"),
+        ("synchronize", "history synchronization failed: replayed"),
+        ("renew", "connection renewal failed: replayed"),
+    ],
+)
+def test_a_session_that_must_come_out_exact_raises_otherwise(operation, message):
+    """The three operations before a generation's input raise, with the runtime's words, when
+    their sync leaves the session other than exact (harnesses/default/context.py before the
+    session moved into the encoder). Each sync is recorded first."""
+    with _rig() as rig:
+        rig.encoder.syncs = [CONTAMINATED]
+        rig.encoder.renewal = "go_away"
+        if operation == "recovery":
+            rig.encoder.mark_dirty()
+            running = rig.ensure_ready()
+        elif operation == "synchronize":
+            request = HistorySyncRequest(SEED, "history_block_compaction", HISTORY)
+            running = rig.encoder.synchronize(request, rig.records)
+        else:
+            running = rig.encoder.renew(SEED, HISTORY, rig.records)
+        with pytest.raises(RuntimeError, match=f"^{message}$"):
+            rig.run(running)
+    ((sync, result, error),) = rig.records.calls
+    assert (result, error) == (CONTAMINATED, None)
+    assert sync.reason == {"recovery": "runtime_recovery", "renew": "go_away"}.get(
+        operation, "history_block_compaction"
+    )
+
+
+def test_a_renewal_runs_only_once_the_provider_asks_for_it():
+    with _rig() as rig:
+        assert rig.run(rig.encoder.renew(SEED, HISTORY, rig.records)) is None
+        rig.encoder.renewal, rig.encoder.syncs = "go_away", [EXACT]
+        assert rig.run(rig.encoder.renew(SEED, HISTORY, rig.records)) is EXACT
+    assert rig.encoder.log == [("sync", "go_away", False, HISTORY)]
+
+
+@pytest.mark.parametrize(
+    ("terminal", "reconnect_required", "repaired"),
+    [
+        (ProviderHistoryState.EXACT, False, False),
+        (ProviderHistoryState.EXACT, True, True),
+        (ProviderHistoryState.CONTAMINATED, False, True),
+        (ProviderHistoryState.UNKNOWN, False, True),
+    ],
+)
+def test_a_generation_is_repaired_when_its_end_leaves_the_history_unknown_or_asks_to_reconnect(
+    terminal, reconnect_required, repaired
+):
+    """As the runtime decided after a generation (context.py before the session moved): a
+    repair that does not leave the session exact does not raise; its result says so."""
+    request = HistorySyncRequest(SEED, "provider_history_changed", HISTORY, GENERATION)
+    with _rig() as rig:
+        rig.encoder.syncs = [CONTAMINATED]
+        result = rig.run(rig.encoder.repair(request, terminal, reconnect_required, rig.records))
+    assert result is (CONTAMINATED if repaired else None)
+    assert rig.records.calls == ([(request, CONTAMINATED, None)] if repaired else [])
+
+
+def test_an_abandoned_generation_neither_readies_nor_syncs_the_session():
+    abandoned = threading.Event()
+    abandoned.set()
+    with _rig() as rig:
+        encoder, records = rig.encoder, rig.records
+        encoder.renewal, encoder.syncs = "go_away", [EXACT]
+        encoder.mark_dirty()
+        operations = [
+            (rig.ensure_ready, "its session"),
+            (
+                lambda: encoder.synchronize(HistorySyncRequest(SEED, "c", HISTORY), records),
+                "its sync",
+            ),
+            (lambda: encoder.renew(SEED, HISTORY, records), "its sync"),
+            (
+                lambda: encoder.repair(
+                    HistorySyncRequest(SEED, "r", HISTORY, GENERATION),
+                    ProviderHistoryState.UNKNOWN,
+                    False,
+                    records,
+                ),
+                "its sync",
+            ),
+        ]
+        with retry_cancellation(abandoned):
+            for operation, before in operations:
+                with pytest.raises(RetryCancelled, match=f"^generation abandoned before {before}$"):
+                    rig.run(operation())
+        assert rig.run(rig.ensure_ready()) is EXACT  # a generation that goes on rebuilds it
+    assert encoder.log == [("sync", "runtime_recovery", True, HISTORY)]
+
+
+@pytest.mark.parametrize("operation", ["reopen", "recovery", "synchronize"])
+def test_what_an_abandoned_generation_opened_or_rebuilt_is_closed_again(operation):
+    """The abort came while the generation connected or synced, and closed what was open then.
+    What the connect or sync then opened is recorded, closed again, and the session is left for
+    the next generation to open."""
+    cancel = threading.Event()
+    with _rig(connected=operation != "reopen") as rig:
+        rig.encoder.during = cancel.set
+        rig.encoder.syncs = [EXACT]
+        if operation == "recovery":
+            rig.encoder.mark_dirty()
+        with retry_cancellation(cancel):
+            running = (
+                rig.encoder.synchronize(HistorySyncRequest(SEED, "c", HISTORY), rig.records)
+                if operation == "synchronize"
+                else rig.ensure_ready()
+            )
+            with pytest.raises(
+                RetryCancelled, match="^generation abandoned while it readied its session$"
+            ):
+                rig.run(running)
+        assert rig.encoder.state == RuntimeState.DIRTY and not rig.encoder._connected
+    assert [entry[0] for entry in rig.encoder.log] == [
+        "connect" if operation == "reopen" else "sync",
+        "close",
+    ]
+    ((sync, result, _),) = rig.records.calls
+    assert (sync is None, result) == ((True, None) if operation == "reopen" else (False, EXACT))
+
+
+def test_one_session_operation_runs_at_a_time():
+    """A reopen that takes 1 s holds a sync submitted while it runs until it is done."""
+    with _rig(connected=False) as rig:
+        rig.encoder.connect_s, rig.encoder.syncs = 1.0, [EXACT]
+        reopening = rig.thread.submit(rig.ensure_ready())
+        request = HistorySyncRequest(SEED, "history_block_compaction", HISTORY)
+        rig.run(rig.encoder.synchronize(request, rig.records))
+        assert reopening.done()
+        rig.encoder.log.append(("synced", rig.clock.monotonic()))
+    assert rig.encoder.log == [
+        ("connect", HISTORY, 0.0),
+        ("sync", "history_block_compaction", False, HISTORY),
+        ("synced", 1.0),
+    ]
+
+
+def test_the_state_says_whether_the_session_can_take_the_next_generation():
+    with _rig(connected=False) as rig:
+        states = [rig.encoder.state]
+        rig.run(rig.encoder.connect(ConnectRequest(seed=SEED)))
+        states.append(rig.encoder.state)
+        rig.encoder.mark_dirty()
+        states.append(rig.encoder.state)
+        broken = HistorySyncResult(SyncDisposition.BROKEN, ProviderHistoryState.UNKNOWN)
+        rig.encoder.syncs = [broken]
+        rig.run(
+            rig.encoder.sync_history(HistorySyncRequest(SEED, "provider_history_changed", HISTORY))
+        )
+        states.append(rig.encoder.state)
+        rig.run(rig.encoder.abort(None))
+        states.append(rig.encoder.state)
+        rig.run(rig.ensure_ready())
+        states.append(rig.encoder.state)
+    assert states == [
+        RuntimeState.DIRTY,  # never opened
+        RuntimeState.READY,
+        RuntimeState.DIRTY,
+        RuntimeState.BROKEN,
+        RuntimeState.DIRTY,  # an abort closes a broken session too
+        RuntimeState.READY,
+    ]
+
+
+class _StatelessDriver:
+    """A stateless driver's protocol operations, logged."""
+
+    capabilities = RealtimeCapabilities("replay_stateless", persistent_session=False)
+
+    def __init__(self):
+        self.log: list[tuple] = []
+
+    async def connect(self, request):
+        self.log.append(("connect", request.history))
+
+    async def sync_history(self, request):
+        self.log.append(("sync", request.reason))
+        return HistorySyncResult(SyncDisposition.EXACT, ProviderHistoryState.EXACT, "stateless")
+
+    async def interrupt(self, generation):
+        self.log.append(("interrupt", generation.generation_id))
+        return InterruptResult(ProviderHistoryState.EXACT)
+
+    async def close(self):
+        self.log.append(("close",))
+
+
+def test_a_stateless_driver_is_readied_and_aborted_as_a_session():
+    """StatelessSession: the driver's connect, sync_history and close stand for the
+    connection operations. After an abort the next generation connects again, which is where a
+    Decisions client remakes the HTTP client the abort closed."""
+    driver = _StatelessDriver()
+    clock = FakeClock()
+    with clock.participant():
+        session = StatelessSession(driver, clock=clock, trace=UNTRACED)
+        thread = ExecutionThread(clock, "stateless-test")
+        thread.start()
+        try:
+            thread.run(session.connect(ConnectRequest(seed=SEED)))
+            thread.run(session.abort(GENERATION))
+            thread.run(session.ensure_ready(SEED, HISTORY, _Records()))
+            session.mark_dirty()
+            thread.run(session.ensure_ready(SEED, HISTORY, _Records()))
+            thread.run(session.close())
+        finally:
+            thread.stop()
+    assert driver.log == [
+        ("connect", None),
+        ("interrupt", "turn-0"),
+        ("close",),
+        ("connect", HISTORY),
+        ("sync", "runtime_recovery"),
+        ("close",),
+    ]
+
+
+def test_a_persistent_session_must_manage_itself():
+    """The catalog's check of a driver class (providers/registry.py): one that declares
+    persistent_session without any of the operations the runtime calls is refused."""
+    attributes = {
+        "__init__": lambda self, config, *, clock=None: None,
+        "capabilities": RealtimeCapabilities("replay_session", persistent_session=True),
+        "deployment": Deployment(family="streaming", provider="replay", key_env=None),
+        "model_defaults": {},
+        **{name: lambda self, *args: None for name in catalog._DRIVER_METHODS},
+    }
+    lifecycle = ("ensure_ready", "synchronize", "renew", "repair", "abort", "mark_dirty")
+    for missing in lifecycle:
+        methods = {name: getattr(SessionLifecycle, name) for name in lifecycle if name != missing}
+        driver = type("SessionDriver", (), {**attributes, **methods})
+        with pytest.raises(ValueError, match=rf"declares persistent_session but has no {missing}"):
+            catalog._check_driver("rtb_ext.session:SessionDriver", driver)
 
 
 # ---- OpenAI Realtime on a fake SDK connection ---------------------------------------------
