@@ -311,7 +311,7 @@ class TurnPolicy:
         if self._past_deadline():
             return
         # The horizon is tested after the end check (runner.py run_stream).
-        if self.token and self._tick() >= self.config.max_ticks:
+        if self.token and self._horizon_reached():
             self.phase = _Phase.SETTLED
             return self.kernel.end("horizon", self.config.max_ticks)
         self.phase = _Phase.CAPTURE
@@ -497,7 +497,7 @@ class TurnPolicy:
             return
         # The horizon ends the episode at the next loop top, as today (runner.py _land_action,
         # run_stream).
-        if self.token and self._tick() >= self.config.max_ticks:
+        if self.token and self._horizon_reached():
             return self._resolve("not_applied_tick_limit")
         d, kernel = self.decision, self.kernel
         d.execute_at = kernel.semantic
@@ -588,7 +588,7 @@ class TurnPolicy:
         horizon_truncates = self.token and started + duration * config.env_fps > (
             config.max_ticks + 1e-9
         )
-        by_horizon = horizon_truncates and self._tick() >= config.max_ticks - 1e-9
+        by_horizon = horizon_truncates and self._horizon_reached()
         # The wall deadline cuts a wait as today's sleep does, which flags neither truncation
         # (sandbox/actions.py GuestEnvironment.execute); the task's end or an invalidation cuts it
         # on either clock.
@@ -605,7 +605,7 @@ class TurnPolicy:
         self._after_execution("wait")
 
     def _resolve(self, status: str, terminal_after_action: bool = False) -> None:
-        d, kernel, config = self.decision, self.kernel, self.config
+        d, kernel = self.decision, self.kernel
         d.status, d.terminal_after_action = status, terminal_after_action
         record = {
             "decision": d.index,
@@ -628,7 +628,7 @@ class TurnPolicy:
             not terminal_after_action
             and status not in {"not_applied_terminal", "invalid_run"}
             and kernel.ending is None
-            and self._tick() < config.max_ticks
+            and not self._horizon_reached()
         ):
             action_end = max(float(d.tau), float(self._tick()))
             d.next_tick = self._next_observation_tick(d.t_k, action_end)
@@ -856,6 +856,11 @@ class TurnPolicy:
         then()
 
     # ---- clock arithmetic -------------------------------------------------------------------
+
+    def _horizon_reached(self) -> bool:
+        """The tick is at the horizon, within 1e-9 as a move is at its target (_advance): a move
+        cut at a horizon off the tick grid stops a float short of it."""
+        return self._tick() >= self.config.max_ticks - 1e-9
 
     def _frame(self) -> float:
         """The frame a state read reads: on the token clock the position, which every step of a

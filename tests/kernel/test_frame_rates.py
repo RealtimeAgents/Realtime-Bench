@@ -300,6 +300,39 @@ def test_a_horizon_within_1e9_of_a_whole_tick_is_that_tick(tokens_per_frame, las
     assert sim.termination == Termination("tick_limit", "horizon", 51, 51, 25.5, 25.5, None)
 
 
+def test_a_paused_episode_ends_at_a_horizon_off_the_tick_grid():
+    """Paused at 1 fps for 0.85 s, every reply a 0.2 s wait. The wait from 0 ends at 0.2 and the
+    move to the next frame, cut at the horizon, ends at 0.2 + (0.85 - 0.2), a float just below
+    0.85. A move is done within 1e-9 of its target, so the horizon is reached there: the loop
+    top ends the episode instead of observing that tick again and again, as today's loop does
+    (runner.py run_stream compares the horizon exactly)."""
+    sim = _run(_config("token", (1, 1), 0.85), [Reply(latency=0.5, action=Action.wait(0.2))] * 3)
+    assert [tick for tick, _ in sim.captures] == [0]
+    assert [outcome.status for outcome in sim.outcomes] == ["wait"]
+    assert sim.outcomes[0].next_observation_tick == 0.85
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("tick_limit", 0.85)
+
+
+def test_a_response_spending_the_allowance_lands_at_a_horizon_off_the_tick_grid():
+    """3 fps fed at 1 fps for 1.3 s: T = 3.9000000000000004 ticks. Decision 1 observes tick 3 with
+    0.3 input frames left, 30 tokens at B = 100; a response of all of them puts the action at
+    3 + 30 * 3 / 100, a float just below T, so within 1e-9 of it: the action lands at the
+    horizon and is not applied, and the loop top there ends the episode without observing it
+    (today's loop executes it and observes tick 3.9 once more)."""
+    replies = [
+        Reply(latency=0.5, output_tokens=0),
+        Reply(latency=0.5, action=CLICK, output_tokens=30),
+    ]
+    sim = _run(_config("token", (3, 1), 1.3, 100), replies)
+    assert [tick for tick, _ in sim.captures] == [0, 3]
+    starts = [command for command in sim.commands if isinstance(command, StartGeneration)]
+    assert [start.remaining_clock_tokens for start in starts] == [130, 30]
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == ["none", "not_applied_tick_limit"]
+    assert sim.outcomes[1].post_horizon_output_tokens == 0
+    assert sim.termination.stop_reason == "tick_limit"
+
+
 @pytest.mark.parametrize(
     ("rates", "duration_s", "observed"),
     [
