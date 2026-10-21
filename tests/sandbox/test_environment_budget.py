@@ -1,9 +1,12 @@
 """Each environment operation fails once it runs past its overall budget, and the run is invalid.
 
 The real run_stream drives the real GuestEnvironment (sandbox/actions.py). Its GuestClient talks to
-FakeGuest; a real catalog game (realtime_tasks/game/runtime.py) reads its state and advances the
-token clock over FakeCDP. Each case slows one operation down: it must fail within its budget and
-latch the invalid-run reason the runner already uses for that operation.
+FakeGuest; a real catalog game (realtime_tasks/game/runtime.py) reads its state, advances the token
+clock and takes key input over FakeCDP. Each case slows one operation down: it must fail within its
+budget and latch the invalid-run reason the runner already uses for that operation.
+
+The cases at the end run on the fake clock (tests/fake_clock.py), where an operation's parts spend
+virtual time: which budget times which part is exact there, and nothing waits in real time.
 """
 
 from __future__ import annotations
@@ -15,15 +18,19 @@ from dataclasses import replace
 import pytest
 
 import realtime_tasks.registry as tasks
+from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.evaluation import runner
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
 from realtime_framework.sandbox.browser.clock import cdp_wait_realtime_action_barrier
+from realtime_framework.sandbox.budget import Deadline
 from realtime_framework.sandbox.guest import GuestClient, action_timeout
 from realtime_tasks.game.runtime import _GET_STATE
 from realtime_tasks.types import Task
 
+from ..fake_clock import FakeClock
+from ..replay.clock_task import ClockTask
 from .fakes import FakeCDP, FakeGuest
 
 BUDGET = 0.5
@@ -33,6 +40,7 @@ SLACK = 1.5
 GAME = "gh_javascript_pong"
 PLAYING = {"game_state": {"player_returns": 0}, "terminal": {"isTerminal": False}}
 CLICK = Action(ActionType.CLICK, {"x": 10, "y": 10})
+TAP = Action(ActionType.KEY, {"key": "space"})
 
 
 class ScriptedAgent:
@@ -124,9 +132,10 @@ def _environment(guest: FakeGuest, task: Task | None = None, **options):
     )
 
 
-def _run(env) -> tuple[ScriptedAgent, float]:
-    """Three decisions of run_stream, each clicking; returns the agent and the wall time taken."""
-    agent = ScriptedAgent(CLICK)
+def _run(env, action: Action = CLICK) -> tuple[ScriptedAgent, float]:
+    """Three decisions of run_stream, each taking ``action``; returns the agent and the wall time
+    taken."""
+    agent = ScriptedAgent(action)
     started = time.monotonic()
     runner.run_stream(agent, env, max_ticks=3, log=lambda line: None, clock_mode="token")
     return agent, time.monotonic() - started
@@ -136,11 +145,11 @@ def _spent_the_budget(elapsed: float) -> None:
     assert BUDGET - 0.05 <= elapsed < BUDGET + SLACK, elapsed
 
 
-def _invalid(env, reason: str, operation: str) -> None:
+def _invalid(env, reason: str, operation: str, budget: float = BUDGET) -> None:
     """The run is invalid for ``reason``, and the detail names ``operation``'s exceeded budget."""
     assert env._invalid_run["category"] == "environment"
     assert env._invalid_run["reason"] == reason
-    assert f"{operation} took longer than {BUDGET:g} s" in env._invalid_run["detail"]
+    assert f"{operation} took longer than {budget:g} s" in env._invalid_run["detail"]
 
 
 def test_an_action_budget_extends_for_text_input_and_holds_as_the_guest_request_does():
@@ -253,6 +262,36 @@ def test_a_clock_advance_with_a_slow_connect_fails_within_its_budget(budgets, ga
     _spent_the_budget(elapsed)
 
 
+def test_a_token_key_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, game, monkeypatch):
+    # The game sends the key in one CDP transaction (sandbox/browser/clock.py cdp_key_event);
+    # before, waiting for its lock had no limit.
+    budgets(key_event_s=BUDGET)
+    with FakeGuest() as guest, FakeCDP() as fake:
+        task = game(fake)
+        monkeypatch.setattr(task, "advance_clock", lambda frames=1, key_events=(): None)
+        monkeypatch.setattr(task, "evaluation_snapshot", None)
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with client_for(fake.port).transaction():
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        held.wait(5)
+        try:
+            env = _environment(guest, task)
+            agent, elapsed = _run(env, TAP)
+        finally:
+            release.set()
+            holder.join(5)
+    _invalid(env, "action_execution_failed", "key press")
+    assert agent.statuses == ["invalid_run"]
+    assert fake.commands == []
+    _spent_the_budget(elapsed)
+
+
 def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget(budgets, game):
     # The game reads its snapshot through cdp_eval, which turns the timeout into an empty state;
     # the read still fails because it returned after its deadline.
@@ -264,3 +303,112 @@ def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget(budgets, 
     assert env._termination_snapshot_captured is False
     assert agent.statuses == []
     _spent_the_budget(elapsed)
+
+
+# ---- on the fake clock -------------------------------------------------------------------------
+
+
+def _cdp_call(clock: FakeClock, seconds: float) -> None:
+    """Take ``seconds`` as a CDP call made inside an operation does (sandbox/browser/cdp.py): it
+    ends where the operation's budget ends, and fails then."""
+    deadline = Deadline(120, "CDP call")
+    clock.sleep(min(seconds, deadline.remaining()))
+    deadline.remaining()
+
+
+def _keyed(clock: FakeClock, **options) -> tuple[actions.GuestEnvironment, ClockTask]:
+    """A GuestEnvironment on the token clock at 1 fps, timed on ``clock``, whose task takes key
+    input as a game's does (tests/replay/clock_task.py)."""
+    task = ClockTask(1.0)
+    env = actions.GuestEnvironment(
+        None, None, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
+    )
+    return env, task
+
+
+def _slow_key_event(clock: FakeClock, task: ClockTask, index: int, seconds: float) -> None:
+    """The task's key event number ``index`` from now on takes ``seconds``; the others take none."""
+    sent = []
+    record = task.clock_key_event
+
+    def clock_key_event(event_type, key, auto_repeat=False, held_modifiers=()):
+        if len(sent) == index:
+            _cdp_call(clock, seconds)
+        sent.append(event_type)
+        record(event_type, key, auto_repeat=auto_repeat, held_modifiers=held_modifiers)
+
+    task.clock_key_event = clock_key_event
+
+
+@pytest.mark.parametrize(
+    ("held", "action", "index", "operation"),
+    [
+        pytest.param(None, TAP, 0, "key press", id="a-tap-s-press"),
+        pytest.param(None, TAP, 1, "key release", id="a-tap-s-release"),
+        pytest.param("space", TAP, 2, "key press", id="pressing-a-tapped-held-key-again"),
+        pytest.param(None, Action.hold_key("a", 1.0), 0, "key press", id="a-hold-s-press"),
+        pytest.param(None, Action.hold_key("a", 0.0), 1, "key release", id="a-0-s-hold-s-release"),
+    ],
+)
+def test_a_token_key_event_past_its_budget_fails_the_action(held, action, index, operation):
+    clock = FakeClock()
+    env, task = _keyed(clock)
+    if held is not None:
+        env.execute(Action.hold_key(held, 5.0))
+    _slow_key_event(clock, task, index, 60.0)
+    budget = actions.ENVIRONMENT_BUDGET.key_event_s
+    with clock.participant():
+        assert env.execute(action) == "failed"
+        assert clock.monotonic() == budget
+    _invalid(env, "action_execution_failed", operation, budget)
+
+
+def test_a_tap_s_frame_between_its_press_and_release_keeps_its_own_budgets():
+    """The tap renders one frame with its key down (sandbox/actions.py TAP_HOLD_S): that advance
+    and the end check after it are timed by the clock-advance and state-read budgets."""
+    clock = FakeClock()
+    env, task = _keyed(clock, stop_check=lambda: _cdp_call(clock, 15.0))
+    advance = task.advance_clock
+
+    def advance_clock(frames=1, key_events=()):
+        _cdp_call(clock, 15.0)
+        return advance(frames, key_events)
+
+    task.advance_clock = advance_clock
+    assert actions.ENVIRONMENT_BUDGET.key_event_s < 15.0
+    with clock.participant():
+        assert env.execute(TAP) == "applied"
+        assert clock.monotonic() == 30.0
+    assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
+    assert getattr(env, "_invalid_run", None) is None
+
+
+def test_each_key_event_of_a_repeated_tap_has_its_own_budget():
+    clock = FakeClock()
+    env, task = _keyed(clock)
+    record = task.clock_key_event
+
+    def clock_key_event(*args, **kwargs):
+        _cdp_call(clock, 6.0)
+        record(*args, **kwargs)
+
+    task.clock_key_event = clock_key_event
+    assert actions.ENVIRONMENT_BUDGET.key_event_s < 12.0
+    with clock.participant():
+        assert env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3})) == "applied"
+        assert clock.monotonic() == 36.0
+
+
+def test_a_lease_s_release_past_its_budget_invalidates_the_run():
+    """The legacy loop's advance releases a key whose lease ended (sandbox/actions.py
+    wait_until_tick)."""
+    clock = FakeClock()
+    env, task = _keyed(clock)
+    env.execute(Action.hold_key("a", 0.5))
+    _slow_key_event(clock, task, 0, 60.0)
+    budget = actions.ENVIRONMENT_BUDGET.key_event_s
+    with clock.participant():
+        assert env.execute(Action.wait(1.0)) == "failed"
+        assert clock.monotonic() == budget
+    _invalid(env, "clock_key_release_failed", "key release", budget)
+    assert env.tick_index() == 0.5
