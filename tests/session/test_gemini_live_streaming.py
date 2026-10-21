@@ -33,6 +33,7 @@ from realtime_framework.entity.model import (
     ConnectRequest,
     GenerationRequest,
     HistorySyncRequest,
+    RuntimeState,
     SessionSeed,
     SyncDisposition,
 )
@@ -955,6 +956,26 @@ def test_nothing_goes_out_once_the_reader_failed():
     first, second = asyncio.run(run())
     assert first.code == 1011 and second is first
     assert rig.socket.sent == []
+
+
+def test_a_reader_that_failed_leaves_the_session_to_be_rebuilt():
+    """A connection whose reader failed takes nothing, so the session is dirty: readying it
+    rebuilds it on a new connection, which takes the next push."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        rig.socket.feed(server_closed(1011, "Internal error."))
+        await settle()
+        state = rig.driver.state
+        await rig.driver.ensure_ready(rig.seed, rig.view([pushed(1)]), lambda *_, **__: None)
+        await rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)]))
+        await rig.driver.close()
+        return state
+
+    assert asyncio.run(run()) == RuntimeState.DIRTY
+    assert len(rig.live.sockets) == 2
+    assert [wire(message) for message in rig.socket.sent][-2:] == ["video", ("text", "frame 2")]
 
 
 def test_a_reply_is_refused_while_one_is_in_flight():

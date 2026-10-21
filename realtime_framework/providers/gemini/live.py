@@ -650,7 +650,8 @@ class GeminiLiveDriver(SessionLifecycle):
         connection's close, for the next reply to start, on this connection or a later one: its
         events() hands them over first, in its own generation, telling the connection they were
         read on; their calls, of any earlier reply, are told by id only. A read that fails or is
-        cancelled ends every reply waiting with the receiver's failure."""
+        cancelled ends every reply waiting with the receiver's failure; one that fails leaves the
+        session dirty, as the connection takes nothing any more (_session_for_input)."""
         try:
             while True:
                 arrived = await receiver.next()
@@ -679,6 +680,7 @@ class GeminiLiveDriver(SessionLifecycle):
             raise
         except Exception:  # noqa: BLE001 - the receiver keeps it as its failure
             self._end_replies(receiver.failure)
+            self.mark_dirty()
 
     def _end_replies(self, failure: BaseException) -> None:
         for reply in self._replies.values():
