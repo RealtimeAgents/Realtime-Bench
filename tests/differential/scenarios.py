@@ -606,6 +606,31 @@ LATCHED = [
 # they fail until then (test_named.py, xfail strict), and pass once it is.
 PENDING = {"wall-a-failed-action-settles-after-the-snapshot-read": "p1c 修 U4/U5"}
 
+# KF5d: the task ends at a decision's landing, after its frame was read. The kernel lands the
+# action without a read before it; today's loop reads, finds the end and lands nothing.
+LANDED = [
+    # A 0.5 s wait lands at 0.5 s and runs out at 1 s, where its timer goes before the periodic
+    # read, and the read after it finds the end.
+    Script(
+        "wall",
+        1.25,
+        _timed(["wait:0.5"], [0.5]),
+        ends_at_s=0.5,
+        expect=frozenset({"K-g", "KF5d", "U7", "X2"}),
+        name="wall-a-wait-lands-after-the-end",
+    ),
+    # A refused click at 0.5 s is read after by nobody; the periodic read at 1 s finds the end
+    # while the decision paces.
+    Script(
+        "wall",
+        2.0,
+        (Turn("click", attempts=(Attempt(0.5),), rejected="the guest refused the action"),),
+        ends_at_s=0.25,
+        expect=frozenset({"K-g", "KF5d", "U7", "X2"}),
+        name="wall-a-refused-action-lands-after-the-end",
+    ),
+]
+
 # KF2: at 5 fps the horizon main() computes from 0.17 minutes is 51.00000000000001 ticks, which
 # the kernel takes as 51. 1000-token replies at B = 100 move ten frames each; decision 5's lands
 # on tick 51.
@@ -639,5 +664,14 @@ EARLY_END = [
 ]
 
 NAMED = (
-    FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + X12 + LATCHED + HORIZON + EARLY_END
+    FRAME_RATES
+    + RUNNER_LOOP
+    + [LONG]
+    + MISSING
+    + PER_RULE
+    + X12
+    + LATCHED
+    + LANDED
+    + HORIZON
+    + EARLY_END
 )
