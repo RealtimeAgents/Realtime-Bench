@@ -708,10 +708,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 return
 
     async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
-        if self._conn is None:
+        session, core_generation = generation.opaque
+        # A response on a session closed or replaced since was closed with its connection.
+        if self._session is not session:
             return InterruptResult(ProviderHistoryState.UNKNOWN)
         kwargs = {}
-        _, core_generation = generation.opaque
         response_id = core_generation.response_id
         if response_id:
             kwargs["response_id"] = response_id
@@ -719,7 +720,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs["event_id"] = cancel_event_id
         core_generation.cancel_event_id = cancel_event_id
         try:
-            await asyncio.to_thread(self._wire, self._conn.response.cancel, **kwargs)
+            await asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs)
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
         except Exception as exc:  # noqa: BLE001 - provider control boundary
             return InterruptResult(
