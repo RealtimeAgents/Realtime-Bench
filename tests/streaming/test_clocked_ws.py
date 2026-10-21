@@ -22,10 +22,10 @@ def _record(direction, msg=None, at=None, conn=1):
     return {"conn": conn, "dir": direction, "at": at, "msg": msg}
 
 
-def _replay(records, client, *, tolerance_s=None) -> list[str]:
+def _replay(records, client) -> list[str]:
     """Run ``client(connect, clock)`` against the cassette; return the server's problems."""
     clock = FakeClock()
-    with CassetteServer(records, clock, tolerance_s=tolerance_s) as server:
+    with CassetteServer(records, clock) as server:
         connection = clocked_connection(ClientConnection, clock)
 
         def open_connection():
@@ -63,13 +63,13 @@ def test_timed_messages_arrive_at_their_time_and_reactive_ones_at_once():
         clock.sleep(0.5)
         ws.close()
 
-    assert _replay(records, client, tolerance_s=0.0) == []
+    assert _replay(records, client) == []
     assert arrivals == [("session.created", 0.0), ("reply", 2.5)]
 
 
 def test_a_server_close_is_sent_at_its_time_and_the_next_connection_follows():
     records = [
-        _record("open"),
+        _record("open", at=0.0),
         _record("close", {"by": "server", "code": 1011, "reason": "scripted"}, 2.0),
         _record("open", conn=2, at=2.5),
         _record("s2c", {"type": "session.created"}, conn=2),
@@ -86,7 +86,7 @@ def test_a_server_close_is_sent_at_its_time_and_the_next_connection_follows():
         seen.append((_recv(ws)["type"], clock.monotonic()))
         ws.close()
 
-    assert _replay(records, client, tolerance_s=0.0) == []
+    assert _replay(records, client) == []
     assert seen == [(1011, "scripted", 2.0), ("session.created", 2.5)]
 
 
@@ -99,10 +99,10 @@ def _closed_over_a_problem(ws) -> str:
 
 def test_a_message_sent_early_closes_the_connection():
     records = [
-        _record("open"),
-        _record("c2s", {"type": "first"}),
+        _record("open", at=0.0),
+        _record("c2s", {"type": "first"}, 0.0),
         _record("s2c", {"type": "answer"}, 5.0),
-        _record("c2s", {"type": "second"}),
+        _record("c2s", {"type": "second"}, 5.0),
     ]
     reasons = []
 
@@ -119,7 +119,7 @@ def test_a_message_sent_early_closes_the_connection():
 
 
 def test_a_message_that_differs_closes_the_connection():
-    records = [_record("open"), _record("c2s", {"type": "hello", "n": 1})]
+    records = [_record("open", at=0.0), _record("c2s", {"type": "hello", "n": 1}, 0.0)]
 
     def client(open_connection, clock):
         ws = open_connection()
@@ -130,7 +130,11 @@ def test_a_message_that_differs_closes_the_connection():
 
 
 def test_records_left_unused_are_reported_at_the_end():
-    records = [_record("open"), _record("c2s", {"type": "hello"}), _record("open", conn=2)]
+    records = [
+        _record("open", at=0.0),
+        _record("c2s", {"type": "hello"}, 0.0),
+        _record("open", at=1.0, conn=2),
+    ]
 
     def client(open_connection, clock):
         ws = open_connection()
@@ -140,16 +144,19 @@ def test_records_left_unused_are_reported_at_the_end():
     assert _replay(records, client) == ["conn 2: 1 record(s) left unused, from record 2 (open)"]
 
 
-def test_send_times_are_compared_within_the_tolerance():
+def test_a_message_sent_at_another_time_than_the_scripts_is_a_problem():
     records = [_record("open", at=0.0), _record("c2s", {"type": "hello"}, 1.0)]
 
-    def client(open_connection, clock):
-        ws = open_connection()
-        clock.sleep(1.5)
-        _send(ws, {"type": "hello"})
-        ws.close()
+    def client_after(delay):
+        def client(open_connection, clock):
+            ws = open_connection()
+            clock.sleep(delay)
+            _send(ws, {"type": "hello"})
+            ws.close()
 
-    assert _replay(records, client) == []
-    assert _replay(records, client, tolerance_s=0.25) == [
+        return client
+
+    assert _replay(records, client_after(1.0)) == []
+    assert _replay(records, client_after(1.5)) == [
         "conn 1 record 1: c2s hello at t=1.5, recorded at t=1"
     ]

@@ -37,7 +37,7 @@ CASSETTE = Path(__file__).parent / "cassettes" / "openai_realtime-timed-reply.js
 
 def test_the_driver_receives_each_message_when_the_fake_clock_reads_its_time():
     clock = FakeClock()
-    with CassetteServer(ws_cassette.read(CASSETTE), clock, tolerance_s=0.0) as server:
+    with CassetteServer(ws_cassette.read(CASSETTE), clock) as server:
         driver = driver_for(server.port, clock, UNTRACED)
         driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         deltas = run_on_fake_clock(clock, run_turns(driver, 1))

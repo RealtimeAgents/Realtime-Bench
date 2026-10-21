@@ -87,8 +87,10 @@ def test_a_traced_session_becomes_a_cassette_that_replays_on_the_fake_clock(tmp_
 
     # One connection: its open, then every message the driver sent and each one it read, in the
     # order they were captured. The acknowledgements carry the client's ids, as placeholders.
-    assert records[0]["dir"] == "open" and records[0]["at"] == records[1]["at"]
+    # Only the server's messages keep their times: the client's are compared in order only.
+    assert records[0]["dir"] == "open"
     assert {record["conn"] for record in records} == {1}
+    assert all((r["at"] is None) == (r["dir"] != "s2c") for r in records)
     normalize = baseline.Normalizer()
     sent = [r["msg"] for r in records if r["dir"] == "c2s"]
     read = [r["msg"] for r in records if r["dir"] == "s2c"]
@@ -103,7 +105,7 @@ def test_a_traced_session_becomes_a_cassette_that_replays_on_the_fake_clock(tmp_
         "response.create",
     ]
     assert read[-1]["type"] == "response.done"
-    times = [r["at"] for r in records]
+    times = [r["at"] for r in records if r["dir"] == "s2c"]
     assert 0 <= times[0] and times[-1] < 30.0
 
     clock = FakeClock()

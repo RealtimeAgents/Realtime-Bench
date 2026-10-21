@@ -26,8 +26,8 @@ RESPONSE_CREATE = {"type": "response.create"}
 RESPONSE_DONE = {"type": "response.done", "response": {"id": "resp_1"}}
 
 
-def _cursor(records, **kwargs) -> Cursor:
-    return Cursor(records, baseline.Normalizer(), **kwargs)
+def _cursor(records) -> Cursor:
+    return Cursor(records, baseline.Normalizer())
 
 
 def test_a_cassette_reads_back_as_written(tmp_path):
@@ -52,9 +52,9 @@ def test_a_record_must_have_exactly_the_four_fields(tmp_path):
 def test_reactive_messages_follow_their_trigger_and_timed_ones_their_time():
     cursor = _cursor(
         [
-            _record("open"),
+            _record("open", at=0.0),
             _record("s2c", {"type": "session.created"}),
-            _record("c2s", RESPONSE_CREATE),
+            _record("c2s", RESPONSE_CREATE, 0.5),
             _record("s2c", {"type": "response.created"}),
             _record("s2c", RESPONSE_DONE, 2.0),
         ]
@@ -76,8 +76,8 @@ def test_a_released_message_carries_this_sessions_ids():
     made up keeps its placeholder."""
     cursor = _cursor(
         [
-            _record("open"),
-            _record("c2s", _create("<rtb_user-1>")),
+            _record("open", at=0.0),
+            _record("c2s", _create("<rtb_user-1>"), 0.0),
             _record("s2c", {**_added("<rtb_user-1>"), "next": "<server_item-1>"}),
         ]
     )
@@ -91,10 +91,10 @@ def test_a_released_message_carries_this_sessions_ids():
 def test_a_message_sent_before_a_server_message_recorded_before_it_is_early():
     cursor = _cursor(
         [
-            _record("open"),
-            _record("c2s", RESPONSE_CREATE),
+            _record("open", at=0.0),
+            _record("c2s", RESPONSE_CREATE, 1.0),
             _record("s2c", RESPONSE_DONE, 5.0),
-            _record("c2s", _create("<rtb_user-1>")),
+            _record("c2s", _create("<rtb_user-1>"), 5.0),
         ]
     )
     cursor.open(0.0)
@@ -111,7 +111,7 @@ def test_a_message_sent_before_a_server_message_recorded_before_it_is_early():
 
 
 def test_a_message_that_differs_names_the_field():
-    cursor = _cursor([_record("open"), _record("c2s", _create("<rtb_user-1>"))])
+    cursor = _cursor([_record("open", at=0.0), _record("c2s", _create("<rtb_user-1>"), 0.0)])
     cursor.open(0.0)
     cursor.receive(1, {**_create("rtb_user_1"), "item": {"id": "rtb_user_1", "role": "system"}}, 0)
     assert cursor.problems == [
@@ -122,10 +122,10 @@ def test_a_message_that_differs_names_the_field():
 def test_records_left_unused_are_a_problem():
     cursor = _cursor(
         [
-            _record("open"),
-            _record("c2s", RESPONSE_CREATE),
+            _record("open", at=0.0),
+            _record("c2s", RESPONSE_CREATE, 0.0),
             _record("s2c", RESPONSE_DONE, 1.0),
-            _record("open", conn=2),
+            _record("open", at=2.0, conn=2),
         ]
     )
     cursor.open(0.0)
@@ -137,40 +137,45 @@ def test_records_left_unused_are_a_problem():
 
 
 def test_more_than_the_recording_is_a_problem():
-    cursor = _cursor([_record("open"), _record("c2s", RESPONSE_CREATE)])
+    cursor = _cursor([_record("open", at=0.0), _record("c2s", RESPONSE_CREATE, 0.0)])
     cursor.open(0.0)
     cursor.receive(1, RESPONSE_CREATE, 0.0)
     cursor.receive(1, RESPONSE_CREATE, 0.0)
     assert cursor.problems == [
         "conn 1: c2s response.create sent, but the recording has nothing more on it"
     ]
-    unrecorded = _cursor([_record("open")])
+    unrecorded = _cursor([_record("open", at=0.0)])
     unrecorded.open(0.0)
     assert unrecorded.open(1.0) is None
     assert unrecorded.problems == ["conn 2: opened, but the recording has nothing more on it"]
 
 
-def test_send_times_are_compared_only_with_a_tolerance():
-    records = [_record("open", at=0.0), _record("c2s", RESPONSE_CREATE, 1.0), _record("c2s", {})]
-    for tolerance, problems in [
-        (None, []),
-        (0.25, ["conn 1 record 1: c2s response.create at t=1.5, recorded at t=1"]),
+def test_a_client_record_with_a_time_must_happen_at_that_time():
+    """A hand-written script's times are compared on the fake clock, to within its rounding."""
+    records = [_record("open", at=0.0), _record("c2s", RESPONSE_CREATE, 1.0)]
+    for sent_at, problems in [
+        (1.0 + 1e-12, []),
+        (1.5, ["conn 1 record 1: c2s response.create at t=1.5, recorded at t=1"]),
+        (0.5, ["conn 1 record 1: c2s response.create at t=0.5, recorded at t=1"]),
     ]:
-        cursor = _cursor(records, tolerance_s=tolerance)
+        cursor = _cursor(records)
         cursor.open(0.0)
-        cursor.receive(1, RESPONSE_CREATE, 1.5)
-        cursor.receive(1, {}, 9.0)  # a null time is never compared
+        cursor.receive(1, RESPONSE_CREATE, sent_at)
         assert cursor.finish() == problems
-    cursor = _cursor(records, tolerance_s=0.25)
-    cursor.open(0.0)
-    cursor.receive(1, RESPONSE_CREATE, 0.8)
-    cursor.receive(1, {}, 0.8)
+
+
+def test_a_converted_recordings_client_records_are_compared_in_order_only():
+    records = [_record("open"), _record("c2s", RESPONSE_CREATE), _record("s2c", RESPONSE_DONE, 0.4)]
+    cursor = _cursor(records)
+    cursor.open(7.0)
+    cursor.receive(1, RESPONSE_CREATE, 0.2)
+    assert cursor.release(1, 0.4) == [_record("s2c", RESPONSE_DONE, 0.4)]
     assert cursor.finish() == []
 
 
 def test_a_client_close():
     # Without a recorded close the client may close once the records are used.
-    cursor = _cursor([_record("open")])
+    cursor = _cursor([_record("open", at=0.0)])
     cursor.open(0.0)
     cursor.client_closed(1, 1000, 3.0)
     assert cursor.finish() == []
@@ -179,12 +184,14 @@ def test_a_client_close():
         (1000, []),
         (1001, ["conn 1 record 1: the client closed it with 1001, recorded 1000"]),
     ]:
-        cursor = _cursor([_record("open"), _record("close", {"by": "client", "code": 1000})])
+        cursor = _cursor(
+            [_record("open", at=0.0), _record("close", {"by": "client", "code": 1000}, 1.0)]
+        )
         cursor.open(0.0)
         cursor.client_closed(1, code, 1.0)
         assert cursor.finish() == problems
     # A close while records are left.
-    cursor = _cursor([_record("open"), _record("s2c", RESPONSE_DONE, 4.0)])
+    cursor = _cursor([_record("open", at=0.0), _record("s2c", RESPONSE_DONE, 4.0)])
     cursor.open(0.0)
     cursor.client_closed(1, 1000, 1.0)
     assert cursor.problems == [
@@ -197,7 +204,7 @@ def test_a_client_close():
 
 def test_a_server_close_is_released_like_a_timed_message():
     close = {"by": "server", "code": 1011, "reason": "scripted"}
-    cursor = _cursor([_record("open"), _record("close", close, 2.0)])
+    cursor = _cursor([_record("open", at=0.0), _record("close", close, 2.0)])
     cursor.open(0.0)
     assert cursor.next_due(1) == 2.0
     assert cursor.release(1, 2.0) == [_record("close", close, 2.0)]

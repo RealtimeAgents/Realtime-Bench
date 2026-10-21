@@ -17,24 +17,30 @@ The cursor replays a cassette strictly, each connection's records in order. A se
 released once the client has done everything recorded before it on that connection: at once when
 its ``at`` is null (a reactive message), otherwise once the clock reads ``at`` (a timed message).
 It is sent with this session's ids in place of the placeholders. What the client does next is
-matched against the next client record: a message must equal it once normalized and, when the
-replay compares times (``tolerance_s``), arrive within the tolerance of its ``at``; a null ``at``
-is not compared. A connection whose recording ends without a close may be closed by the client
-any time after its last record: the episode trace, which recordings are converted from, has no
-closes.
+matched against the next client record: a message must equal it once normalized, and the client
+must do it when the clock reads the record's ``at``. A null ``at`` there is not compared.
+A connection whose recording ends without a close may be closed by the client any time after its
+last record: the episode trace, which recordings are converted from, has no closes.
+
+Cassettes come two ways (stream-plan 4.19). A hand-written script runs on the fake clock, where
+our side's times are as exact as the script's, so it gives every client record its time. A
+recording converted from a real run by from_trace compares the order only: the client times of a
+real run include the time our side took to compute, which passes for nothing on the fake clock.
 
 The first difference is a problem, and after it nothing more is released:
 - a message sent early: the next record is a server message that is not due yet;
-- a message that differs from the recording, or one beyond it;
+- a message that differs from the recording, or one beyond it, or one sent at another time;
 - a connection the recording does not have, or a close where it has more records;
 - at the end, records left unused.
 
-from_trace converts what an episode trace recorded of a live session into a cassette, so that a
-smoke test's run becomes a recording.
+To turn a smoke test's run into a recording:
+
+    .venv/bin/python -m tests.streaming.ws_cassette <run dir> <cassette.jsonl>
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from collections import deque
@@ -49,9 +55,9 @@ DIRECTIONS = ("open", "c2s", "s2c", "close")
 # (providers/openai_realtime.py:186-188, providers/gemini/live.py:270).
 NORMALIZERS = {"openai_realtime.ws": baseline.Normalizer, "gemini_live.ws": WireNormalizer}
 _PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
-# A timed record is due once the clock reads its time to within this: a wait until it ends at
-# ``now + (at - now)`` on the clock, which can round one ulp short of ``at``.
-_DUE_SLACK_S = 1e-9
+# Times on the fake clock agree to within this: a wait until ``at`` ends at ``now + (at - now)``,
+# which can round one ulp short of ``at``.
+_SLACK_S = 1e-9
 
 
 def write(path: Path, records: list[dict]) -> None:
@@ -74,14 +80,15 @@ def from_trace(run_dir: Path) -> list[dict]:
     The agent trace records each message a driver sends just before it writes it, and each one it
     receives when it reads it, with the connection that carried it (providers/capture.py:266-370),
     in the order they were captured (evaluation/agent_trace.py:179-196); the bodies are in the
-    blob pack. A message's ``at`` is its capture's wall time less the episode origin the runner
-    records in ActiveLoopStarted (evaluation/runner.py:1407-1419), which on the wall clock is
-    semantic time. A retried run appends attempts; the last one with that record is taken.
+    blob pack. A server message's ``at`` is its capture's wall time less the episode origin the
+    runner records in ActiveLoopStarted (evaluation/runner.py:1407-1419), which on the wall clock
+    is semantic time; the client's records have none, so only their order is compared. A retried
+    run appends attempts; the last one with that record is taken.
 
     The trace records no handshake (providers/capture.py:8-9) and no close: the recording
     connection captures handshake failures, sends and receives only (capture.py:303-331). So a
-    connection opens when its first message is captured, and the cassette has no closes. The
-    failed handshakes and sends the trace does record have no cassette form yet and raise.
+    connection opens before its first message, and the cassette has no closes. The failed
+    handshakes and sends the trace does record have no cassette form yet and raise.
     """
     events = [
         json.loads(line)
@@ -103,15 +110,26 @@ def from_trace(run_dir: Path) -> list[dict]:
     for message in messages:
         if message["direction"] == "lifecycle":
             raise ValueError(f"no cassette form for a {message['message_type']} record")
-        at = round((message["captured_wall_time_ns"] - origin_ns) / 1e9, 6)
         conn = numbers.get(message["connection_id"])
         if conn is None:
             conn = numbers[message["connection_id"]] = len(numbers) + 1
-            records.append({"conn": conn, "dir": "open", "at": at, "msg": None})
+            records.append({"conn": conn, "dir": "open", "at": None, "msg": None})
         body = json.loads(load_body(run_dir / "episode_blobs.pack", message["body"]))
-        direction = "c2s" if message["direction"] == "client" else "s2c"
+        if message["direction"] == "client":
+            direction, at = "c2s", None
+        else:
+            direction = "s2c"
+            at = round((message["captured_wall_time_ns"] - origin_ns) / 1e9, 6)
         records.append({"conn": conn, "dir": direction, "at": at, "msg": normalize(body)})
     return records
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Turn a run's live session into a cassette.")
+    parser.add_argument("run_dir", type=Path, help="holds episode_trace.jsonl, episode_blobs.pack")
+    parser.add_argument("cassette", type=Path)
+    args = parser.parse_args()
+    write(args.cassette, from_trace(args.run_dir))
 
 
 def _server_side(record: dict) -> bool:
@@ -133,12 +151,11 @@ class Cursor:
     one the server's placeholders are restored from. Times are semantic seconds since the origin.
     """
 
-    def __init__(self, records: list[dict], normalizer, *, tolerance_s: float | None = None):
+    def __init__(self, records: list[dict], normalizer):
         self._pending: dict[int, deque] = {}
         for index, record in enumerate(records):
             self._pending.setdefault(record["conn"], deque()).append((index, record))
         self._normalize = normalizer
-        self._tolerance_s = tolerance_s
         self._opened = 0
         self.problems: list[str] = []
 
@@ -219,7 +236,7 @@ class Cursor:
             if head is None or not _server_side(head[1]):
                 break
             record = head[1]
-            if record["at"] is not None and record["at"] > now + _DUE_SLACK_S:
+            if record["at"] is not None and record["at"] > now + _SLACK_S:
                 break
             self._pending[conn].popleft()
             if record["dir"] == "s2c":
@@ -262,7 +279,7 @@ class Cursor:
     def _take(self, conn: int, now: float) -> None:
         index, record = self._pending[conn].popleft()
         at = record["at"]
-        if self._tolerance_s is not None and at is not None and abs(now - at) > self._tolerance_s:
+        if at is not None and abs(now - at) > _SLACK_S:
             self._problem(
                 f"conn {conn} record {index}: {_label(record['dir'], record['msg'])} at"
                 f" t={now:g}, recorded at t={at:g}"
@@ -287,3 +304,7 @@ class Cursor:
             return value
 
         return restore(message)
+
+
+if __name__ == "__main__":
+    main()
