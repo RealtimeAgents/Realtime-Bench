@@ -140,6 +140,53 @@ def test_submitted_coroutines_start_in_order():
             thread.stop()
 
 
+def test_stop_ends_the_coroutines_still_pending_on_the_loop():
+    """A coroutine still waiting when the thread stops is cancelled, and its cleanup runs to its
+    end on the thread's loop before stop returns, a to_thread in it too. Left pending on the
+    closed loop, it would be finalized wherever the garbage collector frees it, and its cleanup
+    would run on that thread instead."""
+    clock = FakeClock()
+    cleaned = []
+
+    async def waiting():
+        try:
+            await clock.sleep_async(1e9)
+        finally:
+            name = threading.current_thread().name
+            cleaned.append((name, await asyncio.to_thread(lambda: "closed")))
+
+    with clock.participant():
+        thread = _started(clock)
+        coroutine = waiting()
+        thread.submit(coroutine)
+        thread.run(asyncio.sleep(0))  # the coroutine is waiting
+        thread.stop()
+    assert cleaned == [("execution-test", "closed")]
+    assert coroutine.cr_frame is None
+    assert thread._loop.is_closed() and not thread._thread.is_alive()
+
+
+def test_stop_leaves_a_cleanup_that_does_not_end_pending():
+    """Stop waits for the cancelled coroutines at most its timeout, then stops the loop."""
+    clock = FakeClock()
+
+    async def stuck():
+        try:
+            await clock.sleep_async(1e9)
+        finally:
+            await asyncio.Event().wait()
+
+    with clock.participant():
+        thread = _started(clock)
+        coroutine = stuck()
+        thread.submit(coroutine)
+        thread.run(asyncio.sleep(0))
+        thread.stop(timeout=0.2)
+    assert coroutine.cr_frame is not None
+    assert thread._loop.is_closed() and not thread._thread.is_alive()
+    coroutine.close()
+
+
 def test_a_stopped_thread_refuses_work():
     clock = FakeClock()
 

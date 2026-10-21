@@ -68,14 +68,36 @@ class ExecutionThread:
         return future.result()
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Stop the loop and, once its thread has ended within ``timeout`` seconds, close it.
-        Coroutines still pending on it never finish."""
+        """Cancel the coroutines still pending, let their cleanup end on the loop within
+        ``timeout`` seconds, as asyncio.run ends its loop, then stop the loop and, once its
+        thread has ended within another ``timeout``, close it. A coroutine left pending on the
+        closed loop would be finalized wherever the garbage collector frees it, and the cleanup
+        in its finally clauses would run on that thread: there an asyncio.to_thread can take the
+        executor lock that thread already holds, and the thread waits forever. A cleanup that
+        does not end in time is left pending."""
         if not self.running:
             return
         loop = self._loop
-        loop.call_soon_threadsafe(loop.stop)
+        asyncio.run_coroutine_threadsafe(_end_pending(), loop)
         thread = self._thread
         if thread is not None:
             thread.join(timeout=timeout)
+            if thread.is_alive():
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=timeout)
         if not loop.is_running():
             loop.close()
+
+
+async def _end_pending() -> None:
+    """Cancel every other task on the running loop, wait for them, then stop the loop."""
+    current = asyncio.current_task()
+    pending = [task for task in asyncio.all_tasks() if task is not current]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending)
+    for task in pending:
+        if not task.cancelled():
+            task.exception()  # retrieved, so the loop logs no unretrieved exception
+    asyncio.get_running_loop().stop()
