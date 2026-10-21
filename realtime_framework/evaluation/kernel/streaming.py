@@ -14,10 +14,12 @@ takes its place and supersedes it. Three refusals keep an action from executing:
 over or past its deadline, its reply was given up, or the frame it names cannot be found. A call
 the provider cancels is withdrawn while its action waits; one that executed is recorded as it ran.
 A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
-is given up only at the end, or when a watchdog finds it or a frame push stuck; then the next
-reply starts in the same step. The shell runs the abort first, which returns once the agent has
-cleaned the session up, and the next reply rebuilds it from the accepted history (phase2.md,
-什么时候触发生成).
+is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
+a push its watchdog finds stuck, or pushes failing in a row. Then the next reply starts in the
+same step. The shell runs the abort first, which returns once the agent has cleaned the session up
+and closed it, which fails a push stuck in it, and the next reply rebuilds the session from the
+accepted history (phase2.md, 什么时候触发生成). A session that still takes no frame after that, or
+one that takes none before the first reply, when there is none to give up, invalidates the run.
 
 The state is read at most once an environment frame, at the frame's grid point, during replies too,
 and once more right after every action executed: that read settles the action, as the one that
@@ -56,6 +58,7 @@ from realtime_framework.evaluation.kernel.events import (
     Execute,
     FrameCaptured,
     GenerationResult,
+    KeysReleased,
     Outcome,
     OutcomeCommitted,
     Priority,
@@ -80,10 +83,12 @@ class StreamingConfig:
     duration_s: float  # the task horizon in seconds
     env_fps: float = 1.0  # the end checks' cadence
     input_fps: float = 1.0  # frames fed to the model
-    # A reply that has not ended, or a frame push not answered, after this long is stuck.
-    # Placeholders until the smoke tests (phase2.md, 落地前要验证).
+    # A reply that has not ended, or a frame push not answered, after this long is stuck, as is a
+    # session that failed this many pushes in a row. Placeholders until the smoke tests
+    # (phase2.md, 落地前要验证).
     reply_watchdog_s: float = 30.0
     push_watchdog_s: float = 10.0
+    push_failure_limit: int = 3
     timing: RunnerTimingConfig = field(default_factory=RunnerTimingConfig)  # the frozen stream
 
 
@@ -203,6 +208,8 @@ class StreamingPolicy:
         self._capture_due = False  # a grid point came while another operation was out
         self._pushing: FrameCaptured | None = None
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
+        self._failed_pushes = 0  # in a row
+        self._rebuilt = False  # the session was given up for its frames, and none went in since
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
         self._check_due = False  # a read came due while another operation was out
         self._read_frame: int | None = None  # the environment frame read last
@@ -252,13 +259,18 @@ class StreamingPolicy:
                 self._calls_cancelled(event)
             case ActionExecuted():
                 self._executed(event)
+            case KeysReleased(error=str() as error):
+                # The release timer's release failed for good (events.py KeysReleased); the
+                # shell's environment reports that through on_invalid instead.
+                self.kernel.invalidate("environment", "wall_key_release_failed", error)
             case OutcomeCommitted():
                 self._committed(event)
         self._report()
 
     def on_result(self, result: GenerationResult) -> None:
-        """The reply ended. Its actions arrived on their own; ``result`` carries none, only why the
-        reply came to no action, or its failure."""
+        """The reply ended. Its actions arrived on their own; ``result`` carries none, only why
+        the reply, or what else it said, came to no action, or its failure. A reply that came to
+        no action, or to a protocol failure, has an outcome of its own."""
         kernel = self.kernel
         generation, self.generation = self.generation, None
         kernel.cancel_timer(self._reply_watchdog)
@@ -267,7 +279,7 @@ class StreamingPolicy:
             invalid = result.invalid
             kernel.invalidate(invalid.category, invalid.reason, invalid.detail)
         elif not self._stopped():
-            if not self._handed[generation]:
+            if result.protocol_failure is not None or not self._handed[generation]:
                 outcome = self._outcome(
                     self._decision_of[generation],
                     "none",
@@ -307,7 +319,15 @@ class StreamingPolicy:
             self._stuck("reply_watchdog")
         elif timer.kind == "push_watchdog":
             self._push_watchdog = None
-            self._stuck("push_watchdog")
+            if not self._stopped():
+                self._session_stuck(
+                    "push_watchdog",
+                    "frame_push_stuck",
+                    f"a frame push did not answer in {config.push_watchdog_s:g}s",
+                )
+                if kernel.ending is None:
+                    # The push is still out: the rebuilt session has as long again.
+                    self._arm_push_watchdog()
         self._report()
 
     def on_end(self) -> None:
@@ -318,7 +338,9 @@ class StreamingPolicy:
             self.abandoned.add(self.generation)
             self.generation = None
         self._reply_watchdog = self._push_watchdog = None
-        self._queued = None
+        if self._queued is not None:
+            self._drop(self._queued.observation_id, "ended")
+            self._queued = None
         self._check_due = self._capture_due = self._deadline_due = False
         if self.current is not None and not self._executing:
             after, self.current = self.current, None
@@ -382,29 +404,53 @@ class StreamingPolicy:
         )
 
     def _push(self, frame: FrameCaptured) -> None:
-        kernel = self.kernel
         self._pushing = frame
+        self._arm_push_watchdog()
+        self.kernel.emit(PushFrame(frame.observation_id))
+
+    def _arm_push_watchdog(self) -> None:
+        kernel = self.kernel
         self._push_watchdog = kernel.set_timer(
             "push_watchdog", Clock.OPS, kernel.ops + self.config.push_watchdog_s, Priority.CONTROL
         )
-        kernel.emit(PushFrame(frame.observation_id))
 
     def _pushed(self, event: FramePushed) -> None:
         kernel = self.kernel
         frame, self._pushing = self._pushing, None
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
+        # Counted also once the episode is over: every frame captured goes in or is dropped.
+        if event.error is None:
+            self.frames_pushed += 1
+        else:
+            self._drop(frame.observation_id, "push_failed")
         if self._stopped():
             return
         if event.error is None:
             self._latest = frame
-            self.frames_pushed += 1
+            self._failed_pushes, self._rebuilt = 0, False
             # The first reply waits for the first frame; later ones follow each other.
             if self.generation is None:
                 self._start_reply()
+        else:
+            self._failed_pushes += 1
+            limit = self.config.push_failure_limit
+            if self._failed_pushes >= limit:
+                self._failed_pushes = 0
+                self._session_stuck(
+                    "push_failed", "frame_push_failed", f"{limit} pushes failed: {event.error}"
+                )
         if self._queued is not None and not self._stopped():
             queued, self._queued = self._queued, None
             self._push(queued)
+
+    def _session_stuck(self, reason: str, invalid_reason: str, detail: str) -> None:
+        """The session takes no frames: give its reply up, so that the next one rebuilds it. The
+        run is invalid once a rebuilt session takes none either, or with no reply to give up."""
+        if self._rebuilt or self.generation is None:
+            return self.kernel.invalidate("provider", invalid_reason, detail)
+        self._rebuilt = True
+        self._stuck(reason)
 
     # ---- replies ----------------------------------------------------------------------------
 
@@ -423,8 +469,7 @@ class StreamingPolicy:
         )
 
     def _stuck(self, reason: str) -> None:
-        """Give the reply in flight up and start the next. Before the first reply there is none,
-        and a stuck push answers when its own bound runs out."""
+        """Give the reply in flight up and start the next."""
         generation = self.generation
         if self._stopped() or generation is None:
             return
