@@ -136,6 +136,16 @@ def test_the_frame_that_shows_the_stream_frozen_is_not_written_as_captured():
     assert _kernel_kinds(episode.trace).count("FrameCaptured") == 1
 
 
+def test_a_frame_captured_after_another_failure_is_written_as_captured():
+    """The key held from 0.5 s fails to come up at 1.25 s, during the capture of frame 1: the
+    run is invalid by then, but not for a frozen stream, and the frame was captured."""
+    world = World(capture_s=0.5, release_failures={0})
+    episode = run("wall", 3.0, [Reply(0.0, Action.hold_key("a", 0.75)), Reply(0.5)], world)
+    assert episode.invalid["reason"] == "wall_key_release_failed"
+    captured = episode.trace.payloads("ObservationCaptured")
+    assert [(p["decision"], p["observation_id"]) for p in captured] == [(0, "obs-0"), (1, "obs-1")]
+
+
 def test_an_invalidation_without_a_detail_is_written_as_the_runner_writes_it():
     episode = run("wall", 1.0, [Reply(0.5, fields={"invalid_reason": "history_sync_failed"})])
     assert episode.trace.payloads("RunInvalidated") == [
