@@ -100,6 +100,7 @@ class World:
     commit_s: float = 0.0
     snapshot_s: float = 0.0
     frozen_from: int | None = None  # from this capture on every frame repeats the same identity
+    capture_errors: dict[int, str] = field(default_factory=dict)  # capture (1-based) -> fault
     rejections: dict[int, str] = field(default_factory=dict)  # decision -> the guest's refusal
     execute_errors: dict[int, str] = field(default_factory=dict)  # decision -> environment fault
     check_errors: dict[int, str] = field(default_factory=dict)  # end check (1-based) -> fault
@@ -309,7 +310,8 @@ class Simulation:
             self._frozen_tick = tick if self._frozen_tick is None else self._frozen_tick
             tick = self._frozen_tick
         fingerprint = (f"frame-{frame}", tick, f"sha-{frame}")
-        self.kernel.post(FrameCaptured(f"obs-{index}", tick, timestamp, fingerprint))
+        error = world.capture_errors.get(index + 1)
+        self.kernel.post(FrameCaptured(f"obs-{index}", tick, timestamp, fingerprint, error))
 
     def _start(self, generation: int) -> None:
         reply = next(self._replies)

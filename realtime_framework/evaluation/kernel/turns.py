@@ -297,12 +297,14 @@ class TurnPolicy:
         self.kernel.emit(Capture())
 
     def _captured(self, event: FrameCaptured) -> None:
-        if self.phase is not _Phase.CAPTURE:
-            return
         kernel, config = self.kernel, self.config
         if event.error is not None:
+            # Also once the episode is over: the capture was under way at the end, and today's
+            # loop judges every failed capture (runner.py _decide).
             self.phase = _Phase.SETTLED
             return kernel.invalidate("environment", "observation_capture_failed", event.error)
+        if self.phase is not _Phase.CAPTURE:
+            return
         if self._frozen.observe(event.fingerprint, kernel.ops):
             self.phase = _Phase.SETTLED
             return kernel.invalidate(
