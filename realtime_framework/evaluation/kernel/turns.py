@@ -86,8 +86,12 @@ class TurnConfig:
 
     @property
     def max_ticks(self) -> float:
-        """The horizon T in environment ticks."""
-        return self.duration_s * self.env_fps
+        """The horizon T in environment ticks. Within 1e-9 of a whole tick it is that tick, where
+        the environment's clock snaps to (sandbox/actions.py GuestEnvironment.wait_until_tick):
+        0.17 min at 5 fps is tick 51, not 51.00000000000001."""
+        ticks = self.duration_s * self.env_fps
+        whole = round(ticks)
+        return float(whole) if abs(ticks - whole) < 1e-9 else ticks
 
 
 class _Phase(str, Enum):

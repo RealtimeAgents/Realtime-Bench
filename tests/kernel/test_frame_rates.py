@@ -257,6 +257,26 @@ def test_the_allowance_is_the_remaining_input_frames_times_b(
 
 
 @pytest.mark.parametrize(
+    ("tokens_per_frame", "last"),
+    [(None, "applied"), (100, "not_applied_tick_limit")],
+    ids=["paused", "finite-b"],
+)
+def test_a_horizon_within_1e9_of_a_whole_tick_is_that_tick(tokens_per_frame, last):
+    """0.17 min at 5 fps is 51.00000000000001 ticks. The environment's clock snaps to tick 51
+    within 1e-9 (sandbox/actions.py GuestEnvironment.wait_until_tick), so the horizon is tick 51:
+    the loop top there ends the episode instead of observing tick 51 again and again, paused, or
+    once more with no allowance left, with finite B. Paused, each action lands on its observed
+    tick; with B = 100, one input frame of output puts the last action at T, not applied."""
+    config = _config("token", (5, 5), 0.17 * 60, tokens_per_frame)
+    assert config.max_ticks == 51
+    reply = Reply(latency=0.5, action=CLICK, output_tokens=tokens_per_frame)
+    sim = _run(config, [reply] * 52)
+    assert [tick for tick, _ in sim.captures] == list(range(51))
+    assert [outcome.status for outcome in sim.outcomes] == ["applied"] * 50 + [last]
+    assert sim.termination == Termination("tick_limit", "horizon", 51, 51, 25.5, 25.5, None)
+
+
+@pytest.mark.parametrize(
     ("rates", "duration_s", "observed"),
     [
         ((1, 1), 3.0, [0, 1, 2]),  # T = 3
