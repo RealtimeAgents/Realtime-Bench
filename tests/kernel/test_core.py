@@ -230,16 +230,19 @@ def test_later_end_signals_change_nothing():
 
 def test_the_first_invalidation_is_latched_and_ends_the_episode():
     kernel, _ = _kernel()
-    kernel.invalidate("environment", "clock_advance_failed", "x" * 5000)
+    # A long detail keeps its end, where a traceback names the exception (runner.py:205-207).
+    traceback = "Traceback (most recent call last):\n" + "x" * 5000 + "\nRuntimeError: boom"
+    kernel.invalidate("environment", "clock_advance_failed", traceback)
     kernel.invalidate("provider", "generation_error")
     commands = kernel._flush()
     assert _kinds(commands) == ["RunInvalidated", "EpisodeEnded"]
     data = _records(commands)[0].data
-    assert (data["category"], data["reason"], len(data["detail"])) == (
+    assert (data["category"], data["reason"], data["detail"]) == (
         "environment",
         "clock_advance_failed",
-        2000,
+        traceback[-2000:],
     )
+    assert data["detail"].endswith("\nRuntimeError: boom")
     assert kernel.invalid.reason == "clock_advance_failed"
     assert kernel.ending.cause == "invalid"
 
