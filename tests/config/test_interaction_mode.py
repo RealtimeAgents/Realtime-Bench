@@ -659,10 +659,11 @@ def test_a_streaming_run_summary_without_its_section_is_not_scored(tmp_path):
 def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
     environment, tmp_path, capsys, interaction_mode
 ):
-    """A Harbor trial after its run: the request's options become the trial worker's command and
-    settings, which the report's integration reads (wall_clock_launch.json); the runner's expected
-    identity (reporting.prepare_episode_report) and the report over the run summary
-    (reporting.report) carry the mode to Harbor's verifier, which compares it with task.json."""
+    """A Harbor trial over a run summary made as runner.main() leaves one (_report_root), with
+    no run: the request's options become the trial worker's command and settings, which the
+    report's integration reads (wall_clock_launch.json); the runner's expected identity
+    (reporting.prepare_episode_report) and the report over the run summary (reporting.report)
+    carry the mode to Harbor's verifier, which compares it with task.json."""
     from realtime_framework.evaluation import _trial
     from realtime_framework.evaluation.config import configuration_sha256
     from realtime_framework.evaluation.harbor import (

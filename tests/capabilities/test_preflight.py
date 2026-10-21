@@ -701,8 +701,9 @@ OPENAI_STREAMING_CAP = "openai_realtime streams at most 1 fps; requested 2"
 
 
 def test_streaming_frame_rate_cap_of_openai_realtime():
-    """OpenAI Realtime's streaming cap (max_streaming_fps): every entry point that checks the
-    interaction mode applies it to a streaming run only; a turn-based run at 2 fps goes on."""
+    """OpenAI Realtime's streaming cap (max_streaming_fps): validate_model_interaction and
+    check_episode here, and the trial worker below, apply it to a streaming run only; a
+    turn-based run at 2 fps goes on."""
     fails(
         lambda: validate_model_interaction(
             "openai_realtime", clock_mode="wall", fps=2.0, model_input_fps=2.0,
