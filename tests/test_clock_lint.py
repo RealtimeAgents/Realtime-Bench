@@ -12,11 +12,17 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 RUFF = Path(sys.executable).with_name("ruff")
 LINT = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["ruff"]["lint"]
 EXEMPT = [pattern for pattern, rules in LINT["per-file-ignores"].items() if "TID251" in rules]
 LOOP_METHODS = {"time", "call_later", "call_at"}
+# Calls that return an event loop: asyncio's, a Clock's, and a future's or task's get_loop().
+LOOP_CALLS = {"get_running_loop", "get_event_loop", "new_event_loop", "get_loop"}
+
+needs_ruff = pytest.mark.skipif(not RUFF.exists(), reason=f"ruff is not installed at {RUFF}")
 
 
 def _ruff(*args: str, source: str | None = None) -> subprocess.CompletedProcess:
@@ -29,11 +35,13 @@ def _ruff(*args: str, source: str | None = None) -> subprocess.CompletedProcess:
     )
 
 
+@needs_ruff
 def test_framework_reads_the_time_only_through_the_clock():
     result = _ruff("realtime_framework", "realtime_tasks", "tests")
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@needs_ruff
 def test_the_rule_reports_a_direct_call_in_framework_code():
     source = (
         "import asyncio, threading, time\n\n\n"
@@ -47,28 +55,42 @@ def test_the_rule_reports_a_direct_call_in_framework_code():
     assert result.stdout.count("TID251") == 3, result.stdout
 
 
-def _is_loop(node: ast.expr) -> bool:
-    """A name or attribute that ends in "loop", or asyncio.get_running_loop()/get_event_loop()."""
+def _name(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
-        return node.id.endswith("loop")
+        return node.id
     if isinstance(node, ast.Attribute):
-        return node.attr.endswith("loop")
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"get_running_loop", "get_event_loop"}
-    )
+        return node.attr
+    return None
+
+
+def _makes_loop(node: ast.expr) -> bool:
+    return isinstance(node, ast.Call) and _name(node.func) in LOOP_CALLS
 
 
 def loop_time_calls(source: str) -> list[int]:
-    """Lines that call time(), call_later() or call_at() on an event loop."""
+    """Lines that call time(), call_later() or call_at() on an event loop: a name or attribute
+    that ends in "loop" or is assigned a call in LOOP_CALLS, or such a call itself."""
+    tree = ast.parse(source)
+    bound = {
+        _name(target)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and _makes_loop(node.value)
+        for target in node.targets
+    }
+
+    def is_loop(node: ast.expr) -> bool:
+        name = _name(node)
+        if name is not None:
+            return name.endswith("loop") or name in bound
+        return _makes_loop(node)
+
     return [
         node.lineno
-        for node in ast.walk(ast.parse(source))
+        for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in LOOP_METHODS
-        and _is_loop(node.func.value)
+        and is_loop(node.func.value)
     ]
 
 
@@ -80,8 +102,14 @@ def test_loop_time_calls_are_found():
         "asyncio.get_running_loop().call_later(1, print)\n"
         "self._loop.call_at(1, print)\n"
         "clock.time()\n"
+        "lp = asyncio.get_running_loop()\n"
+        "lp.time()\n"
+        "lp.call_later(1, print)\n"
+        "future.get_loop().time()\n"
+        "self.lp = clock.new_event_loop()\n"
+        "self.lp.call_at(1, print)\n"
     )
-    assert loop_time_calls(source) == [3, 4, 5]
+    assert loop_time_calls(source) == [3, 4, 5, 8, 9, 10, 12]
 
 
 def test_no_loop_time_outside_the_clock():
