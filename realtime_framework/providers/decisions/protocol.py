@@ -1,6 +1,6 @@
 # Adapted from Pydantic AI, https://github.com/pydantic/pydantic-ai at commit
-# 57d8610448b9a6b2b0d3f70a85bf134b59c4b7eb: SystemOneModel.decide, its response schema and
-# _error_body in pydantic_ai_slim/pydantic_ai/models/system_one.py, and ChoiceAnswer in
+# 57d8610448b9a6b2b0d3f70a85bf134b59c4b7eb: SystemOneModel.decide, _Usage and _error_body in
+# pydantic_ai_slim/pydantic_ai/models/system_one.py, and ChoiceAnswer in
 # pydantic_ai_slim/pydantic_ai/models/decision.py. Its license:
 #
 # The MIT License (MIT)
@@ -34,24 +34,31 @@ the request is built and sent, and the reply validated, the way that model does.
   question goes out as the selection flow wrote it: how the server renders the JSON for the model
   is not known, so the bytes stay as they were.
 - Of the model's settings only ``extra_body`` is taken (Luna's route); the client carries the
-  key, headers and timeout. The state may hold images: Luna's screenshots travel inside it.
+  key, headers and timeout. ``extra_body`` is merged as given: its type is not checked, and a key
+  it overrides (model, state, questions) is not checked again. The state may hold images: Luna's
+  screenshots travel inside it.
 - Only Choice questions are asked, so only Choice answers are read.
-- The reply is parsed as ``json.loads`` parses it and validated in strict mode (a count must be
-  a JSON integer, a probability a JSON number); its usage counts have no default.
-- The reply also names its upstream, which must be the pinned one, and its model, which must be
-  the requested model or that name followed by a hyphen and more.
+- Only the asked answers are read: an answer to a question not asked is ignored, as these
+  clients always did, where Pydantic AI rejects the reply.
+- The reply is parsed as ``json.loads`` parses it (a body that is not JSON raises its
+  JSONDecodeError) and read in the order these clients always read it: its upstream, which must
+  be the configured one, and its model, which must be the requested model or that name followed
+  by a hyphen and more; then its usage; then each asked answer. The usage and the answers are
+  validated in strict mode (a count must be a JSON integer, a probability a JSON number), and the
+  usage counts have no default.
 - The probabilities are not required to sum to one.
+- An invalid reply raises ValueError with these clients' short messages, followed by the answer
+  as received when an answer is at fault, not with the validation error's text.
 - Any status outside 2xx is an error. OpenRouter's context-limit and refusal statuses raise
-  their own errors, which the selection flow reads; every other error, and a transport error as
-  httpx raises it, is left to the shared retry policy (entity/model.py classify_http_failure).
-  An invalid reply raises ValueError.
+  their own errors, which the selection flow reads; every other error status is left to the
+  shared retry policy (entity/model.py classify_http_failure). A transport error is raised as
+  httpx raises it, and the client counts it as transient (classify_question_error).
 - The caller gets the reply's JSON as received, not converted answers.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import isfinite
 from typing import Annotated, Any, Literal, TypedDict
 
 import httpx
@@ -89,33 +96,40 @@ async def decide(
     if not response.is_success:
         raise _error(response)
     reply = response.json()
-    try:
-        parsed = _response_adapter.validate_python(reply, strict=True)
-    except ValidationError as e:
-        raise ValueError(f"Invalid response from the Decisions API: {e}") from e
-    if parsed["provider"].lower() != upstream.lower():
+    if not isinstance(reply, dict):
+        raise ValueError("Decisions response must be an object")  # noqa: TRY004
+    if str(reply.get("provider", "")).lower() != upstream.lower():
         raise ValueError("Decisions response did not come from the configured upstream provider")
-    if parsed["model"] != model and not parsed["model"].startswith(model + "-"):
+    reply_model = str(reply.get("model", ""))
+    if reply_model != model and not reply_model.startswith(model + "-"):
         raise ValueError("Decisions response model differs from the requested model family")
-    if parsed["answers"].keys() != questions.keys():
-        raise ValueError(
-            "Invalid response from the Decisions API: answer names do not match the questions"
-        )
+    try:
+        _usage_adapter.validate_python(reply.get("usage"), strict=True)
+    except ValidationError as e:
+        raise ValueError("Decisions response is missing valid native token usage") from e
+    answers = reply.get("answers")
     for name, question in questions.items():
-        answer = parsed["answers"][name]
-        probabilities = answer["probabilities"]
-        valid = (
-            answer["choice"] in question["criteria"]
-            and probabilities.keys() == question["criteria"].keys()
-            and isfinite(answer["confidence"])
-            and 0 <= answer["confidence"] <= 1
-            and all(isfinite(p) and 0 <= p <= 1 for p in probabilities.values())
-        )
-        if not valid:
+        answer = answers.get(name) if isinstance(answers, dict) else None
+        try:
+            parsed = _answer_adapter.validate_python(answer, strict=True)
+        except ValidationError as e:
             raise ValueError(
-                f"Invalid response from the Decisions API: answer {name!r} does not match its "
-                f"question: {answer!r}"
+                f"Decisions response is missing a valid choice answer (or was refused): {answer!r}"
+            ) from e
+        criteria = question["criteria"]
+        if parsed["choice"] not in criteria:
+            raise ValueError(
+                f"Decisions returned a choice outside the requested criteria: {answer!r}"
             )
+        if parsed["probabilities"].keys() != criteria.keys():
+            raise ValueError(
+                f"Decisions returned an incomplete probability distribution: {answer!r}"
+            )
+        # A chained comparison is false for NaN and the infinities.
+        if not all(
+            0 <= value <= 1 for value in (parsed["confidence"], *parsed["probabilities"].values())
+        ):
+            raise ValueError(f"Decisions returned invalid probabilities or confidence: {answer!r}")
     return reply
 
 
@@ -153,16 +167,8 @@ class _ChoiceAnswer(TypedDict):
     probabilities: dict[str, float]
 
 
-class _DecisionsResponse(TypedDict):
-    """The body the API answers ``decisions`` with."""
-
-    provider: str
-    model: str
-    answers: dict[str, _ChoiceAnswer]
-    usage: _Usage
-
-
-_response_adapter = TypeAdapter(_DecisionsResponse)
+_usage_adapter = TypeAdapter(_Usage)
+_answer_adapter = TypeAdapter(_ChoiceAnswer)
 
 
 def _error_body(response: httpx.Response) -> object:
