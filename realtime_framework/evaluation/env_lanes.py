@@ -35,6 +35,9 @@ raised is answered with the error, as the turn-based shell answers one.
 
 End checks run on a lane of their own (stream-plan 4.9): the policy may send an Execute while a
 state read, up to 10 s on the wall clock, is out, and the two take the gate in turn.
+
+At the end the snapshot waits for the action executing to finish (stream-plan 4.8): the lanes say
+which one executes (``executing``) and when it is done (``action_done``).
 """
 
 from __future__ import annotations
@@ -172,6 +175,9 @@ class EnvLanes:
         self._capture = Lane("capture", post, clock)
         self._action = Lane("action", post, clock)
         self._end_check = Lane("end-check", post, clock)
+        self.executing: Execute | None = None  # the command the action lane runs
+        self._idle = clock.event()  # set while no action executes
+        self._idle.set()
 
     def capture(self, captured: Callable[[Observation], FrameCaptured]) -> None:
         """Capture: answer with ``captured(observation)``, which the lane calls."""
@@ -195,8 +201,17 @@ class EnvLanes:
                 return answer
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
                 return ActionExecuted(command.decision, error=traceback.format_exc())
+            finally:
+                self.executing = None
+                self._idle.set()
 
+        self.executing = command
+        self._idle.clear()
         self._action.submit(run)
+
+    def action_done(self, wait: float) -> bool:
+        """Whether no action executes, or the one that does finishes within ``wait`` seconds."""
+        return self._clock.wait(self._idle, wait)
 
     def check_end(self, command: CheckEnd) -> None:
         def run():
