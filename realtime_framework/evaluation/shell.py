@@ -960,16 +960,20 @@ class _Shell:
             return
         if bound is None:
             return
+        # The log names the bound as the runner does (runner.py _move_timeout).
         if bound == "provider_watchdog":
             seconds = held.bound_at - held.started_ops
             r = episode_records.watchdog_result(round(seconds, 2), seconds)
+            timeout = self.config.timing.provider_watchdog_s
         else:
             # The bound, however late the shell got to it: the kernel charges the move that much.
             due = held.bound_at if bound == "per_move_cap" else self.config.duration_s
             seconds = due - held.started_semantic
             r = episode_records.timed_out_result(round(seconds, 2), bound)
+            capped = bound == "per_move_cap"
+            timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         self.log(
-            f"[default] k={held.decision} generation TIMED OUT (>{seconds:g}s, {bound}) — discarded"
+            f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) — discarded"
         )
         result, inference = self._settle(held, r)
         if reason == "per_move_cap":

@@ -168,7 +168,7 @@ def test_a_generation_the_watchdog_gave_up_on_is_recorded_as_the_runner_records_
         (0, "generation_watchdog_timeout")
     ]
     assert episode.env._token_accounting.summary()["responses"] == 1
-    assert "[default] k=0 generation TIMED OUT (>7s, provider_watchdog) — discarded" in (
+    assert "[default] k=0 generation TIMED OUT (>7.0s, provider_watchdog) — discarded" in (
         episode.logs
     )
 

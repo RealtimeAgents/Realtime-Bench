@@ -346,17 +346,37 @@ def test_a_move_over_the_cap_took_the_cap_though_the_shell_saw_it_late():
     assert episode.timeline[0][2] == 1.5
     (timed_out,) = [p for p in episode.trace.payloads("InferenceCompleted") if p["decision"] == 0]
     assert timed_out["latency_s"] == 1.5
+    assert "[default] k=0 generation TIMED OUT (>1.5s, per_move_cap) — discarded" in episode.logs
+
+
+def test_a_later_move_over_the_cap_took_the_cap():
+    """The second move starts at 1 s and its 1.5 s cap falls due at 2.5 s: the move is charged
+    the cap from its start."""
+    episode = run("wall", 4.0, [Reply(0.5), Reply(hang=True), Reply(0.5)], per_move_cap_s=1.5)
+    assert episode.statuses()[:2] == ["applied", "skipped_timeout"]
+    assert episode.env.lifecycle[1]["model_latency_s"] == 1.5
+    (timed_out,) = [p for p in episode.trace.payloads("InferenceCompleted") if p["decision"] == 1]
+    assert timed_out["latency_s"] == 1.5
 
 
 def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
     """The runner's lines for them (runner.py _run_step, _mark_budget_exhausted)."""
-    capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.5)
-    assert "[default] k=0 generation TIMED OUT (>1.5s, per_move_cap) — discarded" in capped.logs
+    capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.0)
+    assert "[default] k=0 generation TIMED OUT (>1.0s, per_move_cap) — discarded" in capped.logs
     cut = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])
-    assert "[default] k=1 generation TIMED OUT (>2s, wall_deadline) — discarded" in cut.logs
+    assert "[default] k=1 generation TIMED OUT (>2.0s, wall_deadline) — discarded" in cut.logs
     spent = run("wall", 5.0, [Reply(1.0), Reply(1.0)], think_budget_s=1.5)
     assert spent.env._stop_reason == "think_budget"
     assert "[think] deliberation budget exhausted: 2.0s >= 1.5s -> forfeit" in spent.logs
+
+
+def test_a_generation_given_up_on_at_the_tasks_end_did_not_time_out():
+    """The task ends at 1.5 s and the end check at 2 s sees it: the call is given up on, but no
+    bound came, so nothing is logged or recorded as timed out."""
+    episode = run("wall", 3.0, [Reply(hang=True)], World(ends_at=1.5, end_reason="won"))
+    assert episode.env._termination["stop_reason"] == "won"
+    assert not any("TIMED OUT" in line for line in episode.logs)
+    assert episode.trace.payloads("InferenceCompleted") == []
 
 
 @pytest.mark.parametrize(
