@@ -112,7 +112,8 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
                     json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                     for r in records
                 ]
-                content = "\n".join([texts.jev_ledger_header, *notes, *record_lines])
+                header = texts.jev_ledger_header_omitted if notes else texts.jev_ledger_header
+                content = "\n".join([header, *notes, *record_lines])
             else:
                 content = texts.ledger_header + "\n" + block.text
             messages.append({"role": JEV_ROLES[item.intent.role], "content": content})

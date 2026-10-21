@@ -59,6 +59,11 @@ JEV_LEDGER_HEADER = (
     "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and "
     "occurrences preserve every action; start/step/count expands exact indices):"
 )
+# Once the earliest actions are left out (LEDGER_OMISSION follows it).
+JEV_LEDGER_HEADER_OMITTED = (
+    "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and "
+    "occurrences preserve every listed action; start/step/count expands exact indices):"
+)
 JEV_HISTORY_PREFIX = "Recent action and feedback history: "
 JEV_CURRENT_PREFIX = "Current observation: "
 LUNA_ACTION_LABEL = "Chosen action: "
@@ -92,6 +97,7 @@ class FixedTexts:
     ledger_header: str
     ledger_omission: str  # the ledger's first line once actions were left out; {count} of them
     jev_ledger_header: str
+    jev_ledger_header_omitted: str
     jev_history_prefix: str
     jev_current_prefix: str
     luna_action_label: str
@@ -105,6 +111,7 @@ FIXED_TEXTS = FixedTexts(
     ledger_header=ARCHIVED_ACTION_LEDGER_HEADER,
     ledger_omission=LEDGER_OMISSION,
     jev_ledger_header=JEV_LEDGER_HEADER,
+    jev_ledger_header_omitted=JEV_LEDGER_HEADER_OMITTED,
     jev_history_prefix=JEV_HISTORY_PREFIX,
     jev_current_prefix=JEV_CURRENT_PREFIX,
     luna_action_label=LUNA_ACTION_LABEL,
