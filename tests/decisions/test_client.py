@@ -3,7 +3,7 @@
 What goes on the wire: the path, every header in order, the body's bytes. What comes back: a
 ChoiceReply holding the reply as received, a context limit the selection flow splits on, or an
 error with the failure kind the per-question retry gives it (classify_question_error). The replay
-baselines compare bodies with key order ignored, and their stub only sends valid replies.
+baselines compare bodies with key order ignored, and every 200 their stub sends is a valid reply.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import socket
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from realtime_framework.entity.model import (
     ChoiceContextLimitError,
     TransportFailure,
 )
+from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
 
@@ -115,22 +117,24 @@ def endpoint():
         yield endpoint
 
 
-def _decide(endpoint, api, answer, *, question=QUESTION):
-    """Ask one question; return the reply or the exception, and the requests it sent."""
+def _client(api, base_url):
     client_type, model, upstream = APIS[api]
-    state = LUNA_STATE if api == "luna" else JEV_STATE
-    endpoint.answer = answer
-    first = len(endpoint.server.requests)
     client = client_type(
         ModelConfig(
             adapter_type="openai_decisions" if api == "luna" else "jev_decisions",
             model_name=model,
             api_key=KEY,
-            api_base_url=endpoint.server.origin + "/api/alpha",
+            api_base_url=base_url,
             upstream_provider=upstream,
         )
     )
     client.bind_trace(_Trace())
+    return client
+
+
+def _ask(client, api, question=QUESTION):
+    """The client's reply, or the exception it raised."""
+    state = LUNA_STATE if api == "luna" else JEV_STATE
 
     async def run():
         try:
@@ -140,7 +144,15 @@ def _decide(endpoint, api, answer, *, question=QUESTION):
         finally:
             await client.close()
 
-    return asyncio.run(run()), endpoint.server.requests[first:]
+    return asyncio.run(run())
+
+
+def _decide(endpoint, api, answer, *, question=QUESTION):
+    """Ask one question; return the reply or the exception, and the requests it sent."""
+    endpoint.answer = answer
+    first = len(endpoint.server.requests)
+    result = _ask(_client(api, endpoint.server.origin + "/api/alpha"), api, question)
+    return result, endpoint.server.requests[first:]
 
 
 # ---- The request -------------------------------------------------------------------------------
@@ -219,17 +231,19 @@ VALID = {
     "more_answer_fields": lambda api: _answer(
         api, probabilities={"b": 0.0, "a": 0.0}, extra="kept"
     ),
+    "zero_confidence": lambda api: _answer(api, confidence=0),
 }
 
 
 @pytest.mark.parametrize("api", list(APIS))
 @pytest.mark.parametrize("case", list(VALID))
 def test_a_valid_reply_comes_back_as_received(endpoint, case, api):
+    """As parsed: compared as JSON text, so key order and 1 against 1.0 count."""
     reply = VALID[case](api)
     result, _ = _decide(endpoint, api, _serve(200, reply))
-    assert result.response == reply
-    assert result.answer == reply["answers"]["next_action"]
-    assert result.usage == reply["usage"]
+    assert json.dumps(result.response) == json.dumps(reply)
+    assert json.dumps(result.answer) == json.dumps(reply["answers"]["next_action"])
+    assert json.dumps(result.usage) == json.dumps(reply["usage"])
 
 
 @pytest.mark.parametrize("api", list(APIS))
@@ -246,13 +260,19 @@ INVALID = {
     "other_provider": lambda api: _reply(api, provider="anthropic"),
     "no_provider": lambda api: _without(_reply(api), "provider"),
     "shorter_model_name": lambda api: _reply(api, model=APIS[api][1].rpartition("-")[0]),
+    "model_name_running_on": lambda api: _reply(api, model=APIS[api][1] + "2"),
     "no_model": lambda api: _without(_reply(api), "model"),
     "no_usage": lambda api: _without(_reply(api), "usage"),
     "usage_without_output": lambda api: _reply(api, usage={"input_tokens": 1}),
     "usage_as_float": lambda api: _reply(api, usage={"input_tokens": 1.0, "output_tokens": 1}),
     "usage_as_bool": lambda api: _reply(api, usage={"input_tokens": 1, "output_tokens": True}),
     "usage_as_text": lambda api: _reply(api, usage={"input_tokens": "1", "output_tokens": 1}),
-    "negative_usage": lambda api: _reply(api, usage={"input_tokens": -1, "output_tokens": 1}),
+    "negative_input_tokens": lambda api: _reply(
+        api, usage={"input_tokens": -1, "output_tokens": 1}
+    ),
+    "negative_output_tokens": lambda api: _reply(
+        api, usage={"input_tokens": 1, "output_tokens": -1}
+    ),
     "no_answers": lambda api: _without(_reply(api), "answers"),
     "no_answer": lambda api: _reply(api, answers={}),
     "answers_not_a_mapping": lambda api: _reply(api, answers=[]),
@@ -262,6 +282,7 @@ INVALID = {
     "refusal": lambda api: _reply(
         api, answers={"next_action": {"type": "refusal", "refusal": "no"}}
     ),
+    "answer_of_another_type": lambda api: _answer(api, type="score"),
     "choice_not_offered": lambda api: _answer(api, choice="c"),
     "choice_not_text": lambda api: _answer(api, choice=1),
     "probability_missing": lambda api: _answer(api, probabilities={"a": 1.0}),
@@ -274,6 +295,7 @@ INVALID = {
     "no_confidence": lambda api: _reply(
         api, answers={"next_action": _without(_reply(api)["answers"]["next_action"], "confidence")}
     ),
+    "confidence_above_one": lambda api: _answer(api, confidence=1.5),
     "confidence_infinite": lambda api: _answer(api, confidence=math.inf),
     "confidence_as_bool": lambda api: _answer(api, confidence=True),
     "confidence_null": lambda api: _answer(api, confidence=None),
@@ -344,7 +366,13 @@ ERRORS = {
     "500_no_message": ((500, {"error": {}}, ()), ("DecisionsHTTPError", INTERNAL, TRANSIENT)),
     "500_list": ((500, [1, 2], ()), ("DecisionsHTTPError", INTERNAL, TRANSIENT)),
     "500_long": ((500, _error(LONG, 500), ()), ("DecisionsHTTPError", LONG[:500], TRANSIENT)),
-    # httpx does not follow redirects; a redirect is an error even with a reply's body.
+    # Only a 400 or a 413 is a context limit.
+    "500_context_length": (
+        (500, _error("Too long", 500, metadata={"raw": "context_length_exceeded"}), ()),
+        ("DecisionsHTTPError", "Too long", TRANSIENT),
+    ),
+    "502_not_utf8": ((502, b"\xff<html>", ()), ("DecisionsHTTPError", "Bad Gateway", TRANSIENT)),
+    # httpx does not follow redirects; a redirect is an error whatever its body.
     "307": ((307, _reply("luna"), ()), ("DecisionsHTTPError", "Temporary Redirect", FATAL)),
 }
 
@@ -352,7 +380,8 @@ ERRORS = {
 @pytest.mark.parametrize("api", list(APIS))
 @pytest.mark.parametrize("served, expected", list(ERRORS.values()), ids=list(ERRORS))
 def test_an_error_status_is_classified(endpoint, served, expected, api):
-    """The replay baselines hold these messages (jev_transport_retries detail, invalid_detail)."""
+    """The records take these messages (ModelAttemptFinished, invalid_detail); the replay
+    baselines hold the 503's (openai_decisions-retry) and the 413's (the overflow baselines)."""
     error_type, message, failure = expected
     status = served[0]
     error, _ = _decide(endpoint, api, _serve(*served))
@@ -372,3 +401,41 @@ def test_a_dropped_connection_is_transient(endpoint, api):
     error, _ = _decide(endpoint, api, lambda index, received: DROP)
     assert isinstance(error, httpx.TransportError)
     assert APIS[api][0].classify_question_error(error) == TransportFailure(TRANSIENT)
+
+
+@pytest.mark.parametrize("api", list(APIS))
+def test_a_refused_connection_is_transient(api):
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        port = unused.getsockname()[1]
+    error = _ask(_client(api, f"http://127.0.0.1:{port}/api/alpha"), api)
+    assert isinstance(error, httpx.ConnectError)
+    assert APIS[api][0].classify_question_error(error) == TransportFailure(TRANSIENT)
+
+
+@pytest.mark.parametrize("api", list(APIS))
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("slow"), httpx.PoolTimeout("busy")])
+def test_a_timeout_is_transient(error, api):
+    assert APIS[api][0].classify_question_error(error) == TransportFailure(TRANSIENT)
+
+
+@pytest.mark.parametrize("api", list(APIS))
+def test_the_client_and_the_one_after_an_abort(api):
+    """Neither model YAML names a base URL (configs/models/), so a run posts to OpenRouter's."""
+    client = _client(api, None)
+
+    async def clients():
+        first = client.client
+        await client.close()
+        await client.connect(None)
+        await client.close()
+        return first, client.client
+
+    first, rebuilt = asyncio.run(clients())
+    assert rebuilt is not first
+    for http in (first, rebuilt):
+        assert str(http.base_url) == "https://openrouter.ai/api/alpha/"
+        assert http.timeout == httpx.Timeout(30.0)
+        assert http.headers["Authorization"] == f"Bearer {KEY}"
+        for kind in ("request", "response"):
+            assert [type(hook.__self__) for hook in http.event_hooks[kind]] == [HttpCapture]
