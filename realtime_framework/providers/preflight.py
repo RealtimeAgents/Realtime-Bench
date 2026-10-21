@@ -114,7 +114,8 @@ def validate_model_interaction(
 
 
 def check_config(driver, config) -> None:
-    """Static model-config rules, in the order the driver's constructor applied them."""
+    """Static model-config rules, in the order the driver's constructor applied them; the
+    context reserve, which the estimating APIs also checked before each request, comes last."""
     if issubclass(driver, LiteLLMDriver):
         compat = driver.compat
         if compat.output_limit_required and config.native_output_limit is None:
@@ -122,15 +123,15 @@ def check_config(driver, config) -> None:
                 f"The {config.adapter_type} API requires {compat.output_limit_param}; "
                 "declare endpoint.native_output_limit in the model YAML"
             )
-        if (
-            driver.deployment.gateway == "openai_compatible"
-            and config.context_window_tokens is not None
-            and config.context_reserve_tokens >= config.context_window_tokens
-        ):
-            raise ValueError("Context capacity must exceed generation reserve")
     elif issubclass(driver, GeminiLiveDriver):
         _check_live_options(config)
         _check_live_model_contract(config)
+    if (
+        driver.capabilities.request_size_estimation
+        and config.context_window_tokens is not None
+        and config.context_reserve_tokens >= config.context_window_tokens
+    ):
+        raise ValueError("Context capacity must exceed generation reserve")
 
 
 def _check_live_options(config) -> None:

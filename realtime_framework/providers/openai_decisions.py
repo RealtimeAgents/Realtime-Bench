@@ -33,11 +33,7 @@ from realtime_framework.entity.model import (
     retry_after_seconds,
 )
 from realtime_framework.providers.capture import HttpCapture
-from realtime_framework.providers.context import (
-    context_status,
-    estimated_request_tokens,
-    validate_context_reserve,
-)
+from realtime_framework.providers.context import context_status, estimated_request_tokens
 from realtime_framework.providers.decisions.driver import DecisionEncoder
 from realtime_framework.providers.litellm import chat_messages
 
@@ -158,7 +154,6 @@ class OpenAIDecisionsClient(DecisionEncoder):
         """Estimate the canonical request; the generation reserve covers each question's criteria."""
         if self.config.context_window_tokens is None:
             return {"pressure": False, "counter": "unconfigured"}
-        validate_context_reserve(self.config)
         # Counts the request's chat-message rendering, not the transcript sent; the pressure
         # archive points were calibrated on this count.
         count = estimated_request_tokens(
