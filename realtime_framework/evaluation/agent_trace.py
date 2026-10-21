@@ -163,10 +163,10 @@ class AgentTraceSink:
     """Queue agent records on any thread; one writer thread emits them in capture order.
 
     While the kernel's shell runs an episode, the writer hands each record to the shell as an
-    AgentRecord instead (``hand_over``): the kernel numbers it into the episode log once nothing
-    else is due, and the shell writes it, so agent and kernel records share one order. The blobs
-    and the session links are still made here, before the record is handed over. A capture's
-    times are read on ``clock``, the episode's operational clock."""
+    AgentRecord instead (``hand_over``): the shell gives the kernel one a step, the kernel numbers
+    it into the episode log and the shell writes it, so agent and kernel records share one order.
+    The blobs and the session links are still made here, before the record is handed over. A
+    capture's times are read on ``clock``, the episode's operational clock."""
 
     def __init__(self, trace, pack_path: Path, *, clock: Clock):
         self.trace = trace
@@ -231,6 +231,11 @@ class AgentTraceSink:
         """From the next record on, hand each to the kernel with ``post`` instead of writing it."""
         with self._emit_lock:
             self._post = post
+
+    def fail(self, error: str) -> None:
+        """A record handed over could not be written: the run is invalid as the sink closes
+        (close_agent_trace), and later records are counted, not written."""
+        self._error = self._error or error
 
     def take_back(self, write_handed) -> None:
         """Write the records again. ``write_handed`` writes those already handed over first; the
