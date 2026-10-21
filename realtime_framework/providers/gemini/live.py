@@ -715,6 +715,28 @@ class GeminiLiveDriver(SessionLifecycle):
         self._core.sent(push.keys)
         return {"observation_id": push.observation_id}
 
+    async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
+        """Streaming: start the next reply with one activity, holding the execution feedback of
+        ``request.canonical`` that the session lacks (SessionCore.trigger). Its generation starts
+        before the activity goes out, so that the reader takes the reply's first message for
+        it; the session's NO_INTERRUPTION leaves a reply still running alone."""
+        session = self._session_for_input()
+        generation = await self.start_generation(request)
+        trigger = self._core.trigger(request.canonical)
+        async with self._writing:
+            self._activity_open = True
+            try:
+                for item in trigger.inputs:
+                    await self._send_realtime(session, item)
+            except BaseException:
+                # An incomplete activity cannot be resumed as canonical context.
+                self._core.send_failed(trigger.keys)
+                self._replies.pop(request.generation_id, None)
+                raise
+            self._activity_open = False
+        self._core.sent(trigger.keys)
+        return generation
+
     async def send_observation(
         self, observation: ProviderObservation, history: CanonicalRequest
     ) -> dict:
@@ -785,19 +807,19 @@ class GeminiLiveDriver(SessionLifecycle):
         if self.streaming:
             self._replies[request.generation_id] = asyncio.Queue()
         self._core.start_generation(request.generation_id)
+        transport = "realtime_input" if self.streaming else self.options["input_transport"]
         return GenerationHandle(
             request.generation_id,
             # The policy's queued acknowledgement, sent for every call of this generation.
             opaque=request.canonical.policy.texts.gemini_queued_tool_response,
             metadata={
                 **self._connect_metadata,
-                "input_audio_carrier_ms": (
-                    100 if self.options["input_transport"] == "realtime_input" else 0
-                ),
+                "input_audio_carrier_ms": 100 if transport == "realtime_input" else 0,
+                # A streaming push sends a frame's text right after its video.
                 "video_ingestion_wait_ms": (
-                    1000 if self.options["input_transport"] == "realtime_input" else 0
+                    1000 if transport == "realtime_input" and not self.streaming else 0
                 ),
-                "gemini_live_input_transport": self.options["input_transport"],
+                "gemini_live_input_transport": transport,
                 "gemini_live_tool_response_scheduling": self.options["tool_response_scheduling"],
                 "gemini_live_history_format": self.options["history_format"],
                 "gemini_live_tool_behavior": self.options["tool_behavior"],
