@@ -285,9 +285,21 @@ def test_a_large_allowance_is_rounded_down_within_float_noise():
     [
         (0.17, 51),  # 51.00000000000001 ticks, 7.1e-15 past tick 51
         (32.02, 9606),  # 9606.000000000002 ticks, 1.8e-12 past tick 9606
-        (51.00000002 / 300, None),  # 2e-8 past tick 51
+        ((51 + 0.5e-9) / 300, 51),  # 5.0e-10 past tick 51
+        ((51 - 0.5e-9) / 300, 51),  # 5.0e-10 short of it
+        ((51 + 2e-9) / 300, None),  # 2.0e-9 past it
+        ((51 - 2e-9) / 300, None),  # 2.0e-9 short of it
+        (51.00000002 / 300, None),  # 2e-8 past it
     ],
-    ids=["0.17-min", "32.02-min", "past-1e-9"],
+    ids=[
+        "0.17-min",
+        "32.02-min",
+        "half-1e-9-past",
+        "half-1e-9-short",
+        "2e-9-past",
+        "2e-9-short",
+        "2e-8-past",
+    ],
 )
 def test_the_horizon_snaps_to_a_whole_tick_within_1e9(minutes, whole):
     """At 5 fps the run's horizon is max_minutes * 60 * 5 ticks (runner.py main), whose float noise
@@ -349,6 +361,9 @@ def test_a_response_spending_the_allowance_lands_at_a_horizon_off_the_tick_grid(
     assert sim.executed == []
     assert [outcome.status for outcome in sim.outcomes] == ["none", "not_applied_tick_limit"]
     assert sim.outcomes[1].post_horizon_output_tokens == 0
+    # Nor is anything paced from there: the decision's next observation is the tick it is at.
+    assert [boundary["decision"] for boundary in _boundaries(sim)] == [0]
+    assert sim.outcomes[1].next_observation_tick == 3.9
     assert sim.termination.stop_reason == "tick_limit"
 
 
