@@ -1,9 +1,9 @@
 """The OpenAI Realtime session core, driven without a WebSocket.
 
 History views come from the request builder the runtime uses (harnesses/default/request.py), and
-native-streaming views are laid out as the streaming history view lays them out
-(harnesses/streaming/history.py); server events are parsed the way the SDK's
-RealtimeConnection.recv parses them (openai/resources/realtime/realtime.py).
+native-streaming views from the streaming history view (harnesses/streaming/history.py); server
+events are parsed the way the SDK's RealtimeConnection.recv parses them
+(openai/resources/realtime/realtime.py).
 """
 
 from __future__ import annotations
@@ -19,18 +19,15 @@ from openai.types.realtime import RealtimeServerEvent
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
-from realtime_framework.entity.request import (
-    AnswerRequirements,
-    BlockTime,
-    CallParameters,
-    CanonicalRequest,
-    ContentBlock,
-    Intent,
-    RequestItem,
-)
+from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
-from realtime_framework.harnesses.streaming.history import frame_block
+from realtime_framework.harnesses.streaming.history import (
+    feedback_block,
+    frame_block,
+    history_view,
+    output_block,
+)
 from realtime_framework.providers.openai_realtime_session import (
     ROLES,
     Create,
@@ -505,9 +502,9 @@ def test_a_streaming_reply_keeps_its_items_under_its_output_block(status):
 
 
 def stream(script: str) -> list:
-    """Blocks of a native-streaming session in the order the agent accepts them, under the
-    streaming history view's names. F: a frame pushed, frame n showing turn n's prompt and
-    screenshot; R: reply d; B: the feedback on the oldest reply without one."""
+    """Blocks of a native-streaming session in the order the agent accepts them. F: a frame
+    pushed, frame n showing turn n's prompt and screenshot; R: reply d; B: the feedback on the
+    oldest reply without one."""
     table, blocks, replies, reported = FrameTable(), [], 0, 0
     for step in script:
         if step == "F":
@@ -516,57 +513,25 @@ def stream(script: str) -> list:
             blocks.append(frame_block(record, observation))
         elif step == "R":
             replies += 1
-            output = ContentBlock(f"d{replies}.output", "model_output", "model", BlockTime())
-            blocks.append(replace(output, text=f"r{replies}"))
+            blocks.append(output_block(replies, f"r{replies}", None, None))
         else:
             reported += 1
-            feedback = ContentBlock(
-                f"d{reported}.feedback", "execution_feedback", "environment", BlockTime()
-            )
-            blocks.append(
-                replace(feedback, text=f"fb{reported}", attached_to=f"d{reported}.output")
-            )
+            blocks.append(feedback_block(reported, None, f"fb{reported}", None))
     return blocks
 
 
-def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message") -> CanonicalRequest:
-    """The streaming history view of the blocks, laid out here as harnesses/streaming/history.py
-    lays it out, so that these tests do not hang on the view's signature: the system
-    instruction, then every block in order, every reply and feedback kept (decision 4.6), the
-    frames older than the newest ``frames`` folded to the turn-based placeholder (decision 23),
-    and the feedback where the policy's ``feedback`` places it: as its own block, or with the
-    feedback since the frame before in front of the next frame, which loses it when it folds,
-    the feedback since the newest frame waiting at the end."""
-    framed = [index for index, block in enumerate(blocks) if block.kind == "frame"]
-    older = set(framed[: max(0, len(framed) - frames)])
-    items, pending = [RequestItem(SYSTEM, Intent("instruction", "head"))], []
-
-    def prefix(frame):
-        block = ContentBlock(
-            pending[0].id.removesuffix("feedback") + "prefix",
-            "execution_feedback",
-            "environment",
-            BlockTime() if frame is None else frame.time,
-            text="\n".join(waiting.text for waiting in pending),
-            attached_to=None if frame is None else frame.id,
-        )
-        return RequestItem(block, Intent("input", "frame_prefix"))
-
-    for index, block in enumerate(blocks):
-        if feedback == "frame_prefix" and block.kind == "execution_feedback":
-            pending.append(block)
-            continue
-        if index in older:
-            block = replace(block, text=TEXTS.folded_visual, image=None, folded=True)
-        elif block.kind == "frame" and pending:
-            items.append(prefix(block))
-        if block.kind == "frame":
-            pending = []
-        role = "model" if block.kind == "model_output" else "input"
-        items.append(RequestItem(block, Intent(role, "in_order")))
-    if pending:
-        items.append(prefix(None))
-    return CanonicalRequest(POLICY, "turns", tuple(items), ANSWER, CALL)
+def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message"):
+    """The streaming history view of the blocks: the frames older than the newest ``frames``
+    folded to the turn-based placeholder (decision 23), every reply and feedback kept (decision
+    4.6), and the feedback where the policy's ``feedback`` places it."""
+    return history_view(
+        blocks,
+        policy=replace(POLICY, feedback=feedback),
+        system=SYSTEM,
+        retained_frames=frames,
+        answer=ANSWER,
+        call=CALL,
+    )
 
 
 def test_a_new_connection_replays_the_streaming_view():
