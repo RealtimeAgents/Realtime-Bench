@@ -586,6 +586,79 @@ def test_a_wait_cut_short_by_the_end_reports_the_terminal_condition():
     assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 3)
 
 
+@pytest.mark.parametrize(
+    ("replies", "fault", "reason", "failed_at"),
+    [
+        # The wait from 1 steps to 2; the step to 3, the third advance, fails.
+        (
+            [Reply(action=Action.wait(2.5), output_tokens=256)],
+            {"advance_errors": {3: "renderer crashed"}},
+            "clock_advance_failed",
+            2,
+        ),
+        # "a" is held until 2.5; the wait from 1 is cut there, and the release fails.
+        (
+            [
+                Reply(action=Action.hold_key("a", 2.5), output_tokens=0),
+                Reply(action=Action.wait(3.0), output_tokens=0),
+            ],
+            {"release_errors": {1: "renderer crashed"}},
+            "clock_key_release_failed",
+            2.5,
+        ),
+    ],
+    ids=["advance", "release"],
+)
+def test_a_wait_whose_own_step_fails_is_a_failed_action(replies, fault, reason, failed_at):
+    # The environment lets a wait's time pass inside execute(), which reports a failed step as a
+    # failed action: invalid_run, only the error as the execution record, nothing applied, not
+    # paced, and still reported (sandbox/actions.py GuestEnvironment.execute; runner.py
+    # _land_action).
+    sim = _run(_token(10), *replies, **fault)
+    wait = len(replies) - 1
+    resolved = _record(sim, "ActionResolved", wait)
+    assert (resolved["status"], resolved["terminal_after_action"]) == ("invalid_run", False)
+    assert resolved["environment_tick"] == failed_at
+    assert resolved["execution_result"] == {"error": "renderer crashed"}
+    assert [entry.data["decision"] for entry in sim.entries("ActionApplied")] == list(range(wait))
+    assert [entry.data["decision"] for entry in sim.entries("ClockAdvanced")].count(wait) == 1
+    assert sim.outcomes[wait] == _outcome(
+        wait,
+        "invalid_run",
+        tau=1.0,
+        delay=1.0 if wait == 0 else 0.0,
+        next_tick=failed_at,
+        dropped=0,
+        tokens=replies[-1].output_tokens,
+    )
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", failed_at)
+    assert termination.invalid == Invalidated("environment", reason, "renderer crashed")
+
+
+def test_a_wait_cut_short_by_a_third_failed_read_stays_a_wait():
+    # A failed read is no failed step: the wait stops as at an end it sees, and today's
+    # environment reports it a wait cut short (sandbox/actions.py GuestEnvironment.done). The
+    # check before the wait at 1 and those after its steps to 2 and 3 fail.
+    errors = {check: f"check {check} failed" for check in (3, 4, 5)}
+    sim = _run(_token(10), Reply(action=Action.wait(3.0), output_tokens=256), check_errors=errors)
+    assert _asked(sim) == [0, 1, 1, 2, 3]
+    resolved = _record(sim, "ActionResolved", 0)
+    assert (resolved["status"], resolved["terminal_after_action"]) == ("wait", True)
+    assert resolved["execution_result"] == {
+        "duration_simulated_seconds": 2.0,
+        "requested_duration_simulated_seconds": 3.0,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": True,
+    }
+    assert [entry.data["decision"] for entry in sim.entries("ActionApplied")] == [0]
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", 3)
+    assert termination.invalid == Invalidated(
+        "environment", "terminal_state_check_failed", "check 5 failed"
+    )
+
+
 def test_a_wait_cut_short_by_the_horizon_reports_the_horizon():
     # T = 5, n = 1024: the wait starts at tau = 4 and asks for 4 + 2.5 > T, so it stops at 5 after
     # 1 s (sandbox/actions.py:217-218, 837-857). The check after it still runs; nothing is paced

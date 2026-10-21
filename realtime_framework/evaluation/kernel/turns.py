@@ -127,6 +127,7 @@ class _Decision:
     landing_at: float | None = None
     execute_at: float = 0.0
     wait: tuple[float, float] | None = None  # (start position, requested seconds)
+    failed: str | None = None  # the error of a step of the wait's own clock move
     status: str | None = None
     detail: str = ""
     terminal_after_action: bool = False
@@ -536,6 +537,11 @@ class TurnPolicy:
 
     def _waited(self) -> None:
         d, config = self.decision, self.config
+        if d.failed is not None:
+            # The environment reports a wait whose step failed as a failed action
+            # (sandbox/actions.py GuestEnvironment.execute; runner.py _land_action).
+            d.execution_result = {"error": d.failed}
+            return self._resolve("invalid_run")
         started, duration = d.wait
         elapsed = round(max(0.0, (self._position() - started) / config.env_fps), 9)
         horizon_truncates = self.token and started + duration * config.env_fps > (
@@ -750,8 +756,16 @@ class TurnPolicy:
         if self._then is None:
             return
         if event.error is not None:
-            return self.kernel.invalidate("environment", "clock_advance_failed", event.error)
+            return self._step_failed("clock_advance_failed", event.error)
         self._release(lambda: self._check_end(self._advance))
+
+    def _step_failed(self, reason: str, error: str) -> None:
+        """A step of a token-clock move failed to advance or to release keys: the run is invalid,
+        for the environment's reasons (sandbox/actions.py GuestEnvironment.wait_until_tick,
+        GuestEnvironment._release_clock_keys). A wait whose own step failed is a failed action."""
+        if self.phase is _Phase.WAIT:
+            self.decision.failed = error
+        self.kernel.invalidate("environment", reason, error)
 
     def _release(self, then: Callable) -> None:
         tick = self._tick()
@@ -765,10 +779,10 @@ class TurnPolicy:
 
     def _keys_released(self, event: KeysReleased) -> None:
         if event.error is not None:
-            # The environment's reasons (sandbox/actions.py GuestEnvironment._release_clock_keys,
-            # GuestEnvironment._wall_release_due).
-            reason = "clock_key_release_failed" if self.token else "wall_key_release_failed"
-            return self.kernel.invalidate("environment", reason, event.error)
+            if self.token:
+                return self._step_failed("clock_key_release_failed", event.error)
+            # The environment's reason (sandbox/actions.py GuestEnvironment._wall_release_due).
+            return self.kernel.invalidate("environment", "wall_key_release_failed", event.error)
         # Wall-clock releases come from the shell's own timer and need no answer.
         if self._released is None:
             return
