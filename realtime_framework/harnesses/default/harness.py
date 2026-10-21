@@ -1705,7 +1705,9 @@ class DefaultHarness(VisionAgentBase):
             return self._cancelled_result(self.clock.monotonic() - started), True
         except Exception as exc:
             # Only the failure record() kept as final becomes an invalid decision; anything else
-            # raised on the way (by record() itself, the backoff, the output check) propagates.
+            # raised on the way (by record() itself, the backoff, the output check) propagates,
+            # and the shell ends the run with it as generation_error, the final failure's record
+            # included.
             if exc is not final_error:
                 raise
         else:
