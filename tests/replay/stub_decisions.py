@@ -1,11 +1,11 @@
 """Scripted OpenRouter Decisions endpoint on 127.0.0.1 with an OS-assigned port.
 
 Both Decisions clients post each Choice question attempt to ``{base_url}/decisions``, one after
-another (providers/openai_decisions.py:168; providers/decisions/selection.py:172-188, 321). The test
-loads one decision's script before the decision. Each request takes the next entry: an Answer is
-returned in the smallest body the client accepts (openai_decisions.py:115-130, 188-201), a Failure
-as the error status and body it names. Every request is kept in arrival order, with its path,
-lower-cased headers and raw body.
+another (providers/decisions/protocol.py decide; providers/decisions/selection.py _choose,
+_decide_with_retries). The test loads one decision's script before the decision. Each request
+takes the next entry: an Answer is returned in the smallest body the client accepts
+(providers/decisions/protocol.py decide), a Failure as the error status and body it names.
+Every request is kept in arrival order, with its path, lower-cased headers and raw body.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-QUESTION_KEY = "next_action"  # providers/openai_decisions.py:39
+QUESTION_KEY = "next_action"  # providers/openai_decisions.py QUESTION_KEY
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,8 @@ class Answer:
 
 @dataclass(frozen=True)
 class Failure:
-    """An error response; the client reads ``error.message`` (openai_decisions.py:169-187)."""
+    """An error response; the client reads ``error.message`` (providers/decisions/protocol.py
+    _error)."""
 
     status: int
     message: str
