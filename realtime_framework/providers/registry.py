@@ -355,7 +355,8 @@ _DRIVER_DECLARATIONS = (
     ("model_defaults", dict),
 )
 # Capability flags whose method the harness or runtime calls. The runtime calls
-# request_context_status before each request of an API that declares request_size_estimation.
+# request_context_status before each request of an API that declares request_size_estimation,
+# and of no other: a driver with the method but not the flag would never be estimated.
 _DECLARED_METHODS = {
     "classifies_transport_errors": "classify_transport_error",
     "connection_renewal": "connection_renewal_reason",
@@ -419,6 +420,11 @@ def _check_driver(target: str, driver: type) -> None:
     for flag, method in _DECLARED_METHODS.items():
         if getattr(driver.capabilities, flag) and not callable(getattr(driver, method, None)):
             raise ValueError(f"{target!r} declares {flag} but has no {method}()")
+    estimates = driver.capabilities.request_size_estimation
+    if callable(getattr(driver, "request_context_status", None)) and not estimates:
+        raise ValueError(
+            f"{target!r} has request_context_status() but does not declare request_size_estimation"
+        )
 
 
 # Catalog

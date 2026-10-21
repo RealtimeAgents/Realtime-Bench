@@ -144,7 +144,9 @@ driver as a [model API](#add-a-model-api).
    `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
    window; without a declared window the method returns
-   `{"pressure": False, "counter": "unconfigured"}`.
+   `{"pressure": False, "counter": "unconfigured"}`. The flag, not the method, decides this: a
+   driver that implements `request_context_status` without declaring `request_size_estimation`
+   is refused when its YAML is loaded.
 2. Install the package into the environment that runs the benchmark, for example
    `uv pip install -e /path/to/your-driver`. `PYTHONPATH` is not enough: each Harbor trial runs
    with `PYTHONPATH` set to this repository.
