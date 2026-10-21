@@ -238,6 +238,21 @@ def test_a_done_reply_lands_as_a_wait_and_its_record_says_why():
     assert "ActionProposed" not in episode.trace.events()
 
 
+def test_a_done_reply_over_the_cap_still_records_why_it_was_not_a_done():
+    """Its 100 tokens are one second at B = 100, over the 0.5 s cap: the kernel places no action
+    and so names no protocol failure (kernel/turns.py _accept). The runner rewrites the protocol
+    of every DONE it was given (runner.py _decide), and the record says so here too."""
+    reply = Reply(0.0, Action(ActionType.DONE), 100, fields={"action_protocol": {"source": "json"}})
+    episode = run("token", 2.0, [reply, reply], tokens_per_frame=100, per_move_cap_s=0.5)
+    assert episode.statuses()[0] == "skipped_timeout"
+    assert episode.agent.outcomes[0].protocol_failure is None
+    assert episode.env.lifecycle[0]["action_protocol"] == {
+        "source": "invalid_action_fallback_wait",
+        "valid_action": False,
+        "protocol_failure": "unsupported_terminal_action",
+    }
+
+
 def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_out_call():
     """The legacy wall cap is a timer: at 1 s the kernel gives the generation up, the agent is
     asked to abort it and the decision is reported skipped. Its records are the runner's of the
