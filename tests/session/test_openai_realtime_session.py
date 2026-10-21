@@ -666,6 +666,22 @@ def test_a_new_connection_replays_the_streaming_view():
     assert new_core().replay_streaming(None) == []
 
 
+def test_separate_feedback_is_the_same_item_in_native_streaming_as_turn_based():
+    """Under separate_message an action's feedback is a user item of its own right after the
+    reply it reports, with the feedback's text, whether a turn-based replay or a native-streaming
+    one writes the session: both hold the same items."""
+    turn_based = new_core().replay(separate_view([fed(1, "r1", "fb1"), turn(2)]))
+    streaming = new_core().replay_streaming(streaming_view(stream("FRBF"), frames=5))
+    assert [(op.role, op.text) for op in turn_based] == [
+        ("user", "frame 1"),
+        ("assistant", "r1"),
+        ("user", "fb1"),
+        ("user", "frame 2"),
+    ]
+    items = [[(op.role, op.text, op.image) for op in ops] for ops in (turn_based, streaming)]
+    assert items[0] == items[1]
+
+
 def streamed(blocks, frames: int = 2, feedback: str = "separate_message") -> RealtimeSessionCore:
     """A core that replayed the streaming view of these blocks, every item confirmed."""
     core = new_core()

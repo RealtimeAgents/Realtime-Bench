@@ -457,6 +457,34 @@ def test_seed_replays_each_feedback_after_its_turn_s_tool_rounds():
     assert "d0.feedback" in connect.seeded
 
 
+def test_separate_feedback_is_the_same_content_in_native_streaming_as_turn_based():
+    """Under separate_message an action's feedback is a user text Content of its own after the
+    reply it reports and before the next frame, under the same block id, whether a turn-based
+    seed (after the turn's tool rounds) or a native-streaming one (after the reply's text)
+    replays it."""
+    turn_based = plan(session_core(), separate_view([fed(1, "F1"), turn(2)]))
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "F1", None),
+        pushed(2),
+    ]
+    streaming = plan(
+        session_core(streaming=True),
+        streaming_view(blocks, frames=5, placement="separate_message"),
+    )
+    replayed = [content for batch in turn_based.seed for content in batch]
+    (streamed,) = streaming.seed
+    # Turn-based: frame 1, its call and the receipt, then the feedback; streaming: frame 1 and
+    # the reply's text, then the feedback.
+    assert [content.role for content in replayed[:3]] == ["user", "model", "user"]
+    assert streamed[1] == Content("model", (Part(text="click P1"),))
+    assert replayed[0] == streamed[0] == frame_content(1)
+    assert replayed[3] == streamed[2] == feedback_content("F1")
+    assert replayed[4] == streamed[3] == frame_content(2)
+    assert "d1.feedback" in turn_based.seeded and "d1.feedback" in streaming.seeded
+
+
 def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
     core = session_core()
     connected(core)
