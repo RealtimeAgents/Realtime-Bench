@@ -899,10 +899,15 @@ class GuestEnvironment:
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
         unexpected parameters, ...) and answers 400. That is the model's action being
-        rejected, not an environment failure, so it must not invalidate the run.
+        rejected, not an environment failure, so it must not invalidate the run. A refusal that
+        arrives after the action's budget ran out is the guest's too: the BudgetExceeded keeps it
+        as its cause.
         """
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        return isinstance(status, int) and 400 <= status < 500
+        for error in (exc, exc.__cause__):
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            if isinstance(status, int) and 400 <= status < 500:
+                return True
+        return False
 
     def _execution_failed(self, exc):
         self.failed += 1
