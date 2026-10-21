@@ -3,7 +3,9 @@
 An action is interpreted against one frame's entry: its SoM marks resolve the action's element
 references and its geometry maps the action's image coordinates to the desktop. The entry stays
 when the provider context folds or drops the frame. A streaming action names the frame it is based
-on; a turn-based action is interpreted against the frame of its own generation.
+on; a turn-based action is interpreted against the frame of its own generation. A captured frame
+dropped before it is prepared takes no number, so the numbers the model sees have no gaps; the
+streaming policy counts the drops (evaluation/kernel/streaming.py).
 """
 
 from __future__ import annotations
@@ -28,8 +30,7 @@ class FrameRecord:
     captured_at: float
     geometry: dict  # FrameGeometry of the image the model is sent
     marks: dict | None  # the SoM mark map; None when the frame had no inspection
-    # "prepared" until its request or session push went out, then "sent"; "dropped" when
-    # streaming gave it up unsent, a newer frame taking its place.
+    # "prepared" until its request or session push went out, then "sent".
     send_status: str = "prepared"
     sent_unix_s: float | None = None
     # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
@@ -45,7 +46,6 @@ class FrameTable:
 
     def __init__(self) -> None:
         self._frames: dict[int, FrameRecord] = {}
-        self._dropped = 0
         self._lock = threading.Lock()
 
     def register(
@@ -61,16 +61,6 @@ class FrameTable:
             record = self._frames[frame]
             record.send_status = "sent"
             record.sent_unix_s = sent_unix_s
-
-    def record_dropped(self, frame: int) -> None:
-        with self._lock:
-            self._frames[frame].send_status = "dropped"
-            self._dropped += 1
-
-    def dropped_count(self) -> int:
-        """The prepared frames given up unsent."""
-        with self._lock:
-            return self._dropped
 
     def record_acked(self, frame: int, acked_unix_s: float) -> None:
         with self._lock:
@@ -100,8 +90,8 @@ class FrameTable:
 
     def age(self, record: FrameRecord, at_unix_s: float) -> dict:
         """How old a frame is when an action based on it arrives: the frames sent after it by
-        then (not those dropped or still unsent), and the seconds since its capture. Streaming
-        runs on the wall clock only, so its frames' capture times are wall time as well."""
+        then (not those still unsent), and the seconds since its capture. Streaming runs on the
+        wall clock only, so its frames' capture times are wall time as well."""
         with self._lock:
             newer = (self._frames[n] for n in range(record.frame + 1, len(self._frames) + 1))
             return {
