@@ -484,6 +484,66 @@ def test_history_overflow_two_blocks(tmp_path):
     _settle("history_overflow_two_blocks", header, records, tmp_path)
 
 
+# (window, reserve) under which decision 24 of the terms script, with every turn archived, fits
+# only once more than one block of its 24 archived actions is left out: it estimates 34643 with
+# ten out, 33157 with twenty and 32470 with all 24. The first fits after two blocks; the second
+# only after a third, short block of four.
+OMISSION_BLOCKS = {
+    "two": ((36000, 2000), [10, 20]),
+    "short_last": ((34800, 2000), [10, 20, 24]),
+}
+
+
+@pytest.mark.parametrize("blocks", list(OMISSION_BLOCKS))
+def test_history_overflow_omission_blocks(blocks, tmp_path):
+    """One block of archived actions left out is not enough, but all of them would be: the count
+    with every action left out lets the runtime go on, a block at a time, until the request
+    fits, and the decision is sent. The step records the actions this request left out."""
+    window, after = OMISSION_BLOCKS[blocks]
+    _, records = _play_terms(script.TERMS_OMISSION, window, tmp_path)
+    k = script.TERMS_ARCHIVE_DECISION
+    assert not any(r["result"].get("invalid_reason") for r in records)
+    omissions = _pressure_archives(tmp_path, "ledger_omission")
+    assert [(o["scope"]["decision"], o["ledger"]["omitted_actions_after"]) for o in omissions] == [
+        (k, n) for n in after
+    ]
+    assert _runtime(records[k])["request_context_omitted_actions"] == after[-1]
+    assert not _runtime(records[k])["request_context"]["pressure"]
+    for record in records[k:]:
+        assert _runtime(record)["history_omitted_actions_total"] == after[-1]
+        ledger = _bodies(record)[0]["state"]["history"][1]["content"].split("\n")
+        assert ledger[1] == LEDGER_OMISSION.format(count=after[-1])
+
+
+def test_history_overflow_exhausted_in_one_block(tmp_path, monkeypatch):
+    """Decision 5 sees the terms with only five actions archived: one block leaves them all out,
+    so no count with every action left out is needed before the request is given up. It counts
+    its request three times: as it came, after its one archived block and after its one omitted
+    block."""
+    counts = []
+    sized = JevDecisionsClient.request_context_status
+
+    async def counted(self, request):
+        counts.append(request.canonical.items[-1].block.observation_id)
+        return await sized(self, request)
+
+    monkeypatch.setattr(JevDecisionsClient, "request_context_status", counted)
+    _, records = _play(
+        "jev_decisions",
+        script.TERMS_EXHAUSTED_EARLY,
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        scene=script.terms_scene(len(script.TERMS_EXHAUSTED_EARLY)),
+        update=dict(zip(("context_window_tokens", "context_reserve_tokens"), (32000, 4000))),
+    )
+    *_, failed = records
+    assert failed["result"]["invalid_reason"] == "context_exceeded_before_request"
+    omissions = _pressure_archives(tmp_path, "ledger_omission")
+    assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [5]
+    assert counts.count(failed["observation"]["observation_id"]) == 3
+
+
 def test_history_overflow_omission_stays(tmp_path):
     """Actions left out of the ledger stay out for the rest of the episode, as archived turns
     stay archived, so the history the model sees stays stable: after decision 24 leaves ten out
