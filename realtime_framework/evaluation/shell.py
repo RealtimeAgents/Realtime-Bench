@@ -276,6 +276,32 @@ def _invalid_record(invalid: Invalidated) -> dict:
     return record
 
 
+def _escaped_termination(
+    kernel: Kernel,
+    semantic: float,
+    ops: float,
+    snapshot_at: float | None,
+    failure: str,
+    latched: dict | None,
+) -> Termination:
+    """How an episode ended whose kernel, or its shell's reading of the clocks, raised (N11), as
+    a shell tells it without the kernel. The run is invalid for the first failure: the kernel's
+    or the environment's when one was latched, run_exception otherwise. It ended at the first end
+    signal: the kernel's when it had one, else the reading the failure came at."""
+    ending = kernel.ending
+    invalid = kernel.invalid or (
+        _invalidated(latched)
+        if latched is not None
+        # The end of a traceback names the exception (runner.py _invalidate).
+        else Invalidated("runner", "run_exception", failure[-2000:])
+    )
+    if ending is None:
+        return Termination("invalid_run", "invalid", semantic, snapshot_at, ops, None, invalid)
+    return Termination(
+        "invalid_run", ending.cause, ending.at, snapshot_at, ending.ops, None, invalid
+    )
+
+
 class _Shell:
     def __init__(self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, inputs_log):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
@@ -299,6 +325,7 @@ class _Shell:
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
+        self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -314,11 +341,14 @@ class _Shell:
         env.kernel_counts_reads = True
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
-        if self._inputs_log is None:
-            self._loop()
-        else:
-            with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
+        try:
+            if self._inputs_log is None:
                 self._loop()
+            else:
+                with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
+                    self._loop()
+        except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
+            self._wrap_up(traceback.format_exc())
         return self.timeline
 
     def _loop(self) -> None:
@@ -457,12 +487,7 @@ class _Shell:
             case FreezeSnapshot():
                 self._freeze()
             case ReleaseInputs():
-                try:
-                    self.env.release_inputs()
-                except Exception:  # noqa: BLE001 - the snapshot is frozen; cleanup is best effort
-                    self.log(
-                        "[cleanup] failed to release stateful inputs:\n" + traceback.format_exc()
-                    )
+                self._release_inputs()
             case Finish(termination=termination):
                 self._finish(termination)
 
@@ -806,6 +831,13 @@ class _Shell:
     # ---- the end ------------------------------------------------------------------------------
 
     def _freeze(self) -> None:
+        error = self._read_snapshot()
+        semantic, ops = self._read()  # when the read returned
+        self._frozen_at = semantic
+        self.post(SnapshotFrozen(semantic, semantic if ops is None else ops, error))
+
+    def _read_snapshot(self) -> str | None:
+        """Read the scorer's snapshot; the error of a read that failed."""
         env = self.env
         # The presentation boundary precedes the scorer's snapshot.
         env._active_end_unix_s = self.clocks.operational.time()
@@ -829,8 +861,13 @@ class _Shell:
                 env._termination_snapshot_captured = True
                 env._termination_snapshot_error = None
                 self._snapshot_read = True
-        semantic, ops = self._read()  # when the read returned
-        self.post(SnapshotFrozen(semantic, semantic if ops is None else ops, error))
+        return error
+
+    def _release_inputs(self) -> None:
+        try:
+            self.env.release_inputs()
+        except Exception:  # noqa: BLE001 - the snapshot is frozen; cleanup is best effort
+            self.log("[cleanup] failed to release stateful inputs:\n" + traceback.format_exc())
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
@@ -861,6 +898,49 @@ class _Shell:
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
             env._invalid_run = _invalid_record(invalid)
+
+    def _wrap_up(self, failure: str) -> None:
+        """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
+        longer holds, so the shell wraps the episode up without it, as the runner wrapped up a
+        loop that raised (runner.py run_stream, _finalize): the call running is interrupted, the
+        snapshot frozen unless it was, the inputs released and the termination record written.
+        A failure on the way is only logged."""
+        self._escaped(failure)
+        env = self.env
+        try:
+            for generation in list(self._generations):
+                self._abort(generation)
+            semantic, ops = self._now  # the reading the failure came at, or the last good one
+            if self._frozen_at is None:
+                self._read_snapshot()
+                # The token clock's world stands still meanwhile; its reading may be what raised.
+                self._frozen_at = semantic if self.token else self._read()[0]
+            self._release_inputs()
+            latched = getattr(env, "_invalid_run", None)
+            first = self.kernel.invalid is None and latched is None
+            termination = _escaped_termination(
+                self.kernel,
+                semantic,
+                semantic if ops is None else ops,
+                self._frozen_at,
+                failure,
+                latched,
+            )
+            self._terminate(termination)
+            if first:  # the run_exception is the first failure: recorded as the runner does
+                record = _invalid_record(termination.invalid)
+                self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
+                if self.trace is not None and not self._trace_failed:
+                    self.trace.emit(
+                        TraceEvent.RUN_INVALIDATED,
+                        record,
+                        kernel_seq=None,
+                        semantic=semantic,
+                        ops=ops,
+                    )
+        except Exception:  # noqa: BLE001 - the episode is over either way
+            self.log("[default] wrapping up the episode failed:\n" + traceback.format_exc())
+        self._finished = True
 
     # ---- the episode trace --------------------------------------------------------------------
 

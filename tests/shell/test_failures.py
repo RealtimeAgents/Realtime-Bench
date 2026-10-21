@@ -15,6 +15,8 @@ import threading
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.evaluation.kernel.core import Kernel
+from realtime_framework.evaluation.kernel.turns import TurnPolicy
 
 from .world import CLICK, Agent, Environment, Reply, World, run
 
@@ -228,6 +230,137 @@ def test_a_result_settled_past_its_bound_still_invalidates_the_run(
     episode = run("wall", 3.0, replies, agent_type=agent_type, **config)
     assert episode.invalid["reason"] == reason
     assert episode.env._stop_reason == "invalid_run"
+
+
+def _breaks(monkeypatch, owner, name: str, when) -> None:
+    """``owner.name`` raises from the first call ``when(self, *args)`` holds for on."""
+    original = getattr(owner, name)
+
+    def broken(self, *args, **kwargs):
+        if when(self, *args):
+            raise RuntimeError(f"{name} broke")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(owner, name, broken)
+
+
+def _wrapped_up(episode, at: float, snapshot_at: float | None = None) -> None:
+    """The shell wrapped the episode up without the kernel: the snapshot frozen once and the
+    inputs released after it, the run invalid and its termination record written."""
+    env = episode.env
+    calls = [call for call, _, _ in env.calls if call != "check_end"]
+    assert calls.count("snapshot") == 1 and calls[-2:] == ["snapshot", "release_inputs"]
+    assert env._termination_snapshot_captured is True
+    snapshot_at = at if snapshot_at is None else snapshot_at
+    assert env._termination == {
+        "stop_reason": "invalid_run",
+        "end_s": at,
+        "snapshot_s": snapshot_at,
+        "snapshot_delay_s": round(snapshot_at - at, 9),
+    }
+    assert env._stop_reason == "invalid_run"
+    assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
+
+
+def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
+    """N11: the kernel raises at the end check at 2 s, during the second call, which never
+    answers. Nothing can be asked of the kernel any more: the shell interrupts the call, freezes
+    the snapshot, releases the inputs and writes the termination record itself, as the runner
+    wrapped up a loop that raised (runner.py run_stream). The run is invalid: run_exception,
+    its traceback the summary's error, recorded as the runner records it."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 2.0)
+    episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])
+    _wrapped_up(episode, 2.0)
+    assert episode.statuses() == ["applied"]
+    assert ("abort", 2) in episode.agent.calls
+    invalid = episode.invalid
+    assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
+    assert "RuntimeError: step broke" in invalid["detail"]
+    assert "RuntimeError: step broke" in episode.env._loop_error
+    assert any(line.startswith("[invalid-run] runner:run_exception") for line in episode.logs)
+    (written,) = episode.trace.payloads("RunInvalidated")
+    assert written["reason"] == "run_exception"
+
+
+def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
+    """The policy raises as it takes the second result, back at 1.5 s, inside the kernel's
+    step: the same as the kernel raising."""
+    _breaks(monkeypatch, TurnPolicy, "_accept", lambda policy, *_: policy.decisions == 1)
+    episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)])
+    _wrapped_up(episode, 1.5)
+    assert episode.invalid["reason"] == "run_exception"
+    assert "RuntimeError: _accept broke" in episode.env._loop_error
+
+
+class _BrokenTicks(Environment):
+    """The environment's tick reading raises from tick 2 on; its snapshot does not read it."""
+
+    def tick_index(self) -> float:
+        if self.semantic() >= 2:
+            raise RuntimeError("tick_index broke")
+        return super().tick_index()
+
+    def _snapshot(self) -> dict:
+        self.log("snapshot")
+        return {"tick": self.semantic()}
+
+
+def test_a_failed_clock_reading_leaves_the_episode_wrapped_up_by_the_shell():
+    """The token clock comes to tick 2 after the second action, and the shell's next reading of
+    it raises: the episode ends at the last reading the shell took, tick 1."""
+    replies = [Reply(0.0, CLICK, output_tokens=100)] * 3
+    episode = run("token", 5.0, replies, tokens_per_frame=100, env_type=_BrokenTicks)
+    _wrapped_up(episode, 1.0)
+    assert episode.invalid["reason"] == "run_exception"
+    assert "RuntimeError: tick_index broke" in episode.env._loop_error
+
+
+def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monkeypatch):
+    """The deadline ended the episode at 3 s and the snapshot, frozen then, took until 3.5 s;
+    the kernel raises as it takes the snapshot's answer. The end stays the deadline, the first
+    end signal (decision 32), and the snapshot is not taken again."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, *_: kernel.ending is not None)
+    episode = run("wall", 3.0, [Reply(hang=True)], World(snapshot_s=0.5))
+    _wrapped_up(episode, 3.0, snapshot_at=3.5)
+    assert episode.invalid["reason"] == "run_exception"
+
+
+def test_a_kernel_that_raises_after_an_invalidation_keeps_the_first_failure(monkeypatch):
+    """The generation fails at 0.5 s, and the kernel raises at its next step: the run stays
+    invalid for the first failure, as under the runner (runner.py _invalidate)."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, *_: kernel.invalid is not None)
+    episode = run("wall", 3.0, [Reply(0.5, raises="provider down")])
+    _wrapped_up(episode, 0.5)
+    assert episode.invalid["reason"] == "generation_error"
+    assert "RuntimeError: step broke" in episode.env._loop_error
+    assert [p["reason"] for p in episode.trace.payloads("RunInvalidated")] == ["generation_error"]
+
+
+def test_a_kernel_that_raises_before_taking_the_environments_failure_keeps_it(monkeypatch):
+    """The key held from 0.5 s fails to come up at 1.25 s, and the kernel raises at the step that
+    would take the environment's report of it: that failure came first, and the run is invalid
+    for it, its record the environment's."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 1.25)
+    world = World(release_failures={0})
+    episode = run("wall", 3.0, [Reply(0.5, Action.hold_key("a", 0.75)), Reply(hang=True)], world)
+    _wrapped_up(episode, 1.25)
+    assert episode.invalid == {
+        "category": "environment",
+        "reason": "wall_key_release_failed",
+        "detail": "keyup failed",
+    }
+    assert episode.trace.payloads("RunInvalidated") == []
+
+
+def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
+    """The kernel raises, and the environment refuses the termination record: run_episode
+    still returns, and the failure is logged."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 1.0)
+    episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], env_type=_UnfinishableEnvironment)
+    assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
+    assert any(
+        line.startswith("[default] wrapping up the episode failed:") for line in episode.logs
+    )
 
 
 class _Cancelled(BaseException):
