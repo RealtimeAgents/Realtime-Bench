@@ -32,7 +32,6 @@ from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agen
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.capture import REDACTED, header_kept
-from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
@@ -521,10 +520,16 @@ def test_decisions_context_limit_splits_the_candidates(
     assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 4
 
 
-def test_jev_estimates_the_digest_it_sends(monkeypatch):
+def test_jev_estimates_the_history_it_sends(tmp_path, monkeypatch):
     """The runtime archives against JEV's estimate (harnesses/default/context.py _run_turn): the
-    digest every question sends, not the chat rendering Luna's estimate counts."""
-    monkeypatch.setenv("REPLAY_TRACE_KEY", KEY)
+    UTF-8 bytes of the history each question sends, not of the chat rendering Luna's estimate
+    counts."""
+    _, _, stub = _decide(
+        JevDecisionsClient, "typesafe/jev-1.13", "typesafe", [], tmp_path, monkeypatch
+    )
+    (sent,) = stub.requests
+    history = json.loads(sent.body)["state"]["history"]
+    size = len(json.dumps(history, ensure_ascii=False).encode())
     config = ModelConfig(
         adapter_type="jev_decisions",
         model_name="typesafe/jev-1.13",
@@ -532,8 +537,6 @@ def test_jev_estimates_the_digest_it_sends(monkeypatch):
         upstream_provider="typesafe",
     )
     request = GenerationRequest("turn-0", None, None, "wall", canonical=_request(config))
-    digest = render_digest(request.canonical)
-    size = len(json.dumps(digest, ensure_ascii=False).encode())
 
     def status(window, reserve):
         client = JevDecisionsClient(
