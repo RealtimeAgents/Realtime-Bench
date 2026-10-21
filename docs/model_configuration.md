@@ -100,8 +100,9 @@ A model that needs a new wire protocol gets a driver:
    abort and mark its session, and records each of its waits before it starts. Inherit
    `SessionLifecycle` (`realtime_framework/providers/session_lifecycle.py`) for these: it
    implements `connect`, `sync_history`, `close` and those three over your `_connect`,
-   `_sync_history`, `_close_current` and `interrupt`, and `_wait` records a wait and takes it.
-   Build HTTP clients
+   `_sync_history`, `_close_current` and `interrupt`, records into the trace `bind_trace` gave
+   you, kept as `self._trace`, and `_wait` records a wait and takes it. `ensure_ready(seed,
+   history, record)` hands `record` what it did before it returns or raises. Build HTTP clients
    with the hooks in `realtime_framework/providers/capture.py`, so every request and response is
    recorded.
 2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
