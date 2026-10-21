@@ -41,6 +41,9 @@ from tests.replay import baseline
 
 DIRECTIONS = ("open", "c2s", "s2c", "close")
 _PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
+# A timed record is due once the clock reads its time to within this: a wait until it ends at
+# ``now + (at - now)`` on the clock, which can round one ulp short of ``at``.
+_DUE_SLACK_S = 1e-9
 
 
 def write(path: Path, records: list[dict]) -> None:
@@ -162,7 +165,7 @@ class Cursor:
             if head is None or not _server_side(head[1]):
                 break
             record = head[1]
-            if record["at"] is not None and record["at"] > now:
+            if record["at"] is not None and record["at"] > now + _DUE_SLACK_S:
                 break
             self._pending[conn].popleft()
             if record["dir"] == "s2c":
