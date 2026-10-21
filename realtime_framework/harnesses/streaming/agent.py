@@ -2,7 +2,7 @@
 StreamingKernelAgent) for a live session that frames go into as they are captured, and whose
 replies hand their actions over as they come off the wire (phase2.md, native streaming).
 
-The agent keeps the content blocks the session should hold, in the order it accepted them, and
+The agent keeps the content blocks the session should hold, in the order they came to it, and
 gives every push and connection operation the view they make (history.py), so that a session
 rebuilt from the view holds what the live one did. Every driver operation runs on the agent's one
 execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py). Each
@@ -13,7 +13,8 @@ it is renewed, as Gemini Live's after a goAway, waits for that reply instead.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and records
 it as sent once the driver put it into the session. A frame whose push failed keeps its number and
-stays out of the view (frames.py).
+stays out of the view (frames.py). As a turn-based history does, the agent holds a screenshot only
+while the view keeps it, and a frame only while a reply may start on it or is on it.
 
 A reply starts on the view. Each function call is parsed as its message is read, against the frame
 it names, and posted to the kernel with the time its message came off the wire, in semantic
