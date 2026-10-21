@@ -187,6 +187,11 @@ class ModelConfig(BaseModel):
     # The context-policy preset the model takes in place of its API row's (one of
     # entity/context_policy.py MODEL_PRESETS), from its model YAML's context_preset.
     context_preset: str | None = None
+    # Native streaming only: the model YAML's streaming settings, which replace the same keys of
+    # its driver's streaming_settings. Left out of every dump of the model configuration: only a
+    # streaming run's configuration records them, merged, as its streaming settings
+    # (evaluation/config.py effective_run_config).
+    streaming: dict = Field(default_factory=dict, exclude=True)
     # OpenRouter's concrete upstream provider slug. When set, the transport restricts routing to
     # this provider, disables fallbacks, and requires support for every requested parameter.
     # Keeping it in ModelConfig makes the route part of the effective runtime-config hash.

@@ -326,6 +326,42 @@ def test_a_streaming_run_records_the_live_api_settings(streaming_gemini, monkeyp
         assert "streaming" not in run_config(key, "turn_based")
 
 
+def test_a_model_yaml_sets_the_streaming_settings(
+    streaming_gemini, monkeypatch, tmp_path
+):
+    """A model YAML's streaming settings replace the driver's they name. A streaming run records
+    them; a turn-based run's configuration, its model configuration included, is the one without
+    them."""
+    from realtime_framework.evaluation.config import effective_run_config
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver
+
+    def run_config(key, interaction_mode):
+        return effective_run_config(
+            model_config=catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed"),
+            fps=1.0, max_minutes=5.0, protocol="wall-clock", think_budget_s=None,
+            per_move_cap_s=None, mode="default", clock_mode="wall",
+            interaction_mode=interaction_mode,
+        )
+
+    turn_based = run_config(GEMINI, "turn_based")
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / f"{GEMINI}.yaml").write_text(
+        (catalog.MODELS_DIR / f"{GEMINI}.yaml").read_text()
+        + "streaming:\n  compression_trigger_tokens: 100000\n"
+    )
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+    catalog._catalog_entries.cache_clear()
+    try:
+        assert run_config(GEMINI, "streaming")["streaming"] == {
+            **GeminiLiveDriver.streaming_settings,
+            "compression_trigger_tokens": 100_000,
+        }
+        assert run_config(GEMINI, "turn_based") == turn_based
+    finally:
+        catalog._catalog_entries.cache_clear()
+
+
 def test_a_leaderboard_submission_is_turn_based(tmp_path):
     """rtbench upload's check of three jobs (evaluation/submission.py check_runs); each one's
     trial has no report, which counts as a failed task. Streaming results go to a separate

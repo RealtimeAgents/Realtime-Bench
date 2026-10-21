@@ -98,6 +98,29 @@ Whether either takes effect is not recorded on its own: it follows from the driv
 harness fingerprint covers (an external driver's identity, for an external driver), and from the
 model configuration, which the run hash covers.
 
+### Streaming settings
+
+`streaming` (top level, optional) sets what a live API keeps of a native-streaming session
+(`--ak interaction_mode=streaming`): `retained_frames` for `openai_realtime`, the newest frames
+that keep their screenshots, and `compression_trigger_tokens` and `compression_target_tokens` for
+`gemini_live`, the context size at which the server compresses the session and the size it
+compresses it to, which must be smaller. Each is a positive integer, and a key left out keeps the
+API's default (`streaming_settings` of its driver):
+
+```yaml
+endpoint:
+  api: openai_realtime
+  model: gpt-realtime-2
+  api_key_env: OPENAI_API_KEY
+reasoning_effort: low
+streaming:
+  retained_frames: 10
+```
+
+Only a streaming run uses and records them: its configuration lists every setting with the value
+it ran with, and a turn-based run's configuration has none. To compare values, save each as its
+own preset, so the runs keep apart by model name too.
+
 ## Add a model API
 
 A model that needs a new wire protocol gets a driver:

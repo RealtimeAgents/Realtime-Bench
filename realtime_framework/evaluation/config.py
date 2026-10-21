@@ -654,6 +654,7 @@ def effective_run_config(
     interaction_mode: str = "turn_based",
 ) -> dict:
     """Capture non-secret effective settings that materially change a run."""
+    streaming = getattr(model_config, "streaming", {})  # never in the dump (ModelConfig.streaming)
     if hasattr(model_config, "model_dump"):
         model_config = model_config.model_dump()
     if clock_mode == "wall":
@@ -772,8 +773,9 @@ def effective_run_config(
     if is_external_driver(adapter_type):
         config["external_driver"] = external_driver_identity(adapter_type)
     if interaction_mode == "streaming":
-        # validate_model_interaction admits only a live API that declares streaming.
-        config["streaming"] = dict(driver.streaming_settings)
+        # validate_model_interaction admits only a live API that declares streaming. The model
+        # YAML's settings replace those of its driver's they name.
+        config["streaming"] = {**driver.streaming_settings, **streaming}
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:
