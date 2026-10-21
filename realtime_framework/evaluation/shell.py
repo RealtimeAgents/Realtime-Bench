@@ -22,8 +22,9 @@ since the kernel started; it must be passed, or the kernel would time its watchd
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
 ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, their
 payload completed with the fields the runner writes today. Of the echoes of the events it handled,
-FrameCaptured is written as ObservationCaptured, GenerationFinished as OutputChunkReceived and
-InferenceCompleted, and an agent's AgentRecord under its own kind with the data its trace sink gave.
+FrameCaptured is written as ObservationCaptured, GenerationFinished of a result the shell settled
+as OutputChunkReceived and InferenceCompleted, and an agent's AgentRecord under its own kind with
+the data its trace sink gave.
 Every other record (TimerSet, EpisodeEnded, Termination and the other echoes, SnapshotFrozen's too)
 is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the one SnapshotFrozen in the
 trace is the snapshot main() writes, where reporting ends the active interval. Every record carries
@@ -225,7 +226,10 @@ class _Generation:
     usage_before: dict | None
     started_at: float  # operational time when it started
     done: threading.Event  # set once the worker has handed its result back
-    result: dict | None = None  # settled on the shell's thread before the kernel gets it
+    result: dict | None = None  # as the worker handed it back
+    # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
+    # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
+    inference: tuple[list[dict], dict] | None = None
 
 
 @dataclass
@@ -235,7 +239,8 @@ class _Decision:
     index: int
     observation: Observation | None = None
     generation: _Generation | None = None
-    accepted: dict | None = None  # the settled result the kernel accepted
+    # Its settled result: the one the kernel accepted, or the call it gave up on at the cap.
+    result: dict | None = None
     executed_at: float | None = None  # operational time right before its Execute
     coordinate_trace: Any = None
     resolved: dict | None = None  # its ActionResolved payload
@@ -398,7 +403,7 @@ class _Shell:
                 self._abort(generation)
             case AcceptResult(generation=generation):
                 self.agent.accept(generation)
-                self._decision.accepted = self._generations[generation].result
+                self._decision.result = self._generations[generation].result
             case DiscardResult(generation=generation):
                 self.agent.discard(generation)
             case Execute():
@@ -548,20 +553,26 @@ class _Shell:
 
     def _settle_returned(self) -> None:
         """Settle the results the workers handed back, on this thread, and hand them to the
-        kernel: the next step files them."""
+        kernel: the next step files them. The late result of a generation the kernel gave up on
+        goes back as it came, to be discarded: the runner never handled one either."""
         while self._returned:
             held = self._returned.popleft()
+            if self.kernel.generation != held.generation:
+                self.post(GenerationFinished(held.generation, GenerationResult()))
+                continue
             try:
-                result = self._settle(held)
+                result, held.inference = self._settle(held, held.result)
             except Exception:  # noqa: BLE001 - as an exception that escaped the legacy loop
                 self._raised(traceback.format_exc())
             else:
                 self.post(GenerationFinished(held.generation, result))
 
-    def _settle(self, held: _Generation) -> GenerationResult:
+    def _settle(self, held: _Generation, r: dict) -> tuple[GenerationResult, tuple]:
         """The result's annotations, usage, token accounting, cap audit and trajectory row, in
-        the runner's order (runner.py ``_decide``), and what the kernel needs of it."""
-        r, budget, clock_mode, agent = held.result, held.budget, self.config.clock_mode, self.agent
+        the runner's order (runner.py ``_decide``); what the kernel needs of it, and its
+        OutputChunkReceived and InferenceCompleted payloads as they were before the trajectory
+        row."""
+        budget, clock_mode, agent = held.budget, self.config.clock_mode, self.agent
         episode_records.annotate_result(
             r,
             decision=held.decision,
@@ -576,19 +587,38 @@ class _Shell:
         if held.usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(held.usage_before, usage_after)
         episode_records.account_tokens(r, held.remaining, self.env)
+        observation_id = r["observation_id"]
+        inference = (
+            episode_records.output_chunks(r, held.decision, observation_id),
+            episode_records.inference_completed(r, held.decision, observation_id),
+        )
         episode_records.audit_output_caps(agent, r, budget)
         failure = episode_records.finalize_decision_audit(agent, r)
         if failure is not None:
             self.log(f"[default] trajectory audit write failed:\n{failure}")
         # The kernel clamps the count to the allowance itself (kernel/turns.py _accept).
         unclamped = r["unclamped_clock_output_tokens"]
-        return GenerationResult(
+        result = GenerationResult(
             action=r.get("action"),
             output_tokens=r["clock_output_tokens"] if unclamped is None else unclamped,
             latency=r["latency"],
             protocol_failure=(r.get("action_protocol") or {}).get("protocol_failure"),
             invalid=episode_records.result_invalid(r, agent, clock_mode),
         )
+        return result, inference
+
+    def _timed_out(self, entry: Entry) -> None:
+        """The kernel reports a move over the per-move cap as skipped (kernel/turns.py
+        ``on_timer``); the other generations it gives up on end the episode and their decision
+        goes unreported. The move's records are the runner's of a call it gave up on."""
+        held = self._generations[entry.data["generation"]]
+        latency = round(self.clocks.operational.time() - held.started_at, 2)
+        r = episode_records.timed_out_result(latency, entry.data["reason"])
+        _, (chunks, completed) = self._settle(held, r)
+        self._decision.result = r
+        for chunk in chunks:
+            self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
+        self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
 
     def _abort(self, generation: int) -> None:
         held = self._generations.get(generation)  # None when its StartGeneration raised
@@ -654,21 +684,7 @@ class _Shell:
 
     def _commit(self, outcome: Outcome) -> None:
         env, decision, config = self.env, self._decision, self.config
-        r = decision.accepted
-        if r is None:
-            # A move over the per-move cap reports no result (kernel/turns.py on_timer): its
-            # record has what the decision was given.
-            held, r = decision.generation, {}
-            episode_records.annotate_result(
-                r,
-                decision=held.decision,
-                observation=held.observation,
-                native_output_limit=held.native_output_limit,
-                budget=held.budget,
-                remaining_clock_tokens=held.remaining,
-                clock_mode=config.clock_mode,
-                tokens_per_frame=config.tokens_per_frame,
-            )
+        r = decision.result
         if outcome.protocol_failure == "unsupported_terminal_action":
             r["action_protocol"] = episode_records.terminal_wait_protocol(
                 r.get("action_protocol") or {}
@@ -783,8 +799,8 @@ class _Shell:
 
     def _record(self, entry: Entry) -> None:
         """Write one kernel record (D6). One under a TraceEvent name keeps it, with the payload
-        the runner writes; a frame's echo is ObservationCaptured and a generation's is
-        OutputChunkReceived and InferenceCompleted; any other is a KernelRecord."""
+        the runner writes; a frame's echo is ObservationCaptured and the echo of a settled
+        result OutputChunkReceived and InferenceCompleted; any other is a KernelRecord."""
         kind, data, decision = entry.kind, entry.data, self._decision
         if kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
@@ -794,21 +810,16 @@ class _Shell:
                 episode_records.observation_captured(decision.observation, decision.index),
                 entry,
             )
-        elif kind == "GenerationFinished":
-            held = self._generations[data.generation]
-            r, observation_id = held.result, held.result["observation_id"]
-            for chunk in episode_records.output_chunks(r, held.decision, observation_id):
+        elif kind == "GenerationFinished" and self._generations[data.generation].inference:
+            chunks, completed = self._generations[data.generation].inference
+            for chunk in chunks:
                 self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
-            self._emit(
-                TraceEvent.INFERENCE_COMPLETED,
-                episode_records.inference_completed(r, held.decision, observation_id),
-                entry,
-            )
+            self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
             self._emit(
                 TraceEvent.ACTION_PROPOSED,
                 episode_records.action_proposed(
-                    decision.accepted, data["decision"], data["observation_id"]
+                    decision.result, data["decision"], data["observation_id"]
                 ),
                 entry,
             )
@@ -851,6 +862,8 @@ class _Shell:
             self._emit(TraceEvent.RUN_INVALIDATED, _invalid_record(invalid), entry)
         else:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
+            if kind == "GenerationAbandoned" and data["reason"] == "per_move_cap":
+                self._timed_out(entry)
 
     def _emit(self, event: TraceEvent | str, payload: dict, entry: Entry) -> None:
         if self.trace is None or self._trace_failed:

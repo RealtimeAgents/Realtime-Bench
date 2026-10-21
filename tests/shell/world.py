@@ -234,7 +234,11 @@ class Agent:
         self.generated: list[tuple] = []  # (generation, decision, observation id, budget)
         self.calls: list[tuple] = []  # (call, argument)
         self.outcomes: list = []
+        self.trajectory: list[dict] = []  # the settled results, as the trajectory audit gets them
         self._cancels: dict[int, object] = {}
+
+    def finalize_decision_audit(self, result: dict) -> None:
+        self.trajectory.append(dict(result))
 
     def generate(self, generation, decision, observation, budget) -> PendingDecision:
         reply = self.replies[len(self.generated)]
