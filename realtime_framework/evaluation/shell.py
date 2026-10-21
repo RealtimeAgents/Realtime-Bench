@@ -22,13 +22,14 @@ since the kernel started; it must be passed, or the kernel would time its watchd
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
 ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, their
 payload completed with the fields the runner writes today. Of the echoes of the events it handled,
-FrameCaptured is written as ObservationCaptured, GenerationFinished of a result the shell settled
-as OutputChunkReceived and InferenceCompleted, and an agent's AgentRecord under its own kind with
-the data its trace sink gave.
+FrameCaptured of a frame that was captured is written as ObservationCaptured (a failed capture
+writes none), GenerationFinished of a result the shell settled as OutputChunkReceived and
+InferenceCompleted, and an agent's AgentRecord under its own kind with the data its trace sink
+gave.
 Every other record (TimerSet, EpisodeEnded, Termination and the other echoes, SnapshotFrozen's too)
-is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the one SnapshotFrozen in the
-trace is the snapshot main() writes, where reporting ends the active interval. Every record carries
-``kernel_seq``, ``semantic`` and ``ops`` at the top level.
+is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the trace holds at most one
+SnapshotFrozen, the one main() writes for a snapshot it took. Every record carries ``kernel_seq``,
+``semantic`` and ``ops`` at the top level.
 
 Failed state reads. The run is invalid once three state reads in a row have failed; a read that
 answers starts the count over. The kernel keeps the count (kernel/turns.py READ_FAILURE_LIMIT),
