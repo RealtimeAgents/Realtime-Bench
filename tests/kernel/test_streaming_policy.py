@@ -779,6 +779,13 @@ def test_a_config_that_would_divide_by_zero_or_never_let_time_pass_is_refused(fi
         StreamingConfig(**({"duration_s": 5.0} | fields))
 
 
+def test_a_config_off_the_wall_clock_is_refused():
+    """A capture and an action run at once only on the wall clock: on the token clock an action
+    moves the environment's clock while a capture reads it."""
+    with pytest.raises(ValueError, match="wall clock"):
+        StreamingConfig(5.0, clock_mode="token")
+
+
 # ---- what a single change to the rules would break --------------------------------------------
 
 

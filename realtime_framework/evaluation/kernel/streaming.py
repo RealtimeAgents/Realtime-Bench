@@ -1,13 +1,13 @@
 """The native-streaming interaction policy: a live session fed frames while its actions arrive at
 any time (phase2.md, native streaming).
 
-Wall clock only, so the two clocks are one. Frames are captured on the input-frame grid and pushed
-into the session one at a time. A frame captured while one is being pushed waits in a single slot
-and a newer one takes its place; the older one counts as dropped, as does a grid point that comes
-while the capture before is still under way or passes before it can be handled. Replies follow one
-another: the next starts as soon as the last is accepted, without waiting for its actions'
-outcomes, and frames keep going in meanwhile. A reply hands over each of its actions as soon as it
-appears, with the call it came in and the time it came off the wire.
+Wall clock only, which the config insists on, so the two clocks are one. Frames are captured on
+the input-frame grid and pushed into the session one at a time. A frame captured while one is being
+pushed waits in a single slot and a newer one takes its place; the older one counts as dropped, as
+does a grid point that comes while the capture before is still under way or passes before it can
+be handled. Replies follow one another: the next starts as soon as the last is accepted, without
+waiting for its actions' outcomes, and frames keep going in meanwhile. A reply hands over each of
+its actions as soon as it appears, with the call it came in and the time it came off the wire.
 
 One action executes at a time; one that arrives meanwhile waits in a single slot, and a newer one
 takes its place and supersedes it. Three refusals keep an action from executing: the episode is
@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
@@ -100,6 +100,9 @@ class StreamingConfig:
     push_watchdog_s: float = 10.0
     push_failure_limit: int = 3
     timing: RunnerTimingConfig = field(default_factory=RunnerTimingConfig)  # the frozen stream
+    # The run's. A capture and an action run at once (decision 50), which the wall clock's
+    # environment lets them; on the token clock an action moves the clock a capture reads.
+    clock_mode: Literal["token", "wall"] = "wall"
 
     def __post_init__(self) -> None:
         # A grid of no rate divides by zero; a watchdog of no time gives replies up at one
@@ -109,6 +112,8 @@ class StreamingConfig:
                 raise ValueError(f"{name} must be positive, not {getattr(self, name)!r}")
         if self.push_failure_limit < 1:
             raise ValueError("push_failure_limit must be at least 1")
+        if self.clock_mode != "wall":
+            raise ValueError(f"native streaming runs on the wall clock, not {self.clock_mode!r}")
 
 
 class _FrozenStream:
