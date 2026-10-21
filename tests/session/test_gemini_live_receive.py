@@ -113,7 +113,7 @@ class Rig:
     """A GeminiLiveDriver for ``model`` on scripted connections; ``log`` holds its connects and
     sleeps in order."""
 
-    def __init__(self, monkeypatch, model: str, scripts: list[list[dict]]):
+    def __init__(self, model: str, scripts: list[list[dict]]):
         self.log: list = []
         config = ModelConfig(
             adapter_type="gemini_live",
@@ -131,7 +131,12 @@ class Rig:
         policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
         call = CallParameters(model, config.reasoning_effort, None)
         self.view = lambda turns: build_request(
-            policy, system_block(self.seed.system_instruction, None), tuple(turns), None, answer, call
+            policy,
+            system_block(self.seed.system_instruction, None),
+            tuple(turns),
+            None,
+            answer,
+            call,
         )
         self.history = self.view(())
 
@@ -171,12 +176,11 @@ IDLE = {"serverContent": {"interactionStatus": "IDLE"}, **USAGE}
 TURN_COMPLETE = {"serverContent": {"turnComplete": True}, **USAGE}
 
 
-def test_receive_loop_stamps_connection_and_generation(monkeypatch):
+def test_receive_loop_stamps_connection_and_generation():
     """Two generations on one connection, one on the next: every event carries the connection
     it arrived on and the generation whose reply it belongs to. The bare turnComplete of a spoken
     filler ends google-genai's receive iterator; the loop reads on to IDLE."""
     rig = Rig(
-        monkeypatch,
         "gemini-3.8-live-extended-thinking",
         [
             [
@@ -220,11 +224,10 @@ def test_receive_loop_stamps_connection_and_generation(monkeypatch):
     assert second.sent == []
 
 
-def test_resume_waits_for_the_session_release(monkeypatch):
+def test_resume_waits_for_the_session_release():
     """A goAway renewal resumes on a new connection. Closing the old one and the server
     releasing its session are not atomic, so the resume's setup waits the release grace."""
     rig = Rig(
-        monkeypatch,
         "gemini-3.8-live",
         [
             [
@@ -260,10 +263,10 @@ def server_closed(code: int, reason: str) -> ConnectionClosedError:
     return ConnectionClosedError(Close(code, reason), None)
 
 
-def test_a_failed_read_leaves_the_connection_unusable(monkeypatch):
+def test_a_failed_read_leaves_the_connection_unusable():
     """A read that fails ends the connection's receiver: the generation reading it raises the
     failure, and so does every later generation on that connection, with the same exception."""
-    rig = Rig(monkeypatch, "gemini-3.8-live", [[server_closed(1011, "Internal error.")]])
+    rig = Rig("gemini-3.8-live", [[server_closed(1011, "Internal error.")]])
 
     async def run():
         failures = []
@@ -284,8 +287,8 @@ def test_a_failed_read_leaves_the_connection_unusable(monkeypatch):
     assert rig.driver.classify_transport_error(second).retryable
 
 
-def test_a_cancelled_read_leaves_the_connection_unusable(monkeypatch):
-    rig = Rig(monkeypatch, "gemini-3.8-live", [[HANG]])
+def test_a_cancelled_read_leaves_the_connection_unusable():
+    rig = Rig("gemini-3.8-live", [[HANG]])
 
     async def run():
         await rig.connect()
@@ -309,12 +312,10 @@ def test_a_cancelled_read_leaves_the_connection_unusable(monkeypatch):
     assert rig.driver._core.replies == {}
 
 
-def test_an_orphan_message_is_logged_and_skipped(monkeypatch, caplog):
+def test_an_orphan_message_is_logged_and_skipped(caplog):
     """With no generation's reply in flight on the connection, a message is an orphan: the
     receiver logs it and reads on, here into the server's close."""
-    rig = Rig(
-        monkeypatch, "gemini-3.8-live", [[TURN_COMPLETE, server_closed(1011, "Internal error.")]]
-    )
+    rig = Rig("gemini-3.8-live", [[TURN_COMPLETE, server_closed(1011, "Internal error.")]])
 
     async def run():
         await rig.connect()
@@ -331,7 +332,7 @@ def test_an_orphan_message_is_logged_and_skipped(monkeypatch, caplog):
     assert "Gemini Live connection 1: no generation takes LiveServerMessage" in caplog.messages
 
 
-def test_a_receive_that_ends_without_a_message_fails(monkeypatch):
+def test_a_receive_that_ends_without_a_message_fails():
     """google-genai's receive() ends only after a message. An iterator that ends without one
     fails the read instead of being reopened forever, which would hold the event loop."""
 
@@ -340,7 +341,7 @@ def test_a_receive_that_ends_without_a_message_fails(monkeypatch):
             return
             yield
 
-    rig = Rig(monkeypatch, "gemini-3.8-live", [[]])
+    rig = Rig("gemini-3.8-live", [[]])
     rig.live.session_type = EmptyReceive
     outcome = []
 
@@ -359,7 +360,7 @@ def test_a_receive_that_ends_without_a_message_fails(monkeypatch):
     assert str(failure) == "Gemini Live connection 1: receive() ended without a message"
 
 
-def test_a_failed_reply_does_not_resume(monkeypatch):
+def test_a_failed_reply_does_not_resume():
     """The core promotes the resumption handle when it reads the clean completion; the driver
     then rejects that message's usage. The failed reply is not a boundary to resume from, so the
     goAway renewal rebuilds instead."""
@@ -370,7 +371,6 @@ def test_a_failed_reply_does_not_resume(monkeypatch):
         "responseTokensDetails": [{"modality": "AUDIO", "tokenCount": 5}],
     }
     rig = Rig(
-        monkeypatch,
         "gemini-3.8-live",
         [
             [
@@ -416,10 +416,10 @@ def realtime_input_with(key: str):
     ],
     ids=["client-content", "client-content-fails", "realtime", "start-fails", "video-fails"],
 )
-def test_observation_delivery(monkeypatch, model, failing):
+def test_observation_delivery(model, failing):
     """An observation's blocks count as sent once handed to the connection, and as unknown when
     a send of the observation fails, on either input transport."""
-    rig = Rig(monkeypatch, model, [[]])
+    rig = Rig(model, [[]])
     rig.live.sockets[0].fail = failing
     history = rig.view([frame_turn(0)])
 
@@ -440,12 +440,11 @@ def test_observation_delivery(monkeypatch, model, failing):
 TRANSCRIPT = {"serverContent": {"outputTranscription": {"text": "partial"}}}
 
 
-def test_a_reply_read_after_reconnecting_keeps_its_connection_and_generation(monkeypatch):
+def test_a_reply_read_after_reconnecting_keeps_its_connection_and_generation():
     """The second reply on connection 1 is read halfway when the driver reconnects and starts a
     generation on connection 2. Reading on from the old events() still reads connection 1, and
     numbers what it reads as that connection's second generation."""
     rig = Rig(
-        monkeypatch,
         "gemini-3.8-live",
         [[TURN_COMPLETE, TRANSCRIPT, TURN_COMPLETE], [TURN_COMPLETE]],
     )
@@ -471,11 +470,11 @@ def test_a_reply_read_after_reconnecting_keeps_its_connection_and_generation(mon
     assert turn_2 == [("UsageSnapshot", 2, 1, "turn-2"), ("GenerationBoundary", 2, 1, "turn-2")]
 
 
-def test_a_message_is_numbered_by_the_generation_in_flight_when_read(monkeypatch):
+def test_a_message_is_numbered_by_the_generation_in_flight_when_read():
     """The receiver numbers a message when it reads it, by the generation then in flight on the
     connection, whichever events() asked: here the first reply's consumer reads on after the next
     generation has started."""
-    rig = Rig(monkeypatch, "gemini-3.8-live", [[TRANSCRIPT, TURN_COMPLETE]])
+    rig = Rig("gemini-3.8-live", [[TRANSCRIPT, TURN_COMPLETE]])
 
     async def run():
         await rig.connect()
@@ -489,10 +488,10 @@ def test_a_message_is_numbered_by_the_generation_in_flight_when_read(monkeypatch
     assert after == [("UsageSnapshot", 1, 2, "turn-1"), ("GenerationBoundary", 1, 2, "turn-1")]
 
 
-def test_idle_ends_a_turn_complete_reply(monkeypatch):
+def test_idle_ends_a_turn_complete_reply():
     """With turn_complete as the completion signal, an IDLE status still ends the reply, without
     a clean turn_complete boundary; events() returns without reading further."""
-    rig = Rig(monkeypatch, "gemini-3.8-live", [[IDLE]])
+    rig = Rig("gemini-3.8-live", [[IDLE]])
 
     async def run():
         await rig.connect()
@@ -513,10 +512,10 @@ CALL = {"toolCall": {"functionCalls": [{"id": "call-0", "name": "wait", "args": 
     ],
     ids=["read", "acknowledgement"],
 )
-def test_the_go_away_deadline_bounds_the_reply(monkeypatch, script, stall):
+def test_the_go_away_deadline_bounds_the_reply(script, stall):
     """After a goAway the server closes the connection; a read or a tool acknowledgement still
     pending at the deadline fails the reply, and the driver closes the connection."""
-    rig = Rig(monkeypatch, "gemini-3.8-live", [script])
+    rig = Rig("gemini-3.8-live", [script])
     rig.live.sockets[0].stall = stall
 
     async def run():
@@ -530,9 +529,8 @@ def test_the_go_away_deadline_bounds_the_reply(monkeypatch, script, stall):
     assert rig.driver._session is None and rig.driver._core.connection is None
 
 
-def test_an_interrupted_reply_is_contaminated(monkeypatch):
+def test_an_interrupted_reply_is_contaminated():
     rig = Rig(
-        monkeypatch,
         "gemini-3.8-live",
         [
             [
@@ -558,8 +556,8 @@ def test_an_interrupted_reply_is_contaminated(monkeypatch):
     assert events[-1].metadata["clean_turn_complete"] is False
 
 
-def test_a_cancelled_tool_call_fails_the_reply(monkeypatch):
-    rig = Rig(monkeypatch, "gemini-3.8-live", [[{"toolCallCancellation": {"ids": ["call-0"]}}]])
+def test_a_cancelled_tool_call_fails_the_reply():
+    rig = Rig("gemini-3.8-live", [[{"toolCallCancellation": {"ids": ["call-0"]}}]])
 
     async def run():
         await rig.connect()
@@ -578,8 +576,8 @@ GO_AWAY_AFTER_A_CLEAN_TURN = [
 ]
 
 
-def test_input_waits_for_the_renewal_a_go_away_asks_for(monkeypatch):
-    rig = Rig(monkeypatch, "gemini-3.8-live", [GO_AWAY_AFTER_A_CLEAN_TURN])
+def test_input_waits_for_the_renewal_a_go_away_asks_for():
+    rig = Rig("gemini-3.8-live", [GO_AWAY_AFTER_A_CLEAN_TURN])
 
     async def run():
         await rig.connect()
@@ -594,10 +592,10 @@ def test_input_waits_for_the_renewal_a_go_away_asks_for(monkeypatch):
     assert rig.live.sockets[0].sent == []  # nothing of the observation was written
 
 
-def test_an_interrupted_session_is_not_resumed(monkeypatch):
+def test_an_interrupted_session_is_not_resumed():
     """On the realtime_input transport an interrupt opens a new activity on the same connection;
     the session it leaves has no clean boundary, so the goAway renewal rebuilds."""
-    rig = Rig(monkeypatch, "replay-gemini-live", [GO_AWAY_AFTER_A_CLEAN_TURN, []])
+    rig = Rig("replay-gemini-live", [GO_AWAY_AFTER_A_CLEAN_TURN, []])
 
     async def run():
         await rig.connect()
