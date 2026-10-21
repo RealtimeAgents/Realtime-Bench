@@ -61,6 +61,7 @@ class FedSocket:
         self.sent: list[dict] = []
         self._frames: asyncio.Queue = asyncio.Queue()
         self._answers: list[tuple] = []  # (kind, frames), in the order they are due
+        self.fail = None  # a predicate on a client message whose send raises
 
     def feed(self, *frames) -> None:
         for frame in frames:
@@ -81,6 +82,8 @@ class FedSocket:
 
     async def send(self, message):
         message = json.loads(message)
+        if self.fail is not None and self.fail(message):
+            raise RuntimeError("the activity end does not go out")
         self.sent.append(message)
         if self._answers and wire(message) == self._answers[0][0]:
             self.feed(*self._answers.pop(0)[1])
@@ -513,6 +516,88 @@ def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
     ]
     assert delivery == Delivery.SENT
     assert rig.log == []
+
+
+def test_a_push_and_a_trigger_go_out_one_after_the_other():
+    """A frame pushed while a reply is requested goes out whole before or after the activity,
+    never inside it."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        await asyncio.gather(
+            rig.driver.push_frame(None, rig.view([pushed(1)])),
+            rig.driver.request_reply(request),
+        )
+        await rig.driver.close()
+
+    asyncio.run(run())
+    sent = [wire(message) for message in rig.socket.sent]
+    push = [
+        wire(message)
+        for message in rig.socket.sent
+        if wire(message) in ("video", ("text", "frame 1"))
+    ]
+    assert sent in (push + ACTIVITY, ACTIVITY + push)
+
+
+def test_a_write_cancelled_while_it_waits_for_the_session_records_nothing():
+    """A push or a reply that is given up while a connection operation holds the session plans
+    nothing: no block counts as written, no generation is waiting."""
+    rig = Rig()
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+        pushed(2),
+    ]
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        async with rig.driver._session_lock():
+            writes = [
+                asyncio.ensure_future(rig.driver.push_frame(None, rig.view(blocks))),
+                asyncio.ensure_future(rig.driver.request_reply(request)),
+            ]
+            await settle()
+            for write in writes:
+                write.cancel()
+            await asyncio.wait(writes)
+        state = (dict(rig.driver._core.delivery), dict(rig.driver._core.carried))
+        replies = (dict(rig.driver._core.replies), dict(rig.driver._replies))
+        await rig.driver.close()
+        return state, replies
+
+    (delivery, carried), replies = asyncio.run(run())
+    assert list(delivery) == [("setup",)] and carried == {}
+    assert replies == ({}, {})
+    assert rig.socket.sent == []
+
+
+def test_a_reply_is_refused_while_an_activity_is_left_open():
+    """An activity whose write failed cannot be closed as canonical context: no reply is
+    requested on that connection until the session is rebuilt."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        failures = []
+        for _ in range(2):
+            try:
+                await rig.driver.request_reply(request)
+            except RuntimeError as exc:
+                failures.append(str(exc))
+        await rig.driver.close()
+        return failures
+
+    assert asyncio.run(run()) == [
+        "the activity end does not go out",
+        "Gemini Live input activity is already open",
+    ]
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
