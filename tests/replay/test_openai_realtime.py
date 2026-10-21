@@ -21,21 +21,34 @@ the run is compared with tests/replay/baselines/.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 from pathlib import Path
 
+import pytest
+
+import realtime_framework.entity.model as model_module
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.entity.model import TRANSIENT
+from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import SessionSeed
+from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import TransportFailureError
+from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
 from realtime_framework.providers import registry as catalog
+from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 
 from . import baseline
 from .build import build_episode
 from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION
-from .ws_openai_realtime import RealtimeStub, replies, run_steps
+from .ws_openai_realtime import FailingListener, RealtimeStub, replies, run_steps
 
 BASELINES = Path(__file__).parent / "baselines"
 MODEL_KEY = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml
@@ -403,6 +416,54 @@ def test_rejected_upgrade_retries_connect(tmp_path):
     assert all(_connections_used(r) == [2] for r in _steps(records))
     _compare_with_baseline("token-rejected-upgrade", records, baseline.trajectory(tmp_path))
     assert session_waits(tmp_path) == ["connect_backoff"]
+
+
+class _ConnectAttempts:
+    """An agent trace that keeps each connect attempt's outcome and failure kind."""
+
+    def __init__(self):
+        self.attempts: list[tuple] = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        if event == TraceEvent.MODEL_ATTEMPT_FINISHED:
+            self.attempts.append((payload["outcome"], payload["failure_kind"]))
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["close", "reset", "plain", None],
+    ids=["closed_at_accept", "reset_after_request", "tls_to_plain_http", "name_lookup"],
+)
+def test_network_fault_retries_connect(fault, monkeypatch):
+    """connect()'s retry (providers/openai_realtime.py _connect) on failures below HTTP: a
+    connection closed or reset before the upgrade response (websockets InvalidMessage, from
+    EOFError), TLS answered in plain HTTP (ssl.SSLError), and a failed name lookup
+    (socket.gaierror; hermetic.py refuses every lookup but loopback). classify_transport_error
+    takes each as TRANSIENT, so connect() makes the shared policy's four attempts
+    (entity/model.py TRANSPORT_RETRY) and then fails with its retries spent."""
+    waits = []
+    monkeypatch.setattr(
+        model_module, "_backoff", lambda clock, cancel, seconds: waits.append(seconds)
+    )
+    trace = _ConnectAttempts()
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    request = ConnectRequest(seed=SessionSeed("instruction", MODEL_KEY, None, 1.0, answer))
+    with contextlib.ExitStack() as stack:
+        if fault is None:
+            base_url = "http://realtime.invalid/v1"
+        else:
+            listener = stack.enter_context(FailingListener(fault))
+            base_url = listener.base_url("https" if fault == "plain" else "http")
+        driver = OpenAIRealtimeDriver(realtime_config(base_url))
+        driver.bind_trace(trace)
+        with pytest.raises(TransportFailureError) as raised:
+            asyncio.run(driver.connect(request))
+    if fault is not None:
+        assert listener.accepted == 4
+    assert trace.attempts == [("retry", TRANSIENT)] * 3 + [("failed", TRANSIENT)]
+    assert len(waits) == 3
+    assert raised.value.failure == TransportFailure(TRANSIENT, exhausted=True)
+    assert raised.value.retries == 3
 
 
 def test_session_edit_error_rebuilds(tmp_path):
