@@ -621,11 +621,18 @@ class NativeStreamingAgent(VisionAgentBase):
             self._generation_of[call_id] = reply.generation
         self._post(arrival)
 
-    def abort(self, generation: int) -> None:
-        """AbortGeneration: give the reply up, interrupt it and close the session, and return
-        once that is done, which fails a push stuck in the session. The next push or reply opens
-        the session again from the view."""
+    def abort(self, generation: int | None = None) -> None:
+        """AbortGeneration: give the reply up, whichever is on for None (KernelAgent.abort),
+        interrupt it and close the session, and return once that is done, which fails a push
+        stuck in the session. The next push or reply opens the session again from the view."""
         with self._lock:
+            if generation is None:
+                on = [
+                    number for number, reply in self._replies.items() if not reply.cancel.is_set()
+                ]
+                if not on:
+                    return
+                generation = on[-1]
             reply = self._replies.get(generation)
             if reply is None:
                 self._aborted_early.add(generation)
