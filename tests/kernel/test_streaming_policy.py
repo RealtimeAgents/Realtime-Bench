@@ -749,6 +749,25 @@ def test_the_reply_after_a_slow_abort_has_its_whole_watchdog():
     assert sim.started == [(1, 0.0), (2, 7.0)]
 
 
+def test_a_push_held_for_the_sessions_renewal_is_not_stuck():
+    """The session is to be renewed from 1, so the push of the frame captured then waits for the
+    reply on it, which runs until 14, and says it is held. Its watchdog does not give that reply up:
+    the reply ends on its own and is accepted, and the push goes in once it has."""
+    sim = _run(World(replies=[Reply(14.0)], renewal_pushes={2}), 20.0)
+    assert sim.data("GenerationAbandoned") == [{"generation": 2, "reason": "deadline"}]
+    assert sim.accepted == [1]
+    assert sim.started == [(1, 0.0), (2, 14.0)]
+
+
+def test_a_push_held_for_the_renewal_has_its_whole_watchdog_once_it_goes_on():
+    """The held push goes on at 14 and then hangs: its watchdog gives the next reply up at 24,
+    ten seconds after it went on, not at 11."""
+    world = World(replies=[Reply(14.0)], renewal_pushes={2}, stuck_pushes={2})
+    sim = _run(world, 30.0)
+    assert sim.aborted[0] == (2, 24.0)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 2, "reason": "push_watchdog"}
+
+
 def test_a_push_stuck_before_the_first_reply_invalidates_the_run():
     """There is no reply to give up, so no session to rebuild."""
     sim = _run(World(push_times={1: 12.0}), 5.0, push_watchdog_s=2.0)

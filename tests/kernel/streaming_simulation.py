@@ -68,6 +68,8 @@ from realtime_framework.evaluation.kernel.streaming import (
     CallsCancelled,
     FramePushed,
     PushFrame,
+    PushHeld,
+    PushResumed,
     StreamingConfig,
     StreamingPolicy,
 )
@@ -152,6 +154,9 @@ class World:
     push_errors: dict[int, str] = field(default_factory=dict)
     # The nth push hangs until the next abort closes the session, which fails it.
     stuck_pushes: set[int] = field(default_factory=set)
+    # The nth push waits for the session's renewal, which waits for the reply on it to end or be
+    # given up, and says so (PushHeld, then PushResumed), as the agent does after a goAway.
+    renewal_pushes: set[int] = field(default_factory=set)
     check_errors: dict[int, str] = field(default_factory=dict)
     commit_errors: dict[int, str] = field(default_factory=dict)  # the nth Commit -> fault
     # Key -> the fault that makes the environment's release timer invalidate the run, which the
@@ -202,6 +207,8 @@ class Simulation:
         self._in_flight: int | None = None
         self._busy: set[str] = set()  # the lanes running a command
         self._stuck_push: str | None = None  # the frame a stuck push holds
+        # (the reply it waits for, what goes on then) of a push held for the session's renewal
+        self._held_push: tuple[int, Callable] | None = None
         self._holders: set[str] = set()  # the operations holding the lock
         self._line: deque[tuple[bool, Callable]] = deque()  # (alone, take) waiting, in order
         self._observed: dict[str | None, float] = {}  # observation -> capture time
@@ -419,16 +426,28 @@ class Simulation:
         error = world.push_errors.get(frame)
 
         def pushed() -> None:
+            self._busy.discard("push")
             if error is None:
                 self.sent[frame] = self._observed[observation_id]
             self.kernel.post(FramePushed(observation_id, self.ops, error))
 
-        if frame in world.stuck_pushes:
-            assert "push" not in self._busy, "the push lane is busy"
-            self._busy.add("push")
-            self._stuck_push = observation_id
+        def go() -> None:
+            if frame in world.stuck_pushes:
+                self._stuck_push = observation_id
+            else:
+                self._later(self.ops + world.push_times.get(frame, world.push_s), pushed)
+
+        def resume() -> None:
+            self.kernel.post(PushResumed(observation_id))
+            go()
+
+        assert "push" not in self._busy, "the push lane is busy"
+        self._busy.add("push")
+        if frame in world.renewal_pushes and self._in_flight is not None:
+            self.kernel.post(PushHeld(observation_id))
+            self._held_push = (self._in_flight, resume)
             return
-        self._lane("push", world.push_times.get(frame, world.push_s), pushed)
+        go()
 
     def _start(self, generation: int) -> None:
         assert self._in_flight is None, f"generation {generation} starts with another in flight"
@@ -465,7 +484,15 @@ class Simulation:
 
     def _finish(self, generation: int, result: GenerationResult) -> None:
         self._finished.add(generation)
+        self._off(generation)
         self.kernel.post(GenerationFinished(generation, result))
+
+    def _off(self, generation: int) -> None:
+        """The reply is off the session: a push held for its renewal goes on."""
+        if self._held_push is not None and self._held_push[0] == generation:
+            _, resume = self._held_push
+            self._held_push = None
+            resume()
 
     def _arrive(self, generation: int, call: Call) -> None:
         """Post the call's action with the frame it names and that frame's age now, as the agent
@@ -513,6 +540,7 @@ class Simulation:
             observation_id, self._stuck_push = self._stuck_push, None
             self._busy.discard("push")
             self.kernel.post(FramePushed(observation_id, self.ops, "the session was closed"))
+        self._off(generation)
         if interruptible and generation not in self._finished:
             self._later(self.ops, lambda: self._finish(generation, GenerationResult()))
 

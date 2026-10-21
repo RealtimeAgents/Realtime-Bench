@@ -352,6 +352,7 @@ def _random_world(rng: random.Random, config: StreamingConfig) -> World:
         snapshot_error=rare("snapshot failed", 0.03),
         frozen_from=rare(rng.randrange(0, 6), 0.03),
         abort_s=rng.choice((0.0, 0.0, 0.0, 1.0, 12.0)),
+        renewal_pushes={rng.randrange(1, 12)} if rng.random() < 0.1 else set(),
     )
 
 
@@ -392,6 +393,7 @@ def test_the_random_scripts_reach_the_states_that_matter():
         "a capture during an action": 85,
         "the deadline waits for the read after an action": 2,
         "a reply started after a slow abort": 13,
+        "a push held for the session's renewal": 8,
     }
     assert {state: reached[state] >= floor for state, floor in floors.items()} == dict.fromkeys(
         floors, True
@@ -442,4 +444,5 @@ COVERAGE = {
         sim.world.abort_s > 0
         and any(start > at for _, at in sim.aborted for _, start in sim.started)
     ),
+    "a push held for the session's renewal": lambda sim: sim.entries("PushHeld"),
 }
