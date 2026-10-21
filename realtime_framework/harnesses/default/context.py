@@ -668,8 +668,9 @@ class RealtimeRuntime:
         decision: int,
         cancel: threading.Event,
     ) -> RuntimeTurnResult:
-        """One generation. ``cancel`` is its own event; once it is set the generation sends
-        nothing more. Its turn comes back in the result, for accept_turn once it is accepted."""
+        """One generation. ``cancel`` is its own event: once it is set, the generation stops at
+        its next check (_stop_if_abandoned) and its retries end. Its turn comes back in the
+        result, for accept_turn once it is accepted."""
         try:
             return self._submit(
                 self._run_turn(
