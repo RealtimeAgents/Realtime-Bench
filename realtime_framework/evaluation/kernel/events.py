@@ -331,9 +331,10 @@ class Outcome:
     token_delay_frames: float | None
     action_output_tokens: int | None
     post_horizon_output_tokens: int
-    # The action the decision came to, after a DONE or FAIL became a wait, and its protocol
-    # failure: what the agent's feedback reports as executed and why. Both are None when it came
-    # to no action, as a move over the per-move cap does.
+    # The action the decision came to, a DONE or FAIL already the wait it became, and its protocol
+    # failure, whatever came of it: the status says whether it was executed, as in today's
+    # lifecycle record. Both are None when it came to no action, as a move over the per-move cap
+    # does.
     action: Action | None = field(default=None, compare=False)
     protocol_failure: str | None = field(default=None, compare=False)
 

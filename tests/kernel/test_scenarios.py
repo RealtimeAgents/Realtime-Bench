@@ -871,6 +871,95 @@ def test_every_proposed_action_is_resolved_exactly_once():
     )
 
 
+DONE = Action(ActionType.DONE)
+
+
+@pytest.mark.parametrize(
+    ("config", "world", "status", "action", "protocol_failure"),
+    [
+        (
+            _wall(10.0),
+            World([Reply(1.25, CLICK), Reply(100.0)], rejections={0: "no"}),
+            "rejected",
+            CLICK,
+            None,
+        ),
+        (
+            _wall(10.0, think_budget_s=1.0),
+            World([Reply(1.25, DONE)]),
+            "skipped_budget",
+            Action.wait(),
+            "unsupported_terminal_action",
+        ),
+        (
+            _wall(10.0),
+            World([Reply(4.5, CLICK)], ends_at=4.25),
+            "not_applied_terminal",
+            CLICK,
+            None,
+        ),
+        (
+            _wall(3.0),
+            World([Reply(2.0, CLICK)], check_s=0.5),
+            "not_applied_time_limit",
+            CLICK,
+            None,
+        ),
+        (
+            _wall(2.0, per_move_cap_s=1.0),
+            World([Reply(2.0, CLICK)] * 2),
+            "skipped_timeout",
+            None,
+            None,
+        ),
+        (
+            _token(10.0),
+            World([Reply(1.0, CLICK, output_tokens=100)], execute_errors={0: "no"}),
+            "invalid_run",
+            CLICK,
+            None,
+        ),
+        (
+            _token(10.0),
+            World([Reply(1.0, DONE, output_tokens=100)], ends_at=1),
+            "not_applied_terminal",
+            Action.wait(),
+            "unsupported_terminal_action",
+        ),
+        (
+            _token(2.0),
+            World([Reply(1.0, CLICK, output_tokens=200)]),
+            "not_applied_tick_limit",
+            CLICK,
+            None,
+        ),
+    ],
+    ids=[
+        "wall-rejected",
+        "wall-skipped_budget",
+        "wall-not_applied_terminal",
+        "wall-not_applied_time_limit",
+        "wall-skipped_timeout",
+        "token-invalid_run",
+        "token-not_applied_terminal",
+        "token-not_applied_tick_limit",
+    ],
+)
+def test_the_outcome_carries_the_action_the_decision_came_to_whatever_came_of_it(
+    config, world, status, action, protocol_failure
+):
+    """Outcome.action is the action the decision came to, a DONE already the wait it became, and
+    Outcome.protocol_failure why, whatever its status: the status says whether it was executed, as
+    in today's lifecycle record (runner.py _apply). A move over the per-move cap comes to none."""
+    sim = _run(config, world)
+    (outcome,) = sim.outcomes[:1]
+    assert (outcome.status, outcome.action, outcome.protocol_failure) == (
+        status,
+        action,
+        protocol_failure,
+    )
+
+
 @pytest.mark.parametrize(
     ("config", "world", "termination"),
     [
