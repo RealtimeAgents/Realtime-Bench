@@ -171,7 +171,7 @@ def build_episode(
                 task, text_observation=text_observation, fps=config.fps, **(scene or {})
             ),
             clock=clock,
-            env_fps=env_fps,
+            env_fps=config.fps if env_fps is None else env_fps,
         )
     return Episode(
         agent=setup.agent,

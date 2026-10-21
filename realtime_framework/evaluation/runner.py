@@ -1987,21 +1987,23 @@ def set_up_agent(
     episode_trace: EpisodeTrace,
     model: str,
     open_capture,
+    env_fps: float,
     clock=None,
-    env_fps: float | None = None,
 ) -> None:
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
     ``instruction`` is the task description and ``model`` the model identity the tool trace
     records. ``open_capture(text_observation)`` returns the scene capture for the observation
     form the model's context policy names. ``clock`` is the episode's operational clock, which
-    the agent reads (real time when omitted). ``env_fps`` is the environment frame rate, which
-    the clock note describes where it differs from the model-input rate ``cfg.fps``. What this
-    makes is recorded in ``setup``.
+    the agent reads (real time when omitted). ``env_fps`` is the environment frame rate, which may
+    not be below the model-input rate ``cfg.fps`` and which the clock note describes where the two
+    differ. What this makes is recorded in ``setup``.
     """
     clock = clock or SystemClock()
     # Every pre-run rule on the model, clock, interaction mode and task, before any is built.
-    check_episode(cfg, clock_mode=clock_mode, task=ctask, interaction_mode=interaction_mode)
+    check_episode(
+        cfg, clock_mode=clock_mode, task=ctask, env_fps=env_fps, interaction_mode=interaction_mode
+    )
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
     agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace, clock=clock)

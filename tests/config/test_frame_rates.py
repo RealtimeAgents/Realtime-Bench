@@ -29,9 +29,9 @@ def gemini_config(model_input_fps: float):
 
 
 def test_video_cap_reads_the_model_input_rate():
-    check_episode(gemini_config(1.0), clock_mode="wall", task=tasks.get(WEB))
+    check_episode(gemini_config(1.0), clock_mode="wall", task=tasks.get(WEB), env_fps=2.0)
     with pytest.raises(ValueError) as caught:
-        check_episode(gemini_config(2.0), clock_mode="wall", task=tasks.get(WEB))
+        check_episode(gemini_config(2.0), clock_mode="wall", task=tasks.get(WEB), env_fps=2.0)
     assert str(caught.value) == CAP_MESSAGE
 
 

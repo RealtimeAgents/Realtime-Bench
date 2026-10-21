@@ -280,7 +280,7 @@ def check_context_policy(driver, policy, config) -> None:
 
 
 def check_episode(
-    model_config, *, clock_mode, task, interaction_mode="turn_based", env_fps=None
+    model_config, *, clock_mode, task, env_fps, interaction_mode="turn_based"
 ) -> None:
     """The runner's rules, applied once before it builds the agent.
 
@@ -291,11 +291,9 @@ def check_episode(
     interaction-mode rules follow the clock check, as in validate_model_interaction. The context
     policy is checked last. ``task`` is the registered task (its category and task_id).
     ``env_fps`` is the environment frame rate, checked first against the model-input rate
-    ``model_config.fps`` as in validate_model_interaction; without it that check is left to
-    effective_run_config.
+    ``model_config.fps`` as in validate_model_interaction.
     """
-    if env_fps is not None:
-        check_frame_rates(env_fps, model_config.fps)
+    check_frame_rates(env_fps, model_config.fps)
     adapter_type = model_config.adapter_type
     driver = adapter_class(adapter_type)
     check_wall_clock(driver, adapter_type, clock_mode)
