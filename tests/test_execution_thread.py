@@ -49,7 +49,10 @@ def test_a_coroutine_runs_in_its_callers_context():
             return attempt
 
         try:
-            sent = await RequestRetry("unit", lambda exc: None, lambda *args: None).run_async(send)
+            retry = RequestRetry(
+                "unit", lambda exc: None, lambda *args: None, cancelled=lambda *args: None
+            )
+            sent = await retry.run_async(send)
         except RetryCancelled:
             sent = None
         return current_trace_scope(), sent
