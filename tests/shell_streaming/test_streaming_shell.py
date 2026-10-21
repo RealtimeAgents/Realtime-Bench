@@ -11,12 +11,16 @@ The default world: a capture takes 0.25 s, an end check 0.5 s, an action 2 s and
 from __future__ import annotations
 
 import json
+import time
+
+import pytest
 
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.env_lanes import EnvLanes
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Invalidated, Termination
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
@@ -32,7 +36,7 @@ CLICK = Action(ActionType.CLICK, {"x": 1, "y": 2})
 ONE_CLICK = [Reply(1.6, (Call(0.9, CLICK, "c0"),))]
 
 
-def _episode(duration_s, replies, *, tmp_path=None, env_setup=None):
+def _episode(duration_s, replies, *, tmp_path=None, env_setup=None, logs=None):
     clock = FakeClock()
     env, agent = FakeEnv(clock), FakeAgent(clock, replies)
     if env_setup is not None:
@@ -42,7 +46,7 @@ def _episode(duration_s, replies, *, tmp_path=None, env_setup=None):
         if tmp_path is None
         else EpisodeTrace(tmp_path / "trace.jsonl", run_id="s", clock=clock)
     )
-    logs: list[str] = []
+    logs = [] if logs is None else logs
     with clock.participant():
         termination = run_streaming_episode(
             agent,
@@ -243,7 +247,91 @@ def test_the_shells_own_failure_on_a_lane_invalidates_the_run_as_a_run_exception
     assert "fingerprint failed" in env._loop_error
 
 
-def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
+def _step_breaks(monkeypatch, when) -> None:
+    step = Kernel.step
+
+    def broken(self, semantic, ops=None):
+        if when(self, semantic):
+            raise RuntimeError("step broke")
+        return step(self, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+
+
+def _no_snapshot_thread(env, clock) -> None:
+    start_thread = clock.start_thread
+
+    def refusing(target, *, name=None):
+        if name == "snapshot":
+            raise RuntimeError("no thread")
+        return start_thread(target, name=name)
+
+    clock.start_thread = refusing
+
+
+@pytest.mark.parametrize("kernel_breaks", [False, True], ids=["kernel-holds", "kernel-raises"])
+def test_a_snapshot_whose_thread_did_not_start_is_answered_as_failed(monkeypatch, kernel_breaks):
+    """The deadline at 3 s asks for the snapshot, and its thread cannot start: the kernel is
+    answered that the snapshot failed, and the run is invalid. Should the kernel raise then,
+    the wrap-up does not wait for that snapshot."""
+    if kernel_breaks:
+        _step_breaks(monkeypatch, lambda kernel, semantic: kernel.ending is not None)
+    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=_no_snapshot_thread)
+    assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
+        "invalid_run",
+        3.0,
+        None,
+    )
+    assert termination.invalid.reason == "run_exception"
+    assert "RuntimeError: no thread" in env._loop_error
+
+
+@pytest.mark.parametrize("kernel_breaks", [False, True], ids=["kernel-holds", "kernel-raises"])
+def test_a_snapshot_whose_thread_raised_is_answered_as_failed(monkeypatch, kernel_breaks):
+    """The snapshot's thread raises as it takes its place at the gate: the kernel is answered
+    that the snapshot failed, as for a command that raised, and the run is invalid."""
+
+    def freeze_turn(lanes):
+        raise RuntimeError("no turn")
+
+    monkeypatch.setattr(EnvLanes, "freeze_turn", freeze_turn)
+    if kernel_breaks:
+        _step_breaks(monkeypatch, lambda kernel, semantic: kernel.ending is not None)
+    termination, env, _ = _episode(3.0, ONE_CLICK)
+    assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
+    assert termination.invalid.reason == "run_exception"
+    assert "RuntimeError: no turn" in env._loop_error
+
+
+def _refuses_the_record(monkeypatch) -> None:
+    setattr_ = FakeEnv.__setattr__
+
+    def refusing(env, name, value):
+        if name == "_termination":
+            raise RuntimeError("read-only")
+        setattr_(env, name, value)
+
+    monkeypatch.setattr(FakeEnv, "__setattr__", refusing)
+
+
+@pytest.mark.parametrize("kernel_breaks", [False, True], ids=["kernel-holds", "kernel-raises"])
+def test_an_episode_whose_termination_record_raises_still_ends(monkeypatch, kernel_breaks):
+    """The environment refuses the termination record. The episode ends all the same and
+    returns how it ended, its verdict latched first: main() reads it whatever else was written.
+    A wrap-up that fails so is logged."""
+    _refuses_the_record(monkeypatch)
+    if kernel_breaks:
+        _step_breaks(monkeypatch, lambda kernel, semantic: semantic >= 2.0)
+    logs: list[str] = []
+    termination, env, _ = _episode(3.0, ONE_CLICK, logs=logs)
+    assert termination.stop_reason == ("invalid_run" if kernel_breaks else "time_limit")
+    assert env._stop_reason == termination.stop_reason
+    if kernel_breaks:
+        assert env._invalid_run["reason"] == "run_exception"
+        assert any(line.startswith("[streaming] wrapping up the episode failed") for line in logs)
+
+
+def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch, tmp_path):
     """N11, as on the turn-based shell: the kernel raises at its step at 2 s, while the click
     executes and the reply runs. Nothing can be asked of the kernel any more: the shell gives
     the reply up, takes the snapshot right after the action (4.8), releases the inputs and
@@ -256,12 +344,18 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
         return step(self, semantic, ops)
 
     monkeypatch.setattr(Kernel, "step", broken)
-    termination, env, agent = _episode(6.0, ONE_CLICK)
+    logs: list[str] = []
+    termination, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path, logs=logs)
     assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
         "invalid_run",
         2.0,
         4.275,
     )
+    # Recorded as the turn-based shell records it, readings and all.
+    (written,) = [r for r in _records(tmp_path) if r["event"] == "RunInvalidated"]
+    assert written["payload"]["reason"] == "run_exception"
+    assert (written["kernel_seq"], written["semantic"], written["ops"]) == (None, 2.0, 2.0)
+    assert any(line.startswith("[invalid-run] runner:run_exception") for line in logs)
     assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
     assert env.intervals[-1] == ("snapshot", 3.775, 4.275)
     assert env.released_at == 4.275
@@ -279,7 +373,17 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
 def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monkeypatch):
     """The deadline at 3 s ends the episode and the snapshot waits for the click executing; the
     kernel raises at the next step. The shell waits for that snapshot instead of taking another,
-    and the end stays the deadline, the first end signal (decision 32)."""
+    and the end stays the deadline, the first end signal (decision 32). The snapshot's thread
+    takes a moment of real time after the read, before it writes its reading: the wait, not
+    the gate the inputs are released at, is what the wrap-up has it by."""
+    setattr_ = FakeEnv.__setattr__
+
+    def slow_after_the_read(env, name, value):
+        if name == "_termination_snapshot_error":
+            time.sleep(0.3)
+        setattr_(env, name, value)
+
+    monkeypatch.setattr(FakeEnv, "__setattr__", slow_after_the_read)
     step = Kernel.step
 
     def broken(self, semantic, ops=None):

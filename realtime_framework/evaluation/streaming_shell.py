@@ -228,7 +228,7 @@ class _StreamingShell:
                 self._commit(outcome)
             case FreezeSnapshot():
                 self._frozen = self.clocks.operational.event()
-                self.clocks.operational.start_thread(self._freeze, name="snapshot")
+                self.clocks.operational.start_thread(self._freezing, name="snapshot")
             case ReleaseInputs():
                 try:
                     self.lanes.gate.call(self.env.release_inputs)
@@ -254,6 +254,8 @@ class _StreamingShell:
             case Commit(outcome=outcome):
                 return OutcomeCommitted(outcome.decision, failure)
             case FreezeSnapshot():
+                if self._frozen is not None:
+                    self._frozen.set()  # its thread never ran: nothing is left to wait for
                 return SnapshotFrozen(self._now, self._now, failure)
         return None
 
@@ -392,8 +394,19 @@ class _StreamingShell:
         env._termination_snapshot_error = error
         at = self._read()  # when the read returned
         self._frozen_at = at
-        self._frozen.set()
         self.post(SnapshotFrozen(at, at, error))
+
+    def _freezing(self) -> None:
+        """The snapshot's thread. Its answer comes back whatever happens, as a command's does
+        (_run), and whoever waits for the snapshot is let go."""
+        try:
+            self._freeze()
+        except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
+            failure = traceback.format_exc()
+            self._raised(failure)
+            self.post(SnapshotFrozen(self._now, self._now, failure))
+        finally:
+            self._frozen.set()
 
     def _read_snapshot(self, snapshotter):
         clock = self.clocks.operational
@@ -401,22 +414,26 @@ class _StreamingShell:
             return snapshotter()
 
     def _finish(self, termination: Termination) -> None:
-        """The termination record main() and the report read, in seconds to nine places."""
-        env = self.env
-        end_s = termination.ended_at
-        snapshot_s = termination.snapshot_at if self._snapshot_read else None
-        env._termination = {
-            "stop_reason": termination.stop_reason,
-            "end_s": round(end_s, 9),
-            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-        }
-        env._stop_reason = termination.stop_reason
-        if termination.invalid is not None:
-            env._invalid_run = _invalid_record(termination.invalid)
-        self.lanes.close()
-        self._push_lane.close()
+        """The termination record main() and the report read, in seconds to nine places. The
+        episode is over whatever comes of writing it, and its verdict goes first: main() reads
+        it whatever else could be written."""
         self._termination = termination
+        env = self.env
+        try:
+            env._stop_reason = termination.stop_reason
+            if termination.invalid is not None:
+                env._invalid_run = _invalid_record(termination.invalid)
+            end_s = termination.ended_at
+            snapshot_s = termination.snapshot_at if self._snapshot_read else None
+            env._termination = {
+                "stop_reason": termination.stop_reason,
+                "end_s": round(end_s, 9),
+                "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
+                "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
+            }
+        finally:
+            self.lanes.close()
+            self._push_lane.close()
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell
@@ -424,27 +441,40 @@ class _StreamingShell:
         snapshot taken unless FreezeSnapshot took it, the inputs released and the termination
         written. A failure on the way is only logged."""
         self._raised(failure)
+        # What the environment latched by now came first; a failure during the wrap-up after.
+        latched = getattr(self.env, "_invalid_run", None)
+        first = self.kernel.invalid is None and latched is None
         try:
             for generation in list(self._replies):
                 self._abort(generation)
             if self._frozen is None:
                 self._frozen = self.clocks.operational.event()
-                self._freeze()
+                self._freezing()
             else:
                 self.clocks.operational.wait(self._frozen, None)
             self._handle(ReleaseInputs())
-            latched = getattr(self.env, "_invalid_run", None)
-            first = self.kernel.invalid is None and latched is None
             termination = _escaped_termination(
                 self.kernel, self._now, self._now, self._frozen_at, failure, latched
             )
             self._finish(termination)
-            if first:  # the run_exception is the first failure: recorded as the kernel's are
+            # The run_exception is the first failure: recorded as the turn-based shell does.
+            if first:
                 record = _invalid_record(termination.invalid)
                 self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
-                self._write(TraceEvent.RUN_INVALIDATED, record)
+                if self.trace is not None and not self._trace_failed:
+                    self.trace.emit(
+                        TraceEvent.RUN_INVALIDATED,
+                        record,
+                        kernel_seq=None,
+                        semantic=self._now,
+                        ops=self._now,
+                    )
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
+        if self._termination is None:  # how it ended, as far as the wrap-up got
+            self._termination = _escaped_termination(
+                self.kernel, self._now, self._now, self._frozen_at, failure, latched
+            )
 
     # ---- the episode trace --------------------------------------------------------------------
 
