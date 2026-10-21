@@ -1228,7 +1228,9 @@ class GeminiLiveDriver(SessionLifecycle):
             calls = getattr(getattr(message, "tool_call", None), "function_calls", None) or []
             if calls:
                 tool_calls_seen += len(calls)
-                self._core.calls_received([(call.id, call.name) for call in calls])
+                self._core.calls_received(
+                    [(call.id, call.name) for call in calls], received.connection
+                )
                 call_records = []
                 for call in calls:
                     arguments = dict(call.args or {})
@@ -1251,7 +1253,7 @@ class GeminiLiveDriver(SessionLifecycle):
                     )
                 # Acknowledge every pending call as queued; the next observation carries its
                 # execution result.
-                acknowledged = self._core.acknowledging()
+                acknowledged = self._core.acknowledging(received.connection)
                 function_responses = [
                     self.types.FunctionResponse(
                         id=call_id,
@@ -1263,13 +1265,17 @@ class GeminiLiveDriver(SessionLifecycle):
                 ]
                 # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
                 # prevents its acknowledgement from triggering another model generation while
-                # the current decision drains through authoritative terminal usage.
-                try:
-                    await bound(session.send_tool_response(function_responses=function_responses))
-                except BaseException:
-                    self._core.acknowledgement_failed(acknowledged, received.connection)
-                    raise
-                self._core.acknowledgement_sent(acknowledged, received.connection)
+                # the current decision drains through authoritative terminal usage. Calls read on
+                # a connection closed since have none to write, which google-genai refuses.
+                if function_responses:
+                    try:
+                        await bound(
+                            session.send_tool_response(function_responses=function_responses)
+                        )
+                    except BaseException:
+                        self._core.acknowledgement_failed(acknowledged, received.connection)
+                        raise
+                    self._core.acknowledgement_sent(acknowledged, received.connection)
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)
                 completed_refs["native_tool_exchanges"].append(
