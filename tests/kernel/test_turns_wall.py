@@ -569,8 +569,20 @@ def test_a_wait_is_a_timer_and_the_environment_is_asked_during_it():
 
 
 @pytest.mark.parametrize(
-    ("duration_s", "ends_at", "latency", "wake_at", "asked", "end_at", "stop_reason", "cause"),
+    (
+        "duration_s",
+        "ends_at",
+        "latency",
+        "wake_at",
+        "asked",
+        "end_at",
+        "stop_reason",
+        "cause",
+        "by_end",
+    ),
     [
+        # The deadline cuts it as today's sleep(min(duration, remaining)) does, and today's record
+        # flags neither truncation (sandbox/actions.py GuestEnvironment.execute).
         (
             6.0,
             None,
@@ -580,13 +592,25 @@ def test_a_wait_is_a_timer_and_the_environment_is_asked_during_it():
             6.0,
             "time_limit",
             "deadline",
+            False,
         ),
-        (10.0, 2.5, 1.25, 4.25, [0.0, 1.0, 1.25, 2.0, 3.0], 3.0, "game_decided", "environment"),
+        # The task's end, which today's sleep does not notice, cuts it as on the token clock.
+        (
+            10.0,
+            2.5,
+            1.25,
+            4.25,
+            [0.0, 1.0, 1.25, 2.0, 3.0],
+            3.0,
+            "game_decided",
+            "environment",
+            True,
+        ),
     ],
     ids=["deadline", "environment"],
 )
 def test_the_end_cuts_a_wait_short_and_it_stays_a_wait(
-    duration_s, ends_at, latency, wake_at, asked, end_at, stop_reason, cause
+    duration_s, ends_at, latency, wake_at, asked, end_at, stop_reason, cause, by_end
 ):
     world = World(replies=[Reply(latency, Action.wait(3.0))], ends_at=ends_at)
     sim = _episode(_wall(duration_s), world)
@@ -598,7 +622,7 @@ def test_the_end_cuts_a_wait_short_and_it_stays_a_wait(
         "duration_simulated_seconds": 1.75,
         "requested_duration_simulated_seconds": 3.0,
         "truncated_by_episode_horizon": False,
-        "truncated_by_terminal_condition": False,
+        "truncated_by_terminal_condition": by_end,
     }
     assert sim.outcomes == [_outcome(0, "wait", latency, end_at, latency, terminal=True)]
     assert _boundaries(sim) == []
