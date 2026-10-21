@@ -907,3 +907,27 @@ def test_an_abort_naming_no_generation_gives_up_the_reply_on(monkeypatch, clock)
     assert clock.wait(replied, 1.0)
     assert out["value"].cancelled
     agent.close()
+
+
+def test_a_push_waiting_for_a_renewal_goes_in_once_the_reply_is_accepted_whatever_comes_next(
+    monkeypatch, clock
+):
+    """The reply after the one the push waited for starts at once, renewing the session, and goes
+    on it: the push goes in then, while that reply is on, not once it ends."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [Reply((GoAway(0.5),), ends_at=2.0), Reply(ends_at=5.0)]
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    assert clock.wait(replied, 2.0)
+    agent.accept(7)
+    next_reply, _ = _on_worker(clock, lambda: agent.generate(8, 4, frame, BUDGET))
+    assert clock.wait(pushed, 1.0)
+    assert "error" not in pushing
+    assert not next_reply.is_set()
+    operations = [call[:2] for call in agent.driver.calls]
+    assert operations.index(("sync", "go_away")) < operations.index(("push", "obs-3"))
+    assert clock.wait(next_reply, 10.0)
+    agent.close()

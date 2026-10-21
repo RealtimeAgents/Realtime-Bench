@@ -194,6 +194,9 @@ class FakeLiveDriver(SessionLifecycle):
         self.calls.append(("interrupt", generation.generation_id))
 
     def connection_renewal_reason(self) -> str | None:
+        # Read on the execution thread, where the reader applies a goAway: read anywhere else,
+        # whether a goAway came first depends on how the threads run.
+        asyncio.get_running_loop()
         return "go_away" if self.renewal_required else None
 
     def _take_input(self) -> None:
