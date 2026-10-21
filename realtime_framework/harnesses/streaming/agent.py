@@ -109,6 +109,7 @@ class _Reply:
     decision: int
     own: _Pushed  # the frame it started on
     cancel: threading.Event = field(default_factory=threading.Event)  # set once it is aborted
+    failed: bool = False  # generate() raised for it
     handle: GenerationHandle | None = None
     text: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
@@ -304,6 +305,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._execution.run(self._reply(reply, budget))
         except BaseException:
             if not reply.cancel.is_set():
+                reply.failed = True
                 self._finish_inspection(reply.own, "reply_failed", raw_action_output=reply.output)
                 raise
             outcome = "cancelled"
@@ -454,13 +456,17 @@ class NativeStreamingAgent(VisionAgentBase):
             self._execution.run(self.driver.abort(None if reply is None else reply.handle))
 
     def accept(self, generation: int) -> None:
-        """AcceptResult: the reply's output joins the view, and its usage the episode's."""
+        """AcceptResult: the reply's output joins the view, and its usage the episode's. A
+        failed reply, which the kernel accepts too, joins nothing, as a failed turn."""
         with self._lock:
             reply = self._replies.pop(generation)
-            if reply.output:
+            if reply.output and not reply.failed:
                 self._blocks.append(
                     output_block(reply.decision, reply.output, reply.based_on, self.clock.time_ns())
                 )
+        if reply.failed:
+            self._log_reply(reply, "reply_failed")
+            return
         self._accumulate_usage(reply.usage)
         self._log_reply(reply, "reply")
 
