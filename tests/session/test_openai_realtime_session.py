@@ -565,12 +565,14 @@ def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message") 
 def test_a_new_connection_replays_the_streaming_view():
     """4.14: a rebuilt session holds the streaming view, one item per block in order: the frames
     older than the newest K as the placeholder without a screenshot, each reply as an assistant
-    item (an empty one as none), each feedback as a user item. Nothing is anchored or named."""
+    item (an empty one as none), each feedback as a user item. Nothing is anchored; frames and
+    feedback name their client events as pushes do."""
     blocks = stream("FFRFBFR")
     blocks[-1] = replace(blocks[-1], text="")
     core = new_core()
     operations = core.replay_streaming(streaming_view(blocks))
-    assert all(op.previous_item_id is op.event_id is None for op in operations)
+    assert all(op.previous_item_id is None for op in operations)
+    assert [op.event_id is not None for op in operations] == [True, True, False, True, True, True]
     assert [(op.role, op.text, op.image is not None) for op in operations] == [
         ("user", TEXTS.folded_visual, False),
         ("user", TEXTS.folded_visual, False),
@@ -656,10 +658,10 @@ def test_a_push_names_its_client_event():
         op.previous_item_id is None and op.event_id.startswith("rtb_push_")
         for op in (frame, feedback)
     )
-    assert core.pushes == {
-        frame.event_id: Push("f2.frame", frame.item_id),
-        feedback.event_id: Push("d1.feedback", feedback.item_id),
-    }
+    assert (core.pushes[frame.event_id], core.pushes[feedback.event_id]) == (
+        Push("f2.frame", frame.item_id),
+        Push("d1.feedback", feedback.item_id),
+    )
     assert core.frames["f2.frame"].user_item_id == frame.item_id
     assert core.frames["d1.feedback"].user_item_id == feedback.item_id
     sent(core, [frame, feedback])
@@ -812,6 +814,33 @@ def test_an_error_about_a_push_refuses_that_block_alone():
         ("create", "user", item["f1.frame"], True),
         ("delete", item["f4.frame"], None, True),
         ("create", "user", batch.operations[1].item_id, True),
+    ]
+
+
+def test_a_block_refused_again_after_a_rebuild_is_refused_alone():
+    """A rebuilt session replays every block the view holds, a frame the old connection refused
+    too. Its frames and feedback are planned as pushes, under client events, so the server
+    refusing one again refuses it alone: the reply asked for meanwhile gets nothing of it, and
+    later edits leave it out."""
+    blocks = stream("FFRFF")
+    core = new_core()
+    replayed = sent(core, core.replay_streaming(streaming_view(blocks, frames=5)))
+    assert [op.event_id.startswith("rtb_push_") for op in replayed if op.role == "user"] == [
+        True
+    ] * 4
+    f1, f2, r1, f3, f4 = replayed
+    assert r1.event_id is None
+    reply = core.start_reply("d2.output")
+    assert core.receive(error(f2.event_id))
+    assert list(reply.events) == []
+    assert "f2.frame" not in core.frames
+    acknowledge(core, [f1, r1, f3, f4])
+    batch = core.queue_edit(streaming_view(blocks, frames=1))
+    assert shape(batch.operations) == [
+        ("delete", f1.item_id, None, True),
+        ("create", "user", "root", True),
+        ("delete", f3.item_id, None, True),
+        ("create", "user", r1.item_id, True),
     ]
 
 
