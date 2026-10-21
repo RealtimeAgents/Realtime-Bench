@@ -239,6 +239,7 @@ class _Generation:
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
+    invalid: Invalidated | None = None  # why the settled result is unusable, if it is
 
 
 @dataclass
@@ -601,6 +602,7 @@ class _Shell:
             except Exception:  # noqa: BLE001 - as an exception that escaped the legacy loop
                 self._raised(traceback.format_exc())
             else:
+                held.invalid = result.invalid
                 self.post(GenerationFinished(held.generation, result))
 
     def _late(self, held: _Generation) -> bool:
@@ -929,7 +931,9 @@ class _Shell:
 
     def _abandoned_on_a_bound(self, entry: Entry) -> None:
         """A generation the kernel gave up on. One whose result came back before and was settled
-        keeps the call's own records, written now, ahead of the decision's. Otherwise one given
+        keeps the call's own records, written now, ahead of the decision's, and what made that
+        result unusable still invalidates the run, as the runner's check of every result did
+        (runner.py _apply): the kernel discards the result with its reason. Otherwise one given
         up on at the per-move cap, the wall deadline or the provider watchdog timed out: it is
         logged and recorded as the runner records a call it gave up on (runner.py _run_step),
         with no usage, which leaves the episode's cost incomplete (decision 48). Only the move
@@ -949,6 +953,8 @@ class _Shell:
                     f"[default] k={held.decision} generation back in "
                     f"{held.result['latency']:g}s, settled past its {bound} — discarded"
                 )
+            if held.invalid is not None and self.kernel.invalid is None:
+                self.post(held.invalid)
             return
         if bound is None:
             return

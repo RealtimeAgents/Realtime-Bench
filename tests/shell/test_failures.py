@@ -153,6 +153,55 @@ def test_a_failed_trajectory_row_of_a_call_the_deadline_cut_invalidates_the_run(
     assert episode.env._termination["end_s"] == 2.0
 
 
+class _SlowRows(Agent):
+    """Writing a trajectory row takes 10 ms; with ``fails`` the first one fails."""
+
+    fails = False
+
+    def finalize_decision_audit(self, result: dict) -> None:
+        self.clock.sleep(0.01)
+        if self.fails and result["decision"] == 0:
+            raise OSError("trajectory disk full")
+        super().finalize_decision_audit(result)
+
+
+class _SlowFailingRows(_SlowRows):
+    fails = True
+
+
+class _SlowToolRows(_SlowRows):
+    """With a tool runtime a result needs its inspection proof (episode_records.result_invalid)."""
+
+    tool_runtime = object()
+
+
+@pytest.mark.parametrize("bound", ["cap", "deadline"])
+@pytest.mark.parametrize(
+    ("agent_type", "raises", "reason"),
+    [
+        (_SlowFailingRows, None, "trajectory_write_failed"),
+        (_SlowRows, "provider down", "generation_error"),
+        (_SlowToolRows, None, "inspection_protocol_error"),
+    ],
+    ids=["row", "generation", "inspection"],
+)
+def test_a_result_settled_past_its_bound_still_invalidates_the_run(
+    bound, agent_type, raises, reason
+):
+    """The result comes back 5 ms before the bound and settling it ends 5 ms after it: the
+    kernel gives the generation up first and discards it. What made the result unusable still
+    invalidates the run, as the runner's check of every result it settled did (runner.py
+    _apply). (The next call never answers: the record of a call given up on needs no proof.)"""
+    if bound == "cap":
+        replies = [Reply(1.495, raises=raises), Reply(hang=True)]
+        config = {"per_move_cap_s": 1.5}
+    else:
+        replies, config = [Reply(2.995, raises=raises)], {}
+    episode = run("wall", 3.0, replies, agent_type=agent_type, **config)
+    assert episode.invalid["reason"] == reason
+    assert episode.env._stop_reason == "invalid_run"
+
+
 class _Cancelled(BaseException):
     """As entity/model.py RetryCancelled, which is not an Exception."""
 
