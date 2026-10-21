@@ -639,10 +639,24 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         pending = core_generation.events
         numbers = {"connection": session.number, "generation": core_generation.number}
         sequence = 0
+        ended = False
         while True:
             await session.receive_until(lambda: pending)
             if not pending:
-                return  # the connection closed normally
+                # The connection closed normally. A reply still unconcluded then is a half reply:
+                # its connection ended before its response.done, as a status=failed one's fault
+                # ends it, rather than its partial text passing as the whole answer.
+                if not ended:
+                    sequence += 1
+                    yield ProviderError(
+                        generation.generation_id,
+                        sequence,
+                        "connection_closed",
+                        "the connection closed before the response completed",
+                        True,
+                        **numbers,
+                    )
+                return
             event = pending.popleft()
             event_type = getattr(event, "type", "")
             if event_type == "response.created":
@@ -663,6 +677,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                     cancel_event_id and getattr(error, "event_id", None) == cancel_event_id
                 )
                 sequence += 1
+                ended = True
                 yield ProviderError(
                     generation.generation_id,
                     sequence,

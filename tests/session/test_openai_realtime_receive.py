@@ -462,6 +462,28 @@ def _offline_driver(*, streaming: bool = False) -> OpenAIRealtimeDriver:
     return driver
 
 
+def test_a_clean_close_mid_reply_ends_the_generation_with_a_fatal_error():
+    """A connection the server closes normally before the response.done leaves a half reply: the
+    generation ends with a fatal ProviderError, as a response that ends with status=failed does,
+    not with a quiet return that would pass the partial text off as the whole answer."""
+    connection = _FakeConnection()
+    core = opened([turn(0)])
+    generation = core.start_generation("d0.frame")
+    session = _Session(3, connection, core)
+    created, added, text, _ = response_events()
+    for event in (created, added, text, _clean_close()):
+        connection.queue.put(event)
+    handle = GenerationHandle("turn-0", opaque=(session, generation))
+
+    async def collect():
+        return [event async for event in _offline_driver().events(handle)]
+
+    events = _within(collect())
+    assert [type(event) for event in events] == [GenerationBoundary, TextDelta, ProviderError]
+    assert events[-1].fatal
+    assert {(event.connection, event.generation) for event in events} == {(3, 1)}
+
+
 def test_events_end_when_the_connection_closes():
     """A clean close ends the response's events; an error on the way is reported with the
     connection and generation numbers."""
