@@ -308,6 +308,10 @@ def _mark_cache_breakpoint(messages: list[dict]) -> None:
 
 
 # Chat protocol mapping
+# The canonical request's neutral roles (entity/request.py Role) as chat roles.
+CHAT_ROLES = {"instruction": "system", "input": "user", "model": "assistant"}
+
+
 def frame_text(prefix: str, prompt: str) -> str:
     """A session frame's text: the pending execution feedback, then the frame prompt."""
     return f"{prefix}\n{prompt}" if prefix else prompt
@@ -316,8 +320,8 @@ def frame_text(prefix: str, prompt: str) -> str:
 def chat_messages(request) -> tuple[dict, ...]:
     """The canonical request as the OpenAI-format message list, before the compat flags apply.
 
-    Luna's size estimate counts it and the trajectory summary shows it. Every ledger is a user
-    message at index 1, whatever its intended role. Live tool exchanges have no message form here.
+    Luna's size estimate counts it and the trajectory summary shows it. The ledger, at index 1,
+    takes the role the policy gives it. Live tool exchanges have no message form here.
     """
     messages = []
     prefix = ""
@@ -327,7 +331,10 @@ def chat_messages(request) -> tuple[dict, ...]:
             messages.append({"role": "system", "content": block.text})
         elif block.kind == "action_ledger":
             messages.append(
-                {"role": "user", "content": request.policy.texts.ledger_header + "\n" + block.text}
+                {
+                    "role": CHAT_ROLES[item.intent.role],
+                    "content": request.policy.texts.ledger_header + "\n" + block.text,
+                }
             )
         elif item.intent.position == "frame_prefix":
             prefix = block.text

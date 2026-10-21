@@ -59,7 +59,7 @@ REASONING_EFFORT = "low"  # as --reasoning-effort low; sent top-level (providers
 # With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
 # oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
 # into the ledger that becomes messages[1] (context.py:295-305; harnesses/default/request.py:53-55;
-# providers/litellm.py:329-332). Decision k carries k earlier turns plus its own frame.
+# providers/litellm.py chat_messages). Decision k carries k earlier turns plus its own frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 

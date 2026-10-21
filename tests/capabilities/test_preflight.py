@@ -857,17 +857,94 @@ def test_context_status_needs_its_declaration():
     )
 
 
-def test_declared_roles_are_the_encoders_roles():
-    """The roles each encoder maps a request intent onto (openai_realtime_session.py ROLES,
-    gemini/session.py _ROLES); Decisions state has none."""
-    from realtime_framework.providers import openai_realtime_session
-    from realtime_framework.providers.gemini import session as gemini_session
+# The protocol role each encoder sends the archived-action ledger in, by the ledger's intent role
+# (entity/request.py Role): a chat message (providers/litellm.py chat_messages), a Realtime
+# conversation item (openai_realtime_session.py) or a Live content (gemini/session.py).
+CHAT_ROLES = {"instruction": "system", "input": "user", "model": "assistant"}
+LEDGER_SENT_AS = {
+    "litellm": CHAT_ROLES,
+    "chat_completions": CHAT_ROLES,
+    "openrouter": CHAT_ROLES,
+    "anthropic_messages": CHAT_ROLES,
+    "moonshot": CHAT_ROLES,
+    "openai_realtime": CHAT_ROLES,
+    "gemini_live": {"input": "user", "model": "model"},
+}
 
-    for api, roles in (
-        ("openai_realtime", openai_realtime_session.ROLES),
-        ("gemini_live", gemini_session._ROLES),
-    ):
-        assert set(catalog.adapter_class(api).capabilities.roles) == set(roles), api
+
+def sent_ledger_roles(api, role):
+    """The roles the API's encoder sends the ledger in, for a request built under the API's
+    policy with that ledger role: the messages the driver hands LiteLLM, or what the session core
+    plans."""
+    from realtime_framework.entity.actions import Observation
+    from realtime_framework.entity.model import (
+        CanonicalTurn,
+        GenerationRequest,
+        ProviderObservation,
+    )
+    from realtime_framework.entity.request import AnswerRequirements, CallParameters
+    from realtime_framework.harnesses.default.request import (
+        build_request,
+        ledger_block,
+        system_block,
+    )
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver, live_options
+    from realtime_framework.providers.gemini.session import SessionCore
+    from realtime_framework.providers.litellm import LiteLLMDriver
+    from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
+    from realtime_framework.providers.openai_realtime_session import RealtimeSessionCore
+
+    key = next(key for key in catalog.CATALOG if catalog.get(key).adapter_type == api)
+    config = preset(key, api_key="preflight-test")
+    policy = current_context_policy().for_path(api, config.provider_options, config.context_preset)
+    frame = ProviderObservation(
+        observation=Observation(b"raw", 100.0, 0.0, {"observation_id": "o0"}),
+        prompt="FRAME",
+        image_bytes=b"png",
+        mime_type="image/png",
+        image_detail="auto",
+        geometry={},
+    )
+    ledger = ledger_block('{"decision": 0}', 1, None)
+    request = build_request(
+        replace(policy, ledger_role=role),
+        system_block("SYSTEM", None),
+        (CanonicalTurn(observation=frame, decision=1),),
+        ledger,
+        AnswerRequirements("text_json", "standard_vlm"),
+        CallParameters(config.model_name, None, None),
+    )
+    text = policy.texts.ledger_header + "\n" + ledger.text
+    driver = catalog.adapter_class(api)
+    if issubclass(driver, LiteLLMDriver):
+        generation = GenerationRequest("turn-1", None, None, "wall", canonical=request)
+        messages = driver(config)._request_kwargs(generation)["messages"]
+        return [message["role"] for message in messages if message["content"] == text]
+    if issubclass(driver, OpenAIRealtimeDriver):
+        creates = RealtimeSessionCore(lambda kind: f"rtb_{kind}").replay(request)
+        return [create.role for create in creates if create.text == text]
+    if issubclass(driver, GeminiLiveDriver):
+        seed = SessionCore(live_options(config)).connect(request, None, replacing=False).seed
+        contents = [content for batch in seed for content in batch]
+        return [content.role for content in contents if content.parts[0].text == text]
+    raise AssertionError(f"{api} declares roles but has no ledger rendering here")
+
+
+@pytest.mark.parametrize(
+    "api, role", [(api, role) for api, sent_as in LEDGER_SENT_AS.items() for role in sent_as]
+)
+def test_ledger_is_sent_in_its_intent_role(api, role):
+    """check_context_policy accepts any ledger role the API declares, so the encoder sends the
+    ledger in each one."""
+    assert sent_ledger_roles(api, role) == [LEDGER_SENT_AS[api][role]]
+
+
+def test_declared_roles_are_the_encoders_roles():
+    """The roles each encoder renders (LEDGER_SENT_AS); Decisions state has none."""
+    declaring = {api for api in catalog.APIS if catalog.adapter_class(api).capabilities.roles}
+    assert declaring == set(LEDGER_SENT_AS)
+    for api, sent_as in LEDGER_SENT_AS.items():
+        assert set(catalog.adapter_class(api).capabilities.roles) == set(sent_as), api
     for api in catalog.APIS:
         capabilities = catalog.adapter_class(api).capabilities
         assert capabilities.labels_instead_of_roles == (capabilities.action_channel == "choice")

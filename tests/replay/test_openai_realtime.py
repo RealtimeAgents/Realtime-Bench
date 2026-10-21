@@ -6,7 +6,7 @@ action, usage and reported execution result of each decision. GenerationRequest.
 built every turn (harnesses/default/context.py:480-487) but the driver takes only its newest
 frame's id from it (providers/openai_realtime.py:355-357), and the trajectory's input_prompt
 shows the archived action ledger as a user message (harnesses/default/harness.py:1127-1133;
-providers/litellm.py:329-332), the role the wire item has had since context policy version 3
+providers/litellm.py chat_messages), the role the wire item has had since context policy version 3
 (openai_realtime_session.py:205-221, 292-297; version 1 sent a system item). The canonical
 request is not recorded; the trajectory rows are, with input_prompt as a digest (baseline.py).
 
