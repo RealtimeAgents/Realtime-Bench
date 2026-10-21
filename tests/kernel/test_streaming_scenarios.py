@@ -308,7 +308,7 @@ def _random_world(rng: random.Random) -> World:
         ends_at=rare(rng.uniform(0.0, 8.0), 0.4),
         end_reason=rare("success", 0.5),
         start_s=rng.choice((0.0, 0.0, 0.3)),
-        invalidations=((rng.uniform(0.0, 8.0), Invalidated("environment", "x")),)
+        posts=((rng.uniform(0.0, 8.0), Invalidated("environment", "x")),)
         if rng.random() < 0.05
         else (),
         capture_s=rng.choice(TIMES),

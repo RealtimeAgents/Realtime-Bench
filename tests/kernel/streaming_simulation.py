@@ -125,7 +125,8 @@ class World:
     ends_at: float | None = None  # the task reports its end from this time on
     end_reason: str | None = None
     start_s: float = 0.0  # the policy starts this long after the episode origin
-    invalidations: tuple[tuple[float, Invalidated], ...] = ()  # posted by other threads
+    # (time, event) other threads post: an invalidation, a release timer's answer.
+    posts: tuple[tuple[float, object], ...] = ()
     capture_s: float = 0.0
     push_s: float = 0.0
     check_s: float = 0.0
@@ -198,7 +199,7 @@ class Simulation:
     # ---- driving ----------------------------------------------------------------------------
 
     def run(self, max_steps: int = 100_000) -> Simulation:
-        for at, event in self.world.invalidations:
+        for at, event in self.world.posts:
             self._later(at, lambda event=event: self.kernel.post(event))
         self._queue.extend(self.kernel.start(self.ops))
         for _ in range(max_steps):

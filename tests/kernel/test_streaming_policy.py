@@ -16,6 +16,7 @@ from realtime_framework.evaluation.kernel.events import (
     Commit,
     Execute,
     Invalidated,
+    KeysReleased,
     Outcome,
     Record,
     SetTimer,
@@ -444,7 +445,7 @@ def test_an_action_handed_over_after_the_end_is_not_applied():
 def test_an_invalidation_from_another_thread_settles_the_waiting_action():
     calls = (Call(0.5, CLICK, execute_s=2.0), Call(1.0, TYPE))
     failure = Invalidated("environment", "wall_key_release_failed", "x")
-    sim = _run(World(replies=[Reply(3.0, calls=calls)], invalidations=((1.5, failure),)))
+    sim = _run(World(replies=[Reply(3.0, calls=calls)], posts=((1.5, failure),)))
     assert sim.statuses() == ["applied", "invalid_run"]
     applied = sim.resolved()[0]
     assert (applied["finished_at"], applied["terminal_after_action"]) == (2.5, True)
@@ -618,3 +619,14 @@ def test_every_push_failing_before_the_first_reply_invalidates_the_run():
     assert sim.started == []
     assert _ended(sim)[:3] == ("invalid_run", "invalid", 2.0)
     assert sim.termination.invalid.reason == "frame_push_failed"
+
+
+def test_a_release_the_shell_timer_reports_failed_invalidates_the_run():
+    """KeysReleased carries the error of a release that failed for good (events.py)."""
+    calls = (Call(0.5, Action.hold_key("a", 1.5)),)
+    failed = KeysReleased(("a",), "xdotool keyup failed")
+    sim = _run(World(replies=[Reply(3.0, calls=calls)], posts=((2.0, failed),)))
+    assert _ended(sim) == ("invalid_run", "invalid", 2.0, 2.0)
+    assert sim.termination.invalid == Invalidated(
+        "environment", "wall_key_release_failed", "xdotool keyup failed"
+    )
