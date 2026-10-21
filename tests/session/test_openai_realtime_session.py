@@ -24,6 +24,7 @@ from realtime_framework.providers.openai_realtime_session import (
     Create,
     Delete,
     Delivery,
+    Push,
     RealtimeSessionCore,
 )
 
@@ -472,3 +473,60 @@ def test_delivery_is_unknown_while_written_then_sent_then_acknowledged():
         Delivery.UNKNOWN,
         Delivery.SENT,
     ]
+
+
+# ---- native streaming ------------------------------------------------------------------------
+
+
+def test_a_push_names_its_client_event():
+    """A pushed frame is appended like an observed one, but its create names a client event."""
+    core = opened([turn(0, "a0")])
+    user = core.push(view([turn(0, "a0"), turn(1, feedback="EXECUTION RESULT: y")]))
+    assert (user.role, user.text, user.image.data) == (
+        "user",
+        "EXECUTION RESULT: y\nframe 1",
+        b"png-1",
+    )
+    assert user.previous_item_id is None and user.event_id.startswith("rtb_push_")
+    assert core.frames["d1.frame"].user_item_id == user.item_id
+    assert core.pushes == {user.event_id: Push("d1.frame", user.item_id)}
+    sent(core, [user])
+    assert core.receive(done(user.item_id))
+    assert core.delivery[user.key] == Delivery.ACKNOWLEDGED
+    assert core.pushes[user.event_id].error is None
+
+
+def test_an_error_about_a_push_refuses_that_frame_alone():
+    """With a response in progress and an edit waiting, an error naming a push's client event
+    refuses that frame: it leaves the mirror, and the response and the edit go on. The edit was
+    planned after the push from a view that holds the frame, and leaves it as it was."""
+    turns = [turn(0, "a0"), turn(1, "a1")]
+    core = opened(turns)
+    generation = core.start_generation("d1.frame")
+    turns.append(turn(2))
+    push = core.push(view(turns))
+    sent(core, [push])
+    turns[0].fold_visual()
+    batch = core.begin_edit(view(turns))
+    delete0, create0 = sent(core, batch.operations)
+
+    refusal = error(push.event_id)
+    assert core.receive(refusal)
+    assert core.pushes[push.event_id].error is refusal.error
+    assert core.delivery[push.key] == Delivery.SENT
+    assert list(core.frames) == ["d0.frame", "d1.frame"]
+    assert list(generation.events) == []
+    assert not core.edit_answered
+
+    core.receive(deleted(delete0.item_id))
+    core.receive(done(create0.item_id))
+    assert core.finish_edit() is batch
+    assert list(core.frames) == ["d0.frame", "d1.frame"]
+    assert (core.frames["d0.frame"].user_item_id, core.frames["d0.frame"].folded) == (
+        create0.item_id,
+        True,
+    )
+    # An error that names no client event still reaches the response.
+    unnamed = error(None)
+    assert core.receive(unnamed)
+    assert list(generation.events) == [unnamed]
