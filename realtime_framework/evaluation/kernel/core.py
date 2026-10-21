@@ -34,6 +34,7 @@ from realtime_framework.evaluation.kernel.agenda import Agenda, Inbox
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
     AcceptResult,
+    ActionExecuted,
     AgentRecord,
     Clock,
     DiscardResult,
@@ -109,10 +110,13 @@ class Kernel:
         for event in self.inbox.take():
             # An end check's answer is filed at the reading it was asked at, the time its end is
             # dated by: a check asked before the deadline is handled before it (phase2.md,
-            # 时间和结束判定).
+            # 时间和结束判定). An action that reports when it finished, as one on a lane of its
+            # own does, is filed there, however late the shell took its answer in.
             at = self.semantic
             if isinstance(event, EndChecked):
                 at = self._asked.get(event.request, at)
+            elif isinstance(event, ActionExecuted) and event.finished_at is not None:
+                at = min(at, event.finished_at)
             self.agenda.add(Clock.SEMANTIC, at, event.priority, event)
         due = self.agenda.pop({Clock.SEMANTIC: self.semantic, Clock.OPS: self.ops})
         if due is None:
