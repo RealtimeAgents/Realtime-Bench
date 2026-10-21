@@ -448,6 +448,10 @@ def run_stream(
             # runtime's complete emitted-token count. Protocol delimiters are part of those counts.
             action_output_tokens = output_tokens
             d_ticks = action_output_tokens / tokens_per_frame * frame_ticks
+            if r.get("post_horizon_output_tokens"):
+                # The complete response lands past the horizon. The count charged, the allowance
+                # rounded down to a whole token, can place it just short of the horizon.
+                d_ticks = float(max_ticks) - float(t_k)
             deliberation_s = d_ticks * delta_s
         elif clock_mode == "token":
             action_output_tokens = output_tokens
