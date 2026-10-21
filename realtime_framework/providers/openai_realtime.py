@@ -69,6 +69,10 @@ _CLIENT_ID_MAX_LENGTH = 32
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
 # The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
+# How long a connection's close may take before the socket is dropped under it. A close stuck on
+# a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
+# fails both. Normal closes finish well within it, so it adds no observable wait.
+_CONNECTION_CLOSE_TIMEOUT_S = 10.0
 _NETWORK_ERRNOS = {
     errno.ENETUNREACH,
     errno.EHOSTUNREACH,
@@ -420,9 +424,17 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         closed = True
         if cm is not None:
             try:
-                await asyncio.to_thread(cm.__exit__, None, None, None)
+                await self.clock.wait_for(
+                    asyncio.to_thread(cm.__exit__, None, None, None),
+                    _CONNECTION_CLOSE_TIMEOUT_S,
+                )
             except Exception:  # noqa: BLE001 - best-effort SDK cleanup
+                # A close stuck on a write that does not drain leaves a streaming push stuck in
+                # the same write: drop the socket under both, which fails the write and lets the
+                # close return. The SDK keeps the WebSocket connection as ``_connection``.
                 closed = False
+                if session is not None:
+                    session._conn._connection.close_socket()
         if session is not None:
             await session.stop_reading(closed=closed)
 
