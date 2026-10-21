@@ -12,10 +12,12 @@ connection, or rebuild the session without the reply's output. A push the sessio
 it is renewed, as Gemini Live's after a goAway, waits for that reply instead, at a gate of its
 own; whether it waits is decided on the execution thread, where the goAway is read.
 
-A push enters the frame in the frame table, which draws its number on the screenshot, and records
-it as sent once the driver put it into the session. A frame whose push failed keeps its number and
-stays out of the view (frames.py). As a turn-based history does, the agent holds a screenshot only
-while the view keeps it, and a frame only while a reply may start on it or is on it.
+A push enters the frame in the frame table, which draws its number on the screenshot, and once the
+driver put it into the session records it as sent and confirmed when the driver's receipt says it
+was written and confirmed, or its confirmation unknown where the protocol confirms no frame
+(decision N43). A frame whose push failed keeps its number and stays out of the view (frames.py).
+As a turn-based history does, the agent holds a screenshot only while the view keeps it, and a
+frame only while a reply may start on it or is on it.
 
 A reply starts on the view. Each function call is parsed as its message is read, against the frame
 it names, and posted to the kernel with the time its message came off the wire, in semantic
@@ -382,21 +384,40 @@ class NativeStreamingAgent(VisionAgentBase):
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
-        await self.driver.push_frame(pushed.value, view)
+        receipt = await self.driver.push_frame(pushed.value, view)
+        frame = pushed.record.frame
         # On the execution thread, where the reply's messages are read: an action read from
-        # now on finds the frame sent, and counts it in an older frame's age.
+        # now on finds the frame sent, when the receipt says it was written (decision N43), and
+        # counts it in an older frame's age.
         with self._lock:
-            self.frames.record_sent(pushed.record.frame, self.clock.time())
+            self.frames.record_sent(frame, self._wall(receipt.written_at))
+            if receipt.confirmed_at is None:
+                self.frames.record_ack_unknown(frame)
+            else:
+                self.frames.record_acked(frame, self._wall(receipt.confirmed_at))
             self._blocks.append(block)
             self._pushed[key] = pushed
             self._release_folded()
         # The kernel's records name the frame by its observation id, the session's by its block:
         # this ties the two (evaluation/reporting.py summarize_streaming).
         self._trace.capture(
-            TraceEvent.FRAME_SENT, {"frame": pushed.record.frame, "observation_id": key}
+            TraceEvent.FRAME_SENT,
+            {
+                "frame": frame,
+                "observation_id": key,
+                "sent_monotonic_ns": round(receipt.written_at * 1e9),
+                "confirmed_monotonic_ns": (
+                    None if receipt.confirmed_at is None else round(receipt.confirmed_at * 1e9)
+                ),
+            },
         )
         self._retire()
         return None
+
+    def _wall(self, monotonic: float) -> float:
+        """A reading of the clock's monotonic time, the drivers' (FunctionCall.received_at,
+        PushReceipt), as wall seconds, as Clock.time() reads them."""
+        return self.clock.time() - (self.clock.monotonic() - monotonic)
 
     def _renewal_due(self) -> bool:
         return bool(
@@ -595,7 +616,7 @@ class NativeStreamingAgent(VisionAgentBase):
     def _arrived(self, reply: _Reply, text: str, call_id: str, received_at: float) -> None:
         """Parse one action against the frame it names and post it, with the time its message
         came off the wire, ``received_at`` on the clock's monotonic reading."""
-        arrived = self.clock.time() - (self.clock.monotonic() - received_at)
+        arrived = self._wall(received_at)
         action, protocol = parse_grounded_action(
             self, text, reply.own.execution, arrived, reply.own.record
         )

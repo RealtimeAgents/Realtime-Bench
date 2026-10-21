@@ -36,6 +36,7 @@ from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderError
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
+from realtime_framework.entity.model import PushReceipt
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
@@ -128,6 +129,9 @@ class _Session:
         self.number = number
         self.core = core
         self._conn = conn
+        # When each operation was written on this connection, by Operation.key, on the driver's
+        # clock: a pushed frame's receipt (push_frame).
+        self.written_at: dict[tuple[str, str], float] = {}
         self._read: asyncio.Task | None = None
         # Native streaming: the reader that reads every event, the clock it reads each event's
         # arrival on, and what tells waiters that it read one.
@@ -391,6 +395,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             except BaseException:
                 core.send_failed(operation)
                 raise
+            session.written_at[operation.key] = self.clock.monotonic()
             core.sent(operation)
 
     @staticmethod
@@ -546,14 +551,15 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         await asyncio.to_thread(self._wire, session._conn.response.create, **kwargs)
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
-    async def push_frame(self, observation: ProviderObservation, history) -> None:
+    async def push_frame(self, observation: ProviderObservation, history) -> PushReceipt:
         """Native streaming: push the newest frame of the streaming history view, after the
         feedback the view holds that the session lacks, and fold the frames the view folds
         (decision 23). A frame the session already holds, as a rebuild replayed it or
         request_reply pushed it, is not pushed again. Returns once the server confirmed the
-        frame; raises when the server refused it, which loses that frame alone, or the
-        connection closed first. A fold the server fails leaves the session dirty, for the next
-        ensure_ready to rebuild it from the view.
+        frame, with when it was written and when its confirmation came (decision N43); raises
+        when the server refused it, which loses that frame alone, or the connection closed
+        first. A fold the server fails leaves the session dirty, for the next ensure_ready to
+        rebuild it from the view.
 
         It plans and writes holding the session as a connection operation does
         (SessionLifecycle), so its writes go to the session it planned them on once a connect
@@ -573,6 +579,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise session.closed
         if frame.error is not None:
             raise RuntimeError(f"OpenAI Realtime refused {frame.block_id}: {frame.error!r}")
+        return PushReceipt(session.written_at[frame.key], core.acknowledged_at[frame.key])
 
     async def _fold(self, session: _Session, batch) -> None:
         """Bring the session to the view's folds, one edit at a time (queue_edit): wait for the
