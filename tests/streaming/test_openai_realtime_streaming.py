@@ -38,6 +38,7 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.streaming.history import frame_block
+from realtime_framework.providers import openai_realtime
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver, _Session
 from realtime_framework.providers.openai_realtime_session import Delete
 from tests.fake_clock import FakeClock
@@ -669,6 +670,60 @@ def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed()
         "f2.frame": False,
         "f3.frame": False,
     }
+
+
+# The server closes a rebuilt session's connection before it confirmed the replay.
+CLOSED_BEFORE_CONFIRMED = [
+    {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+    c2s(SESSION_UPDATE),
+    push(1, 1, 1),
+    push(2, 2, 2),
+    {"conn": 1, "dir": "close", "at": 0.3, "msg": {"by": "server", "code": 1000, "reason": "bye"}},
+]
+
+
+def test_a_rebuild_whose_connection_closes_before_its_replay_is_confirmed_raises():
+    """connect() hands over no session the server closed before it confirmed the replay: it
+    raises that close."""
+    clock, table, blocks = FakeClock(), FrameTable(), []
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+    for k in (1, 2):
+        observation = _observation(k)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        blocks.append(frame_block(record, observation))
+
+    async def scenario(driver):
+        with pytest.raises(ConnectionClosedOK):
+            await driver.connect(
+                ConnectRequest(seed=seed, history=streaming_view(blocks, frames=2))
+            )
+        await driver.close()
+
+    with CassetteServer(CLOSED_BEFORE_CONFIRMED, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+
+
+def test_a_connect_retries_under_the_newest_frame_of_its_history(monkeypatch):
+    """The connect retry's jitter key names the session the connect resumes: the newest frame
+    of its history."""
+    keys = []
+
+    class Stop(Exception):
+        pass
+
+    def retry(key, *args, **kwargs):
+        keys.append(key)
+        raise Stop
+
+    monkeypatch.setattr(openai_realtime, "RequestRetry", retry)
+    request = ConnectRequest(seed=SEED, history=streaming_view(stream("FRF")))
+    with pytest.raises(Stop):
+        _within(_offline_driver()._connect(request))
+    assert keys == ["f2.frame:connect"]
 
 
 def test_a_push_during_a_rebuild_goes_out_once_the_rebuilt_session_took_its_replay():
