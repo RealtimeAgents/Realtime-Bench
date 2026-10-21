@@ -48,8 +48,6 @@ from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation.clock import TokenAccounting
-from realtime_framework.evaluation.clock import token_record
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
 
@@ -885,94 +883,21 @@ def run_stream(
             },
         )
         r = _run_step(_step, k)
-        r.update(
-            {
-                "decision": k,
-                "observation_id": metadata.get("observation_id"),
-                "observation_tick": getattr(obs, "tick_number", t_k),
-                "observation_batch": observation_batch,
-                "observation_timestamp": getattr(obs, "timestamp", None),
-                "decision_output_cap": budget.runtime_output_tokens,
-                "native_output_limit": native_output_limit,
-                "runtime_output_token_cap": budget.runtime_output_tokens,
-                "provider_output_token_cap": r.get(
-                    "provider_output_token_cap", budget.provider_output_tokens
-                ),
-                "transport_output_token_cap": r.get(
-                    "transport_output_token_cap", budget.transport_output_tokens
-                ),
-                "remaining_clock_tokens": remaining_clock_tokens,
-                "clock_delay_clock": (
-                    "simulated_token_clock" if clock_mode == "token" else "wall_clock"
-                ),
-                "clock_delay_definition": (
-                    "complete_clock_output_tokens_divided_by_tokens_per_frame"
-                    if clock_mode == "token" and tokens_per_frame is not None
-                    else "paused_environment_no_generation_delay"
-                    if clock_mode == "token"
-                    else "complete_decision_wall_latency"
-                ),
-            }
+        episode_records.annotate_result(
+            r,
+            decision=k,
+            observation=obs,
+            observation_batch=observation_batch,
+            native_output_limit=native_output_limit,
+            budget=budget,
+            remaining_clock_tokens=remaining_clock_tokens,
+            clock_mode=clock_mode,
+            tokens_per_frame=tokens_per_frame,
         )
-        runtime_metadata = r.get("realtime_runtime")
-        if isinstance(runtime_metadata, dict):
-            for name in ("provider_response_status", "provider_response_status_reason"):
-                if r.get(name) is None and runtime_metadata.get(name) is not None:
-                    r[name] = runtime_metadata[name]
         usage_after = episode_records.usage_snapshot(adapter)
         if usage_before is not None and usage_after is not None:
-            keys = set(usage_before) | set(usage_after)
-            r["frame_usage"] = {
-                name: max(
-                    0, int(usage_after.get(name, 0) or 0) - int(usage_before.get(name, 0) or 0)
-                )
-                for name in keys
-                if isinstance(usage_before.get(name, 0), (int, float))
-                and isinstance(usage_after.get(name, 0), (int, float))
-            }
-        clock_output_tokens, clock_output_tokens_source = episode_records.clock_output_tokens(r)
-        if (
-            remaining_clock_tokens is not None
-            and clock_output_tokens is not None
-            and clock_output_tokens > remaining_clock_tokens
-        ):
-            r["unclamped_clock_output_tokens"] = clock_output_tokens
-            r["post_horizon_output_tokens"] = clock_output_tokens - remaining_clock_tokens
-            clock_output_tokens = remaining_clock_tokens
-            clock_output_tokens_source = (
-                f"episode_horizon_clamped:{clock_output_tokens_source or 'unknown'}"
-            )
-        r["clock_output_tokens"] = clock_output_tokens
-        r["clock_output_tokens_source"] = clock_output_tokens_source
-        r["action_output_tokens"] = clock_output_tokens
-        r["remaining_clock_tokens"] = remaining_clock_tokens
-        r.setdefault("unclamped_clock_output_tokens", None)
-        r.setdefault("post_horizon_output_tokens", 0)
-        r["token_accounting"] = token_record(r)
-        for name in (
-            "provider_input_tokens",
-            "provider_output_tokens",
-            "provider_total_tokens",
-            "provider_reasoning_output_tokens",
-            "provider_visible_output_tokens",
-            "provider_audio_output_tokens",
-            "provider_output_tokens_source",
-            "provider_reasoning_output_tokens_source",
-            "provider_visible_output_tokens_source",
-            "provider_visible_output_tokens_missing_reason",
-            "provider_audio_output_tokens_source",
-            "provider_audio_output_tokens_missing_reason",
-            "provider_token_normalization_schema",
-            "provider_token_semantics",
-            "provider_protocol_family",
-            "provider_upstream",
-        ):
-            r[name] = r["token_accounting"].get(name)
-        accounting = getattr(env, "_token_accounting", None)
-        if accounting is None:
-            accounting = TokenAccounting()
-            env._token_accounting = accounting
-        accounting.add(r["token_accounting"])
+            r["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
+        episode_records.account_tokens(r, remaining_clock_tokens, env)
         chunks = r.get("output_chunks")
         if not isinstance(chunks, list):
             chunks = (
