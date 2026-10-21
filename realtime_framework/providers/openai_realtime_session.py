@@ -7,14 +7,14 @@ pushed (feedback placed in front of a frame goes into the frame's item), each af
 server put it after, a reply's items being the server's. From a history view it plans the item
 creates and deletes that bring the server there, and it records what became of each one, which
 the driver writes to the event log: unknown while it is written, sent once the write returned,
-acknowledged once the server confirmed it, refused if the server answered a native-streaming
-push with an error. Each server event the driver reads is handed to ``receive``, in the order the
-connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
-settles the in-place edit waiting for it, an error about a block native streaming pushed refuses
-that block alone, a response event joins its generation. Sending and receiving are the driver's.
-On a turn-based session it reads only while something waits for an event, so what arrives after
-the last wait reaches the core with the next read; native streaming's reader reads every event as
-it arrives and hands it to ``arrived``.
+acknowledged once the server confirmed it, refused if the server answered it with an error
+naming its client event. Each server event the driver reads is handed to ``receive``, in the
+order the connection delivered it, which passes it to the state it belongs to: an acknowledgement
+or error settles the in-place edit waiting for it, an error about a block native streaming pushed
+refuses that block alone, a response event joins its generation. Sending and receiving are the
+driver's. On a turn-based session it reads only while something waits for an event, so what
+arrives after the last wait reaches the core with the next read; native streaming's reader reads
+every event as it arrives and hands it to ``arrived``.
 """
 
 from __future__ import annotations
@@ -75,8 +75,9 @@ class Delivery(str, Enum):
     """What is known about one planned operation, in the Gemini Live core's terms
     (providers/gemini/session.py): unknown from the start of its write until the write returns,
     sent after that, acknowledged once the server confirmed it. A write that fails leaves it
-    unknown: the server may or may not have it. A native-streaming push the server answered with
-    an error naming its client event is refused: the server does not have it."""
+    unknown: the server may or may not have it. A native-streaming push or an in-place edit's
+    operation the server answered with an error naming its client event is refused: the server
+    did not make it."""
 
     SENT = "sent"
     ACKNOWLEDGED = "acknowledged"
@@ -215,12 +216,13 @@ class RealtimeSessionCore:
 
     ``new_id(kind)`` names each planned client item and client event. ``on_delivery(state,
     contents)`` hears each change in what became of operations: "sent", "confirmed", "refused"
-    (a push) or "unknown" (a failed write), with each operation's key and block. The mirror
-    takes in a plan as it is made, before the driver sends it (an in-place edit only once it is
-    acknowledged), so after a failed send it is ahead of the server; the session is not used
-    again then, as the runtime reconnects or rebuilds (harnesses/default/context.py). A pushed
-    block the server refuses leaves the mirror, and the session goes on without it:
-    native-streaming edits leave it out of the views they plan from.
+    (an error named its client event) or "unknown" (a failed write), with each operation's key
+    and block, None for a delete, whose create named it. The mirror takes in a plan as it is
+    made, before the driver sends it (an in-place edit only once it is acknowledged), so after a
+    failed send it is ahead of the server; the session is not used again then, as the runtime
+    reconnects or rebuilds (harnesses/default/context.py). A pushed block the server refuses
+    leaves the mirror, and the session goes on without it: native-streaming edits leave it out
+    of the views they plan from.
     """
 
     def __init__(
@@ -537,7 +539,7 @@ class RealtimeSessionCore:
             self._on_delivery("unknown", [(operation.key, operation.block)])
 
     def settled(self, operation: Operation) -> bool:
-        """Whether the server acknowledged an operation, or refused it as a push."""
+        """Whether the server acknowledged an operation, or refused it."""
         return self.delivery.get(operation.key) in (Delivery.ACKNOWLEDGED, Delivery.REFUSED)
 
     @property
@@ -663,6 +665,12 @@ class RealtimeSessionCore:
                 return True
             edit = self._edit
             about_edit = edit is not None and event_id in edit.client_events
+            if about_edit:
+                # The server did not make the operation the error names.
+                (refused,) = (op for op in edit.operations if op.event_id == event_id)
+                if self.delivery.get(refused.key) is not Delivery.ACKNOWLEDGED:
+                    self.delivery[refused.key] = Delivery.REFUSED
+                    self._on_delivery("refused", [(refused.key, refused.block)])
             taken = False
             # An error that names no client event may be about any of them.
             if self._unconfirmed and self._edit_error is None and (event_id is None or about_edit):

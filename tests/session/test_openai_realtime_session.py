@@ -363,6 +363,34 @@ def test_an_error_about_the_edit_fails_it(named):
     assert not core.frames["d0.frame"].folded
 
 
+@pytest.mark.parametrize("named", ["last", "none"])
+def test_the_edit_operation_an_error_names_is_refused(named):
+    """The operation of an edit whose client event the server's error names is refused, as a
+    refused push is: the server did not make it. An error that names no event refuses none of
+    them; they stay sent or confirmed."""
+    heard = []
+    numbers = itertools.count(1)
+    core = RealtimeSessionCore(
+        lambda kind: f"rtb_{kind}_{next(numbers)}",
+        lambda state, contents: heard.append((state, contents)),
+    )
+    turns = [turn(0, "a0"), turn(1, "a1")]
+    for operation in sent(core, core.replay(view(turns))):
+        core.receive(done(operation.item_id))
+    turns[0].fold_visual()
+    first, last = sent(core, core.begin_edit(view(turns)).operations)
+    core.receive(deleted(first.item_id))
+    heard.clear()
+    core.receive(error(last.event_id if named == "last" else None))
+    if named == "last":
+        assert heard == [("refused", [(last.key, "d0.frame")])]
+        assert core.delivery[last.key] is Delivery.REFUSED
+    else:
+        assert heard == []
+        assert core.delivery[last.key] is Delivery.SENT
+    assert core.delivery[first.key] is Delivery.ACKNOWLEDGED
+
+
 def test_an_error_about_another_event_leaves_the_edit_waiting():
     turns = [turn(0, "a0"), turn(1, "a1")]
     core = opened(turns)

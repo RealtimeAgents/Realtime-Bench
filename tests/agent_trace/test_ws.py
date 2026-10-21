@@ -282,15 +282,16 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
     assert error["ack_outcome"] == "error"
 
     # What became of each item the session core wrote, by connection: turn 0's frame was sent,
-    # then confirmed (conversation.item.done); the delete the server refused stays sent; the
-    # rebuild's items, the history and then turn 2's frame, are confirmed on the new connection.
+    # then confirmed (conversation.item.done); the delete the server's error names was sent, then
+    # refused; the rebuild's items, the history and then turn 2's frame, are confirmed on the new
+    # connection.
     deliveries: dict[tuple, list] = {}
     for delivery in (e["payload"] for e in events if e["event"] == "SessionDelivery"):
         for content in delivery["contents"]:
             states = deliveries.setdefault((delivery["connection"], tuple(content["key"])), [])
             states.append((delivery["state"], content["block"]))
     refused = json.loads(load_body(pack, deletes[-1]["body"]))["item_id"]
-    assert deliveries[(first, ("delete", refused))] == [("sent", None)]
+    assert deliveries[(first, ("delete", refused))] == [("sent", None), ("refused", None)]
     created = [key for connection, key in deliveries if connection == first and key[0] == "create"]
     assert deliveries[(first, created[0])] == [("sent", "d0.frame"), ("confirmed", "d0.frame")]
     assert [states[-1] for (c, _), states in deliveries.items() if c == rebuilt] == [
