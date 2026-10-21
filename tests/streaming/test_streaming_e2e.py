@@ -1,202 +1,392 @@
-"""Native-streaming episodes end to end over replayed live sessions (tests/streaming/e2e.py).
+"""Native-streaming episodes end to end on the real agent and drivers (tests/streaming/e2e.py).
 
-Each cassette scripts the same episode. The environment captures a frame at 0, 1 and 2 s, and
-the agent pushes each as it comes. Reply 1 starts on the first frame at 0 s; its click, based on
-frame 1, comes off the wire at 0.4 s and executes at once, and the reply ends at 0.6 s. Reply 2
-starts then and never ends: the deadline at 3 s gives it up, and the snapshot takes 0.5 s.
+NativeStreamingAgent runs on OpenAIRealtimeDriver or GeminiLiveDriver, each connected to the
+cassette's server on the fake clock. The environment captures a frame at 0, 1 and 2 s, and the
+agent pushes each as it comes. Reply 1 starts on the first frame at 0 s; its click, based on
+frame 1, comes off the wire at 0.4 s and takes 0.1 s to execute. Reply 2 starts when reply 1
+ends and never ends: the deadline at 3 s gives it up, and the snapshot takes 0.5 s.
+
+The opening message's system instruction, and Gemini's function declarations, are placeholders
+in the cassettes; each test checks the values they stand for against the agent's seed.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from typing import ClassVar
 
+import pytest
+
+from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Termination
 from realtime_framework.evaluation.reporting import summarize_streaming
-from tests.replay import baseline
-from tests.replay.frames import screenshot
-from tests.replay.ws_gemini_live import WireNormalizer
-from tests.streaming.e2e import (
-    LIVE_PATH,
-    SILENCE,
-    ScriptedLiveAgent,
-    ScriptedRealtimeAgent,
-    run_e2e,
+from realtime_framework.harnesses.default.prompts import (
+    FUNCTION_CALL_FRAME_PROMPT,
+    TEXT_ACTION_FRAME_PROMPT,
 )
+from realtime_framework.harnesses.registry import configure_agent, create_agent
+from realtime_framework.providers import registry as catalog
+from realtime_framework.sandbox.observation.capture import prepare_for_model
+from realtime_framework.sandbox.observation.som import render_frame_number
+from tests.replay import baseline
+from tests.replay.fake_env import FakeEnvironment
+from tests.replay.frames import screenshot
+from tests.replay.ws_gemini_live import QUEUED_RESPONSE, WireNormalizer
+from tests.streaming.clocked_ws import clocked_connection
+from tests.streaming.e2e import LIVE_PATH, SILENCE, run_e2e
+from tests.streaming.ws_cassette import RealtimeNormalizer
 
 FRAMES = [f"replay-form:{n:06d}" for n in (1, 2, 3)]  # tests/replay/frames.py ids, captures 0-2
-CLICK = {"x": 1, "y": 2, "frame": 1}
+TASK = "Click the button."
+CLICK = {"x": 100, "y": 200, "frame": 1}
+REQUESTED = "click {'x': 100, 'y': 200}"
+FEEDBACK = f"EXECUTION RESULT: actual={REQUESTED}; requested={REQUESTED}; status=applied."
+INSTRUCTION = "<system instruction>"
+TOOLS = "<tools>"
+EXECUTION_S = 0.1
+
+
+@pytest.fixture(autouse=True)
+def _slow_click(monkeypatch):
+    """A click that executes in no time commits as reply 2 starts on OpenAI, where the reply's end
+    hands its action over, and whether reply 2's request holds its feedback is then a race."""
+    execute = FakeEnvironment.execute
+
+    def slow(self, action, *, release_at=None):
+        status = execute(self, action, release_at=release_at)
+        self.clock.sleep(EXECUTION_S)
+        return status
+
+    monkeypatch.setattr(FakeEnvironment, "execute", slow)
+
+
+class _Placeholders:
+    """Replaces the value under each key in PLACEHOLDERS with its placeholder, and keeps it."""
+
+    PLACEHOLDERS: ClassVar[dict[str, str]] = {}
+
+    def __init__(self):
+        super().__init__()
+        self.hidden: dict[str, object] = {}
+
+    def __call__(self, value, key=None):
+        if key in self.PLACEHOLDERS:
+            self.hidden[key] = value
+            return self.PLACEHOLDERS[key]
+        return super().__call__(value, key)
+
+
+class RealtimeWire(_Placeholders, RealtimeNormalizer):
+    PLACEHOLDERS: ClassVar[dict[str, str]] = {"instructions": INSTRUCTION}
+
+
+class LiveWire(_Placeholders, WireNormalizer):
+    PLACEHOLDERS: ClassVar[dict[str, str]] = {"systemInstruction": INSTRUCTION, "tools": TOOLS}
+
+
+def _initialized(agent, clock):
+    configure_agent(agent, fps=1.0, tokens_per_frame=None, clock_mode="wall", category="realtime")
+    agent.initialize(TASK, Observation(b"", clock.time(), 0, {}))
+    return agent
+
+
+def _agent(config, log_dir, trace, clock):
+    return create_agent(config, log_dir, trace=trace, clock=clock, interaction_mode="streaming")
+
+
+def realtime_agent(log_dir):
+    def build(clock, port, *, trace):
+        config = catalog.to_model_config(
+            "gpt-realtime-2", fps=1.0, reasoning_effort="low", api_key="sk-replay"
+        ).model_copy(update={"api_base_url": f"http://127.0.0.1:{port}/v1"})
+        agent = _agent(config, log_dir, trace, clock)
+        # The SDK's synchronous connection reads on a thread the fake clock does not know.
+        agent.driver._ws_connection = clocked_connection(agent.driver._ws_connection, clock)
+        return _initialized(agent, clock)
+
+    return build
+
+
+def live_agent(log_dir):
+    def build(clock, port, *, trace):
+        config = catalog.to_model_config(
+            "gemini-3.8-live", fps=1.0, reasoning_effort="fixed", api_key="replay-key"
+        )
+        agent = _agent(config, log_dir, trace, clock)
+        # google-genai connects over wss whenever it has an API key; the server is plain ws.
+        api_client = agent.driver.client._api_client
+        api_client._websocket_base_url = lambda: f"ws://127.0.0.1:{port}"
+        del api_client._websocket_ssl_ctx["ssl"]
+        return _initialized(agent, clock)
+
+    return build
 
 
 def _record(direction, msg=None, at=None):
     return {"conn": 1, "dir": direction, "at": at, "msg": msg}
 
 
-def _image(n: int) -> str:
-    return baseline.image_digest(screenshot(n))
+def _frame(n: int) -> str:
+    """Capture ``n`` (from 0) as the agent sends it: scaled for the model, its number drawn."""
+    return baseline.image_digest(render_frame_number(prepare_for_model(screenshot(n)).data, n + 1))
 
 
-def _realtime_push(n: int, at: float) -> list[dict]:
-    """Frame ``n`` (from 0) going in at ``at``, and the server's confirmation."""
-    item = {
-        "id": f"<rtb_user-{n + 1}>", "type": "message", "role": "user",
-        "content": [
-            {"type": "input_text", "text": f"FRAME {n + 1}"},
-            {"type": "input_image", "image_url": f"data:image/png;{_image(n)}"},
-        ],
+def _realtime_push(n: int, content: list[dict], at: float, previous: str | None) -> list[dict]:
+    """Item ``n`` (from 1) going in at ``at``, and the server's confirmation of it."""
+    item = {"id": f"<rtb_user-{n}>", "type": "message", "role": "user", "content": content}
+    create = {"type": "conversation.item.create", "event_id": f"<rtb_push-{n}>", "item": item}
+    done = {
+        "type": "conversation.item.done", "previous_item_id": previous,
+        "item": {"id": f"<rtb_user-{n}>"},
     }  # fmt: skip
-    create = {"type": "conversation.item.create", "event_id": f"<rtb_push-{n + 1}>", "item": item}
-    created = {"type": "conversation.item.created", "item": {"id": f"<rtb_user-{n + 1}>"}}
-    return [_record("c2s", create, at), _record("s2c", created)]
+    return [_record("c2s", create, at), _record("s2c", done)]
+
+
+def _realtime_frame(n: int) -> list[dict]:
+    return [
+        {"type": "input_text", "text": TEXT_ACTION_FRAME_PROMPT},
+        {"type": "input_image", "image_url": f"data:image/png;{_frame(n)}"},
+    ]
 
 
 def realtime_cassette(frame_2_at: float = 1.0) -> list[dict]:
-    create = {"type": "response.create", "response": {"max_output_tokens": "inf"}}
-    click = {
-        "type": "response.output_text.done", "response_id": "resp_1", "item_id": "item_1",
-        "text": json.dumps({"action": "click", **CLICK}),
+    """``frame_2_at``: when the cassette has the second frame go in."""
+    session = {
+        "type": "realtime", "instructions": INSTRUCTION, "output_modalities": ["text"],
+        "truncation": "disabled",
+    }  # fmt: skip
+    create = {
+        "type": "response.create",
+        "response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}},
+    }
+    text = json.dumps({"action": "click", **CLICK})
+    added = {"type": "response.output_item.added", "response_id": "resp_1"}
+    reply = {"response_id": "resp_1", "item_id": "item_1", "output_index": 0, "content_index": 0}
+    usage = {
+        "input_tokens": 20, "output_tokens": 5, "total_tokens": 25,
+        "input_token_details": {
+            "cached_tokens": 0, "text_tokens": 10, "image_tokens": 10, "audio_tokens": 0,
+        },
+        "output_token_details": {"text_tokens": 5, "audio_tokens": 0},
+    }  # fmt: skip
+    done = {
+        "id": "resp_1", "status": "completed", "output": [{"id": "item_1"}], "usage": usage,
     }  # fmt: skip
     return [
         _record("open", at=0.0),
         _record("s2c", {"type": "session.created", "session": {}}),
-        _record("c2s", {"type": "session.update", "session": {"type": "realtime"}}, 0.0),
+        _record("c2s", {"type": "session.update", "session": session}, 0.0),
         _record("s2c", {"type": "session.updated", "session": {}}),
-        *_realtime_push(0, 0.0),
+        *_realtime_push(1, _realtime_frame(0), 0.0, None),
         _record("c2s", create, 0.0),
         _record("s2c", {"type": "response.created", "response": {"id": "resp_1"}}, 0.2),
-        _record("s2c", click, 0.4),
-        _record("s2c", {"type": "response.done", "response": {"id": "resp_1"}}, 0.6),
-        _record("c2s", create, 0.6),
-        _record("s2c", {"type": "response.created", "response": {"id": "resp_2"}}, 0.8),
-        *_realtime_push(1, frame_2_at),
-        *_realtime_push(2, 2.0),
+        _record("s2c", {**added, "item": {"id": "item_1"}}, 0.2),
+        _record("s2c", {"type": "response.output_text.delta", **reply, "delta": text}, 0.3),
+        _record("s2c", {"type": "response.output_text.done", **reply, "text": text}, 0.4),
+        _record("s2c", {"type": "response.done", "response": done}, 0.4),
+        _record("c2s", create, 0.4),
+        _record("s2c", {"type": "response.created", "response": {"id": "resp_2"}}, 0.6),
+        # The click's feedback, committed at 0.5 s, goes in before the next frame.
+        *_realtime_push(2, [{"type": "input_text", "text": FEEDBACK}], 1.0, "item_1"),
+        *_realtime_push(3, _realtime_frame(1), frame_2_at, "<rtb_user-2>"),
+        *_realtime_push(4, _realtime_frame(2), 2.0, "<rtb_user-3>"),
         _record(
             "c2s",
             {"type": "response.cancel", "event_id": "<rtb_cancel-1>", "response_id": "resp_2"},
             3.0,
         ),
-        _record("s2c", {"type": "response.done", "response": {"id": "resp_2"}}),
-        _record("close", {"by": "client", "code": 1000}),
+        _record("close", {"by": "client", "code": 1000}, 3.0),
     ]
+
+
+def _live_input(at: float, **realtime_input) -> dict:
+    return _record("c2s", {"realtime_input": realtime_input}, at)
 
 
 def _live_push(n: int, at: float) -> list[dict]:
-    video = {"data": _image(n), "mime_type": "image/png"}
+    """Capture ``n`` (from 0) going in at ``at``: its image, then its text."""
     return [
-        _record("c2s", {"realtime_input": {"video": video}}, at),
-        _record("c2s", {"realtime_input": {"text": f"FRAME {n + 1}"}}, at),
+        _live_input(at, video={"data": _frame(n), "mime_type": "image/png"}),
+        _live_input(at, text=FUNCTION_CALL_FRAME_PROMPT),
     ]
 
 
-def _live_trigger(at: float) -> list[dict]:
-    # WireNormalizer keeps an audio blob as the SHA-256 of its bytes.
+def _live_trigger(at: float, *text: str) -> list[dict]:
+    """A reply's start: one activity, the text it carries and the silence that opens it."""
     silence = {
-        "data": f"sha256:{hashlib.sha256(SILENCE).hexdigest()}",
-        "mime_type": "audio/pcm;rate=16000",
-    }
+        "data": "sha256:" + hashlib.sha256(SILENCE).hexdigest(), "mime_type": "audio/pcm;rate=16000",
+    }  # fmt: skip
     return [
-        _record("c2s", {"realtime_input": {"activityStart": {}}}, at),
-        _record("c2s", {"realtime_input": {"audio": silence}}, at),
-        _record("c2s", {"realtime_input": {"activityEnd": {}}}, at),
+        _live_input(at, activityStart={}),
+        *(_live_input(at, text=part) for part in text),
+        _live_input(at, audio=silence),
+        _live_input(at, activityEnd={}),
     ]
 
 
 def live_cassette() -> list[dict]:
+    setup = {
+        "model": "models/gemini-3.8-live",
+        "generationConfig": {"responseModalities": ["AUDIO"]},
+        "systemInstruction": INSTRUCTION,
+        "tools": TOOLS,
+        "realtimeInputConfig": {
+            "activity_handling": "NO_INTERRUPTION",
+            "automatic_activity_detection": {"disabled": True},
+            "turn_coverage": "TURN_INCLUDES_ALL_INPUT",
+        },
+        "contextWindowCompression": {
+            "sliding_window": {"target_tokens": 32768}, "trigger_tokens": 65536,
+        },
+        "outputAudioTranscription": {},
+        "sessionResumption": {},
+    }  # fmt: skip
     call = {"id": "call_1", "name": "click", "args": CLICK}
-    queued = {"id": "call_1", "name": "click", "response": {"status": "queued_not_executed"}}
+    response = {
+        "id": "call_1", "name": "click", "response": QUEUED_RESPONSE, "scheduling": "SILENT",
+        "will_continue": False,
+    }  # fmt: skip
+    usage = {"promptTokenCount": 20, "responseTokenCount": 3, "totalTokenCount": 23}
     return [
         _record("open", {"path": LIVE_PATH}, 0.0),
-        _record("c2s", ScriptedLiveAgent.SETUP, 0.0),
+        _record("c2s", {"setup": setup}, 0.0),
         _record("s2c", {"setupComplete": {}}),
         *_live_push(0, 0.0),
         *_live_trigger(0.0),
         _record("s2c", {"toolCall": {"functionCalls": [call]}}, 0.4),
-        _record("c2s", {"tool_response": {"functionResponses": [queued]}}, 0.4),
-        _record("s2c", {"serverContent": {"turnComplete": True}}, 0.6),
-        *_live_trigger(0.6),
+        _record("c2s", {"tool_response": {"functionResponses": [response]}}, 0.4),
+        _record("s2c", {"serverContent": {"turnComplete": True}, "usageMetadata": usage}, 0.6),
+        *_live_trigger(0.6, FEEDBACK),
         *_live_push(1, 1.0),
         *_live_push(2, 2.0),
-        # Gemini Live names no reply to cancel: giving one up closes its connection.
-        _record("close", {"by": "client", "code": 1000}),
+        _record("close", {"by": "client", "code": 1000}, 3.0),
     ]
 
 
-def _the_scripted_episode(episode, call_id):
-    """What the episode both cassettes script leaves, whichever API it ran on."""
+def _agent_records(episode, event: TraceEvent) -> list[dict]:
+    return [row["payload"] for row in episode.records if row["event"] == event.value]
+
+
+def _delivered(episode, state: str) -> list[str | None]:
+    return [
+        content["block"]
+        for payload in _agent_records(episode, TraceEvent.SESSION_DELIVERY)
+        if payload["state"] == state
+        for content in payload["contents"]
+    ]
+
+
+def _the_episode(episode, call_id: str) -> dict:
+    """What either cassette's episode leaves in the kernel, the environment and the agent; and
+    the episode's streaming summary."""
     env, agent = episode.env, episode.agent
     assert episode.logs == []
     assert episode.problems == []  # every message at its time, and the cassette used up
     assert episode.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.0, 3.5, None)
-    assert [(p.observation_id, p.sent_at) for p in agent.pushed] == list(
-        zip(FRAMES, (0.0, 1.0, 2.0), strict=True)
-    )
-    assert agent.started == [(1, FRAMES[0], 0.0), (2, FRAMES[0], 0.6)]
-    assert (agent.accepted, agent.aborted, agent.discarded) == ([1], [(2, 3.0)], [2])
-    ((committed_at, outcome),) = agent.committed
-    assert (committed_at, outcome.status, outcome.call_id) == (0.4, "applied", call_id)
-    assert (outcome.arrived_at, outcome.frame_age_s) == (0.4, 0.4)
     (execution,) = env.executions
     assert (execution["time"], execution["status"]) == (0.4, "applied")
-    assert execution["action"]["parameters"] == {"x": 1, "y": 2}
+    assert execution["action"]["parameters"] == {"x": 100, "y": 200}
+    assert execution["action"]["coordinate_space"] == "model_image_px"
     assert [c["call"] for c in env.calls] == [
         "env.capture", "env.execute", "env.capture", "env.capture",
         "task.evaluation_snapshot", "env.release_inputs",
     ]  # fmt: skip
-    assert env._termination == {
-        "stop_reason": "time_limit", "end_s": 3.0, "snapshot_s": 3.5, "snapshot_delay_s": 0.5,
-    }  # fmt: skip
-    assert episode.kernel("FrameCaptured", "observation_id", "timestamp") == list(
-        zip(FRAMES, (0.0, 1.0, 2.0), strict=True)
-    )
     assert episode.kernel("FramePushed", "observation_id", "sent_at", "error") == [
         (FRAMES[0], 0.0, None), (FRAMES[1], 1.0, None), (FRAMES[2], 2.0, None),
     ]  # fmt: skip
-    assert episode.kernel("ActionArrived", "call_id", "frame", "frame_age_frames") == [
-        (call_id, 1, 0)
-    ]
+    assert episode.kernel(
+        "ActionArrived", "call_id", "frame", "frame_age_s", "frame_age_frames", "generation"
+    ) == [(call_id, 1, 0.4, 0, 1)]
     assert episode.kernel("ActionResolved", "status", "started_at", "finished_at") == [
-        ("applied", 0.4, 0.4)
+        ("applied", 0.4, 0.4 + EXECUTION_S)
     ]
     assert episode.kernel("ResultDiscarded", "generation") == [(2,)]
     assert episode.kernel("FrameDropped") == []
-    assert episode.records[-1]["payload"]["kind"] == "Termination"
-
-
-def test_an_episode_over_a_replayed_openai_realtime_session(tmp_path):
-    episode = run_e2e(ScriptedRealtimeAgent, realtime_cassette(), tmp_path, duration_s=3.0)
-    _the_scripted_episode(episode, "item_1")
-    summary = summarize_streaming(episode.trace_path, {"retained_frames": 20})
-    assert summary["context_control"] == "exact"
+    assert agent.action_history == [
+        {
+            "decision": 0, "call_id": call_id, "requested": REQUESTED, "executed": REQUESTED,
+            "result": "applied", "detail": "",
+        }
+    ]  # fmt: skip
+    assert [
+        (row.frame, row.observation_id, row.send_status, row.sent_unix_s)
+        for row in agent.frames._frames.values()
+    ] == [(1, FRAMES[0], "sent", 0.0), (2, FRAMES[1], "sent", 1.0), (3, FRAMES[2], "sent", 2.0)]
+    assert [
+        (sent["frame"], sent["observation_id"])
+        for sent in _agent_records(episode, TraceEvent.FRAME_SENT)
+    ] == [(1, FRAMES[0]), (2, FRAMES[1]), (3, FRAMES[2])]
+    trajectory = episode.trace_path.parent / "agent" / "trajectory.jsonl"
+    rows = [json.loads(line) for line in trajectory.read_text().splitlines()]
+    assert [(row["type"], row["generation"], row["observation_id"]) for row in rows] == [
+        ("reply", 1, FRAMES[0]), ("reply_discarded", 2, FRAMES[0]),
+    ]  # fmt: skip
+    summary = summarize_streaming(episode.trace_path, agent.driver.streaming_settings)
     assert (summary["frames"]["captured"], summary["frames"]["pushed"]) == (3, 3)
     assert summary["actions"]["outcomes"] == {"applied": 1}
     assert summary["replies"] == {"started": 2, "abandoned": {"deadline": 1}}
+    return summary
 
 
-def test_an_episode_over_a_replayed_gemini_live_session(tmp_path):
+def test_the_agent_on_openai_realtime_over_a_replayed_session(tmp_path):
+    wire = RealtimeWire()
     episode = run_e2e(
-        ScriptedLiveAgent, live_cassette(), tmp_path, duration_s=3.0, normalizer=WireNormalizer()
-    )
-    _the_scripted_episode(episode, "call_1")
-    settings = {"compression_trigger_tokens": 65_536, "compression_target_tokens": 32_768}
-    summary = summarize_streaming(episode.trace_path, settings)
+        realtime_agent(tmp_path / "agent"), realtime_cassette(), tmp_path, duration_s=3.0,
+        normalizer=wire,
+    )  # fmt: skip
+    summary = _the_episode(episode, "text")
+    assert wire.hidden == {"instructions": episode.agent._seed.system_instruction}
+    # The server confirms every frame and the feedback as it takes them.
+    blocks = ["f1.frame", "d0.text.feedback", "f2.frame", "f3.frame"]
+    assert _delivered(episode, "sent") == blocks
+    assert _delivered(episode, "confirmed") == blocks
+    assert summary["context_control"] == "exact"
+    assert summary["frames"]["confirmed"] == 3
+    assert summary["frames"]["send_to_confirm_s"]["max"] == 0.0
+
+
+def test_the_agent_on_gemini_live_over_a_replayed_session(tmp_path):
+    wire = LiveWire()
+    episode = run_e2e(
+        live_agent(tmp_path / "agent"), live_cassette(), tmp_path, duration_s=3.0,
+        normalizer=wire,
+    )  # fmt: skip
+    summary = _the_episode(episode, "call_1")
+    agent = episode.agent
+    assert wire.hidden["systemInstruction"] == {"parts": [{"text": agent._seed.system_instruction}]}
+    (tools,) = wire.hidden["tools"]
+    assert [tool["name"] for tool in tools["functionDeclarations"]] == [
+        declaration["name"] for declaration in agent._answer.function_declarations
+    ]
+    # Gemini Live confirms nothing but the setup.
+    assert _delivered(episode, "sent") == [
+        "f1.frame", None, "d0.call_1.feedback", "f2.frame", "f3.frame",
+    ]  # fmt: skip
+    assert _delivered(episode, "confirmed") == ["system"]
     assert summary["context_control"] == "approximate"
-    assert (summary["frames"]["pushed"], summary["frames"]["confirmed"]) == (3, 0)
+    assert summary["frames"]["confirmed"] == 0
 
 
 def test_a_session_that_departs_from_its_cassette_ends_the_episode_invalid(tmp_path):
-    """The cassette has frame 2 going in at 1.5 s; the episode pushes it as it is captured, at
-    1 s. The server closes the connection over it, the reply running fails with it, and the run
-    is invalid at that time."""
+    """The cassette has the second frame go in at 1.5 s; the agent pushes it as it is captured,
+    at 1 s. The server closes the connection over it, which fails that push and the reply
+    running, and the run is invalid then."""
     episode = run_e2e(
-        ScriptedRealtimeAgent, realtime_cassette(frame_2_at=1.5), tmp_path, duration_s=3.0
-    )
-    assert episode.problems[0] == (
-        "conn 1 record 12: c2s conversation.item.create at t=1, recorded at t=1.5"
-    )
+        realtime_agent(tmp_path / "agent"), realtime_cassette(frame_2_at=1.5), tmp_path,
+        duration_s=3.0, normalizer=RealtimeWire(),
+    )  # fmt: skip
+    assert episode.problems == [
+        "conn 1 record 16: c2s conversation.item.create at t=1, recorded at t=1.5"
+    ]
     termination = episode.termination
     assert (termination.stop_reason, termination.ended_at) == ("invalid_run", 1.0)
-    assert termination.invalid.reason == "generation_error"
-    assert "ConnectionError: the session ended during reply 2" in termination.invalid.detail
+    assert (termination.invalid.category, termination.invalid.reason) == (
+        "provider",
+        "generation_error",
+    )
+    assert "received 1011 (internal error) conn 1 record 16" in termination.invalid.detail
     assert episode.kernel("FrameDropped", "observation_id", "reason") == [
         (FRAMES[1], "push_failed")
     ]
