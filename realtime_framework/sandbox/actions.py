@@ -1016,8 +1016,8 @@ class GuestEnvironment:
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
             ):
-                # The checks and the hold snapshot below take _wall_lock, which the wall clock's
-                # release timer holds during its guest request.
+                # On the wall clock some checks and the hold snapshot below wait for _wall_lock,
+                # which the release timer holds during its guest request.
                 self._reject(action)
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
