@@ -16,6 +16,7 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.events import (
     FunctionCall,
+    FunctionCallsCancelled,
     GenerationBoundary,
     ProviderHistoryState,
     TextDelta,
@@ -51,6 +52,14 @@ class Call:
 class Text:
     at: float
     text: str
+
+
+@dataclass(frozen=True)
+class Cancel:
+    """The provider cancels ``call_ids``, of this reply or an earlier one."""
+
+    at: float
+    call_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -159,7 +168,11 @@ class FakeLiveDriver(SessionLifecycle):
             gid = generation.generation_id
             if isinstance(message, Fail):
                 raise message.error
-            if isinstance(message, Call):
+            if isinstance(message, Cancel):
+                yield FunctionCallsCancelled(
+                    gid, sequence, call_ids=message.call_ids, received_at=received
+                )
+            elif isinstance(message, Call):
                 yield FunctionCall(
                     gid,
                     sequence,

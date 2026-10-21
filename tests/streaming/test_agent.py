@@ -8,6 +8,7 @@ import pytest
 
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.evaluation.kernel.events import Outcome
+from realtime_framework.evaluation.kernel.streaming import CallsCancelled
 from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
 from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
@@ -17,6 +18,7 @@ from .fake_live import (
     BUDGET,
     REALTIME,
     Call,
+    Cancel,
     Fail,
     Reply,
     Text,
@@ -405,5 +407,62 @@ def test_a_reply_starts_on_a_renewed_session(monkeypatch, clock):
     assert agent.driver.calls[-2:] == [
         ("sync", "go_away", ("system", "f1.frame", "f2.frame")),
         ("reply", 7, ("system", "f1.frame", "f2.frame")),
+    ]
+    agent.close()
+
+
+def _kinds(posted) -> list[tuple]:
+    """Each event posted: an arrival as (generation, call id), a cancellation as
+    ("cancelled", generation, call ids)."""
+    return [
+        ("cancelled", e.generation, e.call_ids)
+        if isinstance(e, CallsCancelled)
+        else (e.generation, e.call_id)
+        for e in posted
+    ]
+
+
+def test_a_cancellation_names_the_calls_it_withdraws_by_the_generation_they_came_in(
+    monkeypatch, clock
+):
+    """Each call is posted before the cancellation of it. A call the agent never handed over,
+    one that was no action or one it never had, is no one's to withdraw."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(
+        Reply(
+            (
+                _click("c1", 0.25, 2),
+                Call(0.375, "c2", "fly", {"to": "moon"}),
+                _click("c3", 0.5, 2),
+                Cancel(0.75, ("c3", "c2", "c1", "zz")),
+            ),
+            ends_at=1.0,
+        )
+    )
+    agent.generate(7, 3, frame, BUDGET)
+    assert _kinds(posted) == [(7, "c1"), (7, "c3"), ("cancelled", 7, ("c3", "c1"))]
+    agent.close()
+
+
+def test_a_reply_may_carry_the_cancellation_of_an_earlier_replys_calls(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [
+        Reply((_click("c1", 0.25, 2),), ends_at=0.5),
+        Reply((_click("c2", 0.25, 2), Cancel(0.5, ("c1", "c2"))), ends_at=1.0),
+    ]
+    agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    agent.generate(8, 4, frame, BUDGET)
+    assert _kinds(posted) == [
+        (7, "c1"),
+        (8, "c2"),
+        ("cancelled", 7, ("c1",)),
+        ("cancelled", 8, ("c2",)),
     ]
     agent.close()

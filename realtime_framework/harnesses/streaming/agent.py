@@ -17,9 +17,11 @@ A reply starts on the view. Each function call is parsed as its message is read,
 it names, and posted to the kernel with the time its message came off the wire, in semantic
 seconds from the episode's origin; one whose frame cannot be found arrives refused. One that is no
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
-the reply ended. An accepted reply's output joins the view; a discarded one adds nothing. Each
-outcome the kernel commits joins it as its execution feedback (feedback.py), where the policy
-places it.
+the reply ended. A call the provider cancels, of this reply or an earlier one, is withdrawn under
+the generation it came in, once its action was posted.
+
+An accepted reply's output joins the view; a discarded one adds nothing. Each outcome the kernel
+commits joins it as its execution feedback (feedback.py), where the policy places it.
 """
 
 from __future__ import annotations
@@ -36,7 +38,12 @@ from realtime_framework.entity.actions import (
 )
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.entity.events import FunctionCall, TextDelta, UsageSnapshot
+from realtime_framework.entity.events import (
+    FunctionCall,
+    FunctionCallsCancelled,
+    TextDelta,
+    UsageSnapshot,
+)
 from realtime_framework.entity.model import (
     ConnectRequest,
     GenerationHandle,
@@ -54,7 +61,7 @@ from realtime_framework.entity.request import (
     ContentBlock,
 )
 from realtime_framework.evaluation.kernel.events import Outcome
-from realtime_framework.evaluation.kernel.streaming import ActionArrived
+from realtime_framework.evaluation.kernel.streaming import ActionArrived, CallsCancelled
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
 from realtime_framework.harnesses.default.harness import (
@@ -124,6 +131,8 @@ class NativeStreamingAgent(VisionAgentBase):
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
         # What each action asked for (action_text), by its outcome's (decision, call id).
         self._requested: dict[tuple[int, str], str] = {}
+        # The generation of each call an action was posted for, which a cancellation names.
+        self._generation_of: dict[str, int] = {}
         super().__init__(config, log_dir, trace=trace)
 
     def _setup_backend(self):
@@ -335,6 +344,15 @@ class NativeStreamingAgent(VisionAgentBase):
                 action = {"action": event.name, **event.arguments}
             reply.calls.append(json.dumps(action, ensure_ascii=False))
             self._arrived(reply, reply.calls[-1], event.call_id, event.received_at)
+        elif isinstance(event, FunctionCallsCancelled):
+            # By the generation each call came in, which may be an earlier reply's.
+            withdrawn: dict[int, list[str]] = {}
+            with self._lock:
+                for call_id in event.call_ids:
+                    if call_id in self._generation_of:
+                        withdrawn.setdefault(self._generation_of[call_id], []).append(call_id)
+            for generation, call_ids in withdrawn.items():
+                self._post(CallsCancelled(generation, tuple(call_ids)))
 
     def _arrived(self, reply: _Reply, text: str, call_id: str, received_at: float) -> None:
         """Parse one action against the frame it names and post it, with the time its message
@@ -371,6 +389,7 @@ class NativeStreamingAgent(VisionAgentBase):
             self._requested[(reply.decision, call_id)] = (
                 "none" if action is None else action_text(action)
             )
+            self._generation_of[call_id] = reply.generation
         self._post(arrival)
 
     def abort(self, generation: int) -> None:
