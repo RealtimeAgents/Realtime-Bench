@@ -460,16 +460,11 @@ _RUNTIME_ENV_KEYS = frozenset(
     }
 )
 
-# These sources can change what a model sees, what it may emit, how actions execute, or how a run is
-# recorded. Task/scorer content is covered by the suite fingerprint, and each run's model and runtime
-# settings by runtime_config_hash, so neither configs/ nor task packages belong here.
-_HARNESS_DIRS = (
-    "realtime_framework/entity",
-    "realtime_framework/harnesses",
-    "realtime_framework/providers",
-    "realtime_framework/evaluation",
-    "realtime_framework/sandbox",
-)
+# The framework package, top-level modules and all: its sources can change what a model sees, what
+# it may emit, how actions execute, or how a run is recorded. Task/scorer content is covered by the
+# suite fingerprint, and each run's model and runtime settings by runtime_config_hash, so neither
+# configs/ nor task packages belong here.
+_HARNESS_PACKAGE = "realtime_framework"
 _SOURCE_SUFFIXES = frozenset({".py", ".yaml", ".yml", ".json", ".sh", ".toml"})
 # The released harness version and its locked hash live in pyproject.toml [tool.rtbench.harness],
 # outside the fingerprinted sources, like each suite manifest's version/suite_hash lock.
@@ -477,25 +472,11 @@ HARNESS_UNRELEASED = "+dev"
 
 
 def _source_paths() -> list[Path]:
-    paths = set()
-    missing = []
-    for relative in _HARNESS_DIRS:
-        directory = identity_ROOT / relative
-        if not directory.is_dir():
-            missing.append(relative + "/")
-            continue
-        paths.update(
-            path
-            for path in directory.rglob("*")
-            if path.is_file()
-            and path.suffix in _SOURCE_SUFFIXES
-            and "__pycache__" not in path.parts
-        )
-    if missing:
-        raise FileNotFoundError(
-            "Harness fingerprint source paths are missing: " + ", ".join(sorted(missing))
-        )
-    return sorted(paths)
+    return sorted(
+        path
+        for path in (identity_ROOT / _HARNESS_PACKAGE).rglob("*")
+        if path.is_file() and path.suffix in _SOURCE_SUFFIXES and "__pycache__" not in path.parts
+    )
 
 
 def _normalized_bytes(path: Path) -> bytes:
