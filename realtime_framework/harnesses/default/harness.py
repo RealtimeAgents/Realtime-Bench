@@ -1540,7 +1540,7 @@ class DefaultHarness(VisionAgentBase):
                 action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
             action, action_protocol = parse_grounded_action(
-                self, output.text, newest_execution, time.time()
+                self, output.text, newest_execution, self.clock.time()
             )
         thinking = output.reasoning_text
         serialization = output.token_fields.get("action_serialization")
