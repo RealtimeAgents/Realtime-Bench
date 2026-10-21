@@ -162,11 +162,9 @@ class GuestEnvironment:
         # the kernel's shell, which ends the leases itself; () on the wall clock, whose release
         # timer ends them.
         self.last_held_keys = ()
-        # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
-        # makes go to last_end_checks, each (ended, reason, error) as check_end() answered or
-        # failed, (False, None, None) also when the task has no end check, instead of done(),
-        # which invalidates the run at the first failure.
-        self.kernel_counts_reads = False
+        # The end checks the last key tap made, for the kernel's shell, which counts failed state
+        # reads: each (ended, reason, error) as check_end() answered or failed, (False, None, None)
+        # also when the task has no end check.
         self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
         self._wall_holds = {}
@@ -278,11 +276,9 @@ class GuestEnvironment:
                     break
 
     def _ended_after_step(self):
-        """The end check after each token step of wait_until_tick. When the kernel counts failed
-        reads, every check goes to last_end_checks as (ended, reason, error), and after a failed
-        one, (False, None, its traceback), the advance goes on."""
-        if not self.kernel_counts_reads:
-            return self.done()
+        """The end check after each token step of wait_until_tick: the kernel counts failed reads,
+        so every check goes to last_end_checks as (ended, reason, error), and after a failed one,
+        (False, None, its traceback), the advance goes on."""
         try:
             ended, reason = self.check_end()
         except Exception:  # noqa: BLE001 - the kernel counts the failed read
@@ -1143,38 +1139,12 @@ class GuestEnvironment:
             with self.action_audit_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
-    def done(self):
-        if getattr(self, "_invalid_run", None):
-            return True
-        if self._done:
-            return True
-        if self.stop_check is not None:
-            try:
-                with operation_budget(
-                    "state read", ENVIRONMENT_BUDGET.state_read_s, clock=self.clocks.operational
-                ):
-                    terminal = self.stop_check()
-                if terminal:
-                    self._episode_over = True
-                    if isinstance(terminal, str):
-                        self._terminal_reason = terminal
-                    return True
-            except Exception:
-                self._invalid_run = {
-                    "category": "environment",
-                    "reason": "terminal_state_check_failed",
-                    "detail": traceback.format_exc(),
-                }
-                return True
-        return False
-
     def check_end(self):
         """Ask the task whether the episode is over, for the kernel's shell: ``(ended, reason)``.
 
-        Unlike done(), ``_invalid_run`` is neither read nor written: a failed read raises, and the
-        kernel counts it (evaluation/shell.py). An end is latched in ``_episode_over`` and
-        ``_terminal_reason`` as done() latches it. On the wall clock one read has its own, shorter
-        budget.
+        ``_invalid_run`` is neither read nor written: a failed read raises, and the kernel counts
+        it (evaluation/shell.py). An end is latched in ``_episode_over`` and ``_terminal_reason``.
+        On the wall clock one read has its own, shorter budget.
         """
         if self.stop_check is None:
             return False, None
