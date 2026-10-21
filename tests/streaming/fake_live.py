@@ -39,6 +39,7 @@ LIVE = "gemini-3.8-live"  # configs/models/gemini-3.8-live.yaml; its policy row 
 REALTIME = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml; openai_realtime, actions in text
 BUDGET = DecisionBudget(None, None, None, "wall")
 EXACT, CONTAMINATED = ProviderHistoryState.EXACT, ProviderHistoryState.CONTAMINATED
+EXACT_SYNC = SyncDisposition.EXACT
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ class FakeLiveDriver(SessionLifecycle):
         self.renewal_required = False
         self.open = False
         self.connect_s = 0.0  # how long opening a connection takes
+        self.resumes = False  # a goAway renewal resumes the session instead of rebuilding it
         self._pushes: dict[str, asyncio.Event] = {}  # set once that observation's push went out
 
     def bind_trace(self, trace) -> None:
@@ -162,6 +164,10 @@ class FakeLiveDriver(SessionLifecycle):
         await self._close_current()
         self._open()
         self.calls.append(("sync", request.reason, _ids(request.history)))
+        if request.reason == "go_away" and self.resumes:
+            # As Gemini Live resumes a goAway renewal with its latest handle.
+            metadata = {"session_resumed": True, "history_session_reconnected": True}
+            return HistorySyncResult(EXACT_SYNC, EXACT, provider_metadata=metadata)
         return HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT)
 
     def _open(self) -> None:
@@ -308,6 +314,19 @@ def screenshot() -> bytes:
 
 def observation(clock, n: int) -> Observation:
     return Observation(screenshot(), clock.time(), n, {"observation_id": f"obs-{n}"})
+
+
+class RecordingTrace:
+    """An episode trace that keeps each capture as (event, payload)."""
+
+    def __init__(self):
+        self.captured: list[tuple] = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        self.captured.append((event, payload))
+
+    def of(self, event) -> list[dict]:
+        return [payload for captured, payload in self.captured if captured == event]
 
 
 def make_agent(

@@ -27,6 +27,7 @@ from .fake_live import (
     Fail,
     GoAway,
     RecordingToolRuntime,
+    RecordingTrace,
     Reply,
     Text,
     TextEnd,
@@ -858,3 +859,47 @@ def test_closing_while_a_push_reopens_the_session_closes_what_it_opened(monkeypa
     assert operations[-1] == "close"
     assert operations.index("connect", 1) < len(operations) - 1
     assert clock.wait(pushed, 1.0)
+
+
+# ---- what the trace says of the session --------------------------------------------------------
+
+
+def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkeypatch, clock):
+    """As RealtimeRuntime._record_sync and _record_reconnect: each session operation is a
+    HistoryChanged of the kind the driver's result reports, with the result's detail and
+    metadata, and a SessionStateChanged says whether the provider's context is known."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(
+        Reply(
+            (_click("c1", 0.25, 1),),
+            ends_at=1.0,
+            usage={"output_tokens": 3},
+            boundaries=("interrupted", "turn_complete"),
+        )
+    )
+    agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    agent.push(observation(clock, 3))
+    agent.driver.resumes = True
+    agent.driver.renewal_required = True
+    agent.push(observation(clock, 4))
+    agent.abort(8)
+    agent.push(observation(clock, 5))
+    changes = trace.of(TraceEvent.HISTORY_CHANGED)
+    assert [(c["kind"], c["trigger"], c["sync"]["reason"]) for c in changes] == [
+        ("rebuild", "recovery", "runtime_recovery"),
+        ("session_resumed", "provider", "go_away"),
+        ("rebuild", "recovery", "reconnect"),
+    ]
+    assert changes[1]["sync"]["provider_metadata"]["session_resumed"] is True
+    states = trace.of(TraceEvent.SESSION_STATE_CHANGED)
+    assert [(s["state"], s["cause"], s["generation_id"]) for s in states] == [
+        ("unknown", "generation_terminal_state", "streaming-7"),
+        ("exact", "sync:runtime_recovery", None),
+        ("unknown", "session_resumed", None),
+        ("exact", "reconnect", None),
+    ]
+    agent.close()
