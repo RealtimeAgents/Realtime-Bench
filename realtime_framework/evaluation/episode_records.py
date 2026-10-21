@@ -5,10 +5,24 @@ whether its result is usable, the protocol of a DONE or FAIL landed as a wait, i
 identity for the frozen-stream check, the payloads of its trace events and its action lifecycle
 record.
 
-run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
-records with them. Nothing here paces the episode, orders the skips or waits: each function takes
+The kernel's shell (shell.py) and the legacy turn loop (runner.py _run_stream_legacy) build their
+records with these. Nothing here paces the episode, orders the skips or waits: each function takes
 what its caller measured, so the pacing on the two sides stays separate code and running them side
 by side still compares it (phase2.md, 怎么验证).
+
+A generation's result ``r`` is settled in this order, each step reading what the ones before it
+wrote: ``annotate_result`` (the observation id the inspection proof is checked against), the
+``frame_usage`` between two ``usage_snapshot`` readings, ``account_tokens``, the
+``output_chunks`` and ``inference_completed`` payloads, ``audit_output_caps``,
+``finalize_decision_audit`` and last ``result_invalid``. A failed trajectory write is recorded on
+``r`` over any failure already there, so it takes precedence.
+
+What the kernel's GenerationResult takes from a settled ``r``: ``action`` is ``r["action"]``, a
+DONE or FAIL as it came; ``output_tokens`` the count before the allowance clamped it, which the
+kernel clamps itself: ``r["unclamped_clock_output_tokens"]`` when ``account_tokens`` clamped it,
+else ``r["clock_output_tokens"]``; ``latency`` is ``r["latency"]``;
+``protocol_failure`` comes from ``r["action_protocol"]``, which a result the loop made up for a
+failed or abandoned call has none of; ``invalid`` is ``result_invalid``.
 """
 
 from __future__ import annotations
@@ -242,9 +256,10 @@ def clock_output_tokens(r: dict) -> tuple[int | None, str | None]:
 
 def account_tokens(r: dict, remaining_clock_tokens: int | None, env) -> None:
     """Settle the result's clock output tokens and its token record, and add the record to the
-    episode's token accounting on ``env``. Output past the remaining allowance is billed but not
-    charged to the clock: the clock count stops at the allowance and the excess is kept as
-    post-horizon tokens."""
+    episode's token accounting on ``env``: once per result, on the thread that owns ``env``, as
+    nothing locks the accounting. Output past the remaining allowance is billed but not charged
+    to the clock: the clock count stops at the allowance and the excess is kept as post-horizon
+    tokens."""
     count, source = clock_output_tokens(r)
     if remaining_clock_tokens is not None and count is not None and count > remaining_clock_tokens:
         r["unclamped_clock_output_tokens"] = count
@@ -389,8 +404,9 @@ def terminal_wait_protocol(action_protocol: dict) -> dict:
 
 
 def frame_output_tokens(r: dict) -> int | None:
-    """The output tokens that place the decision's action: the clock count already settled on
-    ``r``, else the count its sources give now."""
+    """The output tokens the legacy loop places the decision's action with: the clock count
+    already settled on ``r``, which the allowance has clamped, else the count its sources give
+    now. The kernel takes the count before the clamp."""
     value = r.get("clock_output_tokens")
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
         return int(value)
