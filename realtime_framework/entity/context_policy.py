@@ -140,9 +140,10 @@ class PathPolicy:
     # output, and no encoder can do otherwise
     verbatim_replay: bool
     # 8 before each request, archive the oldest turns while it exceeds the declared context
-    # window, then, with no turn left, leave out the earliest archived actions. On allows it; it
-    # acts only where the API declares an estimate of its requests
-    # (RealtimeCapabilities.request_size_estimation) and the model config has a window
+    # window, then, with no turn left, leave out the earliest archived actions, which stay out
+    # for the rest of the episode as archived turns do. On allows it; it acts only where the API
+    # declares an estimate of its requests (RealtimeCapabilities.request_size_estimation) and
+    # the model config has a window
     pressure_archive: bool
     decision_history: DecisionHistory | None  # 9 Decision history form
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls

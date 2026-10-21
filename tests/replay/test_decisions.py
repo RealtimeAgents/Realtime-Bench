@@ -351,6 +351,16 @@ def _has_ledger(api: str, body: dict) -> bool:
     return body["state"]["history"][1]["content"].startswith(JEV_LEDGER_HEADER)
 
 
+def _first_decision(line: str) -> int:
+    """The decision of a ledger line's first action: its own, or the first of a run the JEV
+    digest compacts (providers/decisions/history.py compact_repeated_records)."""
+    record = json.loads(line)
+    if "decision" in record:
+        return record["decision"]
+    decisions = record["occurrences"]["decision"]
+    return decisions["start"] if isinstance(decisions, dict) else decisions[0]
+
+
 @pytest.mark.parametrize("api", list(APIS))
 def test_history_overflow(api, tmp_path):
     """History too long: the runtime estimates each request against the declared window and,
@@ -417,8 +427,13 @@ def test_jev_large_observation(tmp_path):
 
 # JEV windows for decision 24 of the terms scripts, which estimates 38560 bytes with its 24 turns,
 # 37743 with 14 and 36666 with 4 (each archived turn adds its action to the ledger): the first
-# needs two archived blocks; the second is below the system text and the terms alone.
-ARCHIVE_WINDOWS = {"two_blocks": (40000, 3000), "exhausted": (32000, 4000)}
+# needs two archived blocks; the second is below the system text and the terms alone; the third
+# holds the terms only once every turn is archived and ten actions are left out.
+ARCHIVE_WINDOWS = {
+    "two_blocks": (40000, 3000),
+    "exhausted": (32000, 4000),
+    "omission": (38000, 2000),
+}
 
 
 def _trace_events(run_dir: Path) -> list[dict]:
@@ -466,6 +481,28 @@ def test_history_overflow_two_blocks(tmp_path):
         {"archived_actions_before": 10, "archived_actions_after": 20},
     ]
     _settle("history_overflow_two_blocks", header, records, tmp_path)
+
+
+def test_history_overflow_omission_stays(tmp_path):
+    """Actions left out of the ledger stay out for the rest of the episode, as archived turns
+    stay archived, so the history the model sees stays stable: after decision 24 leaves ten out
+    to fit the terms, decisions 25-27 still leave them out, though with the full ledger they
+    would be far below the window."""
+    _, records = _play_terms(script.TERMS_OMISSION, ARCHIVE_WINDOWS["omission"], tmp_path)
+    k = script.TERMS_ARCHIVE_DECISION
+    window, reserve = ARCHIVE_WINDOWS["omission"]
+    assert not any(r["result"].get("invalid_reason") for r in records)
+    omissions = _pressure_archives(tmp_path, "ledger_omission")
+    assert [(o["scope"]["decision"], o["ledger"]["omitted_actions_after"]) for o in omissions] == [
+        (k, 10)
+    ]
+    for record in records[k + 1 :]:
+        runtime = _runtime(record)
+        assert runtime["history_omitted_actions_total"] == 10
+        assert runtime["request_context"]["input_tokens"] < (window - reserve) / 3
+        ledger = _bodies(record)[0]["state"]["history"][1]["content"].split("\n")
+        assert ledger[1] == LEDGER_OMISSION.format(count=10)
+        assert _first_decision(ledger[2]) == 11  # decisions count from 1 in the ledger
 
 
 def test_history_overflow_exhausted(tmp_path, monkeypatch):

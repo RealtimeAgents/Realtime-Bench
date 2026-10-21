@@ -171,7 +171,9 @@ class RealtimeRuntime:
         self._turns: list[CanonicalTurn] = []
         self._archived_action_count = 0
         # The earliest archived actions the ledger leaves out: a request that did not fit with
-        # every turn archived dropped them, and none comes back.
+        # every turn archived dropped them. As archived turns do, they stay out for the rest of
+        # the episode, though a later request would fit with them, so that the history the model
+        # sees does not change back.
         self._omitted_action_count = 0
         self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
         self._buffer = CatchupBuffer()
