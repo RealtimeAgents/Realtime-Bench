@@ -1,7 +1,8 @@
 """The kernel's inputs as run_episode records them (evaluation/shell.py ``inputs_log``): the
 readings of every kernel call that handled something and the events the step took from the inbox.
 Fed to a new kernel they reproduce the episode's log record for record, which is what replaying a
-real run's inputs after a change needs (phase2.md, 怎么验证)."""
+real run's inputs after a change needs (phase2.md, 怎么验证). A step the kernel raised in is the
+last line, marked; the log of an episode the kernel finished ends with an end line."""
 
 from __future__ import annotations
 
@@ -74,13 +75,17 @@ def recorded_event(record: dict):
 
 
 def replay_inputs(config, lines: list[dict]) -> tuple[Kernel, list]:
-    """Feed the recorded inputs to a new kernel; return it and the log it wrote."""
+    """Feed the recorded inputs to a new kernel, up to a step the kernel raised in; return it and
+    the log it wrote."""
     kernel = Kernel(TurnPolicy(config))
     start, *steps = lines
     assert (start["call"], start["events"]) == ("start", [])
     out = kernel.start(start["semantic"], start["ops"])
     entries = [command.entry for command in out if isinstance(command, Record)]
     for line in steps:
+        if line["call"] == "end" or line.get("raised"):
+            assert line is lines[-1]
+            break
         assert line["call"] == "step"
         for record in line["events"]:
             kernel.post(recorded_event(record))
@@ -139,6 +144,7 @@ def test_replaying_the_recorded_inputs_reproduces_the_episode_log(
     with kernel_log() as logged:
         episode = run(clock_mode, 3.0, replies, world, inputs_log=path, **fields)
     lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines[-1]["call"] == "end"
     kernel, entries = replay_inputs(episode.config, lines)
     assert entries == logged
     assert kernel.termination is not None
@@ -169,6 +175,71 @@ def test_an_input_the_log_cannot_hold_leaves_the_episode_to_finish(tmp_path):
     assert episode.statuses() == ["applied", "applied"]
     assert episode.env._stop_reason == "time_limit"
     assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
+    lines = (tmp_path / "inputs.jsonl").read_text().splitlines()
+    assert "end" not in [json.loads(line)["call"] for line in lines]
+
+
+def test_a_step_the_kernel_raised_in_is_the_log_s_last_line(tmp_path, monkeypatch):
+    """N11: the kernel raises in the step that takes the end check at 2 s. That step is the last
+    line, marked, with its readings and the events it took; there is no end line, and the lines
+    before it replay the kernel's log as far as it got."""
+    step = Kernel.step
+
+    def broken(kernel, semantic, ops=None):
+        taken = kernel.inbox._events
+        if semantic >= 2.0 and any(isinstance(event, events.EndChecked) for event in taken):
+            raise RuntimeError("step broke")
+        return step(kernel, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+    path = tmp_path / "kernel_inputs.jsonl"
+    with kernel_log() as logged:
+        episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], inputs_log=path)
+    assert episode.invalid["reason"] == "run_exception"
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    last = lines[-1]
+    assert (last["call"], last["raised"], last["semantic"]) == ("step", True, 2.0)
+    assert "EndChecked" in [event["event"] for event in last["events"]]
+    _, entries = replay_inputs(episode.config, lines)
+    assert entries == logged
+
+
+class _Disk(io.StringIO):
+    """A log file that keeps apart what was flushed to it."""
+
+    def __init__(self):
+        super().__init__()
+        self.flushed = ""
+        self.behind = []  # for each write, whether what came before was not flushed yet
+
+    def write(self, text: str) -> int:
+        self.behind.append(self.getvalue() != self.flushed)
+        return super().write(text)
+
+    def flush(self) -> None:
+        super().flush()
+        self.flushed = self.getvalue()
+
+
+class _Interrupted(Environment):
+    """The second end check is interrupted, as SIGTERM interrupts main() (runner.py)."""
+
+    def check_end(self):
+        if "check_end" in self.names():
+            raise KeyboardInterrupt
+        return super().check_end()
+
+
+def test_an_interrupted_episode_leaves_the_lines_it_wrote_on_disk(monkeypatch, tmp_path):
+    """Each line is flushed as it is written and the log is closed whatever stops the episode."""
+    disk = _Disk()
+    _opens(monkeypatch, lambda: disk)
+    with pytest.raises(KeyboardInterrupt):
+        run("wall", 3.0, [Reply(0.5)], inputs_log=tmp_path / "in.jsonl", env_type=_Interrupted)
+    assert disk.closed
+    calls = [json.loads(line)["call"] for line in disk.flushed.splitlines()]
+    assert calls[0] == "start" and calls[1:] and set(calls[1:]) == {"step"}
+    assert disk.behind == [False] * len(calls)
 
 
 class _FullDisk(io.StringIO):
