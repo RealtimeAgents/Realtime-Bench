@@ -336,6 +336,10 @@ class Outcome:
     next_observation_tick: float
     dropped_intermediate_frames: int
     post_action_rendered: bool
+    # Seconds from the capture of the frame the action was decided on until the action landed, on
+    # the turn-based clocks (simulated seconds on the token clock); until it arrived on streaming,
+    # which may be before it executes (FrameTable.age). The lifecycle record's
+    # frame_age_at_action_s either way.
     frame_age_s: float | None
     token_delay_frames: float | None
     action_output_tokens: int | None
