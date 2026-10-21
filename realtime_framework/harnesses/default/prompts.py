@@ -190,24 +190,43 @@ TEXT_ACTION_FRAME_PROMPT = (
 )
 
 
-def budget_clock_prompt(fps: float, tokens_per_frame: int | None, clock_mode: str = "token") -> str:
-    """Describe the effective evaluation clock without assuming a provider session mechanism."""
+def budget_clock_prompt(
+    fps: float,
+    tokens_per_frame: int | None,
+    clock_mode: str = "token",
+    env_fps: float | None = None,
+) -> str:
+    """Describe the effective evaluation clock without assuming a provider session mechanism.
+    ``fps`` is the model-input frame rate. ``env_fps``, the environment's, is described only
+    where it differs: frames then fall between environment ticks."""
+    second = "second" if clock_mode == "wall" else "simulated second"
+    ticks = (
+        ""
+        if env_fps is None or env_fps == fps
+        else f"Each frame is captured at the first environment tick ({env_fps:g} per {second}) "
+        "at or after its scheduled time; observed_at_tick in the action ledger counts these ticks. "
+    )
     if clock_mode == "wall":
         return (
             f"WALL CLOCK: observations are scheduled at {fps:g} fps. "
-            "Environment time follows physical elapsed time. Produce at most one action "
+            + ticks
+            + "Environment time follows physical elapsed time. Produce at most one action "
             "per decision and use execution feedback to track which actions were applied."
         )
     timing = (
         f"TOKEN CLOCK: observations are scheduled at f={fps:g} frames per simulated second. "
-        "Physical inference and GUI execution latency do not advance simulated time. "
+        + ticks
+        + "Physical inference and GUI execution latency do not advance simulated time. "
         "Produce at most one action per observation. "
     )
     if tokens_per_frame is None:
+        advance = (
+            "to the next scheduled frame" if ticks else "exactly one frame interval (1/f seconds)"
+        )
         return timing + (
             "B is unlimited: output length does not affect simulated time, so each action lands "
-            "at the tick it observed. The environment then advances exactly one frame interval "
-            "(1/f seconds), and the next observation includes the action's effect."
+            f"at the tick it observed. The environment then advances {advance}, and the next "
+            "observation includes the action's effect."
         )
     timing += (
         f"B={tokens_per_frame} charged tokens/frame; kappa=B*f={tokens_per_frame * fps:g} "

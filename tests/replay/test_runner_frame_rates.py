@@ -232,6 +232,7 @@ def test_token_clock(case, monkeypatch, tmp_path):
             model_key=OPENROUTER_MODEL_KEY,
             clock_mode="token",
             tokens_per_frame=case.tokens_per_frame,
+            env_fps=case.env_fps,
         )
         env = TokenEnvironment(episode.frames, task, max_minutes=case.max_minutes)
         timeline = run_loop(episode, env)
@@ -377,6 +378,7 @@ def test_wall_clock(case, tmp_path):
             model_key=CHAT_MODEL_KEY,
             clock_mode="wall",
             clock=clock,
+            env_fps=case.env_fps,
         )
         env = FakeEnvironment(
             episode.frames,
