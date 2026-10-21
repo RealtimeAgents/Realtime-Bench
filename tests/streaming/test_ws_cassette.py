@@ -22,6 +22,7 @@ def _added(item_id: str) -> dict:
     return {"type": "conversation.item.added", "item": {"id": item_id}}
 
 
+PATH = "/v1/realtime?model=gpt-realtime-2"
 RESPONSE_CREATE = {"type": "response.create"}
 RESPONSE_DONE = {"type": "response.done", "response": {"id": "resp_1"}}
 
@@ -59,7 +60,7 @@ def test_reactive_messages_follow_their_trigger_and_timed_ones_their_time():
             _record("s2c", RESPONSE_DONE, 2.0),
         ]
     )
-    assert cursor.open(0.0) == 1
+    assert cursor.open(0.0, PATH) == 1
     assert [r["msg"]["type"] for r in cursor.release(1, 0.0)] == ["session.created"]
     assert cursor.release(1, 0.0) == []  # the next server record waits for the client
     cursor.receive(1, RESPONSE_CREATE, 0.5)
@@ -81,7 +82,7 @@ def test_a_released_message_carries_this_sessions_ids():
             _record("s2c", {**_added("<rtb_user-1>"), "next": "<server_item-1>"}),
         ]
     )
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, _create("rtb_user_0a1b2c"), 0.0)
     (released,) = cursor.release(1, 0.0)
     assert released["msg"] == {**_added("rtb_user_0a1b2c"), "next": "<server_item-1>"}
@@ -97,7 +98,7 @@ def test_a_message_sent_before_a_server_message_recorded_before_it_is_early():
             _record("c2s", _create("<rtb_user-1>"), 5.0),
         ]
     )
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, RESPONSE_CREATE, 1.0)
     assert cursor.release(1, 3.0) == []
     cursor.receive(1, _create("rtb_user_77"), 3.0)
@@ -112,7 +113,7 @@ def test_a_message_sent_before_a_server_message_recorded_before_it_is_early():
 
 def test_a_message_that_differs_names_the_field():
     cursor = _cursor([_record("open", at=0.0), _record("c2s", _create("<rtb_user-1>"), 0.0)])
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, {**_create("rtb_user_1"), "item": {"id": "rtb_user_1", "role": "system"}}, 0)
     assert cursor.problems == [
         'conn 1 record 1: c2s conversation.item.create differs:\n  msg.item.role: "user" -> "system"'
@@ -128,7 +129,7 @@ def test_records_left_unused_are_a_problem():
             _record("open", at=2.0, conn=2),
         ]
     )
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, RESPONSE_CREATE, 0.0)
     assert cursor.finish() == [
         "conn 1: 1 record(s) left unused, from record 2 (s2c response.done)",
@@ -136,17 +137,28 @@ def test_records_left_unused_are_a_problem():
     ]
 
 
+def test_a_connection_opened_at_another_path_is_a_problem():
+    """An open record holds the request path, with the model in it on OpenAI's; one converted
+    from a trace has none, and is opened at any path."""
+    cursor = _cursor([_record("open", {"path": PATH}, 0.0)])
+    assert cursor.open(0.0, "/v1/realtime?model=gpt-realtime") is None
+    assert cursor.problems == [
+        "conn 1: opened at /v1/realtime?model=gpt-realtime, but the recording opens at " + PATH
+    ]
+    assert _cursor([_record("open")]).open(0.0, "/elsewhere") == 1
+
+
 def test_more_than_the_recording_is_a_problem():
     cursor = _cursor([_record("open", at=0.0), _record("c2s", RESPONSE_CREATE, 0.0)])
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, RESPONSE_CREATE, 0.0)
     cursor.receive(1, RESPONSE_CREATE, 0.0)
     assert cursor.problems == [
         "conn 1: c2s response.create sent, but the recording has nothing more on it"
     ]
     unrecorded = _cursor([_record("open", at=0.0)])
-    unrecorded.open(0.0)
-    assert unrecorded.open(1.0) is None
+    unrecorded.open(0.0, PATH)
+    assert unrecorded.open(1.0, PATH) is None
     assert unrecorded.problems == ["conn 2: opened, but the recording has nothing more on it"]
 
 
@@ -159,7 +171,7 @@ def test_a_client_record_with_a_time_must_happen_at_that_time():
         (0.5, ["conn 1 record 1: c2s response.create at t=0.5, recorded at t=1"]),
     ]:
         cursor = _cursor(records)
-        cursor.open(0.0)
+        cursor.open(0.0, PATH)
         cursor.receive(1, RESPONSE_CREATE, sent_at)
         assert cursor.finish() == problems
 
@@ -167,7 +179,7 @@ def test_a_client_record_with_a_time_must_happen_at_that_time():
 def test_a_converted_recordings_client_records_are_compared_in_order_only():
     records = [_record("open"), _record("c2s", RESPONSE_CREATE), _record("s2c", RESPONSE_DONE, 0.4)]
     cursor = _cursor(records)
-    cursor.open(7.0)
+    cursor.open(7.0, PATH)
     cursor.receive(1, RESPONSE_CREATE, 0.2)
     assert cursor.release(1, 0.4) == [_record("s2c", RESPONSE_DONE, 0.4)]
     assert cursor.finish() == []
@@ -176,7 +188,7 @@ def test_a_converted_recordings_client_records_are_compared_in_order_only():
 def test_a_client_close():
     # Without a recorded close the client may close once the records are used.
     cursor = _cursor([_record("open", at=0.0)])
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.client_closed(1, 1000, 3.0)
     assert cursor.finish() == []
     # A recorded close must come next, with its code.
@@ -187,12 +199,12 @@ def test_a_client_close():
         cursor = _cursor(
             [_record("open", at=0.0), _record("close", {"by": "client", "code": 1000}, 1.0)]
         )
-        cursor.open(0.0)
+        cursor.open(0.0, PATH)
         cursor.client_closed(1, code, 1.0)
         assert cursor.finish() == problems
     # A close while records are left.
     cursor = _cursor([_record("open", at=0.0), _record("s2c", RESPONSE_DONE, 4.0)])
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.client_closed(1, 1000, 1.0)
     assert cursor.problems == [
         (
@@ -205,7 +217,7 @@ def test_a_client_close():
 def test_a_server_close_is_released_like_a_timed_message():
     close = {"by": "server", "code": 1011, "reason": "scripted"}
     cursor = _cursor([_record("open", at=0.0), _record("close", close, 2.0)])
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     assert cursor.next_due(1) == 2.0
     assert cursor.release(1, 2.0) == [_record("close", close, 2.0)]
     assert cursor.finish() == []
@@ -225,7 +237,7 @@ def test_a_pushed_frames_and_a_cancels_event_ids_are_our_random_ids(message, kin
     recorded = normalize()({**message, "event_id": f"rtb_{kind}_0a1b2c"})
     assert recorded["event_id"] == f"<rtb_{kind}-1>"
     cursor = Cursor([_record("open", at=0.0), _record("c2s", recorded, 0.0)], normalize())
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, {**message, "event_id": f"rtb_{kind}_9f8e7d"}, 0.0)
     assert cursor.finish() == []
 
@@ -243,7 +255,7 @@ def test_in_a_converted_recording_the_client_may_go_ahead_of_the_servers_times()
         _record("s2c", _added("<rtb_user-1>")),
     ]
     cursor = _cursor(records)
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, RESPONSE_CREATE, 0.0)
     assert cursor.release(1, 1.0) == []
     cursor.receive(1, _create("rtb_user_77"), 1.0)
@@ -259,7 +271,7 @@ def test_a_server_message_gone_ahead_of_carries_this_sessions_ids():
         _record("c2s", RESPONSE_CREATE),
     ]
     cursor = _cursor(records)
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, _create("rtb_user_77"), 0.0)
     assert cursor.release(1, 1.0) == []
     cursor.receive(1, RESPONSE_CREATE, 1.0)
@@ -276,7 +288,7 @@ def test_a_close_never_goes_ahead_of_a_server_message():
         _record("close", {"by": "client", "code": 1000}),
     ]
     cursor = _cursor(records)
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.client_closed(1, 1000, 1.0)
     assert cursor.problems == [
         "conn 1: the client closed it (1000), but the recording has s2c x next (record 1)"
@@ -288,7 +300,7 @@ def test_server_messages_gone_ahead_of_but_never_sent_are_left_unused():
     it."""
     records = [_record("open"), _record("s2c", {"type": "x"}, 5.0), _record("c2s", {"type": "a"})]
     cursor = _cursor(records)
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, {"type": "a"}, 0.0)
     cursor.client_closed(1, 1000, 0.0)
     assert cursor.finish() == [
@@ -303,7 +315,7 @@ def test_nothing_gone_ahead_of_is_released_once_the_message_differs():
         _record("c2s", RESPONSE_CREATE),
     ]
     cursor = _cursor(records)
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, {"type": "response.cancel"}, 0.5)
     assert cursor.failed
     assert cursor.release(1, 2.0) == []
@@ -315,7 +327,7 @@ def test_a_message_ahead_of_a_reactive_server_record_names_it():
     cursor = _cursor(
         [_record("open", at=0.0), _record("s2c", {"type": "x"}), _record("c2s", {"type": "a"}, 0)]
     )
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     cursor.receive(1, {"type": "a"}, 0.0)
     assert cursor.problems == [
         "conn 1 record 1: c2s a sent at t=0, before the recorded s2c x (reactive)"
@@ -329,7 +341,7 @@ def test_nothing_after_a_server_close_is_released_with_it():
     cursor = _cursor(
         [_record("open", at=0.0), _record("close", close, 1.0), _record("s2c", {"type": "y"}, 1.0)]
     )
-    cursor.open(0.0)
+    cursor.open(0.0, PATH)
     assert cursor.release(1, 1.0) == [_record("close", close, 1.0)]
     assert cursor.release(1, 1.0) == []
     assert cursor.next_due(1) is None

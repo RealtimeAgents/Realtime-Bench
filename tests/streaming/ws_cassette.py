@@ -12,8 +12,10 @@ per line:
 since the episode origin. ``msg`` is a message as JSON, normalized like the replay baselines
 (tests/replay/baseline.py): each of our random ids becomes a placeholder numbered by first
 appearance, and an image or audio the client sends its digest. The server's messages keep
-everything else as it came, since they are sent back. An open has no message; a close is
-``{"by": "client" | "server", "code": int}``, with the ``reason`` a server close sends.
+everything else as it came, since they are sent back. An open's message is the request path,
+``{"path": str}``, or null where the recording has none (one converted from a trace), which any
+path opens; a close is ``{"by": "client" | "server", "code": int}``, with the ``reason`` a server
+close sends.
 
 The cursor replays a cassette strictly, each connection's records in order. A server record is
 released once the client has done everything recorded before it on that connection: at once when
@@ -37,7 +39,8 @@ The first difference is a problem, and after it nothing more is released:
 - a message sent early: the next record is a server message that is not due yet, and the client
   record after it has a time;
 - a message that differs from the recording, or one beyond it, or one sent at another time;
-- a connection the recording does not have, or a close where it has more records;
+- a connection the recording does not have, or opened at another path, or a close where it has
+  more records;
 - a connection the client leaves open, and at the end, records left unused.
 
 To turn a smoke test's run into a recording:
@@ -221,13 +224,20 @@ class Cursor:
 
     # ---- what the client does ----------------------------------------------------------------
 
-    def open(self, now: float) -> int | None:
-        """The client opened its next connection; its number, or None when it is not recorded."""
+    def open(self, now: float, path: str) -> int | None:
+        """The client opened its next connection at the request path ``path``; its number, or None
+        when it is not recorded."""
         self._opened += 1
         conn = self._opened
         head = self._head(conn)
         if head is None or head[1]["dir"] != "open":
             self._problem(f"conn {conn}: opened, but the recording {self._next(conn)}")
+            return None
+        recorded = head[1]["msg"]
+        if recorded is not None and recorded["path"] != path:
+            self._problem(
+                f"conn {conn}: opened at {path}, but the recording opens at {recorded['path']}"
+            )
             return None
         self._take(conn, now)
         return conn
