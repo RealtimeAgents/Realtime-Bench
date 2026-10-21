@@ -14,6 +14,7 @@ import contextlib
 import json
 from types import SimpleNamespace
 
+import pytest
 from google.genai import _common, _live_converters, types
 from google.genai import errors as genai_errors
 from google.genai import live as genai_live
@@ -651,6 +652,64 @@ def test_a_reply_is_refused_while_an_activity_is_left_open():
         "the activity end does not go out",
         "Gemini Live input activity is already open",
     ]
+
+
+def go_away(time_left: str) -> dict:
+    return {"goAway": {"timeLeft": time_left}}
+
+
+@pytest.mark.parametrize("time_left", ["0s", "2s"])
+def test_a_reply_read_to_its_end_before_a_go_away_is_handed_over_whole(time_left):
+    """The reader reads a reply to its end, then a goAway whose deadline has passed by the time
+    events() takes the reply: the reply is handed over whole and its call acknowledged, as a
+    turn-based read of the same messages does; the connection is still to be renewed."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), TURN_COMPLETE, go_away(time_left))
+        await settle()
+        events = await drain(rig.driver.events(generation))
+        reason = rig.driver.connection_renewal_reason()
+        await rig.driver.close()
+        return events, reason
+
+    events, reason = asyncio.run(run())
+    assert [type(event).__name__ for event in events] == [
+        "FunctionCall",
+        "UsageSnapshot",
+        "GenerationBoundary",
+    ]
+    assert reason == "go_away"
+    assert [wire(message) for message in rig.socket.sent] == ["tool_response"]
+
+
+def test_a_go_away_in_a_reply_leaves_the_reply_to_end_before_the_deadline():
+    """A goAway in the middle of a reply: the reply that ends before the deadline is handed over
+    whole; one that has not ended by then is no result (GoAwayDeadlineExceeded), as turn-based."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), GO_AWAY, TURN_COMPLETE)
+        ended = await drain(rig.driver.events(generation))
+        generation = await rig.start("turn-1")
+        rig.socket.feed(call("call-1"), go_away("2.1s"))
+        try:
+            await drain(rig.driver.events(generation))
+        except live.GoAwayDeadlineExceeded as exc:
+            return ended, exc
+
+    ended, failure = asyncio.run(run())
+    assert [getattr(event, "kind", type(event).__name__) for event in ended] == [
+        "FunctionCall",
+        "go_away",
+        "UsageSnapshot",
+        "turn_complete",
+    ]
+    assert isinstance(failure, live.GoAwayDeadlineExceeded)
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
