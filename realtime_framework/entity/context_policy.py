@@ -140,7 +140,8 @@ class PathPolicy:
     turns: Retention  # 2 turn retention; archived actions form the ledger
     feedback: Literal["separate_message", "frame_prefix", "digest"]  # 3 execution feedback
     # 4 role of the archived-action ledger; an encoder without roles places it by position and
-    # header (RealtimeCapabilities.labels_instead_of_roles), and the value has no effect there
+    # header (RealtimeCapabilities.labels_instead_of_roles), and the value is at most a label
+    # there (providers/decisions/history.py JEV_ROLES)
     ledger_role: Literal["instruction", "input"]
     texts: FixedTexts  # 5 placeholder and fixed texts
     reasoning_replay: bool  # 6 send past reasoning back
