@@ -203,6 +203,7 @@ class TurnPolicy:
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
         self._released: Callable | None = None  # what follows the key release in progress
+        self._stepping = False  # an AdvanceClock or ReleaseKeys not answered yet
 
     @property
     def settled(self) -> bool:
@@ -266,10 +267,16 @@ class TurnPolicy:
             self._moved()
 
     def on_end(self) -> None:
-        """Settle the decision in hand once the episode is over; nothing lands after the end."""
+        """Settle the decision in hand once the episode is over; nothing lands after the end. A
+        clock step or key release out settles it on its answer, as an execution does: another end
+        can come before that answer, and a wait whose own step failed is still a failed action."""
         self._awaited = None
         self._then = None
         self._released = None
+        if not self._stepping:
+            self._settle()
+
+    def _settle(self) -> None:
         phase = self.phase
         if phase in (_Phase.GUARD, _Phase.CAPTURE, _Phase.GENERATE, _Phase.HORIZON):
             self.phase = _Phase.SETTLED
@@ -796,13 +803,17 @@ class TurnPolicy:
             if step <= 1e-9:
                 # A lease ending at this tick is released without an end check.
                 return self._release(self._advance)
+        self._stepping = True
         self.kernel.emit(AdvanceClock(step))
 
     def _clock_stepped(self, event: ClockStepped) -> None:
-        if self._then is None:
+        if not self._stepping:
             return
+        self._stepping = False
         if event.error is not None:
             return self._step_failed("clock_advance_failed", event.error)
+        if self.kernel.ending is not None:
+            return self._settle()
         self._release(lambda: self._check_end(self._advance))
 
     def _step_failed(self, reason: str, error: str) -> None:
@@ -811,7 +822,10 @@ class TurnPolicy:
         GuestEnvironment._release_clock_keys). A wait whose own step failed is a failed action."""
         if self.phase is _Phase.WAIT:
             self.decision.failed = error
+        ended = self.kernel.ending is not None
         self.kernel.invalidate("environment", reason, error)
+        if ended:
+            self._settle()
 
     def _release(self, then: Callable) -> None:
         tick = self._tick()
@@ -821,17 +835,22 @@ class TurnPolicy:
         for key in keys:
             del self.leases[key]
         self._released = then
+        self._stepping = True
         self.kernel.emit(ReleaseKeys(keys))
 
     def _keys_released(self, event: KeysReleased) -> None:
         if event.error is not None:
             if self.token:
+                self._stepping = False
                 return self._step_failed("clock_key_release_failed", event.error)
             # The environment's reason (sandbox/actions.py GuestEnvironment._wall_release_due).
             return self.kernel.invalidate("environment", "wall_key_release_failed", event.error)
         # Wall-clock releases come from the shell's own timer and need no answer.
-        if self._released is None:
+        if not self._stepping:
             return
+        self._stepping = False
+        if self.kernel.ending is not None:
+            return self._settle()
         then, self._released = self._released, None
         then()
 

@@ -695,6 +695,29 @@ def test_a_wait_whose_own_step_fails_is_a_failed_action(replies, fault, reason, 
     assert termination.invalid == Invalidated("environment", reason, "renderer crashed")
 
 
+def test_a_wait_whose_own_step_fails_settles_on_that_answer_though_the_run_ended_meanwhile():
+    # The wait from 1 steps to 2; the step to 3, the third advance, takes 0.5 s and fails, and
+    # meanwhile another thread invalidates the run. The end leaves the wait to settle on its
+    # step's answer, as an execution does (kernel/core.py), so the wait is still the failed
+    # action the environment reports (sandbox/actions.py GuestEnvironment.execute).
+    trace_lost = Invalidated("harness", "episode_trace_write_failed", "disk full")
+    sim = _run(
+        _token(10),
+        Reply(action=Action.wait(2.5), output_tokens=256),
+        advance_errors={3: "renderer crashed"},
+        advance_s=0.5,
+        invalidations=((1.25, trace_lost),),
+    )
+    resolved = _record(sim, "ActionResolved", 0)
+    assert (resolved["status"], resolved["terminal_after_action"]) == ("invalid_run", False)
+    assert resolved["execution_result"] == {"error": "renderer crashed"}
+    assert sim.entries("ActionApplied") == []
+    assert [outcome.status for outcome in sim.outcomes] == ["invalid_run"]
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", 2)
+    assert termination.invalid == trace_lost
+
+
 def test_a_wait_cut_short_by_a_third_failed_read_stays_a_wait():
     # A failed read is no failed step: the wait stops as at an end it sees, and today's
     # environment reports it a wait cut short (sandbox/actions.py GuestEnvironment.done). The
