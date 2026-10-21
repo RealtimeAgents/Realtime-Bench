@@ -4,8 +4,9 @@ from __future__ import annotations
 """What each model API is shown at every step, and where: twelve named items and a version.
 
 Version 1 copied what each code path did before the policy existed; every later version changes
-one item (see CONTEXT_POLICY_VERSION). Changing any value changes the model-visible content, so it
-bumps the version. The values count in the effective run config and therefore in its hash. Every
+one item (see CONTEXT_POLICY_VERSION). A change that alters what some model is shown bumps the
+version; moving a preset from an API row to the model that needs it alters nothing shown and keeps
+it. The values count in the effective run config and therefore in its hash. Every
 item is read from here: retention, feedback placement, the ledger role, reasoning and verbatim
 replay, pressure archiving, the Decision history form, the tool-call replay format, the prompts
 (item 11) and the observation form (item 12); the encoders take their fixed texts (item 5) from
