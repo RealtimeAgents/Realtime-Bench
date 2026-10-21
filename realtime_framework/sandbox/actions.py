@@ -571,6 +571,15 @@ class GuestEnvironment:
                     "be used, not the browser's address bar, tabs or the desktop around it"
                 )
 
+    def _reject(self, action):
+        """Run the _reject_* checks that apply to the action."""
+        if action.action_type in (ActionType.KEY, ActionType.HOLD_KEY):
+            self._reject_page_reload(action)
+            self._reject_browser_shortcut(action)
+        elif action.action_type.value in POINTER_ACTIONS:
+            self._reject_zoom_scroll(action)
+            self._reject_outside_page(action)
+
     def _ensure_page_focus(self):
         """Keep desktop key input on the page; returns True when focus had to be restored."""
         ensure = getattr(self.scene_capture, "ensure_page_focus", None)
@@ -967,17 +976,12 @@ class GuestEnvironment:
             except Exception as exc:
                 return self._execution_failed(exc)
         try:
-            if action_type in (ActionType.KEY, ActionType.HOLD_KEY):
-                self._reject_page_reload(action)
-                self._reject_browser_shortcut(action)
-            elif action_type.value in POINTER_ACTIONS:
-                self._reject_zoom_scroll(action)
-                self._reject_outside_page(action)
             if (
                 self.clock_mode == "token"
                 and hasattr(self.task, "clock_key_event")
                 and action_type in (ActionType.KEY, ActionType.HOLD_KEY)
             ):
+                self._reject(action)
                 self._last_execution_result = self._execute_clock_key(action)
                 self.actions += 1
                 return "applied"
@@ -985,6 +989,9 @@ class GuestEnvironment:
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
             ):
+                # The checks and the hold snapshot below take _wall_lock, which the wall clock's
+                # release timer holds during its guest request.
+                self._reject(action)
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
                     ActionType.KEY,
@@ -1019,6 +1026,7 @@ class GuestEnvironment:
                     if not isinstance(result, dict):
                         result = {"guest_result": result}
                     result["business_action_barrier"] = barrier_result
+                active_holds = self._active_hold_snapshot()
             if focus_restored:
                 if not isinstance(result, dict):
                     result = {"guest_result": result}
@@ -1030,7 +1038,7 @@ class GuestEnvironment:
             elif action_type == ActionType.MOUSE_UP:
                 self._held_mouse_buttons.discard(action.parameters.get("button", "left"))
             if isinstance(self._last_execution_result, dict):
-                self._last_execution_result["active_holds"] = self._active_hold_snapshot()
+                self._last_execution_result["active_holds"] = active_holds
                 self._last_execution_result["active_mouse_buttons"] = sorted(
                     self._held_mouse_buttons
                 )
