@@ -1,9 +1,9 @@
 """The OpenAI Realtime session core, driven without a WebSocket.
 
 History views come from the request builder the runtime uses (harnesses/default/request.py), and
-native-streaming views from the streaming history view (harnesses/streaming/history.py); server
-events are parsed the way the SDK's RealtimeConnection.recv parses them
-(openai/resources/realtime/realtime.py).
+native-streaming views are laid out as the streaming history view lays them out
+(harnesses/streaming/history.py); server events are parsed the way the SDK's
+RealtimeConnection.recv parses them (openai/resources/realtime/realtime.py).
 """
 
 from __future__ import annotations
@@ -19,16 +19,18 @@ from openai.types.realtime import RealtimeServerEvent
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
-from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.entity.request import (
+    AnswerRequirements,
+    BlockTime,
+    CallParameters,
+    CanonicalRequest,
+    ContentBlock,
+    Intent,
+    RequestItem,
+)
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
-from realtime_framework.harnesses.streaming.history import (
-    StreamingRetention,
-    feedback_block,
-    frame_block,
-    history_view,
-    output_block,
-)
+from realtime_framework.harnesses.streaming.history import frame_block
 from realtime_framework.providers.openai_realtime_session import (
     ROLES,
     Create,
@@ -494,18 +496,18 @@ def test_a_streaming_reply_keeps_its_items_under_its_output_block(status):
     response.done its output items are kept under the output block it becomes."""
     core = opened([turn(0, "a0")])
     assistant = core.frames["d0.frame"].assistant_item_ids
-    reply = core.start_reply("g1.output")
+    reply = core.start_reply("d1.output")
     events = response_events(status)
     assert all(core.receive(event) for event in events)
     assert list(reply.events) == events
-    assert core.outputs == ({} if status == "failed" else {"g1.output": ["srv_1"]})
+    assert core.outputs == ({} if status == "failed" else {"d1.output": ["srv_1"]})
     assert core.frames["d0.frame"].assistant_item_ids == assistant
 
 
 def stream(script: str) -> list:
-    """Blocks of a native-streaming session in the order the agent accepts them. F: a frame
-    pushed, frame n showing turn n's prompt and screenshot; R: a reply; B: the feedback on the
-    oldest reply without one."""
+    """Blocks of a native-streaming session in the order the agent accepts them, under the
+    streaming history view's names. F: a frame pushed, frame n showing turn n's prompt and
+    screenshot; R: reply d; B: the feedback on the oldest reply without one."""
     table, blocks, replies, reported = FrameTable(), [], 0, 0
     for step in script:
         if step == "F":
@@ -514,27 +516,33 @@ def stream(script: str) -> list:
             blocks.append(frame_block(record, observation))
         elif step == "R":
             replies += 1
-            blocks.append(output_block(replies, f"r{replies}", None, None))
+            output = ContentBlock(f"d{replies}.output", "model_output", "model", BlockTime())
+            blocks.append(replace(output, text=f"r{replies}"))
         else:
             reported += 1
-            blocks.append(feedback_block(reported, f"fb{reported}", None))
+            feedback = ContentBlock(
+                f"d{reported}.feedback", "execution_feedback", "environment", BlockTime()
+            )
+            blocks.append(
+                replace(feedback, text=f"fb{reported}", attached_to=f"d{reported}.output")
+            )
     return blocks
 
 
-def streaming_view(blocks, frames: int = 2):
-    """The streaming history view of the blocks: the newest ``frames`` frames keep their
-    screenshots, older ones are folded to the turn-based placeholder, and every reply and
-    feedback stays (decisions 23 and 4.6)."""
-    retention = StreamingRetention(frames=frames, older_frames="placeholder", replies="all")
-    return history_view(
-        blocks,
-        policy=POLICY,
-        system=SYSTEM,
-        retention=retention,
-        actions={},
-        answer=ANSWER,
-        call=CALL,
-    )
+def streaming_view(blocks, frames: int = 2) -> CanonicalRequest:
+    """The streaming history view of the blocks, laid out here as harnesses/streaming/history.py
+    lays it out, so that these tests do not hang on the view's signature: the system
+    instruction, then every block in order, every reply and feedback kept (decision 4.6), the
+    frames older than the newest ``frames`` folded to the turn-based placeholder (decision 23)."""
+    framed = [index for index, block in enumerate(blocks) if block.kind == "frame"]
+    older = set(framed[: max(0, len(framed) - frames)])
+    items = [RequestItem(SYSTEM, Intent("instruction", "head"))]
+    for index, block in enumerate(blocks):
+        if index in older:
+            block = replace(block, text=TEXTS.folded_visual, image=None, folded=True)
+        role = "model" if block.kind == "model_output" else "input"
+        items.append(RequestItem(block, Intent(role, "in_order")))
+    return CanonicalRequest(POLICY, "turns", tuple(items), ANSWER, CALL)
 
 
 def test_a_new_connection_replays_the_streaming_view():
@@ -559,10 +567,10 @@ def test_a_new_connection_replays_the_streaming_view():
         "f1.frame": (f1, TEXTS.folded_visual, True),
         "f2.frame": (f2, TEXTS.folded_visual, True),
         "f3.frame": (f3, "frame 3", False),
-        "g1.feedback": (b1, "fb1", False),
+        "d1.feedback": (b1, "fb1", False),
         "f4.frame": (f4, "frame 4", False),
     }
-    assert core.outputs == {"g1.output": [r1], "g2.output": []}
+    assert core.outputs == {"d1.output": [r1], "d2.output": []}
     assert new_core().replay_streaming(None) == []
 
 
@@ -601,10 +609,10 @@ def test_a_push_names_its_client_event():
     )
     assert core.pushes == {
         frame.event_id: Push("f2.frame", frame.item_id),
-        feedback.event_id: Push("g1.feedback", feedback.item_id),
+        feedback.event_id: Push("d1.feedback", feedback.item_id),
     }
     assert core.frames["f2.frame"].user_item_id == frame.item_id
-    assert core.frames["g1.feedback"].user_item_id == feedback.item_id
+    assert core.frames["d1.feedback"].user_item_id == feedback.item_id
     sent(core, [frame, feedback])
     assert core.receive(done(frame.item_id))
     assert (core.delivery[frame.key], core.delivery[feedback.key]) == (
@@ -622,7 +630,7 @@ def test_a_streaming_edit_folds_the_frames_older_than_the_newest_k_where_they_we
     blocks = stream("FRFBFRF")
     core = streamed(blocks, frames=4)
     item = items_of(core)
-    anchors = {"f1.frame": "root", "f2.frame": item["g1.output"], "f3.frame": item["g1.feedback"]}
+    anchors = {"f1.frame": "root", "f2.frame": item["d1.output"], "f3.frame": item["d1.feedback"]}
     folded = list(anchors)[: 4 - frames]
 
     batch = core.queue_edit(streaming_view(blocks, frames))
@@ -656,7 +664,7 @@ def test_a_fold_anchors_on_the_items_the_server_made_for_a_reply(output):
     """A reply made in this session: the frame accepted after it goes after the reply's last
     output item. A reply with no output item leaves it after the block before the reply."""
     core = streamed(stream("F"), frames=5)
-    core.start_reply("g1.output")
+    core.start_reply("d1.output")
     items = [{"id": "srv_1"}] if output else []
     core.receive(server(type="response.created", response={"id": "resp_1"}))
     core.receive(
@@ -727,7 +735,7 @@ def test_an_error_about_a_push_refuses_that_block_alone():
     leaves it out can."""
     blocks = stream("FFFF")
     core = streamed(blocks[:2], frames=5)
-    reply = core.start_reply("g1.output")
+    reply = core.start_reply("d1.output")
     refused = core.push(streaming_view(blocks[:3], frames=5))
     sent(core, [refused])
     fold = core.queue_edit(streaming_view(blocks[:3], frames=2))
@@ -807,7 +815,7 @@ def test_a_fold_while_a_reply_streams_loses_no_event():
     push arrive interleaved, and each reaches its state."""
     blocks = stream("FFF")
     core = streamed(blocks[:2], frames=5)
-    reply = core.start_reply("g1.output")
+    reply = core.start_reply("d1.output")
     view = streaming_view(blocks, frames=2)
     pushed = core.push(view)
     sent(core, [pushed])
@@ -833,7 +841,7 @@ def test_a_fold_while_a_reply_streams_loses_no_event():
         placeholder.item_id,
         True,
     )
-    assert core.outputs == {"g1.output": ["srv_1"]}
+    assert core.outputs == {"d1.output": ["srv_1"]}
 
 
 def test_the_streaming_reader_records_when_events_came_off_the_wire():
@@ -846,7 +854,7 @@ def test_the_streaming_reader_records_when_events_came_off_the_wire():
     core = streamed(blocks[:1], frames=5)
     pushed = core.push(streaming_view(blocks, frames=5))
     sent(core, [pushed])
-    reply = core.start_reply("g1.output")
+    reply = core.start_reply("d1.output")
     created, added, _, finished = response_events()
     text = server(
         type="response.output_text.done",
