@@ -857,10 +857,7 @@ class _Shell:
                 entry,
             )
         elif kind == "GenerationFinished" and self._generations[data.generation].inference:
-            chunks, completed = self._generations[data.generation].inference
-            for chunk in chunks:
-                self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
-            self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
+            self._emit_inference(self._generations[data.generation].inference, entry)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
             self._emit(
                 TraceEvent.ACTION_PROPOSED,
@@ -931,43 +928,53 @@ class _Shell:
                 )
 
     def _abandoned_on_a_bound(self, entry: Entry) -> None:
-        """A generation given up on at the per-move cap, the wall deadline or the provider
-        watchdog timed out: it is logged and recorded as the runner records a call it gave up on
-        (runner.py _run_step), with no usage, which leaves the episode's cost incomplete
-        (decision 48). Only the move over the cap is reported, as skipped (kernel/turns.py
-        on_timer); the other two end the episode and their decision goes unreported. A call that
-        came back before the bound and was settled after it has its own records instead."""
+        """A generation the kernel gave up on. One whose result came back before and was settled
+        keeps the call's own records, written now, ahead of the decision's. Otherwise one given
+        up on at the per-move cap, the wall deadline or the provider watchdog timed out: it is
+        logged and recorded as the runner records a call it gave up on (runner.py _run_step),
+        with no usage, which leaves the episode's cost incomplete (decision 48). Only the move
+        over the cap is reported, as skipped (kernel/turns.py on_timer); the other two end the
+        episode and their decision goes unreported."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
-        if reason == "per_move_cap":
-            # The bound, however late the shell got to it: the kernel charges the move that much.
-            seconds = held.bound_at - held.started_semantic
-            r = episode_records.timed_out_result(round(seconds, 2), "per_move_cap")
-            bound = "per_move_cap"
-        elif reason == "deadline":
-            seconds = self.config.duration_s - held.started_semantic
-            r = episode_records.timed_out_result(round(seconds, 2), "wall_deadline")
-            bound = "wall_deadline"
-        elif reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
+        bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
+        if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
+            bound = "provider_watchdog"
+        if held.inference is not None:
+            self._emit_inference(held.inference, entry)
+            held.inference = None  # its echo writes nothing more
+            if reason == "per_move_cap":
+                self._decision.result = held.result
+            if bound is not None:
+                self.log(
+                    f"[default] k={held.decision} generation back in "
+                    f"{held.result['latency']:g}s, settled past its {bound} — discarded"
+                )
+            return
+        if bound is None:
+            return
+        if bound == "provider_watchdog":
             seconds = held.bound_at - held.started_ops
             r = episode_records.watchdog_result(round(seconds, 2), seconds)
-            bound = "provider_watchdog"
         else:
-            return
+            # The bound, however late the shell got to it: the kernel charges the move that much.
+            due = held.bound_at if bound == "per_move_cap" else self.config.duration_s
+            seconds = due - held.started_semantic
+            r = episode_records.timed_out_result(round(seconds, 2), bound)
         self.log(
             f"[default] k={held.decision} generation TIMED OUT (>{seconds:g}s, {bound}) — discarded"
         )
-        if held.inference is not None:
-            if reason == "per_move_cap":
-                self._decision.result = held.result
-            return
-        result, (chunks, completed) = self._settle(held, r)
+        result, inference = self._settle(held, r)
         if reason == "per_move_cap":
             self._decision.result = r
+        self._emit_inference(inference, entry)
+        if result.invalid is not None and self.kernel.invalid is None:
+            self.post(result.invalid)  # its trajectory row could not be written
+
+    def _emit_inference(self, inference: tuple[list[dict], dict], entry: Entry) -> None:
+        chunks, completed = inference
         for chunk in chunks:
             self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
         self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
-        if result.invalid is not None and self.kernel.invalid is None:
-            self.post(result.invalid)  # its trajectory row could not be written
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the

@@ -96,20 +96,27 @@ def test_a_result_settled_across_the_deadline_does_not_land():
     assert len(episode.agent.trajectory) == 1
     assert episode.agent.calls == [("discard", 1)]
     assert episode.env._termination["stop_reason"] == "time_limit"
+    line = "[default] k=0 generation back in 2.995s, settled past its wall_deadline — discarded"
+    assert line in episode.logs
 
 
 def test_a_result_settled_across_the_cap_is_the_moves_only_record():
     """The result comes back 5 ms before the 1.5 s cap and settling it ends 5 ms after it; the
     kernel gets it after the cap and reports the move skipped. Its records are the call's own,
-    once: none is made up for a call given up on."""
+    once, written when the cap gives it up, before the move's: none is made up for a call given
+    up on."""
     replies = [Reply(1.495), Reply(0.5)]
     episode = run("wall", 3.0, replies, agent_type=_SlowTrajectory, per_move_cap_s=1.5)
     assert episode.statuses() == ["skipped_timeout", "applied"]
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p["timed_out"]) for p in completed] == [(0, False), (1, False)]
+    events = episode.trace.events()
+    assert events.index("InferenceCompleted") < events.index("ActionResolved")
     rows = episode.agent.trajectory
     assert [(row["decision"], row.get("timed_out")) for row in rows] == [(0, None), (1, None)]
     assert episode.env.lifecycle[0]["model_latency_s"] == pytest.approx(1.495)
+    line = "[default] k=0 generation back in 1.495s, settled past its per_move_cap — discarded"
+    assert line in episode.logs
 
 
 @pytest.mark.parametrize("tokens_per_frame", [100, None], ids=["token", "paused"])
