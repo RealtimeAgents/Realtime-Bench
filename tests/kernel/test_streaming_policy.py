@@ -580,11 +580,15 @@ def test_a_push_stuck_until_the_reply_is_given_up_recovers_with_the_rebuilt_sess
 def test_a_push_still_stuck_after_the_session_was_rebuilt_invalidates_the_run():
     """The second push never answers. The reply is given up at 3, and the next starts on the newest
     frame that went in; at 5 no frame has gone in since, and the run is invalid. Meanwhile each
-    frame captured drops the one waiting before it."""
+    frame captured drops the one waiting before it, and the last one still waits at the end."""
     sim = _run(World(push_times={2: 100.0}), 20.0, push_watchdog_s=2.0)
     assert sim.started == [(1, 0.0), (2, 3.0)]
     assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-0"
-    assert [data["observation_id"] for data in sim.data("FrameDropped")] == ["obs-2", "obs-3"]
+    assert [(d["observation_id"], d["reason"]) for d in sim.data("FrameDropped")] == [
+        ("obs-2", "superseded"),
+        ("obs-3", "superseded"),
+        ("obs-4", "ended"),
+    ]
     assert _ended(sim)[:3] == ("invalid_run", "invalid", 5.0)
     assert sim.termination.invalid.reason == "frame_push_stuck"
 
@@ -638,3 +642,18 @@ def test_a_reply_that_handed_actions_over_still_reports_its_protocol_failure():
     sim = _run(World(replies=[reply]), 3.0)
     told = [(o.decision, o.status, o.call_id, o.protocol_failure) for o in sim.outcomes]
     assert told == [(0, "applied", "a", None), (0, "none", None, "malformed_second_call")]
+
+
+def test_every_frame_captured_is_pushed_or_counted_as_dropped():
+    """Each push takes 1.5 s; the second fails. Frame obs-1 is lost to the failure, obs-3 is
+    dropped by obs-4 while waiting, and obs-5 still waits at the end; the push answered at the
+    deadline went in."""
+    sim = _run(World(push_s=1.5, push_errors={2: "item rejected"}), 6.0)
+    assert [frame for _, frame in sim.pushes] == [1, 2, 3, 4]
+    assert [(d["observation_id"], d["reason"]) for d in sim.data("FrameDropped")] == [
+        ("obs-1", "push_failed"),
+        ("obs-3", "superseded"),
+        ("obs-5", "ended"),
+    ]
+    assert (sim.policy.frames_pushed, sim.policy.dropped_frames) == (3, 3)
+    assert len(sim.captures) == 6

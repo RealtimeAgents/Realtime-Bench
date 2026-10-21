@@ -338,7 +338,9 @@ class StreamingPolicy:
             self.abandoned.add(self.generation)
             self.generation = None
         self._reply_watchdog = self._push_watchdog = None
-        self._queued = None
+        if self._queued is not None:
+            self._drop(self._queued.observation_id, "ended")
+            self._queued = None
         self._check_due = self._capture_due = self._deadline_due = False
         if self.current is not None and not self._executing:
             after, self.current = self.current, None
@@ -417,11 +419,15 @@ class StreamingPolicy:
         frame, self._pushing = self._pushing, None
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
+        # Counted also once the episode is over: every frame captured goes in or is dropped.
+        if event.error is None:
+            self.frames_pushed += 1
+        else:
+            self._drop(frame.observation_id, "push_failed")
         if self._stopped():
             return
         if event.error is None:
             self._latest = frame
-            self.frames_pushed += 1
             self._failed_pushes, self._rebuilt = 0, False
             # The first reply waits for the first frame; later ones follow each other.
             if self.generation is None:

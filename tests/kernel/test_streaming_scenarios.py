@@ -82,12 +82,14 @@ def test_three_actions_arriving_during_a_long_one_leave_only_the_newest():
 
 def test_frames_captured_while_one_is_pushed_keep_only_the_newest():
     """Each push takes 2.5 s. The frame captured at 1 waits and the one at 2 drops it; that one
-    is pushed at 2.5, and so on. The frame pushed when the episode ends is not waited for."""
+    is pushed at 2.5, and so on. The frame pushed when the episode ends is not waited for, and the
+    one waiting then is dropped."""
     sim = _run(World(push_s=2.5), 6.0)
     assert sim.pushes == [("obs-0", 1), ("obs-2", 2), ("obs-4", 3)]
     assert sim.data("FrameDropped") == [
         {"observation_id": "obs-1", "reason": "superseded", "dropped": 1},
         {"observation_id": "obs-3", "reason": "superseded", "dropped": 2},
+        {"observation_id": "obs-5", "reason": "ended", "dropped": 3},
     ]
     assert sim.started == [(1, 2.5)]
     assert sim.policy.frames_pushed == 2
