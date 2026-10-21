@@ -15,7 +15,7 @@ import threading
 
 import pytest
 
-from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.turns import TurnPolicy
@@ -434,6 +434,74 @@ def test_a_snapshot_whose_reading_raised_once_still_leaves_a_termination_record(
     assert (termination["end_s"], termination["snapshot_s"]) == (2.0, None)
     assert termination["stop_reason"] == "invalid_run"
     assert episode.invalid["reason"] == "run_exception"
+
+
+@pytest.mark.parametrize(
+    ("duration", "tokens_per_frame", "failing", "replies"),
+    [
+        (3.0, None, 1, [Reply(0.0, CLICK)] * 3),
+        (2.005, 100, 3, [Reply(0.0, CLICK, output_tokens=100)] * 4),
+    ],
+    ids=["pace", "horizon"],
+)
+def test_an_advance_to_the_next_frame_or_the_horizon_that_raises_is_the_summarys_error(
+    duration, tokens_per_frame, failing, replies
+):
+    """Paused, the advance to the next frame after the action raises; or, at B = 100 with
+    0.005 tick left after two decisions, the advance to the horizon does. The runner made both
+    outside execute(), and the exception escaped its loop (runner.py _run_stream_legacy)."""
+    world = World(advance_errors={failing: "advance failed"})
+    episode = run("token", duration, replies, world, tokens_per_frame=tokens_per_frame)
+    assert episode.invalid["reason"] == "clock_advance_failed"
+    assert "RuntimeError: advance failed" in episode.env._loop_error
+
+
+def test_the_summarys_error_is_the_first_traceback(monkeypatch):
+    """An advance raises, and then the kernel does: the first traceback stays the error, as the
+    runner kept the one that escaped its loop."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, *_: kernel.invalid is not None)
+    world = World(advance_errors={1: "advance failed"})
+    episode = run("token", 3.0, [Reply(0.0, CLICK, output_tokens=100)], world, tokens_per_frame=100)
+    assert "RuntimeError: advance failed" in episode.env._loop_error
+    assert "step broke" not in episode.env._loop_error
+
+
+def test_a_run_exception_keeps_the_end_of_its_traceback(monkeypatch):
+    """The detail of an invalid run keeps the last 2000 characters, which name the exception
+    (runner.py _invalidate)."""
+
+    def step(kernel, semantic, ops=None):
+        raise RuntimeError("x" * 3000)
+
+    monkeypatch.setattr(Kernel, "step", step)
+    episode = run("wall", 3.0, [Reply(0.5)])
+    detail = episode.invalid["detail"]
+    assert len(detail) == 2000 and detail.endswith("x" * 1000 + "\n")
+
+
+class _InvalidatedDuringTheSecondCall(Environment):
+    """Token clock: 0.25 s into the second call a timer of the environment's own invalidates the
+    run, as the wall clock's key-release timer does (ShellEnvironment.on_invalid)."""
+
+    def capture(self) -> Observation:
+        observation = super().capture()
+        if self.decision == 1:
+            record = {"category": "environment", "reason": "clock_advance_failed", "detail": "x"}
+            self.clock.timer(0.25, lambda: self.on_invalid(record))
+        return observation
+
+
+def test_a_token_call_the_runs_invalidation_gave_up_on_ran_operational_seconds():
+    """The world stands still during the call, at tick 1: it ran the 0.25 operational seconds
+    until the run was invalid."""
+    replies = [Reply(0.1, CLICK, output_tokens=100), Reply(hang=True)]
+    env_type = _InvalidatedDuringTheSecondCall
+    episode = run("token", 5.0, replies, tokens_per_frame=100, env_type=env_type)
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p.get("harness_abort_reason"), p["latency_s"]) for p in completed] == [
+        (0, None, 0.1),
+        (1, "invalid_run", 0.25),
+    ]
 
 
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
