@@ -37,9 +37,10 @@ class SessionLifecycle:
 
     The session is connected once connect() opened it or a sync left it exact, and no longer once
     close() or abort() closed it or a sync raised an Exception or broke it; the last two leave it
-    broken until it is opened again. A connected session is dirty when the provider may hold what
-    the canonical history does not: a generation on it failed or was aborted (mark_dirty), a sync
-    left it neither exact nor broken, or a sync was cut short (RetryCancelled, a cancelled task).
+    broken until it is opened again or aborted. A connected session is dirty when the provider
+    may hold what the canonical history does not: a generation on it failed or was aborted
+    (mark_dirty), a sync left it neither exact nor broken, or a sync was cut short
+    (RetryCancelled, a cancelled task).
     A connection that an operation closes on its way (the one a connect replaces, one past its
     goAway deadline) changes neither.
 
@@ -62,6 +63,11 @@ class SessionLifecycle:
     operation (a goAway deadline, a close) ends with the operation, and an abort's close ends the
     operation.
 
+    Whether the session can take the next generation is its state. What became of each content
+    the encoder wrote, sent or confirmed, its session core records, and the encoder writes each
+    change to the trace (_record_delivery). What the provider keeps beside them is not known:
+    the capability server_context says so.
+
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
     is one, and ``interrupt(generation)``; ``capabilities``, with
@@ -73,7 +79,7 @@ class SessionLifecycle:
     _dirty = False
     _broken = False
     _cleanup: asyncio.Task | None = None
-    _lock: asyncio.Lock | None = None
+    _operation_lock: asyncio.Lock | None = None
 
     @property
     def state(self) -> RuntimeState:
@@ -201,9 +207,9 @@ class SessionLifecycle:
 
     def _session_lock(self) -> asyncio.Lock:
         # Made on first use, on the execution thread's loop, which every operation runs on.
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
+        if self._operation_lock is None:
+            self._operation_lock = asyncio.Lock()
+        return self._operation_lock
 
     async def _sync(
         self, request: HistorySyncRequest, record: Callable[..., None]
@@ -271,6 +277,19 @@ class SessionLifecycle:
         self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
+
+    def _record_delivery(self, state: str, contents, connection: str | None) -> None:
+        """What became of contents the session core wrote on the trace's ``connection``: sent,
+        confirmed by the server, or unknown once their write failed. Each content is its key in
+        the core's delivery record and the history block it carries, if one."""
+        self._trace.capture(
+            TraceEvent.SESSION_DELIVERY,
+            {
+                "state": state,
+                "connection": connection,
+                "contents": [{"key": list(key), "block": block} for key, block in contents],
+            },
+        )
 
     def _record_wait(self, wait: str, seconds: float, until: float | None = None) -> None:
         """``until`` is the end of a wait bounded by a deadline, on the operational clock; a

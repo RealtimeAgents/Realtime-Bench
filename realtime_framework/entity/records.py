@@ -45,6 +45,7 @@ class TraceEvent(str, Enum):
     SESSION_MESSAGE = "SessionMessage"
     SESSION_STATE_CHANGED = "SessionStateChanged"
     SESSION_WAIT = "SessionWait"
+    SESSION_DELIVERY = "SessionDelivery"
     AGENT_TRACE_CLOSED = "AgentTraceClosed"
 
 
@@ -135,8 +136,8 @@ def validate_episode_trace(path: str | Path) -> dict:
 
 The runner owns the trace; the agent receives an ``AgentTrace`` that queues records for a writer
 thread. ``trace_scope`` attributes every capture to the phase that caused it. The scope is a
-ContextVar, so it follows the call into the runtime's event loop (run_coroutine_threadsafe copies
-the caller's context into the task) and into ``asyncio.to_thread`` workers.
+ContextVar, so it follows the call onto the agent's execution thread (run_coroutine_threadsafe
+copies the caller's context into the task) and into ``asyncio.to_thread`` workers.
 """
 
 import contextlib as contextlib

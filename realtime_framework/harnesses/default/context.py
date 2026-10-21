@@ -181,6 +181,8 @@ class RealtimeRuntime:
         self._compaction_items: list[str] = []
         self._lock = threading.Lock()
         self._closed = False
+        # The cancel event of each generation under way.
+        self._running: set[threading.Event] = set()
         self._active_generation: GenerationHandle | None = None
         self._seed: SessionSeed | None = None
         self._turns: list[CanonicalTurn] = []
@@ -615,8 +617,12 @@ class RealtimeRuntime:
     ) -> RuntimeTurnResult:
         """One generation. ``cancel`` is its own event: once it is set, the generation stops at
         its next check (_stop_if_abandoned) and its retries end, the session encoder's included
-        (they run in its retry_cancellation). Its turn comes back in the result, for accept_turn
-        once it is accepted."""
+        (they run in its retry_cancellation). Closing the runtime sets it. Its turn comes back in
+        the result, for accept_turn once it is accepted."""
+        with self._lock:
+            self._running.add(cancel)
+            if self._closed:
+                cancel.set()
         try:
             with retry_cancellation(cancel):
                 return self.execution.run(
@@ -635,6 +641,9 @@ class RealtimeRuntime:
             if not self._abandoned(cancel):
                 self.session.mark_dirty()
             raise
+        finally:
+            with self._lock:
+                self._running.discard(cancel)
 
     def abort(self) -> None:
         """Interrupt whichever generation is generating, close the session and mark it dirty:
@@ -649,12 +658,15 @@ class RealtimeRuntime:
             self.execution.submit(self.session.abort(generation))
 
     def close(self) -> None:
-        """Close the session, once the last abort's cleanup is done or has run for a while. The
-        agent stops the execution thread after this."""
+        """Abandon the generations under way, then close the session, once the last abort's
+        cleanup is done or has run for a while. The agent stops the execution thread after
+        this."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            for cancel in self._running:
+                cancel.set()
         if self.execution.running:
             try:
                 # Longer than the session waits for an abort's cleanup, with time to close after.
@@ -867,7 +879,10 @@ class RealtimeRuntime:
         )
 
     def _record_session_state(self, state, cause, provider_state, generation_id=None) -> None:
-        """Record when the provider-side context becomes unknown, or exact again."""
+        """Record when the provider-side context becomes unknown, or exact again, as the session
+        operations reported it. What became of each content the encoder wrote is its
+        SessionDelivery records; what the provider keeps beside it, the capability
+        server_context."""
         if state == self._session_state:
             return
         self._session_state = state

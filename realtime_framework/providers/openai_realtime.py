@@ -10,6 +10,7 @@ import os as os
 import threading as threading
 import uuid as uuid
 from copy import copy as copy
+from functools import partial
 from typing import ClassVar as ClassVar
 
 from openai import APIConnectionError as APIConnectionError
@@ -305,7 +306,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         core = self._session.core
         for operation in operations:
             core.sending(operation)
-            await asyncio.to_thread(self._send, operation)
+            try:
+                await asyncio.to_thread(self._send, operation)
+            except BaseException:
+                core.send_failed(operation)
+                raise
             core.sent(operation)
 
     @staticmethod
@@ -381,10 +386,14 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise RuntimeError("OpenAI Realtime session closed while it opened")
         # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``
         # (openai/resources/realtime/realtime.py:765).
+        connection = self._conn._connection
         self._session = _Session(
-            self._conn._connection.trace_connection_number,
+            connection.trace_connection_number,
             self._conn,
-            RealtimeSessionCore(self._new_client_id),
+            RealtimeSessionCore(
+                self._new_client_id,
+                partial(self._record_delivery, connection=connection.trace_connection_id),
+            ),
         )
         # The history is None when the runtime opens the episode's first session.
         await self._send_all(self._session.core.replay(request.history))
