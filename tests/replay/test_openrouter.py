@@ -348,6 +348,31 @@ def test_an_error_recording_a_retry_propagates(openrouter_env, tmp_path):
     assert len(stub.requests) == 1
 
 
+def test_an_error_recording_the_final_failure_propagates(openrouter_env, tmp_path):
+    """Attempt 1 gets HTTP 401, which no retry follows, and recording that failure raises. The
+    decision raises the record's error, which the shell ends the run with as generation_error
+    (evaluation/shell.py), instead of ending as the invalid decision of the request failure that
+    a swallowed record left before the shared retry executor."""
+    refused = Failure(401, {"error": {"message": "bad key", "code": 401}})
+    with openrouter_episode(openrouter_env, tmp_path, [refused], **TOKEN_CLOCK) as (
+        stub,
+        _,
+        episode,
+    ):
+        agent = episode.agent
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("the trace refused the record")
+
+        agent._attempt_failed = broken
+        observation = episode.frames.capture(0)
+        agent.configure_decision(episode.budget(observation.tick_number))
+        agent.stream_prefill(observation)
+        with pytest.raises(RuntimeError, match="the trace refused the record"):
+            agent.stream_generate(tick=0)
+    assert len(stub.requests) == 1
+
+
 def test_partial_output_is_not_retried(openrouter_env, tmp_path):
     """The stream breaks off after its first text chunk: LiteLLM raises MidStreamFallbackError
     over httpx.ReadError, which the classifier takes as TRANSIENT (providers/litellm.py
