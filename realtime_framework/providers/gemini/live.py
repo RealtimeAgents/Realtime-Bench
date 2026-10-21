@@ -709,7 +709,8 @@ class GeminiLiveDriver(SessionLifecycle):
             ) from None
 
     def _session_for_input(self):
-        """The open session, which takes input until a goAway asks for a new connection."""
+        """The open session, which takes input until a goAway asks for a new connection, and in
+        streaming while its reader reads."""
         if self._core.renewal_required:
             raise RuntimeError(
                 "Gemini Live requires canonical history synchronization before input"
@@ -717,6 +718,8 @@ class GeminiLiveDriver(SessionLifecycle):
         session = self._session
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        if self.streaming and self._receiver.failure is not None:
+            raise self._receiver.failure
         return session
 
     async def _send_realtime(self, session, item: RealtimeInput) -> None:
@@ -747,6 +750,8 @@ class GeminiLiveDriver(SessionLifecycle):
         replaced, and one given up while it waits has planned nothing."""
         async with self._session_lock():
             session = self._session_for_input()
+            if self._activity_open:
+                raise RuntimeError("Gemini Live input activity is already open")
             push = self._core.push(history)
             try:
                 for item in push.inputs:
@@ -768,16 +773,22 @@ class GeminiLiveDriver(SessionLifecycle):
             session = self._session_for_input()
             if self._activity_open:
                 raise RuntimeError("Gemini Live input activity is already open")
+            if self._core.replies.get(self._core.connection) is not None:
+                raise RuntimeError("Gemini Live has a reply in flight on the connection")
             generation = await self.start_generation(request)
-            trigger = self._core.trigger(request.canonical)
-            self._activity_open = True
+            trigger = None
             try:
+                trigger = self._core.trigger(request.canonical)
+                self._activity_open = True
                 for item in trigger.inputs:
                     await self._send_realtime(session, item)
             except BaseException:
-                # An incomplete activity cannot be resumed as canonical context: the session is
-                # rebuilt before the next reply, and its seed replays the feedback.
-                self._core.send_failed(trigger.keys)
+                # No reply comes, and an incomplete activity cannot be resumed as canonical
+                # context: the session is rebuilt before the next reply, and its seed replays
+                # the feedback.
+                if trigger is not None:
+                    self._core.send_failed(trigger.keys)
+                self._core.reply_abandoned()
                 self._replies.pop(request.generation_id, None)
                 raise
             self._activity_open = False

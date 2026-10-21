@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -791,6 +792,114 @@ def test_each_message_is_traced_under_the_reply_it_was_read_for():
         ("serverContent", scopes[1]),
         ("sessionResumptionUpdate", None),
     ]
+
+
+def test_nothing_goes_out_once_the_reader_failed():
+    """A reader that failed with no reply waiting leaves a connection that takes nothing: a push
+    and a reply raise its failure before anything is written."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        rig.socket.feed(server_closed(1011, "Internal error."))
+        await settle()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        failures = []
+        for write in (
+            rig.driver.push_frame(None, rig.view([pushed(1)])),
+            rig.driver.request_reply(request),
+        ):
+            try:
+                await write
+            except genai_errors.APIError as exc:
+                failures.append(exc)
+        await rig.driver.close()
+        return failures
+
+    first, second = asyncio.run(run())
+    assert first.code == 1011 and second is first
+    assert rig.socket.sent == []
+
+
+def test_a_reply_is_refused_while_one_is_in_flight():
+    """A connection carries one reply at a time: the next is refused until the one in flight
+    ended, and nothing of it is written."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        await rig.driver.request_reply(request)
+        written = len(rig.socket.sent)
+        try:
+            await rig.driver.request_reply(replace(request, generation_id="turn-1"))
+        except RuntimeError as exc:
+            refused = str(exc)
+        unchanged = len(rig.socket.sent) == written
+        await rig.driver.close()
+        return refused, unchanged
+
+    refused, unchanged = asyncio.run(run())
+    assert refused == "Gemini Live has a reply in flight on the connection"
+    assert unchanged
+
+
+def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
+    """A trigger whose write failed is no reply: its feedback is unknown, no generation takes
+    the connection's messages, so a cancellation read later waits for the next reply; and the
+    activity left open refuses a push as well as a reply."""
+    rig = Rig()
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+    ]
+    log = DeliveryLog(lambda: rig.live.sockets[-1].sent if rig.live.sockets else [])
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        try:
+            await rig.driver.request_reply(request)
+        except RuntimeError:
+            pass
+        state = (dict(rig.driver._core.replies), dict(rig.driver._replies))
+        rig.socket.feed(cancelled("call-0"))
+        await settle()
+        held = [orphan.cancelled for orphan in rig.driver._cancelled_between]
+        try:
+            await rig.driver.push_frame(None, rig.view([*blocks, pushed(2)]))
+        except RuntimeError as exc:
+            refused = str(exc)
+        await rig.driver.close()
+        return state, held, refused
+
+    state, held, refused = asyncio.run(run())
+    assert state == ({}, {})
+    assert held == [("call-0",)]
+    assert refused == "Gemini Live input activity is already open"
+    # Its start, feedback and audio went out before its end failed.
+    assert ("unknown", ["d1.feedback"], "gemini_live.ws-1", 3) in log.events
+
+
+def test_a_push_whose_write_failed_is_unknown():
+    rig = Rig()
+    log = DeliveryLog(lambda: rig.live.sockets[-1].sent if rig.live.sockets else [])
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        rig.socket.fail = lambda message: wire(message) == ("text", "frame 1")
+        try:
+            await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        except RuntimeError:
+            pass
+        await rig.driver.close()
+
+    asyncio.run(run())
+    assert log.events[1:] == [("unknown", ["f1.frame"], "gemini_live.ws-1", 1)]
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
