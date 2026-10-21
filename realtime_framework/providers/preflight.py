@@ -256,6 +256,19 @@ def check_context_policy(driver, policy, config) -> None:
             f"The {api} API takes {capabilities.observation_modality} input, "
             f"not the {policy.observation} observation"
         )
+    # The observation JSON carries a choice's candidates (harnesses/jev/observation.py
+    # choice_observation); the other channels answer from the SoM screenshot.
+    choice = capabilities.action_channel == "choice"
+    if choice and policy.observation == "som_screenshot":
+        raise ValueError(
+            f"The {api} API chooses among the candidates of an observation JSON, "
+            f"not of the {policy.observation} observation"
+        )
+    if not choice and policy.observation != "som_screenshot":
+        raise ValueError(
+            f"The {api} API answers in {capabilities.action_channel}; "
+            f"the {policy.observation} observation is for choice APIs"
+        )
 
 
 def check_episode(
