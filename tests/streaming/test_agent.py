@@ -20,6 +20,7 @@ from .fake_live import (
     REALTIME,
     Call,
     Cancel,
+    Error,
     Fail,
     Reply,
     Text,
@@ -494,4 +495,114 @@ def test_a_reply_may_carry_the_cancellation_of_an_earlier_replys_calls(monkeypat
         ("cancelled", 7, ("c1",)),
         ("cancelled", 8, ("c2",)),
     ]
+    agent.close()
+
+
+# ---- how a reply ends, as a turn's does (harnesses/default/context.py _run_turn) -----------------
+
+
+def test_a_fatal_provider_error_fails_the_reply_and_its_session_is_rebuilt(monkeypatch, clock):
+    """A provider fault is no reply of the model's: the run cannot be scored, as a turn's."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(
+        Reply((_click("c1", 0.25, 1), Error(0.5, "response failed")), ends_at=1.0)
+    )
+    with pytest.raises(RuntimeError, match="response failed"):
+        agent.generate(7, 3, frame, BUDGET)
+    assert [a.call_id for a in posted] == ["c1"]
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2][:2] == ("sync", "runtime_recovery")
+    agent.close()
+
+
+def test_a_provider_error_that_is_not_fatal_leaves_the_reply_going(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(
+        Reply((Error(0.25, "cancel race", fatal=False), _click("c1", 0.5, 1)), ends_at=1.0)
+    )
+    r = agent.generate(7, 3, frame, BUDGET).result
+    assert [a.call_id for a in posted] == ["c1"]
+    assert r["action_protocol"]["protocol_failure"] is None
+    agent.close()
+
+
+@pytest.mark.parametrize("boundaries", [("interrupted",), ()], ids=["interrupted", "no_boundary"])
+def test_a_text_reply_cut_short_is_parsed_as_a_turns_text_and_its_session_rebuilt(
+    monkeypatch, clock, boundaries
+):
+    """A response that ended other than completed, or whose connection closed first, leaves the
+    session unknown: its text is the reply's all the same, and the session is rebuilt from the
+    view, which holds it once accepted, before it is used again."""
+    agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    reply = Reply((Text(0.25, '{"action": "cli'),), ends_at=1.0, boundaries=boundaries)
+    agent.driver.replies.append(reply)
+    r = agent.generate(0, 0, frame, BUDGET).result
+    assert posted == []
+    assert r["action_protocol"]["protocol_failure"] == "invalid_action_output"
+    agent.accept(0)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2] == (
+        "sync",
+        "runtime_recovery",
+        ("system", "f1.frame", "f2.frame", "d0.output"),
+    )
+    agent.close()
+
+
+@pytest.mark.parametrize(
+    ("messages", "usage", "boundaries"),
+    [
+        ((), {"output_tokens": 3}, ()),
+        (("c1",), None, ("interrupted", "turn_complete")),
+        ((), {"output_tokens": 3}, ("interrupted", "turn_complete")),
+    ],
+    ids=["no_turn_complete", "interrupted_without_usage", "interrupted_before_a_call"],
+)
+def test_a_function_call_reply_that_did_not_complete_fails(
+    monkeypatch, clock, messages, usage, boundaries
+):
+    """As a native tool turn (FunctionCallTurnCollector.finish): a reply that never came to its
+    turn_complete, or was interrupted before it handed a call over or without its usage, is no
+    result."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    calls = tuple(_click(call_id, 0.25, 1) for call_id in messages)
+    agent.driver.replies.append(Reply(calls, ends_at=1.0, usage=usage, boundaries=boundaries))
+    with pytest.raises(RuntimeError, match="complete"):
+        agent.generate(7, 3, frame, BUDGET)
+    agent.close()
+
+
+def test_a_function_call_reply_interrupted_after_its_call_stands_and_its_session_is_rebuilt(
+    monkeypatch, clock
+):
+    """The call already fixed the action, and the terminal usage came: as a native tool turn,
+    the interruption does not undo it, and leaves the session to be rebuilt."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(
+        Reply(
+            (_click("c1", 0.25, 1),),
+            ends_at=1.0,
+            usage={"output_tokens": 3},
+            boundaries=("interrupted", "turn_complete"),
+        )
+    )
+    agent.generate(7, 3, frame, BUDGET)
+    assert [a.call_id for a in posted] == ["c1"]
+    agent.accept(7)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2][:2] == ("sync", "runtime_recovery")
     agent.close()
