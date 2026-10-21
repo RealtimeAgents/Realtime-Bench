@@ -556,6 +556,26 @@ def test_a_read_across_the_deadline_that_finds_no_end_ends_the_episode_at_the_de
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.5, 3.5, None)
 
 
+def test_the_deadline_waiting_for_a_read_gives_the_reply_in_flight_up_at_once():
+    """The read asked at 4 takes 1.5 s; the reply started at 1 would end at 5.2, past the deadline,
+    while the end waits for that read. It is given up at the deadline, as it would be without the
+    wait, and nothing it says lands."""
+    world = World(replies=[Reply(1.0), Reply(4.2, output_tokens=77)], check_times={5: 1.5})
+    sim = _run(world)
+    assert sim.data("GenerationAbandoned") == [{"generation": 2, "reason": "deadline"}]
+    assert sim.aborted == [(2, 5.0)]
+    assert sim.accepted == [1]
+    assert [o.decision for o in sim.outcomes] == [0]
+    assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.5)
+
+
+def test_a_reply_that_would_fail_while_the_deadline_waits_for_a_read_leaves_the_run_valid():
+    failure = Invalidated("provider", "provider_request_failed", "connection reset")
+    world = World(replies=[Reply(3.25, invalid=failure)], check_times={3: 1.5})
+    sim = _run(world, 3.0)
+    assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.5, 3.5, None)
+
+
 def _click_during_a_capture(capture_s: float, ends_at: float | None) -> Simulation:
     """The click executes from 4.1 to 4.6 alongside the capture due at 4, which takes
     ``capture_s``; the read after the click waits for that capture."""
@@ -594,10 +614,10 @@ def test_a_read_after_an_action_past_the_deadline_that_finds_no_end_ends_it_at_t
 
 
 def test_an_action_that_arrives_while_the_end_waits_for_a_read_is_settled_by_that_end():
-    """The click arrives at 3.25, while the end waits for the read asked at 2."""
-    world = World(
-        replies=[Reply(10.0, calls=(Call(3.25, CLICK),))], ends_at=2.0, check_times={3: 1.5}
-    )
+    """The click arrives at 3.25, while the end waits for the read asked at 2, from the reply given
+    up at the deadline, whose messages keep coming as from the old connection."""
+    reply = Reply(10.0, calls=(Call(3.25, CLICK),), interruptible=False)
+    world = World(replies=[reply], ends_at=2.0, check_times={3: 1.5})
     sim = _run(world, 3.0)
     assert sim.executed == []
     assert sim.statuses() == ["not_applied_terminal"]
