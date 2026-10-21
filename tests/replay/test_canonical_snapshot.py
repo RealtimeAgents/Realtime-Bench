@@ -229,7 +229,8 @@ def test_luna_choice_parts(tmp_path):
     driver_start = agent.driver.start_generation
 
     async def remember_choice(request):
-        used.append(agent._choice)
+        (generation,) = agent._generations
+        used.append(generation.choice)
         return await driver_start(request)
 
     agent.driver.start_generation = remember_choice

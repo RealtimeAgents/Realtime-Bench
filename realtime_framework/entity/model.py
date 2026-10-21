@@ -263,6 +263,8 @@ class GenerationOutput:
 @dataclass(frozen=True)
 class RuntimeTurnResult:
     output: GenerationOutput
+    # The generation's turn with its output; the history takes it once the result is accepted.
+    turn: CanonicalTurn
     generation_id: str
     history_sync: HistorySyncResult
     terminal_history_state: ProviderHistoryState
