@@ -1169,6 +1169,59 @@ def test_an_abandoned_generation_omits_nothing_under_pressure(tmp_path):
     assert [c["scope"]["generation"] for c in changes if c.get("kind") == "pressure_archive"] == [3]
 
 
+def test_an_abandoned_generation_omits_no_second_block(tmp_path):
+    """Stateless chat, with pressure reported by the counts the test chooses. Generations 1-12
+    are accepted, each archiving the turn before it, so twelve actions are archived. Generation
+    13 archives decision 11's turn, leaves ten actions out and is still over, so it counts the
+    request with every action left out. It is aborted while that count is under way, and the
+    count fits: the ledger may be the next generation's by then, so it stops with the ten
+    left out and no more."""
+    steps = [LONG_SCENARIO[0]] * 12
+    with ChatCompletionsStub(replies(steps)) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        driver = agent.driver
+        try:
+            probing, release = threading.Event(), threading.Event()
+            sized, counts = driver.request_context_status, {}
+
+            async def counted(request):
+                status = dict(await sized(request))
+                count = counts[request.generation] = counts.get(request.generation, 0) + 1
+                if request.generation == 13 and count == 4:
+                    probing.set()
+                    await asyncio.to_thread(release.wait, WAIT_S)
+                over = 3 if request.generation == 13 else 1 if request.generation > 1 else 0
+                status["pressure"] = count <= over
+                return status
+
+            driver.request_context_status = counted
+            for generation, decision in enumerate(range(len(steps)), 1):
+                _generate(episode, generation, decision)
+                agent.accept(generation)
+                agent.commit(_outcome(decision, "applied"))
+            box, done = _in_worker(lambda: _generate(episode, 13, 12))
+            assert probing.wait(WAIT_S), "generation 13 counted no request with every action out"
+            agent.abort(13)
+            wait_for_abort(agent, WAIT_S)
+            release.set()
+            abandoned = _joined(box, done)
+            agent.discard(13)
+            history = (agent._runtime.archived_action_count, agent._runtime._omitted_action_count)
+        finally:
+            episode.finish()
+    assert abandoned.cancelled
+    assert len(stub.requests) == len(steps)
+    assert history == (12, 10)
+    changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]
+    omissions = [
+        (c["scope"]["generation"], c["ledger"]["omitted_actions_after"])
+        for c in changes
+        if c.get("kind") == "ledger_omission"
+    ]
+    assert omissions == [(13, 10)]
+
+
 def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
     """Luna, aborted while decision 0's question is under way, as the legacy loop's per-move cap
     does. The abort closes the Decisions HTTP client (providers/openai_decisions.py close), and
