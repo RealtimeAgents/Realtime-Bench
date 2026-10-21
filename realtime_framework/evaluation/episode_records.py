@@ -1,5 +1,5 @@
-"""What one decision leaves on the record: the output tokens its clock is charged with, whether
-its result is usable, and the action as the trace keeps it.
+"""What one decision leaves on the record: its output caps and their audit, the output tokens its
+clock is charged with, whether its result is usable, and the action as the trace keeps it.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -12,8 +12,89 @@ from __future__ import annotations
 import traceback
 
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.sandbox.observation.som import valid_inspection_proof
+
+
+def decision_budget(
+    adapter, remaining_clock_tokens: int | None, clock_mode: str
+) -> tuple[int | None, DecisionBudget]:
+    """The model's native output limit and one decision's output caps. ``remaining_clock_tokens``
+    is the finite token clock's allowance left before the horizon, None without one."""
+    native_output_limit = getattr(getattr(adapter, "config", None), "native_output_limit", None)
+    # None when the model declares no native limit and no token clock bounds the episode.
+    runtime_output_cap = (
+        native_output_limit
+        if remaining_clock_tokens is None
+        else remaining_clock_tokens
+        if native_output_limit is None
+        else min(native_output_limit, remaining_clock_tokens)
+    )
+    # Bound transports that support a per-turn cap by the episode's remaining charged-token
+    # capacity. Drivers without an exact per-turn cap may still return terminal usage beyond T;
+    # that excess is retained for billing audit but excluded from the episode clock.
+    if remaining_clock_tokens is not None:
+        provider_output_token_cap = runtime_output_cap
+    else:
+        unbounded_output = bool(getattr(adapter, "supports_unbounded_output", False))
+        provider_output_token_cap = None if unbounded_output else runtime_output_cap
+    transport_cap_mapper = getattr(adapter, "transport_output_token_cap", None)
+    transport_output_cap = (
+        transport_cap_mapper(provider_output_token_cap)
+        if callable(transport_cap_mapper)
+        else provider_output_token_cap
+    )
+    if not (
+        transport_output_cap is None
+        or transport_output_cap == "inf"
+        or (
+            isinstance(transport_output_cap, int)
+            and not isinstance(transport_output_cap, bool)
+            and transport_output_cap > 0
+        )
+    ):
+        raise ValueError("adapter transport output cap must be None, a positive integer, or 'inf'")
+    return native_output_limit, DecisionBudget(
+        runtime_output_tokens=runtime_output_cap,
+        provider_output_tokens=provider_output_token_cap,
+        transport_output_tokens=transport_output_cap,
+        clock_mode=clock_mode,
+    )
+
+
+def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:
+    """Record the adapter's handoff and action caps for the decision on ``r``. Raises RuntimeError
+    when together they exceed the provider allowance."""
+    handoff_cap = int(getattr(adapter, "_frame_handoff_max_tokens", 0) or 0)
+    action_cap = int(
+        getattr(
+            adapter,
+            "_frame_action_max_tokens",
+            budget.runtime_output_tokens,
+        )
+        or 0
+    )
+    # A decision that was invalidated before generation (e.g. inspection_protocol_error)
+    # never recomputed the adapter's per-decision caps, so they still describe the previous
+    # decision; auditing them against this decision's allowance would raise spuriously.
+    if (
+        budget.provider_output_tokens is not None
+        and r.get("invalid_reason") is None
+        and handoff_cap + action_cap > budget.provider_output_tokens
+    ):
+        raise RuntimeError(
+            f"adapter decision output caps exceed provider transport allowance: "
+            f"handoff={handoff_cap} + action={action_cap} > {budget.provider_output_tokens}"
+        )
+    r.update(
+        {
+            "handoff_token_cap": handoff_cap,
+            "action_token_cap": action_cap,
+            "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
+            "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
+        }
+    )
 
 
 def action_record(action: Action | None) -> dict | None:
