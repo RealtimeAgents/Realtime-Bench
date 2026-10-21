@@ -69,6 +69,10 @@ _CLIENT_ID_MAX_LENGTH = 32
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
 # The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
+# How long a connection's close may take before the socket is dropped under it. A close stuck on
+# a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
+# fails both. Normal closes finish well within it, so it adds no observable wait.
+_CONNECTION_CLOSE_TIMEOUT_S = 10.0
 _NETWORK_ERRNOS = {
     errno.ENETUNREACH,
     errno.EHOSTUNREACH,
@@ -138,14 +142,18 @@ class _Session:
         self._reader: asyncio.Task | None = None
         self._clock = None
         self._read_one: asyncio.Event | None = None
+        self._on_lost = lambda: None
         # How the connection ended: closed normally (by either side), or a failed read.
         self.closed: ConnectionClosedOK | None = None
         self.failure: Exception | None = None
 
-    def read_continuously(self, clock) -> None:
+    def read_continuously(self, clock, on_lost=lambda: None) -> None:
         """Read every event as it arrives until the connection ends, and hand each to the core
-        with the time ``clock`` reads then (native streaming)."""
-        self._clock, self._read_one = clock, asyncio.Event()
+        with the time ``clock`` reads then (native streaming). ``on_lost`` is called once if the
+        connection ends on its own, by a failed read or a close from the server, so the driver
+        can mark the session for rebuild; a close the driver started cancels the reader instead
+        and does not call it."""
+        self._clock, self._read_one, self._on_lost = clock, asyncio.Event(), on_lost
         # The reader reads for the connection, whatever reply is in progress, not for the call
         # that opened it: in an empty context the trace records what it reads in no scope.
         self._reader = asyncio.create_task(self._read_all(), context=contextvars.Context())
@@ -166,6 +174,9 @@ class _Session:
         except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
             self.failure = exc
             self._read_one.set()
+        # The connection ended on its own: a failed read, a core failure, or a close the server
+        # sent. The driver started none of these, so the session is left to be rebuilt.
+        self._on_lost()
 
     async def stop_reading(self, *, closed: bool) -> None:
         """Once the connection is closed, wait for the reader to end; a connection that may
@@ -413,9 +424,17 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         closed = True
         if cm is not None:
             try:
-                await asyncio.to_thread(cm.__exit__, None, None, None)
+                await self.clock.wait_for(
+                    asyncio.to_thread(cm.__exit__, None, None, None),
+                    _CONNECTION_CLOSE_TIMEOUT_S,
+                )
             except Exception:  # noqa: BLE001 - best-effort SDK cleanup
+                # A close stuck on a write that does not drain leaves a streaming push stuck in
+                # the same write: drop the socket under both, which fails the write and lets the
+                # close return. The SDK keeps the WebSocket connection as ``_connection``.
                 closed = False
+                if session is not None:
+                    session._conn._connection.close_socket()
         if session is not None:
             await session.stop_reading(closed=closed)
 
@@ -486,7 +505,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         )
         # The history is None when the runtime opens the episode's first session.
         if self.streaming:
-            session.read_continuously(self.clock)
+            session.read_continuously(self.clock, self.mark_dirty)
             replay = session.core.replay_streaming(request.history)
             await self._send_all(session, replay)
             # A fold anchors a frame on the item its confirmation says the server put it after:
@@ -620,10 +639,24 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         pending = core_generation.events
         numbers = {"connection": session.number, "generation": core_generation.number}
         sequence = 0
+        ended = False
         while True:
             await session.receive_until(lambda: pending)
             if not pending:
-                return  # the connection closed normally
+                # The connection closed normally. A reply still unconcluded then is a half reply:
+                # its connection ended before its response.done, as a status=failed one's fault
+                # ends it, rather than its partial text passing as the whole answer.
+                if not ended:
+                    sequence += 1
+                    yield ProviderError(
+                        generation.generation_id,
+                        sequence,
+                        "connection_closed",
+                        "the connection closed before the response completed",
+                        True,
+                        **numbers,
+                    )
+                return
             event = pending.popleft()
             event_type = getattr(event, "type", "")
             if event_type == "response.created":
@@ -644,6 +677,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                     cancel_event_id and getattr(error, "event_id", None) == cancel_event_id
                 )
                 sequence += 1
+                ended = True
                 yield ProviderError(
                     generation.generation_id,
                     sequence,
@@ -767,7 +801,15 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 detail=request.reason,
                 provider_metadata={"history_session_reconnected": True},
             )
-        except Exception as exc:  # noqa: BLE001 - provider session boundary
+        except Exception as exc:
+            # A connect the shared retry gave up on, or a failure the outer retry may still
+            # retry, propagates as it is: that retry reads its kind and spent budget off it,
+            # which a BROKEN result's text would lose (decision 39).
+            if (
+                isinstance(exc, TransportFailureError)
+                or self.classify_transport_error(exc).retryable
+            ):
+                raise
             return HistorySyncResult(
                 SyncDisposition.BROKEN,
                 ProviderHistoryState.UNKNOWN,
