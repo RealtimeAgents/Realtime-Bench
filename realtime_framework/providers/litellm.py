@@ -1081,7 +1081,14 @@ class LiteLLMDriver:
 
 # Registered chat APIs
 class OpenRouterDriver(LiteLLMDriver):
-    capabilities = _STREAMING_CHAT
+    capabilities = replace(
+        _STREAMING_CHAT,
+        # The encoder sends past reasoning as plain reasoning_content. OpenRouter's reasoning
+        # guide takes it as `reasoning`, for models that return raw reasoning strings; signed,
+        # encrypted or summarized reasoning (its Anthropic, OpenAI and Gemini formats) goes back
+        # as reasoning_details, which the driver does not keep.
+        reasoning_replay="unsupported",
+    )
     protocol = ChatProtocol(sdk_provider="openrouter", reasoning_param="openrouter")
     deployment = ChatDeployment(
         family="vlm",
@@ -1103,6 +1110,7 @@ class MoonshotDriver(LiteLLMDriver):
         # Kimi's thinking-model guide: for K3, passing reasoning_content back "is required in
         # multi-turn conversations and tool-call loops". That is K3's requirement, not the API's:
         # K3's YAML names the kimi_k3 preset, which sends it (entity/context_policy.py PRESETS).
+        # LiteLLM's Moonshot config sends the encoder's reasoning_content unchanged.
         reasoning_replay="optional",
     )
     protocol = ChatProtocol(sdk_provider="moonshot", client="openai", usage="kimi")
@@ -1120,7 +1128,13 @@ class MoonshotDriver(LiteLLMDriver):
 
 
 class AnthropicMessagesDriver(LiteLLMDriver):
-    capabilities = replace(_STREAMING_CHAT, protocol_family="anthropic_messages")
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="anthropic_messages",
+        # LiteLLM's Anthropic converter drops reasoning_content. Anthropic takes past thinking
+        # only as signed thinking blocks passed back unmodified; the driver keeps their summary.
+        reasoning_replay="unsupported",
+    )
     protocol = ChatProtocol(
         sdk_provider="anthropic",
         include_usage=False,
@@ -1148,6 +1162,9 @@ class ChatCompletionsDriver(LiteLLMDriver):
         wall_clock_only=True,
         # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
         request_size_estimation=True,
+        # OpenAI's chat format has no field for past reasoning: LiteLLM passes reasoning_content
+        # through, and whether an endpoint reads it is up to its server.
+        reasoning_replay="unsupported",
     )
     protocol = ChatProtocol(
         sdk_provider="openai",
@@ -1208,6 +1225,10 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
+        # The model id picks LiteLLM's provider, and with it what becomes of reasoning_content:
+        # sent unchanged to OpenAI-format APIs, an unsigned thought part for Gemini, dropped for
+        # Anthropic.
+        reasoning_replay="unsupported",
     )
     protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
     deployment = ChatDeployment(
