@@ -106,3 +106,17 @@ def test_a_response_past_the_horizon_is_not_applied_when_its_allowance_is_not_wh
     assert records[1]["action_clock_position"] == 9000.0
     assert env.tick_index() == 9000.0
     assert env._stop_reason == "tick_limit"
+
+
+def test_a_large_allowance_is_rounded_down_within_float_noise():
+    """25/4, B=100000, 5 minutes = 7500 ticks; a frame is 6.25 ticks. Decision 0's 52998400
+    tokens are 529.984 frames, 3312.4 ticks; frame 530 (3312.5) is observed at tick 3313. The
+    4187 ticks left are 669.92 frames, exactly 66992000 tokens, which floats put a hundred-
+    millionth of a token below. A response of all of them lands on the horizon."""
+    env, agent = run(25.0, 4.0, 100000, 5.0, [(None, 52998400), (Action.wait(1.0), 66992000)])
+    records = lifecycle(env)
+    assert captured_ticks(env) == [0, 3313]
+    assert [r["remaining_clock_tokens"] for r in records] == [120000000, 66992000]
+    assert records[1]["post_horizon_output_tokens"] == 0
+    assert agent.statuses == ["none", "not_applied_tick_limit"]
+    assert env._stop_reason == "tick_limit"
