@@ -12,7 +12,11 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action
-from realtime_framework.entity.context_policy import LUNA_OBSERVATION_LABEL
+from realtime_framework.entity.context_policy import (
+    JEV_CURRENT_PREFIX,
+    JEV_HISTORY_PREFIX,
+    LUNA_OBSERVATION_LABEL,
+)
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.prompts import (
@@ -43,6 +47,7 @@ from tests.replay.ws_openai_realtime import replies as realtime_replies
 
 WAIT_S = 10.0  # bound on every cross-thread wait; none is reached when the code behaves
 LUNA = "gpt-6-luna-decisions"  # configs/models/gpt-6-luna-decisions.yaml; upstream "openai"
+JEV = "jev-1.13"  # configs/models/jev-1.13.yaml; upstream "typesafe"
 # The feedback on a move over the per-move cap, of which nothing was accepted.
 NOTE = (
     "EXECUTION RESULT: actual=wait(); requested=none; status=skipped_timeout. "
@@ -50,12 +55,12 @@ NOTE = (
 )
 
 
-def _luna_episode(stub, run_dir):
-    config = catalog.to_model_config(LUNA, fps=1.0, reasoning_effort="fixed").model_copy(
+def _decisions_episode(stub, run_dir, model=LUNA):
+    config = catalog.to_model_config(model, fps=1.0, reasoning_effort="fixed").model_copy(
         update={"api_base_url": stub.base_url}
     )
     return build_episode(
-        config, run_dir, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=LUNA
+        config, run_dir, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=model
     )
 
 
@@ -426,7 +431,9 @@ def test_the_note_outlasts_its_frame_s_screenshot(tmp_path, monkeypatch, api):
     else:
         stub = DecisionsStub(upstream="openai")
     with stub:
-        episode = _chat_episode(stub, tmp_path) if api == "chat" else _luna_episode(stub, tmp_path)
+        episode = (
+            _chat_episode(stub, tmp_path) if api == "chat" else _decisions_episode(stub, tmp_path)
+        )
         agent = episode.agent
         try:
             for generation, decision in enumerate(range(last + 1), 1):
@@ -453,6 +460,42 @@ def test_the_note_outlasts_its_frame_s_screenshot(tmp_path, monkeypatch, api):
         text = "\n".join(entry for entry in body["state"] if isinstance(entry, str))
         assert text.count(NOTE) == 1
         assert f"{NOTE}\n{LUNA_OBSERVATION_LABEL}{FOLDED_VISUAL_PLACEHOLDER}" in text
+
+
+def test_jev_opens_the_next_observation_with_the_note(tmp_path, monkeypatch):
+    """JEV, whose feedback is part of its action digest. Decision 1's generation is aborted
+    before it starts, reported skipped_timeout and discarded. Decision 2's current observation
+    opens with the note. On decision 3 the digest keeps it before decision 2's action, and
+    decision 0's entry keeps its own feedback."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
+    with DecisionsStub(upstream="typesafe") as stub:
+        episode = _decisions_episode(stub, tmp_path, JEV)
+        agent = episode.agent
+        try:
+            for generation, decision in enumerate(range(4), 1):
+                if decision == 1:
+                    agent.abort(generation)
+                    assert _generate(episode, generation, decision).cancelled
+                    agent.commit(_outcome(decision, "skipped_timeout"))
+                    agent.discard(generation)
+                    continue
+                stub.load(scenario_decisions.WEB_LONG[decision].script)
+                _generate(episode, generation, decision)
+                agent.accept(generation)
+                agent.commit(_outcome(decision, "applied"))
+            turns = agent._runtime.turns
+        finally:
+            episode.finish()
+    ids = [turn.observation.observation_id for turn in turns]
+    assert [turn.decision for turn in turns] == [0, 2, 3]
+    _, second, third = (json.loads(r.body)["state"]["history"] for r in stub.requests)
+    assert second[-1]["content"].startswith(f"{NOTE}\n{JEV_CURRENT_PREFIX}")
+    assert third[-1]["content"].startswith(JEV_CURRENT_PREFIX)
+    digest = json.loads(third[-2]["content"].removeprefix(JEV_HISTORY_PREFIX))
+    assert [entry["observation_id"] for entry in digest] == [ids[0], ids[1], ids[1]]
+    assert digest[0]["execution_feedback"] == turns[0].execution_feedback
+    assert digest[1] == {"observation_id": ids[1], "execution_feedback": NOTE}
+    assert digest[2]["execution_feedback"] == turns[1].execution_feedback
 
 
 def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
@@ -506,7 +549,7 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
     its reply: no question of it is asked."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
     with DecisionsStub(upstream="openai") as stub:
-        episode = _luna_episode(stub, tmp_path)
+        episode = _decisions_episode(stub, tmp_path)
         agent = episode.agent
         driver = agent.driver
         try:
@@ -609,7 +652,7 @@ def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
     answered."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
     with DecisionsStub(upstream="openai") as stub:
-        episode = _luna_episode(stub, tmp_path)
+        episode = _decisions_episode(stub, tmp_path)
         agent = episode.agent
         try:
             entered, release = _hold_questions(agent.driver)

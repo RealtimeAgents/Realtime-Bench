@@ -66,7 +66,8 @@ class ContentBlock:
     text: str = ""
     image: FrameImage | None = None  # unfolded frames of screenshot observations only
     folded: bool = False
-    observation_id: str | None = None  # frame: the existing frame number
+    # frame: the existing frame number; digest feedback an older frame opened with: that frame's
+    observation_id: str | None = None
     based_on: str | None = None  # output and tools: observation_id of the frame answered
     attached_to: str | None = None  # feedback: the output it reports, or the frame it prefixes
     reasoning: str = ""  # output: set only when the policy replays reasoning
