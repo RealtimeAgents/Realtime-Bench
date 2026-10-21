@@ -14,9 +14,9 @@ import contextlib
 import json
 from types import SimpleNamespace
 
+from google.genai import _common, _live_converters, types
 from google.genai import errors as genai_errors
 from google.genai import live as genai_live
-from google.genai import types
 
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
@@ -111,6 +111,21 @@ class FedLive:
 
 async def _yield(value):
     yield value
+
+
+def setup_message(config) -> dict:
+    """The setup google-genai sends for ``config`` to the Gemini Developer API, which the
+    driver's client connects to, converted as its AsyncLive.connect converts it
+    (google/genai/live.py); FedLive takes the config before that conversion."""
+    parameters = types.LiveConnectParameters(model="models/gemini-live", config=config)
+    request = _common.convert_to_dict(
+        _live_converters._LiveConnectParameters_to_mldev(
+            api_client=SimpleNamespace(vertexai=False),
+            from_object=parameters.model_dump(exclude_none=True),
+        )
+    )
+    del request["config"]
+    return json.loads(json.dumps(_common.encode_unserializable_types(request)))["setup"]
 
 
 class Rig:
@@ -209,24 +224,26 @@ def test_a_streaming_setup_compresses_the_context_and_lets_a_trigger_not_interru
         await turn_based.driver.close()
 
     asyncio.run(run())
-    (config,) = rig.live.configs
+    setup = setup_message(rig.live.configs[0])
     settings = live.GeminiLiveDriver.streaming_settings
-    compression = config.context_window_compression
-    assert compression.trigger_tokens == settings["compression_trigger_tokens"]
-    assert compression.sliding_window.target_tokens == settings["compression_target_tokens"]
-    realtime = config.realtime_input_config
-    assert realtime.automatic_activity_detection.disabled
-    assert realtime.activity_handling == types.ActivityHandling.NO_INTERRUPTION
-    assert realtime.turn_coverage == types.TurnCoverage.TURN_INCLUDES_ALL_INPUT
-    assert config.session_resumption.transparent
+    # google-genai sends these two as the config's field names, which the server's JSON takes.
+    assert setup["contextWindowCompression"] == {
+        "trigger_tokens": settings["compression_trigger_tokens"],
+        "sliding_window": {"target_tokens": settings["compression_target_tokens"]},
+    }
+    assert setup["realtimeInputConfig"] == {
+        "automatic_activity_detection": {"disabled": True},
+        "activity_handling": "NO_INTERRUPTION",
+        "turn_coverage": "TURN_INCLUDES_ALL_INPUT",
+    }
     metadata = rig.driver._connect_metadata
     assert metadata["gemini_live_context_window_compression"] == settings
     assert metadata["gemini_live_server_context"] == "unknown"
 
-    (turn_based_config,) = turn_based.live.configs
-    assert turn_based_config.context_window_compression is None
-    assert turn_based_config.realtime_input_config is None  # the preset's client_content
-    assert not turn_based_config.session_resumption.transparent
+    turn_based_setup = setup_message(turn_based.live.configs[0])
+    assert "contextWindowCompression" not in turn_based_setup
+    assert "realtimeInputConfig" not in turn_based_setup  # the preset's client_content
+    assert setup["sessionResumption"] == turn_based_setup["sessionResumption"]
     assert "gemini_live_context_window_compression" not in turn_based.driver._connect_metadata
 
 
