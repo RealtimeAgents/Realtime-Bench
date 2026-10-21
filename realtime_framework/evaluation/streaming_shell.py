@@ -119,7 +119,8 @@ def run_streaming_episode(
     """Run one streaming episode; return how it ended. What main() reads afterwards is left on
     ``env`` as the turn-based shell leaves it: the stop reason and the termination record
     (``_stop_reason``, ``_termination``), the frozen snapshot (``_termination_snapshot*``,
-    ``_active_end_unix_s``), ``_invalid_run`` and ``_loop_error``."""
+    ``_active_end_unix_s``), ``_invalid_run``, ``_loop_error``, and a frozen stream
+    (``_stream_frozen``, ``_stream_freeze_count``)."""
     return _StreamingShell(agent, env, config, clocks, log, trace).run()
 
 
@@ -501,6 +502,11 @@ class _StreamingShell:
     def _record(self, entry: Entry) -> None:
         if entry.kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**entry.data)
+            if invalid.reason == "observation_stream_frozen":
+                # What main() reads for the run summary, as the turn-based shell sets it.
+                env = self.env
+                env._stream_freeze_count = getattr(env, "_stream_freeze_count", 0) + 1
+                env._stream_frozen = True
             self.log(
                 f"[invalid-run] {invalid.category}:{invalid.reason}"
                 + (f" — {invalid.detail}" if invalid.detail else "")

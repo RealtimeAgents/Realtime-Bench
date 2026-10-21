@@ -588,3 +588,22 @@ def test_a_push_that_raises_any_exception_loses_that_frame_only():
         )
     assert termination.invalid is None
     assert agent.started[0][1] == "obs-2"  # the first reply waits for the first frame that went out
+
+
+def test_a_frozen_stream_is_left_on_the_environment_as_the_turn_based_shell_leaves_it():
+    """Each capture brings the same frame back: the third makes the stream frozen and the run
+    invalid, which main() reads off the environment for the run summary
+    (observation_stream_frozen, observation_stream_freeze_count), as on the turn-based shell."""
+    from realtime_framework.entity.actions import Observation
+
+    def same_frame(env, clock):
+        def capture():
+            env._operate("capture")
+            env.captures += 1
+            return Observation(b"", clock.time(), 0, {"observation_id": "obs-1"})
+
+        env.capture = capture
+
+    termination, env, _ = _episode(6.0, [], env_setup=same_frame)
+    assert termination.invalid.reason == "observation_stream_frozen"
+    assert (env._stream_frozen, env._stream_freeze_count) == (True, 1)
