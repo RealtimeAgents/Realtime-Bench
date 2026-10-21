@@ -106,6 +106,27 @@ def test_a_result_settled_across_the_cap_is_the_moves_only_record():
     assert episode.env.lifecycle[0]["model_latency_s"] == pytest.approx(1.495)
 
 
+@pytest.mark.parametrize("tokens_per_frame", [100, None], ids=["token", "paused"])
+def test_a_token_result_back_before_the_watchdog_is_taken_though_settling_it_crosses_it(
+    tokens_per_frame,
+):
+    """The result comes back 5 ms before the 7 s operational watchdog and settling it takes
+    10 ms. The world stands still while it settles, so the kernel gets it at the reading it came
+    back at, as the runner's bounded wait returned with it (runner.py _bounded_call)."""
+    replies = [Reply(6.995, CLICK, output_tokens=100), Reply(0.0, CLICK, output_tokens=100)]
+    timing = RunnerTimingConfig(provider_watchdog_s=7.0)
+    episode = run(
+        "token",
+        2.0,
+        replies,
+        tokens_per_frame=tokens_per_frame,
+        timing=timing,
+        agent_type=_SlowTrajectory,
+    )
+    assert episode.invalid is None
+    assert episode.statuses()[0] == "applied"
+
+
 def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_moved():
     """The first decision's 1000 tokens move the world to tick 10; the next call never answers.
     The watchdog's 7 s are operational, so it fires 7 s into that call though the tick is past

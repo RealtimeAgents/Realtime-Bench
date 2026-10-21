@@ -322,15 +322,17 @@ class _Shell:
             # The results back before the reading are settled only once nothing else is due by
             # then: a deadline or a cap that came first gives their generation up, and a result
             # the kernel will not take leaves no record. One back later waits for the next
-            # reading. The kernel gets them at the reading after the settling, which takes time
-            # in the world too: a deadline that came meanwhile goes first, and nothing lands after
-            # it (phase2.md, 时间和结束判定).
+            # reading. On the wall clock the kernel gets them at the reading after the settling,
+            # which takes time in the world too: a deadline that came meanwhile goes first, and
+            # nothing lands after it (phase2.md, 时间和结束判定). The token clock's world stands
+            # still meanwhile; a new reading would only let the operational watchdog overtake a
+            # result back before it.
             returned = len(self._returned)
             now = self._read()
             commands = self._step(now)
             if commands is None and returned:
                 self._settle_returned(returned)
-                commands = self._step(self._read())
+                commands = self._step(now if self.token else self._read())
             if commands is None:
                 self._sleep()
             else:
