@@ -23,8 +23,9 @@ Failed state reads. The run is invalid once three state reads in a row have fail
 answers starts the count over. The kernel keeps the count (kernel/turns.py READ_FAILURE_LIMIT),
 over every read that decides whether the episode is over: ``check_end()``, which answers CheckEnd,
 and on the token clock the reads a key tap makes inside ``execute()``, which the shell passes on as
-``ActionExecuted.end_checks``. On neither path does the environment invalidate the run for a failed
-read.
+``ActionExecuted.end_checks``. The shell sets ``kernel_counts_reads``, and then the environment
+invalidates the run for a failed read on neither path; under the legacy loop it stays unset, and
+the first failed read invalidates the run as today.
 """
 
 from __future__ import annotations
@@ -55,6 +56,10 @@ class ShellEnvironment(Protocol):
     # key tap makes them, after each step of its advance; one that sees the end stops the tap, a
     # failed one does not. The shell passes them as ActionExecuted.end_checks.
     last_end_checks: tuple[str | None, ...]
+    # Set by the shell before the episode: the kernel counts failed state reads, so a failed read
+    # inside execute() goes to last_end_checks instead of latching the run invalid. The legacy
+    # loop leaves it False.
+    kernel_counts_reads: bool
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
     # key-release timer, on its own thread, invalidates the run.
     on_invalid: Callable[[dict], None] | None
