@@ -1278,7 +1278,12 @@ class _Shell:
             )
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             self._trace_failed = True
-            self.post(Invalidated("harness", "episode_trace_write_failed", traceback.format_exc()))
+            if self._finished:  # the kernel handles nothing more (_write_handed)
+                self.agent_trace.fail(traceback.format_exc())
+            else:
+                self.post(
+                    Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
+                )
 
     def _checkpoint(self) -> None:
         """Make the trace durable at the end of every decision."""
