@@ -1087,6 +1087,9 @@ class _Generation:
     choice: tuple | None = None
     frame: FrameRecord | None = None  # its observation's frame-table record
     staged: _Staged | None = None
+    # Set as generate() returns; ``discarded`` when discard() came before, to drop it then.
+    returned: bool = False
+    discarded: bool = False
 
 
 class DefaultHarness(VisionAgentBase):
@@ -1110,8 +1113,9 @@ class DefaultHarness(VisionAgentBase):
         self._trace_decision = None
         # The generations that have not ended; abort() and close() cancel them.
         self._generations: list[_Generation] = []
-        # Kernel generations aborted before their worker started generate().
+        # Kernel generations aborted, and discarded, before their worker started generate().
         self._cancelled_early: set[int] = set()
+        self._discarded_early: set[int] = set()
         self._generations_lock = threading.Lock()
         # The episode's operational clock; the runtime, the driver and the retry wait read it.
         self.clock = clock or SystemClock()
@@ -1327,7 +1331,11 @@ class DefaultHarness(VisionAgentBase):
             if number in self._cancelled_early:
                 self._cancelled_early.remove(number)
                 generation.cancel.set()
-            self._generations.append(generation)
+            if number in self._discarded_early:
+                self._discarded_early.remove(number)
+                generation.discarded = True
+            else:
+                self._generations.append(generation)
         self._trace_decision = decision
         self._frame_action_max_tokens = native_output_limit(
             self.config.native_output_limit, provider_output_tokens
@@ -1368,14 +1376,33 @@ class DefaultHarness(VisionAgentBase):
             budget.transport_output_tokens,
             budget.clock_mode,
         )
-        result, cancelled = self._generate(state, [observation])
+        try:
+            result, cancelled = self._generate(state, [observation])
+        finally:
+            with self._generations_lock:
+                state.returned = True
+                discarded = state.discarded
+            if discarded:
+                self._drop(state)
         return PendingDecision(generation, decision, result, cancelled, state.staged)
 
     def accept(self, generation: int) -> None:
         self._write(self._close(number=generation))
 
     def discard(self, generation: int) -> None:
-        self._drop(self._close(number=generation))
+        """DiscardResult. At the end of an episode the shell also discards a generation whose
+        worker is still running, or has not started generate() yet, which the kernel has
+        aborted by then: it is dropped as generate() returns."""
+        with self._generations_lock:
+            state = next((g for g in self._generations if g.number == generation), None)
+            if state is None:
+                self._discarded_early.add(generation)
+                return
+            self._generations.remove(state)
+            if not state.returned:
+                state.discarded = True
+                return
+        self._drop(state)
 
     def stream_generate(self, tick=0):
         """The legacy loop's decision on the newest prefilled frame. Its result is written at
