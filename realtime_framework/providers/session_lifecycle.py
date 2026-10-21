@@ -64,9 +64,9 @@ class SessionLifecycle:
     operation.
 
     Whether the session can take the next generation is its state. What became of each content
-    the encoder wrote, sent or confirmed, its session core records, and the encoder writes each
-    change to the trace (_record_delivery). What the provider keeps beside them is not known:
-    the capability server_context says so.
+    the encoder wrote, sent, confirmed or refused by the server, or unknown, its session core
+    records, and the encoder writes each change to the trace (_record_delivery). What the
+    provider keeps beside them is not known: the capability server_context says so.
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
