@@ -96,6 +96,7 @@ class World:
     invalidations: tuple[tuple[float, Invalidated], ...] = ()
     capture_s: float = 0.0  # operational seconds each command occupies the shell
     check_s: float = 0.0
+    check_seconds: dict[int, float] = field(default_factory=dict)  # end check (1-based) -> its own
     execute_s: float = 0.0
     advance_s: float = 0.0
     commit_s: float = 0.0
@@ -145,6 +146,7 @@ class Simulation:
         self.commands: list = []
         self.command_times: list[float] = []  # the semantic time each command was run at
         self.checks: list[tuple[float, float]] = []  # (semantic, ops) at every end check
+        self.after_action: list[bool] = []  # for every end check, whether it follows an action
         self.tap_checks: list[float] = []  # the tick at every end check inside a key tap
         self.captures: list[tuple[float, float]] = []  # (tick, timestamp) of every frame
         self.executed: list[tuple[int, float, Action]] = []  # (decision, semantic, action)
@@ -243,6 +245,7 @@ class Simulation:
             case CheckEnd(request=request):
                 semantic = self.semantic()
                 self.checks.append((semantic, self.ops))
+                self.after_action.append(kernel.policy.phase.value == "post_check")
                 error = world.check_errors.get(len(self.checks))
                 ended = error is None and (
                     (world.ends_at is not None and semantic >= world.ends_at)
@@ -251,7 +254,7 @@ class Simulation:
                         and len(self.checks) >= world.ends_from_check
                     )
                 )
-                self._spend(world.check_s)
+                self._spend(world.check_seconds.get(len(self.checks), world.check_s))
                 kernel.post(EndChecked(request, ended, world.end_reason if ended else None, error))
             case Capture():
                 self._capture()

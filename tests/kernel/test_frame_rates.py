@@ -325,12 +325,12 @@ def test_paused_mode_advances_one_input_frame_per_decision(rates, duration_s, ob
     assert [outcome.dropped_intermediate_frames for outcome in sim.outcomes] == [0] * len(observed)
     assert [outcome.frame_age_s for outcome in sim.outcomes] == [0.0] * len(observed)
     assert sim.advances == [1.0] * int(max_ticks)
-    # Loop top, before and after execution at t_k; one check per tick to the next frame; the
-    # loop top that finds the horizon.
-    checks = []
+    # The loop top reads tick 0; each action is read after it, at t_k, and each tick the clock
+    # steps to after that; no loop top or check before execution reads a tick again.
+    checks = [0]
     for t_k, next_tick in zip(observed, next_ticks, strict=True):
-        checks += [t_k] * 3 + list(range(t_k + 1, int(next_tick) + 1))
-    assert _semantics(sim) == [*checks, max_ticks]
+        checks += [t_k, *range(t_k + 1, int(next_tick) + 1)]
+    assert _semantics(sim) == checks
     ops = 0.5 * len(observed)
     assert sim.termination == Termination(
         "tick_limit", "horizon", max_ticks, max_ticks, ops, ops, None
@@ -367,11 +367,12 @@ def test_a_one_second_wait_is_env_fps_ticks(rates, next_tick, dropped):
         dropped,
     )
     assert sim.advances == [1.0] * (2 * env_fps)
-    # Each decision: loop top and before execution, a check per tick, after execution; the
-    # second WAIT ends at T, where the next loop top finds the horizon.
-    first_checks = [0, 0, *range(1, env_fps + 1), env_fps]
-    second_checks = [env_fps, env_fps, *range(env_fps + 1, 2 * env_fps + 1), 2 * env_fps]
-    assert _semantics(sim) == [*first_checks, *second_checks, 2 * env_fps]
+    # The loop top reads tick 0; each WAIT reads every tick it steps to and once more as it ends;
+    # the second ends at T, where the next loop top finds the horizon. No loop top or check
+    # before execution reads a tick again.
+    first_checks = [0, *range(1, env_fps + 1), env_fps]
+    second_checks = [*range(env_fps + 1, 2 * env_fps + 1), 2 * env_fps]
+    assert _semantics(sim) == [*first_checks, *second_checks]
     assert sim.termination == Termination(
         "tick_limit", "horizon", 2.0 * env_fps, 2.0 * env_fps, 1.0, 1.0, None
     )

@@ -6,12 +6,16 @@ keeps it (runner.py run_stream) and phase2.md where it changes it (事件内核;
 The first end signal ends the episode at once: it freezes the snapshot, writes off and interrupts
 the generation in flight, and stops every timer; the decision in hand is settled with the skip
 order and reported; a late result is discarded. At one instant an end beats a completion, which
-beats a start. Wall end checks run every 1/env_fps s, during generations too.
+beats a start. The state is read at most once a frame, and once more after every action: on the
+wall clock by the check due every 1/env_fps s, during generations too, on the token clock after
+each step; the loop top and the check before landing read only a frame not read yet.
 """
 
 from __future__ import annotations
 
+import math
 import random
+from collections import Counter
 from dataclasses import asdict
 
 import pytest
@@ -97,6 +101,24 @@ def _past_the_deadline(sim: Simulation) -> list:
     ]
 
 
+def _frame(sim: Simulation, semantic: float) -> float:
+    """The frame a read reads: the token clock's position, or the wall clock's environment
+    frame."""
+    return semantic if sim.token else math.floor(semantic * sim.config.env_fps + 1e-9)
+
+
+def _reads_by_frame(sim: Simulation) -> Counter:
+    """How many times each frame was read, besides the reads after an action; a tap's reads are
+    reads of the frames it steps to."""
+    frames = Counter(
+        _frame(sim, semantic)
+        for (semantic, _), after in zip(sim.checks, sim.after_action, strict=True)
+        if not after
+    )
+    frames.update(sim.tap_checks)
+    return frames
+
+
 def _check_invariants(sim: Simulation) -> None:
     """What every episode keeps, whatever ends it."""
     records, commands = sim.records, sim.commands
@@ -113,6 +135,15 @@ def _check_invariants(sim: Simulation) -> None:
     assert [command for command in commands[ended:] if isinstance(command, banned)] == []
     # Nor from the wall deadline on, though an answer filed before it may be handled after it.
     assert _past_the_deadline(sim) == []
+    # The state is read at most once a frame, and once more after every action that did not end
+    # the episode.
+    assert set(_reads_by_frame(sim).values()) <= {1}
+    landed = [
+        entry
+        for entry in sim.entries("ActionResolved")
+        if entry.data["status"] in {"applied", "wait"} and not entry.data["terminal_after_action"]
+    ]
+    assert sum(sim.after_action) >= len(landed)
     # One generation at a time, and no outcome reported while one is in flight.
     in_flight = None
     for command in commands:
@@ -223,8 +254,9 @@ def test_a_token_action_at_the_horizon_is_not_applied():
     starts = [command for command in sim.commands if isinstance(command, StartGeneration)]
     assert [start.remaining_clock_tokens for start in starts] == [200]  # floor(2 * 100)
     assert sim.advances == [1.0, 1.0]
-    # The loop top, after each step, before execution, and the loop top that finds the horizon.
-    assert sim.checks == [(0, 0.0), (1, 1.0), (2, 1.0), (2, 1.0), (2, 1.0)]
+    # The loop top and each step; tick 2 is not read again before execution or at the loop top
+    # that finds the horizon.
+    assert sim.checks == [(0, 0.0), (1, 1.0), (2, 1.0)]
     assert sim.executed == []
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.action_clock_position) == ("not_applied_tick_limit", 2.0)
@@ -252,9 +284,10 @@ def test_a_wall_wait_across_the_deadline_ends_at_the_deadline():
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.terminal_after_action) == ("wait", True)
     assert (outcome.action_clock_position, outcome.frame_age_s) == (0.5, 0.5)
-    # A WAIT is no environment call, and no end check is asked after the deadline.
+    # A WAIT is no environment call; frame 0, read at the loop top, is not read again before it,
+    # and no end check is asked after the deadline.
     assert sim.executed == []
-    assert sim.checks == [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0), (2.0, 2.0)]
+    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.0, 3.0, 3.0, None)
 
 
@@ -265,8 +298,9 @@ def test_a_token_wait_across_the_horizon_ends_at_the_horizon():
     wait = Action.wait(5.0)
     sim = _run(_token(3.0), World(replies=[Reply(latency=0.5, action=wait, output_tokens=100)]))
     assert sim.advances == [1.0, 1.0, 1.0]
-    # Loop top; approach to 1; before execution; wait steps to 2 and 3; after execution; loop top.
-    assert _semantics(sim) == [0, 1, 1, 2, 3, 3, 3]
+    # Loop top; approach to 1; wait steps to 2 and 3; after execution. Neither tick 1 before the
+    # wait nor tick 3 at the loop top is read again.
+    assert _semantics(sim) == [0, 1, 2, 3, 3]
     (resolved,) = sim.entries("ActionResolved")
     assert (resolved.data["status"], resolved.data["terminal_after_action"]) == ("wait", False)
     assert resolved.data["execution_result"] == {
@@ -301,18 +335,16 @@ def test_a_token_hold_expiring_between_frames_splits_the_step():
         for command in sim.commands[second:]
         if isinstance(command, AdvanceClock | ReleaseKeys | CheckEnd)
     ]
-    # Step to the lease end, release, check; the rest of the step, check; before execution; loop
-    # top.
+    # Step to the lease end, release, check; the rest of the step, check. Tick 2 is not read again
+    # before execution or at the loop top.
     assert moves == [
         "AdvanceClock",
         "ReleaseKeys",
         "CheckEnd",
         "AdvanceClock",
         "CheckEnd",
-        "CheckEnd",
-        "CheckEnd",
     ]
-    assert _semantics(sim) == [0, 1, 1, 1, 1, 1.5, 2, 2, 2]
+    assert _semantics(sim) == [0, 1, 1, 1.5, 2]
     # The hold lands on the boundary and renders it; the second action time is the horizon.
     assert sim.renders == [1]
     assert [outcome.status for outcome in sim.outcomes] == ["applied", "not_applied_tick_limit"]
@@ -447,9 +479,9 @@ def test_a_generation_spanning_several_frames_drops_them():
     ]
     sim = _run(_token(5.0), World(replies=replies))
     assert sim.advances == [1.0, 1.0, 1.0, 0.5, 0.5, 1.0]
-    # Decision 0: loop top, 4 approach steps, before and after execution, the step to 4.
-    # Decision 1: loop top, the step to 5, before execution; then the loop top at the horizon.
-    assert _semantics(sim) == [0, 1, 2, 3, 3.5, 3.5, 3.5, 4, 4, 5, 5, 5]
+    # Decision 0: loop top, 4 approach steps, after execution, the step to 4. Decision 1: the step
+    # to 5. No loop top or check before execution reads a tick read already.
+    assert _semantics(sim) == [0, 1, 2, 3, 3.5, 3.5, 4, 5]
     assert sim.executed == [(0, 3.5, CLICK)]
     first = sim.outcomes[0]
     assert (first.action_clock_position, first.next_observation_tick) == (3.5, 4)
@@ -482,9 +514,10 @@ def test_a_wall_generation_spanning_several_frames_drops_them():
     (runner.py _apply)."""
     sim = _run(_wall(5.0), World(replies=[Reply(latency=2.5, action=CLICK), Reply(latency=10.0)]))
     assert sim.executed == [(0, 2.5, CLICK)]
-    # Loop top; every second; before and after execution; at 3 s the periodic check (set before
-    # the move) and the loop top; 4 s; the deadline beats the check due at 5 s.
-    assert _semantics(sim) == [0, 1, 2, 2.5, 2.5, 3, 3, 4]
+    # Loop top; every second; after execution, frame 2 having been read at 2 s; at 3 s the
+    # periodic check (set before the move), and the loop top reads no more; 4 s; the deadline
+    # beats the check due at 5 s.
+    assert _semantics(sim) == [0, 1, 2, 2.5, 3, 4]
     (outcome,) = sim.outcomes
     assert (outcome.action_clock_position, outcome.next_observation_tick) == (2.5, 3)
     assert (outcome.dropped_intermediate_frames, outcome.frame_age_s) == (2, 2.5)
@@ -556,8 +589,9 @@ def test_a_wall_action_exactly_on_a_frame_boundary_lands_before_the_check():
         if entry.data["kind"] == "end_check" and entry.data["at"] == 2.0
     ]
     assert finished.seq < resolved.seq < periodic.seq
-    # Before and after execution, the periodic check, the loop top, all at 2 s; then 3 s and 4 s.
-    assert _semantics(sim) == [0, 1, 2, 2, 2, 2, 3, 4]
+    # Before and after execution at 2 s, frame 2 not having been read; the periodic check due then
+    # and the loop top read it no more; then 3 s and 4 s.
+    assert _semantics(sim) == [0, 1, 2, 2, 3, 4]
     assert sim.captures == [(0, 0.0), (2, 2.0)]
     assert sim.termination == Termination("time_limit", "deadline", 5.0, 5.0, 5.0, 5.0, None)
 
@@ -601,7 +635,7 @@ def test_with_no_allowance_left_the_clock_moves_to_the_horizon():
     assert [tick for tick, _ in sim.captures] == [0, 2]
     assert len([command for command in sim.commands if isinstance(command, StartGeneration)]) == 1
     assert sim.advances == [1.0, 1.0, 0.5]
-    assert _semantics(sim) == [0, 1, 2, 2, 2, 2, 2.5]
+    assert _semantics(sim) == [0, 1, 2, 2, 2.5]
     assert sim.termination == Termination("tick_limit", "horizon", 2.5, 2.5, 1.0, 1.0, None)
 
 
@@ -779,8 +813,9 @@ def test_the_deadline_during_a_synchronous_execution_waits_for_it():
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
     assert (outcome.action_clock_position, outcome.frame_age_s) == (2.5, 2.5)
-    # No check after execution: the episode was already over when the shell returned.
-    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (2.5, 2.5)]
+    # No check before execution, frame 2 having been read at 2 s, and none after it: the episode
+    # was already over when the shell returned.
+    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
     assert sim.snapshots == [(3.5, 3.5)]
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.5, 3.5, None)
 
@@ -891,16 +926,18 @@ DONE = Action(ActionType.DONE)
             Action.wait(),
             "unsupported_terminal_action",
         ),
+        # Back on the frame boundary at 4 s and at 2 s, ahead of the periodic check: the frame is
+        # read before execution.
         (
             _wall(10.0),
-            World([Reply(4.5, CLICK)], ends_at=4.25),
+            World([Reply(4.0, CLICK)], ends_at=3.5),
             "not_applied_terminal",
             CLICK,
             None,
         ),
         (
             _wall(3.0),
-            World([Reply(2.0, CLICK)], check_s=0.5),
+            World([Reply(2.0, CLICK)], check_seconds={3: 1.5}),
             "not_applied_time_limit",
             CLICK,
             None,
@@ -1121,6 +1158,55 @@ def _random_wall_episode(seed: int) -> tuple[TurnConfig, World]:
     )
     config = _wall(duration_s, per_move_cap_s=rng.choice([None, None, None, 1.5]))
     return config, world
+
+
+def _random_token_episode(seed: int) -> tuple[TurnConfig, World]:
+    """A token-clock episode at one of the acceptance frame rates, finite B or paused, with taps,
+    holds and waits, an end from some tick and some failed reads."""
+    rng = random.Random(seed)
+    env_fps, input_fps = rng.choice([(1, 1), (2, 2), (60, 1), (30, 7)])
+    tokens_per_frame = rng.choice([None, 50, 100, 256])
+    duration_s = rng.choice([2.0, 3.0])
+    actions = [
+        CLICK,
+        Action.wait(rng.choice([0.0, 0.3, 1.0, 2.5])),
+        Action(ActionType.KEY, {"key": "a", "repeat": rng.choice([1, 2])}),
+        Action.hold_key("b", rng.choice([0.2, 1.0, 3.0])),
+        None,
+    ]
+    tokens = [0, 30, 100, 300] if tokens_per_frame else [None, 10]
+    replies = [
+        Reply(rng.choice([0.05, 0.3, 1.0]), rng.choice(actions), rng.choice(tokens))
+        for _ in range(60)
+    ]
+    max_ticks = duration_s * env_fps
+    world = World(
+        replies=replies,
+        ends_at=rng.choice([None, None, rng.random() * max_ticks * 1.2]),
+        end_reason=rng.choice([None, "target_reached"]),
+        check_errors={rng.randint(1, 40): "read failed" for _ in range(rng.randint(0, 3))},
+        tap_check_errors={rng.randint(1, 5): "read failed" for _ in range(rng.randint(0, 2))},
+    )
+    config = TurnConfig(
+        "token",
+        duration_s,
+        env_fps=env_fps,
+        input_fps=input_fps,
+        tokens_per_frame=tokens_per_frame,
+    )
+    return config, world
+
+
+def test_random_token_episodes_keep_the_invariants():
+    """At every acceptance rate, with taps reading inside the action, no frame is read twice
+    besides once after every action, and every other invariant holds."""
+    for seed in range(500):
+        config, world = _random_token_episode(seed)
+        sim = Simulation(config, world).run()
+        try:
+            _check_invariants(sim)
+        except AssertionError as error:
+            raise AssertionError(f"random token episode {seed}") from error
 
 
 def test_random_wall_episodes_keep_the_invariants():
