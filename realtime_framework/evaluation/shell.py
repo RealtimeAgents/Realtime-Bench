@@ -22,10 +22,10 @@ since the kernel started; it must be passed, or the kernel would time its watchd
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
 ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, their
 payload completed with the fields the runner writes today. Of the echoes of the events it handled,
-FrameCaptured of a frame that was captured is written as ObservationCaptured (a failed capture
-writes none), GenerationFinished of a result the shell settled as OutputChunkReceived and
-InferenceCompleted, and an agent's AgentRecord under its own kind with the data its trace sink
-gave.
+FrameCaptured of a frame that was captured is written as ObservationCaptured (a failed capture,
+and the frame that shows the stream frozen, write none), GenerationFinished of a result the shell
+settled as OutputChunkReceived and InferenceCompleted, and an agent's AgentRecord under its own
+kind with the data its trace sink gave.
 Every other record (TimerSet, EpisodeEnded, Termination and the other echoes, SnapshotFrozen's too)
 is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the trace holds at most one
 SnapshotFrozen, the one main() writes for a snapshot it took. Every record carries ``kernel_seq``,
@@ -101,9 +101,10 @@ class ShellEnvironment(Protocol):
     thread. An operation that fails raises, except ``execute()``: it returns ``"failed"`` and
     leaves the error in ``_last_exec_error``, whether the guest refused the action in
     ``_last_rejected_by_guest`` and the execution record in ``_last_execution_result``, which the
-    shell reads as the runner does (runner.py:576-585, 626). The environment may also latch the run
-    invalid itself (``_invalid_run``) with a more precise reason, such as ``clock_advance_failed``
-    from a tap; the shell posts that as Invalidated before the command's answer."""
+    shell reads as the runner does (runner.py ``_land_action``, ``_apply``). The environment may
+    also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
+    ``clock_advance_failed`` from a tap; the shell posts that as Invalidated before the command's
+    answer."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
     d: float  # seconds per environment tick
@@ -240,7 +241,6 @@ class _Decision:
 
     index: int
     observation: Observation | None = None
-    generation: _Generation | None = None
     # Its settled result: the one the kernel accepted, or the call it gave up on at the cap.
     result: dict | None = None
     landed_at: float | None = None  # operational time when its action came to land
@@ -342,13 +342,13 @@ class _Shell:
         if self._inputs is None:
             return
         semantic, ops = self._now
-        line = {
-            "call": call,
-            "semantic": semantic,
-            "ops": ops,
-            "events": [{"event": type(event).__name__, **_jsonable(event)} for event in events],
-        }
         try:
+            line = {
+                "call": call,
+                "semantic": semantic,
+                "ops": ops,
+                "events": [{"event": type(event).__name__, **_jsonable(event)} for event in events],
+            }
             self._inputs.write(json.dumps(line) + "\n")
         except Exception:  # noqa: BLE001 - a replay aid; the episode goes on without it
             self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
@@ -530,13 +530,9 @@ class _Shell:
         entry, self._started = self._started, None
         self._emit(
             TraceEvent.INFERENCE_STARTED,
-            {
-                **episode_records.inference_started(
-                    observation, decision, usage_before, native_output_limit, budget
-                ),
-                "generation": command.generation,
-                "remaining_clock_tokens": remaining,
-            },
+            episode_records.inference_started(
+                observation, decision, usage_before, native_output_limit, budget
+            ),
             entry,
         )
         clock = self.clocks.operational
@@ -552,26 +548,27 @@ class _Shell:
             self._now[0],
             clock.event(),
         )
-        self._generations[held.generation] = self._decision.generation = held
+        self._generations[held.generation] = held
         clock.start_thread(lambda: self._generate(held), name=f"generation-{held.generation}")
 
     def _generate(self, held: _Generation) -> None:
-        """The worker: one generation, handed back to the shell's thread as it came."""
+        """The worker: one generation, handed back to the shell's thread as it came, whatever
+        happens on the way: the kernel waits for it."""
         try:
             pending = self.agent.generate(
                 held.generation, held.decision, held.observation, held.budget
             )
             held.result = pending.result
-        # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled):
-        # the result must come back, or the kernel would wait for it.
+        # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled).
         except BaseException:  # noqa: BLE001 - a failed generation invalidates the run
             failure = traceback.format_exc()
-            self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
             latency = round(self.clocks.operational.time() - held.started_at, 2)
             held.result = episode_records.generation_error(latency, failure)
-        self._returned.append(held)
-        held.done.set()
-        self._wake.set()
+            self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
+        finally:
+            self._returned.append(held)
+            held.done.set()
+            self._wake.set()
 
     def _settle_returned(self, count: int) -> None:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
@@ -810,6 +807,12 @@ class _Shell:
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
         (runner.py ``_termination``); the token clock's are ticks."""
+        try:
+            self._terminate(termination)
+        finally:
+            self._finished = True  # nothing more will be asked (kernel/core.py)
+
+    def _terminate(self, termination: Termination) -> None:
         env = self.env
         ticks_per_s = self.config.env_fps if self.token else 1.0
         end_s = termination.ended_at / ticks_per_s
@@ -830,7 +833,6 @@ class _Shell:
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
             env._invalid_run = _invalid_record(invalid)
-        self._finished = True
 
     # ---- the episode trace --------------------------------------------------------------------
 
@@ -841,7 +843,7 @@ class _Shell:
         kind, data, decision = entry.kind, entry.data, self._decision
         if kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
-        elif kind == "FrameCaptured" and data.error is None:
+        elif kind == "FrameCaptured" and data.error is None and not self._froze():
             self._emit(
                 TraceEvent.OBSERVATION_CAPTURED,
                 episode_records.observation_captured(decision.observation, decision.index),
@@ -910,8 +912,36 @@ class _Shell:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
             if kind == "TimerFired" and data["kind"] == "per_move_cap":
                 self._cap_due = data["at"]
-            if kind == "GenerationAbandoned" and data["reason"] == "per_move_cap":
-                self._timed_out(entry)
+            elif kind == "GenerationAbandoned":
+                self._abandoned_on_a_bound(entry)
+            elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
+                self.log(
+                    f"[think] deliberation budget exhausted: {self.policy.spent:.1f}s >= "
+                    f"{self.config.think_budget_s:g}s -> forfeit"
+                )
+
+    def _abandoned_on_a_bound(self, entry: Entry) -> None:
+        """A generation given up on at the per-move cap or the wall deadline timed out, as the
+        runner logs it (runner.py _run_step); one over the cap is reported as skipped."""
+        reason = entry.data["reason"]
+        if reason not in ("per_move_cap", "deadline"):
+            return
+        held = self._generations[entry.data["generation"]]
+        due = self._cap_due if reason == "per_move_cap" else self.config.duration_s
+        bound = "per_move_cap" if reason == "per_move_cap" else "wall_deadline"
+        self.log(
+            f"[default] k={held.decision} generation TIMED OUT "
+            f"(>{due - held.started_semantic:g}s, {bound}) — discarded"
+        )
+        if reason == "per_move_cap":
+            self._timed_out(entry)
+
+    def _froze(self) -> bool:
+        """Whether the frame whose echo this is froze the stream: the kernel judged it in the
+        step that handled it (kernel/turns.py _captured), and the runner writes no frame its
+        check stops (runner.py _decide)."""
+        invalid = self.kernel.invalid
+        return invalid is not None and invalid.reason == "observation_stream_frozen"
 
     def _emit(self, event: TraceEvent | str, payload: dict, entry: Entry) -> None:
         if self.trace is None or self._trace_failed:
