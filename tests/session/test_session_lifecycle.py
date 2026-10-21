@@ -62,7 +62,8 @@ EXACT = HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT, "
 class _Encoder(SessionLifecycle):
     """Connection operations that log what they are asked, at the clock's time. ``syncs`` holds
     what each sync returns, or raises; an interrupt takes ``interrupt_s`` and then raises
-    ``interrupt_error``, if set; a close raises ``close_error``, if set."""
+    ``interrupt_error``, if set; a close raises ``close_error`` and a connect ``connect_error``,
+    if set."""
 
     def __init__(self, clock: FakeClock):
         self.clock = clock
@@ -72,9 +73,12 @@ class _Encoder(SessionLifecycle):
         self.interrupt_s = 0.0
         self.interrupt_error: Exception | None = None
         self.close_error: Exception | None = None
+        self.connect_error: Exception | None = None
 
     async def _connect(self, request):
         self.log.append(("connect", request.history, self.clock.monotonic()))
+        if self.connect_error is not None:
+            raise self.connect_error
 
     async def _sync_history(self, request):
         self.log.append(("sync", request.reason, request.force_rebuild, request.history))
@@ -120,15 +124,17 @@ class _Rig:
 
 
 @contextlib.contextmanager
-def _rig():
-    """An _Encoder that connect() opened, with its execution thread on the fake clock."""
+def _rig(*, connected: bool = True):
+    """An _Encoder, which connect() opened unless not ``connected``, with its execution thread
+    on the fake clock."""
     clock = FakeClock()
     with clock.participant():
         rig = _Rig(clock)
         rig.thread.start()
         try:
-            rig.run(rig.encoder.connect(ConnectRequest(seed=SEED)))
-            rig.encoder.log.clear()
+            if connected:
+                rig.run(rig.encoder.connect(ConnectRequest(seed=SEED)))
+                rig.encoder.log.clear()
             yield rig
         finally:
             rig.thread.stop()
@@ -138,6 +144,51 @@ def test_a_ready_session_is_left_alone():
     with _rig() as rig:
         assert rig.run(rig.ensure_ready()) is None
     assert rig.encoder.log == [] and rig.records.calls == []
+
+
+@pytest.mark.parametrize("before", ["never-connected", "closed"])
+def test_a_session_not_open_is_opened(before):
+    with _rig(connected=before == "closed") as rig:
+        if before == "closed":
+            rig.run(rig.encoder.close())
+        rig.encoder.log.clear()
+        rig.run(rig.ensure_ready())
+    assert rig.encoder.log == [("connect", HISTORY, 0.0)]
+    assert rig.records.calls == [(None, None, None)]
+
+
+def test_a_failed_reopen_raises_unrecorded():
+    with _rig() as rig:
+        rig.run(rig.encoder.abort(None))
+        rig.encoder.connect_error = ConnectionError("refused")
+        with pytest.raises(ConnectionError, match="^refused$"):
+            rig.run(rig.ensure_ready())
+    assert rig.records.calls == []
+
+
+def test_a_reopened_session_is_clean():
+    """A session that failed and was then aborted is reopened, not rebuilt again after that."""
+    with _rig() as rig:
+        rig.encoder.mark_dirty()
+        rig.run(rig.encoder.abort(None))
+        rig.run(rig.ensure_ready())
+        assert rig.run(rig.ensure_ready()) is None
+    assert [entry[0] for entry in rig.encoder.log] == ["close", "connect"]
+
+
+def test_an_abort_its_caller_gives_up_on_still_cleans_up():
+    """The cleanup runs on its own: cancelling the abort that started it does not stop it, and
+    the next ensure_ready waits for it."""
+    with _rig() as rig:
+        rig.encoder.interrupt_s = 5.0
+        with pytest.raises(TimeoutError):
+            rig.thread.run(rig.encoder.abort(GENERATION), timeout=2.0)
+        rig.run(rig.ensure_ready())
+    assert rig.encoder.log == [
+        ("interrupt", "turn-0"),
+        ("close", 5.0),
+        ("connect", HISTORY, 5.0),
+    ]
 
 
 def test_the_next_use_reopens_the_session_once_the_abort_is_done():
