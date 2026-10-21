@@ -811,8 +811,10 @@ class GuestEnvironment:
         """Press the chord now and release it when the lease expires; never block the loop.
 
         The lease lasts ``duration`` from the press, or to ``release_at`` (semantic seconds since
-        the origin) when the kernel's shell gives it; a press delayed to or close to that time
-        still holds its keys as long as a tap (TAP_HOLD_S), or the whole hold if it is shorter.
+        the origin) when the kernel's shell gives it. A press delayed to or past that time keeps
+        its keys down at least min(duration, TAP_HOLD_S) more: TAP_HOLD_S is the token clock's
+        tap, 1/60 s (the guest's wall-clock tap is 1/30 s), and a press never holds longer late
+        than on time.
         """
         parts, chord = self._key_chord(action)
         duration = float(action.parameters.get("duration", 1.0))
