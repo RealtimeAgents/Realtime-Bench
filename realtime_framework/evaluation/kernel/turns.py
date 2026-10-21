@@ -387,6 +387,11 @@ class TurnPolicy:
         # position when the result is handled.
         if self.token and tokens_per_frame is not None:
             d.d_ticks = tokens * config.env_fps / (tokens_per_frame * config.input_fps)
+            if d.post_horizon:
+                # The whole response ends past the horizon, so the action lands there, though the
+                # allowance, whole tokens, can fall short of it: an action whose completed response
+                # lands beyond the horizon is not applied (runner.py module docstring).
+                d.d_ticks = config.max_ticks - d.t_k
             deliberation = d.d_ticks / config.env_fps
         elif self.token:
             deliberation = 0.0

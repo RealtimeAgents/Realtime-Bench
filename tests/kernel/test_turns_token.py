@@ -230,6 +230,31 @@ def test_an_action_reaching_the_horizon_is_clamped_and_not_applied(tokens):
     )
 
 
+def test_a_response_past_the_allowance_lands_at_the_horizon_though_the_allowance_falls_short():
+    # T = 5 + 1/512: at t_k = 0, remaining = floor(1280.5 + 1e-9) = 1280 tokens, five frames, short
+    # of T. The response's 2000 tokens run past the horizon, so the action lands at T, not at 5,
+    # and is not applied: an action whose completed response lands beyond the horizon is not
+    # applied (runner.py module docstring), which today's loop misses here.
+    horizon = 5 + 1 / 512
+    sim = _run(_token(horizon), Reply(action=CLICK, output_tokens=2000))
+    assert sim.entries("InferenceStarted")[0].data["remaining_clock_tokens"] == 1280
+    assert _approach(sim, 0) == _inference_to_action(0, 0, horizon, horizon, 1280)
+    assert sim.executed == []
+    assert sim.outcomes == [
+        _outcome(
+            0,
+            "not_applied_tick_limit",
+            tau=horizon,
+            delay=horizon,
+            next_tick=horizon,
+            dropped=0,
+            tokens=1280,
+            post_horizon=720,
+        )
+    ]
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("tick_limit", horizon)
+
+
 def test_an_end_reported_at_the_horizon_beats_the_tick_limit():
     # The task ends from tick 20 = T on: the approach's check at 20 finds it before anything tests
     # the horizon, so the environment's reason is the stop reason (runner.py:526-529, 791-803).
