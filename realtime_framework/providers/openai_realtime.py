@@ -152,10 +152,12 @@ class _Session:
                 await self._receive()
                 self._read_one.set()
         except asyncio.CancelledError:
-            # Only a close that may have left the connection open cancels the reader: the
-            # session is over all the same for whoever waits on it.
+            # Only a close that may have left the connection open, or the end of the loop,
+            # cancels the reader: the session is over all the same for whoever waits on it, and
+            # the read its thread is blocked in ends only once the socket closes.
             self.failure = ConnectionError("OpenAI Realtime session closed")
             self._read_one.set()
+            self._conn._connection.close_socket()
             raise
         except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
             self.failure = exc

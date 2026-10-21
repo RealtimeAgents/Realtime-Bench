@@ -14,8 +14,9 @@ from functools import partial
 from types import SimpleNamespace
 
 import pytest
-from websockets.exceptions import ConnectionClosedOK
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.events import (
     GenerationBoundary,
     ProviderHistoryState,
@@ -34,6 +35,7 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.records import UNTRACED, current_trace_scope, trace_scope
 from realtime_framework.entity.request import AnswerRequirements
+from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.streaming.history import frame_block
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver, _Session
@@ -242,12 +244,25 @@ class _FailingManager:
         raise RuntimeError("close failed")
 
 
+class _SocketConnection(_FakeConnection):
+    """The fake connection as the SDK holds websockets' (``_connection``), whose
+    close_socket() ends the read in flight, as websockets' does."""
+
+    @property
+    def _connection(self):
+        return self
+
+    def close_socket(self) -> None:
+        self.queue.put(ConnectionClosedError(None, None))
+
+
 def test_a_failed_close_cancels_the_reader_and_ends_its_waiters():
     """A close that raises may leave the connection open, so the reader is cancelled instead of
-    waited for; whoever waits on the session then raises rather than waiting for good."""
+    waited for; whoever waits on the session then raises rather than waiting for good. The
+    cancelled reader closes the socket, which ends the read its thread is blocked in."""
 
     async def scenario():
-        driver, connection = _offline_driver(), _FakeConnection()
+        driver, connection = _offline_driver(), _SocketConnection()
         session = _Session(1, connection, new_core())
         session.read_continuously(Ticks())
         reply = session.core.start_reply()
@@ -257,12 +272,27 @@ def test_a_failed_close_cancels_the_reader_and_ends_its_waiters():
         await driver._close_current()
         cancelled = session._reader.cancelled()
         raised = await asyncio.gather(waiter, return_exceptions=True)
-        connection.queue.put(_clean_close())  # ends the read the cancel left blocked
+        await until(lambda: connection.in_flight == 0, timeout=1.0)
         return cancelled, raised
 
     cancelled, (raised,) = _within(scenario())
     assert cancelled
     assert isinstance(raised, ConnectionError)
+
+
+def test_stopping_the_loop_under_a_streaming_reader_closes_its_socket():
+    """An execution thread stopped with the connection still open cancels the reader, which
+    closes the socket: no thread is left blocked in a read."""
+    connection, execution = _SocketConnection(), ExecutionThread(SystemClock(), "reader")
+    execution.start()
+
+    async def start():
+        _Session(1, connection, new_core()).read_continuously(Ticks())
+
+    execution.submit(start()).result()
+    _within(until(lambda: connection.in_flight == 1))
+    execution.stop()
+    _within(until(lambda: connection.in_flight == 0, timeout=1.0))
 
 
 def test_a_model_yaml_sets_the_frames_the_session_keeps():
