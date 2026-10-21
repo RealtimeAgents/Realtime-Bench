@@ -4,6 +4,8 @@ discrete-event simulation (tests/kernel/streaming_simulation.py)."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
@@ -13,6 +15,7 @@ from realtime_framework.harnesses.default.frames import (
     INVALID_FRAME_SYNTAX,
     MISSING_FRAME,
 )
+from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
 from tests.kernel.streaming_simulation import Call, Reply, Simulation, World
 
@@ -95,13 +98,25 @@ def test_a_reply_with_no_action_ran_nothing():
     assert "WAIT was executed" not in text
 
 
-def test_a_done_ran_as_the_wait_it_became():
+def test_a_done_ran_as_the_wait_it_became_and_says_so_as_the_turn_based_feedback_does():
     world = World(replies=[Reply(1.0, calls=(Call(0.25, Action(ActionType.DONE, {}), "a"),))])
     outcome = _outcomes(world)["a"]
     assert (outcome.status, outcome.protocol_failure) == ("wait", "unsupported_terminal_action")
-    assert execution_feedback(outcome, "done").startswith(
-        "EXECUTION RESULT: actual=wait; requested=done; status=wait."
+    assert execution_feedback(outcome, "done") == (
+        "EXECUTION RESULT: actual=wait; requested=done; status=wait. "
+        + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
     )
+
+
+def test_a_done_its_reply_lost_ran_nothing_and_has_no_wait_note():
+    first = Reply(4.0, calls=(Call(1.0, CLICK, "a"), Call(3.0, Action(ActionType.DONE, {}), "b")))
+    world = World(replies=[replace(first, interruptible=False), Reply(1.0)], execute_s=1.5)
+    outcome = _outcomes(world, 4.5, reply_watchdog_s=2.0)["b"]
+    assert (outcome.status, outcome.protocol_failure) == (
+        "cancelled_generation",
+        "unsupported_terminal_action",
+    )
+    assert UNSUPPORTED_TERMINAL_ACTION_FEEDBACK not in execution_feedback(outcome, "done")
 
 
 def test_an_action_the_deadline_kept_from_running_says_the_time_limit_was_reached():
