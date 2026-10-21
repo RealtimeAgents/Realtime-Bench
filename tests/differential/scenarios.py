@@ -308,6 +308,32 @@ PER_RULE = [
         expect=frozenset({"K-rel", "X2"}),
         name="wall-hold-pressed-after-the-guards",
     ),
+    # K-rel, decision 38: a 0.1 s hold sent at 0.25 s is pressed at 0.45 s, past the 0.35 s its
+    # lease ends; the environment holds it 1/60 s more, to 0.467 s.
+    Script(
+        "wall",
+        2.5,
+        _timed(["hold:shift:0.1", "click", "click"], [0.25] * 3),
+        execute_s=0.2,
+        expect=frozenset({"K-rel", "X2", "X4"}),
+        name="wall-a-hold-pressed-past-its-lease",
+    ),
+    # Key names as the environment knows them: "left" is the arrow key.
+    Script(
+        "wall",
+        2.5,
+        _timed(["hold:left:0.5", "click", "click"], [0.25] * 3),
+        expect=frozenset({"X2"}),
+        name="wall-a-key-under-another-name",
+    ),
+    Script(
+        "token",
+        3.0,
+        _tokens([("hold:left:0.5", 0), ("click", 50), ("click", 50)]),
+        tokens_per_frame=100,
+        expect=frozenset({"KF5"}),
+        name="token-a-key-under-another-name",
+    ),
     # K-i: decision 1 runs out of the think budget and skips its action; the check at 1.75 s
     # finds the task's end while it paces.
     Script(

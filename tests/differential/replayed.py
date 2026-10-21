@@ -609,11 +609,17 @@ def _requests(stub) -> list[dict]:
 
 
 def _drive(episode, env, script, driver, config, clocks, now) -> None:
-    """Run the episode under ``driver``, recording what the agent is told and when it is
-    aborted; then drain the abandoned workers and close as main() does
+    """Run the episode under ``driver``, recording what the agent is told, when a generation
+    returns and when one is aborted; then drain the abandoned workers and close as main() does
     (evaluation/runner.py main)."""
     agent = episode.agent
     commit_action, commit, abort = agent.commit_action, agent.commit, agent.abort
+    generate = agent.generate
+
+    def recording_generate(generation, *args, **kwargs):
+        pending = generate(generation, *args, **kwargs)
+        env.log("diff.generated", generation=generation, at=now())
+        return pending
 
     def recording_commit(status, detail=""):
         env.log("agent.commit_action", status=status, detail=detail, at=now())
@@ -629,9 +635,10 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
         return commit(outcome)
 
     def recording_abort(*args, **kwargs):
-        env.log("agent.abort", at=now())
+        env.log("agent.abort", generation=args[0] if args else kwargs.get("generation"), at=now())
         return abort(*args, **kwargs)
 
+    agent.generate = recording_generate
     agent.commit_action = recording_commit
     agent.commit = recording_outcome
     agent.abort = recording_abort
@@ -705,6 +712,17 @@ OUTCOME_FIELDS = (
 )
 
 
+def _unaborted(abandoned, aborted: set, generated: dict) -> list[int]:
+    """The generations the kernel gave up on that the shell left running: neither aborted nor
+    returned by the reading the kernel gave them up at."""
+    return [
+        generation
+        for generation, at in abandoned
+        if generation not in aborted
+        and (generation not in generated or earlier(at, generated[generation]))
+    ]
+
+
 def project(script: Script, env, side: str) -> Projection:
     """The environment's log, in order: the runner's trace events and calls into the
     environment, what the agent was told, and what the subclasses above log (``diff.*``)."""
@@ -721,9 +739,11 @@ def project(script: Script, env, side: str) -> Projection:
     executed_at = {}
     taps, reads, records, aborts, requested, extras = [], [], 0, 0, [], []
     kernel_reads, once = [], Once()
+    abandoned, aborted, generated = [], set(), {}
     commits, snapshot_after, aborted_at, output_tokens = 0, None, [], {}
     first_end, ended_before_commit = None, {}
     trace = {kind: {} for kind in TRACED}
+    key_events, results = [], {}
     for call in env.calls:
         name = call["call"]
         ends = name == "diff.invalid" or (name == "diff.check" and ends_the_run(call["answer"]))
@@ -773,6 +793,13 @@ def project(script: Script, env, side: str) -> Projection:
                 action = payload["action"]
                 if action is not None and action["action_type"] == "wait":
                     d["wait_record"] = wait_record(payload["execution_result"])
+                else:
+                    # A wait's is its record above.
+                    result = normalize(payload["execution_result"])
+                    if isinstance(result, dict) and not token:
+                        # FakeEnvironment numbers its executions; "executed" says which ran.
+                        result.pop("execution", None)
+                    results[payload["decision"]] = result
             elif event == "ActionApplied":
                 of(payload["decision"])["applied"] = True
             elif event == "RunInvalidated":
@@ -780,8 +807,9 @@ def project(script: Script, env, side: str) -> Projection:
             elif event == "KernelRecord" and payload["kind"] == "GenerationAbandoned":
                 # The kernel's own count: the shell interrupts only a generation still running
                 # (evaluation/shell.py _Shell._abort), which at one instant is the scheduler's
-                # call.
+                # call; _unaborted checks it did.
                 aborts += 1
+                abandoned.append((payload["data"]["generation"], at))
         elif name == "agent.commit_action":
             # The environment numbers its calls by capture, and each decision captures once.
             k = call["decision"]
@@ -798,6 +826,15 @@ def project(script: Script, env, side: str) -> Projection:
                 "frame_age_s": record["frame_age_at_action_s"]
             }
             timeout_reasons[record["decision"]] = record["harness_timeout_reason"]
+        elif name.startswith("task.") and "key" in call and not call["finalizing"]:
+            # What the task clock is told of the keys (tests/replay/clock_task.py).
+            key_events.append(
+                {k: v for k, v in call.items() if k not in ("decision", "finalizing")}
+            )
+        elif name == "task.advance" and call["key_events"] and not call["finalizing"]:
+            key_events.append(
+                {"call": name, "at_s": call["from_s"], "key_events": call["key_events"]}
+            )
         elif name == "task.evaluation_snapshot" and snapshot_after is None:
             snapshot_after = commits
         elif name == "diff.execute":
@@ -839,6 +876,9 @@ def project(script: Script, env, side: str) -> Projection:
         elif name == "agent.abort":
             aborts += side == "legacy"
             aborted_at.append(call["at"])
+            aborted.add(call["generation"])
+        elif name == "diff.generated":
+            generated[call["generation"]] = call["at"]
     invalid = getattr(env, "_invalid_run", None)
     termination = env._termination
     if first_end is None:
@@ -896,6 +936,19 @@ def project(script: Script, env, side: str) -> Projection:
     # The trace records by decision, normalized as the replay baselines are.
     # "synthesized": what the records of a call the shell gave up on say, by decision
     # (rules._abandoned).
-    beyond = {"requests": env.requests, "usage": env.usage, "trace": trace, "synthesized": {}}
-    kernel = None if token or side != "shell" else {"reads": kernel_reads}
+    # "key_events": token clock, what the task clock was told of the keys before the snapshot.
+    # "results": each decision's execution_result but a wait's, as ActionResolved has it.
+    beyond = {
+        "requests": env.requests,
+        "usage": env.usage,
+        "trace": trace,
+        "synthesized": {},
+        "key_events": key_events if token else None,
+        "results": results,
+    }
+    kernel = None
+    if side == "shell":
+        kernel = {"unaborted": _unaborted(abandoned, aborted, generated)}
+        if not token:
+            kernel["reads"] = kernel_reads
     return Projection(side, {"decisions": decisions, "episode": episode}, facts, beyond, kernel)
