@@ -1,9 +1,10 @@
 """Gemini Live session core: what the session holds and what the driver does next, without I/O.
 
 From a history view the core plans what the session is sent: the contents that seed a new
-connection and the input of each observation, as neutral Contents and Parts. GeminiLiveDriver
-(live.py) turns them into google-genai types, writes and reads the WebSocket and reads the clock,
-and reports back what it wrote and received. The core keeps the session state and answers with
+connection and the input of each observation, as neutral Contents and Parts, and each frame
+native streaming pushes, as realtime inputs. GeminiLiveDriver (live.py) turns them into
+google-genai types, writes and reads the WebSocket and reads the clock, and reports back what it
+wrote and received. The core keeps the session state and answers with
 the operations to perform: how to open the next connection and what to seed on it, whether a sync
 resumes or rebuilds, which tool calls to acknowledge and which the server cancels, which
 connection and generation a server message belongs to and whether that generation's output ends
@@ -22,7 +23,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from realtime_framework.entity.request import CanonicalRequest, FrameImage
 
@@ -82,6 +83,27 @@ class Observation:
     @property
     def content(self) -> Content:
         return _frame_content(self.role, self.text, self.image)
+
+
+@dataclass(frozen=True)
+class RealtimeInput:
+    """One realtime_input message, as google-genai's send_realtime_input takes it: an activity's
+    start or end, a video frame, text, or the silent audio an activity must hold."""
+
+    kind: Literal["activity_start", "video", "text", "audio_carrier", "activity_end"]
+    image: FrameImage | None = None  # the video frame
+    text: str | None = None
+
+
+@dataclass(frozen=True)
+class Push:
+    """The newest frame of a streaming history view as native streaming pushes it: on the
+    realtime_input video stream, then its text, outside any activity, so that it starts no reply.
+    Nothing waits between the two."""
+
+    inputs: tuple[RealtimeInput, ...]
+    observation_id: str | None
+    keys: tuple[tuple, ...]  # the delivery key of its frame block
 
 
 def _frame_prefixes(history: CanonicalRequest) -> dict:
@@ -437,6 +459,18 @@ class SessionCore:
         self.candidate_resume_handle = None
         self.sending(observation.keys)
         return observation
+
+    def push(self, history: CanonicalRequest) -> Push:
+        """Plan the streaming history view's newest frame as native streaming pushes it, and
+        record it as being written."""
+        frame = next(item.block for item in reversed(history.items) if item.block.kind == "frame")
+        push = Push(
+            (RealtimeInput("video", image=frame.image), RealtimeInput("text", text=frame.text)),
+            frame.observation_id,
+            (("block", frame.id),),
+        )
+        self.sending(push.keys)
+        return push
 
     def interrupt_sent(self) -> None:
         self.resume_handle = None

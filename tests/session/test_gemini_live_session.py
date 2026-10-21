@@ -29,6 +29,7 @@ from realtime_framework.providers.gemini.session import (
     Delivery,
     Orphan,
     Part,
+    RealtimeInput,
     Received,
     SessionCore,
 )
@@ -285,6 +286,20 @@ def test_a_streaming_rebuild_replays_the_streaming_view():
         frame_content(3),
     ]
     assert connect.seeded == ("f1.frame", "g1.output", "f2.frame", "g1.feedback", "f3.frame")
+
+
+def test_a_streaming_frame_is_pushed_as_video_then_its_text():
+    """A pushed frame is a video frame and then its text, with no activity around them and
+    nothing between them; it counts as sent once handed to the connection."""
+    core = session_core(streaming=True)
+    connected(core)
+    push = core.push(streaming_view([pushed(1), pushed(2)]))
+    video = RealtimeInput("video", image=frame_content(2).parts[1].image)
+    assert push.inputs == (video, RealtimeInput("text", text="frame 2"))
+    assert (push.observation_id, push.keys) == ("obs-2", (("block", "f2.frame"),))
+    assert core.delivery[("block", "f2.frame")] == Delivery.SENT
+    core.send_failed(push.keys)
+    assert core.delivery[("block", "f2.frame")] == Delivery.UNKNOWN
 
 
 def test_observation_and_acknowledgement_delivery():
