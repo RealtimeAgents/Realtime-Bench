@@ -1,7 +1,8 @@
 """The agent's clock reaches each wait and time read its driver makes (realtime_framework/clock.py).
 
-create_agent gives the harness its clock, and the harness builds the driver and the runtime with
-it (harnesses/default/harness.py _setup_backend). A driver passes it on to its connect retry, its
+runner.set_up_agent gives create_agent, the agent's trace sink and the tool runtime the clock
+main() hands it. create_agent gives the harness its clock, and the harness builds the driver and
+the runtime with it (harnesses/default/harness.py _setup_backend). A driver passes it on to its connect retry, its
 request pacing, its Choice decisions and the hooks that time its HTTP responses. Each of these
 falls back to real time when it is given no clock, so a clock lost on the way changes nothing a
 test on real time can see. Here every agent is built by create_agent on the fake clock
@@ -37,6 +38,10 @@ from realtime_framework.harnesses.registry import create_agent
 
 from .agent_trace.test_http import CANDIDATES, _request
 from .fake_clock import FakeClock
+from .replay.build import build_episode
+from .replay.frames import CLOCK_ORIGIN, ReplayTask
+from .replay.scenario import TASK_INSTRUCTION
+from .replay.test_chat_completions import MODEL_KEY, chat_completions_config
 
 S = 1_000_000_000  # nanoseconds
 DECISIONS = ModelConfig(
@@ -68,6 +73,27 @@ class _Trace:
     def capture(self, event, payload, *, body=None, classify=None):
         self.records.append((event, payload))
         return len(self.records)
+
+
+def test_set_up_agent_builds_the_agent_its_sink_and_tool_runtime_on_its_clock(tmp_path):
+    """runner.set_up_agent, which main() calls with the episode's operational clock, hands it to
+    the agent it creates, the agent's trace sink and the tool runtime (evaluation/runner.py)."""
+    clock = FakeClock(wall_origin=CLOCK_ORIGIN)
+    with clock.participant():
+        episode = build_episode(
+            chat_completions_config("http://127.0.0.1:9/v1", stream=False),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=MODEL_KEY,
+            clock=clock,
+        )
+        try:
+            assert episode.agent.clock is clock
+            assert episode.agent_trace.clock is clock
+            assert episode.agent.tool_runtime.clock is clock
+        finally:
+            episode.finish()
 
 
 def test_the_agent_builds_its_driver_and_runtime_on_its_clock():

@@ -27,6 +27,7 @@ from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
 
+S = 1_000_000_000  # nanoseconds
 FPS = 1
 MAX_MINUTES = 0.0625
 HORIZON_S = MAX_MINUTES * 60
@@ -45,14 +46,17 @@ SNAPSHOT_AT_S = FINALIZED_S + SNAPSHOT_S  # when evaluation_snapshot() returned
 
 
 class FakeClock(SystemClock):
-    """The episode clocks: time() reads the fake clock and sleep() advances it; anything else is
-    the system clock."""
+    """The episode clocks: time() and time_ns() read the fake clock and sleep() advances it;
+    anything else is the system clock."""
 
     def __init__(self, now):
         self.now = now
 
     def time(self):
         return self.now
+
+    def time_ns(self):
+        return round(self.now * S)
 
     def sleep(self, seconds):
         self.now += seconds
@@ -146,17 +150,31 @@ DESKTOP = types.SimpleNamespace(
 )
 
 
-def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False) -> dict:
+def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False, seen=None) -> dict:
     """Run main() for ``task`` and return its run_summary.json. With ``agent_trace`` the agent
-    gets an AgentTraceSink on the episode trace, as ``agent.sink``, as set_up_agent makes one."""
+    gets an AgentTraceSink on the episode trace, as ``agent.sink``, as set_up_agent makes one.
+    ``seen`` gets the episode clocks main() makes and the arguments it calls set_up_agent and
+    run_stream with."""
+    seen = {} if seen is None else seen
 
-    def set_up_agent(setup, *args, episode_trace, run_dir, clock, **kwargs):
+    def episode_clocks(clock_mode, fps):
+        seen.setdefault("clocks", []).append(Clocks(clock, clock))
+        return seen["clocks"][-1]
+
+    def set_up_agent(setup, *args, **kwargs):
+        seen["set_up_agent"] = kwargs
         setup.agent = agent
         if agent_trace:
-            sink = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack", clock=clock)
+            pack = kwargs["run_dir"] / "episode_blobs.pack"
+            sink = AgentTraceSink(kwargs["episode_trace"], pack, clock=kwargs["clock"])
             setup.agent_trace = agent.sink = sink
         setup.stage = "environment_setup"
 
+    def run_stream(adapter, env, **kwargs):
+        seen["run_stream"] = {"env": env, **kwargs}
+        return real_run_stream(adapter, env, **kwargs)
+
+    real_run_stream = runner.run_stream
     argv = [
         "runner", "--task", "fake_task", "--model", "fake-model", "--adapter", "anthropic_messages",
         "--clock", "wall", "--fps", str(FPS), "--max-minutes", str(MAX_MINUTES),
@@ -166,11 +184,12 @@ def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False) -> dict:
         mock.patch.object(sys, "argv", argv),
         # main() writes SANDBOX_GRAPHICS_MODE and SCREEN_RECORDING_ENCODER into os.environ.
         mock.patch.dict(os.environ),
-        mock.patch.object(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock)),
+        mock.patch.object(runner, "episode_clocks", episode_clocks),
         mock.patch.object(runner, "R", DESKTOP),
         mock.patch.object(runner, "GuestClient", lambda **_: guest),
         mock.patch.object(runner.custom_tasks, "get", lambda task_id: task),
         mock.patch.object(runner, "set_up_agent", set_up_agent),
+        mock.patch.object(runner, "run_stream", run_stream),
         # An unscored cell exits 1 after the summary is written (runner.py main).
         contextlib.suppress(SystemExit),
     ):
@@ -211,6 +230,24 @@ def test_main_stamps_the_generation_artifact_on_the_operational_clock(tmp_path):
     run_main(tmp_path, task, FakeAgent(clock), clock, guest)
     manifest = json.loads((tmp_path / "run" / "generation_artifact" / "manifest.json").read_text())
     assert task.origin + SNAPSHOT_AT_S <= manifest["captured_unix_s"] <= clock.now
+
+
+def test_main_runs_the_episode_on_the_clocks_it_makes(tmp_path):
+    """main() makes the episode clocks once and hands the same ones to run_stream and the
+    environment, and the operational one to set_up_agent, the scene capture it opens for it and
+    the episode trace."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    seen = {}
+    run_main(tmp_path, task, FakeAgent(clock), clock, guest, seen=seen)
+    (clocks,) = seen["clocks"]
+    assert seen["run_stream"]["clocks"] is clocks
+    assert seen["run_stream"]["env"].clocks is clocks
+    assert seen["set_up_agent"]["clock"] is clock
+    assert seen["set_up_agent"]["open_capture"](False).clock is clock
+    started = json.loads((tmp_path / "run" / "episode_trace.jsonl").read_text().splitlines()[0])
+    assert (started["event"], started["wall_time_ns"]) == ("EpisodeStarted", 1_000_000 * S)
 
 
 class RecordingAgent(FakeAgent):
