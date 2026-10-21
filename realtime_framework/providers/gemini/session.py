@@ -110,7 +110,7 @@ class Push:
 class Trigger:
     """A reply's start as native streaming sends it: one activity on realtime_input, not a client
     turn_complete. It holds the execution feedback no seed or trigger has handed to the session
-    yet, and the silent audio an activity must hold."""
+    yet, under whichever placement, and the silent audio an activity must hold."""
 
     inputs: tuple[RealtimeInput, ...]
     keys: tuple[tuple, ...]  # the delivery keys of the feedback blocks it carries
@@ -188,6 +188,7 @@ class Connect:
     seed: tuple[list[Content], ...]  # batches of the history view's contents
     seeded: tuple[str, ...]  # ids of the history-view blocks the seed replays
     release_grace: bool
+    carried: tuple[tuple[str, str], ...]  # (id, text) of the execution feedback the seed replays
 
     @property
     def contents(self) -> int:
@@ -292,9 +293,9 @@ class SessionCore:
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         self.last_turn_clean = False
-        # The history blocks a seed or a trigger has handed to a connection of the session, by
-        # id, over the episode.
-        self.carried: set[str] = set()
+        # The execution feedback a seed or a trigger has handed to a connection of the session,
+        # over the episode: the text handed, by block id.
+        self.carried: dict[str, str] = {}
         # The generation whose reply is being read, by connection, until the reply ends.
         self.replies: dict[int, _Generation] = {}
 
@@ -309,11 +310,17 @@ class SessionCore:
         self.resume_handle = resume_handle
         self.latest_resume_handle = resume_handle
         contents, seeded = self._seed(history)
+        feedback = [] if history is None else [item.block for item in history.items]
         return Connect(
             resume_handle,
             tuple(history_batches(contents)),
             seeded,
             release_grace=replacing or bool(contents),
+            carried=tuple(
+                (block.id, block.text)
+                for block in feedback
+                if block.kind == "execution_feedback" and block.id in seeded
+            ),
         )
 
     def _seed(self, history: CanonicalRequest | None) -> tuple[list[Content], tuple[str, ...]]:
@@ -322,12 +329,14 @@ class SessionCore:
         The system block travels in the setup instead. In a turn-based view a model output is the
         canonical action of the native call that its turn's tool block carries, so it has no
         Content of its own. The streaming view (harnesses/streaming/history.py) has no tool blocks:
-        each reply's output and each execution feedback is a text Content, in the view's order.
+        each reply's output and each execution feedback, whether its own block or one in front of
+        a frame, is a text Content, in the view's order, as a trigger carries feedback, and a
+        frame is its own text, as a push sends it.
         """
         if history is None:
             return [], ()
         texts = history.policy.texts
-        prefixes = _frame_prefixes(history)
+        prefixes = {} if self.streaming else _frame_prefixes(history)
         contents, seeded, turn_index = [], [], -1
         for item in history.items:
             block = item.block
@@ -425,7 +434,7 @@ class SessionCore:
         self.connection = self._connections
         self.delivery = {("setup",): Delivery.CONFIRMED}
         self.sending(("block", block_id) for block_id in connect.seeded)
-        self.carried.update(connect.seeded)
+        self.carried.update(connect.carried)
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -491,25 +500,31 @@ class SessionCore:
         return push
 
     def trigger(self, history: CanonicalRequest) -> Trigger:
-        """Plan the activity that starts a streaming session's next reply, with the history
-        view's execution feedback no seed or trigger has handed to the session yet, and record
-        that feedback as being written."""
-        feedback = [
-            item.block
-            for item in history.items
-            if item.block.kind == "execution_feedback" and item.block.id not in self.carried
-        ]
-        text = "\n".join(block.text for block in feedback)
+        """Plan the activity that starts a streaming session's next reply, with what the session
+        lacks of the history view's execution feedback, and record it as being written.
+
+        The feedback is in blocks of its own or in blocks in front of frames, as the policy
+        places it (PathPolicy.feedback). A block in front of the next frame gains a line with each
+        feedback until that frame comes (harnesses/streaming/history.py), so a trigger carries
+        what a block gained since a seed or a trigger last handed it to the session."""
+        lacking = []
+        for item in history.items:
+            block = item.block
+            carried = self.carried.get(block.id)
+            if block.kind == "execution_feedback" and carried != block.text:
+                gained = block.text if carried is None else block.text[len(carried) + 1 :]
+                lacking.append((block, gained))
+        text = "\n".join(gained for _, gained in lacking)
         trigger = Trigger(
             (
                 RealtimeInput("activity_start"),
-                *((RealtimeInput("text", text=text),) if feedback else ()),
+                *((RealtimeInput("text", text=text),) if lacking else ()),
                 RealtimeInput("audio_carrier"),
                 RealtimeInput("activity_end"),
             ),
-            tuple(("block", block.id) for block in feedback),
+            tuple(("block", block.id) for block, _ in lacking),
         )
-        self.carried.update(block.id for block in feedback)
+        self.carried.update((block.id, block.text) for block, _ in lacking)
         self.sending(trigger.keys)
         return trigger
 

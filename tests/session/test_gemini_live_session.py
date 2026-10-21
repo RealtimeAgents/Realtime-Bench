@@ -9,6 +9,9 @@ are google-genai's LiveServerMessage, built from the wire JSON the replay stub s
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
 from google.genai import types
 
 from realtime_framework.entity.actions import Observation
@@ -103,12 +106,14 @@ def pushed(k: int):
     return frame_block(FrameRecord(k, observation.observation_id, float(k), {}, None), observation)
 
 
-def streaming_view(blocks, *, frames: int = 2):
-    """The streaming history view of the accepted ``blocks``: every reply kept, and the newest
-    ``frames`` frames with their screenshots."""
+def streaming_view(blocks, *, frames: int = 2, placement: str | None = None):
+    """The streaming history view of the accepted ``blocks``: every reply kept, the newest
+    ``frames`` frames with their screenshots, and the feedback where ``placement`` puts it (the
+    gemini_live row's placement when None)."""
+    policy = current_context_policy().for_path("gemini_live", {}, None)
     return history_view(
         blocks,
-        policy=current_context_policy().for_path("gemini_live", {}, None),
+        policy=policy if placement is None else replace(policy, feedback=placement),
         system=system_block("system instruction", None),
         retained_frames=frames,
         answer=AnswerRequirements("function_call", "standard_vlm"),
@@ -278,10 +283,19 @@ def test_seed_replays_tool_rounds_as_a_transcript():
     )
 
 
-def test_a_streaming_rebuild_replays_the_streaming_view():
+# Execution feedback as its own block, and in front of the next frame: where the context policy
+# can place it on a live path (PathPolicy.feedback).
+PLACEMENTS = ("separate_message", "frame_prefix")
+# The feedback block of reply 1's outcome in the view, under each placement.
+FEEDBACK_1 = {"separate_message": "d1.feedback", "frame_prefix": "d1.prefix"}
+
+
+@pytest.mark.parametrize("placement", PLACEMENTS)
+def test_a_streaming_rebuild_replays_the_streaming_view(placement):
     """A streaming session is rebuilt from the streaming view, in its order: the frames, the
     older ones folded to text, each reply's output as model text and each feedback as user
-    text."""
+    text. A frame is its own text, as a push sends it, also when its feedback is in front of
+    it."""
     action = '{"action": "click", "target": "P1", "frame": 1}'
     history = streaming_view(
         [
@@ -290,7 +304,8 @@ def test_a_streaming_rebuild_replays_the_streaming_view():
             pushed(2),
             feedback_block(1, None, "EXECUTION RESULT: ok", None),
             pushed(3),
-        ]
+        ],
+        placement=placement,
     )
     connect = plan(session_core(streaming=True), history)
     assert connect.mode == "canonical_history_replay"
@@ -302,7 +317,8 @@ def test_a_streaming_rebuild_replays_the_streaming_view():
         Content("user", (Part(text="EXECUTION RESULT: ok"),)),
         frame_content(3),
     ]
-    assert connect.seeded == ("f1.frame", "g1.output", "f2.frame", "g1.feedback", "f3.frame")
+    feedback = FEEDBACK_1[placement]
+    assert connect.seeded == ("f1.frame", "d1.output", "f2.frame", feedback, "f3.frame")
 
 
 def test_a_streaming_frame_is_pushed_as_video_then_its_text():
@@ -319,10 +335,13 @@ def test_a_streaming_frame_is_pushed_as_video_then_its_text():
     assert core.delivery[("block", "f2.frame")] == Delivery.UNKNOWN
 
 
-def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
+@pytest.mark.parametrize("placement", PLACEMENTS)
+def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last(placement):
     """A trigger is one activity holding the feedback no seed or trigger has carried into the
     session yet, then the silent audio an activity must hold. A rebuild's seed carries the
-    feedback it replays; a resume keeps what the session held."""
+    feedback it replays; a resume keeps what the session held. In front of the next frame, the
+    feedback since the newest frame waits at the end of the view, and a trigger takes what it
+    gained since the last."""
     start, carrier, end = (RealtimeInput(kind) for kind in ACTIVITY)
     core = session_core(streaming=True)
     blocks = [
@@ -331,28 +350,73 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
         feedback_block(1, None, "EXECUTION RESULT: ok", None),
         pushed(2),
     ]
-    connected(core, streaming_view(blocks))
-    assert core.trigger(streaming_view(blocks)) == Trigger((start, carrier, end), ())
-
-    for generation, feedback in ((2, "EXECUTION RESULT: missed"), (3, "SUPERSEDED")):
-        blocks += [
-            output_block(generation, "click P1", "obs-2", None),
-            feedback_block(generation, None, feedback, None),
-        ]
-    trigger = core.trigger(streaming_view(blocks))
-    text = RealtimeInput("text", text="EXECUTION RESULT: missed\nSUPERSEDED")
-    assert trigger == Trigger(
-        (start, text, carrier, end), (("block", "g2.feedback"), ("block", "g3.feedback"))
+    connected(core, streaming_view(blocks, placement=placement))
+    assert core.trigger(streaming_view(blocks, placement=placement)) == Trigger(
+        (start, carrier, end), ()
     )
-    assert core.delivery[("block", "g3.feedback")] == Delivery.SENT
-    assert core.trigger(streaming_view(blocks)).keys == ()
+
+    for decision, feedback in ((2, "EXECUTION RESULT: missed"), (3, "SUPERSEDED")):
+        blocks += [
+            output_block(decision, "click P1", "obs-2", None),
+            feedback_block(decision, None, feedback, None),
+        ]
+    trigger = core.trigger(streaming_view(blocks, placement=placement))
+    text = RealtimeInput("text", text="EXECUTION RESULT: missed\nSUPERSEDED")
+    keys = {
+        "separate_message": (("block", "d2.feedback"), ("block", "d3.feedback")),
+        "frame_prefix": (("block", "d2.prefix"),),
+    }[placement]
+    assert trigger == Trigger((start, text, carrier, end), keys)
+    assert core.delivery[keys[-1]] == Delivery.SENT
+    assert core.trigger(streaming_view(blocks, placement=placement)).keys == ()
 
     connected(core, resume_handle="handle-0")
     blocks += [
         output_block(4, "click P1", "obs-2", None),
         feedback_block(4, None, "EXECUTION RESULT: ok", None),
     ]
-    assert core.trigger(streaming_view(blocks)).keys == (("block", "g4.feedback"),)
+    trigger = core.trigger(streaming_view(blocks, placement=placement))
+    assert trigger.inputs[1] == RealtimeInput("text", text="EXECUTION RESULT: ok")
+    assert trigger.keys == {
+        "separate_message": (("block", "d4.feedback"),),
+        "frame_prefix": (("block", "d2.prefix"),),
+    }[placement]
+
+
+def test_a_streaming_trigger_sends_a_frame_prefix_once_also_after_its_frame_comes():
+    """The feedback a trigger took while it waited for the next frame is in front of that frame
+    once it is pushed, under the same block: no trigger sends it again."""
+    core = session_core(streaming=True)
+    blocks = [pushed(1), output_block(1, "click P1", "obs-1", None)]
+    connected(core, streaming_view(blocks, placement="frame_prefix"))
+    blocks.append(feedback_block(1, None, "EXECUTION RESULT: ok", None))
+    taken = core.trigger(streaming_view(blocks, placement="frame_prefix"))
+    assert taken.keys == (("block", "d1.prefix"),)
+    blocks.append(pushed(2))
+    core.push(streaming_view(blocks, placement="frame_prefix"))
+    assert core.trigger(streaming_view(blocks, placement="frame_prefix")).keys == ()
+    blocks.append(feedback_block(2, None, "EXECUTION RESULT: missed", None))
+    later = core.trigger(streaming_view(blocks, placement="frame_prefix"))
+    assert later.keys == (("block", "d2.prefix"),)
+    assert later.inputs[1] == RealtimeInput("text", text="EXECUTION RESULT: missed")
+
+
+def test_a_streaming_rebuild_replays_the_feedback_waiting_for_the_next_frame():
+    """A rebuild before the next frame replays the feedback since the newest frame, at the end;
+    a trigger after it takes only what came since."""
+    core = session_core(streaming=True)
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+    ]
+    rebuild = connected(core, streaming_view(blocks, placement="frame_prefix"))
+    (contents,) = rebuild.seed
+    assert contents[-1] == Content("user", (Part(text="EXECUTION RESULT: ok"),))
+    assert rebuild.seeded[-1] == "d1.prefix"
+    blocks.append(feedback_block(2, None, "EXECUTION RESULT: missed", None))
+    trigger = core.trigger(streaming_view(blocks, placement="frame_prefix"))
+    assert trigger.inputs[1] == RealtimeInput("text", text="EXECUTION RESULT: missed")
 
 
 def test_observation_and_acknowledgement_delivery():
