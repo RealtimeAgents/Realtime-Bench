@@ -198,6 +198,7 @@ class GeminiLiveDriver(SessionLifecycle):
         action_channel="function_call",
         classifies_transport_errors=True,
         connection_renewal=True,
+        interaction_modes=frozenset({"turn_based", "streaming"}),
     )
     deployment = Deployment(
         family="streaming",
