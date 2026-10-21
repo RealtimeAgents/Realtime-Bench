@@ -235,13 +235,11 @@ class FrameEncodingConfig:
 class RunnerTimingConfig:
     """Operational bounds of the decision loop (evaluation/runner.py)."""
 
-    deadline_grace_s: float = 2.0  # settle margin added to the wall-clock bound
     abandoned_drain_s: float = 30.0  # wait for per-move workers a timeout abandoned
     observation_freeze_n: int = 3  # identical observations that make a frozen stream, at least 2
     provider_watchdog_s: float = 300.0  # token-clock provider watchdog; off when <= 0
 
     ENVIRONMENT: ClassVar[dict] = {
-        "deadline_grace_s": ("STREAM_DEADLINE_GRACE_S", float),
         "abandoned_drain_s": ("STREAM_ABANDONED_DRAIN_S", float),
         "observation_freeze_n": ("STREAM_OBSERVATION_FREEZE_N", _at_least_two),
         "provider_watchdog_s": ("STREAM_PROVIDER_WATCHDOG_S", float),

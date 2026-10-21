@@ -5,16 +5,17 @@ from __future__ import annotations
 import pytest
 
 from realtime_framework.entity.config import FrameEncodingConfig, RunnerTimingConfig
+from realtime_framework.evaluation import effective_config
 
 
 def replaced_reads(environ):
     """The reads the config fields replaced (sandbox/observation/capture.py:317-319 and
-    evaluation/runner.py DEADLINE_GRACE_S through PROVIDER_WATCHDOG_S at 8319a10)."""
+    evaluation/runner.py DEADLINE_GRACE_S through PROVIDER_WATCHDOG_S at 8319a10), but the deadline
+    grace, which only the legacy loop had (tests/differential/legacy_loop.py)."""
     return {
         "max_dimension": int(environ.get("FRAME_MAX_DIM", "768")),
         "jpeg_quality": int(environ.get("FRAME_JPEG_QUALITY", "85")),
         "image_detail": environ.get("FRAME_IMAGE_DETAIL", "auto"),
-        "deadline_grace_s": float(environ.get("STREAM_DEADLINE_GRACE_S", "2.0")),
         "abandoned_drain_s": float(environ.get("STREAM_ABANDONED_DRAIN_S", "30.0")),
         "observation_freeze_n": max(2, int(environ.get("STREAM_OBSERVATION_FREEZE_N", "3"))),
         "provider_watchdog_s": float(environ.get("STREAM_PROVIDER_WATCHDOG_S", "300")),
@@ -46,3 +47,6 @@ def test_fields_match_the_replaced_reads(environ):
     assert [type(value) for value in values.values()] == [
         type(value) for value in expected.values()
     ]
+    # The effective config exports the runner's timing as the runner has it, no more.
+    exported = {f for group, f, *_ in effective_config._IMPORT_SETTINGS if group == "runner_timing"}
+    assert exported == set(vars(timing))
