@@ -767,7 +767,15 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 detail=request.reason,
                 provider_metadata={"history_session_reconnected": True},
             )
-        except Exception as exc:  # noqa: BLE001 - provider session boundary
+        except Exception as exc:
+            # A connect the shared retry gave up on, or a failure the outer retry may still
+            # retry, propagates as it is: that retry reads its kind and spent budget off it,
+            # which a BROKEN result's text would lose (decision 39).
+            if (
+                isinstance(exc, TransportFailureError)
+                or self.classify_transport_error(exc).retryable
+            ):
+                raise
             return HistorySyncResult(
                 SyncDisposition.BROKEN,
                 ProviderHistoryState.UNKNOWN,
