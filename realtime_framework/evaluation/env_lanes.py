@@ -37,9 +37,9 @@ Answers. A capture's is what the shell makes of the Observation: the shell keeps
 agent and knows its identity for the frozen-stream check. An action's is ActionExecuted, read from
 the environment right after the action, before the next action can change what it read
 (``_last_exec_error``, ``_last_rejected_by_guest``, ``_last_execution_result``, ``last_held_keys``,
-``last_end_checks``); its coordinate trace and when it started and finished go to the shell as
-Executed before the answer. An end check's is EndChecked. A command whose run
-raised is answered with the error, as the turn-based shell answers one.
+``last_end_checks``) with when it held the gate and when it returned; its coordinate trace and
+those times go to the shell as Executed before the answer. An end check's is EndChecked. A command
+whose run raised is answered with the error, as the turn-based shell answers one.
 
 End checks run on a lane of their own (stream-plan 4.9): the policy may send an Execute while a
 state read, up to 10 s on the wall clock, is out, and the two take the gate in turn.
@@ -323,6 +323,9 @@ class EnvLanes:
             rejection=rejection,
             error=error,
             end_checks=env.last_end_checks,
+            # Semantic seconds: on the wall clock the operational clock is the semantic one.
+            started_at=started_at - env.t0,
+            finished_at=finished_at - env.t0,
         )
         record = Executed(command.decision, env._last_coordinate_trace, started_at, finished_at)
         return answer, record
