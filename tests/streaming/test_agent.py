@@ -102,7 +102,7 @@ def test_a_frame_that_went_in_is_recorded_under_its_number(monkeypatch, clock):
 def test_a_push_records_its_frame_sent_and_confirmed_when_its_receipt_says(monkeypatch, clock):
     """Decision N43: the frame went out when the receipt says it was written, not when the push
     came back, which waits for the server's confirmation; both times go into the frame table on
-    the wall clock and into FrameSent on the driver's."""
+    the wall clock, and FrameSent records the frame-table row's capture, send and confirmation."""
     trace = RecordingTrace()
     agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME, trace=trace)
     agent.driver.confirm_s = 0.4
@@ -111,7 +111,8 @@ def test_a_push_records_its_frame_sent_and_confirmed_when_its_receipt_says(monke
     assert (record.sent_unix_s, record.ack_status) == (1000.0, "acked")
     assert record.acked_unix_s == pytest.approx(1000.4)
     [sent] = trace.of(TraceEvent.FRAME_SENT)
-    assert (sent["sent_monotonic_ns"], sent["confirmed_monotonic_ns"]) == (0, 400_000_000)
+    assert (sent["captured_unix_s"], sent["sent_unix_s"]) == (record.captured_at, 1000.0)
+    assert sent["acked_unix_s"] == record.acked_unix_s
     agent.close()
 
 
@@ -130,7 +131,11 @@ def test_a_push_on_a_protocol_that_confirms_no_frame_leaves_its_confirmation_unk
         None,
     )
     [sent] = trace.of(TraceEvent.FRAME_SENT)
-    assert (sent["sent_monotonic_ns"], sent["confirmed_monotonic_ns"]) == (250_000_000, None)
+    assert (sent["captured_unix_s"], sent["sent_unix_s"], sent["acked_unix_s"]) == (
+        record.captured_at,
+        1000.25,
+        None,
+    )
     agent.close()
 
 
