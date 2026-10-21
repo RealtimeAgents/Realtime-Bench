@@ -272,3 +272,29 @@ def test_records_the_kernel_never_took_are_written_when_it_raises(tmp_path, monk
     records = _agent_records(episode.trace)
     assert [record["payload"]["index"] for record in records] == [0, 1, 2]
     assert ["kernel_seq" in record for record in records] == [False] * 3
+
+
+class SameNameAgent(Agent):
+    """Records, on its worker, a record under a name the kernel's records use too."""
+
+    def generate(self, generation, decision, observation, budget):
+        with trace_scope(phase="decision", decision=decision, generation=generation):
+            self.sink.capture(TraceEvent.ACTION_PROPOSED, {"note": "the agent's own"})
+        _handed(self.sink, decision + 1)
+        return super().generate(generation, decision, observation, budget)
+
+
+def test_an_agent_record_is_written_as_the_agent_s_whatever_its_name(tmp_path):
+    """An agent record under a name the kernel's records also use is the agent's: it is written
+    as the sink gave it, not read as the kernel's ActionProposed."""
+    episode = run(
+        "wall",
+        2.0,
+        [Reply(0.5), Reply(0.5)],
+        agent_type=SameNameAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.invalid is None
+    assert episode.statuses() == ["applied", "applied"]
+    notes = [record["payload"].get("note") for record in _agent_records(episode.trace)]
+    assert notes == ["the agent's own"] * 2
