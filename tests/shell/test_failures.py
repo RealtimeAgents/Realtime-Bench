@@ -3,9 +3,10 @@
 An exception the legacy loop let escape it (runner.py run_stream) invalidates the run as
 runner:run_exception and the episode still finalizes. An invalid run the environment latches
 itself in an operation that returns keeps its own reason: the shell posts it before the
-command's answer, and the wall clock's key-release timer posts it through ``on_invalid``. Failed
-state reads are counted by the kernel, three in a row invalidate the run, the ones a token key
-tap makes inside execute() too (X12).
+command's answer, after it when the answer carries the same failure of the action, and the wall
+clock's key-release timer posts it through ``on_invalid``. Failed state reads are counted by the
+kernel, three in a row invalidate the run, the ones a token key tap makes inside execute() too
+(X12).
 """
 
 from __future__ import annotations
@@ -580,6 +581,28 @@ def test_an_execution_failure_invalidates_the_run():
         "detail": "guest down",
     }
     assert episode.statuses() == ["invalid_run"]
+
+
+def test_a_failed_action_the_environment_latched_settles_before_the_snapshot_read():
+    """Decision 1's click fails at 1.5 s and the environment latches action_execution_failed, as
+    GuestEnvironment._execution_failed does (sandbox/actions.py); reading the snapshot takes 1.5
+    s. The answer carries the same failure and comes first, so the click settles at tick 1, where
+    it ran, as under the runner (runner.py _land_action); the record of the invalid run is the
+    environment's."""
+    latched = {
+        "category": "environment",
+        "reason": "action_execution_failed",
+        "detail": "guest connection reset",
+    }
+    world = World(latches={1: latched}, snapshot_s=1.5)
+    episode = run("wall", 5.0, [Reply(0.5), Reply(0.5)], world)
+    _finalized(episode, 1.5)
+    assert episode.invalid == latched
+    assert episode.statuses() == ["applied", "invalid_run"]
+    resolved = episode.trace.payloads("ActionResolved")[1]
+    assert (resolved["status"], resolved["environment_tick"]) == ("invalid_run", 1)
+    assert episode.env.lifecycle[1]["next_observation_tick"] == 1
+    assert episode.trace.payloads("RunInvalidated") == [latched]
 
 
 def test_failed_feedback_and_a_failed_lifecycle_write_invalidate_the_run():

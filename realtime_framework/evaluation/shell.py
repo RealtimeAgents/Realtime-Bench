@@ -565,9 +565,9 @@ class _Shell:
 
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
-        itself in an operation that returned, such as a key tap's failed advance inside
-        ``execute()``, goes to the kernel with its own reason before the command's answer. One
-        that raised raises here, with no post: its caller answers with the error."""
+        itself in an operation that returned goes to the kernel with its own reason before the
+        command's answer (an action's, see _execute). One that raised raises here, with no post:
+        its caller answers with the error."""
         latched = getattr(self.env, "_invalid_run", None)
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
@@ -793,7 +793,8 @@ class _Shell:
         env, decision = self.env, self._decision
         env._last_execution_result = None
         env._last_coordinate_trace = None
-        status = self._env(env.execute, command.action, release_at=command.release_at)
+        latched = getattr(env, "_invalid_run", None)
+        status = env.execute(command.action, release_at=command.release_at)
         rejection = error = None
         if status == "failed":
             # A guest refusal is the model's action failing, not the environment's.
@@ -802,16 +803,29 @@ class _Shell:
             else:
                 error = env._last_exec_error
         decision.coordinate_trace = env._last_coordinate_trace
-        self.post(
-            ActionExecuted(
-                command.decision,
-                result=env._last_execution_result,
-                held_keys=env.last_held_keys,
-                rejection=rejection,
-                error=error,
-                end_checks=env.last_end_checks,
-            )
+        answer = ActionExecuted(
+            command.decision,
+            result=env._last_execution_result,
+            held_keys=env.last_held_keys,
+            rejection=rejection,
+            error=error,
+            end_checks=env.last_end_checks,
         )
+        invalid = getattr(env, "_invalid_run", None)
+        if invalid is None or invalid is latched:
+            self.post(answer)
+        elif invalid["reason"] == "action_execution_failed":
+            # The answer carries this failure and the kernel names it the same (kernel/turns.py
+            # _executed): first, it settles the action where it ran, not after the snapshot read
+            # the end asks for.
+            self.post(answer)
+            self.post(_invalidated(invalid))
+        else:
+            # Latched for a step inside the action, such as a key tap's failed advance: first, it
+            # keeps its reason, which the kernel would read from the answer as
+            # action_execution_failed.
+            self.post(_invalidated(invalid))
+            self.post(answer)
 
     def _commit(self, outcome: Outcome) -> None:
         env, decision, config = self.env, self._decision, self.config
