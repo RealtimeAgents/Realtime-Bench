@@ -99,12 +99,14 @@ class History:
         return self
 
 
-def _view(blocks, frames=20, older_frames="placeholder", text="all", actions=None, policy=POLICY):
+def _view(
+    blocks, frames=20, older_frames="placeholder", replies="all", actions=None, policy=POLICY
+):
     return history_view(
         blocks,
         policy=policy,
         system=SYSTEM,
-        retention=StreamingRetention(frames=frames, older_frames=older_frames, text=text),
+        retention=StreamingRetention(frames=frames, older_frames=older_frames, replies=replies),
         actions=actions or {},
         answer=ANSWER,
         call=CALL,
@@ -282,7 +284,7 @@ def test_the_archive_cycles_replies_as_the_turn_window_cycles_turns(replies, kep
     # effective_detailed_history_policy).
     assert POLICY.turns == Retention(keep=50, block=10)
     history = History().play("FR" * replies)
-    view = _view(history.blocks, text="archive", actions=history.actions)
+    view = _view(history.blocks, replies="archive", actions=history.actions)
     assert _kept(view, "model_output") == [
         f"g{n}.output" for n in range(replies - kept + 1, replies + 1)
     ]
@@ -291,7 +293,7 @@ def test_the_archive_cycles_replies_as_the_turn_window_cycles_turns(replies, kep
 def test_archived_replies_leave_with_their_feedback_and_the_older_frames_before_them():
     history = History().play("FRFRBFRBFR")
     view = _view(
-        history.blocks, frames=2, text="archive", actions=history.actions, policy=SMALL_WINDOW
+        history.blocks, frames=2, replies="archive", actions=history.actions, policy=SMALL_WINDOW
     )
     assert _kept(view) == ["f3.frame", "g3.output", "f4.frame", "g4.output"]
     ledger = _ledger(view)
@@ -309,7 +311,7 @@ def test_the_ledger_keeps_its_time_while_the_replies_archived_after_have_no_acti
         history.play("FR")
         history.actions[history.blocks[-1].id] = ()
     view = _view(
-        history.blocks, frames=2, text="archive", actions=history.actions, policy=SMALL_WINDOW
+        history.blocks, frames=2, replies="archive", actions=history.actions, policy=SMALL_WINDOW
     )
     # Six replies archive four; the fourth reply archived the two that had actions.
     ledger = _ledger(view).block
@@ -324,7 +326,7 @@ def test_there_is_no_ledger_while_no_archived_reply_has_actions():
     for reply in ("g1.output", "g2.output"):
         history.actions[reply] = ()
     view = _view(
-        history.blocks, frames=2, text="archive", actions=history.actions, policy=SMALL_WINDOW
+        history.blocks, frames=2, replies="archive", actions=history.actions, policy=SMALL_WINDOW
     )
     assert _kept(view, "model_output") == ["g3.output", "g4.output"]
     assert _ledger(view) is None
@@ -333,7 +335,7 @@ def test_there_is_no_ledger_while_no_archived_reply_has_actions():
 def test_an_older_frame_accepted_after_the_last_archived_reply_stays():
     history = History().play("FRFRBFRBFR")
     view = _view(
-        history.blocks, frames=1, text="archive", actions=history.actions, policy=SMALL_WINDOW
+        history.blocks, frames=1, replies="archive", actions=history.actions, policy=SMALL_WINDOW
     )
     assert _kept(view) == ["f3.frame", "g3.output", "f4.frame", "g4.output"]
     assert [block.folded for block in _frames(view)] == [True, False]
@@ -342,7 +344,7 @@ def test_an_older_frame_accepted_after_the_last_archived_reply_stays():
 def test_feedback_that_arrives_after_its_reply_was_archived_leaves_with_it():
     history = History().play("FRFRFRFRBBB")
     view = _view(
-        history.blocks, frames=4, text="archive", actions=history.actions, policy=SMALL_WINDOW
+        history.blocks, frames=4, replies="archive", actions=history.actions, policy=SMALL_WINDOW
     )
     assert _kept(view, "model_output") == ["g3.output", "g4.output"]
     assert _kept(view, "execution_feedback") == ["g3.feedback"]
@@ -353,7 +355,7 @@ def test_the_newest_frames_are_never_archived():
     view = _view(
         history.blocks,
         frames=5,
-        text="archive",
+        replies="archive",
         actions=history.actions,
         policy=replace(POLICY, turns=Retention(keep=1, block=1)),
     )
@@ -376,7 +378,7 @@ def test_each_longer_history_only_adds_to_the_archive(seed):
             accepted,
             frames=retained,
             older_frames=OLDER_FORMS[seed % len(OLDER_FORMS)],
-            text="archive",
+            replies="archive",
             actions=history.actions,
             policy=policy,
         )

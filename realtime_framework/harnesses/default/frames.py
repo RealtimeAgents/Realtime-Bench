@@ -33,8 +33,8 @@ class FrameRecord:
     send_status: str = "prepared"
     sent_unix_s: float | None = None
     # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
-    # confirmation arrived (OpenAI Realtime's conversation.item.created); "unknown" where the
-    # protocol confirms no frame (Gemini Live). None until the driver says which.
+    # confirmation arrived (OpenAI Realtime's conversation.item.created or .done); "unknown"
+    # where the protocol confirms no frame (Gemini Live). None until the driver says which.
     ack_status: str | None = None
     acked_unix_s: float | None = None
 
