@@ -37,7 +37,7 @@ from tests.replay.test_openrouter import MODEL_KEY as OPENROUTER_MODEL_KEY
 from tests.replay.token_env import TokenEnvironment
 
 from . import drivers
-from .projection import Projection, decision, key_releases
+from .projection import Projection, decision, ends_the_run, key_releases
 from .script import Script, action_key, reply_text
 from .simulated import STATE_READ_FAILED, turn_config
 
@@ -323,8 +323,9 @@ class TokenWorld(_Latched, TokenEnvironment):
         if read in failing:
             raise RuntimeError(STATE_READ_FAILED)
         if read in blind and not self._saw_end:
-            # A blind read stands for a failure the kernel takes as "not ended"; once a read has
-            # seen the end, the kernel reads no more, and today's loop reads the task as it is.
+            # A blind read stands for a failure the kernel takes as "not ended"; once an end
+            # check has seen the end, the kernel reads no more, and today's loop reads the task as
+            # it is. A tap's reads tell the kernel only their failures (turns.py:471-474).
             return None
         ends_at = self.script.ends_at_s
         reached = ends_at is not None and self._logical_tick >= ends_at * self.fps
@@ -357,7 +358,7 @@ class TokenWorld(_Latched, TokenEnvironment):
             answer = "invalid_run"
         else:
             answer = "task" if self._invalid_run is None else "failed"
-        self._saw_end = self._saw_end or answer == "task"
+        self._saw_end = self._saw_end or (answer == "task" and not self._in_tap)
         read = self._tap_reads if self._in_tap else self._checks
         self.log("diff.check", tick=tick, in_tap=self._in_tap, read=read, answer=answer)
         return over
@@ -545,11 +546,10 @@ def project(script: Script, env) -> Projection:
     first_end, ended_before_commit = None, {}
     for call in env.calls:
         name = call["call"]
-        if (
-            first_end is None
-            and not call["finalizing"]
-            and (name == "diff.invalid" or (name == "diff.check" and call["answer"]))
-        ):
+        ends = name == "diff.invalid" or (
+            name == "diff.check" and ends_the_run(call.get("in_tap", False), call["answer"])
+        )
+        if first_end is None and not call["finalizing"] and ends:
             first_end = call
         if name == "trace":
             event, payload, at = call["event"], call["payload"], call["at"]
