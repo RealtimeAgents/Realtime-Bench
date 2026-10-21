@@ -56,7 +56,9 @@ from realtime_framework.entity.records import _jsonable
 # every turn archived leaves out the earliest archived actions, a note in their place, and JEV's
 # ledger header then says every listed action is kept; Gemini Live and Luna frames name their own
 # screen, as the text-JSON frames do; the clock note names the environment ticks when the two
-# frame rates differ; the notes on a done run as a wait and on a decision with no accepted answer.
+# frame rates differ; the notes on a done run as a wait and on a decision with no accepted answer;
+# OpenAI Realtime and Gemini Live send each action's execution feedback as its own item, not in
+# front of the next frame.
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
@@ -272,10 +274,9 @@ def current_context_policy() -> ContextPolicy:
         path("openrouter"),
         path("anthropic_messages"),
         path("moonshot"),
-        path("openai_realtime", feedback="frame_prefix"),
+        path("openai_realtime"),
         path(
             "gemini_live",
-            feedback="frame_prefix",
             tool_call_replay="native_tools",
             prompts={"realtime": "function_call", "browser_game": "function_call"},
         ),

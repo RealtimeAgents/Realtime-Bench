@@ -59,6 +59,7 @@ RANDOM_IDS = (
     ("rtb_user", re.compile(r"rtb_user_[0-9a-f]+")),
     ("rtb_assistant", re.compile(r"rtb_assistant_[0-9a-f]+")),
     ("rtb_ledger", re.compile(r"rtb_ledger_[0-9a-f]+")),
+    ("rtb_feedback", re.compile(r"rtb_feedback_[0-9a-f]+")),  # openai_realtime_session.py
     ("rtb_create", re.compile(r"rtb_create_[0-9a-f]+")),
     ("rtb_delete", re.compile(r"rtb_delete_[0-9a-f]+")),
     # output item ids of the Realtime stub (tests/replay/ws_openai_realtime.py:423)

@@ -168,9 +168,10 @@ def _connections_used(record: dict) -> list[int]:
 
 
 def _split(events: list[dict]) -> tuple[list[dict], dict]:
-    """A decision's events on one connection: any edit batch, then the observation item from
-    send_observation (openai_realtime_session.py:245-250; openai_realtime.py:346-349), then
-    response.create (351-371)."""
+    """A decision's events on one connection: any edit batch or replay, then from
+    send_observation the feedback item on the decision before it, unless the replay made it,
+    and the observation item (openai_realtime_session.py new_feedback, observe), then
+    response.create."""
     *batch, observation, response = events
     assert response["type"] == "response.create"
     assert observation["type"] == "conversation.item.create"
@@ -182,6 +183,11 @@ def _is_placeholder(item: dict) -> bool:
     """A folded turn's user item carries only the placeholder text
     (harnesses/default/request.py:155-161; openai_realtime.py:245-258)."""
     return item["content"] == [{"type": "input_text", "text": FOLDED_VISUAL_PLACEHOLDER}]
+
+
+def _is_feedback(item: dict) -> bool:
+    """An action's execution-feedback item (openai_realtime_session.py _feedback_create)."""
+    return item["id"].startswith("rtb_feedback_")
 
 
 def _is_ledger(item: dict) -> bool:
@@ -224,17 +230,35 @@ def test_long_scenario(tmp_path):
     assert fold_pairs == sum(len(turns) for turns in FOLDS.values())
 
     # Follow every turn's items on the server through the edit batches the driver sends.
-    user_items, assistant_items, prompts, ledger = [], [], [], None
+    user_items, assistant_items, feedback_items, prompts, feedback, ledger = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        None,
+    )
     for k, record in enumerate(steps):
         (segment,) = record["client_events"]
         batch, observation = _split(segment["events"])
+        if k:
+            # The feedback on decision k - 1 goes after any edit, as an item of its own.
+            created = batch.pop()
+            assert set(created) == {"type", "item"} and _is_feedback(created["item"])
+            assert created["item"]["role"] == "user"
+            feedback_items.append(created["item"]["id"])
+            feedback.append(created["item"]["content"][0]["text"])
         expected = []
         if k == ARCHIVE:
             for j in ARCHIVED:
-                expected += [("delete", user_items[j]), ("delete", assistant_items[j])]
+                expected += [
+                    ("delete", user_items[j]),
+                    ("delete", assistant_items[j]),
+                    ("delete", feedback_items[j]),
+                ]
             expected.append(("ledger", "root"))
         for j in FOLDS.get(k, ()):
-            anchor = assistant_items[j - 1] if j else "root"
+            anchor = feedback_items[j - 1] if j else "root"
             expected += [("delete", user_items[j]), ("placeholder", anchor)]
         actual = []
         for event in batch:
@@ -270,7 +294,7 @@ def test_long_scenario(tmp_path):
                 "detail": "observation history updated in the existing Realtime session",
                 "history_session_reconnected": False,
                 "history_items_created": len(FOLDS[k]) + (k == ARCHIVE),
-                "history_items_deleted": len(FOLDS[k]) + (k == ARCHIVE) * 2 * len(ARCHIVED),
+                "history_items_deleted": len(FOLDS[k]) + (k == ARCHIVE) * 3 * len(ARCHIVED),
                 "history_visuals_folded_in_place": len(FOLDS[k]),
                 "history_prompts_edited_in_place": len(FOLDS[k]),
             }
@@ -284,35 +308,35 @@ def test_long_scenario(tmp_path):
     lines = ledger.split("\n")
     assert lines[0] == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == 1 + len(ARCHIVED)
 
-    # Execution feedback opens the next observation's prompt (harness.py:1071-1079, 1602-1622).
-    assert prompts[0].startswith(TEXT_ACTION_FRAME_PROMPT)
-    for prompt in prompts[1:]:
-        feedback, frame_prompt = prompt.split("\n", 1)
-        assert feedback.startswith("EXECUTION RESULT: ")
-        assert frame_prompt.startswith(TEXT_ACTION_FRAME_PROMPT)
-    # The rejected actions' feedback: two of the items carrying it are folded later, and the
-    # batch above deleted them for a bare placeholder (harnesses/default/request.py:155-161;
-    # entity/model.py:154-170); the last is kept.
+    # Each action's execution feedback is an item of its own after the action's reply; the
+    # observations carry only the frame prompt.
+    assert all(prompt.startswith(TEXT_ACTION_FRAME_PROMPT) for prompt in prompts)
+    assert all(text.startswith("EXECUTION RESULT: ") for text in feedback)
+    # The rejected actions' feedback: the frames after two of them are folded later, and their
+    # feedback items stay, unlike the prompt prefix before them.
     rejected = [k for k, step in enumerate(LONG_SCENARIO) if step.status == "rejected"]
     folded_at = {j: k for k, turns in FOLDS.items() for j in turns}
     assert [folded_at.get(k + 1) for k in rejected] == [20, 40, None]
     for k in rejected:
-        assert prompts[k + 1].startswith("EXECUTION RESULT: actual=wait(); requested=")
-        assert f"; status=rejected. Detail: {LONG_SCENARIO[k].detail}\n" in prompts[k + 1]
+        assert feedback[k].startswith("EXECUTION RESULT: actual=wait(); requested=")
+        assert feedback[k].endswith(f"; status=rejected. Detail: {LONG_SCENARIO[k].detail}")
 
     # What the model sees: the conversation size at each response.create, and at the last
-    # decision the ledger, turns 10-39 folded, turns 40-58 with their screenshots, then the newest
-    # observation. Each turn's assistant item is the stub's own output item.
+    # decision the ledger, turns 10-39 folded, turns 40-58 with their screenshots, each with its
+    # reply and its feedback, then the newest observation. Each turn's assistant item is the
+    # stub's own output item.
     sizes = [len(r["server_responses"][0]["context"]) for r in steps]
-    assert [sizes[k] for k in (0, 19, 20, 49, 50, 59)] == [1, 39, 41, 99, 82, 100]
+    assert [sizes[k] for k in (0, 19, 20, 49, 50, 59)] == [1, 58, 61, 148, 122, 149]
     assert last_view[0][1:] == ("user", ledger, None)
-    for j, user, assistant in zip(range(10, 59), last_view[1:-1:2], last_view[2:-1:2]):
+    turns = zip(range(10, 59), last_view[1:-1:3], last_view[2:-1:3], last_view[3:-1:3])
+    for j, user, assistant, executed in turns:
         assert assistant[1:] == ("assistant", LONG_SCENARIO[j].reply, None)
+        assert executed[1:] == ("user", feedback[j], None)
         assert user[1] == "user"
         assert (user[2] == FOLDED_VISUAL_PLACEHOLDER) == (j < 40) == (user[3] is None)
         if j >= 40:
             assert user[2] == prompts[j]
-    assert last_view[-1][1:3] == ("user", prompts[-1]) and len(last_view) == 100
+    assert last_view[-1][1:3] == ("user", prompts[-1]) and len(last_view) == 149
 
     # The runtime cap falls below the native limit at decision 30; the wire shows a number once
     # the cap is at most 4096 (openai_realtime.py:214-220).
@@ -348,12 +372,18 @@ def test_dropped_response_reconnects(tmp_path):
     replay, observation = _split(replay)
     assert observation["item"]["content"] == dropped_observation["item"]["content"]
     assert observation["item"]["id"] != dropped_observation["item"]["id"]
-    # The replay is turns 0 and 1, each user item as first created, then its output.
+    # The replay is turns 0 and 1, each user item as first created, then its output, then its
+    # feedback item as the first connection got it with the next observation.
     originals = [_split(r["client_events"][0]["events"])[1]["item"] for r in steps_records[:2]]
+    sent_feedback = [
+        r["client_events"][0]["events"][-3]["item"] for r in (steps_records[1], steps_records[2])
+    ]
     assert all(set(event) == {"type", "item"} for event in replay)
-    assert [e["item"]["role"] for e in replay] == ["user", "assistant"] * 2
-    assert [e["item"]["content"] for e in replay[::2]] == [o["content"] for o in originals]
-    assert [e["item"]["content"][0]["text"] for e in replay[1::2]] == [s.reply for s in steps[:2]]
+    assert [e["item"]["role"] for e in replay] == ["user", "assistant", "user"] * 2
+    assert [e["item"]["content"] for e in replay[::3]] == [o["content"] for o in originals]
+    assert [e["item"]["content"][0]["text"] for e in replay[1::3]] == [s.reply for s in steps[:2]]
+    assert all(_is_feedback(item) for item in sent_feedback)
+    assert [e["item"]["content"] for e in replay[2::3]] == [f["content"] for f in sent_feedback]
 
     runtime = steps_records[2]["result"]["realtime_runtime"]
     assert runtime["transport_reconnect_attempts"] == 1
@@ -389,13 +419,15 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
     _, dropped_observation = _split(dropped["events"])
     assert observation["item"]["content"] == dropped_observation["item"]["content"]
     users = [e["item"] for e in replay if e["item"]["role"] == "user"]
+    frames = [item for item in users if not _is_feedback(item)]
     outputs = [e["item"]["content"][0]["text"] for e in replay if e["item"]["role"] == "assistant"]
-    assert [_is_placeholder(item) for item in users] == [True] * 30 + [False] * 11
+    assert [_is_placeholder(item) for item in frames] == [True] * 30 + [False] * 11
+    assert len(users) - len(frames) == 41  # every retained turn's feedback, the folded ones' too
     # Turn 14's empty output is an item on the first connection but not in the replay
     # (harnesses/default/request.py:91-93; openai_realtime_session.py:195-198, 437), so the rebuilt
     # conversation is one item shorter.
     assert outputs == [step.reply for step in steps[10:51] if step.reply]
-    assert [len(r["context"]) for r in steps_records[51]["server_responses"]] == [84, 83]
+    assert [len(r["context"]) for r in steps_records[51]["server_responses"]] == [125, 124]
     _compare_with_baseline(
         "token-dropped-response-after-archive",
         [records[0], records[1], *steps_records[51:], records[-1]],
@@ -538,22 +570,26 @@ def test_session_edit_error_rebuilds(tmp_path):
     session, *replay = rebuilt["events"]
     assert session["type"] == "session.update"
     replay, _ = _split(replay)
-    users = [e["item"] for e in replay if e["item"]["role"] == "user"]
+    frames = [
+        e["item"] for e in replay if e["item"]["role"] == "user" and not _is_feedback(e["item"])
+    ]
     outputs = [e["item"]["content"][0]["text"] for e in replay if e["item"]["role"] == "assistant"]
-    assert [_is_placeholder(item) for item in users] == [True] * 10 + [False] * 10
+    assert [_is_placeholder(item) for item in frames] == [True] * 10 + [False] * 10
     # A rebuild skips empty outputs (harnesses/default/request.py:91-93;
     # openai_realtime_session.py:195-198); decision 14 replied "".
     assert outputs == [step.reply for step in steps[:20] if step.reply]
 
     # Decision 30 folds turns 10-19 on connection 2. Each placeholder follows the previous turn's
-    # output as the replay created it; turn 14 has none, so turn 15's placeholder follows the
-    # placeholder this batch just created for turn 14 (openai_realtime_session.py:318-321).
+    # feedback item as the replay created it, turn 14's included, which has no output
+    # (openai_realtime_session.py _edit_batch). The feedback on decision 29 goes after the batch.
     (segment,) = steps_records[30]["client_events"]
     fold, _ = _split(segment["events"])
-    creates = [event for event in fold if event["type"] == "conversation.item.create"]
-    origin = {event["item"]["id"]: event["item"]["role"] for event in replay}
+    creates = [e for e in fold if e["type"] == "conversation.item.create" and "event_id" in e]
+    origin = {
+        event["item"]["id"]: "feedback" if _is_feedback(event["item"]) else event["item"]["role"]
+        for event in replay
+    }
     origin.update({event["item"]["id"]: "this batch" for event in creates})
     anchors = [origin.get(event["previous_item_id"]) for event in creates]
-    assert anchors == ["assistant"] * 5 + ["this batch"] + ["assistant"] * 4
-    assert creates[5]["previous_item_id"] == creates[4]["item"]["id"]
+    assert anchors == ["feedback"] * 10
     _compare_with_baseline("token-edit-error", records, baseline.trajectory(tmp_path))

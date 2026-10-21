@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
@@ -76,11 +77,37 @@ def test_stateless_turns_and_ledger():
     )
 
 
+def frame_prefix_request(turns):
+    """openai_realtime's path under the frame-prefix placement of feedback (item 3). No API
+    takes it now; the feedback no turn carries still goes ahead of the next frame this way."""
+    policy = replace(POLICY.paths["openai_realtime"], feedback="frame_prefix")
+    return build_request(policy, SYSTEM, tuple(turns), None, ANSWER, CALL)
+
+
+def test_live_feedback_is_its_own_block_after_the_action():
+    exchange = {"function_calls": [], "function_responses": [], "completion_text": ""}
+    first = turn(1, output="A1", feedback="F1", native_tool_exchanges=[exchange])
+    second = turn(2)
+    for api, action in (
+        ("openai_realtime", ["d1.output"]),
+        ("gemini_live", ["d1.output", "d1.tools"]),
+    ):
+        canonical = request(api, [first, second])
+        assert [item.block.id for item in canonical.items] == [
+            "system",
+            "d1.frame",
+            *action,
+            "d1.feedback",
+            "d2.frame",
+        ]
+        assert canonical.items[-2].intent.position == "in_order"
+
+
 def test_session_prefix_is_rejoined_and_feedback_stays_on_the_turn():
     first = turn(1, output="A1", feedback="F1")
     second = turn(2, prefix="F1")
     assert session_frame_text(second.observation) == "F1\nFRAME"
-    canonical = request("openai_realtime", [first, second])
+    canonical = frame_prefix_request([first, second])
     kinds = [(item.block.id, item.intent.position) for item in canonical.items]
     assert kinds == [
         ("system", "head"),
@@ -95,7 +122,7 @@ def test_session_prefix_is_rejoined_and_feedback_stays_on_the_turn():
     # Folding drops the prefix, as the frame prompt was dropped before.
     second.fold_visual()
     assert session_frame_text(second.observation) == ""
-    assert chat_messages(request("openai_realtime", [first, second]))[-1] == {
+    assert chat_messages(frame_prefix_request([first, second]))[-1] == {
         "role": "user",
         "content": FOLDED_VISUAL_PLACEHOLDER,
     }

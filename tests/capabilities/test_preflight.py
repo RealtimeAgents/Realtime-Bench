@@ -450,8 +450,8 @@ def policy_check(config, **values):
     [
         (
             "gpt-realtime-2",
-            {"feedback": "separate_message"},
-            "The openai_realtime API cannot place execution feedback as separate_message",
+            {"feedback": "frame_prefix"},
+            "The openai_realtime API cannot place execution feedback as frame_prefix",
         ),
         (
             "jev-1.13",
