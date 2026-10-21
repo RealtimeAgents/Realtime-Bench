@@ -1186,6 +1186,52 @@ def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply
     assert [wire(message) for message in rig.socket.sent] == ["video", ("text", "frame 2")]
 
 
+def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again_after_renewal():
+    """A goAway read while a reply waits for the session a push holds: the reply raises
+    RenewalRequired having written and started nothing, and leaves the session as it was. The
+    renewal resumes it, and the reply asked again goes out on the new connection."""
+    rig = Rig()
+    view = rig.view([pushed(1)])
+    request = GenerationRequest("turn-0", None, "inf", "wall", canonical=view)
+
+    async def run():
+        await rig.connect()
+        first = rig.socket
+        first.stall = lambda message: wire(message) == "video"
+        push = asyncio.ensure_future(rig.driver.push_frame(None, view))
+        await settle()
+        reply = asyncio.ensure_future(rig.driver.request_reply(request))
+        first.feed(update("handle-1"), GO_AWAY)
+        await settle()
+        first.release()
+        await push
+        refused = None
+        try:
+            await reply
+        except RenewalRequired as exc:
+            refused = exc
+        left = (
+            [wire(message) for message in first.sent],
+            dict(rig.driver._core.replies),
+            dict(rig.driver._replies),
+            rig.driver.state,
+            rig.driver.connection_renewal_reason(),
+        )
+        renewed = await rig.driver.renew(rig.seed, view, lambda *_, **__: None)
+        generation = await rig.driver.request_reply(request)
+        rig.socket.feed(TURN_COMPLETE)
+        await drain(rig.driver.events(generation))
+        await rig.driver.close()
+        return refused, left, renewed
+
+    refused, left, renewed = asyncio.run(run())
+    assert isinstance(refused, RenewalRequired)
+    assert left == (["video", ("text", "frame 1")], {}, {}, RuntimeState.READY, "go_away")
+    assert renewed.provider_metadata["session_resumed"]
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
+    assert [wire(message) for message in rig.socket.sent] == ACTIVITY
+
+
 def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():
     rig = Rig()
 

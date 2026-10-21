@@ -823,7 +823,11 @@ class GeminiLiveDriver(SessionLifecycle):
         the reply before it are done: a connection carries one reply at a time. Its generation
         starts before the activity goes out, so that the reader takes the reply's first message
         for it. The session's NO_INTERRUPTION keeps the activity from cutting off what the
-        server may still be generating. It holds the session as push_frame does."""
+        server may still be generating. It holds the session as push_frame does.
+
+        After a goAway it raises RenewalRequired, as push_frame does, before it writes or starts
+        anything, also for a goAway read while it waited for the session: renew() resumes the
+        session, and the reply is asked for again."""
         async with self._session_lock():
             session = self._session_for_input()
             if self._activity_open:
