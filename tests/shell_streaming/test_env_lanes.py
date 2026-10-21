@@ -234,3 +234,19 @@ def test_an_operation_that_raises_is_answered_with_its_error():
     assert [type(event) for event in events] == [FrameCaptured, ActionExecuted, EndChecked]
     assert all("failed" in event.error for event in events)
     assert (events[1].decision, events[2].request, executed) == (4, 9, [])
+
+
+def test_the_action_lane_says_when_the_action_it_runs_is_done():
+    clock, _, inbox, lanes = _lanes()
+    done = []
+    with clock.participant():
+        assert lanes.action_done(0.0) and lanes.executing is None
+        command = Execute(0, CLICK)
+        lanes.execute(command, lambda record: None)
+        assert lanes.executing is command
+        done.append((lanes.action_done(0.5), clock.monotonic()))
+        done.append((lanes.action_done(5.0), clock.monotonic()))
+        inbox.wait_for(1)
+    lanes.close()
+    assert done == [(False, 0.5), (True, 2.0)]
+    assert lanes.executing is None
