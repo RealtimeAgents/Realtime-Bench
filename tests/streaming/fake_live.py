@@ -254,6 +254,35 @@ class TextLiveDriver(FakeLiveDriver):
     )
 
 
+class RecordingToolRuntime:
+    """A tool runtime whose inspections find no element, and which writes each finished one
+    to ``rows`` as (observation id, outcome, raw action output, latency), once, as the SoM
+    runtime does (sandbox/observation/som.py ToolRuntime.finish)."""
+
+    def __init__(self):
+        self.rows: list[tuple] = []
+        self._pending: set[str] = set()
+
+    def inspect(self, observation, *, requested_observation_id, **sizes) -> dict:
+        call_id = f"inspection-{len(self._pending) + len(self.rows)}"
+        self._pending.add(call_id)
+        proof = {"call_id": call_id, "observation_id": requested_observation_id}
+        return {"text": "", "proof": proof, "marks": {}, "reference_resolution": {}}
+
+    def resolve_action(self, action, marks, execution):
+        return action
+
+    def finish(self, execution, *, action_latency_s=0.0, raw_action_output="", outcome=""):
+        call_id = execution["proof"]["call_id"]
+        if call_id in self._pending:
+            self._pending.remove(call_id)
+            observation_id = execution["proof"]["observation_id"]
+            self.rows.append((observation_id, outcome, raw_action_output, action_latency_s))
+
+    def close(self) -> None:
+        pass
+
+
 def screenshot() -> bytes:
     stream = io.BytesIO()
     Image.new("RGB", (64, 48), "white").save(stream, format="PNG")

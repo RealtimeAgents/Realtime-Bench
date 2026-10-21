@@ -23,6 +23,7 @@ from .fake_live import (
     Error,
     Fail,
     GoAway,
+    RecordingToolRuntime,
     Reply,
     Text,
     TextLiveDriver,
@@ -729,3 +730,49 @@ def test_an_action_that_comes_as_a_push_goes_out_finds_that_frame_sent(monkeypat
         ("c2", None, 2, 0),
     ]
     agent.close()
+
+
+# ---- what the agent keeps of the frames -------------------------------------------------------
+
+
+def test_the_agent_lets_go_of_a_frames_screenshot_once_it_folds(monkeypatch, clock):
+    """As a turn-based history folds a screenshot (CanonicalTurn.fold_visual): a frame beyond
+    the retained count keeps no image, and only the frames a reply may still start on, the two
+    newest, stay with their prepared screenshots."""
+    agent = make_agent(monkeypatch, clock)
+    for n in range(1, 7):
+        agent.push(observation(clock, n))
+    frames = [block for block in agent._blocks if block.kind == "frame"]
+    assert [block.image is not None for block in frames] == [False] * 4 + [True] * 2
+    assert list(agent._pushed) == ["obs-5", "obs-6"]
+    agent.close()
+
+
+def test_a_frames_inspection_is_finished_once_with_every_reply_on_it(monkeypatch, clock):
+    """Two replies start on frame 1; once frames 2 and 3 are pushed no reply can start on it
+    again, and its inspection is finished with both replies' outputs. The frames left are
+    finished at close, without a reply; a frame whose push failed, at once."""
+    agent = make_agent(monkeypatch, clock)
+    runtime = RecordingToolRuntime()
+    agent.bind_tool_runtime(runtime)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    first = observation(clock, 1)
+    agent.push(first)
+    agent.driver.replies += [
+        Reply((_click("a", 0.5, 1),), 1.0),
+        Reply((_click("b", 0.25, 1),), 1.0),
+    ]
+    for generation in (0, 1):
+        agent.generate(generation, generation, first, BUDGET)
+        agent.accept(generation)
+    agent.driver.failing.add("obs-2")
+    with pytest.raises(RuntimeError):
+        agent.push(observation(clock, 2))
+    assert runtime.rows == [("obs-2", "push_failed", "", 0.0)]
+    agent.push(observation(clock, 3))
+    assert len(runtime.rows) == 1
+    agent.push(observation(clock, 4))
+    outputs = "\n".join(['{"action": "click", "x": 10, "y": 20, "button": "left", "frame": 1}'] * 2)
+    assert runtime.rows[1] == ("obs-1", "completed", outputs, 2.0)
+    agent.close()
+    assert runtime.rows[2:] == [("obs-3", "no_reply", "", 0.0), ("obs-4", "no_reply", "", 0.0)]

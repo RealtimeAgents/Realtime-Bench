@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import (
@@ -96,14 +96,20 @@ TEXT_CALL = "text"
 _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Pushed:
     """A frame in the session: its frame-table entry, as prepared for the model, and its
-    inspection, if the agent has a tool runtime."""
+    inspection, if the agent has a tool runtime; and the replies started on it, for its
+    inspection's one record: how many are on, the outputs of those that ended, in order, their
+    time, and how the last ended."""
 
     record: FrameRecord
     value: ProviderObservation
     execution: dict | None
+    running: int = 0
+    outputs: list[str] = field(default_factory=list)
+    latency: float = 0.0
+    outcome: str = "no_reply"
 
 
 @dataclass
@@ -305,10 +311,40 @@ class NativeStreamingAgent(VisionAgentBase):
             self.frames.record_sent(pushed.record.frame, self.clock.time())
             self._blocks.append(block)
             self._pushed[key] = pushed
+            self._release_folded()
         # The kernel's records name the frame by its observation id, the session's by its block:
         # this ties the two (evaluation/reporting.py summarize_streaming).
         self._trace.capture(
             TraceEvent.FRAME_SENT, {"frame": pushed.record.frame, "observation_id": key}
+        )
+        self._retire()
+
+    def _release_folded(self) -> None:
+        """Let go of the screenshot of the frame the newest push folded, as a turn-based history
+        folds one (CanonicalTurn.fold_visual): the view folds it already. The caller holds the
+        lock."""
+        frames = [index for index, block in enumerate(self._blocks) if block.kind == "frame"]
+        if len(frames) > self._retained:
+            index = frames[-self._retained - 1]
+            self._blocks[index] = replace(self._blocks[index], image=None)
+
+    def _retire(self) -> None:
+        """Finish the inspection of each frame no reply can start on any more, once the replies
+        on it ended, and let go of the frame. The kernel starts a reply on the newest frame it
+        was told was pushed: the newest, or the one before while it is not told yet."""
+        with self._lock:
+            past = list(self._pushed)[:-2]
+            retired = [self._pushed.pop(key) for key in past if not self._pushed[key].running]
+        for pushed in retired:
+            self._finish_frame(pushed)
+
+    def _finish_frame(self, pushed: _Pushed) -> None:
+        """The one record of the frame's inspection, with every reply on it."""
+        self._finish_inspection(
+            pushed,
+            pushed.outcome,
+            action_latency_s=pushed.latency,
+            raw_action_output="\n".join(pushed.outputs),
         )
 
     # ---- replies ------------------------------------------------------------------------------
@@ -323,6 +359,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 generation, decision, self._pushed[observation.metadata.get("observation_id")]
             )
             self._replies[generation] = reply
+            reply.own.running += 1
             if generation in self._aborted_early:
                 self._aborted_early.remove(generation)
                 reply.cancel.set()
@@ -337,13 +374,18 @@ class NativeStreamingAgent(VisionAgentBase):
         except BaseException:
             if not reply.cancel.is_set():
                 reply.failed = True
-                self._finish_inspection(reply.own, "reply_failed", raw_action_output=reply.output)
+                outcome = "reply_failed"
                 raise
             outcome = "cancelled"
-        latency = self.clock.monotonic() - started
-        self._finish_inspection(
-            reply.own, outcome, action_latency_s=latency, raw_action_output=reply.output
-        )
+        finally:
+            latency = self.clock.monotonic() - started
+            with self._lock:
+                own = reply.own
+                own.running -= 1
+                own.outputs += [reply.output] if reply.output else []
+                own.latency += latency
+                own.outcome = outcome
+            self._retire()
         return PendingDecision(
             generation, decision, self._result(reply, latency), reply.cancel.is_set()
         )
@@ -601,5 +643,5 @@ class NativeStreamingAgent(VisionAgentBase):
             self._execution.stop()
         finally:
             for pushed in self._pushed.values():
-                self._finish_inspection(pushed, "no_reply")
+                self._finish_frame(pushed)
             super().close()
