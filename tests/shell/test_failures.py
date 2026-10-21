@@ -56,8 +56,10 @@ def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes()
     assert "RuntimeError: accept broke" in episode.invalid["detail"]
     assert episode.env._loop_error.startswith("Traceback")
     assert "accept broke" in episode.env._loop_error
-    assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
+    raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
+    assert len(raised) == 1
     assert episode.statuses() == ["invalid_run"]
+    assert episode.env.lifecycle[0]["model_latency_s"] == 0.5  # the result it accepted
 
 
 def test_a_decision_budget_the_adapter_refuses_invalidates_the_run_before_the_generation():
@@ -80,6 +82,25 @@ def test_a_generation_that_raises_is_an_unusable_result():
     assert episode.statuses() == []
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["error"], p["invalid_reason"]) for p in completed] == [(True, "generation_error")]
+
+
+class _Cancelled(BaseException):
+    """As entity/model.py RetryCancelled, which is not an Exception."""
+
+
+class _CancelledGeneration(Agent):
+    def generate(self, generation, decision, observation, budget):
+        self.clock.sleep(0.5)
+        raise _Cancelled("retries cancelled")
+
+
+def test_a_generation_that_raises_any_exception_comes_back_failed():
+    """Not only an Exception: the kernel waits for the result, so the worker always hands one
+    back, as the runner's bounded call did (runner.py _bounded_call)."""
+    episode = run("wall", 3.0, [Reply(0.5)], agent_type=_CancelledGeneration)
+    _finalized(episode, 0.5)
+    assert episode.invalid["reason"] == "generation_error"
+    assert "_Cancelled: retries cancelled" in episode.invalid["detail"]
 
 
 def test_the_environment_keeps_its_reason_for_a_tap_whose_advance_failed():

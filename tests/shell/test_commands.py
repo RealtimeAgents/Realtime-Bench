@@ -8,6 +8,7 @@ scripted world (tests/shell/world.py).
 
 from __future__ import annotations
 
+import gc
 import time
 
 from realtime_framework.entity.actions import Action, ActionType
@@ -258,6 +259,7 @@ def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_
     ]
     assert [echo.generation for echo in echoes] == [1]
     assert episode.env._token_accounting.summary()["responses"] == 2
+    assert episode.logs[0].endswith("-> skipped_timeout TIMEOUT")
 
 
 class _SlowAbort(Agent):
@@ -286,6 +288,15 @@ def test_a_paused_decision_lands_on_its_frame_and_moves_one_frame_on():
     assert episode.timeline == [(0, 0, 0.0, 0.0, CLICK), (1, 1, 0.0, 1.0, CLICK)]
     assert episode.env._termination["stop_reason"] == "tick_limit"
     assert episode.env._termination["end_s"] == 2.0
+
+
+def test_a_frame_and_a_result_are_let_go_once_the_decision_is_over():
+    """Only the decision in hand keeps its frame: one a long episode had kept would grow with
+    it."""
+    episode = run("wall", 5.0, [Reply(0.5)] * 5)
+    assert episode.statuses() == ["applied"] * 5
+    gc.collect()
+    assert [ref() is not None for ref in episode.env.observations] == [False] * 4 + [True]
 
 
 def test_without_a_snapshot_reader_the_termination_has_no_snapshot_time():

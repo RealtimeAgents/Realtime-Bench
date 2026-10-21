@@ -405,10 +405,12 @@ class _Shell:
                 self._start_generation(command)
             case AbortGeneration(generation=generation):
                 self._abort(generation)
+            # Its records are written by now (the echo comes first); its frame and result go.
             case AcceptResult(generation=generation):
+                self._decision.result = self._generations.pop(generation).result
                 self.agent.accept(generation)
-                self._decision.result = self._generations[generation].result
             case DiscardResult(generation=generation):
+                del self._generations[generation]
                 self.agent.discard(generation)
             case Execute():
                 self._execute(command)
@@ -546,7 +548,9 @@ class _Shell:
                 held.generation, held.decision, held.observation, held.budget
             )
             held.result = pending.result
-        except Exception:  # noqa: BLE001 - a failed generation invalidates the run
+        # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled):
+        # the result must come back, or the kernel would wait for it.
+        except BaseException:  # noqa: BLE001 - a failed generation invalidates the run
             failure = traceback.format_exc()
             self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
             latency = round(self.clocks.operational.time() - held.started_at, 2)
@@ -747,7 +751,9 @@ class _Shell:
         act = None if action is None else (action.action_type.value, action.parameters)
         self.log(
             f"[default] k={outcome.decision} t_k={t_k} δ={d_ticks:g} τ={tau:g} act={act} -> "
-            f"{outcome.status}" + (f" tokens={outcome.action_output_tokens}" if self.token else "")
+            f"{outcome.status}"
+            + (f" tokens={outcome.action_output_tokens}" if self.token else "")
+            + (" TIMEOUT" if outcome.status == "skipped_timeout" else "")
         )
 
     # ---- the end ------------------------------------------------------------------------------
@@ -757,7 +763,8 @@ class _Shell:
         # The presentation boundary precedes the scorer's snapshot.
         env._active_end_unix_s = self.clocks.operational.time()
         env._termination_snapshot_captured = False
-        snapshotter = env.task.evaluation_snapshot
+        # The Task base class has none (realtime_tasks/types.py).
+        snapshotter = getattr(env.task, "evaluation_snapshot", None)
         error = None
         if snapshotter is not None:
             try:

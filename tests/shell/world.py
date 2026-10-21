@@ -11,6 +11,7 @@ on the token clock it is the FrameClock's frame, which only ``step_clock`` and a
 from __future__ import annotations
 
 import math
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -69,9 +70,13 @@ class Environment:
         self.clock = clocks.operational
         self.d = 1.0 / fps
         self.t0 = self.clock.time()
-        self.task = SimpleNamespace(
-            evaluation_snapshot=self._snapshot if world.snapshotter else None
+        # A task without a snapshot reader has no evaluation_snapshot at all.
+        self.task = (
+            SimpleNamespace(evaluation_snapshot=self._snapshot)
+            if world.snapshotter
+            else SimpleNamespace()
         )
+        self.observations: list = []  # weak references to every frame captured
         self.last_held_keys: tuple[str, ...] = ()
         self.last_end_checks: tuple[str | None, ...] = ()
         self.kernel_counts_reads = False
@@ -124,6 +129,7 @@ class Environment:
             observation = Observation(
                 self._frozen.screenshot, timestamp, self._frozen.tick_number, self._frozen.metadata
             )
+        self.observations.append(weakref.ref(observation))
         return observation
 
     def check_end(self) -> tuple[bool, str | None]:
