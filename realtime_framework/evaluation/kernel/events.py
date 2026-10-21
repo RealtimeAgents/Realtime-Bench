@@ -337,6 +337,10 @@ class Outcome:
     # does.
     action: Action | None = field(default=None, compare=False)
     protocol_failure: str | None = field(default=None, compare=False)
+    # Streaming: the call the action came in, and when the message carrying it came off the wire,
+    # in semantic seconds. None on turn-based decisions, and for a reply that came to no action.
+    call_id: str | None = None
+    arrived_at: float | None = None
 
 
 @dataclass(frozen=True)
