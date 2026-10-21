@@ -136,7 +136,9 @@ class ShellEnvironment(Protocol):
     def execute(self, action: Action, *, release_at: float | None = None) -> str:
         """Run one action and return its status as today. Never a wait: the kernel lets a wait's
         time pass itself. On the wall clock a hold_key's keys are released at ``release_at``,
-        semantic seconds since the origin, unless a key is already held until later."""
+        semantic seconds since the origin, unless a key is already held until later; a press
+        delayed to or past ``release_at`` keeps its keys down min(duration, 1/60 s) more after its
+        keydown returned."""
 
     def check_end(self) -> tuple[bool, str | None]:
         """Ask the task whether the episode is over: ``(ended, reason)``. Only the task is asked:
@@ -543,7 +545,7 @@ class _Shell:
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
-        the summary's error (runner.py run_stream, main)."""
+        the summary's error (runner.py _run_stream_legacy, main)."""
         self.log(f"[default] decision loop raised:\n{failure}")
         if self._loop_error is None:
             self._loop_error = self.env._loop_error = failure
@@ -565,9 +567,9 @@ class _Shell:
 
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
-        itself in an operation that returned, such as a key tap's failed advance inside
-        ``execute()``, goes to the kernel with its own reason before the command's answer. One
-        that raised raises here, with no post: its caller answers with the error."""
+        itself in an operation that returned goes to the kernel with its own reason before the
+        command's answer (an action's, see _execute). One that raised raises here, with no post:
+        its caller answers with the error."""
         latched = getattr(self.env, "_invalid_run", None)
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
@@ -793,7 +795,8 @@ class _Shell:
         env, decision = self.env, self._decision
         env._last_execution_result = None
         env._last_coordinate_trace = None
-        status = self._env(env.execute, command.action, release_at=command.release_at)
+        latched = getattr(env, "_invalid_run", None)
+        status = env.execute(command.action, release_at=command.release_at)
         rejection = error = None
         if status == "failed":
             # A guest refusal is the model's action failing, not the environment's.
@@ -802,16 +805,29 @@ class _Shell:
             else:
                 error = env._last_exec_error
         decision.coordinate_trace = env._last_coordinate_trace
-        self.post(
-            ActionExecuted(
-                command.decision,
-                result=env._last_execution_result,
-                held_keys=env.last_held_keys,
-                rejection=rejection,
-                error=error,
-                end_checks=env.last_end_checks,
-            )
+        answer = ActionExecuted(
+            command.decision,
+            result=env._last_execution_result,
+            held_keys=env.last_held_keys,
+            rejection=rejection,
+            error=error,
+            end_checks=env.last_end_checks,
         )
+        invalid = getattr(env, "_invalid_run", None)
+        if invalid is None or invalid is latched:
+            self.post(answer)
+        elif invalid["reason"] == "action_execution_failed":
+            # The answer carries this failure and the kernel names it the same (kernel/turns.py
+            # _executed): first, it settles the action where it ran, not after the snapshot read
+            # the end asks for.
+            self.post(answer)
+            self.post(_invalidated(invalid))
+        else:
+            # Latched for a step inside the action, such as a key tap's failed advance: first, it
+            # keeps its reason, which the kernel would read from the answer as
+            # action_execution_failed.
+            self.post(_invalidated(invalid))
+            self.post(answer)
 
     def _commit(self, outcome: Outcome) -> None:
         env, decision, config = self.env, self._decision, self.config
@@ -958,9 +974,9 @@ class _Shell:
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
         longer holds, so the shell wraps the episode up without it, as the runner wrapped up a
-        loop that raised (runner.py run_stream, _finalize): the call running is interrupted, the
-        snapshot frozen unless it was, the inputs released and the termination record written.
-        A failure on the way is only logged."""
+        loop that raised (runner.py _run_stream_legacy, _finalize): the call running is
+        interrupted, the snapshot frozen unless it was, the inputs released and the termination
+        record written. A failure on the way is only logged."""
         self._escaped(failure)
         env = self.env
         try:
