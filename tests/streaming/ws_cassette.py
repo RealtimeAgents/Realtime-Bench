@@ -51,9 +51,28 @@ from tests.replay import baseline
 from tests.replay.ws_gemini_live import WireNormalizer
 
 DIRECTIONS = ("open", "c2s", "s2c", "close")
+
+
+class RealtimeNormalizer(baseline.Normalizer):
+    """baseline.Normalizer, and two of our OpenAI Realtime ids the replay baselines never meet: the
+    event ids of a pushed frame (providers/openai_realtime_session.py:290) and of a cancel
+    (providers/openai_realtime.py:548)."""
+
+    IDS = (
+        ("rtb_push", re.compile(r"rtb_push_[0-9a-f]+")),
+        ("rtb_cancel", re.compile(r"rtb_cancel_[0-9a-f]+")),
+    )
+
+    def _string(self, value: str) -> str:
+        value = super()._string(value)
+        for kind, pattern in self.IDS:
+            value = pattern.sub(lambda match, kind=kind: self._placeholder(kind, match[0]), value)
+        return value
+
+
 # The normalizer of each live channel's messages: the drivers' trace channels
-# (providers/openai_realtime.py:186-188, providers/gemini/live.py:270).
-NORMALIZERS = {"openai_realtime.ws": baseline.Normalizer, "gemini_live.ws": WireNormalizer}
+# (providers/openai_realtime.py:188-190, providers/gemini/live.py:271).
+NORMALIZERS = {"openai_realtime.ws": RealtimeNormalizer, "gemini_live.ws": WireNormalizer}
 _PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
 # Times on the fake clock agree to within this: a wait until ``at`` ends at ``now + (at - now)``,
 # which can round one ulp short of ``at``.
