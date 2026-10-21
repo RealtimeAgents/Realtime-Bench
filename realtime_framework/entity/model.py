@@ -24,12 +24,10 @@ from realtime_framework.entity.request import CanonicalRequest
 
 
 class RuntimeState(str, Enum):
-    NEW = "new"
-    CONNECTING = "connecting"
+    """Whether the session can take the next generation (providers/session_lifecycle.py), or
+    the runtime is closed."""
+
     READY = "ready"
-    GENERATING = "generating"
-    INTERRUPTING = "interrupting"
-    SYNCHRONIZING = "synchronizing"
     DIRTY = "dirty"
     BROKEN = "broken"
     CLOSED = "closed"
