@@ -252,9 +252,11 @@ class TurnPolicy:
             kernel.end("deadline", timer.at)
         elif timer.kind == "end_check":
             # A check a synchronous command delayed past the deadline is not asked: the deadline
-            # comes first, as in sandbox/actions.py GuestEnvironment.done.
+            # comes first, as in sandbox/actions.py GuestEnvironment.done. Nor is one an execution
+            # delayed: the check right after the action reads at that reading.
             if kernel.semantic < self.config.duration_s:
-                self._check_end(None)
+                if self.phase is not _Phase.EXECUTE:
+                    self._check_end(None)
                 self._schedule_end_check()
         elif timer.kind == "generation_watchdog":
             seconds = self.config.timing.provider_watchdog_s
