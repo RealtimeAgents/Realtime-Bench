@@ -122,15 +122,16 @@ class EnvironmentBudgetConfig:
     """Overall time budget in seconds of each environment operation (sandbox/budget.py).
 
     The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in
-    evaluation/runner.py. Running past a budget fails the operation and invalidates the run.
+    evaluation/runner.py. Running past a budget fails the operation and invalidates the run, except
+    at the cleanup after the outcome is latched (release_inputs), whose failure is only logged.
     """
 
     # Execute one action, everything from the page focus to the page's action barrier. Extended for
     # text input and holds as the guest's request timeout is (sandbox/guest.py action_timeout). A
-    # key action under the token clock is timed per key event instead.
+    # game's key action under the token clock goes over CDP and is timed per key event instead.
     action_s: float = 20.0
-    # Send one key event, a press or a release, under the token clock; a tap's frame between its
-    # press and its release is a clock advance. The guest's request timeout for a key.
+    # Send one such key event, a press or a release; a tap's frame between its press and its
+    # release is a clock advance. As long as the guest's request for a key may take.
     key_event_s: float = 10.0
     # Capture one observation: the page probes, the guest's screenshots and the wait for the render
     # fence. As long as one CDP call may take by default.
