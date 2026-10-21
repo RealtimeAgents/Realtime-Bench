@@ -15,7 +15,7 @@ import pytest
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import Action, ActionType
-from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, GuestEnvironment
+from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, TAP_HOLD_S, GuestEnvironment
 from realtime_framework.sandbox.budget import BudgetExceeded
 
 from ..fake_clock import FakeClock
@@ -352,23 +352,33 @@ class _SlowFocus:
 
 
 @pytest.mark.parametrize(
-    ("release_at", "lease_s", "keyup_s"),
+    ("duration", "release_at", "held_s"),
     [
-        pytest.param(1.5, 1.0, 1.5, id="released-after-the-press"),
-        pytest.param(0.2, 0.0, 0.5, id="release-time-passed-before-the-press"),
+        pytest.param(0.2, 1.5, 1.0, id="released-after-the-press"),
+        pytest.param(0.2, 0.2, TAP_HOLD_S, id="release-time-passed-before-the-press"),
+        pytest.param(0.2, 0.51, TAP_HOLD_S, id="release-time-less-than-a-tap-after-the-press"),
+        pytest.param(0.01, 0.01, 0.01, id="a-hold-shorter-than-a-tap-keeps-its-length"),
     ],
 )
-def test_a_wall_hold_records_when_the_kernel_s_release_ends_its_lease(release_at, lease_s, keyup_s):
-    """The press waits for the page focus; a release time that has passed by then lets the key
-    up at once, which the execution result shows next to the duration asked for."""
+def test_a_wall_hold_lasts_to_the_kernel_s_release_time_and_at_least_a_tap(
+    duration, release_at, held_s
+):
+    """The press waits for the page focus. A release time that has passed by then, or comes less
+    than a tap later, still leaves the key down as long as a tap (TAP_HOLD_S), or the hold if it
+    is shorter; the execution result says how long, next to the duration asked for."""
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
     with clock.participant():
-        assert env.execute(Action.hold_key("arrowleft", 0.2), release_at=release_at) == "applied"
+        assert env.execute(Action.hold_key("arrowleft", duration), release_at=release_at) == (
+            "applied"
+        )
         clock.sleep(5.0)
     result = env._last_execution_result
-    assert (result["duration_seconds"], result["lease_seconds"]) == (0.2, lease_s)
-    assert _xdotool(env) == [(0.5, "xdotool keydown -- Left"), (keyup_s, "xdotool keyup -- Left")]
+    assert result["duration_seconds"] == duration
+    assert result["lease_seconds"] == round(held_s, 3)
+    times, commands = zip(*_xdotool(env))
+    assert commands == ("xdotool keydown -- Left", "xdotool keyup -- Left")
+    assert times == pytest.approx((0.5, 0.5 + held_s))
 
 
 def test_a_legacy_wall_hold_records_no_lease():
