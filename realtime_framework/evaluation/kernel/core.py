@@ -17,10 +17,11 @@ error, never left unanswered: the decision in hand settles only on its answer, a
 cannot finish before. StartGeneration is answered by GenerationFinished whenever the worker is
 done; the kernel does not wait for one it aborted. Record, SetTimer, AbortGeneration,
 AcceptResult, DiscardResult and ReleaseInputs want no answer; SetTimer asks to be stepped once its
-clock reads ``at``. After Finish the shell steps no more, so nothing posted later is handled or
-numbered. A log entry's kind is the class name of the event handled, an AgentRecord's own kind, or
-the name of a record the kernel writes, a TraceEvent value for the trace's; shell.py says how the
-episode trace names each.
+clock reads ``at``. After Finish the kernel handles nothing more: an event it is stepped through is
+only numbered into the log, which is how the shell writes the agent's last records (shell.py
+_write_handed). A log entry's kind is the class name of the event handled, an AgentRecord's own
+kind, or the name of a record the kernel writes, a TraceEvent value for the trace's; shell.py says
+how the episode trace names each.
 """
 
 from __future__ import annotations
