@@ -24,7 +24,8 @@ GEMINI = {"compression_trigger_tokens": 65_536, "compression_target_tokens": 32_
 class ConfirmingAgent(FakeAgent):
     """A session that records each frame it pushes as OpenAI Realtime's session core does, through
     the agent's trace (providers/session_lifecycle.py _record_delivery): sent as the push starts,
-    confirmed by the server as it returns."""
+    confirmed by the server as it returns. Then, as the native-streaming agent does, the frame-table
+    number the frame went in under (harnesses/streaming/agent.py push)."""
 
     def __init__(self, clock, replies, trace):
         super().__init__(clock, replies)
@@ -32,24 +33,31 @@ class ConfirmingAgent(FakeAgent):
         self._sequence = itertools.count(1)
 
     def push(self, observation):
-        block = f"f{len(self.pushed) + 1}.frame"
+        frame = len(self.pushed) + 1
+        block = f"f{frame}.frame"
         self._deliver("sent", block)
         super().push(observation)
         self._deliver("confirmed", block)
+        observation_id = observation.metadata["observation_id"]
+        self._capture(TraceEvent.FRAME_SENT, frame=frame, observation_id=observation_id)
 
     def _deliver(self, state, block):
+        contents = [{"key": ["create", f"item-{block}"], "block": block}]
+        self._capture(
+            TraceEvent.SESSION_DELIVERY, state=state, connection="conn-1", contents=contents
+        )
+
+    def _capture(self, event, **fields):
         # What evaluation/agent_trace.py AgentTraceSink writes for a capture.
         self.trace.emit(
-            TraceEvent.SESSION_DELIVERY,
+            event,
             {
                 "source": "agent",
                 "capture_seq": next(self._sequence),
                 "captured_wall_time_ns": self.clock.time_ns(),
                 "captured_monotonic_ns": self.clock.monotonic_ns(),
                 "scope": None,
-                "state": state,
-                "connection": "conn-1",
-                "contents": [{"key": ["create", f"item-{block}"], "block": block}],
+                **fields,
             },
         )
 

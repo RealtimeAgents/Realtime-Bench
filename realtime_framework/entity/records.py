@@ -46,6 +46,8 @@ class TraceEvent(str, Enum):
     SESSION_STATE_CHANGED = "SessionStateChanged"
     SESSION_WAIT = "SessionWait"
     SESSION_DELIVERY = "SessionDelivery"
+    # Native streaming: the frame-table number a pushed frame went into the session under.
+    FRAME_SENT = "FrameSent"
     AGENT_TRACE_CLOSED = "AgentTraceClosed"
 
 

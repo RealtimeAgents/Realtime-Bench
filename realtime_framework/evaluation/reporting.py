@@ -791,14 +791,16 @@ def summarize_streaming(trace_path, settings: dict | None) -> dict:
     Frames: those captured and pushed into the session, from the kernel's FrameCaptured and
     FramePushed (seconds from capture to push), those dropped by reason (FrameDropped), and those
     the provider confirmed or refused, from the session's delivery records of frame blocks
-    (seconds from sent to confirmed). Gemini Live confirms no frame. Actions: those that arrived,
-    the age of the frame each names when it arrived, and each one's outcome (ActionResolved), with
-    the seconds an applied action waited from its arrival and ran. Replies: those started and
-    those given up, by reason. Each distribution's total_decisions counts the frames or actions
-    it is taken over. ``settings`` is the run configuration's streaming settings: the
-    newest frames OpenAI Realtime keeps, which the harness deletes past, make the context control
-    exact; Gemini Live's compression thresholds, past which the server compresses the session
-    unseen, approximate (phase2.md, 上下文怎么管)."""
+    (seconds from sent to confirmed). The kernel's records name a frame by its observation id and
+    the session's by its frame-table number: the agent's FrameSent ties the two, so a frame pushed
+    counts as confirmed when the block it went in under was. Gemini Live confirms no frame.
+    Actions: those that arrived, the age of the frame each names when it arrived, and each one's
+    outcome (ActionResolved), with the seconds an applied action waited from its arrival and ran.
+    Replies: those started and those given up, by reason. Each distribution's total_decisions
+    counts the frames or actions it is taken over. ``settings`` is the run configuration's
+    streaming settings: the newest frames OpenAI Realtime keeps, which the harness deletes past,
+    make the context control exact; Gemini Live's compression thresholds, past which the server
+    compresses the session unseen, approximate (phase2.md, 上下文怎么管)."""
     kernel = {
         kind: []
         for kind in (
@@ -812,11 +814,16 @@ def summarize_streaming(trace_path, settings: dict | None) -> dict:
         )
     }
     sent, confirmed, refused = {}, {}, set()
-    for row in rows(trace_path, {"KernelRecord", TraceEvent.SESSION_DELIVERY.value}):
+    numbers = {}  # observation id -> the frame-table number it went in under
+    events = {"KernelRecord", TraceEvent.SESSION_DELIVERY.value, TraceEvent.FRAME_SENT.value}
+    for row in rows(trace_path, events):
         payload = row["payload"]
         if row["event"] == "KernelRecord":
             if payload["kind"] in kernel:
                 kernel[payload["kind"]].append(payload["data"])
+            continue
+        if row["event"] == TraceEvent.FRAME_SENT.value:
+            numbers[payload["observation_id"]] = payload["frame"]
             continue
         at = payload["captured_monotonic_ns"] / 1e9
         for content in payload["contents"]:
@@ -857,7 +864,9 @@ def summarize_streaming(trace_path, settings: dict | None) -> dict:
             "push_failed": len(kernel["FramePushed"]) - len(pushed),
             "dropped": sum(dropped.values()),
             "dropped_by_reason": dict(sorted(dropped.items())),
-            "confirmed": len(confirmed),
+            "confirmed": sum(
+                f"f{numbers.get(d['observation_id'])}.frame" in confirmed for d in pushed
+            ),
             "refused": len(refused),
             "capture_to_push_s": seconds(
                 [d["sent_at"] - captured[d["observation_id"]] for d in pushed], len(pushed)
