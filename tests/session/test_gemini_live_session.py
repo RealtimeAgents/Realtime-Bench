@@ -175,12 +175,12 @@ def clean_turn(core: SessionCore, generation_id: str, handle: str, *messages) ->
 
 
 def start_reply(core: SessionCore, generation_id: str, blocks=None) -> None:
-    """A streaming reply: the newest of the accepted ``blocks`` pushed, a trigger, then the
-    generation."""
+    """A streaming reply: the newest of the accepted ``blocks`` pushed, the generation, then its
+    trigger."""
     history = streaming_view(blocks or [pushed(0)])
     core.push(history)
-    core.trigger(history)
     core.start_generation(generation_id)
+    core.trigger(history)
 
 
 def clean_reply(core: SessionCore, generation_id: str, handle: str) -> None:
@@ -755,6 +755,21 @@ def test_a_reply_message_arrives_as_received():
     assert (received.connection, received.generation, received.generation_id) == (1, 1, "turn-0")
     assert arrive(core, server_content(turnComplete=True)).ends
     assert core.latest_resume_handle == "handle-0" and core.replies == {}
+
+
+def test_a_reply_s_first_message_is_its_generation_s_once_it_starts_before_the_trigger():
+    """Read as it arrives, a call right after the trigger is the reply's when its generation
+    started first, and an orphan that no generation takes when it did not."""
+    call = message({"toolCall": {"functionCalls": [{"id": "call-0", "name": "click", "args": {}}]}})
+    core = session_core(streaming=True)
+    connected(core)
+    start_reply(core, "turn-0")
+    assert arrive(core, call).generation_id == "turn-0"
+
+    late = session_core(streaming=True)
+    connected(late)
+    late.trigger(streaming_view([pushed(0)]))
+    assert isinstance(arrive(late, call), Orphan)
 
 
 def test_a_message_carries_the_time_it_was_read():
