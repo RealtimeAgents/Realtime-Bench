@@ -472,9 +472,28 @@ def policy_check(config, **values):
             "The jev_decisions API takes text input, not the observation_json_screenshot "
             "observation",
         ),
+        # Without the observation JSON a choice API has no candidates (harnesses/jev/
+        # observation.py choice_observation), and the other channels have no use for them.
+        (
+            "gpt-6-luna-decisions",
+            {"observation": "som_screenshot"},
+            (
+                "The openai_decisions API chooses among the candidates of an observation JSON, "
+                "not of the som_screenshot observation"
+            ),
+        ),
+        (
+            "claude-opus-5",
+            {"observation": "observation_json_screenshot"},
+            (
+                "The openrouter API answers in text_json; the observation_json_screenshot "
+                "observation is for choice APIs"
+            ),
+        ),
     ],
     ids=["live-feedback", "digest-feedback", "ledger-role", "reasoning-unsupported",
-         "history-form", "screenshot-input", "text-input"],
+         "history-form", "screenshot-input", "text-input", "choice-observation",
+         "chat-observation"],
 )
 def test_context_policy_item(key, values, message):
     fails(policy_check(preset(key), **values), message)
