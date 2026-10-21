@@ -611,6 +611,18 @@ def test_reasoning_effort_of_a_choice_api(capsys, tmp_path):
     )
 
 
+def test_context_preset_of_a_model_yaml(tmp_path):
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "kimi.yaml").write_text(
+        "endpoint: {api: moonshot, model: kimi-k3}\ncontext_preset: kimi-k3\n"
+    )
+    fails(
+        lambda: catalog.load_definitions(models),
+        "kimi.yaml: context_preset must be one of ['luna', 'jev', 'kimi_k3']",
+    )
+
+
 def test_reasoning_effort_of_other_apis():
     fails(
         lambda: catalog.validate_reasoning_effort("gemini-live", "bogus"),
