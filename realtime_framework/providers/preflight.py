@@ -114,7 +114,8 @@ def validate_model_interaction(
 
 
 def check_config(driver, config) -> None:
-    """Static model-config rules, in the order the driver's constructor applied them."""
+    """Static model-config rules, in the order the driver's constructor applied them; the
+    context reserve, which the estimating APIs also checked before each request, comes last."""
     if issubclass(driver, LiteLLMDriver):
         compat = driver.compat
         if compat.output_limit_required and config.native_output_limit is None:
@@ -122,15 +123,15 @@ def check_config(driver, config) -> None:
                 f"The {config.adapter_type} API requires {compat.output_limit_param}; "
                 "declare endpoint.native_output_limit in the model YAML"
             )
-        if (
-            driver.deployment.gateway == "openai_compatible"
-            and config.context_window_tokens is not None
-            and config.context_reserve_tokens >= config.context_window_tokens
-        ):
-            raise ValueError("Context capacity must exceed generation reserve")
     elif issubclass(driver, GeminiLiveDriver):
         _check_live_options(config)
         _check_live_model_contract(config)
+    if (
+        driver.capabilities.request_size_estimation
+        and config.context_window_tokens is not None
+        and config.context_reserve_tokens >= config.context_window_tokens
+    ):
+        raise ValueError("Context capacity must exceed generation reserve")
 
 
 def _check_live_options(config) -> None:
@@ -249,12 +250,32 @@ def check_context_policy(driver, policy, config) -> None:
     form = "turns" if policy.decision_history is None else policy.decision_history.form
     if form != _HISTORY_FORMS[capabilities.history_replay]:
         raise ValueError(f"The {api} API cannot replay history as {form}")
+    if (
+        policy.tool_call_replay is not None
+        and policy.tool_call_replay not in capabilities.tool_call_replay
+    ):
+        raise ValueError(
+            f"The {api} API cannot replay past tool calls as {policy.tool_call_replay}"
+        )
     if (policy.observation == "observation_json_text") != (
         capabilities.observation_modality == "text"
     ):
         raise ValueError(
             f"The {api} API takes {capabilities.observation_modality} input, "
             f"not the {policy.observation} observation"
+        )
+    # The observation JSON carries a choice's candidates (harnesses/jev/observation.py
+    # choice_observation); the other channels answer from the SoM screenshot.
+    choice = capabilities.action_channel == "choice"
+    if choice and policy.observation == "som_screenshot":
+        raise ValueError(
+            f"The {api} API chooses among the candidates of an observation JSON, "
+            f"not of the {policy.observation} observation"
+        )
+    if not choice and policy.observation != "som_screenshot":
+        raise ValueError(
+            f"The {api} API answers in {capabilities.action_channel}; "
+            f"the {policy.observation} observation is for choice APIs"
         )
 
 

@@ -53,7 +53,6 @@ from realtime_framework.providers.capture import LoggerCapture
 from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
-from realtime_framework.providers.context import validate_context_reserve
 
 LITELLM_VERSION = "1.106.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -1072,44 +1071,6 @@ class LiteLLMDriver:
             return TransportFailure(TRANSIENT)
         return TransportFailure(FATAL)
 
-    # ---- physical context (OpenAI-compatible deployments) --------------------------------
-
-    async def request_context_status(self, request):
-        """Count the actual pending request, including the newest image and action ledger."""
-        limit = self.config.context_window_tokens
-        if limit is None:
-            return {"pressure": False, "counter": "unconfigured"}
-        validate_context_reserve(self.config)
-        messages = self._request_kwargs(request)["messages"]
-        if self.config.context_counter == "vllm":
-            endpoint = self.base_url.removesuffix("/v1") + "/tokenize"
-            response = await asyncio.to_thread(
-                traced_post(self, "vllm.tokenize", "context_count"),
-                endpoint,
-                json={
-                    "model": self.config.model_name,
-                    "messages": messages,
-                    "add_generation_prompt": True,
-                },
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=request.timeout_s or 30,
-            )
-            response.raise_for_status()
-            result = response.json()
-            count = result.get("count")
-            actual_limit = result.get("max_model_len")
-            if type(count) is not int or count < 0:
-                raise RuntimeError("Token counter did not return a valid multimodal input count")
-            if actual_limit != limit:
-                raise RuntimeError(
-                    f"Serving capacity changed: configured {limit}, reported {actual_limit}; start a new run with matching settings"
-                )
-            source = "vllm_multimodal_tokenize"
-        else:
-            count = estimated_request_tokens(messages, self.config.context_image_tokens)
-            source = "estimated_utf8_bytes_plus_image_allowance"
-        return context_status(self.config, count, source)
-
 
 # Registered chat APIs
 class OpenRouterDriver(LiteLLMDriver):
@@ -1196,6 +1157,41 @@ class ChatCompletionsDriver(LiteLLMDriver):
         require_api_key=False,
     )
     compat = ChatCompat(strip_image_detail=True)
+
+    async def request_context_status(self, request):
+        """Count the actual pending request, including the newest image and action ledger."""
+        limit = self.config.context_window_tokens
+        if limit is None:
+            return {"pressure": False, "counter": "unconfigured"}
+        messages = self._request_kwargs(request)["messages"]
+        if self.config.context_counter == "vllm":
+            endpoint = self.base_url.removesuffix("/v1") + "/tokenize"
+            response = await asyncio.to_thread(
+                traced_post(self, "vllm.tokenize", "context_count"),
+                endpoint,
+                json={
+                    "model": self.config.model_name,
+                    "messages": messages,
+                    "add_generation_prompt": True,
+                },
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=request.timeout_s or 30,
+            )
+            response.raise_for_status()
+            result = response.json()
+            count = result.get("count")
+            actual_limit = result.get("max_model_len")
+            if type(count) is not int or count < 0:
+                raise RuntimeError("Token counter did not return a valid multimodal input count")
+            if actual_limit != limit:
+                raise RuntimeError(
+                    f"Serving capacity changed: configured {limit}, reported {actual_limit}; start a new run with matching settings"
+                )
+            source = "vllm_multimodal_tokenize"
+        else:
+            count = estimated_request_tokens(messages, self.config.context_image_tokens)
+            source = "estimated_utf8_bytes_plus_image_allowance"
+        return context_status(self.config, count, source)
 
 
 class DirectLiteLLMDriver(LiteLLMDriver):

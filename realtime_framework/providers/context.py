@@ -42,11 +42,3 @@ def context_status(config, count: int, counter: str) -> dict:
         "pressure": count > limit - reserve,
         "counter": counter,
     }
-
-
-def validate_context_reserve(config) -> None:
-    if (
-        config.context_window_tokens is not None
-        and config.context_reserve_tokens >= config.context_window_tokens
-    ):
-        raise ValueError("context reserve must be smaller than deployed context capacity")
