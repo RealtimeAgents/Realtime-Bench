@@ -38,6 +38,7 @@ from realtime_framework.providers.gemini.session import Connect
 from realtime_framework.providers.gemini.session import Content
 from realtime_framework.providers.gemini.session import Orphan
 from realtime_framework.providers.gemini.session import Part
+from realtime_framework.providers.gemini.session import RealtimeInput
 from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
@@ -288,6 +289,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._trace_connection: str | None = None  # the trace's id of the last connection opened
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
+        self._writing = asyncio.Lock()  # streaming: held while a push or a trigger is written
         self._last_video_sent_at: float | None = None
         # The goAway deadline the trace has a wait for, on the open connection.
         self._go_away_wait_recorded: float | None = None
@@ -668,11 +670,8 @@ class GeminiLiveDriver(SessionLifecycle):
                 "gemini_live_go_away_deadline_before_turn_complete"
             ) from None
 
-    async def send_observation(
-        self, observation: ProviderObservation, history: CanonicalRequest
-    ) -> dict:
-        """Send the history view's newest frame, after the feedback the session does not hold
-        yet, as one input activity."""
+    def _session_for_input(self):
+        """The open session, which takes input until a goAway asks for a new connection."""
         if self._core.renewal_required:
             raise RuntimeError(
                 "Gemini Live requires canonical history synchronization before input"
@@ -680,6 +679,48 @@ class GeminiLiveDriver(SessionLifecycle):
         session = self._session
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        return session
+
+    async def _send_realtime(self, session, item: RealtimeInput) -> None:
+        if item.kind == "video":
+            blob = self.types.Blob(data=item.image.data, mime_type=item.image.mime_type)
+            await session.send_realtime_input(video=blob)
+        elif item.kind == "text":
+            await session.send_realtime_input(text=item.text)
+        elif item.kind == "audio_carrier":
+            await session.send_realtime_input(audio=self._audio_carrier())
+        elif item.kind == "activity_start":
+            await session.send_realtime_input(activity_start=self.types.ActivityStart())
+        else:
+            await session.send_realtime_input(activity_end=self.types.ActivityEnd())
+
+    def _audio_carrier(self):
+        # Native audio activity must contain audio. This fixed 100-ms silent carrier has no task
+        # information; its input usage is audited, never output-charged.
+        return self.types.Blob(data=bytes(3200), mime_type="audio/pcm;rate=16000")
+
+    async def push_frame(self, observation: ProviderObservation, history: CanonicalRequest) -> dict:
+        """Streaming: push the history view's newest frame, one the session does not hold yet,
+        on the realtime_input video stream and then its text, outside any activity, so that it
+        starts no reply. A push and a trigger do not interleave their messages."""
+        session = self._session_for_input()
+        push = self._core.push(history)
+        async with self._writing:
+            try:
+                for item in push.inputs:
+                    await self._send_realtime(session, item)
+            except BaseException:
+                self._core.send_failed(push.keys)
+                raise
+        self._core.sent(push.keys)
+        return {"observation_id": push.observation_id}
+
+    async def send_observation(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> dict:
+        """Send the history view's newest frame, after the feedback the session does not hold
+        yet, as one input activity."""
+        session = self._session_for_input()
         if self._activity_open:
             raise RuntimeError("Gemini Live input activity is already open")
         frame = self._core.observe(history)
@@ -727,11 +768,7 @@ class GeminiLiveDriver(SessionLifecycle):
             for content in frame.feedback:
                 await session.send_realtime_input(text=content.parts[0].text)
             await session.send_realtime_input(text=frame.text)
-            # Native audio activity must contain audio. This fixed 100-ms silent carrier
-            # has no task information; its input usage is audited, never output-charged.
-            await session.send_realtime_input(
-                audio=self.types.Blob(data=bytes(3200), mime_type="audio/pcm;rate=16000")
-            )
+            await session.send_realtime_input(audio=self._audio_carrier())
             await session.send_realtime_input(activity_end=self.types.ActivityEnd())
             self._activity_open = False
         except BaseException:
