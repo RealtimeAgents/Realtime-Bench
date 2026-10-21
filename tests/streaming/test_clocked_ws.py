@@ -219,3 +219,20 @@ def test_a_connection_the_client_leaves_open_is_a_problem():
         _send(open_connection(), {"type": "hello"})  # and never closed
 
     assert _replay(records, client) == [LEFT_OPEN.format(conn=1)]
+
+
+def test_a_message_due_when_the_client_closes_goes_first():
+    """L1: the server releases what is due before it reads what the client did, a close too, so a
+    close at the time a message comes due always follows that message, as the script has it."""
+    records = [
+        _record("open", at=0.0),
+        _record("s2c", {"type": "last"}, 2.0),
+        _record("close", {"by": "client", "code": 1000}, 2.0),
+    ]
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        clock.sleep(2.0)
+        ws.close()
+
+    assert [_replay(records, client) for _ in range(10)] == [[]] * 10
