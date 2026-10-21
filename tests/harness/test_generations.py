@@ -502,6 +502,31 @@ def test_an_accepted_reply_that_is_no_action_ends_its_tool_call_as_such(tmp_path
     assert outcomes == ["action_protocol_error"]
 
 
+def test_the_generation_the_episode_ends_on_is_left_unsettled(tmp_path):
+    """Pins today's behaviour, which is not decided yet. The episode ends as generation 2's
+    reply lands: the kernel aborts it and finishes, and dispatches nothing after Termination
+    (kernel/core.py), so no DiscardResult follows. Generation 2 writes no provider usage, and
+    its tool call has no outcome: close() records it as incomplete."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            last = _generate(episode, 2, 1)
+            agent.abort(2)
+        finally:
+            episode.finish()
+    assert not last.cancelled and len(stub.requests) == 2
+    usage = [(u["tick"], u["stale"]) for u in _jsonl(tmp_path / "provider-usage.jsonl")]
+    assert usage == [(0, False)]
+    calls = _jsonl(tmp_path / "tool_calls.jsonl")
+    assert [(call.get("outcome"), call.get("incomplete")) for call in calls] == [
+        ("completed", None),
+        (None, True),
+    ]
+
+
 def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
     """Turn-based, on a page whose Submit button (P3) moves 120 px right in every frame.
     Generation 1 is aborted while it still inspects its frame, and enters that frame in the
