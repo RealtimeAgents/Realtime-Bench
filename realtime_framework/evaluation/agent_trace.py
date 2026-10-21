@@ -152,7 +152,7 @@ def _json_bytes(value) -> bytes:
         else:
             pieces.append(json.dumps(item, ensure_ascii=False).encode("utf-8"))
             if isinstance(item, str) and len(item) >= SPAN_MIN_CHARS:
-                time.sleep(0)
+                time.sleep(0)  # noqa: TID251 - yields the GIL, waits no time
 
     encode(value)
     return b"".join(pieces)
@@ -273,7 +273,8 @@ class AgentTraceSink:
             length += start - previous
             spans.append({"at": length, "ref": self.pack.put(data[start:end])})
             previous = end
-            time.sleep(0)  # let the runtime loop run between screenshots
+            # Yields the GIL so the runtime loop runs between screenshots; waits no time.
+            time.sleep(0)  # noqa: TID251
         pieces.append(data[previous:])
         template = b"".join(pieces)
         described["template"] = self.pack.put(template, compress=True)
