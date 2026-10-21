@@ -758,8 +758,12 @@ class GuestEnvironment:
             }
         return self._wall_autorepeat
 
-    def _execute_wall_hold(self, action):
-        """Press the chord now and release it when the lease expires; never block the loop."""
+    def _execute_wall_hold(self, action, release_at=None):
+        """Press the chord now and release it when the lease expires; never block the loop.
+
+        The lease lasts ``duration`` from the press, or to ``release_at`` (semantic seconds since
+        the origin) when the kernel's shell gives it.
+        """
         parts, chord = self._key_chord(action)
         duration = float(action.parameters.get("duration", 1.0))
         if not math.isfinite(duration) or duration <= 0:
@@ -770,6 +774,7 @@ class GuestEnvironment:
         with self._wall_lock:
             autorepeat = self._ensure_wall_autorepeat()
             now = self.clocks.semantic.time()
+            expires_at = now + duration if release_at is None else self.t0 + release_at
             new_parts = [
                 (identity, wire) for identity, wire in parts if identity not in self._wall_holds
             ]
@@ -782,7 +787,7 @@ class GuestEnvironment:
                 self._wall_holds[identity] = {
                     "wire": current["wire"] if current else wire,
                     "keysym": keysyms[identity],
-                    "expires_at": max(current["expires_at"] if current else now, now + duration),
+                    "expires_at": max(current["expires_at"] if current else now, expires_at),
                 }
             self._schedule_wall_release()
             return {
@@ -877,8 +882,9 @@ class GuestEnvironment:
         self._last_coordinate_trace = None
         return "failed"
 
-    def execute(self, action):
-        """Apply one action and return its lifecycle status to the scheduler."""
+    def execute(self, action, *, release_at=None):
+        """Apply one action and return its lifecycle status to the scheduler. The kernel's shell
+        gives a wall-clock hold_key the time to release its keys, ``release_at``."""
         self.last_held_keys = ()
         action_type = action.action_type
         if action_type in (ActionType.DONE, ActionType.FAIL):
@@ -966,7 +972,7 @@ class GuestEnvironment:
                 if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
                     # Keys xdotool cannot name and zero-length holds fall through to the guest,
                     # which validates them (HTTP 400 for unsupported names).
-                    result = self._execute_wall_hold(action)
+                    result = self._execute_wall_hold(action, release_at)
                 if result is None:
                     result = self.g.execute_action(action)
                     if self.clock_mode != "token" and action_type in (

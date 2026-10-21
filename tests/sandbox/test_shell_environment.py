@@ -279,3 +279,38 @@ def test_a_key_release_fails_past_its_budget():
         pytest.raises(BudgetExceeded, match="key release took longer than 10 s"),
     ):
         env.release_keys(("a",))
+
+
+# ---- execute(release_at=...) ----------------------------------------------------------------
+
+
+def _xdotool(env):
+    return [entry for entry in env.g.commands if entry[1].startswith("xdotool")]
+
+
+def test_a_wall_hold_is_released_at_the_kernel_s_time_not_a_duration_after_the_press():
+    """The kernel sends the hold's release with the Execute: the time it sent it plus the
+    duration, in semantic seconds since the origin (evaluation/kernel/turns.py _pre_checked)."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    with clock.participant():
+        clock.sleep(0.25)
+        assert env.execute(Action.hold_key("arrowleft", 1.5), release_at=1.5) == "applied"
+        clock.sleep(5.0)
+    assert _xdotool(env) == [(0.25, "xdotool keydown -- Left"), (1.5, "xdotool keyup -- Left")]
+
+
+def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    with clock.participant():
+        env.execute(Action.hold_key("arrowleft", 3.0), release_at=3.0)
+        clock.sleep(1.0)
+        env.execute(Action.hold_key("arrowleft+a", 1.0), release_at=2.0)
+        clock.sleep(5.0)
+    assert _xdotool(env) == [
+        (0.0, "xdotool keydown -- Left"),
+        (1.0, "xdotool keydown -- a"),
+        (2.0, "xdotool keyup -- a"),
+        (3.0, "xdotool keyup -- Left"),
+    ]
