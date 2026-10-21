@@ -63,7 +63,7 @@ def check_interaction_mode(
 ) -> None:
     """Native streaming pushes frames into a live session at the model-input rate while the model
     generates, so it needs a live API that declares it, the wall clock (neither the token nor the
-    pause clock) and a model-input rate within the model's video cap."""
+    pause clock) and a model-input rate within the model's video cap and its streaming cap."""
     if interaction_mode == "turn_based":
         return
     capabilities = driver.capabilities
@@ -77,6 +77,12 @@ def check_interaction_mode(
     if clock_mode != "wall":
         raise ValueError("Streaming requires a wall clock")
     check_fps(driver, model_input_fps)
+    cap = capabilities.max_streaming_fps
+    if cap is not None and float(model_input_fps) > cap:
+        raise ValueError(
+            f"{capabilities.protocol_family} streams at most {cap:g} fps; "
+            f"requested {model_input_fps:g}"
+        )
 
 
 def check_frame_rates(fps, model_input_fps) -> None:

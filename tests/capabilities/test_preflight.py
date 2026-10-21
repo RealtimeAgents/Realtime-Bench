@@ -697,6 +697,41 @@ def test_streaming_frame_rate_cap():
     episode(preset("gemini-live"), interaction_mode="streaming")
 
 
+OPENAI_STREAMING_CAP = "openai_realtime streams at most 1 fps; requested 2"
+
+
+def test_streaming_frame_rate_cap_of_openai_realtime():
+    """OpenAI Realtime's streaming cap (max_streaming_fps): every entry point that checks the
+    interaction mode applies it to a streaming run only; a turn-based run at 2 fps goes on."""
+    fails(
+        lambda: validate_model_interaction(
+            "openai_realtime", clock_mode="wall", fps=2.0, model_input_fps=2.0,
+            interaction_mode="streaming",
+        ),
+        OPENAI_STREAMING_CAP,
+    )
+    validate_model_interaction("openai_realtime", clock_mode="wall", fps=2.0, model_input_fps=2.0)
+    fails(
+        lambda: episode(
+            preset("gpt-realtime-2", fps=2.0), interaction_mode="streaming", env_fps=2.0
+        ),
+        OPENAI_STREAMING_CAP,
+    )
+    episode(preset("gpt-realtime-2", fps=2.0), env_fps=2.0)
+    episode(preset("gpt-realtime-2"), interaction_mode="streaming")
+
+
+def test_streaming_frame_rate_cap_of_openai_realtime_trial(capsys):
+    from realtime_framework.evaluation._trial import main
+
+    usage_error(
+        capsys,
+        lambda: main(["--catalog-model", "gpt-realtime-2", "--task", WEB, "--fps", "2",
+                      "--interaction-mode", "streaming", "--dry-run"]),
+        OPENAI_STREAMING_CAP,
+    )
+
+
 def test_streaming_frame_rate_cap_plan(tmp_path):
     """The plan's model-input rate defaults to its environment rate."""
     fails(
