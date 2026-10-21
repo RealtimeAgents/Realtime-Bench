@@ -36,6 +36,9 @@ Scripted faults:
 - ``edit_error_on_delete``: answer the n-th delete that carries an event_id with an error.
   Only the in-place compaction sends deletes with an event_id (openai_realtime_session.py:281-309).
 - ``reject_upgrades``: refuse the first n WebSocket upgrades with HTTP 503.
+
+FailingListener stands where the server should be and fails every opening handshake before any
+HTTP response.
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import socket
+import struct
 import threading
 from dataclasses import dataclass, field
 
@@ -462,6 +467,47 @@ class RealtimeStub:
         ]
         connection.items.append(_item_view(done_item))
         return [created, *map(self._event, stream)], None
+
+
+class FailingListener:
+    """A TCP listener on 127.0.0.1 that fails each connection one way: ``close`` closes it as it
+    accepts it, ``reset`` resets it once the upgrade request has arrived, and ``plain`` answers
+    the TLS client hello of a wss:// client in plain HTTP. ``accepted`` counts the connections."""
+
+    def __init__(self, mode: str):
+        self._mode = mode
+        self.accepted = 0
+        self._socket = socket.create_server(("127.0.0.1", 0))
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+
+    def base_url(self, scheme: str = "http") -> str:
+        return f"{scheme}://127.0.0.1:{self._socket.getsockname()[1]}/v1"
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        self._socket.close()
+        self._thread.join(SETTLE_TIMEOUT_S)
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                connection, _ = self._socket.accept()
+            except OSError:  # closed by __exit__
+                return
+            self.accepted += 1
+            with connection:
+                if self._mode == "close":
+                    continue
+                connection.settimeout(SETTLE_TIMEOUT_S)
+                connection.recv(4096)  # the upgrade request, or the TLS client hello
+                if self._mode == "reset":
+                    linger = struct.pack("ii", 1, 0)  # close with a reset
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
+                else:
+                    connection.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
 
 
 def run_steps(episode: Episode, steps: list[Step], stub: RealtimeStub) -> list[dict]:

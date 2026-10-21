@@ -205,13 +205,17 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         Realtime WebSocket writes are not automatically replayed by the SDK. The harness retries
         only when it has received no output or usage for the failed turn, so rebuilding from
         canonical history cannot duplicate a completed action.
+
+        A connect attempt fails below HTTP with an OSError (a refused or reset connection, a
+        failed name lookup, ssl.SSLError) or, when the connection ends before the upgrade
+        response, with websockets' InvalidMessage caused by EOFError; both are transient.
         """
         transient = (
             ConnectionClosed,
             APIConnectionError,
             APITimeoutError,
-            ConnectionError,
-            TimeoutError,
+            OSError,
+            EOFError,
         )
         for current in exception_chain(exc):
             # A reconnect inside the turn already spent the shared retry budget.
