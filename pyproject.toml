@@ -68,7 +68,7 @@ extend-select = ["TID251"]
 [tool.ruff.lint.per-file-ignores]
 # The clock module makes these calls for everyone else.
 "realtime_framework/clock.py" = ["TID251"]
-# Task code does not change in phase 2; its time reads are listed in the clock report.
+# Task code does not change in phase 2.
 "realtime_tasks/**" = ["TID251"]
 # Tests wait in real time where they mean to, and tests/fake_clock.py implements the fake clock.
 "tests/**" = ["TID251"]
