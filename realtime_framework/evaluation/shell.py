@@ -530,13 +530,9 @@ class _Shell:
         entry, self._started = self._started, None
         self._emit(
             TraceEvent.INFERENCE_STARTED,
-            {
-                **episode_records.inference_started(
-                    observation, decision, usage_before, native_output_limit, budget
-                ),
-                "generation": command.generation,
-                "remaining_clock_tokens": remaining,
-            },
+            episode_records.inference_started(
+                observation, decision, usage_before, native_output_limit, budget
+            ),
             entry,
         )
         clock = self.clocks.operational
