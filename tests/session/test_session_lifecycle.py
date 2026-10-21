@@ -59,7 +59,7 @@ EXACT = HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT, "
 class _Encoder(SessionLifecycle):
     """Connection operations that log what they are asked, at the clock's time. ``syncs`` holds
     what each sync returns, or raises; an interrupt takes ``interrupt_s`` and then raises
-    ``interrupt_error``, if set."""
+    ``interrupt_error``, if set; a close raises ``close_error``, if set."""
 
     def __init__(self, clock: FakeClock):
         self.clock = clock
@@ -68,6 +68,7 @@ class _Encoder(SessionLifecycle):
         self.syncs: list = []
         self.interrupt_s = 0.0
         self.interrupt_error: Exception | None = None
+        self.close_error: Exception | None = None
 
     async def _connect(self, request):
         self.log.append(("connect", request.history, self.clock.monotonic()))
@@ -81,6 +82,8 @@ class _Encoder(SessionLifecycle):
 
     async def _close_current(self):
         self.log.append(("close", self.clock.monotonic()))
+        if self.close_error is not None:
+            raise self.close_error
 
     async def interrupt(self, generation):
         self.log.append(("interrupt", generation.generation_id))
@@ -151,28 +154,49 @@ def test_the_next_use_reopens_the_session_once_the_abort_is_done():
 
 
 @pytest.mark.parametrize(
-    ("generation", "error", "log"),
+    ("generation", "interrupt_error", "close_error", "log"),
     [
-        (None, None, [("close", 0.0)]),
-        (GENERATION, RuntimeError("cancel refused"), [("interrupt", "turn-0"), ("close", 0.0)]),
+        (None, None, None, [("close", 0.0)]),
+        (
+            GENERATION,
+            RuntimeError("cancel refused"),
+            None,
+            [("interrupt", "turn-0"), ("close", 0.0)],
+        ),
+        (GENERATION, None, RuntimeError("close failed"), [("interrupt", "turn-0"), ("close", 0.0)]),
     ],
-    ids=["before-the-request", "interrupt-fails"],
+    ids=["before-the-request", "interrupt-fails", "close-fails"],
 )
-def test_an_abort_closes_the_session_whatever_the_interrupt_does(generation, error, log):
+def test_an_abort_leaves_the_session_closed_whatever_fails(
+    generation, interrupt_error, close_error, log
+):
     with _rig() as rig:
-        rig.encoder.interrupt_error = error
+        rig.encoder.interrupt_error = interrupt_error
+        rig.encoder.close_error = close_error
         rig.run(rig.encoder.abort(generation))
         assert rig.encoder.log == log
+        rig.encoder.close_error = None
         rig.run(rig.ensure_ready())
     assert rig.encoder.log[-1] == ("connect", HISTORY, 0.0)
 
 
-def test_close_waits_for_the_abort():
+@pytest.mark.parametrize(
+    ("interrupt_s", "log"),
+    [
+        (1.0, [("interrupt", "turn-0"), ("close", 1.0), ("close", 1.0)]),
+        # A cleanup still running after 10 s is cancelled, and close closes all the same.
+        (60.0, [("interrupt", "turn-0"), ("close", 10.0)]),
+    ],
+    ids=["cleanup-done", "cleanup-hangs"],
+)
+def test_close_waits_for_the_abort_for_a_while(interrupt_s, log):
     with _rig() as rig:
-        rig.encoder.interrupt_s = 1.0
-        rig.thread.submit(rig.encoder.abort(GENERATION))
+        rig.encoder.interrupt_s = interrupt_s
+        abort = rig.thread.submit(rig.encoder.abort(GENERATION))
         rig.run(rig.encoder.close())
-    assert rig.encoder.log == [("interrupt", "turn-0"), ("close", 1.0), ("close", 1.0)]
+        assert rig.clock.wait(abort, 1.0)
+        assert rig.clock.monotonic() == min(interrupt_s, 10.0)
+    assert rig.encoder.log == log
 
 
 def test_a_dirty_session_is_rebuilt_by_a_recovery_sync():

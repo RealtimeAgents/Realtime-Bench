@@ -3,7 +3,8 @@
 A session encoder keeps one provider session open across generations. Whether that session can
 take the next generation, and the cleanup an abort leaves behind for the next use to wait for, do
 not depend on the protocol: SessionLifecycle keeps both, and readies or aborts the session through
-the encoder's own connection operations. The encoder's own waits run through it too.
+the encoder's own connection operations. It also records the encoder's waits on the clock, and
+takes the ones the encoder makes of its own accord.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 
 _NEVER_CANCELLED = threading.Event()
+# How long close() waits for an abort's cleanup before it cancels it and closes all the same.
+_CLEANUP_WAIT_S = 10.0
 
 
 class SessionLifecycle:
@@ -38,14 +41,14 @@ class SessionLifecycle:
     closes on its way (the one a connect replaces, one past its goAway deadline) changes neither.
 
     Every wait of the encoder on the clock is written to the trace before it starts
-    (_record_wait): what it waits for, how long, and until which time on the operational clock. A
-    wait of its own (_wait) ends early once its cancel event is set; a bound on an operation (a
-    goAway deadline, a close) ends with the operation, and an abort's close ends the operation.
+    (_record_wait): what it waits for, how long, and until which time on the operational clock.
+    _wait takes a cancel event and ends early once it is set; a bound on an operation (a goAway
+    deadline, a close) ends with the operation, and an abort's close ends the operation.
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one and does not raise, and ``interrupt(generation)``; ``clock``, the operational clock;
-    and ``_trace``, which bind_trace sets.
+    is one, and ``interrupt(generation)``; ``clock``, the operational clock; and ``_trace``,
+    which bind_trace sets.
     """
 
     _connected = False
@@ -53,7 +56,6 @@ class SessionLifecycle:
     _cleanup: asyncio.Task | None = None
 
     async def connect(self, request: ConnectRequest) -> None:
-        self._connected = False
         await self._connect(request)
         self._connected, self._dirty = True, False
 
@@ -72,12 +74,13 @@ class SessionLifecycle:
         return result
 
     async def close(self) -> None:
-        await self._settle()
+        await self._settle(_CLEANUP_WAIT_S)
         self._connected = False
         await self._close_current()
 
     def mark_dirty(self) -> None:
-        """A generation on the session failed: the next ensure_ready rebuilds it."""
+        """A generation on the session failed: the next ensure_ready rebuilds the session if it
+        is still connected."""
         self._dirty = True
 
     async def ensure_ready(
@@ -122,21 +125,29 @@ class SessionLifecycle:
                 await self.interrupt(generation)
             except Exception:  # noqa: BLE001, S110 - abort remains best-effort
                 pass
-        await self._close_current()
+        try:
+            await self._close_current()
+        except Exception:  # noqa: BLE001, S110 - the session is closed below all the same
+            pass
         self._connected = False
 
-    async def _settle(self) -> None:
+    async def _settle(self, timeout: float | None = None) -> None:
+        """Wait for the last abort's cleanup; one still running after ``timeout`` seconds is
+        cancelled."""
         cleanup = self._cleanup
         if cleanup is None:
             return
-        await asyncio.wait({cleanup})
+        try:
+            await self.clock.wait_for(asyncio.wait({cleanup}), timeout)
+        except TimeoutError:
+            cleanup.cancel()
         if self._cleanup is cleanup:
             self._cleanup = None
 
     async def _wait(
         self, wait: str, seconds: float, cancel: threading.Event = _NEVER_CANCELLED
     ) -> None:
-        """Wait ``seconds`` on the operational clock, as RequestRetry's backoff does. Once
+        """Wait ``seconds`` on the operational clock, the way RequestRetry's backoff waits. Once
         ``cancel`` is set the generation the wait belongs to is abandoned, and RetryCancelled
         ends the wait."""
         self._record_wait(wait, seconds)
