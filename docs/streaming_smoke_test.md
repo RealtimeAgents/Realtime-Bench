@@ -20,8 +20,10 @@ Write down the numbers each check asks for ([what to report](#what-to-report)).
 
 - Both live drivers take `interaction_mode=streaming`, and the runner then runs the
   native-streaming agent (`realtime_framework/harnesses/streaming/agent.py`) on the streaming
-  shell. A streaming run on the token clock, or of any other API, is refused before it starts.
-  OpenAI Realtime streams at most 1 fps until check 8 finds its rate.
+  shell. A streaming run on the token clock, of any other API, or faster than its API streams is
+  refused before its episode starts: a Harbor trial when it is resolved, before any sandbox; the
+  runner started directly once it has built the images and started the sandbox, so such a run
+  still takes the setup time. OpenAI Realtime streams at most 1 fps until check 8 finds its rate.
 - A Linux host with Apptainer (fakeroot) and uv, as for any run ([README](../README.md)). Run
   `uv sync`, then `uv run rtbench setup` once to build the images.
 - Put `OPENAI_API_KEY` and `GEMINI_API_KEY` in `.env` at the repository root. A Harbor trial reads
@@ -35,9 +37,14 @@ Write down the numbers each check asks for ([what to report](#what-to-report)).
   | `gemini-3.8-live` | `gemini_live` | `gemini-3.8-live` |
   | `gemini-3.8-live-extended-thinking` | `gemini_live` | `gemini-3.8-live-extended-thinking` |
 
-- **Cost.** A streaming session generates the whole episode. No live preset has a rate card, so
-  `cost_usd` in `run_summary.json` stays empty (`cost_status` unavailable; read from the code, not
-  run). Price a run yourself from `token_usage` and the provider's price list. Run one 1-minute
+- **Cost.** A streaming session generates the whole episode, and `run_summary.json` does not
+  price it: `cost_usd` is empty and `cost_accounting.reason` is `not_accounted_streaming`.
+  `adapter_token_usage` counts the replies the episode accepted; a reply given up
+  (`streaming.replies.abandoned`) is billed too, so it is a lower bound. Price a run yourself from
+  the usage the provider reported for every reply ([reading message bodies](#reading-the-records))
+  and the provider's price list: OpenAI Realtime's in each `response.done` (`response.usage`),
+  cancelled replies included; Gemini Live's in the `usageMetadata` of its server messages
+  (whether a message counts its turn or the session so far is not checked). Run one 1-minute
   episode per preset first and scale from it before running 3 or 5 minutes.
 
 ## Run one episode
@@ -56,16 +63,18 @@ lacks `episode_blobs.pack`, which holds the message bodies.
 Or the runner directly (the same episode, without Harbor's report and verifier):
 
 ```bash
+RUN=oai-pong-$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p results/smoke
 uv run python -m realtime_framework.evaluation.runner --model gpt-realtime-2 \
   --task gh_javascript_pong --interaction-mode streaming --clock wall --fps 1 \
-  --model-input-fps 1 --max-minutes 3 --results-dir results/smoke --run-id oai-pong-1 \
-  2>&1 | tee results/smoke/oai-pong-1.runner.out
+  --model-input-fps 1 --max-minutes 3 --results-dir results/smoke --run-id "$RUN" \
+  2>&1 | tee "results/smoke/$RUN.runner.out"
 ```
 
 Give `--clock wall`: the runner's default is the token clock, which refuses streaming (`Streaming
-requires a wall clock`). The episode's directory is `results/smoke/oai-pong-1/`. The runner prints
-to its terminal only, so keep its output with `tee`.
+requires a wall clock`). The episode's directory is `results/smoke/$RUN/`. Give each run an id of
+its own: a run under an id used before writes into the same directory, beside the earlier run's
+files. The runner prints to its terminal only, so keep its output with `tee`.
 
 **Other values of K or the thresholds.** Save the preset under a new name with a `streaming`
 block ([streaming settings](model_configuration.md#streaming-settings)) and run that name, for
@@ -96,7 +105,8 @@ In the episode's directory:
   Realtime and `approximate` for Gemini Live. `frames` has `captured`, `pushed`, `push_failed`,
   `dropped` with `dropped_by_reason` (`late`, `capture_busy`, `superseded`, `push_failed`,
   `ended`), `confirmed` and `refused` by the provider, and the distributions `capture_to_push_s`
-  and `send_to_confirm_s`. `actions` has `arrived`, `outcomes` (`applied`, `wait`, `superseded`,
+  (from a frame's capture to when its push was written) and `send_to_confirm_s` (from then to
+  the server's confirmation, OpenAI Realtime's only). `actions` has `arrived`, `outcomes` (`applied`, `wait`, `superseded`,
   `cancelled_generation`, `cancelled_call`, `invalid_grounding_frame`, `rejected`,
   `not_applied_time_limit`, ...), and the distributions `frame_age_s`, `frame_age_frames`,
   `arrival_to_start_s` and `execution_s`. `replies` has `started` and `abandoned` by reason.
@@ -117,8 +127,10 @@ In the episode's directory:
   - `event: "SessionDelivery"`: what became of what the session wrote: `state` (`sent`,
     `confirmed`, `refused`, `unknown`) and `contents`, whose `block` is `f<n>.frame` for frame `n`.
   - `event: "FrameSent"`: the number `n` (`frame`) a frame went into the session under, by its
-    `observation_id`. It ties a frame's `FrameCaptured` and `FramePushed` to its block's
-    `SessionDelivery`, so each frame's capture, push and confirmation line up.
+    `observation_id`, with when it was captured (`captured_unix_s`), written (`sent_unix_s`) and
+    confirmed by the server (`acked_unix_s`, null when no confirmation came, as always on Gemini
+    Live, which confirms no input), in Unix seconds. It ties a frame's `FrameCaptured` and
+    `FramePushed` to its block's `SessionDelivery`.
   - `event: "SessionWait"`: a wait the driver took, with `wait` and `seconds`.
 
 Counting records:
@@ -177,6 +189,12 @@ phase2.md, 落地前要验证 1. Run `gpt-realtime-2` for 3 minutes, so that mor
 - Per reply: `session_bodies.py <dir> response.done`, then for each line
   `response.usage.input_tokens`, `response.usage.input_token_details.image_tokens` and
   `.cached_tokens`, and `response.status`.
+- The usage details are always there (decision N42):
+  `uv run python session_bodies.py <dir> response.done | jq -r '.[4].response.usage.input_token_details | type' | sort | uniq -c`
+  prints only `object`. A `null` one is left unhandled: the first accepted reply that has it ends
+  the run invalid (`invalid_run` `runner` / `run_exception`), and the runner prints
+  `[streaming] shell raised:` with a traceback ending in `AttributeError: 'NoneType' object has
+  no attribute 'get'` (read from the code, not run).
 - Folds: older frames are replaced in place, a `conversation.item.delete` and a
   `conversation.item.create` each:
   `jq -r 'select(.event=="SessionMessage" and .payload.message_type=="conversation.item.delete") | .payload.capture_seq' episode_trace.jsonl | wc -l`.
@@ -185,7 +203,8 @@ Pass: `image_tokens` grows with the frames pushed for the first 20 (the slope is
 frame) and then stays level while the deletes grow with the frames pushed; `input_tokens` peaks
 well under the model's context limit, and no `error` message appears. Report the tokens per frame,
 the peak `input_tokens` and the limit (LiteLLM's table says 128000; the provider's figure is not
-checked). Try `retained_frames` 10 and 40 the same way.
+checked), and whether any reply's `input_token_details` was null. Try `retained_frames` 10 and 40
+the same way.
 
 ### 2. Gemini Live: compression past 2 minutes, and the task still known
 
@@ -226,7 +245,45 @@ Realtime, a function argument for Gemini Live. Run each live preset once.
 - `streaming.actions.frame_age_frames`: a model that names the frame it looks at keeps this small.
   A wrong but existing number shows up only here; compare a few `SessionDelivery` sends of
   `f<n>.frame` with the screenshot by hand if in doubt.
-- Look at a few screenshots: the label is legible and covers no SoM badge near the corner.
+- Look at a few of the screenshots the model got: the label is legible and covers no SoM badge
+  near the corner. `frames/` holds the raw captures, which have no label; the labelled images are
+  in the message bodies. Save this as `pushed_frames.py` and run
+  `uv run python pushed_frames.py <episode dir>`; it writes each pushed image to
+  `<episode dir>/pushed/<capture_seq>.<png|jpeg>`.
+
+  ```python
+  import base64
+  import json
+  import sys
+  from pathlib import Path
+
+  from realtime_framework.evaluation.agent_trace import load_body
+
+  run = Path(sys.argv[1])
+  out = run / "pushed"
+  out.mkdir(exist_ok=True)
+  for line in (run / "episode_trace.jsonl").open():
+      e = json.loads(line)
+      p = e["payload"]
+      if e["event"] != "SessionMessage" or p["direction"] != "client":
+          continue
+      body = json.loads(load_body(run / "episode_blobs.pack", p["body"]))
+      if p["message_type"] == "conversation.item.create":
+          urls = [c["image_url"] for c in body["item"]["content"] if c["type"] == "input_image"]
+          images = [(url[5:].split(";")[0], url.split(",", 1)[1]) for url in urls]
+      elif p["message_type"] == "realtime_input" and "video" in body["realtime_input"]:
+          video = body["realtime_input"]["video"]
+          images = [(video["mime_type"], video["data"])]
+      else:
+          continue
+      for mime, data in images:
+          # OpenAI sends standard base64, google-genai URL-safe base64.
+          image = base64.urlsafe_b64decode(data.replace("+", "-").replace("/", "_"))
+          path = out / f"{p['capture_seq']:06d}.{mime.split('/')[1]}"
+          path.write_bytes(image)
+          print(path)
+  ```
+
 - All three Gemini presets accept the integer `frame` argument (`minimum: 1`): no setup error.
 
 Pass: refusals stay rare (you decide the bar; under 5% of the actions that arrived is a
@@ -240,8 +297,11 @@ phase2.md, 落地前要验证 4; decision 22 (plan b); stream-gemini. Run `gemin
 minutes.
 
 - Frames go in as `realtime_input` video followed by the frame's text, outside any activity, and
-  keep going during replies: in `session_bodies.py <dir>`, the client's `realtime_input` messages
-  come about once a second throughout.
+  keep going during replies: the client's `realtime_input` messages that carry `video` come about
+  once a second throughout,
+  `uv run python session_bodies.py <dir> realtime_input | jq -r 'select(.[4].realtime_input.video) | .[0]'`
+  printing their times. Count only those: each frame sends its text as another `realtime_input`,
+  and each trigger three or four more (the activity's start and end, the silence, any feedback).
 - Each reply starts with one activity: `activityStart`, the feedback since the last trigger as
   text if any, 100 ms of silent audio, `activityEnd`; each is followed by a `toolCall` or a
   `turnComplete` well within the reply watchdog.
@@ -270,7 +330,9 @@ stream-gemini. From the 5-minute run of check 2.
   handle; a run of `resumable: false` means a resume loses what came since.
 - `goAway` messages and the reconnects after them (a new `connection_id`).
 - `toolCallCancellation`: whether it comes before or after its reply's `turnComplete`, and the
-  `CallCancelled` records it leaves.
+  records it leaves: an action still waiting to execute is resolved as cancelled (`ActionResolved`
+  with `status` `cancelled_call`); one executing, executed or resolved otherwise stays as it was,
+  with a `CallCancelled` record.
 
 Report the handle interval, the share of resumable handles, and any `GoAwayDeadlineExceeded`
 failure (`invalid_run`).
@@ -291,9 +353,11 @@ stream-plan 4.7. From every run above.
     | {replies: length, max_s: max}' episode_trace.jsonl
   ```
 
-- Push durations: `run_summary.json` `streaming.frames.capture_to_push_s` and
-  `send_to_confirm_s`. OpenAI Realtime's push is planned to return once the server confirmed the
-  item (stream-oai), so its `capture_to_push_s` would include the confirmation.
+- Push durations: `run_summary.json` `streaming.frames.capture_to_push_s`, from a frame's capture
+  to when its push was written, and `send_to_confirm_s`, from then to the server's confirmation.
+  OpenAI Realtime's push returns once the server confirmed the frame, so its push watchdog times
+  both together. Gemini Live confirms no input: its `send_to_confirm_s` is always empty, and its
+  push ends once written.
 - Whether any watchdog fired: `GenerationAbandoned` records with reason `reply_watchdog`,
   `push_watchdog` or `push_failed`, and `RunInvalidated` with `frame_push_stuck` or
   `frame_push_failed`.
@@ -308,14 +372,26 @@ page, so that they do not wait behind an action's. No record names the connectio
 so check it indirectly, on one streaming and one turn-based run of a web task:
 
 1. During the run, `ss -tnp | grep ':<debug port>'` on the host shows two established
-   connections to the page's debug port in streaming and one in turn-based (if Apptainer shares
-   the host's network, which is not checked). After the episode they are gone.
-2. Actions' focus checks and barriers and the captures all succeed: no `took longer than 8 s`,
-   `disappeared; refusing to switch pages`, `window_probe_failed:` or `capture_probe_failed:` in
-   the runner's output, and `invalid_run` is not `action_execution_failed`.
-3. With text observations, no new `ax_tree_unavailable` warning.
-4. After the episode, Chrome's `/json` lists no extra client on the page.
-5. A navigation away from the page is refused on both connections alike.
+   connections to the page's debug port in streaming and one in turn-based (the sandbox runs on
+   the host's network, `realtime_framework/sandbox/apptainer.py`). After the episode they are
+   gone.
+2. Actions' focus checks and barriers succeed: no `took longer than 8 s` or `disappeared; refusing
+   to switch pages` in the runner's output (an action that fails so ends the run invalid,
+   `[invalid-run] environment:action_execution_failed — ...`), and `invalid_run` is not
+   `action_execution_failed`.
+3. The captures' probes succeed. Their failures are written into each frame's inspection, never
+   printed: in `tool_calls.jsonl` (one row per frame inspected; the last few may be
+   `incomplete: true`, written as the episode closes, with the capture's part complete),
+   `jq -r '.canonical_result | (.scene.reason // empty), (.warnings[]? | split(":")[0])' tool_calls.jsonl | sort | uniq -c`
+   shows no `capture_probe_failed:...` reason and no `window_probe_failed` warning, and with text
+   observations no more `ax_tree_unavailable` than in the turn-based run.
+4. Both connections stay on the task's page. On a run kept for this check, list the page targets
+   with `curl -s http://127.0.0.1:<debug port>/json` and close the task's with
+   `curl -s http://127.0.0.1:<debug port>/json/close/<id>`. Neither connection moves to another
+   page: the next capture's `scene.reason` is `capture_probe_failed:RuntimeError` with a
+   `CDP target ... disappeared; refusing to switch pages` warning, and the next action that probes
+   the page ends the run invalid with the same message, as in turn-based (read from the code, not
+   run).
 
 ### 8. OpenAI Realtime's frame-rate cap
 
@@ -341,23 +417,33 @@ stream-oai. From the run of check 1.
 
 - A refused push: the server's `error.event_id` echoes the push's `event_id` (`rtb_push_...`), and
   the refused item is not in the session afterwards.
-- `previous_item_id` in `conversation.item.created`: an item the client created names the item
-  before it; note what a reply's own items name when a frame went in during the reply.
+- `previous_item_id` in the server's acknowledgement of an item: an item the client created names
+  the item before it; note what a reply's own items name when a frame went in during the reply.
+  The driver takes `conversation.item.added`, `.created` or `.done` as the acknowledgement
+  (`_ITEM_ACKS` in `openai_realtime.py`); the repository's fake server sends `added` and `done`,
+  and which the real API sends is not checked: note it.
 - When `response.output_text.done` arrives within its reply: its arrival is the action's
   `arrived_at`.
 
 ### 10. Empty replies
 
 stream-policy. Replies follow one another without waiting for a new frame, so a fast model asks
-again on the same frame. Count the replies that came to no action: `GenerationFinished` records
-whose `result.action` is null against `streaming.replies.started`, and price them with check 1's
-or check 2's tokens.
+again on the same frame. Count the replies that came to no action, the `GenerationFinished`
+records without an `ActionArrived` of their generation, against `streaming.replies.started`, and
+price them with check 1's or check 2's tokens:
+
+```bash
+jq -s '[.[] | select(.event=="KernelRecord") | .payload] as $k
+  | ([$k[] | select(.kind=="ActionArrived") | .data.generation] | unique) as $acted
+  | [$k[] | select(.kind=="GenerationFinished") | .data.generation]
+  | {finished: length, without_action: map(select(IN($acted[]) | not)) | length}' episode_trace.jsonl
+```
 
 ## What to report
 
 | Check | Numbers |
 | --- | --- |
-| 1 | tokens per frame, peak `input_tokens`, context limit, result for K 10/20/40 |
+| 1 | tokens per frame, peak `input_tokens`, context limit, result for K 10/20/40, null usage details |
 | 2 | prompt tokens per frame, time between compressions, peak against 131072, task still served |
 | 3 | per preset: actions arrived, `invalid_grounding_frame` by detail, `frame_age_frames` p90 |
 | 4 | triggers without a reply, frame rate during replies, messages outside a reply |
