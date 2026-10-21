@@ -26,6 +26,9 @@ from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
+from realtime_framework.evaluation.kernel.turns import TurnConfig
+
+from ..shell.test_inputs import replay_inputs
 
 S = 1_000_000_000  # nanoseconds
 FPS = 1
@@ -306,6 +309,32 @@ def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):
     assert events.index("ModelRequestSent") < events.index("AgentTraceClosed")
     (closed,) = [record["payload"] for record in records if record["event"] == "AgentTraceClosed"]
     assert (closed["captures"], closed["written"], closed["error"]) == (1, 1, None)
+
+
+def test_main_records_the_kernel_s_inputs(tmp_path):
+    """main() has the shell record what the kernel was given, the agent's records among it, next
+    to the episode trace. Fed to a new kernel they reproduce the kernel's records in the trace,
+    with their numbers and readings (phase2.md, 怎么验证)."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    run_main(tmp_path, task, RecordingAgent(clock), clock, guest, agent_trace=True)
+    run_dir = tmp_path / "run"
+    inputs = (run_dir / "kernel_inputs.jsonl").read_text()
+    lines = [json.loads(line) for line in inputs.splitlines()]
+    assert any(event["event"] == "AgentRecord" for line in lines for event in line["events"])
+    config = TurnConfig("wall", HORIZON_S, FPS, FPS, timing=runner.RUNNER_TIMING)
+    kernel, entries = replay_inputs(config, lines)
+    assert kernel.termination.stop_reason == "task_success"
+    trace = (run_dir / "episode_trace.jsonl").read_text()
+    records = [json.loads(line) for line in trace.splitlines()]
+    written = {}
+    for record in records:
+        if record.get("kernel_seq") is not None:
+            written.setdefault(record["kernel_seq"], (record["semantic"], record["ops"]))
+    assert [(e.seq, e.semantic, e.ops) for e in entries] == sorted(
+        (seq, *readings) for seq, readings in written.items()
+    )
 
 
 # Two functions in turn: a traceback folds a run of identical frames into one line.
