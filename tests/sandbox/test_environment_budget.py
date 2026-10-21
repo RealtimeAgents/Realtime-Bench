@@ -25,7 +25,7 @@ from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.evaluation import runner
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
-from realtime_framework.sandbox.budget import Deadline
+from realtime_framework.sandbox.budget import BudgetExceeded, Deadline, operation_budget
 from realtime_framework.sandbox.guest import GuestClient, action_timeout
 from realtime_tasks.game.runtime import _GET_STATE
 from realtime_tasks.types import Task
@@ -482,6 +482,21 @@ def test_a_call_that_ran_out_of_the_operation_s_budget_is_its_failure():
         env.wait_until_tick(1)
     assert env._invalid_run["reason"] == "clock_advance_failed"
     assert env._invalid_run["detail"] == "clock advance took longer than 120 s"
+
+
+def test_an_error_that_only_reads_like_the_budget_s_is_still_wrapped():
+    """Only a BudgetExceeded of the operation's own deadline goes through as it is."""
+    clock = FakeClock()
+    with (
+        clock.participant(),
+        pytest.raises(BudgetExceeded) as raised,
+        operation_budget("state read", 1.0, clock=clock),
+    ):
+        clock.sleep(2.0)
+        raise RuntimeError("state read took longer than 1 s")
+    message = "state read took longer than 1 s"
+    assert str(raised.value) == f"{message} (RuntimeError: {message})"
+    assert isinstance(raised.value.__cause__, RuntimeError)
 
 
 def test_a_task_failure_past_the_budget_keeps_its_traceback():
