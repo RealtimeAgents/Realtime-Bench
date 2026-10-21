@@ -70,8 +70,12 @@ class FedSocket:
         # Closing waits for a write that does not drain, as websockets' close does.
         self.close_stalls = False
         self._dropped = asyncio.Event()
+        self._drained = asyncio.Event()  # release() lets a stalled write go out
         # websockets' transport: an abort drops the connection, which fails a write stuck in it.
         self.transport = SimpleNamespace(abort=self._dropped.set)
+
+    def release(self) -> None:
+        self._drained.set()
 
     def feed(self, *frames) -> None:
         for frame in frames:
@@ -98,8 +102,14 @@ class FedSocket:
         if self.fail is not None and self.fail(message):
             raise RuntimeError("the activity end does not go out")
         if self.stall is not None and self.stall(message):
-            await self._dropped.wait()
-            raise ConnectionClosedError(None, None)
+            waits = [
+                asyncio.ensure_future(event.wait()) for event in (self._dropped, self._drained)
+            ]
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            for wait in waits:
+                wait.cancel()
+            if self._dropped.is_set():
+                raise ConnectionClosedError(None, None)
         self.sent.append(message)
         if self._answers and wire(message) == self._answers[0][0]:
             self.feed(*self._answers.pop(0)[1])
@@ -972,6 +982,61 @@ def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
     assert result.disposition == SyncDisposition.REBUILT
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, None]
     assert "d1.feedback" in rig.driver._core.carried
+
+
+def test_an_acknowledgement_written_after_a_reconnect_is_recorded_on_its_connection():
+    """An acknowledgement whose write returns once the next connection is open is sent on the
+    connection it went out on, and is no write of the new one."""
+    rig = Rig()
+    log = DeliveryLog(lambda: rig.live.sockets[0].sent)
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        first = rig.socket
+        first.stall = lambda message: wire(message) == "tool_response"
+        generation = await rig.start("turn-0")
+        reading = asyncio.ensure_future(drain(rig.driver.events(generation)))
+        first.feed(call("call-0"))
+        await settle()
+        await rig.connect()
+        first.release()
+        await asyncio.wait({reading})
+        new_writes = dict(rig.driver._core.delivery)
+        await rig.driver.close()
+        return new_writes
+
+    new_writes = asyncio.run(run())
+    assert ("sent", [None], "gemini_live.ws-1", 1) in log.events
+    assert ("tool_response", "call-0") not in new_writes
+
+
+def test_a_reply_is_read_on_the_connection_it_started_on():
+    """A reply started before a reconnect is read on its own connection, which the reconnect
+    closed: its events() hands over what was read on it, raises that it closed, and nothing of
+    it, not even the acknowledgement of a call read on the old one, goes to the new one."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        generation = await rig.driver.request_reply(request)
+        rig.socket.feed(call("call-0"))
+        await settle()
+        await rig.connect()
+        rig.socket.feed(call("call-1"))
+        await settle()
+        try:
+            await drain(rig.driver.events(generation))
+        except RuntimeError as exc:
+            failure = str(exc)
+        left = dict(rig.driver._replies)
+        await rig.driver.close()
+        return failure, left
+
+    failure, left = asyncio.run(run())
+    assert failure == "Gemini Live connection 1: a read was cancelled"
+    assert rig.live.sockets[1].sent == [] and left == {}
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():

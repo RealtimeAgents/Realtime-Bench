@@ -538,7 +538,7 @@ def test_each_change_in_delivery_is_heard_with_its_block():
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
-        on_delivery=lambda state, contents: heard.append((state, contents)),
+        on_delivery=lambda state, contents, connection: heard.append((state, contents)),
     )
     core.seed_failed(plan(core, view([turn(0)])), 0)
     connected(core, view([turn(0)]))
@@ -547,7 +547,7 @@ def test_each_change_in_delivery_is_heard_with_its_block():
     frame = core.observe(view([turn(0), turn(1), turn(2)]))
     core.send_failed(frame.keys)
     core.calls_received([("call-1", "click")])
-    core.acknowledgement_sent(core.acknowledging())
+    core.acknowledgement_sent(core.acknowledging(), core.connection)
     seed = [(("block", "d0.frame"), "d0.frame"), (("block", "d0.tools"), "d0.tools")]
     assert heard == [
         ("confirmed", [(("setup",), "system")]),
@@ -566,7 +566,7 @@ def test_a_block_whose_seed_batch_failed_is_unknown_also_if_an_earlier_batch_car
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
-        on_delivery=lambda state, contents: heard.append((state, contents)),
+        on_delivery=lambda state, contents, connection: heard.append((state, contents)),
     )
     connect = replace(
         plan(core, view([turn(0), turn(1)])),
@@ -581,22 +581,28 @@ def test_a_block_whose_seed_batch_failed_is_unknown_also_if_an_earlier_batch_car
 
 
 def test_an_acknowledgement_written_as_its_connection_closes_is_still_heard():
-    """What became of an acknowledgement's write is heard for the calls it answered, also when
-    an abort closed the connection while it was written."""
+    """What became of an acknowledgement's write is heard for the calls it answered, on the
+    connection it was written on, also when an abort closed that connection while it was
+    written; and it is no write of the connection opened since, whose pending calls stay."""
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
-        on_delivery=lambda state, contents: heard.append((state, contents)),
+        on_delivery=lambda state, contents, connection: heard.append((state, contents, connection)),
     )
     for call_id, write in (("call-0", core.acknowledgement_sent), ("call-1", None)):
         connected(core)
         core.calls_received([(call_id, "click")])
-        acknowledged = core.acknowledging()
-        core.closed()
-        (write or core.acknowledgement_failed)(acknowledged)
-    assert heard[1::2] == [
-        ("sent", [(("tool_response", "call-0"), None)]),
-        ("unknown", [(("tool_response", "call-1"), None)]),
+        acknowledged, written_on = core.acknowledging(), core.connection
+        connected(core)
+        core.calls_received([("call-later", "key")])
+        (write or core.acknowledgement_failed)(acknowledged, written_on)
+        assert ("tool_response", call_id) not in core.delivery
+        assert core.pending_calls == [("call-later", "key")]
+        core.pending_calls.clear()
+    acknowledgements = [entry for entry in heard if entry[1][0][0][0] == "tool_response"]
+    assert acknowledgements == [
+        ("sent", [(("tool_response", "call-0"), None)], 1),
+        ("unknown", [(("tool_response", "call-1"), None)], 3),
     ]
 
 
@@ -626,11 +632,11 @@ def test_observation_and_acknowledgement_delivery():
     assert acknowledged == (("call-0", "click"), ("call-1", "key"))
     assert core.delivery[("tool_response", "call-1")] == Delivery.UNKNOWN
     # Still pending: the next acknowledgement answers them again.
-    core.acknowledgement_failed(acknowledged)
+    core.acknowledgement_failed(acknowledged, core.connection)
     assert core.delivery[("tool_response", "call-0")] == Delivery.UNKNOWN
     acknowledged = core.acknowledging()
     assert acknowledged == (("call-0", "click"), ("call-1", "key"))
-    core.acknowledgement_sent(acknowledged)
+    core.acknowledgement_sent(acknowledged, core.connection)
     assert core.delivery[("tool_response", "call-0")] == Delivery.SENT
     assert core.acknowledging() == ()
 
@@ -906,7 +912,7 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     connected(core)
     start_reply(core, "turn-0")
     core.calls_received([("call-0", "click")])
-    core.acknowledgement_sent(core.acknowledging())
+    core.acknowledgement_sent(core.acknowledging(), core.connection)
     core.calls_received([("call-1", "key")])
     written = dict(core.delivery)
     received = receive(core, CANCELLATION)

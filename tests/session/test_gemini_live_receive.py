@@ -601,6 +601,21 @@ GO_AWAY_SOON = {"goAway": {"timeLeft": "2.1s"}}  # the client closes 2 s early: 
 CALL = {"toolCall": {"functionCalls": [{"id": "call-0", "name": "wait", "args": {}}]}}
 
 
+def test_an_acknowledgement_counts_as_sent_once_written():
+    """A call's queued acknowledgement is sent once its tool_response went out, on the
+    connection the call came on."""
+    rig = Rig("gemini-3.8-live", [[CALL, TURN_COMPLETE]])
+    log = DeliveryLog(lambda: rig.live.sockets[0].sent)
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        await drain(rig.driver.events(await rig.start("turn-0")))
+
+    asyncio.run(run())
+    assert log.events[1:] == [("sent", [None], "gemini_live.ws-1", 1)]
+
+
 @pytest.mark.parametrize(
     ("script", "stall"),
     [

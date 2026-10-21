@@ -8,6 +8,7 @@ import contextvars
 import logging as logging
 import os as os
 from dataclasses import dataclass, field
+from typing import Any
 from typing import ClassVar as ClassVar
 
 from realtime_framework.clock import Clock
@@ -120,10 +121,13 @@ class GoAwayDeadlineExceeded(RuntimeError):
 
 @dataclass
 class _StreamedReply:
-    """Streaming: a reply the reader reads for, until its events() is done. ``messages`` holds
-    what it read and events() has not taken yet, or the reader's failure; ``ended``, whether it
-    read the reply's end."""
+    """Streaming: a reply the reader reads for, until its events() is done, on the connection
+    it started on (``session`` and its reader). ``messages`` holds what the reader read and
+    events() has not taken yet, or the reader's failure; ``ended``, whether it read the reply's
+    end."""
 
+    session: Any
+    receiver: _Receiver
     messages: asyncio.Queue = field(default_factory=asyncio.Queue)
     ended: bool = False
 
@@ -310,6 +314,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._replies: dict[str, _StreamedReply] = {}
         self._cancelled_between: list[Orphan] = []
         self._trace_connection: str | None = None  # the trace's id of the last connection opened
+        self._trace_connections: dict[int, str] = {}  # and of each one, by the core's number
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
@@ -331,11 +336,13 @@ class GeminiLiveDriver(SessionLifecycle):
     def bind_trace(self, trace) -> None:
         self._trace = trace
 
-    def _delivered(self, state: str, contents: list[tuple]) -> None:
-        """What became of writes the core recorded, on the connection opened last: a change
-        recorded once the next connection is open, as of an acknowledgement an abandoned reply
-        wrote late on the old one, is put on the new one."""
-        self._record_delivery(state, contents, self._trace_connection)
+    def _delivered(self, state: str, contents: list[tuple], connection: int | None) -> None:
+        """What became of writes the core recorded, on the trace's connection the core numbered
+        ``connection``: also an acknowledgement an abandoned reply wrote late on a connection
+        closed since. One being set up has no number yet: the connection opened last."""
+        self._record_delivery(
+            state, contents, self._trace_connections.get(connection, self._trace_connection)
+        )
 
     @staticmethod
     def _exception_chain(exc: BaseException):
@@ -605,6 +612,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._activity_open = False
         self._last_video_sent_at = None
         self._core.connected(connect)
+        self._trace_connections[self._core.connection] = self._trace_connection
         self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
         if self.streaming:
             # The reader records what it reads in the scope of the reply it reads for
@@ -875,7 +883,7 @@ class GeminiLiveDriver(SessionLifecycle):
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
         if self.streaming:
-            self._replies[request.generation_id] = _StreamedReply()
+            self._replies[request.generation_id] = _StreamedReply(self._session, self._receiver)
             # What the reader reads from here is this reply's, as for a turn-based reply's read.
             self._reading_context.run(enter_trace_scope, current_trace_scope())
         self._core.start_generation(request.generation_id)
@@ -1073,33 +1081,37 @@ class GeminiLiveDriver(SessionLifecycle):
         return [text] if text else []
 
     async def events(self, generation: GenerationHandle):
-        session, receiver = self._session, self._receiver
-        if session is None:
-            raise RuntimeError("Gemini Live session is not connected")
-        if self.streaming:
-            reply = self._replies[generation.generation_id]
-
-            def take():
-                return self._streamed(reply, receiver)
-
-            def bound(operation):
-                # A reply read to its end is the server's whole turn, whatever the deadline.
-                return operation if reply.ended else self._before_go_away_deadline(operation)
-
-        else:
-
-            def take():
-                return self._before_go_away_deadline(receiver.next())
-
-            bound = self._before_go_away_deadline
+        """The reply's events. A streaming reply is read on the connection it started on,
+        whichever is open now: one closed since ends it with its reader's failure."""
         try:
-            async for event in self._events(generation, session, take, bound):
-                yield event
-        except Exception:
-            # The core applied each message as it was read; a reply that then failed here is not
-            # a clean boundary to resume from.
-            self._core.generation_failed(receiver.number)
-            raise
+            if self.streaming:
+                reply = self._replies[generation.generation_id]
+                session, receiver = reply.session, reply.receiver
+
+                def take():
+                    return self._streamed(reply, receiver)
+
+                def bound(operation):
+                    # A reply read to its end is the server's whole turn, whatever the deadline.
+                    return operation if reply.ended else self._before_go_away_deadline(operation)
+
+            else:
+                session, receiver = self._session, self._receiver
+                if session is None:
+                    raise RuntimeError("Gemini Live session is not connected")
+
+                def take():
+                    return self._before_go_away_deadline(receiver.next())
+
+                bound = self._before_go_away_deadline
+            try:
+                async for event in self._events(generation, session, take, bound):
+                    yield event
+            except Exception:
+                # The core applied each message as it was read; a reply that then failed here is
+                # not a clean boundary to resume from.
+                self._core.generation_failed(receiver.number)
+                raise
         finally:
             self._replies.pop(generation.generation_id, None)
 
@@ -1250,9 +1262,9 @@ class GeminiLiveDriver(SessionLifecycle):
                 try:
                     await bound(session.send_tool_response(function_responses=function_responses))
                 except BaseException:
-                    self._core.acknowledgement_failed(acknowledged)
+                    self._core.acknowledgement_failed(acknowledged, received.connection)
                     raise
-                self._core.acknowledgement_sent(acknowledged)
+                self._core.acknowledgement_sent(acknowledged, received.connection)
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)
                 completed_refs["native_tool_exchanges"].append(
