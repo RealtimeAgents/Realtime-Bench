@@ -5,8 +5,9 @@ Scripts take the acceptance frame rates (1/1, 60/1, 30/7, 2/2) and put times and
 the points where the rules turn: whole input frames, half and quarter frames, the deadline, B and
 its multiples. They leave out what the rules do not compare one by one: retries, end checks that
 fail, operations that take time on the wall clock (each named script that needs one says so), and
-wall replies near the deadline plus today's 2 s grace, where today's bounded wait and the reply
-would fall due at one instant (wave2-plan.md, R13). Random scripts may show any expected
+wall replies near the deadline plus today's 2 s grace or the per-move cap, where today's bounded
+wait and the reply would fall due at one instant (wave2-plan.md, R13); the cap and the think
+budget appear on the token clock only. Random scripts may show any expected
 difference; only what no rule explains fails them.
 """
 
@@ -46,6 +47,11 @@ def generate(seed: int) -> Script:
             fields["snapshot_s"] = rng.choice((0.25, 0.5, 1.5))
     elif rng.random() < 0.04:
         fields["advance_errors"] = (rng.randint(1, 8),)
+    if clock == "token":  # in simulated seconds, so no reply can race them
+        if rng.random() < 0.08:
+            fields["per_move_cap_s"] = rng.choice((0.5, 1.0, 1.5)) * frame
+        if rng.random() < 0.08:
+            fields["think_budget_s"] = rng.choice((1.0, 2.0, 3.0)) * frame
     if rng.random() < 0.03:
         fields["snapshot_error"] = "snapshot read failed"
     return Script(
