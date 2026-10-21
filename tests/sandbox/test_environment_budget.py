@@ -23,7 +23,6 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.evaluation import runner
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
-from realtime_framework.sandbox.browser.clock import cdp_wait_realtime_action_barrier
 from realtime_framework.sandbox.budget import Deadline
 from realtime_framework.sandbox.guest import GuestClient, action_timeout
 from realtime_tasks.game.runtime import _GET_STATE
@@ -67,24 +66,6 @@ def _token_clock(task: Task) -> Task:
     """The task clock the runner configures before it builds the environment (runner.py:1624)."""
     task.configure_clock("token", 1.0)
     return task
-
-
-class BarrierTask(Task):
-    """A task whose action barrier waits on the page, as realtime_tasks/web/runtime.py:259-272."""
-
-    def __init__(self, port: int):
-        self.port = port
-        _token_clock(self)
-
-    def begin_gui_action(self) -> dict:
-        return {
-            "input_event_sequence": 0,
-            "business_action_started": 0,
-            "business_action_completed": 0,
-        }
-
-    def complete_gui_action(self, snapshot: dict) -> dict:
-        return cdp_wait_realtime_action_barrier(self.port, "/game", snapshot)
 
 
 @pytest.fixture
@@ -184,21 +165,6 @@ def test_a_slow_action_fails_within_its_budget(budgets):
         agent, elapsed = _run(env)
     _invalid(env, "action_execution_failed", "click action")
     assert agent.statuses == ["invalid_run"]
-    _spent_the_budget(elapsed)
-
-
-def test_an_action_and_its_page_barrier_share_one_budget(budgets):
-    # The guest answers within the budget and the page barrier never does. Without the shared
-    # budget the barrier's own 8 s CDP timeout would apply.
-    budgets(action_s=BUDGET)
-    with FakeGuest(action_delay=0.3) as guest, FakeCDP(mode="flood") as fake:
-        env = _environment(guest, BarrierTask(fake.port))
-        try:
-            agent, elapsed = _run(env)
-        finally:
-            close_port(fake.port)
-    _invalid(env, "action_execution_failed", "click action")
-    assert len(guest.actions) == 1
     _spent_the_budget(elapsed)
 
 
@@ -308,35 +274,72 @@ def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget(budgets, 
 # ---- on the fake clock -------------------------------------------------------------------------
 
 
-def _cdp_call(clock: FakeClock, seconds: float) -> None:
-    """Take ``seconds`` as a CDP call made inside an operation does (sandbox/browser/cdp.py): it
-    ends where the operation's budget ends, and fails then."""
-    deadline = Deadline(120, "CDP call")
+def _sandbox_call(clock: FakeClock, seconds: float, timeout: float = 120.0) -> None:
+    """Take ``seconds`` as a call made inside an operation does: a CDP call (sandbox/browser/
+    cdp.py) or a guest request (sandbox/guest.py) ends where its own timeout or the operation's
+    budget ends, whichever is first, and fails then."""
+    deadline = Deadline(timeout, "sandbox call")
     clock.sleep(min(seconds, deadline.remaining()))
     deadline.remaining()
 
 
 class _ClockGuest:
-    """The guest agent's action endpoint, which answers every action at once."""
+    """The guest agent's action endpoint, where each action takes ``seconds`` of ``clock``."""
 
-    def __init__(self):
+    def __init__(self, clock: FakeClock | None = None, seconds: float = 0.0):
+        self.clock = clock
+        self.seconds = seconds
         self.actions: list[ActionType] = []
 
     def execute_action(self, action: Action) -> dict:
         self.actions.append(action.action_type)
+        if self.seconds:
+            _sandbox_call(self.clock, self.seconds, action_timeout(action, 10.0))
         return {"status": "ok"}
 
 
-def _keyed(
-    clock: FakeClock, guest: _ClockGuest | None = None, **options
+class _BarrierTask(ClockTask):
+    """A web task's action barrier (realtime_tasks/web/runtime.py begin_gui_action and
+    complete_gui_action), whose wait for the page's business request takes ``seconds``; its CDP
+    call has 8 s (sandbox/browser/clock.py cdp_wait_realtime_action_barrier)."""
+
+    def __init__(self, clock: FakeClock, seconds: float):
+        super().__init__(1.0)
+        self.clock = clock
+        self.seconds = seconds
+
+    def begin_gui_action(self) -> dict:
+        return {}
+
+    def complete_gui_action(self, snapshot: dict) -> dict:
+        _sandbox_call(self.clock, self.seconds, 8.0)
+        return {"ok": True}
+
+
+def _timed(
+    clock: FakeClock, guest: _ClockGuest | None = None, task: ClockTask | None = None, **options
 ) -> tuple[actions.GuestEnvironment, ClockTask]:
-    """A GuestEnvironment on the token clock at 1 fps, timed on ``clock``, whose task takes key
-    input as a game's does (tests/replay/clock_task.py)."""
-    task = ClockTask(1.0)
+    """A GuestEnvironment on the token clock at 1 fps, timed on ``clock``; by default its task
+    takes key input as a game's does (tests/replay/clock_task.py)."""
+    task = task or ClockTask(1.0)
     env = actions.GuestEnvironment(
         guest, None, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
     )
     return env, task
+
+
+def test_an_action_and_its_page_barrier_share_one_budget():
+    # The guest answers within the budget and the page barrier never does. Without the shared
+    # budget the barrier's own 8 s CDP timeout would apply.
+    clock = FakeClock()
+    budget = actions.ENVIRONMENT_BUDGET.action_s
+    guest = _ClockGuest(clock, budget - 5.0)
+    env, _ = _timed(clock, guest, _BarrierTask(clock, 3600.0))
+    with clock.participant():
+        assert env.execute(CLICK) == "failed"
+        assert clock.monotonic() == budget
+    _invalid(env, "action_execution_failed", "click action", budget)
+    assert guest.actions == [ActionType.CLICK]
 
 
 def _slow_key_event(clock: FakeClock, task: ClockTask, index: int, seconds: float) -> None:
@@ -346,7 +349,7 @@ def _slow_key_event(clock: FakeClock, task: ClockTask, index: int, seconds: floa
 
     def clock_key_event(event_type, key, auto_repeat=False, held_modifiers=()):
         if len(sent) == index:
-            _cdp_call(clock, seconds)
+            _sandbox_call(clock, seconds)
         sent.append(event_type)
         record(event_type, key, auto_repeat=auto_repeat, held_modifiers=held_modifiers)
 
@@ -365,7 +368,7 @@ def _slow_key_event(clock: FakeClock, task: ClockTask, index: int, seconds: floa
 )
 def test_a_token_key_event_past_its_budget_fails_the_action(held, action, index, operation):
     clock = FakeClock()
-    env, task = _keyed(clock)
+    env, task = _timed(clock)
     if held is not None:
         env.execute(Action.hold_key(held, 5.0))
     _slow_key_event(clock, task, index, 60.0)
@@ -380,11 +383,11 @@ def test_a_tap_s_frame_between_its_press_and_release_keeps_its_own_budgets():
     """The tap renders one frame with its key down (sandbox/actions.py TAP_HOLD_S): that advance
     and the end check after it are timed by the clock-advance and state-read budgets."""
     clock = FakeClock()
-    env, task = _keyed(clock, stop_check=lambda: _cdp_call(clock, 15.0))
+    env, task = _timed(clock, stop_check=lambda: _sandbox_call(clock, 15.0))
     advance = task.advance_clock
 
     def advance_clock(frames=1, key_events=()):
-        _cdp_call(clock, 15.0)
+        _sandbox_call(clock, 15.0)
         return advance(frames, key_events)
 
     task.advance_clock = advance_clock
@@ -398,11 +401,11 @@ def test_a_tap_s_frame_between_its_press_and_release_keeps_its_own_budgets():
 
 def test_each_key_event_of_a_repeated_tap_has_its_own_budget():
     clock = FakeClock()
-    env, task = _keyed(clock)
+    env, task = _timed(clock)
     record = task.clock_key_event
 
     def clock_key_event(*args, **kwargs):
-        _cdp_call(clock, 6.0)
+        _sandbox_call(clock, 6.0)
         record(*args, **kwargs)
 
     task.clock_key_event = clock_key_event
@@ -416,7 +419,7 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
     """The legacy loop's advance releases a key whose lease ended (sandbox/actions.py
     wait_until_tick)."""
     clock = FakeClock()
-    env, task = _keyed(clock)
+    env, task = _timed(clock)
     env.execute(Action.hold_key("a", 0.5))
     _slow_key_event(clock, task, 0, 60.0)
     budget = actions.ENVIRONMENT_BUDGET.key_event_s
@@ -430,7 +433,9 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
 @pytest.mark.parametrize(
     ("release", "error"),
     [
-        pytest.param(lambda clock: _cdp_call(clock, 60.0), "key release took longer", id="slow"),
+        pytest.param(
+            lambda clock: _sandbox_call(clock, 60.0), "key release took longer", id="slow"
+        ),
         pytest.param(lambda clock: 1 / 0, "division by zero", id="failing"),
     ],
 )
@@ -440,7 +445,7 @@ def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, e
     for the run's."""
     clock = FakeClock()
     guest = _ClockGuest()
-    env, task = _keyed(clock, guest)
+    env, task = _timed(clock, guest)
     env.execute(Action.hold_key("a", 5.0))
     env.execute(Action(ActionType.MOUSE_DOWN, {"button": "left"}))
     task.clock_key_event = lambda *args, **kwargs: release(clock)
