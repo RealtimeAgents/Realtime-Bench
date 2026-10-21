@@ -1066,6 +1066,8 @@ class _Staged:
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
     protocol_failure: str | None = None
+    # Its trajectory row, which finalize_decision_audit writes from the result.
+    audit: dict | None = None
 
 
 @dataclass
@@ -1413,6 +1415,8 @@ class DefaultHarness(VisionAgentBase):
             self._record_provider_usage(
                 staged.result, staged.observation, generation.decision, stale=True
             )
+        if staged.audit is not None:
+            staged.audit["type"] = "decision_discarded"
         self._end_tool_calls(staged, "superseded_by_timeout")
 
     def _end_tool_calls(self, staged: _Staged, outcome: str) -> None:
@@ -1900,6 +1904,8 @@ class DefaultHarness(VisionAgentBase):
                     "invalid_detail": sync.detail,
                 }
             )
+        # A result the kernel discards only after it came back is discarded on its row too.
+        generation.staged.audit = log_entry
         return result, runtime_result.cancelled
 
     def commit_action(self, status: str, detail: str = ""):

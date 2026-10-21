@@ -157,16 +157,19 @@ def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
 def test_a_discarded_result_writes_no_history(tmp_path):
     """Generation 2's result is back before the kernel gives up on it, as when the per-move cap
     fires as the reply lands: the abort and DiscardResult follow. Nothing of it joins the
-    history; its provider usage is recorded as stale and its tool call as superseded."""
+    history; its provider usage is recorded as stale, its tool call as superseded, and its
+    trajectory row, written after the verdict, as discarded."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
-            _generate(episode, 1, 0)
+            accepted = _generate(episode, 1, 0)
             agent.accept(1)
+            agent.finalize_decision_audit(accepted.result)
             pending = _generate(episode, 2, 1)
             agent.abort(2)
             agent.discard(2)
+            agent.finalize_decision_audit(pending.result)
             turns, history = agent._runtime.turns, list(agent.action_history)
             usage = agent.token_usage
         finally:
@@ -179,6 +182,8 @@ def test_a_discarded_result_writes_no_history(tmp_path):
     assert [u["stale"] for u in _jsonl(tmp_path / "provider-usage.jsonl")] == [False, True]
     outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
     assert outcomes == ["completed", "superseded_by_timeout"]
+    rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
+    assert rows == [(0, "decision"), (1, "decision_discarded")]
 
 
 def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
