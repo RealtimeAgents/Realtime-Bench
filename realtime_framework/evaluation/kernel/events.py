@@ -161,9 +161,10 @@ class ClockStepped:
 
 @dataclass(frozen=True)
 class KeysReleased:
-    """Keys whose lease ended were released: by ReleaseKeys on the token clock, or by the shell's
-    release timer on the wall clock. A release that failed for good, after the timer's retries on
-    the wall clock, carries its error and invalidates the run on either clock."""
+    """The answer to ReleaseKeys, on the token clock; a release that failed carries its error
+    and invalidates the run. On the wall clock the environment's own timer releases a hold's keys
+    and reports only one that failed for good, after its retries, as an Invalidated
+    (sandbox/actions.py GuestEnvironment._wall_release_due)."""
 
     keys: tuple[str, ...]
     error: str | None = None

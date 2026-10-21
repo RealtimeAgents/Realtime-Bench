@@ -6,7 +6,7 @@ operational clock in seconds, which on the wall clock is also the world's clock;
 the world is the environment tick, which only AdvanceClock and key taps move. A synchronous command
 occupies the shell for its duration, so whatever comes due meanwhile is handled after it returns,
 as in the production shells. What other threads produce (a generation's result, an agent record,
-the wall key-release timer) is posted when the simulated time reaches it.
+a failure of the wall key-release timer) is posted when the simulated time reaches it.
 
 The world plays GuestEnvironment's part only as far as the kernel sees it: a tap holds the key
 1/60 s per repeat, advancing the token tick in steps of at most one tick with an end check after
@@ -401,7 +401,12 @@ class Simulation:
         return error
 
     def _wall_release(self, key: str, at: float) -> None:
+        """The environment's own release timer on the wall clock. It tells the kernel nothing of
+        a release that worked; one that failed for good, after its retries, goes through
+        on_invalid (sandbox/actions.py GuestEnvironment._wall_release_due; shell.py)."""
         if self._releases.get(key) != at:
             return
         del self._releases[key]
-        self.kernel.post(KeysReleased((key,), self._release((key,))))
+        error = self._release((key,))
+        if error is not None:
+            self.kernel.post(Invalidated("environment", "wall_key_release_failed", error))
