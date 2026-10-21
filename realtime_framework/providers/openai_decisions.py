@@ -1,10 +1,12 @@
 """OpenAI Decisions models through OpenRouter's Decisions transport.
 
-Only the question limits, route pin, context estimation and failure classification live here;
-the request is built, sent and read in providers/decisions/protocol.py. The registered class adds
-them to DecisionEncoder, which makes it a complete driver. Candidate actions come with the
-canonical request; the questions, their state, composition and retries belong to the selection
-flow (providers/decisions).
+Only the HTTP client (its key, base URL, timeout and capture hooks, built again after an abort),
+the question limits, the route pin, context estimation and the retry kind of a failed question
+live here; the request is built, sent and read in providers/decisions/protocol.py, which also
+tells a context limit and a refusal from other error statuses. The registered class adds them to
+DecisionEncoder, which makes it a complete driver. Candidate actions come with the canonical
+request; the questions, their state, composition and retries belong to the selection flow
+(providers/decisions).
 
 The transport is httpx rather than LiteLLM's Decisions call (litellm.asystemone, 1.106.1): that
 call cannot send the provider routing block Luna pins its upstream with, takes no client to carry
