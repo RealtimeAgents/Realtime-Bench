@@ -37,6 +37,7 @@ class FakeEnv:
         self.t0 = 0.0
         self.d = 1.0
         self.task = FakeTask(self)
+        self.scene_capture = None  # a desktop task's
         self.seconds = {
             "capture": capture_s,
             "execute": execute_s,

@@ -9,12 +9,19 @@ from __future__ import annotations
 
 import threading
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.model import RetryCancelled
-from realtime_framework.evaluation.env_lanes import EnvGate, EnvLanes, Executed, Lane
+from realtime_framework.evaluation.env_lanes import (
+    CAPTURE_CDP_SESSION,
+    EnvGate,
+    EnvLanes,
+    Executed,
+    Lane,
+)
 from realtime_framework.evaluation.kernel.events import (
     ActionExecuted,
     CheckEnd,
@@ -44,6 +51,16 @@ def _lanes():
         inbox.post(Invalidated("runner", "run_exception", failure))
 
     return clock, env, inbox, EnvLanes(env, inbox.post, clock, raised=raised)
+
+
+def test_the_captures_probe_on_a_cdp_session_of_their_own():
+    """N33: a capture runs alongside an action, so its DOM and AX probes must not wait for the
+    lock of the CDP session the action's calls use (sandbox/browser/cdp.py client_for)."""
+    clock = FakeClock()
+    env = FakeEnv(clock)
+    env.scene_capture = SimpleNamespace(cdp_session="")
+    EnvLanes(env, Inbox(clock).post, clock, raised=lambda failure: None).close()
+    assert env.scene_capture.cdp_session == CAPTURE_CDP_SESSION != ""
 
 
 def test_each_command_is_answered_once_the_gate_lets_it_run():
