@@ -602,7 +602,9 @@ class GuestEnvironment:
 
     def _count_as_held(self, parts):
         """Keys whose press or release failed may still be down on the page: count them as held,
-        so that the cleanup releases them (a key held already keeps its lease)."""
+        so that the cleanup releases them (a key held already keeps its lease). A key that was up
+        gets that keyUp as an event too, but the cleanup comes after the scored snapshot is
+        frozen."""
         for identity, wire in parts:
             self._held_keys.setdefault(
                 identity, {"wire": wire, "expires_at_tick": self._logical_tick}
@@ -901,7 +903,7 @@ class GuestEnvironment:
     def _count_as_held_on_the_wall(self, action):
         """The keys of an action whose press or release failed may still be down on the desktop:
         count those xdotool can name as held, so that the cleanup releases them (a key held
-        already keeps its lease)."""
+        already keeps its lease). The X server drops the release of a key that is up."""
         try:
             parts, _ = self._key_chord(action)
         except ValueError:
