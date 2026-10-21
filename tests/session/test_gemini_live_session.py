@@ -512,6 +512,33 @@ def test_an_interrupt_ends_the_clean_boundary():
     assert not core.last_turn_clean
 
 
+CANCELLATION = message({"toolCallCancellation": {"ids": ["call-1", "call-0"]}})
+
+
+def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
+    """A toolCallCancellation says which calls not to execute, in the server's order, whether
+    it comes in their reply, after it or on a closed connection; it does not end the reply."""
+    core = session_core()
+    connected(core)
+    start_turn(core, "turn-0")
+    core.calls_received([("call-0", "click"), ("call-1", "key")])
+    core.acknowledging()
+    core.acknowledgement_sent()
+    received = receive(core, CANCELLATION)
+    assert received.cancelled == ("call-1", "call-0")
+    assert (received.generation_id, received.complete, received.ends) == ("turn-0", False, False)
+    assert core.delivery[("tool_response", "call-0")] == Delivery.SENT  # what was written stays
+    received = receive(core, server_content(turnComplete=True))
+    assert received.ends and received.cancelled == ()
+
+    orphan = arrive(core, CANCELLATION)
+    assert (orphan.cancelled, orphan.control) == (("call-1", "call-0"), {})
+
+    start_turn(core, "turn-1")
+    connected(core, view([turn(0)]))
+    assert core.received(1, CANCELLATION, 0.0).cancelled == ("call-1", "call-0")
+
+
 def test_an_orphan_from_a_closed_connection_changes_nothing():
     core = session_core()
     connected(core)
