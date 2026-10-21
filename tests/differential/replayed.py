@@ -96,7 +96,7 @@ def _ended(script: Script, reached: bool, applied: int):
 
 class _Latched:
     """Logs when the run's invalid-run value is first latched, by the environment itself or by
-    the runner (evaluation/runner.py:200-211)."""
+    the runner (evaluation/runner.py:197-208)."""
 
     @property
     def _invalid_run(self):
@@ -424,7 +424,7 @@ def _replay_token(script, run_dir, driver, config) -> TokenWorld:
 def _drive(episode, env, script, driver, config, clocks, now) -> None:
     """Run the episode under ``driver``, recording what the agent is told and when it is
     aborted; then drain the abandoned workers and close as main() does (evaluation/runner.py:
-    1932-1938)."""
+    1531-1537)."""
     agent = episode.agent
     commit_action, abort = agent.commit_action, agent.abort
 
@@ -457,7 +457,7 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
 class _FrozenFrames:
     """The frame source, repeating one frame's identity (observation id, tick, screenshot) from
     capture ``frozen_from`` on, each stamped when it is captured: a producer replaying one frame
-    (evaluation/runner.py:74-109)."""
+    (evaluation/runner.py:71-106)."""
 
     def __init__(self, frames, frozen_from: int):
         self._frames = frames

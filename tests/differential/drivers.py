@@ -15,7 +15,7 @@ from realtime_framework.evaluation.runner import run_stream
 
 
 def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
-    """run_stream with the arguments main() passes it (evaluation/runner.py:1822-1835)."""
+    """run_stream with the arguments main() passes it (evaluation/runner.py:1421-1434)."""
     return run_stream(
         agent,
         env,
