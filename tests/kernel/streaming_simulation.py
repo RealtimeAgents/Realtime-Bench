@@ -138,6 +138,8 @@ class World:
     check_times: dict[int, float] = field(default_factory=dict)
     capture_errors: dict[int, str] = field(default_factory=dict)
     push_errors: dict[int, str] = field(default_factory=dict)
+    # The nth push hangs until the next abort closes the session, which fails it.
+    stuck_pushes: set[int] = field(default_factory=set)
     check_errors: dict[int, str] = field(default_factory=dict)
     commit_errors: dict[int, str] = field(default_factory=dict)  # the nth Commit -> fault
     # Key -> the fault that makes the environment's release timer invalidate the run, which the
@@ -185,6 +187,7 @@ class Simulation:
         self._finished: set[int] = set()  # generations whose result was posted
         self._in_flight: int | None = None
         self._busy: set[str] = set()  # the lanes running a command
+        self._stuck_push: str | None = None  # the frame a stuck push holds
         self._holder: str | None = None  # the operation holding the gate
         self._line: deque[Callable] = deque()  # the operations waiting for it, in order
         self._observed: dict[str | None, float] = {}  # observation -> capture time
@@ -395,6 +398,11 @@ class Simulation:
                 self.sent[frame] = self._observed[observation_id]
             self.kernel.post(FramePushed(observation_id, self.ops, error))
 
+        if frame in world.stuck_pushes:
+            assert "push" not in self._busy, "the push lane is busy"
+            self._busy.add("push")
+            self._stuck_push = observation_id
+            return
         self._lane("push", world.push_times.get(frame, world.push_s), pushed)
 
     def _start(self, generation: int) -> None:
@@ -465,10 +473,15 @@ class Simulation:
         self.kernel.post(event)
 
     def _abort(self, generation: int) -> None:
-        """An interruptible reply stops handing anything over and hands back its result now."""
+        """An interruptible reply stops handing anything over and hands back its result now.
+        Closing the session fails a push stuck in it."""
         self.aborted.append((generation, self.ops))
         if self._in_flight == generation:
             self._in_flight = None
+        if self._stuck_push is not None:
+            observation_id, self._stuck_push = self._stuck_push, None
+            self._busy.discard("push")
+            self.kernel.post(FramePushed(observation_id, self.ops, "the session was closed"))
         if not self._reply_of[generation].interruptible:
             return
         for entry in self._posts[generation]:
