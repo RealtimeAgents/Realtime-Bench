@@ -518,7 +518,7 @@ def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
     frame = core.observe(separate_view([fed(0, "F0"), turn(1)]))
     assert frame.contents == (feedback_content("F0"), frame_content(1))
     assert frame.keys == (("block", "d0.feedback"), ("block", "d1.frame"))
-    assert all(core.delivery[key] == Delivery.UNKNOWN for key in frame.keys)
+    assert all(core.delivery[key] == Delivery.UNKNOWN for key in frame.keys)  # until written
 
     # A connection seeded with it already holds it.
     connected(core, separate_view([fed(0, "F0")]))
@@ -534,7 +534,8 @@ def test_each_change_in_delivery_is_heard_with_its_block():
     """on_delivery hears what the event log records: the setup confirmed and the seed sent once
     the connection is up; the setup confirmed and the seed unknown when its write failed before;
     each observation and acknowledgement sent once written, nothing while it is written, and
-    unknown once a write failed."""
+    unknown once a write failed. A turn-based session, as this one, records so as well as a
+    streaming one: a write is not known to have gone out before it returned."""
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
