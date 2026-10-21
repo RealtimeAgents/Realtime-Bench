@@ -921,6 +921,21 @@ def test_a_queued_edit_waits_for_the_one_before_it():
     assert [f.folded for f in core.frames.values()] == [True, True, True, False, False, False]
 
 
+def test_a_failed_streaming_edit_drops_the_view_kept_behind_it():
+    """A failed edit leaves the session whatever the server made of it, to be rebuilt; the view
+    kept while it waited is not planned against that."""
+    blocks = stream("FFFF")
+    core = streamed(blocks[:3], frames=5)
+    first = core.queue_edit(streaming_view(blocks[:3], frames=2))
+    sent(core, first.operations)
+    acknowledge(core, sent(core, [core.push(streaming_view(blocks, frames=5))]))
+    assert core.queue_edit(streaming_view(blocks, frames=2)) is None
+    core.receive(error(first.operations[0].event_id))
+    with pytest.raises(RuntimeError, match=r"^Realtime history edit failed: "):
+        core.finish_edit()
+    assert core.next_edit() is None
+
+
 def test_a_fold_while_a_reply_streams_loses_no_event():
     """Native streaming in small: while a reply streams, a frame is pushed and the view it brings
     folds the oldest frame. The reply's events and the acknowledgements of the edit and of the

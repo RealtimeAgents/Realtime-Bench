@@ -464,10 +464,12 @@ class RealtimeSessionCore:
     def finish_edit(self) -> EditBatch:
         """End the answered edit. Confirmed whole, it is applied to the mirror in place, so a
         response that ended while it waited keeps its output items; a server error fails it, and
-        the conversation is then whatever the server made of it."""
+        the conversation is then whatever the server made of it, so a view a native-streaming
+        edit kept behind it is dropped."""
         batch, error = self._edit, self._edit_error
         self._edit, self._edit_error, self._unconfirmed = None, None, set()
         if error is not None:
+            self._queued = None
             raise RuntimeError(f"Realtime history edit failed: {error!r}")
         self.ledger_item_id = batch.ledger_item_id
         self.ledger_text = batch.ledger_text
@@ -480,8 +482,9 @@ class RealtimeSessionCore:
 
     def queue_edit(self, history: CanonicalRequest) -> EditBatch | None:
         """Plan a native-streaming edit to the streaming history view, or keep the view while an
-        edit is not finished: one edit is sent at a time. Returns the batch to send now, if
-        any."""
+        edit is not finished: one edit is sent at a time. Returns the batch to send now; None
+        while the view is kept, to be planned by next_edit once that edit is finished, or dropped
+        if it fails."""
         self._queued = history
         return self.next_edit()
 
