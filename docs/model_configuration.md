@@ -163,8 +163,10 @@ A model that needs a new wire protocol gets a driver:
    Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
    `model_defaults` (per-model ModelConfig defaults, usually `{}`). A driver that lists
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
-   [streaming settings](#streaming-settings) (a dict); an external driver without it is refused
-   when its model is loaded, and the tests hold every registered driver to the same check.
+   [streaming settings](#streaming-settings) (a dict), and takes `streaming`: the
+   native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`. An external
+   driver without either is refused when its model is loaded, and the tests hold every
+   registered driver to the same checks.
    Function-call drivers send the function declarations the harness puts in
    `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only

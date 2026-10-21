@@ -53,7 +53,15 @@ class OutputCapFlagOnly(ExternalChatDriver):
     capabilities = replace(ExternalChatDriver.capabilities, maps_output_cap=True)
 
 
-class StreamingNoSettings(ExternalChatDriver):
+class StreamingNoSwitch(ExternalChatDriver):
     capabilities = replace(
         ExternalChatDriver.capabilities, interaction_modes=frozenset({"turn_based", "streaming"})
     )
+    streaming_settings: ClassVar[dict] = {}
+
+
+class StreamingNoSettings(StreamingNoSwitch):
+    streaming_settings = None
+
+    def __init__(self, config, *, clock=None, streaming=False):
+        super().__init__(config, clock=clock)
