@@ -834,3 +834,40 @@ def test_a_fold_while_a_reply_streams_loses_no_event():
         True,
     )
     assert core.outputs == {"g1.output": ["srv_1"]}
+
+
+def test_the_streaming_reader_records_when_events_came_off_the_wire():
+    """4.17: native streaming's reader hands each event over with the time it read it. A pushed
+    block was acknowledged at its first acknowledgement; the actions parsed from a reply's
+    completed output text arrived when that text did, kept by its server event id. receive(),
+    which the turn-based reader calls, records neither, nor does an event no state takes, such as
+    the acknowledgement of an item the server made itself."""
+    blocks = stream("FF")
+    core = streamed(blocks[:1], frames=5)
+    pushed = core.push(streaming_view(blocks, frames=5))
+    sent(core, [pushed])
+    reply = core.start_reply("g1.output")
+    created, added, _, finished = response_events()
+    text = server(
+        type="response.output_text.done",
+        event_id="event_7",
+        response_id="resp_1",
+        item_id="srv_1",
+        output_index=0,
+        content_index=0,
+        text='{"action": "wait"}',
+    )
+    for event, now in (
+        (created, 1.0),
+        (server(type="conversation.item.created", item={"id": pushed.item_id}), 1.5),
+        (added, 2.0),
+        (done(pushed.item_id), 2.5),
+        (text, 3.0),
+        (finished, 3.5),
+    ):
+        assert core.arrived(event, now)
+    assert not core.arrived(server(type="rate_limits.updated", rate_limits=[]), 4.0)
+    assert not core.arrived(done("srv_1"), 4.5)
+    assert list(reply.events) == [created, added, text, finished]
+    assert core.acknowledged_at == {pushed.key: 1.5}
+    assert reply.received_at == {"event_7": 3.0}
