@@ -99,7 +99,8 @@ into the session under, with when it was captured, written and confirmed (`Frame
 A streaming episode has no turns, so the fields of `run_summary.json` that count them stay 0 or
 empty: `decisions`, `avg_delta_ticks`, `dropped_intermediate_frames`,
 `avg_frame_age_at_action_s` and `max_frame_age_at_action_s`, `token_usage` and the metrics drawn
-from the decision lifecycle, which it does not write. Read the `streaming` section instead; the
+from the decision lifecycle, which it does not write. Its replies are no model calls to time
+either: `model_timing` is `not_applicable` and `wall_time_s` empty. Read the `streaming` section instead; the
 accepted replies' tokens are in `adapter_token_usage`. Its cost is not accounted either
 (`cost_accounting.reason` is `not_accounted_streaming`): sum the usage the provider reported
 for every reply, those given up included, from the episode trace's session messages; the
