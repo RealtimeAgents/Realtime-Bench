@@ -252,29 +252,7 @@ class GuestEnvironment:
                     if step <= 1e-9:
                         self._release_expired_clock_keys()
                         continue
-                repeat_events, repeats_sent = self._pending_repeat_events(step)
-                try:
-                    with operation_budget(
-                        "clock advance",
-                        ENVIRONMENT_BUDGET.clock_advance_s,
-                        clock=self.clocks.operational,
-                    ):
-                        if repeat_events:
-                            self.task.advance_clock(step, key_events=repeat_events)
-                        else:
-                            self.task.advance_clock(step)
-                except Exception as exc:
-                    self._invalid_run = {
-                        "category": "environment",
-                        "reason": "clock_advance_failed",
-                        "detail": str(exc),
-                    }
-                    raise
-                if repeat_events and self._repeat_key in self._held_keys:
-                    self._held_keys[self._repeat_key]["repeats_sent"] = repeats_sent
-                self._logical_tick += step
-                if abs(self._logical_tick - round(self._logical_tick)) < 1e-9:
-                    self._logical_tick = int(round(self._logical_tick))
+                self._advance_clock(step)
                 self._release_expired_clock_keys()
                 if self.done():
                     break
@@ -282,6 +260,42 @@ class GuestEnvironment:
         clock = self.clocks.semantic
         while self.tick_index() < target and clock.time() < self.deadline:
             clock.sleep(0.03)
+
+    def step_clock(self, step):
+        """Token clock, for the kernel's shell: advance ``step`` ticks, never past the episode
+        horizon. Leases are not cut, no key is released and the end is not checked: the kernel
+        does each (evaluation/shell.py)."""
+        step = float(step)
+        if self._episode_horizon_tick is not None:
+            step = min(step, self._episode_horizon_tick - self._logical_tick)
+        if step > 0:
+            self._advance_clock(step)
+
+    def _advance_clock(self, step):
+        """Advance the task clock ``step`` ticks, with the repeating key's presses due meanwhile."""
+        repeat_events, repeats_sent = self._pending_repeat_events(step)
+        try:
+            with operation_budget(
+                "clock advance",
+                ENVIRONMENT_BUDGET.clock_advance_s,
+                clock=self.clocks.operational,
+            ):
+                if repeat_events:
+                    self.task.advance_clock(step, key_events=repeat_events)
+                else:
+                    self.task.advance_clock(step)
+        except Exception as exc:
+            self._invalid_run = {
+                "category": "environment",
+                "reason": "clock_advance_failed",
+                "detail": str(exc),
+            }
+            raise
+        if repeat_events and self._repeat_key in self._held_keys:
+            self._held_keys[self._repeat_key]["repeats_sent"] = repeats_sent
+        self._logical_tick += step
+        if abs(self._logical_tick - round(self._logical_tick)) < 1e-9:
+            self._logical_tick = int(round(self._logical_tick))
 
     def render_current_frame(self):
         """Publish action-visible pixels without advancing the token clock."""
