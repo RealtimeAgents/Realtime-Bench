@@ -92,10 +92,45 @@ def test_a_frame_that_went_in_is_recorded_under_its_number(monkeypatch, clock):
     with pytest.raises(RuntimeError, match="push failed"):
         agent.push(observation(clock, 2))
     agent.push(observation(clock, 3))
-    assert trace.of(TraceEvent.FRAME_SENT) == [
-        {"frame": 1, "observation_id": "obs-1"},
-        {"frame": 3, "observation_id": "obs-3"},
+    assert [(r["frame"], r["observation_id"]) for r in trace.of(TraceEvent.FRAME_SENT)] == [
+        (1, "obs-1"),
+        (3, "obs-3"),
     ]
+    agent.close()
+
+
+def test_a_push_records_its_frame_sent_and_confirmed_when_its_receipt_says(monkeypatch, clock):
+    """Decision N43: the frame went out when the receipt says it was written, not when the push
+    came back, which waits for the server's confirmation; both times go into the frame table on
+    the wall clock and into FrameSent on the driver's."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME, trace=trace)
+    agent.driver.confirm_s = 0.4
+    agent.push(observation(clock, 1))
+    record, _ = agent.frames.locate(1)
+    assert (record.sent_unix_s, record.ack_status) == (1000.0, "acked")
+    assert record.acked_unix_s == pytest.approx(1000.4)
+    [sent] = trace.of(TraceEvent.FRAME_SENT)
+    assert (sent["sent_monotonic_ns"], sent["confirmed_monotonic_ns"]) == (0, 400_000_000)
+    agent.close()
+
+
+def test_a_push_on_a_protocol_that_confirms_no_frame_leaves_its_confirmation_unknown(
+    monkeypatch, clock
+):
+    """Gemini Live confirms no frame: its receipt has no confirmation time."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    clock.sleep(0.25)
+    agent.push(observation(clock, 1))
+    record, _ = agent.frames.locate(1)
+    assert (record.sent_unix_s, record.ack_status, record.acked_unix_s) == (
+        1000.25,
+        "unknown",
+        None,
+    )
+    [sent] = trace.of(TraceEvent.FRAME_SENT)
+    assert (sent["sent_monotonic_ns"], sent["confirmed_monotonic_ns"]) == (250_000_000, None)
     agent.close()
 
 
