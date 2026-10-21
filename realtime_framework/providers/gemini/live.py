@@ -4,6 +4,7 @@ from __future__ import annotations
 """Gemini Live protocol driver for the shared realtime runtime."""
 
 import asyncio as asyncio
+import contextvars
 import logging as logging
 import os as os
 from dataclasses import dataclass, field
@@ -34,6 +35,8 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.records import current_trace_scope
+from realtime_framework.entity.records import enter_trace_scope
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.providers.capture import async_ws_connection
 from realtime_framework.providers.gemini.session import Connect
@@ -300,6 +303,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._session = None
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._reading: asyncio.Task | None = None  # streaming: the task reading it
+        self._reading_context: contextvars.Context | None = None  # and the context it runs in
         # Streaming: the replies the reader reads for, by generation id; and the cancellations
         # read between replies, which the next reply's events() hands over.
         self._replies: dict[str, _StreamedReply] = {}
@@ -598,7 +602,12 @@ class GeminiLiveDriver(SessionLifecycle):
         self._core.connected(connect)
         self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
         if self.streaming:
-            self._reading = asyncio.ensure_future(self._read_on(self._receiver))
+            # The reader records what it reads in the scope of the reply it reads for
+            # (start_generation hands it over), not in the scope of the call that connected.
+            self._reading_context = contextvars.Context()
+            self._reading = asyncio.get_running_loop().create_task(
+                self._read_on(self._receiver), context=self._reading_context
+            )
         self._connect_metadata = {
             "session_connect_mode": connect.mode,
             "session_resume_handle_used": connect.resume_handle is not None,
@@ -636,6 +645,8 @@ class GeminiLiveDriver(SessionLifecycle):
                 if reply is not None:
                     reply.messages.put_nowait(arrived)
                     reply.ended = reply.ended or arrived.ends
+                    if arrived.ends:
+                        enter_trace_scope(None)  # until the next reply hands its own over
                     continue
                 if isinstance(arrived, Orphan) and arrived.cancelled:
                     self._cancelled_between.append(arrived)
@@ -842,6 +853,8 @@ class GeminiLiveDriver(SessionLifecycle):
             raise RuntimeError("Gemini Live session is not connected")
         if self.streaming:
             self._replies[request.generation_id] = _StreamedReply()
+            # What the reader reads from here is this reply's, as for a turn-based reply's read.
+            self._reading_context.run(enter_trace_scope, current_trace_scope())
         self._core.start_generation(request.generation_id)
         transport = "realtime_input" if self.streaming else self.options["input_transport"]
         return GenerationHandle(
