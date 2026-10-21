@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
@@ -48,6 +49,7 @@ from .ws_gemini_live import (
     TRANSCRIPT_HEADER,
     LiveStub,
     WireNormalizer,
+    interrupted_before_output,
 )
 
 BASELINES = Path(__file__).parent / "baselines"
@@ -713,6 +715,56 @@ def test_resume_failure_short(live_env, tmp_path):
         "go_away_deadline",
         "connection_close",
         "session_release",
+        "session_release",
+        "connection_close",
+    ]
+
+
+def test_interrupted_empty_turn_retry_keeps_its_usage(live_env, tmp_path):
+    """The server interrupts decision 1 before any output and reports only its prompt. The
+    collector raises EmptyInterruptedToolTurnError (harnesses/default/parsing.py
+    FunctionCallTurnCollector.finish), a transient failure (providers/gemini/live.py
+    GeminiLiveDriver._is_transient) that the harness replays although the attempt had usage
+    (harnesses/default/harness.py stream_generate). The retry rebuilds the session from canonical
+    history and succeeds; the decision keeps the interrupted attempt's usage."""
+    live_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    preset = TOOL_TRANSCRIPT
+    config = catalog_config(preset.model)
+    scenario = LONG_SCENARIO[:2]
+    turns = [turn_script(k, step, preset) for k, step in enumerate(scenario)]
+    prompt = 1760
+    turns.insert(1, interrupted_before_output(prompt))
+    records, results, stub = run_episode(
+        "interrupted-empty-turn",
+        config,
+        preset.model,
+        scenario,
+        turns,
+        preset,
+        live_env,
+        tmp_path,
+    )
+    check_session(stub, results)
+    runtime = results[1]["realtime_runtime"]
+    assert runtime["transport_reconnect_attempts"] == 1
+    assert runtime["transport_reconnect_reason"].startswith(
+        "transient: EmptyInterruptedToolTurnError("
+    )
+    (usage,) = runtime["transport_retry_usage"]
+    assert (usage["input_tokens"], usage["output_tokens"]) == (prompt, 0)
+    assert usage["raw_native_usage"] == {"prompt_token_count": prompt, "total_token_count": prompt}
+    assert usage["native_response_usage_exact"] is True
+    assert runtime["transport_retry_usage_status"] == "complete"
+    # Only the retry opens a connection: its recovery closes the interrupted one and waits the
+    # release before it replays the history (harnesses/default/context.py
+    # RealtimeRuntime._ensure_ready; live.py GeminiLiveDriver._connect).
+    steps = records[2:-1]
+    opened = [
+        k for k, record in enumerate(steps) if any(f["dir"] == "open" for f in record["frames"])
+    ]
+    assert opened == [1]
+    assert session_waits(tmp_path / "run") == [
+        "connection_close",
         "session_release",
         "connection_close",
     ]

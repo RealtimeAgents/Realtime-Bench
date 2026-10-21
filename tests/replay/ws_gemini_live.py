@@ -68,6 +68,20 @@ UNSCRIPTED_CLOSE = (1008, "observation beyond the script")
 AWAIT_ACK = object()  # script step: read the acknowledgement of every call sent so far
 
 
+def interrupted_before_output(prompt_tokens: int) -> list[dict]:
+    """A reply the server interrupts before it generates anything: ``interrupted``, then the
+    turnComplete that ends the turn, without generationComplete (google/genai/types.py
+    LiveServerContent.generation_complete). The turnComplete carries the usage of the prompt
+    alone, the terminal usage the driver reads from that message (providers/gemini/live.py
+    GeminiLiveDriver._events); protobuf JSON omits the zero response count, which the driver
+    derives from the total (live.py GeminiLiveDriver._usage_dict)."""
+    usage = {"promptTokenCount": prompt_tokens, "totalTokenCount": prompt_tokens}
+    return [
+        {"serverContent": {"interrupted": True}},
+        {"serverContent": {"turnComplete": True}, "usageMetadata": usage},
+    ]
+
+
 def self_signed_certificate(directory: Path) -> tuple[Path, Path]:
     """Write a certificate for IP 127.0.0.1 and its key, valid for one day from now."""
     key = ec.generate_private_key(ec.SECP256R1())
