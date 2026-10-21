@@ -1,6 +1,7 @@
 """The agent's records through the kernel (evaluation/shell.py ``agent_trace``): during the episode
-its AgentTraceSink hands each to the kernel, which numbers it into the episode log, and the shell
-writes it; once the episode is finished the sink writes them itself again."""
+its AgentTraceSink hands each to the shell, the kernel numbers it into the episode log once nothing
+else is due, and the shell writes it; once the episode is finished the sink writes them itself
+again."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from typing import ClassVar
 from realtime_framework.entity.records import TraceEvent, trace_scope
 from realtime_framework.evaluation.kernel.core import Kernel
 
-from .world import Agent, Reply, World, run
+from .world import Agent, Reply, Trace, World, run
 
 
 def _handed(sink, count: int) -> None:
@@ -62,6 +63,35 @@ class AbortRecordingAgent(RecordingAgent):
             self.sink.capture(TraceEvent.SESSION_STATE_CHANGED, {"aborted": generation})
         self.captured += 1
         _handed(self.sink, self.captured)
+
+
+class SlowTrace(Trace):
+    """A trace whose write of an agent record takes 2 ms of fake time, as a long session log's
+    writes take time in the world."""
+
+    clock: ClassVar = None
+
+    def emit(self, event, payload=None, **fields) -> None:
+        super().emit(event, payload, **fields)
+        if payload is not None and payload.get("source") == "agent":
+            self.clock.sleep(0.002)
+
+
+class BacklogAgent(Agent):
+    """Its second generation records 500 session messages at 2.1 s, while the shell is busy, and
+    returns only once the sink has handed them all over."""
+
+    def __init__(self, clock, replies):
+        super().__init__(clock, replies)
+        SlowTrace.clock = clock
+
+    def generate(self, generation, decision, observation, budget):
+        if decision == 1:
+            self.clock.sleep(1.1)
+            for index in range(500):
+                self.sink.capture(TraceEvent.SESSION_STATE_CHANGED, {"index": index})
+            _handed(self.sink, 500)
+        return super().generate(generation, decision, observation, budget)
 
 
 def _agent_records(trace) -> list[dict]:
@@ -175,3 +205,28 @@ def test_a_kernel_that_raises_leaves_the_agent_s_records_to_the_sink(tmp_path, m
     ]
     assert ["kernel_seq" in record for record in records] == [True, True, False]
     assert records[2]["payload"]["aborted"] == 2
+
+
+def test_a_backlog_of_agent_records_does_not_hold_back_a_result_that_came_back(tmp_path):
+    """The end check at 2.0 s takes until 2.5 s. Meanwhile the second call records 500 session
+    messages, each 2 ms to write, and comes back at 2.2 s. The kernel takes the result at 2.5 s
+    and its action lands then; the records are written after it, though they came first. How
+    much the agent logs does not decide whether or when its action lands."""
+    world = World(slow_checks=[(2.0, 2.1, 0.5)])
+    episode = run(
+        "wall",
+        3.0,
+        [Reply(0.5), Reply(0.1)],
+        world,
+        trace=SlowTrace(),
+        agent_type=BacklogAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.statuses() == ["applied", "applied"]
+    resolved = [record for record in episode.trace.records if record["event"] == "ActionResolved"]
+    assert resolved[1]["semantic"] == 2.5
+    summary = episode.agent.sink.finish(5.0)
+    assert (summary["captures"], summary["written"], summary["error"]) == (500, 500, None)
+    assert len(_agent_records(episode.trace)) == 500
+    numbers = [record["kernel_seq"] for record in episode.trace.records if "kernel_seq" in record]
+    assert numbers == sorted(numbers)
