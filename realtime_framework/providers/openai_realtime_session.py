@@ -303,8 +303,9 @@ class RealtimeSessionCore:
         """Plan a new session's items from a native-streaming history view (None for an empty
         session), one per block in order: a frame's user item, with the feedback in front of it,
         a folded one the placeholder without its screenshot; a reply's assistant item, none for an
-        empty output as a turn's has none; an execution feedback's user item. The mirror becomes
-        the session they make."""
+        empty output as a turn's has none; an execution feedback's user item. Frames and feedback
+        are planned as pushes, so the server refusing one again, as it refused it on the old
+        connection, refuses it alone. The mirror becomes the session they make."""
         operations: list[Create] = []
         for frame in [] if history is None else streaming_blocks(history.items):
             block = frame.item.block
@@ -313,9 +314,7 @@ class RealtimeSessionCore:
                 self.outputs[block.id] = [] if assistant is None else [assistant.item_id]
                 operations += [] if assistant is None else [assistant]
             else:
-                user = self._frame_create(frame)
-                self.frames[block.id] = SentFrame(user.item_id, frame.text, block.folded)
-                operations.append(user)
+                operations.append(self._push(frame))
         return operations
 
     def observe(self, history: CanonicalRequest) -> Create:
@@ -330,7 +329,9 @@ class RealtimeSessionCore:
         feedback in front of it or an execution feedback, as native streaming pushes it while
         responses and edits are in progress: its create names a client event, so a server error
         about it refuses this block alone."""
-        frame = streaming_blocks(history.items)[-1]
+        return self._push(streaming_blocks(history.items)[-1])
+
+    def _push(self, frame: ViewFrame) -> Create:
         user = self._frame_create(frame, event_id=self._new_id("push"))
         self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
         self.pushes[user.event_id] = Push(frame.id, user.item_id)
