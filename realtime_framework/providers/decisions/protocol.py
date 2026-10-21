@@ -34,7 +34,9 @@ the request is built and sent, and the reply validated, the way that model does.
   question goes out as the selection flow wrote it: how the server renders the JSON for the model
   is not known, so the bytes stay as they were.
 - Of the model's settings only ``extra_body`` is taken (Luna's route); the client carries the
-  key, headers and timeout. The state may hold images: Luna's screenshots travel inside it.
+  key, headers and timeout. ``extra_body`` is merged as given: its type is not checked, and a key
+  it overrides (model, state, questions) is not checked again. The state may hold images: Luna's
+  screenshots travel inside it.
 - Only Choice questions are asked, so only Choice answers are read.
 - Only the asked answers are read: an answer to a question not asked is ignored, as these
   clients always did, where Pydantic AI rejects the reply.
@@ -48,8 +50,9 @@ the request is built and sent, and the reply validated, the way that model does.
 - An invalid reply raises ValueError with these clients' short messages, followed by the answer
   as received when an answer is at fault, not with the validation error's text.
 - Any status outside 2xx is an error. OpenRouter's context-limit and refusal statuses raise
-  their own errors, which the selection flow reads; every other error, and a transport error as
-  httpx raises it, is left to the shared retry policy (entity/model.py classify_http_failure).
+  their own errors, which the selection flow reads; every other error status is left to the
+  shared retry policy (entity/model.py classify_http_failure). A transport error is raised as
+  httpx raises it, and the client counts it as transient (classify_question_error).
 - The caller gets the reply's JSON as received, not converted answers.
 """
 
