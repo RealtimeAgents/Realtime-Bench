@@ -78,7 +78,12 @@ from realtime_framework.entity.request import (
     CanonicalRequest,
     ContentBlock,
 )
-from realtime_framework.evaluation.kernel.streaming import ActionArrived, CallsCancelled
+from realtime_framework.evaluation.kernel.streaming import (
+    ActionArrived,
+    CallsCancelled,
+    PushHeld,
+    PushResumed,
+)
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
 from realtime_framework.harnesses.default.harness import (
@@ -356,7 +361,10 @@ class NativeStreamingAgent(VisionAgentBase):
         try:
             with trace_scope(phase="push", observation_id=value.observation_id):
                 while (gate := self._execution.run(self._push(key, pushed))) is not None:
+                    # Held for the session's renewal, which is no push stuck in it.
+                    self._post(PushHeld(key))
                     self.clock.wait(gate, None)
+                    self._post(PushResumed(key))
         except BaseException:
             self._finish_inspection(pushed, "push_failed")
             raise
