@@ -111,6 +111,7 @@ class _Decision:
     remaining: int | None = None
     timeout: int | None = None  # the timer bounding the generation
     action: Action | None = None
+    protocol_failure: str | None = None
     timed_out: bool = False
     over_budget: bool = False
     output_tokens: int | None = None
@@ -381,7 +382,7 @@ class TurnPolicy:
         d.tau = d.t_k + d.d_ticks if self.token else max(self._position(), self.tau_prev)
         self.tau_prev = d.tau
         d.target = min(d.tau, config.max_ticks)
-        d.action, d.timed_out = action, timed_out
+        d.action, d.protocol_failure, d.timed_out = action, protocol_failure, timed_out
         d.approach_from = self._tick()
         if self.token:
             # Token time stood still during the generation: move it to the action time first.
@@ -626,6 +627,8 @@ class TurnPolicy:
             token_delay_frames=d.d_ticks if self.token else None,
             action_output_tokens=d.output_tokens,
             post_horizon_output_tokens=d.post_horizon,
+            action=d.action,
+            protocol_failure=d.protocol_failure,
         )
         self.phase = _Phase.COMMIT
         self.kernel.emit(Commit(outcome))

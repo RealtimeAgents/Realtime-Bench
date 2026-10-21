@@ -565,6 +565,8 @@ def test_the_per_move_cap_skips_the_decision_and_the_episode_goes_on(latency):
         _outcome(0, "skipped_timeout", 2.0, 2, 2.0, dropped=1),
         _outcome(1, "applied", 3.25, 4, 1.25, dropped=1),
     ]
+    # A move over the cap places no action.
+    assert [outcome.action for outcome in sim.outcomes] == [None, CLICK]
     assert _asked(sim) == [0.0, 1.0, 2.0, 2.0, 3.0, 3.25, 3.25, 4.0, 4.0]
     assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.0)
 

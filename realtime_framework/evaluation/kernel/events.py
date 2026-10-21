@@ -323,6 +323,10 @@ class Outcome:
     token_delay_frames: float | None
     action_output_tokens: int | None
     post_horizon_output_tokens: int
+    # The action the decision came to, after a DONE or FAIL became a wait, and its protocol
+    # failure: what the agent's feedback reports as executed and why.
+    action: Action | None = field(default=None, compare=False)
+    protocol_failure: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
