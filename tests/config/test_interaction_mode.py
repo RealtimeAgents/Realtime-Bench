@@ -64,11 +64,11 @@ def test_the_runner_refuses_streaming(runner_cells):
     assert runner_cells[GAME]["error"] == f"ValueError: {UNSUPPORTED}"
 
 
-def run_main(tmp_path, monkeypatch, *argv, agents=None) -> dict:
+def run_main(tmp_path, monkeypatch, *argv, agents=None, clock_mode="wall") -> dict:
     """runner.main() in this interpreter with the export probe's stand-ins for the container, the
     guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
     decision loop that fails at once, so the run ends invalid. Each agent built is appended to
-    ``agents``. Returns the run summary."""
+    ``agents``; ``clock_mode`` None leaves --clock out. Returns the run summary."""
     import sys
 
     import realtime_tasks.registry as tasks
@@ -108,7 +108,7 @@ def run_main(tmp_path, monkeypatch, *argv, agents=None) -> dict:
     monkeypatch.setattr(runner, "run_stream", run_stream)
     for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
         monkeypatch.setenv(name, "cpu")  # main() sets both
-    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", *argv]
+    argv = ["--model", GEMINI, "--task", WEB, *(["--clock", clock_mode] if clock_mode else []), *argv]
     argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
     with pytest.raises(SystemExit):  # an invalid run is not a scored result
@@ -136,6 +136,17 @@ def test_a_refused_streaming_run_records_the_mode(tmp_path, monkeypatch):
     # Refused before its configuration was resolved, it pushed no frame.
     assert summary["streaming"]["context_control"] is None
     assert summary["streaming"]["frames"]["pushed"] == 0
+
+
+def test_the_runner_refuses_streaming_on_its_default_clock(streaming_gemini, tmp_path, monkeypatch):
+    """Without --clock the runner runs the token clock (runner.py main), on which streaming is
+    refused before the agent is built, where a driver declares it too."""
+    agents = []
+    summary = run_main(
+        tmp_path, monkeypatch, "--interaction-mode", "streaming", agents=agents, clock_mode=None
+    )
+    assert summary["error"].strip().endswith("ValueError: Streaming requires a wall clock")
+    assert (summary["clock_mode"], agents) == ("token", [])
 
 
 def test_a_streaming_run_keeps_the_hash_it_expected(streaming_gemini, tmp_path, monkeypatch):
