@@ -1,13 +1,15 @@
 """The OpenAI Realtime session core, driven without a WebSocket.
 
-History views come from the request builder the runtime uses (harnesses/default/request.py);
-server events are parsed the way the SDK's RealtimeConnection.recv parses them
+History views come from the request builder the runtime uses (harnesses/default/request.py), and
+native-streaming views from the streaming history view (harnesses/streaming/history.py); server
+events are parsed the way the SDK's RealtimeConnection.recv parses them
 (openai/resources/realtime/realtime.py).
 """
 
 from __future__ import annotations
 
 import itertools
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -18,7 +20,15 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
+from realtime_framework.harnesses.streaming.history import (
+    StreamingRetention,
+    feedback_block,
+    frame_block,
+    history_view,
+    output_block,
+)
 from realtime_framework.providers.openai_realtime_session import (
     ROLES,
     Create,
@@ -727,3 +737,67 @@ def test_a_streaming_reply_keeps_its_items_under_its_output_block(status):
     assert list(reply.events) == events
     assert core.outputs == ({} if status == "failed" else {"g1.output": ["srv_1"]})
     assert core.frames["d0.frame"].assistant_item_ids == assistant
+
+
+def stream(script: str) -> list:
+    """Blocks of a native-streaming session in the order the agent accepts them. F: a frame
+    pushed, frame n showing turn n's prompt and screenshot; R: a reply; B: the feedback on the
+    oldest reply without one."""
+    table, blocks, replies, reported = FrameTable(), [], 0, 0
+    for step in script:
+        if step == "F":
+            observation = turn(sum(block.kind == "frame" for block in blocks) + 1).observation
+            record = table.register(observation.observation_id, 0.0, {}, None)
+            blocks.append(frame_block(record, observation))
+        elif step == "R":
+            replies += 1
+            blocks.append(output_block(replies, f"r{replies}", None, None))
+        else:
+            reported += 1
+            blocks.append(feedback_block(reported, f"fb{reported}", None))
+    return blocks
+
+
+def streaming_view(blocks, frames: int = 2):
+    """The streaming history view of the blocks: the newest ``frames`` frames keep their
+    screenshots, older ones are folded to the turn-based placeholder, and every reply and
+    feedback stays (decisions 23 and 4.6)."""
+    retention = StreamingRetention(frames=frames, older_frames="placeholder", replies="all")
+    return history_view(
+        blocks,
+        policy=POLICY,
+        system=SYSTEM,
+        retention=retention,
+        actions={},
+        answer=ANSWER,
+        call=CALL,
+    )
+
+
+def test_a_new_connection_replays_the_streaming_view():
+    """4.14: a rebuilt session holds the streaming view, one item per block in order: the frames
+    older than the newest K as the placeholder without a screenshot, each reply as an assistant
+    item (an empty one as none), each feedback as a user item. Nothing is anchored or named."""
+    blocks = stream("FFRFBFR")
+    blocks[-1] = replace(blocks[-1], text="")
+    core = new_core()
+    operations = core.replay_streaming(streaming_view(blocks))
+    assert all(op.previous_item_id is op.event_id is None for op in operations)
+    assert [(op.role, op.text, op.image is not None) for op in operations] == [
+        ("user", TEXTS.folded_visual, False),
+        ("user", TEXTS.folded_visual, False),
+        ("assistant", "r1", False),
+        ("user", "frame 3", True),
+        ("user", "fb1", False),
+        ("user", "frame 4", True),
+    ]
+    f1, f2, r1, f3, b1, f4 = (op.item_id for op in operations)
+    assert {k: (f.user_item_id, f.text, f.folded) for k, f in core.frames.items()} == {
+        "f1.frame": (f1, TEXTS.folded_visual, True),
+        "f2.frame": (f2, TEXTS.folded_visual, True),
+        "f3.frame": (f3, "frame 3", False),
+        "g1.feedback": (b1, "fb1", False),
+        "f4.frame": (f4, "frame 4", False),
+    }
+    assert core.outputs == {"g1.output": [r1], "g2.output": []}
+    assert new_core().replay_streaming(None) == []
