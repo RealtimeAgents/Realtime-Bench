@@ -10,8 +10,11 @@ generation still running, whose decision is not reported.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
+
+import pytest
 
 import realtime_framework.entity.model as model_module
 from realtime_framework.clock import Clocks, FrameClock
@@ -230,12 +233,18 @@ class _HangingAgent:
         self.aborted.set()
 
 
-def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run():
+@pytest.mark.parametrize("watchdog_s", [None, 7.0], ids=["default", "configured"])
+def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monkeypatch, watchdog_s):
     """Pause mode at 1 fps on GuestEnvironment: decision 0's generation never comes back. Token
     time stands still while a model generates and only operational time moves, so the kernel's
-    provider watchdog (kernel/turns.py on_timer) fires at 300 s of it: the run is invalid with
-    the provider's generation_watchdog_timeout, the world still at frame 0, and the generation is
-    aborted without a report."""
+    provider watchdog (kernel/turns.py on_timer) fires at 300 s of it, or at the run's own
+    STREAM_PROVIDER_WATCHDOG_S, which run_stream hands the kernel with the rest of
+    RUNNER_TIMING: the run is invalid with the provider's generation_watchdog_timeout, the world
+    still at frame 0, and the generation is aborted without a report."""
+    if watchdog_s is not None:
+        timing = dataclasses.replace(runner.RUNNER_TIMING, provider_watchdog_s=watchdog_s)
+        monkeypatch.setattr(runner, "RUNNER_TIMING", timing)
+    expected = runner.RUNNER_TIMING.provider_watchdog_s
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     task = ClockTask(1.0)
     env = GuestEnvironment(
@@ -261,9 +270,9 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run():
     assert env._invalid_run == {
         "category": "provider",
         "reason": "generation_watchdog_timeout",
-        "detail": "generation exceeded 300s",
+        "detail": f"generation exceeded {expected:g}s",
     }
-    assert ended_at == runner.PROVIDER_WATCHDOG_S == 300.0
+    assert ended_at == expected == (300.0 if watchdog_s is None else watchdog_s)
     assert (env.tick_index(), task.world_time()) == (0, 0.0)
     assert agent.aborted.is_set()
     assert (timeline, agent.outcomes) == ([], [])
