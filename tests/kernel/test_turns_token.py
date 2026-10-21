@@ -187,8 +187,9 @@ def test_an_action_landing_exactly_on_a_boundary_renders_before_the_next_frame()
 
 
 def test_a_key_tap_on_an_exact_boundary_moves_the_next_frame_without_a_render():
-    # n = 256: tau = 11, but the tap holds the key 1/60 tick (sandbox/actions.py:513), so the
-    # boundary of max(11, 11 + 1/60) is 12 and next = 12; dropped = 12 - 10 - 1 = 1.
+    # n = 256: tau = 11, but the tap holds the key 1/60 s, 1/60 tick at 1 fps
+    # (sandbox/actions.py:513), so the boundary of max(11, 11 + 1/60) is 12 and next = 12;
+    # dropped = 12 - 10 - 1 = 1.
     tapped = 11 + 1 / 60
     sim = _run(_token(20), _idle(10), Reply(action=TAP, output_tokens=256), _idle(8))
     assert sim.executed == [(1, 11, TAP)]
@@ -440,12 +441,13 @@ def test_the_barrier_renders_nothing_for_a_task_without_a_renderer():
     [(1, 2, 1, False), (60, 2, 1, True), (90, 3, 2, False)],
     ids=["one", "sixty", "ninety"],
 )
-def test_each_key_tap_repeat_moves_the_clock_a_sixtieth_of_a_tick(
+def test_the_next_frame_is_taken_from_where_a_key_tap_left_the_clock(
     repeat, next_tick, dropped, rendered
 ):
-    # The tap lands at tau = 1 and holds the key 1/60 tick per repeat (sandbox/actions.py:503-514);
-    # the boundary is taken from max(tau, tick) = 1 + repeat/60 (runner.py:600). Sixty repeats end
-    # exactly on 2, so that pace move is empty and the frame is rendered.
+    # The tap lands at tau = 1, and the environment holds the key 1/60 s per repeat inside the
+    # action, 1/60 tick at 1 fps (sandbox/actions.py:503-514); the kernel takes the boundary from
+    # max(tau, tick) = 1 + repeat/60 (runner.py:600). Sixty repeats end exactly on 2, so that pace
+    # move is empty and the frame is rendered.
     tap = Action(ActionType.KEY, {"key": "space", "repeat": repeat})
     sim = _run(_token(10), Reply(action=tap, output_tokens=256), _idle(10 - next_tick))
     assert sim.executed == [(0, 1, tap)]
@@ -539,11 +541,13 @@ def test_holding_a_held_key_again_only_extends_its_lease(again, released_at):
 @pytest.mark.parametrize(
     "hold", [1 + 1 / 60, 1.01], ids=["ends-with-the-tap", "ends-inside-the-tap"]
 )
-def test_a_lease_that_ended_during_a_key_tap_is_released_without_a_check_of_its_own(hold):
+def test_a_lease_that_ended_during_a_key_tap_is_released_by_the_kernel_after_the_tap(hold):
     # Decision 0 holds "a" from tick 0 until ``hold``; decision 1 taps another key at tick 1, which
-    # moves the clock to 1 + 1/60 inside the environment. The pace move then starts on a lease
-    # that has already ended: it is released with no end check (sandbox/actions.py:226-228), and
-    # the move goes on to next = 2.
+    # moves the clock to 1 + 1/60 inside the environment. The environment cuts the tap where the
+    # lease ends and lets "a" up there itself (sandbox/actions.py GuestEnvironment.wait_until_tick);
+    # the kernel, which keeps the lease, releases it once the tap is over, at the start of the
+    # pace move, with no end check of its own, and the move goes on to next = 2. So its log dates
+    # the release after the actual one, and its ReleaseKeys finds the key already up (K-j).
     tapped = 1 + 1 / 60
     sim = _run(
         _token(10),
@@ -551,7 +555,12 @@ def test_a_lease_that_ended_during_a_key_tap_is_released_without_a_check_of_its_
         Reply(action=TAP, output_tokens=0),
         _idle(8),
     )
-    assert sim.key_events == [(tapped, "up", ("a",))]
+    releases = [
+        (at, command)
+        for command, at in zip(sim.commands, sim.command_times, strict=True)
+        if isinstance(command, ReleaseKeys)
+    ]
+    assert releases == [(tapped, ReleaseKeys(("a",)))]
     assert _clock(sim) == [
         # decision 0: loop top, before and after landing, the pace move 0 -> 1
         "check",
