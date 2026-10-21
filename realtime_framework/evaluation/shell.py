@@ -421,14 +421,19 @@ class _Shell:
                 self.agent.discard(generation)
             case Execute():
                 self._execute(command)
+            # A failed step is answered with its error, and the kernel gives it the environment's
+            # reason (kernel/turns.py _step_failed, _rendered).
             case AdvanceClock(step=step):
-                self._env(self.env.step_clock, step)
-                self.post(ClockStepped())
+                self.post(ClockStepped(self._failure(self.env.step_clock, step)))
             case ReleaseKeys(keys=keys):
-                self._env(self.env.release_keys, keys)
-                self.post(KeysReleased(keys))
+                self.post(KeysReleased(keys, self._failure(self.env.release_keys, keys)))
             case RenderFrame():
-                self.post(FrameRendered(self._env(self.env.render_current_frame) is not None))
+                try:
+                    rendered = self._env(self.env.render_current_frame)
+                except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
+                    self.post(FrameRendered(error=traceback.format_exc()))
+                else:
+                    self.post(FrameRendered(rendered is not None))
             case Commit(outcome=outcome):
                 self._commit(outcome)
             case FreezeSnapshot():
@@ -456,18 +461,10 @@ class _Shell:
         settle the decision; the run_exception before it decides the reason."""
         semantic, ops = self._now
         match command:
-            case CheckEnd(request=request):
-                return EndChecked(request, error=failure)
             case Capture():
                 return FrameCaptured(error=failure)
             case Execute(decision=decision):
                 return ActionExecuted(decision, error=failure)
-            case AdvanceClock():
-                return ClockStepped(failure)
-            case ReleaseKeys(keys=keys):
-                return KeysReleased(keys, failure)
-            case RenderFrame():
-                return FrameRendered(error=failure)
             case Commit(outcome=outcome):
                 return OutcomeCommitted(outcome.decision, failure)
             case FreezeSnapshot():
@@ -476,14 +473,23 @@ class _Shell:
 
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
-        itself, with its own reason, goes to the kernel before the command's answer."""
+        itself in an operation that returned, such as a key tap's failed advance inside
+        ``execute()``, goes to the kernel with its own reason before the command's answer. An
+        operation that raised is answered with its error."""
         latched = getattr(self.env, "_invalid_run", None)
+        result = operation(*args, **kwargs)
+        invalid = getattr(self.env, "_invalid_run", None)
+        if invalid is not None and invalid is not latched:
+            self.post(_invalidated(invalid))
+        return result
+
+    def _failure(self, operation, *args) -> str | None:
+        """Run one synchronous environment operation; its error, None when it returned."""
         try:
-            return operation(*args, **kwargs)
-        finally:
-            invalid = getattr(self.env, "_invalid_run", None)
-            if invalid is not None and invalid is not latched:
-                self.post(_invalidated(invalid))
+            self._env(operation, *args)
+        except Exception:  # noqa: BLE001 - the command's answer carries it
+            return traceback.format_exc()
+        return None
 
     def _check_end(self, request: int) -> None:
         try:
@@ -813,8 +819,13 @@ class _Shell:
         env._stop_reason = termination.stop_reason
         env._think_spent = self.policy.spent
         env._dropped_intermediate_frames = self.policy.dropped_frames
-        if termination.invalid is not None:
-            env._invalid_run = _invalid_record(termination.invalid)
+        invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
+        # The record of a failure the environment latched itself is its own, the detail whole.
+        if invalid is not None and (
+            latched is None
+            or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
+        ):
+            env._invalid_run = _invalid_record(invalid)
         self._finished = True
 
     # ---- the episode trace --------------------------------------------------------------------
