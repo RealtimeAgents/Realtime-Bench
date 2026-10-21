@@ -75,10 +75,15 @@ def test_a_frame_without_a_protocol_confirmation_is_unknown():
     assert (record.ack_status, record.acked_unix_s) == ("unknown", None)
 
 
-def test_an_action_naming_a_frame_whose_push_failed_finds_nothing():
+def test_a_frame_whose_push_failed_keeps_its_number_and_leaves_a_gap():
+    """Frame 2's push fails: the next frame is still 3, so the model sees 1 and 3, and an action
+    naming 2 finds nothing."""
     table = FrameTable()
-    table.register("obs-1", 101.0, GEOMETRY, None)
-    assert table.locate(1) == (None, FRAME_NOT_IN_TABLE)
+    records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, None) for n in (1, 2, 3)]
+    for record in (records[0], records[2]):
+        table.record_sent(record.frame, record.captured_at + 0.1)
+    assert [record.frame for record in records if record.send_status == "sent"] == [1, 3]
+    assert table.locate(2) == (None, FRAME_NOT_IN_TABLE)
 
 
 def test_a_frame_age_counts_only_the_frames_sent_after_it():
