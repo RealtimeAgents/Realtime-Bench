@@ -32,7 +32,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
 )
-from realtime_framework.entity.records import UNTRACED
+from realtime_framework.entity.records import UNTRACED, current_trace_scope, trace_scope
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.streaming.history import frame_block
@@ -135,6 +135,35 @@ def test_a_streaming_session_reads_each_event_as_it_arrives():
         "response.done",
     ]
     assert session.closed is not None and session.failure is None
+
+
+class _ScopedConnection(_FakeConnection):
+    """The fake connection, which keeps the trace scope each read runs in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scopes: list[dict | None] = []
+
+    def recv(self):
+        self.scopes.append(current_trace_scope())
+        return super().recv()
+
+
+def test_the_streaming_reader_reads_in_no_generation_scope():
+    """The reader reads for the connection, whatever reply is in progress: the trace records
+    what it reads in no scope, not in that of the call that opened the connection, often a
+    rebuild for an earlier generation."""
+
+    async def scenario():
+        connection = _ScopedConnection()
+        session = _Session(1, connection, new_core())
+        with trace_scope(decision=2, generation=2):
+            session.read_continuously(Ticks())
+        connection.queue.put(_clean_close())
+        await session.receive_until(lambda: False)
+        return connection.scopes
+
+    assert _within(scenario()) == [None]
 
 
 def test_a_failed_read_ends_the_streaming_reader_and_raises_in_every_waiter():

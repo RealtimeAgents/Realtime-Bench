@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
+import contextvars
 import errno
 import logging as logging
 import os as os
@@ -141,9 +142,9 @@ class _Session:
         """Read every event as it arrives until the connection ends, and hand each to the core
         with the time ``clock`` reads then (native streaming)."""
         self._clock, self._read_one = clock, asyncio.Event()
-        # The reader runs in the context of the call that starts it: the trace records every
-        # message it reads in that call's scope.
-        self._reader = asyncio.create_task(self._read_all())
+        # The reader reads for the connection, whatever reply is in progress, not for the call
+        # that opened it: in an empty context the trace records what it reads in no scope.
+        self._reader = asyncio.create_task(self._read_all(), context=contextvars.Context())
 
     async def _read_all(self) -> None:
         try:
