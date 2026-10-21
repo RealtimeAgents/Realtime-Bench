@@ -8,7 +8,7 @@ bring the server there, and it records what became of each one: unknown while it
 once the write returned, acknowledged once the server confirmed it. Each server event the driver
 reads is handed to ``receive``, in the order the connection delivered it, which passes it to the
 state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, an
-error about a frame native streaming pushed refuses that frame alone, a response event joins its
+error about a block native streaming pushed refuses that block alone, a response event joins its
 generation. Sending and receiving are the driver's; it reads only while something waits for an
 event, so what arrives after the last wait reaches the core with the next read.
 """
@@ -86,10 +86,10 @@ class SentFrame:
 
 @dataclass
 class Push:
-    """A frame native streaming pushed: the frame block id, its user item id, and the server error
-    that refused the item's create, if one did."""
+    """A block native streaming pushed, a frame or an execution feedback: its block id, its user
+    item id, and the server error that refused the item's create, if one did."""
 
-    frame_id: str
+    block_id: str
     item_id: str
     error: object | None = None
 
@@ -97,8 +97,8 @@ class Push:
 @dataclass(frozen=True)
 class EditBatch:
     """One planned in-place edit and the session it leaves: the ledger item, each retained
-    frame's user item id, text and folded state, and the frames it removes. It leaves assistant
-    items as they are."""
+    frame's user item id, text and folded state (a native-streaming edit lists the frames it
+    replaces), and the frames it removes. It leaves assistant items as they are."""
 
     operations: tuple[Operation, ...]
     ledger_item_id: str | None
@@ -186,9 +186,9 @@ class RealtimeSessionCore:
     ``new_id(kind)`` names each planned client item and client event. The mirror takes in a plan
     as it is made, before the driver sends it (an in-place edit only once it is acknowledged), so
     after a failed send it is ahead of the server; the session is not used again then, as the
-    runtime reconnects or rebuilds (harnesses/default/context.py). A pushed frame the server
+    runtime reconnects or rebuilds (harnesses/default/context.py). A pushed block the server
     refuses leaves the mirror, and the session goes on without it; the history views it is edited
-    to must leave the frame out too, or they cannot be reached in place.
+    to must leave the block out too, or they cannot be reached in place.
     """
 
     def __init__(self, new_id: Callable[[str], str]):
@@ -201,7 +201,7 @@ class RealtimeSessionCore:
         self.ledger_text = ""
         # Every operation handed to the connection, by Operation.key.
         self.delivery: dict[tuple[str, str], Delivery] = {}
-        # Every frame native streaming pushed, by the client event of its create.
+        # Every block native streaming pushed, by the client event of its create.
         self.pushes: dict[str, Push] = {}
         # The items of each reply native streaming requested, by the output block it becomes.
         self.outputs: dict[str, list[str]] = {}
@@ -310,38 +310,20 @@ class RealtimeSessionCore:
         return user
 
     def push(self, history: CanonicalRequest) -> Create:
-        """Plan the user item of the newest frame as native streaming pushes it, while responses
-        and edits are in progress: its create names a client event, so a server error about it
-        refuses this frame alone. The history ends with it."""
-        frame = history_frames(history.items)[1][-1]
-        user = self._frame_create(frame, event_id=self._new_id("push"))
-        self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
-        self.pushes[user.event_id] = Push(frame.id, user.item_id)
+        """Plan the user item of a native-streaming history view's newest block, a frame or an
+        execution feedback, as native streaming pushes it while responses and edits are in
+        progress: its create names a client event, so a server error about it refuses this block
+        alone."""
+        item = streaming_blocks(history.items)[-1]
+        user = self._frame_create(ViewFrame(item), event_id=self._new_id("push"))
+        self.frames[item.block.id] = SentFrame(user.item_id, item.block.text, item.block.folded)
+        self.pushes[user.event_id] = Push(item.block.id, user.item_id)
         return user
 
-    def _covered(self, frames: list[ViewFrame]) -> tuple[list[ViewFrame], set[str]]:
-        """Split a history view made while frames are pushed at the newest frame both the view
-        and the mirror hold. An edit covers the view's frames up to that one. The view's frames
-        after it are not in the mirror, not pushed yet or refused, and the mirror's frames after
-        it were pushed after the view was made: the edit leaves both alone. With no frame in
-        common, the mirror's frames the view dropped cannot be told from those pushed after it,
-        so the edit leaves them all; the next edit that shares a frame drops the old ones."""
-        held = [index for index, frame in enumerate(frames) if frame.id in self.frames]
-        if not held:
-            return [], set(self.frames)
-        order = list(self.frames)
-        newest = order.index(frames[held[-1]].id)
-        return frames[: held[-1] + 1], set(order[newest + 1 :])
-
-    def in_place_problem(self, history: CanonicalRequest, *, pushing: bool = False) -> str | None:
+    def in_place_problem(self, history: CanonicalRequest) -> str | None:
         """Why the history view cannot be reached by editing this conversation, if it cannot.
-        Checked before the first operation is sent, so a refused edit sends nothing. With
-        ``pushing`` (native streaming pushes frames while views are made), the frames the edit
-        leaves to their pushes are not checked."""
-        frames = history_frames(history.items)[1]
-        if pushing:
-            frames = self._covered(frames)[0]
-        for frame in frames:
+        Checked before the first operation is sent, so a refused edit sends nothing."""
+        for frame in history_frames(history.items)[1]:
             sent = self.frames.get(frame.id)
             if sent is None:
                 return "retained turn is missing its provider user item ID"
@@ -349,32 +331,40 @@ class RealtimeSessionCore:
                 return "provider visual state cannot be unfolded in place"
         return None
 
-    def begin_edit(self, history: CanonicalRequest, *, pushing: bool = False) -> EditBatch:
+    def begin_edit(self, history: CanonicalRequest) -> EditBatch:
         """Plan one in-place edit to the history view, which then waits for the server to
-        confirm each of its operations. With ``pushing`` it leaves out the frames newer than the
-        newest one the view and the mirror both hold."""
+        confirm each of its operations."""
         ledger, frames = history_frames(history.items)
-        newer: set[str] = set()
-        if pushing:
-            frames, newer = self._covered(frames)
-        batch = self._edit_batch(ledger, frames, history.policy.texts, newer)
+        return self._begin(self._edit_batch(ledger, frames, history.policy.texts))
+
+    def _begin(self, batch: EditBatch) -> EditBatch:
         self._edit, self._edit_error = batch, None
         self._unconfirmed = {op.key for op in batch.operations}
         return batch
 
+    def _replacement(
+        self, frame: ViewFrame, sent: SentFrame, previous_item_id: str
+    ) -> list[Operation]:
+        """Replace a sent user item whose text changed or whose screenshot folded with the
+        view's, where it was: delete it, then create the view's after ``previous_item_id``.
+        Nothing when it is unchanged."""
+        if frame.text == sent.text and not (frame.item.block.folded and not sent.folded):
+            return []
+        delete = Delete(sent.user_item_id, self._new_id("delete"))
+        create = self._frame_create(
+            frame, previous_item_id=previous_item_id, event_id=self._new_id("create")
+        )
+        return [delete, create]
+
     def _edit_batch(
-        self,
-        ledger: RequestItem | None,
-        frames: list[ViewFrame],
-        texts: FixedTexts,
-        newer: set[str],
+        self, ledger: RequestItem | None, frames: list[ViewFrame], texts: FixedTexts
     ) -> EditBatch:
         """Plan one in-place edit from the history view, in send order: delete the items of sent
-        frames the view no longer holds, except those pushed after it (``newer``), replace the
-        ledger if its text changed, then replace each user item whose text changed or whose
-        screenshot folded, after the item before it. Every operation names its client event."""
+        frames the view no longer holds, replace the ledger if its text changed, then replace each
+        user item whose text changed or whose screenshot folded, after the item before it. Every
+        operation names its client event."""
         operations: list[Operation] = []
-        retained = {frame.id for frame in frames} | newer
+        retained = {frame.id for frame in frames}
         for frame_id, sent in self.frames.items():
             if frame_id not in retained:
                 for item_id in (sent.user_item_id, *sent.assistant_item_ids):
@@ -400,19 +390,11 @@ class RealtimeSessionCore:
         for frame in frames:
             sent = self.frames[frame.id]
             folded = frame.item.block.folded
-            user_item_id = sent.user_item_id
-            prompt_changed = frame.text != sent.text
-            if prompt_changed or (folded and not sent.folded):
-                operations.append(Delete(user_item_id, self._new_id("delete")))
-                replacement = self._frame_create(
-                    frame,
-                    previous_item_id=previous_item_id,
-                    event_id=self._new_id("create"),
-                )
-                operations.append(replacement)
-                folded_count += int(folded and not sent.folded)
-                prompt_edit_count += int(prompt_changed)
-                user_item_id = replacement.item_id
+            replacement = self._replacement(frame, sent, previous_item_id)
+            operations += replacement
+            folded_count += int(folded and not sent.folded)
+            prompt_edit_count += int(frame.text != sent.text)
+            user_item_id = replacement[-1].item_id if replacement else sent.user_item_id
             sent_frames[frame.id] = (user_item_id, frame.text, folded)
             assistant_item_ids = sent.assistant_item_ids
             previous_item_id = assistant_item_ids[-1] if assistant_item_ids else user_item_id
@@ -469,17 +451,14 @@ class RealtimeSessionCore:
         for frame_id in batch.removed:
             del self.frames[frame_id]
         for frame_id, planned in batch.frames.items():
-            # A frame whose push the server refused while the edit waited has left the mirror.
-            # The edit neither changed it nor anchored on it, or the server would have failed it.
-            sent = self.frames.get(frame_id)
-            if sent is not None:
-                sent.user_item_id, sent.text, sent.folded = planned
+            sent = self.frames[frame_id]
+            sent.user_item_id, sent.text, sent.folded = planned
         return batch
 
     def queue_edit(self, history: CanonicalRequest) -> EditBatch | None:
-        """Plan a native-streaming edit to the history view, leaving out the frames newer than the
-        newest one the view and the session both hold, or keep the view while an edit is not
-        finished: one edit is sent at a time. Returns the batch to send now, if any."""
+        """Plan a native-streaming edit to the streaming history view, or keep the view while an
+        edit is not finished: one edit is sent at a time. Returns the batch to send now, if
+        any."""
         self._queued = history
         return self.next_edit()
 
@@ -490,10 +469,62 @@ class RealtimeSessionCore:
         if self._edit is not None or self._queued is None:
             return None
         history, self._queued = self._queued, None
-        problem = self.in_place_problem(history, pushing=True)
-        if problem is not None:
-            raise RuntimeError(f"Realtime history edit refused: {problem}")
-        return self.begin_edit(history, pushing=True)
+        blocks = self._held_blocks(history)
+        if not all(self._holds(item.block) for item in blocks):
+            # The view still holds a block whose push the server refused.
+            raise RuntimeError(
+                "Realtime history edit refused: retained block is missing its provider item ID"
+            )
+        return self._begin(self._fold_batch(blocks))
+
+    def _holds(self, block) -> bool:
+        return block.id in (self.outputs if block.kind == "model_output" else self.frames)
+
+    def _held_blocks(self, history: CanonicalRequest) -> list[RequestItem]:
+        """A native-streaming view's blocks up to the newest one the session holds, which an edit
+        covers. The view's blocks after it are not pushed yet, or were refused; the session's
+        blocks the view lacks were pushed after it was made, as a view keeps every block it once
+        had (decision 4.6). The edit leaves both alone."""
+        blocks = streaming_blocks(history.items)
+        held = [index for index, item in enumerate(blocks) if self._holds(item.block)]
+        return blocks[: held[-1] + 1] if held else []
+
+    def _fold_batch(self, blocks: list[RequestItem]) -> EditBatch:
+        """Plan one native-streaming edit from the blocks it covers, in send order: replace each
+        user item whose text changed or whose screenshot folded, after the item of the block
+        before it in the view, as a turn-based edit does (decision 23: the view folds each frame
+        older than the newest K to the turn-based placeholder). A frame pushed while a reply ran
+        is before the reply in the view but may be after its items on the server; its
+        replacement goes where the view has it, as a rebuild would put it. Every block stays, so
+        nothing else is deleted. Every operation names its client event."""
+        operations: list[Operation] = []
+        replaced: dict[str, tuple[str, str, bool]] = {}
+        folded_count = 0
+        prompt_edit_count = 0
+        previous_item_id = "root"
+        for item in blocks:
+            block = item.block
+            if block.kind == "model_output":
+                if self.outputs[block.id]:
+                    previous_item_id = self.outputs[block.id][-1]
+                continue
+            sent = self.frames[block.id]
+            replacement = self._replacement(ViewFrame(item), sent, previous_item_id)
+            operations += replacement
+            folded_count += int(block.folded and not sent.folded)
+            prompt_edit_count += int(block.text != sent.text)
+            previous_item_id = replacement[-1].item_id if replacement else sent.user_item_id
+            if replacement:
+                replaced[block.id] = (previous_item_id, block.text, block.folded)
+        return EditBatch(
+            tuple(operations),
+            self.ledger_item_id,
+            self.ledger_text,
+            replaced,
+            (),
+            folded_count,
+            prompt_edit_count,
+        )
 
     def start_generation(self, frame_id: str) -> Generation:
         """Register the response about to be requested for a sent frame. The first
@@ -524,9 +555,9 @@ class RealtimeSessionCore:
             event_id = getattr(error, "event_id", None)
             push = self.pushes.get(event_id)
             if push is not None:
-                # The server did not make the frame's item.
+                # The server did not make the block's item.
                 push.error = error
-                del self.frames[push.frame_id]
+                del self.frames[push.block_id]
                 return True
             edit = self._edit
             about_edit = edit is not None and event_id in edit.client_events
