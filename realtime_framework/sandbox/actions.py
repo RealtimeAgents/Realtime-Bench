@@ -154,6 +154,11 @@ class GuestEnvironment:
         # The identities of the keys the last execute() leased with a hold_key, for the kernel's
         # shell, which ends the leases itself.
         self.last_held_keys = ()
+        # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
+        # makes go to last_end_checks (None for a read that answered, the error of one that
+        # failed) instead of done(), which invalidates the run at the first failure.
+        self.kernel_counts_reads = False
+        self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
         self._wall_holds = {}
         self._wall_lock = threading.RLock()
@@ -260,12 +265,25 @@ class GuestEnvironment:
                         continue
                 self._advance_clock(step)
                 self._release_expired_clock_keys()
-                if self.done():
+                if self._ended_after_step():
                     break
             return
         clock = self.clocks.semantic
         while self.tick_index() < target and clock.time() < self.deadline:
             clock.sleep(0.03)
+
+    def _ended_after_step(self):
+        """The end check after each token step of wait_until_tick. When the kernel counts failed
+        reads, a failed one goes to last_end_checks and the advance goes on."""
+        if not self.kernel_counts_reads:
+            return self.done()
+        try:
+            ended, _ = self.check_end()
+        except Exception:  # noqa: BLE001 - the kernel counts the failed read
+            self.last_end_checks += (traceback.format_exc(),)
+            return False
+        self.last_end_checks += (None,)
+        return ended
 
     def step_clock(self, step):
         """Token clock, for the kernel's shell: advance ``step`` ticks, never past the episode
@@ -893,6 +911,7 @@ class GuestEnvironment:
         """Apply one action and return its lifecycle status to the scheduler. The kernel's shell
         gives a wall-clock hold_key the time to release its keys, ``release_at``."""
         self.last_held_keys = ()
+        self.last_end_checks = ()
         action_type = action.action_type
         if action_type in (ActionType.DONE, ActionType.FAIL):
             if self.honor_fail:
