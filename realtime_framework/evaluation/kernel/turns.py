@@ -527,11 +527,9 @@ class TurnPolicy:
         if self.phase is not _Phase.EXECUTE:
             return
         d, kernel = self.decision, self.kernel
-        # A tap's end checks were made before the action finished, the last on the frame it
-        # stopped at. One that saw the end ends the episode there, by the task's reason; no
-        # check follows.
-        if event.end_checks:
-            self._read_at = kernel.semantic
+        # A tap's end checks were made before the action finished, the last on the tick it
+        # stopped at, which the check right after the action reads again. One that saw the end
+        # ends the episode there, by the task's reason; no check follows.
         for ended, reason, error in event.end_checks:
             if self._count_read(error):
                 break
