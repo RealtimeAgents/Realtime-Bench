@@ -833,7 +833,28 @@ def test_declared_methods_exist():
         for flag, method in methods.items():
             if getattr(capabilities, flag):
                 assert callable(getattr(driver, method, None)), (api, method)
+        assert capabilities.request_size_estimation == callable(
+            getattr(driver, "request_context_status", None)
+        ), api
         assert capabilities.interaction_modes == {"turn_based"}
+
+
+def test_context_status_needs_its_declaration():
+    """The runtime asks request_context_status only of an API that declares
+    request_size_estimation (harnesses/default/context.py _run_turn). A driver that has the
+    method without the flag, as the method alone once sufficed, is refused at load instead of
+    never archiving under context pressure."""
+    driver = catalog.adapter_class("chat_completions")
+    undeclared = type(
+        "Undeclared",
+        (driver,),
+        {"capabilities": replace(driver.capabilities, request_size_estimation=False)},
+    )
+    fails(
+        lambda: catalog._check_driver("ext.chat:Undeclared", undeclared),
+        "'ext.chat:Undeclared' has request_context_status() but does not declare "
+        "request_size_estimation",
+    )
 
 
 def test_declared_roles_are_the_encoders_roles():
