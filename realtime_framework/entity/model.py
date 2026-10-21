@@ -297,6 +297,9 @@ class OutputCollector(Protocol):
 @runtime_checkable
 class RealtimeDriver(Protocol):
     capabilities: RealtimeCapabilities
+    # The episode's operational clock, which the harness passes as Class(config, clock=clock).
+    # The HTTP capture hooks (providers/capture.py) time each response on it.
+    clock: Clock
 
     async def connect(self, request: ConnectRequest) -> None: ...
 

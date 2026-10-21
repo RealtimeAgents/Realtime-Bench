@@ -333,6 +333,7 @@ def load_definitions(directory):
 Only the selected implementation is imported, so optional SDKs never affect other APIs.
 """
 
+import inspect as inspect
 from importlib import import_module as import_module
 
 from realtime_framework.entity.model import Deployment, ModelClient, RealtimeCapabilities
@@ -400,10 +401,17 @@ def _external_class(target: str) -> type:
 
 def _check_driver(target: str, driver: type) -> None:
     """Check that a driver class has what the catalog, the pre-run checks, the harness and the
-    runtime read from it; registered drivers meet the same contract."""
+    runtime read from it, and takes what the harness builds it with; registered drivers meet the
+    same contract."""
     missing = [name for name in _DRIVER_METHODS if not callable(getattr(driver, name, None))]
     if missing:
         raise ValueError(f"{target!r} is not a model encoder: missing {', '.join(missing)}")
+    try:
+        inspect.signature(driver).bind(None, clock=None)
+    except TypeError as exc:
+        raise ValueError(
+            f"{target!r} cannot be built as {driver.__name__}(config, clock=clock): {exc}"
+        ) from None
     for name, kind in _DRIVER_DECLARATIONS:
         if not isinstance(getattr(driver, name, None), kind):
             declaration = f"a {kind.__name__} class attribute"

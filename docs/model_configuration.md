@@ -91,13 +91,16 @@ A model that needs a new wire protocol gets a driver:
 1. Write a driver in `realtime_framework/providers/` implementing `RealtimeDriver`
    (`realtime_framework/entity/model.py`): `connect`, `send_observation`, `start_generation`,
    `events`, `interrupt`, `sync_history`, `close`, plus `bind_trace(trace)`, which receives the
-   episode trace. Its constructor takes the model config and the keyword `clock`
-   (`realtime_framework/clock.py`), kept as `self.clock`; every wait and time read goes through
-   it. Stateless APIs make `connect` and `sync_history` no-ops and send the canonical
-   request (`GenerationRequest.canonical`, `realtime_framework/entity/request.py`) in their own
-   format; session APIs send each observation and keep native history. Build HTTP clients with
-   the hooks in `realtime_framework/providers/capture.py`, so every request and response is
-   recorded.
+   episode trace. The harness builds it as `Driver(config, clock=clock)`, with the episode's
+   operational clock (`realtime_framework/clock.py`); a driver whose constructor cannot take
+   `clock` is refused when its model is loaded. Keep it as `self.clock`: the capture hooks below
+   time each response on it, and the driver's own waits and time reads (a pause between
+   requests, a grace period) go through it. Transport timeouts, such as an HTTP client's or a
+   WebSocket receive's, stay in real time. Stateless APIs make `connect` and `sync_history`
+   no-ops and send the canonical request (`GenerationRequest.canonical`,
+   `realtime_framework/entity/request.py`) in their own format; session APIs send each
+   observation and keep native history. Build HTTP clients with the hooks in
+   `realtime_framework/providers/capture.py`, so every request and response is recorded.
 2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
    timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
    which optional methods it implements, and what it can render of the context policy: `roles`,

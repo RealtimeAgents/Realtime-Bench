@@ -336,6 +336,14 @@ def test_preflight_reads_the_external_declaration(external, capsys):
                 "bind_trace"
             ),
         ),
+        # The harness builds every driver as Class(config, clock=clock).
+        (
+            "rtb_ext.broken:NoClock",
+            (
+                "'rtb_ext.broken:NoClock' cannot be built as NoClock(config, clock=clock): "
+                "got an unexpected keyword argument 'clock'"
+            ),
+        ),
         # The template declares request_size_estimation: the runtime estimates every request.
         (
             "rtb_ext.broken:NoContextStatus",
@@ -381,9 +389,9 @@ def test_preflight_reads_the_external_declaration(external, capsys):
             ),
         ),
     ],
-    ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-context-status",
-         "no-capabilities", "no-deployment", "no-model-defaults", "classifier-flag",
-         "renewal-flag", "output-cap-flag"],
+    ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
+         "no-context-status", "no-capabilities", "no-deployment", "no-model-defaults",
+         "classifier-flag", "renewal-flag", "output-cap-flag"],
 )
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")
