@@ -43,6 +43,8 @@ class World:
     end_reason: str | None = None
     capture_s: float = 0.0
     check_s: float = 0.0
+    # (start, end, seconds): an end check asked in [start, end) of semantic time takes ``seconds``
+    slow_checks: list[tuple[float, float, float]] = field(default_factory=list)
     execute_s: float = 0.0
     snapshot_s: float = 0.0
     frozen_from: int | None = None  # from this capture on, every frame repeats one identity
@@ -134,7 +136,9 @@ class Environment:
 
     def check_end(self) -> tuple[bool, str | None]:
         self.checks += 1
-        self.clock.sleep(self.world.check_s)
+        now = self.semantic()
+        slow = [seconds for start, end, seconds in self.world.slow_checks if start <= now < end]
+        self.clock.sleep(slow[0] if slow else self.world.check_s)
         self.log("check_end", check=self.checks)
         if self.checks in self.world.check_errors:
             raise RuntimeError(self.world.check_errors[self.checks])

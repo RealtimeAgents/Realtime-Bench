@@ -39,9 +39,13 @@ def test_the_shell_steps_only_when_something_is_due(steps):
     episode = run("wall", 3.0, [Reply(2.5)])
     assert episode.statuses() == ["applied"]
     assert sorted({semantic for semantic, _, _ in steps}) == [0.0, 1.0, 2.0, 2.5, 3.0]
-    # Each sleep ended on something due, so the step right after it handled it.
+    # Each sleep ended on something due: the step right after it handled it, or, woken by a
+    # returned result, it found nothing else due and the step that took the result came next.
     idle = [index for index, (_, _, due) in enumerate(steps) if not due]
-    assert all(steps[index + 1][2] for index in idle if index + 1 < len(steps))
+    for index in idle[:-1]:
+        _, _, due = steps[index + 1]
+        if not due:
+            assert steps[index + 2][2] and steps[index + 2][0] == steps[index + 1][0]
 
 
 @pytest.mark.parametrize(
