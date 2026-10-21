@@ -598,6 +598,14 @@ class GuestEnvironment:
         ensure = getattr(self.scene_capture, "ensure_page_focus", None)
         return bool(ensure()) if callable(ensure) else False
 
+    def _count_as_held(self, parts):
+        """Keys whose press or release failed may still be down on the page: count them as held,
+        so that the cleanup releases them (a key held already keeps its lease)."""
+        for identity, wire in parts:
+            self._held_keys.setdefault(
+                identity, {"wire": wire, "expires_at_tick": self._logical_tick}
+            )
+
     def _execute_clock_key(self, action):
         parts, chord = self._key_chord(action)
         requested_identities = {identity for identity, _ in parts}
@@ -607,17 +615,21 @@ class GuestEnvironment:
             # Modifiers held by an earlier hold_key stay down: they only flag the tap's events.
             inherited_modifiers = self._held_modifiers(exclude=requested_identities)
             for _ in range(repeat):
-                self._clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
-                # A new press of a repeatable key takes over auto-repeat on a real keyboard; the
-                # tap is released before its first repeat could fire, so nothing repeats
-                # afterwards. Modifier keys do not repeat and leave the repeating key alone.
-                if any(identity not in MODIFIER_KEYS for identity, _ in parts):
-                    self._repeat_key = None
-                # Games that poll key state once per draw (reading a keys-down map in draw())
-                # never see a keyDown+keyUp delivered inside one frozen instant. Render
-                # one frame with the key down before releasing it (~17 ms of virtual time).
-                self.wait_until_tick(self._logical_tick + TAP_HOLD_S / self.d)
-                self._clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
+                try:
+                    self._clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
+                    # A new press of a repeatable key takes over auto-repeat on a real keyboard;
+                    # the tap is released before its first repeat could fire, so nothing repeats
+                    # afterwards. Modifier keys do not repeat and leave the repeating key alone.
+                    if any(identity not in MODIFIER_KEYS for identity, _ in parts):
+                        self._repeat_key = None
+                    # Games that poll key state once per draw (reading a keys-down map in draw())
+                    # never see a keyDown+keyUp delivered inside one frozen instant. Render
+                    # one frame with the key down before releasing it (~17 ms of virtual time).
+                    self.wait_until_tick(self._logical_tick + TAP_HOLD_S / self.d)
+                    self._clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
+                except Exception:
+                    self._count_as_held(parts)
+                    raise
             # A tap of an already-held key must not terminate its outstanding lease. The lease may
             # have expired during the rendered frame above, so only keys still held are pressed
             # again.
@@ -662,17 +674,13 @@ class GuestEnvironment:
         if new_parts:
             try:
                 self._clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+                if duration <= 1e-9:
+                    self._clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
             except Exception:
-                # The press may have reached the page: its keys count as held, for the cleanup.
-                for identity, wire in new_parts:
-                    self._held_keys[identity] = {
-                        "wire": wire,
-                        "expires_at_tick": self._logical_tick,
-                    }
+                self._count_as_held(new_parts)
                 raise
         if duration <= 1e-9:
             if new_parts:
-                self._clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
                 # The transient press took over auto-repeat and was released at once.
                 self._repeat_key = None
         else:
@@ -850,14 +858,7 @@ class GuestEnvironment:
                         ]
                     )
                 except Exception:
-                    # The keydown may have reached the desktop: its keys count as held, for the
-                    # cleanup.
-                    for identity, wire in new_parts:
-                        self._wall_holds[identity] = {
-                            "wire": wire,
-                            "keysym": keysyms[identity],
-                            "expires_at": now,
-                        }
+                    self._count_as_held_on_the_wall(action)
                     raise
             pressed_at = self.clocks.semantic.time()
             expires_at = (
@@ -893,6 +894,23 @@ class GuestEnvironment:
                 # key an earlier hold keeps down longer goes up at that one's end.
                 result["lease_seconds"] = round(expires_at - pressed_at, 3)
             return result
+
+    def _count_as_held_on_the_wall(self, action):
+        """The keys of an action whose press or release failed may still be down on the desktop:
+        count those xdotool can name as held, so that the cleanup releases them (a key held
+        already keeps its lease)."""
+        try:
+            parts, _ = self._key_chord(action)
+        except ValueError:
+            return
+        with self._wall_lock:
+            now = self.clocks.semantic.time()
+            for identity, wire in parts:
+                keysym = _xdotool_keysym(identity)
+                if keysym is not None:
+                    self._wall_holds.setdefault(
+                        identity, {"wire": wire, "keysym": keysym, "expires_at": now}
+                    )
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
@@ -1069,11 +1087,18 @@ class GuestEnvironment:
                     # which validates them (HTTP 400 for unsupported names).
                     result = self._execute_wall_hold(action, release_at)
                 if result is None:
-                    result = self.g.execute_action(action)
-                    if self.clock_mode != "token" and action_type in (
+                    wall_key = self.clock_mode != "token" and action_type in (
                         ActionType.KEY,
                         ActionType.HOLD_KEY,
-                    ):
+                    )
+                    try:
+                        result = self.g.execute_action(action)
+                    except Exception as exc:
+                        # The guest presses and releases these keys itself; a refusal pressed none.
+                        if wall_key and self._refusal(exc) is None:
+                            self._count_as_held_on_the_wall(action)
+                        raise
+                    if wall_key:
                         restored = self._restore_wall_holds(action)
                         if restored:
                             if not isinstance(result, dict):
