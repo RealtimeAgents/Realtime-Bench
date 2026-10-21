@@ -260,5 +260,7 @@ def check_episode(model_config, *, clock_mode, task, interaction_mode="turn_base
     check_choice_task(driver, task)
     check_fps(driver, model_config.fps)
     check_session_config(driver, model_config)
-    policy = current_context_policy().for_path(adapter_type, model_config.provider_options)
+    policy = current_context_policy().for_path(
+        adapter_type, model_config.provider_options, model_config.context_preset
+    )
     check_context_policy(driver, policy, model_config)

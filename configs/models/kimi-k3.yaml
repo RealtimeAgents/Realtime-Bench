@@ -4,3 +4,4 @@ endpoint:
   api_key_env: MOONSHOT_API_KEY
   base_url: https://api.moonshot.ai/v1
 reasoning_effort: low
+context_preset: kimi_k3

@@ -77,6 +77,8 @@ import yaml
 
 from functools import lru_cache
 
+from realtime_framework.entity.context_policy import MODEL_PRESETS
+
 
 _LITELLM = "realtime_framework.providers.litellm:"
 
@@ -262,8 +264,14 @@ def load_definitions(directory):
     ]:
         if not isinstance(value, dict):
             raise ValueError(f"{filename}: model definition must be a mapping")  # noqa: TRY004
-        if set(value) - {"endpoint", "reasoning_effort"} or "endpoint" not in value:
-            raise ValueError(f"{filename}: use an endpoint block, plus optional reasoning_effort")
+        if (
+            set(value) - {"endpoint", "reasoning_effort", "context_preset"}
+            or "endpoint" not in value
+        ):
+            raise ValueError(
+                f"{filename}: use an endpoint block, plus optional reasoning_effort and "
+                "context_preset"
+            )
         key = Path(filename).stem
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in seen:
             raise ValueError(f"{filename}: invalid, duplicate or reserved model name {key!r}")
@@ -309,6 +317,12 @@ def load_definitions(directory):
                 f"{filename}: reasoning_effort must be one of {definition['reasoning_efforts']}"
             )
         definition["defaults"]["reasoning_effort"] = effort
+        if "context_preset" in value:
+            definition["defaults"]["context_preset"] = value["context_preset"]
+        # The YAML's preset, else the one the driver's model_defaults gave (merged above).
+        defaults = definition["defaults"]
+        if "context_preset" in defaults and defaults["context_preset"] not in MODEL_PRESETS:
+            raise ValueError(f"{filename}: context_preset must be one of {list(MODEL_PRESETS)}")
         result.append((filename, definition))
     return result
 
@@ -404,10 +418,10 @@ def _check_driver(target: str, driver: type) -> None:
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
 catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
-connections and reasoning effort. The loader imports the driver module of each API it reads,
-an external driver's included, with what those modules import (the OpenAI SDK, websockets and
-Pillow among them), and reading LiteLLM's model map imports litellm (_litellm_model_map). The
-Gemini SDK is imported only when its driver is constructed.
+connections, reasoning effort and the context-policy preset. The loader imports the driver
+module of each API it reads, an external driver's included, with what those modules import (the
+OpenAI SDK, websockets and Pillow among them), and reading LiteLLM's model map imports litellm
+(_litellm_model_map). The Gemini SDK is imported only when its driver is constructed.
 """
 
 import difflib as difflib

@@ -165,6 +165,9 @@ class ModelConfig(BaseModel):
     # Driver-specific wire options from the driver class's model_defaults (for example Gemini Live
     # tool scheduling). Each driver validates its own keys; the context policy reads history_format.
     provider_options: dict = Field(default_factory=dict)
+    # The context-policy preset the model takes in place of its API row's (one of
+    # entity/context_policy.py MODEL_PRESETS), from its model YAML's context_preset.
+    context_preset: str | None = None
     # OpenRouter's concrete upstream provider slug. When set, the transport restricts routing to
     # this provider, disables fallbacks, and requires support for every requested parameter.
     # Keeping it in ModelConfig makes the route part of the effective runtime-config hash.

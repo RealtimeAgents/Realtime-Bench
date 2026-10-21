@@ -349,7 +349,9 @@ def _probe_runner(request: dict) -> dict:
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
         # (harnesses/default/harness.py:1003).
-        policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
+        policy = current_context_policy().for_path(
+            config.adapter_type, config.provider_options, config.context_preset
+        )
         state["settings_at_agent_setup"] = {
             "active_visual_budget": policy.visuals.keep,
             "visual_fold_block_size": policy.visuals.block,

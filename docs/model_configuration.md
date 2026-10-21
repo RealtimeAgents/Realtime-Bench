@@ -75,6 +75,15 @@ models gained, lost or changed a limit and 54 limits went down, for example
 upgrades, declare it in a preset, as `configs/models/deepseek-v4.1-flash.yaml` does. The run
 records the resolved preset, limit included, so results with different settings are never mixed.
 
+### Context preset
+
+`context_preset` (top level, optional) names a set of context-policy values the model takes in
+place of the standard ones. A model can name only `kimi_k3` (`MODEL_PRESETS` in
+`realtime_framework/entity/context_policy.py`), which sends K3's past reasoning back, as Kimi
+requires for K3: `configs/models/kimi-k3.yaml` sets it, and other moonshot models leave it out and
+send none. A preset the API cannot render is refused before the run, and the run records the
+preset with its configuration.
+
 ## Add a model API
 
 A model that needs a new wire protocol gets a driver:
@@ -127,7 +136,8 @@ driver as a [model API](#add-a-model-api).
    `server_context="none"` for a stateless API. Each optional-method flag you set
    (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
    `maps_output_cap`) needs its method. The driver runs under the `chat_completions` context
-   policy: with `request_size_estimation`, the runtime asks `request_context_status(request)`
+   policy, with the model's [context preset](#context-preset) if it names one. With
+   `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
    window; without a declared window the method returns
    `{"pressure": False, "counter": "unconfigured"}`.
