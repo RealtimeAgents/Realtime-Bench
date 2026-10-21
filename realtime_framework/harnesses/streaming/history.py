@@ -119,13 +119,16 @@ def history_view(
     cut = outputs[archived - 1] if archived else -1
     archived_ids = {blocks[index].id for index in outputs[:archived]}
     items = [RequestItem(system, Intent("instruction", "head"))]
-    if archived:
-        records = [record for index in outputs[:archived] for record in actions[blocks[index].id]]
-        # Dated by the reply whose acceptance last grew the archive.
-        grown = blocks[outputs[policy.turns.keep + archived - policy.turns.block]]
+    replies = [actions[blocks[index].id] for index in outputs[:archived]]
+    records = [record for reply in replies for record in reply]
+    if records:
+        # Dated, as the turn-based ledger is when its action count grows, by the reply whose
+        # acceptance archived the newest reply with actions.
+        newest = max(n for n, reply in enumerate(replies) if reply)
+        turns = policy.turns
+        grown = blocks[outputs[turns.keep + newest // turns.block * turns.block]]
         ledger = ledger_block(executed_action_ledger(records), len(records), grown.time.wall_ns)
-        if ledger is not None:
-            items.append(RequestItem(ledger, Intent(policy.ledger_role, "after_head")))
+        items.append(RequestItem(ledger, Intent(policy.ledger_role, "after_head")))
     for index, block in enumerate(blocks):
         if block.kind != "frame":
             if block.id in archived_ids or block.attached_to in archived_ids:
