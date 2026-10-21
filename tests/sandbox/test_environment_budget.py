@@ -818,10 +818,9 @@ class _DesktopCommands:
         return {"returncode": 0}
 
 
-def test_the_cleanup_releases_the_keys_of_a_wall_hold_whose_keydown_request_failed():
-    clock = FakeClock(wall_origin=1_000.0)
-    guest = _DesktopCommands(clock)
-    env = actions.GuestEnvironment(
+def _wall_on(clock: FakeClock, guest) -> actions.GuestEnvironment:
+    """A GuestEnvironment on the wall clock, timed on ``clock``, whose guest is ``guest``."""
+    return actions.GuestEnvironment(
         guest,
         1_060.0,
         _WallTask(),
@@ -830,6 +829,12 @@ def test_the_cleanup_releases_the_keys_of_a_wall_hold_whose_keydown_request_fail
         wall_start_time=1_000.0,
         clocks=Clocks(clock, clock),
     )
+
+
+def test_the_cleanup_releases_the_keys_of_a_wall_hold_whose_keydown_request_failed():
+    clock = FakeClock(wall_origin=1_000.0)
+    guest = _DesktopCommands(clock)
+    env = _wall_on(clock, guest)
     with clock.participant():
         assert env.execute(Action.hold_key("a", 1.0)) == "failed"
         env.release_inputs()
@@ -837,6 +842,92 @@ def test_the_cleanup_releases_the_keys_of_a_wall_hold_whose_keydown_request_fail
         "xdotool keydown -- a",
         "xdotool keyup -- a",
     ]
+
+
+def _a_frame_that_fails(frames=1, key_events=()):
+    raise RuntimeError("browser frame advanced without a compositor commit")
+
+
+@pytest.mark.parametrize(
+    ("action", "failing"),
+    [
+        pytest.param(TAP, "press", id="a-tap-s-press"),
+        pytest.param(TAP, "frame", id="a-tap-s-frame"),
+        pytest.param(TAP, "release", id="a-tap-s-release"),
+        pytest.param(Action.hold_key("space", 0.0), "release", id="a-0-s-hold-s-release"),
+    ],
+)
+def test_the_cleanup_releases_the_keys_of_a_tap_or_a_0_s_hold_that_failed(action, failing):
+    """Coordinator's decision N23, as N20: the key may be down on the page."""
+    clock = FakeClock()
+    env, task = _timed(clock)
+    if failing == "frame":
+        task.advance_clock = _a_frame_that_fails
+    else:
+        _slow_key_event(clock, task, 0 if failing == "press" else 1, 60.0)
+    with clock.participant():
+        assert env.execute(action) == "failed"
+        env.release_inputs()
+    assert [event["key"] for event in task.events if event["event"] == "keyUp"] == ["space"]
+    assert env._held_keys == {}
+
+
+def test_a_failed_tap_of_a_held_key_leaves_its_lease_as_it_was():
+    clock = FakeClock()
+    env, task = _timed(clock)
+    env.execute(Action.hold_key("space", 5.0))
+    _slow_key_event(clock, task, 1, 60.0)
+    with clock.participant():
+        assert env.execute(TAP) == "failed"
+    assert env._held_keys["space"]["expires_at_tick"] == 5.0
+
+
+class _FailingGuest(_DesktopCommands):
+    """The guest, whose action endpoint fails with ``error``."""
+
+    def __init__(self, clock: FakeClock, error: Exception):
+        super().__init__(clock)
+        self.error = error
+
+    def execute_action(self, action: Action) -> dict:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("action", "error", "keyups"),
+    [
+        pytest.param(
+            Action(ActionType.KEY, {"key": "a"}),
+            requests.ReadTimeout("read timed out"),
+            ["xdotool keyup -- a"],
+            id="a-tap",
+        ),
+        pytest.param(
+            Action.hold_key("a", 0.0),
+            requests.ReadTimeout("read timed out"),
+            ["xdotool keyup -- a"],
+            id="a-0-s-hold",
+        ),
+        pytest.param(
+            Action(ActionType.KEY, {"key": "a"}),
+            GuestRefused("400 guest rejected the action"),
+            [],
+            id="a-refused-tap",
+        ),
+    ],
+)
+def test_the_cleanup_releases_the_keys_of_a_wall_tap_whose_guest_request_failed(
+    action, error, keyups
+):
+    """On the wall clock the guest presses and releases a tap or a 0 s hold itself; a refusal
+    pressed nothing."""
+    clock = FakeClock(wall_origin=1_000.0)
+    guest = _FailingGuest(clock, error)
+    env = _wall_on(clock, guest)
+    with clock.participant():
+        assert env.execute(action) == "failed"
+        env.release_inputs()
+    assert [command for command in guest.commands if "keyup" in command] == keyups
 
 
 @pytest.mark.parametrize("slow", [True, False], ids=["slow", "failing"])
