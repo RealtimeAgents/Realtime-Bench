@@ -1021,6 +1021,23 @@ def test_streaming_settings_of_a_model_yaml(tmp_path, endpoint, streaming, messa
     fails(lambda: catalog.load_definitions(models), message)
 
 
+def test_streaming_settings_compare_the_thresholds_a_driver_has_both_of(tmp_path, monkeypatch):
+    """A driver may take one compression threshold and not the other."""
+    from realtime_framework.providers.gemini.live import GeminiLiveDriver
+
+    monkeypatch.setattr(
+        GeminiLiveDriver, "streaming_settings", {"compression_target_tokens": 32_768}
+    )
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "m.yaml").write_text(
+        "endpoint: {api: gemini_live, model: gemini-3.8-live}\n"
+        "streaming: {compression_target_tokens: 16384}\n"
+    )
+    ((_, definition),) = catalog.load_definitions(models)
+    assert definition["defaults"]["streaming"] == {"compression_target_tokens": 16_384}
+
+
 def test_reasoning_effort_of_other_apis():
     fails(
         lambda: catalog.validate_reasoning_effort("gemini-live", "bogus"),

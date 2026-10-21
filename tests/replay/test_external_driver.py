@@ -407,11 +407,19 @@ def test_preflight_reads_the_external_declaration(external, capsys):
                 "streaming_settings (a dict class attribute)"
             ),
         ),
+        # Held to what a model YAML's are, which replace them.
+        (
+            "rtb_ext.broken:StreamingBadSettings",
+            (
+                "'rtb_ext.broken:StreamingBadSettings': streaming.compression_trigger_tokens "
+                "must be a positive integer"
+            ),
+        ),
     ],
     ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
          "no-context-status", "no-capabilities", "no-deployment", "no-model-defaults",
          "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-switch",
-         "streaming-no-settings"],
+         "streaming-no-settings", "streaming-bad-settings"],
 )
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")
