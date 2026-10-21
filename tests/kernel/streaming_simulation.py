@@ -29,7 +29,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 
-from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
@@ -542,9 +542,27 @@ class Simulation:
         assert not set(self.accepted) & set(self.discarded)
         # The policy keeps one environment operation out at a time: each one it asks for takes
         # the gate when it is asked, so it acts in the world before the deadline, as asked.
-        for name, asked, started, _ in self.operations:
-            if name != "snapshot":
-                assert started == asked, f"the {name} asked at {asked} waited until {started}"
+        gated = [op for op in self.operations if op[0] != "snapshot"]
+        for name, asked, started, _ in gated:
+            assert started == asked, f"the {name} asked at {asked} waited until {started}"
+        # The state is read at most once a frame, but right after an action; an action applied
+        # while the episode ran is followed by that read before anything else takes the
+        # environment (decision 31).
+        applied = {
+            data["started_at"]: data
+            for data in self.resolved().values()
+            if data["status"] == "applied" and data["action"].action_type is not ActionType.WAIT
+        }
+        read = None
+        for before, after in itertools.pairwise([(None, 0.0, 0.0, 0.0), *gated]):
+            if after[0] == "check":
+                frame = math.floor(after[2] * self.config.env_fps + 1e-9)
+                assert frame != read or before[0] == "execute", f"frame {frame} read twice"
+                read = frame
+            if before[0] == "execute" and not applied.get(before[2], {}).get(
+                "terminal_after_action", True
+            ):
+                assert after[0] == "check", f"no read after {before}"
         # Every action that arrived has exactly one outcome, recorded and committed; the nth
         # arrival is action n. Only a real action is a proposal, as on the turn-based clock.
         arrivals = self.entries("ActionArrived")

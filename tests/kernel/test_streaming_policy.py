@@ -134,13 +134,13 @@ def test_a_grid_point_that_comes_during_a_capture_is_skipped_and_counted():
 
 
 def test_grid_points_that_pass_while_the_shell_is_held_are_skipped_and_counted():
-    """The click's feedback holds the shell from 0.25 to 2.75. The capture due at 1 is made then,
-    and the one due at 2 is skipped."""
+    """The click's feedback, given once the read after it answers, holds the shell from 0.25 to
+    2.75. The capture due at 1 is made then, and the one due at 2 is skipped."""
     world = World(replies=[Reply(5.0, calls=(Call(0.25, CLICK),))], commit_s=2.5)
     sim = _run(world)
     assert sim.captures == [0.0, 2.75, 3.0, 4.0]
     assert sim.data("FrameDropped") == [{"observation_id": None, "reason": "late", "dropped": 1}]
-    assert sim.checks == [0.0, 2.75, 3.0, 4.0]
+    assert sim.checks == [0.0, 0.25, 2.75, 3.0, 4.0]
 
 
 def test_a_stream_that_repeats_one_frame_invalidates_the_run():
@@ -511,3 +511,48 @@ def test_a_hold_that_waits_for_the_environment_is_held_its_whole_duration():
     assert sim.executed == [(3.0, hold)]
     assert sim.data("KeyReleaseScheduled") == [{"decision": 0, "index": 0, "at": 4.0}]
     assert sim.key_events == [(4.0, ("a",))]
+
+
+# ---- reading the state (decision 31) ------------------------------------------------------------
+
+
+def test_the_state_is_read_right_after_an_action_and_an_end_it_brings_is_found_then():
+    """The click executes from 4.25 to 4.75, after the read at 4, and ends the task. The read
+    right after it finds the end before the deadline."""
+    calls = (Call(4.25, CLICK, execute_s=0.5),)
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=4.75))
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 4.75]
+    assert _ended(sim) == ("game_decided", "environment", 4.75, 4.75)
+    assert sim.resolved()[0]["terminal_after_action"] is True
+    assert sim.outcomes[0].terminal_after_action is True
+
+
+def test_an_action_waiting_behind_one_that_ends_the_task_never_executes():
+    """The click executes from 2.25 to 2.75 and ends the task; the typing waits behind it. The read
+    after the click comes first and finds the end."""
+    calls = (Call(2.25, CLICK, execute_s=0.5), Call(2.5, TYPE))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=2.75))
+    assert sim.executed == [(2.25, CLICK)]
+    assert sim.statuses() == ["applied", "not_applied_terminal"]
+    assert _ended(sim) == ("game_decided", "environment", 2.75, 2.75)
+
+
+def test_an_action_is_settled_by_the_read_after_it():
+    """The click executes from 1.25 to 1.5; the read after it takes until 1.75. The click is applied
+    once that read answers, and only then does the typing waiting behind it execute, followed by
+    its own read."""
+    calls = (Call(1.25, CLICK, execute_s=0.25), Call(1.375, TYPE))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], check_times={3: 0.25}), 3.0)
+    assert sim.checks == [0.0, 1.0, 1.5, 1.75, 2.0]
+    assert sim.executed == [(1.25, CLICK), (1.75, TYPE)]
+    click = sim.entries("ActionResolved")[0]
+    assert (click.semantic, click.data["finished_at"]) == (1.75, 1.5)
+
+
+def test_a_frame_the_read_after_an_action_read_is_not_read_again_at_its_grid_point():
+    """The click ends at 1.875 as a refused action arrives; the refusal's feedback holds the shell
+    until 2.125. The read after the click is then made in frame 2, before the grid point at 2
+    is handled, which finds frame 2 read."""
+    calls = (Call(1.25, CLICK, execute_s=0.625), Call(1.875, TYPE, grounding=MISSING_FRAME))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=0.25), 3.0)
+    assert sim.checks == [0.0, 1.0, 2.125]
