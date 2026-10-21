@@ -453,82 +453,44 @@ def test_an_orphan_message_changes_nothing():
 
 def test_a_reply_message_arrives_as_received():
     """While a generation's reply is being read, arrived() applies a message as received() does."""
-    core = session_core()
+    core = session_core(streaming=True)
     connected(core)
     start_turn(core, "turn-0")
     received = arrive(core, update("handle-0"))
     assert isinstance(received, Received)
     assert (received.connection, received.generation, received.generation_id) == (1, 1, "turn-0")
     assert arrive(core, server_content(turnComplete=True)).ends
-    assert core.resume_handle == "handle-0" and core.replies == {}
+    assert core.latest_resume_handle == "handle-0" and core.replies == {}
 
 
 def test_an_orphan_go_away_asks_for_a_new_connection():
     """Between replies, a goAway read as it arrives asks for a new connection, by the server's
     deadline, as it does in a reply."""
-    core = session_core()
+    core = session_core(streaming=True)
     connected(core)
     clean_turn(core, "turn-0", "handle-0")
     orphan = arrive(core, go_away("30s"), now=100.0)
     assert isinstance(orphan, Orphan)
     assert (orphan.connection, orphan.control) == (1, GO_AWAY_RECONNECT)
     assert core.renewal_required and core.go_away_deadline == 128.0
-    # Nothing was sent since turn-0 completed cleanly: the renewal resumes with its handle.
     assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) == (
         "handle-0"
     )
 
 
-def test_an_orphan_resumption_update_is_promoted_at_a_clean_boundary():
-    """An orphan's handle is the session's while nothing has been sent since a clean completion
-    or a seed. Once an observation is sent it is only the candidate."""
-    core = session_core()
+def test_an_orphan_resumption_update_is_the_latest_handle():
+    """Between replies, a resumable handle read as it arrives is the one a streaming renewal
+    resumes with; an unresumable update leaves the last resumable one."""
+    core = session_core(streaming=True)
     connected(core)
     clean_turn(core, "turn-0", "handle-0")
-    assert arrive(core, update("handle-1")).control == {}
-    assert core.resume_handle == "handle-1"
-    arrive(core, update(None))  # not resumable from here on: the boundary's handle stays
-    assert (core.resume_handle, core.candidate_resume_handle) == ("handle-1", None)
-
     core.observe(view([turn(1)]))
-    arrive(core, update("handle-2"))
-    assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-2")
-
-    seeded = session_core()
-    connected(seeded, view([turn(0)]))
-    arrive(seeded, update("handle-0"))
-    assert seeded.resume_handle == "handle-0"
-    fresh = session_core()
-    connected(fresh)
-    arrive(fresh, update("handle-0"))  # nothing on the session yet: no handle to resume
-    assert (fresh.resume_handle, fresh.candidate_resume_handle) == (None, "handle-0")
-
-
-def test_output_no_generation_takes_ends_the_clean_boundary():
-    """A reply the server makes of its own accord, read between replies, is not in the history:
-    a handle that arrives after it does not resume the session."""
-    for output in (
-        message({"toolCall": {"functionCalls": [{"id": "call-9", "name": "wait", "args": {}}]}}),
-        server_content(outputTranscription={"text": "unprompted"}),
-    ):
-        core = session_core()
-        connected(core)
-        clean_turn(core, "turn-0", "handle-0")
-        assert arrive(core, output).control == {}
-        arrive(core, update("handle-1"))
-        assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-1")
-        assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) is None
-
-
-def test_an_interrupt_ends_the_clean_boundary():
-    """An interrupt is an input: a handle that arrives after it is not the clean boundary's."""
-    core = session_core()
-    connected(core)
-    clean_turn(core, "turn-0", "handle-0")
-    core.interrupt_sent()
-    arrive(core, update("handle-1"))
-    assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-1")
-    assert not core.last_turn_clean
+    assert arrive(core, update("handle-1")).control == {}
+    arrive(core, update(None))
+    assert core.latest_resume_handle == "handle-1"
+    assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) == (
+        "handle-1"
+    )
 
 
 CANCELLATION = message({"toolCallCancellation": {"ids": ["call-1", "call-0"]}})
@@ -538,7 +500,7 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     """A toolCallCancellation says which calls not to execute, in the server's order, whether
     it comes in their reply, after it, or in a reply still read from a closed connection; it does
     not end the reply."""
-    core = session_core()
+    core = session_core(streaming=True)
     connected(core)
     start_turn(core, "turn-0")
     core.calls_received([("call-0", "click"), ("call-1", "key")])
@@ -591,7 +553,7 @@ def test_streaming_resumes_with_the_latest_resumable_handle():
 
 
 def test_an_orphan_from_a_closed_connection_changes_nothing():
-    core = session_core()
+    core = session_core(streaming=True)
     connected(core)
     clean_turn(core, "turn-0", "handle-0")
     connected(core, view([turn(0)]))
