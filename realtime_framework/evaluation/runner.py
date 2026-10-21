@@ -41,18 +41,15 @@ Runtime invariants:
 import hashlib as hashlib, math as math, traceback as traceback
 
 from realtime_framework.clock import SystemClock
+from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.config import DEFAULT_MODE
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
-from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation.clock import TokenAccounting
-from realtime_framework.evaluation.clock import token_record
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
-from realtime_framework.sandbox.observation.som import valid_inspection_proof
 
 RUNNER_TIMING = RunnerTimingConfig.from_environ()  # read once, at import
 # Small settle margin added to the wall-clock bound so a well-behaved call that is about to return
@@ -209,63 +206,6 @@ def run_stream(
             log(f"[invalid-run] {category}:{reason}" + (f" — {detail}" if detail else ""))
             _emit(TraceEvent.RUN_INVALIDATED, value)
         return getattr(env, "_invalid_run")
-
-    def _action_record(action):
-        if action is None:
-            return None
-        return {
-            "action_type": action.action_type.value,
-            "parameters": action.parameters,
-            "coordinate_space": action.coordinate_space,
-            "coordinate_transform": action.coordinate_transform,
-        }
-
-    def _usage_snapshot():
-        try:
-            value = getattr(adapter, "token_usage", None)
-            value = value() if callable(value) else value
-            return dict(value) if isinstance(value, dict) else None
-        except Exception:
-            return None
-
-    def _usage_number(usage, *names):
-        if not isinstance(usage, dict):
-            return None
-        for name in names:
-            value = usage.get(name)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-                return int(value)
-        return None
-
-    def _clock_output_tokens(r):
-        """Return the complete native output count and its clock source.
-
-        Remote cells must use the API's response-level output usage. Local native runtimes use the
-        token IDs emitted by that runtime.
-        """
-        provider_missing = r.get("provider_usage_missing_reason")
-        if not provider_missing:
-            value = r.get("provider_output_tokens")
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-                return int(value), "provider_reported_output_usage"
-            value = _usage_number(r.get("usage"), "output_tokens", "completion_tokens")
-            if value is not None:
-                return value, "provider_reported_output_usage"
-            value = _usage_number(r.get("frame_usage"), "output_tokens", "completion_tokens")
-            if value is not None:
-                return value, "provider_reported_output_usage_delta"
-        value = r.get("native_received_output_tokens")
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-            return int(value), (
-                r.get("native_received_output_tokens_source") or "native_runtime_output_tokens"
-            )
-        return None, None
-
-    def _frame_output_tokens(r):
-        value = r.get("clock_output_tokens")
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-            return int(value)
-        return _clock_output_tokens(r)[0]
 
     def _frame_at(tick):
         """The last model-input frame due at or before ``tick``."""
@@ -490,37 +430,12 @@ def run_stream(
         """Measure inference -> advance the world -> land the delayed action if still valid."""
         nonlocal tau_prev
         terminal_after_action = False
-        proof = r.get("inspection") if isinstance(r, dict) else None
-        inspection_required = getattr(adapter, "tool_runtime", None) is not None
-        inspection_ok = not inspection_required or valid_inspection_proof(
-            proof,
-            r.get("observation_id"),
-        )
-        if r.get("invalid_reason"):
-            _invalidate(
-                r.get("invalid_category") or "provider",
-                r["invalid_reason"],
-                r.get("invalid_detail"),
-            )
-            return "invalid_run", False, False
-        # A harness-aborted wall-clock call has no returned model decision to inspect. Keep
-        # charging its elapsed time and recording unknown usage, but never mistake this synthetic
-        # timeout for a model response missing its observation-bound inspection proof.
-        harness_wall_timeout = (
-            clock_mode == "wall"
-            and r.get("timed_out")
-            and r.get("action") is None
-            and r.get("harness_timeout_reason") in {"wall_deadline", "per_move_cap"}
-        )
-        if not inspection_ok and not harness_wall_timeout:
-            _invalidate(
-                "tool",
-                "inspection_protocol_error",
-                (proof or {}).get("protocol_error") or (proof or {}).get("status"),
-            )
+        invalid = episode_records.result_invalid(r, adapter, clock_mode)
+        if invalid is not None:
+            _invalidate(invalid.category, invalid.reason, invalid.detail)
             return "invalid_run", False, False
 
-        output_tokens = _frame_output_tokens(r)
+        output_tokens = episode_records.frame_output_tokens(r)
         if clock_mode == "token" and tokens_per_frame is not None:
             if output_tokens is None:
                 _invalidate(
@@ -614,18 +529,18 @@ def run_stream(
         # extra model deliberation, so it must not move the committed action's recorded position.
         action_resolved_at = clock.time()
         status = _land_action()
-        action_result = {
-            "decision": k,
-            "observation_id": r.get("observation_id"),
-            "action": _action_record(action),
-            "status": status,
-            "terminal_after_action": terminal_after_action,
-            "action_clock_position": round(tau_k, 9),
-            "action_resolved_unix_s": action_resolved_at,
-            "environment_tick": env.tick_index(),
-            "execution_result": getattr(env, "_last_execution_result", None),
-            "coordinate_trace": getattr(env, "_last_coordinate_trace", None),
-        }
+        action_result = episode_records.action_resolved(
+            decision=k,
+            observation_id=r.get("observation_id"),
+            action=action,
+            status=status,
+            terminal_after_action=terminal_after_action,
+            action_clock_position=round(tau_k, 9),
+            action_resolved_unix_s=action_resolved_at,
+            environment_tick=env.tick_index(),
+            execution_result=getattr(env, "_last_execution_result", None),
+            coordinate_trace=getattr(env, "_last_coordinate_trace", None),
+        )
         _emit(TraceEvent.ACTION_RESOLVED, action_result)
         if action is not None and status in {"applied", "wait", "terminal", "terminal_ignored"}:
             _emit(TraceEvent.ACTION_APPLIED, action_result)
@@ -716,85 +631,32 @@ def run_stream(
         if recorder is not None:
             try:
                 recorder(
-                    {
-                        "decision": k,
-                        "generation_id": (r.get("realtime_runtime") or {}).get("generation_id"),
-                        "observation_id": r.get("observation_id"),
-                        "observation_batch": r.get("observation_batch"),
-                        "observation_tick": r.get("observation_tick", t_k),
-                        "observation_timestamp": observation_timestamp,
-                        "frame_age_at_action_s": round(frame_age_s, 6)
-                        if frame_age_s is not None
-                        else None,
-                        "frame_age_clock": (
-                            "simulated_token_clock" if clock_mode == "token" else "wall_clock"
-                        ),
-                        "frame_age_definition": (
-                            "action_simulated_time_minus_observation_simulated_time"
-                            if clock_mode == "token"
-                            else "action_resolution_wall_time_minus_observation_wall_time"
-                        ),
-                        # Compatibility field: this is the complete adapter decision duration, not
-                        # pure provider compute and not time to first token.
-                        "model_latency_s": r.get("latency"),
-                        "harness_timeout_reason": r.get("harness_timeout_reason"),
-                        "model_latency_scope": (
-                            "observation_preparation_through_complete_response_processing"
-                        ),
-                        "decision_wall_latency_s": r.get("decision_wall_latency_s"),
-                        "provider_call_wall_latency_s": r.get("provider_call_wall_latency_s"),
-                        "runtime_turn_wall_latency_s": r.get("runtime_turn_wall_latency_s"),
-                        "provider_ttft_s": r.get("provider_ttft_s"),
-                        "provider_ttft_source": r.get("provider_ttft_source"),
-                        "provider_ttft_missing_reason": r.get("provider_ttft_missing_reason"),
-                        "latency_clock": "wall_monotonic",
-                        "action_clock_position": round(tau_k, 9),
-                        "action_resolved_unix_s": action_resolved_at,
-                        "frame_output_tokens": output_tokens,
-                        "token_accounting": r.get("token_accounting"),
-                        "action_output_tokens": action_output_tokens,
-                        "provider_output_tokens": r.get("provider_output_tokens"),
-                        "provider_reasoning_output_tokens": r.get(
-                            "provider_reasoning_output_tokens"
-                        ),
-                        "provider_visible_output_tokens": r.get("provider_visible_output_tokens"),
-                        "provider_audio_output_tokens": r.get("provider_audio_output_tokens"),
-                        "provider_token_normalization_schema": r.get(
-                            "provider_token_normalization_schema"
-                        ),
-                        "provider_token_semantics": r.get("provider_token_semantics"),
-                        "clock_output_tokens": r.get("clock_output_tokens"),
-                        "clock_output_tokens_source": r.get("clock_output_tokens_source"),
-                        "remaining_clock_tokens": r.get("remaining_clock_tokens"),
-                        "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
-                        "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
-                        "provider_response_status": r.get("provider_response_status"),
-                        "provider_response_status_reason": r.get("provider_response_status_reason"),
-                        "action_protocol": r.get("action_protocol"),
-                        "token_accounting_source": r.get("clock_output_tokens_source"),
-                        "token_delay_frames": d_ticks if clock_mode == "token" else None,
-                        "next_observation_tick": next_observation_tick,
-                        "post_action_rendered": post_action_rendered,
-                        "dropped_intermediate_frames": dropped_frames,
-                        "decision_output_cap": r.get("decision_output_cap"),
-                        "native_output_limit": r.get("native_output_limit"),
-                        "runtime_output_token_cap": r.get("runtime_output_token_cap"),
-                        "provider_output_token_cap": r.get("provider_output_token_cap"),
-                        "transport_output_token_cap": r.get("transport_output_token_cap"),
-                        "handoff_token_cap": r.get("handoff_token_cap"),
-                        "action_token_cap": r.get("action_token_cap"),
-                        "status": status,
-                        "terminal_after_action": terminal_after_action,
-                        "action": _action_record(action),
-                        "execution_result": getattr(env, "_last_execution_result", None),
-                        "coordinate_trace": getattr(env, "_last_coordinate_trace", None),
-                        "clock_advance": (
+                    episode_records.lifecycle_record(
+                        r,
+                        decision=k,
+                        observation_tick=r.get("observation_tick", t_k),
+                        clock_mode=clock_mode,
+                        frame_age_s=frame_age_s,
+                        action_clock_position=round(tau_k, 9),
+                        action_resolved_unix_s=action_resolved_at,
+                        frame_output_tokens=output_tokens,
+                        action_output_tokens=action_output_tokens,
+                        token_delay_frames=d_ticks if clock_mode == "token" else None,
+                        next_observation_tick=next_observation_tick,
+                        post_action_rendered=post_action_rendered,
+                        dropped_intermediate_frames=dropped_frames,
+                        status=status,
+                        terminal_after_action=terminal_after_action,
+                        action=action,
+                        execution_result=getattr(env, "_last_execution_result", None),
+                        coordinate_trace=getattr(env, "_last_coordinate_trace", None),
+                        clock_advance=(
                             getattr(getattr(env, "task", None), "_last_clock_advance", None)
                             if clock_mode == "token"
                             else None
                         ),
-                        "recorded_unix_s": clock.time(),
-                    }
+                        recorded_unix_s=clock.time(),
+                    )
                 )
             except Exception:
                 failure = traceback.format_exc()
@@ -885,24 +747,6 @@ def run_stream(
             f"[think] deliberation budget exhausted: {spent:.1f}s >= {think_budget_s:g}s -> forfeit"
         )
 
-    def _record_observation(obs, decision=None):
-        metadata = getattr(obs, "metadata", {}) or {}
-        _emit(
-            TraceEvent.OBSERVATION_CAPTURED,
-            {
-                "decision": decision,
-                "observation_id": metadata.get("observation_id"),
-                "tick": obs.tick_number,
-                "timestamp": obs.timestamp,
-                "screenshot_sha256": metadata.get("screenshot_sha256")
-                or hashlib.sha256(obs.screenshot or b"").hexdigest(),
-                "capture_latency_s": metadata.get("capture_latency_s"),
-                "interactables_status": (metadata.get("interactables") or {})
-                .get("scene", {})
-                .get("status"),
-            },
-        )
-
     def _environment_done():
         queried_at = _world_s()
         return _end_reported(env.done(), queried_at)
@@ -921,20 +765,10 @@ def run_stream(
             return False
         if not _accept_observation(obs):
             return False
-        _record_observation(obs, decision=k)
+        _emit(TraceEvent.OBSERVATION_CAPTURED, episode_records.observation_captured(obs, k))
         t_k = obs.tick_number
         metadata = getattr(obs, "metadata", {}) or {}
-        observation_batch = [
-            {
-                "observation_id": metadata.get("observation_id"),
-                "tick": obs.tick_number,
-                "timestamp": obs.timestamp,
-            }
-        ]
 
-        native_output_limit = getattr(
-            getattr(adapter, "config", None), "native_output_limit", None
-        )
         remaining_clock_tokens = None
         if clock_mode == "token" and tokens_per_frame is not None:
             remaining_clock_tokens = max(
@@ -946,275 +780,47 @@ def run_stream(
             if remaining_clock_tokens <= 0:
                 env.wait_until_tick(max_ticks)
                 return False
-        # None when the model declares no native limit and no token clock bounds the episode.
-        runtime_output_cap = (
-            native_output_limit
-            if remaining_clock_tokens is None
-            else remaining_clock_tokens
-            if native_output_limit is None
-            else min(native_output_limit, remaining_clock_tokens)
+        native_output_limit, budget = episode_records.decision_budget(
+            adapter, remaining_clock_tokens, clock_mode
         )
-        # Bound transports that support a per-turn cap by the episode's remaining charged-token
-        # capacity. Drivers without an exact per-turn cap may still return terminal usage beyond T;
-        # that excess is retained for billing audit but excluded from the episode clock below.
-        if remaining_clock_tokens is not None:
-            provider_output_token_cap = runtime_output_cap
-        else:
-            unbounded_output = bool(getattr(adapter, "supports_unbounded_output", False))
-            provider_output_token_cap = None if unbounded_output else runtime_output_cap
-        transport_cap_mapper = getattr(adapter, "transport_output_token_cap", None)
-        transport_output_cap = (
-            transport_cap_mapper(provider_output_token_cap)
-            if callable(transport_cap_mapper)
-            else provider_output_token_cap
-        )
-        if not (
-            transport_output_cap is None
-            or transport_output_cap == "inf"
-            or (
-                isinstance(transport_output_cap, int)
-                and not isinstance(transport_output_cap, bool)
-                and transport_output_cap > 0
-            )
-        ):
-            raise ValueError(
-                "adapter transport output cap must be None, a positive integer, or 'inf'"
-            )
-        adapter.configure_decision(
-            DecisionBudget(
-                runtime_output_tokens=runtime_output_cap,
-                provider_output_tokens=provider_output_token_cap,
-                transport_output_tokens=transport_output_cap,
-                clock_mode=clock_mode,
-            )
-        )
+        adapter.configure_decision(budget)
 
         def _step(obs=obs, k=k):
             adapter.stream_prefill(obs)
             return adapter.stream_generate(tick=k)
 
-        usage_before = _usage_snapshot()
+        usage_before = episode_records.usage_snapshot(adapter)
         _emit(
             TraceEvent.INFERENCE_STARTED,
-            {
-                "decision": k,
-                "observation_id": metadata.get("observation_id"),
-                "observation_tick": getattr(obs, "tick_number", t_k),
-                "observation_batch": observation_batch,
-                "usage_before": usage_before,
-                "runtime_output_token_cap": runtime_output_cap,
-                "provider_output_token_cap": provider_output_token_cap,
-                "transport_output_token_cap": transport_output_cap,
-                "native_output_limit": native_output_limit,
-            },
+            episode_records.inference_started(obs, k, usage_before, native_output_limit, budget),
         )
         r = _run_step(_step, k)
-        r.update(
-            {
-                "decision": k,
-                "observation_id": metadata.get("observation_id"),
-                "observation_tick": getattr(obs, "tick_number", t_k),
-                "observation_batch": observation_batch,
-                "observation_timestamp": getattr(obs, "timestamp", None),
-                "decision_output_cap": runtime_output_cap,
-                "native_output_limit": native_output_limit,
-                "runtime_output_token_cap": runtime_output_cap,
-                "provider_output_token_cap": r.get(
-                    "provider_output_token_cap", provider_output_token_cap
-                ),
-                "transport_output_token_cap": r.get(
-                    "transport_output_token_cap", transport_output_cap
-                ),
-                "remaining_clock_tokens": remaining_clock_tokens,
-                "clock_delay_clock": (
-                    "simulated_token_clock" if clock_mode == "token" else "wall_clock"
-                ),
-                "clock_delay_definition": (
-                    "complete_clock_output_tokens_divided_by_tokens_per_frame"
-                    if clock_mode == "token" and tokens_per_frame is not None
-                    else "paused_environment_no_generation_delay"
-                    if clock_mode == "token"
-                    else "complete_decision_wall_latency"
-                ),
-            }
+        episode_records.annotate_result(
+            r,
+            decision=k,
+            observation=obs,
+            native_output_limit=native_output_limit,
+            budget=budget,
+            remaining_clock_tokens=remaining_clock_tokens,
+            clock_mode=clock_mode,
+            tokens_per_frame=tokens_per_frame,
         )
-        runtime_metadata = r.get("realtime_runtime")
-        if isinstance(runtime_metadata, dict):
-            for name in ("provider_response_status", "provider_response_status_reason"):
-                if r.get(name) is None and runtime_metadata.get(name) is not None:
-                    r[name] = runtime_metadata[name]
-        usage_after = _usage_snapshot()
+        usage_after = episode_records.usage_snapshot(adapter)
         if usage_before is not None and usage_after is not None:
-            keys = set(usage_before) | set(usage_after)
-            r["frame_usage"] = {
-                name: max(
-                    0, int(usage_after.get(name, 0) or 0) - int(usage_before.get(name, 0) or 0)
-                )
-                for name in keys
-                if isinstance(usage_before.get(name, 0), (int, float))
-                and isinstance(usage_after.get(name, 0), (int, float))
-            }
-        clock_output_tokens, clock_output_tokens_source = _clock_output_tokens(r)
-        if (
-            remaining_clock_tokens is not None
-            and clock_output_tokens is not None
-            and clock_output_tokens > remaining_clock_tokens
-        ):
-            r["unclamped_clock_output_tokens"] = clock_output_tokens
-            r["post_horizon_output_tokens"] = clock_output_tokens - remaining_clock_tokens
-            clock_output_tokens = remaining_clock_tokens
-            clock_output_tokens_source = (
-                f"episode_horizon_clamped:{clock_output_tokens_source or 'unknown'}"
-            )
-        r["clock_output_tokens"] = clock_output_tokens
-        r["clock_output_tokens_source"] = clock_output_tokens_source
-        r["action_output_tokens"] = clock_output_tokens
-        r["remaining_clock_tokens"] = remaining_clock_tokens
-        r.setdefault("unclamped_clock_output_tokens", None)
-        r.setdefault("post_horizon_output_tokens", 0)
-        r["token_accounting"] = token_record(r)
-        for name in (
-            "provider_input_tokens",
-            "provider_output_tokens",
-            "provider_total_tokens",
-            "provider_reasoning_output_tokens",
-            "provider_visible_output_tokens",
-            "provider_audio_output_tokens",
-            "provider_output_tokens_source",
-            "provider_reasoning_output_tokens_source",
-            "provider_visible_output_tokens_source",
-            "provider_visible_output_tokens_missing_reason",
-            "provider_audio_output_tokens_source",
-            "provider_audio_output_tokens_missing_reason",
-            "provider_token_normalization_schema",
-            "provider_token_semantics",
-            "provider_protocol_family",
-            "provider_upstream",
-        ):
-            r[name] = r["token_accounting"].get(name)
-        accounting = getattr(env, "_token_accounting", None)
-        if accounting is None:
-            accounting = TokenAccounting()
-            env._token_accounting = accounting
-        accounting.add(r["token_accounting"])
-        chunks = r.get("output_chunks")
-        if not isinstance(chunks, list):
-            chunks = (
-                [{"content": r.get("raw"), "final": True}]
-                if r.get("raw") not in {None, ""}
-                else []
-            )
-        for chunk_index, chunk in enumerate(chunks):
-            chunk_record = chunk if isinstance(chunk, dict) else {"content": str(chunk)}
-            _emit(
-                TraceEvent.OUTPUT_CHUNK_RECEIVED,
-                {
-                    "decision": k,
-                    "observation_id": metadata.get("observation_id"),
-                    "chunk_index": chunk_index,
-                    "final": bool(chunk_record.get("final", chunk_index == len(chunks) - 1)),
-                    "content": chunk_record.get("content", ""),
-                    "channel": chunk_record.get("channel"),
-                    "output_tokens": chunk_record.get("output_tokens"),
-                    "native_token_count": chunk_record.get("native_token_count"),
-                    "function_call": chunk_record.get("function_call"),
-                    "transport_event": chunk_record.get("transport_event"),
-                    # The trace event itself is appended after inference completes. These fields are
-                    # captured synchronously when the collector receives the provider event.
-                    "received_wall_time_ns": chunk_record.get("received_wall_time_ns"),
-                    "received_monotonic_ns": chunk_record.get("received_monotonic_ns"),
-                    "receive_timestamp_source": chunk_record.get(
-                        "receive_timestamp_source", "unavailable"
-                    ),
-                    "trace_recorded_after_inference": True,
-                },
-            )
+            r["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
+        episode_records.account_tokens(r, remaining_clock_tokens, env)
+        observation_id = metadata.get("observation_id")
+        for chunk in episode_records.output_chunks(r, k, observation_id):
+            _emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk)
         _emit(
             TraceEvent.INFERENCE_COMPLETED,
-            {
-                "decision": k,
-                "observation_id": metadata.get("observation_id"),
-                "latency_s": r.get("latency"),
-                "latency_compatibility_scope": (
-                    "observation_preparation_through_complete_response_processing"
-                ),
-                "decision_wall_latency_s": r.get("decision_wall_latency_s"),
-                "provider_call_wall_latency_s": r.get("provider_call_wall_latency_s"),
-                "runtime_turn_wall_latency_s": r.get("runtime_turn_wall_latency_s"),
-                "provider_ttft_s": r.get("provider_ttft_s"),
-                "provider_ttft_source": r.get("provider_ttft_source"),
-                "provider_ttft_missing_reason": r.get("provider_ttft_missing_reason"),
-                "latency_clock": "wall_monotonic",
-                "usage": r.get("usage"),
-                "frame_usage": r.get("frame_usage"),
-                "token_accounting": r.get("token_accounting"),
-                "provider_output_tokens": r.get("provider_output_tokens"),
-                "provider_reasoning_output_tokens": r.get("provider_reasoning_output_tokens"),
-                "provider_visible_output_tokens": r.get("provider_visible_output_tokens"),
-                "provider_audio_output_tokens": r.get("provider_audio_output_tokens"),
-                "provider_token_normalization_schema": r.get(
-                    "provider_token_normalization_schema"
-                ),
-                "provider_token_semantics": r.get("provider_token_semantics"),
-                "clock_output_tokens": r.get("clock_output_tokens"),
-                "clock_output_tokens_source": r.get("clock_output_tokens_source"),
-                "remaining_clock_tokens": r.get("remaining_clock_tokens"),
-                "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
-                "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
-                "provider_output_token_cap": r.get("provider_output_token_cap"),
-                "transport_output_token_cap": r.get("transport_output_token_cap"),
-                "provider_response_status": r.get("provider_response_status"),
-                "provider_response_status_reason": r.get("provider_response_status_reason"),
-                "stale": bool(r.get("stale")),
-                "timed_out": bool(r.get("timed_out")),
-                "error": bool(r.get("error")),
-                "invalid_reason": r.get("invalid_reason"),
-            },
+            episode_records.inference_completed(r, k, observation_id),
         )
-        handoff_cap = int(getattr(adapter, "_frame_handoff_max_tokens", 0) or 0)
-        action_cap = int(
-            getattr(
-                adapter,
-                "_frame_action_max_tokens",
-                runtime_output_cap,
-            )
-            or 0
-        )
-        # A decision that was invalidated before generation (e.g. inspection_protocol_error)
-        # never recomputed the adapter's per-decision caps, so they still describe the previous
-        # decision; auditing them against this decision's allowance would raise spuriously.
-        if (
-            provider_output_token_cap is not None
-            and r.get("invalid_reason") is None
-            and handoff_cap + action_cap > provider_output_token_cap
-        ):
-            raise RuntimeError(
-                f"adapter decision output caps exceed provider transport allowance: "
-                f"handoff={handoff_cap} + action={action_cap} > {provider_output_token_cap}"
-            )
-        r.update(
-            {
-                "handoff_token_cap": handoff_cap,
-                "action_token_cap": action_cap,
-                "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
-                "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
-            }
-        )
-        finalize_decision_audit = getattr(adapter, "finalize_decision_audit", None)
-        if callable(finalize_decision_audit):
-            try:
-                finalize_decision_audit(r)
-            except Exception:
-                failure = traceback.format_exc()
-                log(f"[default] trajectory audit write failed:\n{failure}")
-                _invalidate("harness", "trajectory_write_failed", failure)
-                r.update(
-                    {
-                        "invalid_category": "harness",
-                        "invalid_reason": "trajectory_write_failed",
-                        "invalid_detail": failure,
-                    }
-                )
+        episode_records.audit_output_caps(adapter, r, budget)
+        failure = episode_records.finalize_decision_audit(adapter, r)
+        if failure is not None:
+            log(f"[default] trajectory audit write failed:\n{failure}")
+            _invalidate("harness", "trajectory_write_failed", failure)
         action_protocol = r.get("action_protocol") or {}
         proposed = r.get("action")
         if proposed is not None and proposed.action_type in {ActionType.DONE, ActionType.FAIL}:
@@ -1229,14 +835,7 @@ def run_stream(
         if r.get("action") is not None and not action_protocol.get("protocol_failure"):
             _emit(
                 TraceEvent.ACTION_PROPOSED,
-                {
-                    "decision": k,
-                    "observation_id": metadata.get("observation_id"),
-                    "action": _action_record(r.get("action")),
-                    "thinking": r.get("thinking"),
-                    "protocol": action_protocol,
-                    "action_output_tokens": r.get("action_output_tokens"),
-                },
+                episode_records.action_proposed(r, k, observation_id),
             )
         status, over_budget, terminal_after_action = _apply(k, t_k, r)
         k += 1
