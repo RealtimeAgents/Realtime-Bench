@@ -9,9 +9,10 @@ thread, and the scored snapshot waits for it. It takes one absolute deadline whe
 call made inside it spends what is left on the lock wait, the connect and each receive, and a
 message that is not the awaited reply does not restart the timer; a guest request gets at most
 what is left for its connect and for each read.
-Waits that cannot be cut this way (a WebSocket send, the task runtimes' own HTTP requests) are
-caught when the operation ends: an operation that ends after its deadline fails. Task runtimes
-pass no budget; the clients read the current operation's deadline here.
+Waits that are not cut this way (a WebSocket send, the task runtimes' own HTTP requests, the wall
+clock's lock on its key holds) are caught when the operation ends: an operation that ends after
+its deadline fails. Task runtimes pass no budget; the clients read the current operation's
+deadline here.
 """
 
 from contextlib import contextmanager as contextmanager

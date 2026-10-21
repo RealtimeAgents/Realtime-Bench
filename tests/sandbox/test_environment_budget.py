@@ -113,6 +113,26 @@ def _environment(guest: FakeGuest, task: Task | None = None, **options):
     )
 
 
+class _WallTask(Task):
+    """A web task's clock at 10 fps on the wall clock; GuestEnvironment takes its tick from it."""
+
+    def clock_snapshot(self) -> dict:
+        return {"fps": 10.0}
+
+
+def _wall_environment(guest: FakeGuest) -> actions.GuestEnvironment:
+    """A GuestEnvironment on the wall clock, whose key holds run xdotool on the guest."""
+    now = time.time()
+    return actions.GuestEnvironment(
+        GuestClient(host="127.0.0.1", port=guest.port),
+        now + 60.0,
+        _WallTask(),
+        honor_fail=False,
+        clock_mode="wall",
+        wall_start_time=now,
+    )
+
+
 def _run(env, action: Action = CLICK) -> tuple[ScriptedAgent, float]:
     """Three decisions of run_stream, each taking ``action``; returns the agent and the wall time
     taken."""
@@ -166,6 +186,27 @@ def test_a_slow_action_fails_within_its_budget(budgets):
     _invalid(env, "action_execution_failed", "click action")
     assert agent.statuses == ["invalid_run"]
     _spent_the_budget(elapsed)
+
+
+def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
+    # The release timer holds the lock on the wall holds during its guest request
+    # (sandbox/actions.py _wall_release_due), and the action reads the holds under that lock.
+    # The wait is not cut, but it spends the action's budget: no key reaches the guest after it.
+    budgets(action_s=BUDGET)
+    with FakeGuest() as guest:
+        env = _wall_environment(guest)
+        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        guest.command_delay = 3 * BUDGET
+        while not any("keyup" in command["command"] for command in guest.commands):
+            time.sleep(0.01)
+        started = time.monotonic()
+        status = env.execute(Action(ActionType.KEY, {"key": "c"}))
+        elapsed = time.monotonic() - started
+        env.release_inputs()
+    assert status == "failed"
+    _invalid(env, "action_execution_failed", "key action")
+    assert elapsed >= BUDGET
+    assert guest.actions == []
 
 
 def test_a_slow_capture_fails_within_its_budget(budgets):
