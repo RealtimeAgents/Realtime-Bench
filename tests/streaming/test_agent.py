@@ -4,9 +4,11 @@ the view each connection operation is given."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from realtime_framework.entity.actions import ActionType
+from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import CallsCancelled
@@ -132,18 +134,21 @@ def _two_frames(agent, clock):
 def test_a_reply_starts_on_the_view_and_posts_each_call_as_it_comes_off_the_wire(
     monkeypatch, clock
 ):
+    """Each call is posted as it is read, while the reply goes on (decision 19), with the time
+    it came off the wire (4.17): the second is read 0.25 s after it came."""
     agent = make_agent(monkeypatch, clock)
     posted = []
-    agent.bind_inbox(posted.append, ORIGIN)
+    agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
     frame = _two_frames(agent, clock)
-    agent.driver.replies.append(Reply((_click("c1", 0.5, 1), _click("c2", 1.0, 2)), ends_at=1.5))
+    late = replace(_click("c2", 1.0, 2), late=0.25)
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1), late), ends_at=1.5))
     pending = agent.generate(7, 3, frame, BUDGET)
     assert agent.driver.calls[-1] == ("reply", 7, ("system", "f1.frame", "f2.frame"))
     assert [
-        (a.generation, a.call_id, a.arrived_at, a.frame, a.frame_age_s, a.frame_age_frames)
-        for a in posted
-    ] == [(7, "c1", 2.5, 1, 1.5, 1), (7, "c2", 3.0, 2, 1.0, 0)]
-    assert all(a.action.action_type == ActionType.CLICK and a.rejection is None for a in posted)
+        (a.generation, a.call_id, a.arrived_at, a.frame, a.frame_age_s, a.frame_age_frames, at)
+        for a, at in posted
+    ] == [(7, "c1", 2.5, 1, 1.5, 1, 1.5), (7, "c2", 3.0, 2, 1.0, 0, 2.25)]
+    assert all(a.action.action_type == ActionType.CLICK and a.rejection is None for a, _ in posted)
     r = pending.result
     assert (pending.generation, pending.decision, r["observation_id"]) == (7, 3, "obs-2")
     assert r["action_protocol"]["protocol_failure"] is None
@@ -794,3 +799,27 @@ def test_a_frames_inspection_is_finished_once_with_every_reply_on_it(monkeypatch
     assert runtime.rows[1] == ("obs-1", "completed", outputs, 2.0)
     agent.close()
     assert runtime.rows[2:] == [("obs-3", "no_reply", "", 0.0), ("obs-4", "no_reply", "", 0.0)]
+
+
+def test_feedback_says_what_the_model_asked_for_not_what_ran(monkeypatch, clock):
+    """The policy runs a done as a wait (evaluation/kernel/streaming.py _arrived): the outcome
+    holds the wait, and the feedback says the done was asked for."""
+    agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((Text(0.25, '{"action": "done", "frame": 2}'),), 1.0))
+    agent.generate(0, 0, frame, BUDGET)
+    agent.accept(0)
+    [arrival] = posted
+    asked = action_text(arrival.action)
+    outcome = _outcome(
+        0, "wait", "text", action=Action.wait(), protocol_failure="unsupported_terminal_action"
+    )
+    agent.commit(outcome)
+    assert asked.startswith("done")
+    assert agent.action_history[-1]["requested"] == asked
+    agent.push(observation(clock, 3))
+    feedback = agent.driver.views[-1].items[-2].block
+    assert (feedback.id, feedback.text) == ("d0.text.feedback", execution_feedback(outcome, asked))
+    agent.close()

@@ -71,8 +71,8 @@ def _recorded(agent, calls: list) -> None:
 
 
 def test_every_kernel_command_comes_to_its_agent_call_and_encoder_operation(monkeypatch):
-    """The first reply clicks frame 1 and ends; the second never ends, and its watchdog gives it
-    up, which discards it; the third is given up at the end."""
+    """Four replies: the first and third click frame 1 and end, and each click executes; the
+    second and fourth never end, and the reply watchdog gives each up, which discards it."""
     clock = FakeClock()
     commands, calls = [], []
     run = _StreamingShell._run
@@ -100,7 +100,14 @@ def test_every_kernel_command_comes_to_its_agent_call_and_encoder_operation(monk
     expected = [entry for entry in map(_command, commands) if entry is not None]
     for kind in ("push", "generate", "accept", "discard", "commit", "abort"):
         assert [c for c in calls if c[0] == kind] == [c for c in expected if c[0] == kind], kind
-    assert {c[0] for c in calls} == {"push", "generate", "accept", "discard", "commit", "abort"}
+
+    def of(kind):
+        return [c[1:] for c in calls if c[0] == kind]
+
+    assert of("generate") == [(1,), (2,), (3,), (4,)]
+    assert (of("accept"), of("abort"), of("discard")) == ([(1,), (3,)], [(2,), (4,)], [(2,), (4,)])
+    assert of("commit") == [(0, "c1", "applied"), (2, "c1", "applied")]
+    assert env.counts["execute"] == 2
     for operation, kind in (("push", "push"), ("reply", "generate")):
         assert [c[1] for c in agent.driver.calls if c[0] == operation] == [
             c[1] for c in expected if c[0] == kind
