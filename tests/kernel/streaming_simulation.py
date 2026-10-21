@@ -611,14 +611,14 @@ class Simulation:
             assert (data["status"] == SUPERSEDED) == (data["superseded_by"] is not None)
             if data["status"] == SUPERSEDED:
                 assert data["superseded_by"] > index
-        # A reply reported as having come to no action handed none over, and whatever a reply
-        # handed over after it was given up was refused.
+        # A reply reported as having come to no action, and to no protocol failure, handed none
+        # over, and whatever a reply handed over after it was given up was refused.
         generation_of = {
             data["decision"]: data["generation"] for data in self.data("InferenceStarted")
         }
         handed = {entry.data.generation for entry in arrivals}
         for outcome in self.outcomes:
-            if outcome.status == "none":
+            if outcome.status == "none" and outcome.protocol_failure is None:
                 assert generation_of[outcome.decision] not in handed
         given_up = {
             entry.data["generation"]: entry.seq for entry in self.entries("GenerationAbandoned")

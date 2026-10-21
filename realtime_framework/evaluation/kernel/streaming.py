@@ -268,8 +268,9 @@ class StreamingPolicy:
         self._report()
 
     def on_result(self, result: GenerationResult) -> None:
-        """The reply ended. Its actions arrived on their own; ``result`` carries none, only why the
-        reply came to no action, or its failure."""
+        """The reply ended. Its actions arrived on their own; ``result`` carries none, only why
+        the reply, or what else it said, came to no action, or its failure. A reply that came to
+        no action, or to a protocol failure, has an outcome of its own."""
         kernel = self.kernel
         generation, self.generation = self.generation, None
         kernel.cancel_timer(self._reply_watchdog)
@@ -278,7 +279,7 @@ class StreamingPolicy:
             invalid = result.invalid
             kernel.invalidate(invalid.category, invalid.reason, invalid.detail)
         elif not self._stopped():
-            if not self._handed[generation]:
+            if result.protocol_failure is not None or not self._handed[generation]:
                 outcome = self._outcome(
                     self._decision_of[generation],
                     "none",
