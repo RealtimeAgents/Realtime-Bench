@@ -11,11 +11,11 @@ connection and generation a server message belongs to and whether that generatio
 with it. Nothing in it awaits, so each call is one transition, in the order of the session.
 
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
-<history block id>)`` and ``("tool_response", <call id>)``, each sent once handed to the
-connection, confirmed when the server acknowledges it (only the setup is: setupComplete) and
-unknown when its send failed. A resumed session also holds what the server restored from the
-handle, which this record does not list. Each change is handed to ``on_delivery``, which the
-driver writes to the event log.
+<history block id>)`` and ``("tool_response", <call id>)``, each unknown while it is written,
+sent once written, confirmed when the server acknowledges it (only the setup is:
+setupComplete) and unknown when its write failed. A resumed session also holds what the server
+restored from the handle, which this record does not list. Each change but the start of a write
+is handed to ``on_delivery``, which the driver writes to the event log.
 """
 
 from __future__ import annotations
@@ -483,7 +483,7 @@ class SessionCore:
         self.connection = self._connections
         self.delivery = {}
         self._set([("setup",)], Delivery.CONFIRMED)
-        self.sending(("block", block_id) for block_id in connect.seeded)
+        self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
@@ -510,11 +510,24 @@ class SessionCore:
     # ---- writes ----------------------------------------------------------------------------
 
     def sending(self, keys) -> None:
-        """Record writes as handed to the connection, before any answer can arrive."""
+        """Record writes that start: unknown until written (sent) or failed (send_failed); the
+        event log hears neither until then."""
+        for key in keys:
+            self.delivery[key] = Delivery.UNKNOWN
+
+    def sent(self, keys) -> None:
+        """The writes returned: the connection took them."""
         self._set(keys, Delivery.SENT)
 
     def send_failed(self, keys) -> None:
         self._set(keys, Delivery.UNKNOWN)
+
+    def seed_failed(self, connect: Connect) -> None:
+        """A write of the seed failed before the connection counted: what it carried is unknown."""
+        self._on_delivery(
+            Delivery.UNKNOWN.value,
+            [(("block", block_id), block_id) for block_id in connect.seeded],
+        )
 
     def _set(self, keys, delivery: Delivery) -> None:
         keys = list(keys)
@@ -612,6 +625,7 @@ class SessionCore:
         return pending
 
     def acknowledgement_sent(self) -> None:
+        self.sent(("tool_response", call_id) for call_id, _ in self.pending_calls)
         self.pending_calls.clear()
 
     def acknowledgement_failed(self) -> None:

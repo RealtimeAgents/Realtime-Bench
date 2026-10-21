@@ -509,15 +509,21 @@ class GeminiLiveDriver(SessionLifecycle):
             session = await cm.__aenter__()
             if getattr(session, "setup_complete", None) is None:
                 raise RuntimeError("Gemini Live did not acknowledge session setup")
+            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
+            self._trace_connection = session._ws.trace_connection_id
             # Seed history explicitly before either input transport. Merely leaving
             # turn_complete=False can cause historical model content to be echoed as new
             # output. HistoryConfig makes this a non-generating initialization boundary.
             # Bound the messages so screenshots do not form one oversized WebSocket frame.
-            for index, batch in enumerate(connect.seed):
-                await session.send_client_content(
-                    turns=[self._content(content) for content in batch],
-                    turn_complete=index == len(connect.seed) - 1,
-                )
+            try:
+                for index, batch in enumerate(connect.seed):
+                    await session.send_client_content(
+                        turns=[self._content(content) for content in batch],
+                        turn_complete=index == len(connect.seed) - 1,
+                    )
+            except BaseException:
+                self._core.seed_failed(connect)
+                raise
         except BaseException as exc:
             try:
                 await cm.__aexit__(type(exc), exc, exc.__traceback__)
@@ -528,8 +534,6 @@ class GeminiLiveDriver(SessionLifecycle):
         self._session = session
         self._activity_open = False
         self._last_video_sent_at = None
-        # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
-        self._trace_connection = session._ws.trace_connection_id
         self._core.connected(connect)
         self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
         self._connect_metadata = {
@@ -601,6 +605,7 @@ class GeminiLiveDriver(SessionLifecycle):
             except BaseException:
                 self._core.send_failed(frame.keys)
                 raise
+            self._core.sent(frame.keys)
             return {"observation_id": frame.observation_id}
         try:
             await session.send_realtime_input(activity_start=self.types.ActivityStart())
@@ -642,6 +647,7 @@ class GeminiLiveDriver(SessionLifecycle):
             self._activity_open = True
             self._core.send_failed(frame.keys)
             raise
+        self._core.sent(frame.keys)
         return {"observation_id": frame.observation_id}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
