@@ -131,6 +131,12 @@ def session_frame_text(observation) -> str:
     return f"{prefix}\n{observation.prompt}" if prefix else observation.prompt
 
 
+class RequestExceedsContext(RuntimeError):
+    """The request did not fit the declared context window, so it was never sent."""
+
+    invalid_reason = "context_exceeded_before_request"
+
+
 class RealtimeRuntime:
     """Own the protocol-neutral lifecycle around one provider driver.
 
@@ -164,6 +170,9 @@ class RealtimeRuntime:
         self._seed: SessionSeed | None = None
         self._turns: list[CanonicalTurn] = []
         self._archived_action_count = 0
+        # The earliest archived actions the ledger leaves out: a request that did not fit with
+        # every turn archived dropped them, and none comes back.
+        self._omitted_action_count = 0
         self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
         self._buffer = CatchupBuffer()
         self._cleanup_future: concurrent.futures.Future | None = None
@@ -255,7 +264,8 @@ class RealtimeRuntime:
 
     def _stop_if_abandoned(self, cancel: threading.Event, before: str) -> None:
         """Stop an aborted generation. _run_turn checks before it applies the retention policy,
-        before it sends its observation and before it starts its reply."""
+        before it sends its observation, before each pressure archive and before it starts its
+        reply."""
         if self._abandoned(cancel):
             raise RetryCancelled(f"generation abandoned before {before}")
 
@@ -280,6 +290,12 @@ class RealtimeRuntime:
         return executed_action_ledger(history, limit=self._archived_action_count)
 
     def ledger_block(self, ledger: str) -> ContentBlock | None:
+        """The ledger as requests carry it: ``ledger`` holds one line per archived action, and
+        the omitted earliest ones give way to a note that counts them."""
+        if self._omitted_action_count:
+            kept = ledger.split("\n")[self._omitted_action_count :]
+            note = self.policy.texts.ledger_omission.format(count=self._omitted_action_count)
+            ledger = "\n".join([note, *kept])
         return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
 
     def history_view(
@@ -550,13 +566,21 @@ class RealtimeRuntime:
             )
             if not status.get("pressure"):
                 break
+            # The count can suspend (a "vllm" counter): by now the history may be the next
+            # generation's, which an aborted one must not archive or cut.
+            self._stop_if_abandoned(cancel, "its pressure archive")
             if self.capabilities.persistent_session:
                 raise RuntimeError(
                     "Request exceeds physical context; driver must implement native context compaction"
                 )
             if not self._turns:
-                raise RuntimeError(
-                    "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
+                # Every turn is archived: leave out the earliest archived actions, a block at a
+                # time, before the request is given up.
+                if self._omit_archived_actions(status):
+                    continue
+                raise RequestExceedsContext(
+                    "Task instructions and current observation exceed context capacity with every "
+                    "archived action omitted; use a larger endpoint window"
                 )
             archived = self._turns[: self.policy.turns.block]
             del self._turns[: len(archived)]
@@ -851,6 +875,27 @@ class RealtimeRuntime:
             ledger=self._ledger_change(archived_actions),
             request_context=status,
         )
+
+    def _omit_archived_actions(self, status) -> int:
+        """Leave the next block of the earliest archived actions out of the ledger; returns how
+        many, none once every one is out."""
+        before = self._omitted_action_count
+        count = min(self.policy.turns.block, self._archived_action_count - before)
+        if count:
+            self._omitted_action_count += count
+            self._history_changed(
+                "ledger_omission",
+                "policy",
+                "pressure_archive",
+                policy_values={"block": self.policy.turns.block},
+                ledger={
+                    "archived_actions": self._archived_action_count,
+                    "omitted_actions_before": before,
+                    "omitted_actions_after": self._omitted_action_count,
+                },
+                request_context=status,
+            )
+        return count
 
     def _replay_items(self) -> list[str]:
         # A replayed live session re-sends past tool calls in the policy's format.

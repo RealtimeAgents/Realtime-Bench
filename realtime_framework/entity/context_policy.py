@@ -47,6 +47,7 @@ from realtime_framework.entity.records import _jsonable
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
+LEDGER_OMISSION = "[{count} earlier archived actions were omitted to fit the context window.]"
 JEV_LEDGER_HEADER = (
     "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and "
     "occurrences preserve every action; start/step/count expands exact indices):"
@@ -82,6 +83,7 @@ class DecisionHistory:
 class FixedTexts:
     folded_visual: str
     ledger_header: str
+    ledger_omission: str  # the ledger's first line once actions were left out; {count} of them
     jev_ledger_header: str
     jev_history_prefix: str
     jev_current_prefix: str
@@ -94,6 +96,7 @@ class FixedTexts:
 FIXED_TEXTS = FixedTexts(
     folded_visual=FOLDED_VISUAL_PLACEHOLDER,
     ledger_header=ARCHIVED_ACTION_LEDGER_HEADER,
+    ledger_omission=LEDGER_OMISSION,
     jev_ledger_header=JEV_LEDGER_HEADER,
     jev_history_prefix=JEV_HISTORY_PREFIX,
     jev_current_prefix=JEV_CURRENT_PREFIX,
@@ -123,8 +126,8 @@ class PathPolicy:
     # output, and no encoder can do otherwise
     verbatim_replay: bool
     # 8 before each request, archive the oldest turns while it exceeds the declared context
-    # window; it applies where the API declares an estimate of its requests
-    # (RealtimeCapabilities.request_size_estimation)
+    # window, then, with no turn left, leave out the earliest archived actions; it applies where
+    # the API declares an estimate of its requests (RealtimeCapabilities.request_size_estimation)
     pressure_archive: bool
     decision_history: DecisionHistory | None  # 9 Decision history form
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
