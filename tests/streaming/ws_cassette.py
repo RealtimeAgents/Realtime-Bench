@@ -174,6 +174,10 @@ def _server_side(record: dict) -> bool:
     return record["dir"] == "s2c" or (record["dir"] == "close" and record["msg"]["by"] == "server")
 
 
+def _when(record: dict) -> str:
+    return "(reactive)" if record["at"] is None else f"at t={record['at']:g}"
+
+
 def _label(direction: str, message) -> str:
     if direction == "open":
         return "open"
@@ -197,6 +201,7 @@ class Cursor:
         self._opened = 0
         # Server records released ahead of their time, which ``release`` hands out first.
         self._ahead: dict[int, deque] = {}
+        self._server_closed: set[int] = set()  # nothing more goes on these
         self.problems: list[str] = []
 
     @property
@@ -228,7 +233,7 @@ class Cursor:
             index, record = head
             self._problem(
                 f"conn {conn} record {index}: {_label('c2s', actual)} sent at t={now:g}, before"
-                f" the recorded {_label(record['dir'], record['msg'])} at t={record['at']:g}"
+                f" the recorded {_label(record['dir'], record['msg'])} {_when(record)}"
             )
             return
         if head is None or head[1]["dir"] != "c2s":
@@ -277,7 +282,7 @@ class Cursor:
     def release(self, conn: int, now: float) -> list[dict]:
         """The server records due on ``conn``, in order: messages with this session's ids, and a
         close as recorded."""
-        if self.failed:
+        if self.failed or conn in self._server_closed:
             return []
         released = list(self._ahead.pop(conn, ()))
         while True:
@@ -289,14 +294,17 @@ class Cursor:
                 break
             self._pending[conn].popleft()
             released.append(self._restored(record))
+            if record["dir"] == "close":
+                self._server_closed.add(conn)
+                break
         return released
 
     def next_due(self, conn: int) -> float | None:
         """When the timed server record next on ``conn`` comes due; None when none is next."""
         head = self._head(conn)
-        if head is None or self.failed or not _server_side(head[1]):
+        if head is None or self.failed or conn in self._server_closed:
             return None
-        return head[1]["at"]
+        return head[1]["at"] if _server_side(head[1]) else None
 
     def finish(self) -> list[str]:
         """The problems, with the records left unused once the client is done."""
