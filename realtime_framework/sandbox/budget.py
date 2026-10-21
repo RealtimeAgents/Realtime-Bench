@@ -13,6 +13,10 @@ Waits that are not cut this way (a WebSocket send, the task runtimes' own HTTP r
 clock's lock on its key holds) are caught when the operation ends: an operation that ends after
 its deadline fails. Task runtimes pass no budget; the clients read the current operation's
 deadline here.
+
+A budget holds only on a real clock: the deadline is read on the operation's clock, but the
+clients wait for what is left of it as real seconds (socket, lock and request timeouts).
+Production times every operation on the system clock.
 """
 
 from contextlib import contextmanager as contextmanager
