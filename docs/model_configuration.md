@@ -92,11 +92,12 @@ A model that needs a new wire protocol gets a driver:
    (`realtime_framework/entity/model.py`): `connect`, `send_observation`, `start_generation`,
    `events`, `interrupt`, `sync_history`, `close`, plus `bind_trace(trace)`, which receives the
    episode trace. The harness builds it as `Driver(config, clock=clock)`, with the episode's
-   operational clock (`realtime_framework/clock.py`); a driver whose constructor cannot take
-   `clock` is refused when its model is loaded. Keep it as `self.clock`: the capture hooks below
-   time each response on it, and the driver's own waits and time reads (a pause between
-   requests, a grace period) go through it. Transport timeouts, such as an HTTP client's or a
-   WebSocket receive's, stay in real time. Stateless APIs make `connect` and `sync_history`
+   operational clock (`realtime_framework/clock.py`); an external driver whose constructor cannot
+   take `clock` is refused when its model is loaded, and the tests hold every registered driver
+   to the same check. Keep it as `self.clock`: the capture hooks below time each response on it,
+   and the driver's own waits and time reads (a pause between requests, a grace period) go
+   through it. Transport timeouts, such as an HTTP client's or a WebSocket receive's, stay in
+   real time. Stateless APIs make `connect` and `sync_history`
    no-ops and send the canonical request (`GenerationRequest.canonical`,
    `realtime_framework/entity/request.py`) in their own format; session APIs send each
    observation and keep native history. Build HTTP clients with the hooks in
