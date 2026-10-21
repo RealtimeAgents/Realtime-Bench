@@ -18,7 +18,7 @@ from realtime_framework.harnesses.default.context import session_frame_text
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
-from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
+from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
 POLICY = current_context_policy()
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
@@ -139,7 +139,7 @@ def test_gemini_tool_exchanges_are_recorded_not_converted():
 
 
 def test_action_digest():
-    frame = "Choose." + OBSERVATION_INTERACTABLES_HEADER + json.dumps({"observation_id": "o3"})
+    frame = "Choose." + FRAME_INTERACTABLES_HEADER + json.dumps({"observation_id": "o3"})
     turns = [
         turn(1, output="A1", feedback="F1"),
         turn(2),

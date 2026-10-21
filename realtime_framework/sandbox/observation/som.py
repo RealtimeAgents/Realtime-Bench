@@ -588,11 +588,8 @@ def resolve_action_references(
 # Protocol
 """Provider-neutral injection of observation-bound, non-mutating interactables."""
 
-OBSERVATION_INTERACTABLES_HEADER = (
-    "\n\nCURRENT-SCREEN GROUNDING (read-only; no inspection round):\n"
-)
-# The text-JSON frames' header: a frame keeps it once newer frames follow, so it names the
-# frame's own screen.
+# Opens every frame's interactables, the SoM legend or the choice models' observation JSON: a
+# frame keeps it once newer frames follow, so it names the frame's own screen.
 FRAME_INTERACTABLES_HEADER = (
     "\n\nGROUNDING FOR THIS SCREEN (read-only; no inspection round):\n"
 )
@@ -600,10 +597,7 @@ FRAME_INTERACTABLES_HEADER = (
 
 def without_observation_interactables(prompt: str) -> str:
     """Remove the appended SoM legend while keeping the frame prompt and execution feedback."""
-    for header in (OBSERVATION_INTERACTABLES_HEADER, FRAME_INTERACTABLES_HEADER):
-        if header in prompt:
-            return prompt.partition(header)[0]
-    return prompt
+    return prompt.partition(FRAME_INTERACTABLES_HEADER)[0]
 
 
 def observation_prompt_with_interactables(base_prompt: str, text: str, header: str) -> str:

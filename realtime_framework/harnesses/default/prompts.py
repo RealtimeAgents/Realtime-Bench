@@ -112,8 +112,12 @@ FUNCTION_CALL_OUTPUT_CONTRACT = (
     "WAIT. The next observation includes the actual execution result. Do not assume success "
     "from the queue acknowledgement. Use wait when no UI action is needed."
 )
+# Shared screenshot marker for the frame prompts. Each frame keeps its text once newer frames
+# follow, so it names the screen of its own decision.
+FRAME_PROMPT = "Screen observed for this decision."
+
 FUNCTION_CALL_FRAME_PROMPT = (
-    "Latest screen. Use current P/R marks when supplied. Submit exactly one GUI action by "
+    FRAME_PROMPT + " Use current P/R marks when supplied. Submit exactly one GUI action by "
     "calling its function. Do not speak."
 )
 
@@ -177,10 +181,6 @@ def system_prompt_for_category(category: str | None, *, finite_budget: bool) -> 
     contract = FINITE_BUDGET_OUTPUT_CONTRACT if finite_budget else STREAM_OUTPUT_CONTRACT
     return _scenario_prompt(SCENARIO_ROLES[category], contract)
 
-
-# Shared screenshot marker for text-action adapters. Each frame keeps its text once newer frames
-# follow, so it names the screen of its own decision.
-FRAME_PROMPT = "Screen observed for this decision."
 
 # Stateful text-output VLM sessions can under-weight an old system message, so each frame repeats only
 # the wire format. Scenario role and task objective remain exclusively in the session seed.

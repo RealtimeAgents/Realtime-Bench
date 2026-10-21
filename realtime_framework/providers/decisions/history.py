@@ -7,7 +7,7 @@ from __future__ import annotations
 import base64
 import json
 
-from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
+from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
 
 def compact_repeated_records(records: list[dict], varying: tuple[str, ...]) -> list[dict]:
@@ -131,7 +131,7 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
                 )
             # The harness omits live candidates and the composition vocabulary from the prompt;
             # they are sent as native Choice criteria.
-            current = json.loads(block.text.partition(OBSERVATION_INTERACTABLES_HEADER)[2])
+            current = json.loads(block.text.partition(FRAME_INTERACTABLES_HEADER)[2])
             messages.append(
                 {
                     "role": JEV_ROLES[item.intent.role],
