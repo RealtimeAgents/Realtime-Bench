@@ -18,7 +18,6 @@ from realtime_framework.evaluation.kernel.events import (
     Commit,
     Execute,
     Invalidated,
-    KeysReleased,
     Outcome,
     Record,
     SetTimer,
@@ -625,17 +624,6 @@ def test_every_push_failing_before_the_first_reply_invalidates_the_run():
     assert sim.started == []
     assert _ended(sim)[:3] == ("invalid_run", "invalid", 2.0)
     assert sim.termination.invalid.reason == "frame_push_failed"
-
-
-def test_a_release_the_shell_timer_reports_failed_invalidates_the_run():
-    """KeysReleased carries the error of a release that failed for good (events.py)."""
-    calls = (Call(0.5, Action.hold_key("a", 1.5)),)
-    failed = KeysReleased(("a",), "xdotool keyup failed")
-    sim = _run(World(replies=[Reply(3.0, calls=calls)], posts=((2.0, failed),)))
-    assert _ended(sim) == ("invalid_run", "invalid", 2.0, 2.0)
-    assert sim.termination.invalid == Invalidated(
-        "environment", "wall_key_release_failed", "xdotool keyup failed"
-    )
 
 
 def test_a_reply_that_handed_actions_over_still_reports_its_protocol_failure():

@@ -58,7 +58,6 @@ from realtime_framework.evaluation.kernel.events import (
     Execute,
     FrameCaptured,
     GenerationResult,
-    KeysReleased,
     Outcome,
     OutcomeCommitted,
     Priority,
@@ -270,10 +269,6 @@ class StreamingPolicy:
                 self._calls_cancelled(event)
             case ActionExecuted():
                 self._executed(event)
-            case KeysReleased(error=str() as error):
-                # The release timer's release failed for good (events.py KeysReleased); the
-                # shell's environment reports that through on_invalid instead.
-                self.kernel.invalidate("environment", "wall_key_release_failed", error)
             case OutcomeCommitted():
                 self._committed(event)
         self._report()
