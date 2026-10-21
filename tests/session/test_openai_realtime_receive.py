@@ -448,14 +448,15 @@ def test_a_failed_read_raises_in_every_waiter():
     assert all(raised is failure for raised in _within(scenario()))
 
 
-def _offline_driver() -> OpenAIRealtimeDriver:
+def _offline_driver(*, streaming: bool = False) -> OpenAIRealtimeDriver:
     driver = OpenAIRealtimeDriver(
         ModelConfig(
             adapter_type="openai_realtime",
             model_name="gpt-realtime-replay",
             api_base_url="http://127.0.0.1:9/v1",  # never connected to
             api_key="sk-receive-stub",
-        )
+        ),
+        streaming=streaming,
     )
     driver.bind_trace(UNTRACED)
     return driver

@@ -230,13 +230,13 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     # placeholder (the turn-based visual budget, 20 s at 1 fps) until a smoke test measures what a
     # frame costs against the model's context.
     streaming_settings: ClassVar[dict] = {"retained_frames": 20}
-    # "streaming" for a native-streaming episode, set before the session connects: the session
-    # then reads every event as it arrives, and is rebuilt from the streaming history view.
-    interaction_mode = "turn_based"
 
-    def __init__(self, config, *, clock=None):
+    def __init__(self, config, *, clock=None, streaming: bool = False):
+        """``streaming``: the session native streaming drives, which reads every event as it
+        arrives and is rebuilt from the streaming history view."""
         self.config = config
         self.clock = clock or SystemClock()
+        self.streaming = streaming
         load_project_secrets()
         key = config.api_key or os.environ.get(config.api_key_env or "OPENAI_API_KEY")
         if not key:
@@ -466,7 +466,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             ),
         )
         # The history is None when the runtime opens the episode's first session.
-        if self.interaction_mode == "streaming":
+        if self.streaming:
             session.read_continuously(self.clock)
             replay = session.core.replay_streaming(request.history)
             await self._send_all(replay)
@@ -771,7 +771,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         )
 
     async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
-        if self.interaction_mode == "streaming":
+        if self.streaming:
             # Native streaming edits the session as frames are pushed (push_frame); any sync
             # rebuilds it from the streaming view (decisions 4.7, 4.14).
             return await self._rebuild(request)

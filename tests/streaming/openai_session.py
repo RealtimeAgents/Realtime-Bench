@@ -54,11 +54,11 @@ def _observation(k: int) -> ProviderObservation:
     )
 
 
-def driver_for(port: int, clock, trace) -> OpenAIRealtimeDriver:
+def driver_for(port: int, clock, trace, *, streaming: bool = False) -> OpenAIRealtimeDriver:
     config = catalog.to_model_config(
         MODEL_KEY, fps=1.0, reasoning_effort="low", api_key=STUB_API_KEY
     ).model_copy(update={"api_base_url": f"http://127.0.0.1:{port}/v1"})
-    driver = OpenAIRealtimeDriver(config, clock=clock)
+    driver = OpenAIRealtimeDriver(config, clock=clock, streaming=streaming)
     driver.bind_trace(trace)
     return driver
 

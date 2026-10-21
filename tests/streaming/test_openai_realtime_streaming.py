@@ -213,8 +213,7 @@ def test_a_failed_close_cancels_the_reader_and_ends_its_waiters():
 def test_a_streaming_sync_rebuilds_the_session():
     """Native streaming edits its session as frames are pushed; a sync, whatever its reason,
     rebuilds the session from the streaming view (decisions 4.7, 4.14)."""
-    driver = _offline_driver()
-    driver.interaction_mode = "streaming"
+    driver = _offline_driver(streaming=True)
     driver._conn = object()
     rebuilt = []
 
@@ -465,8 +464,7 @@ def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
         return events, handle, session
 
     with CassetteServer(RECORDS, clock) as server:
-        driver = driver_for(server.port, clock, UNTRACED)
-        driver.interaction_mode = "streaming"
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
         driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         events, handle, session = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
@@ -537,8 +535,7 @@ def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed()
         return connected, session
 
     with CassetteServer(REBUILT, clock) as server:
-        driver = driver_for(server.port, clock, UNTRACED)
-        driver.interaction_mode = "streaming"
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
         driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         connected, session = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []

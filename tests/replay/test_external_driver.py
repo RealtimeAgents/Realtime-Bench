@@ -390,6 +390,15 @@ def test_preflight_reads_the_external_declaration(external, capsys):
                 "transport_output_token_cap()"
             ),
         ),
+        # The native-streaming agent builds the driver with streaming=True.
+        (
+            "rtb_ext.broken:StreamingNoSwitch",
+            (
+                "'rtb_ext.broken:StreamingNoSwitch' declares streaming but cannot be built as "
+                "StreamingNoSwitch(config, clock=clock, streaming=True): got an unexpected "
+                "keyword argument 'streaming'"
+            ),
+        ),
         # A streaming run records the settings (evaluation/config.py effective_run_config).
         (
             "rtb_ext.broken:StreamingNoSettings",
@@ -401,7 +410,8 @@ def test_preflight_reads_the_external_declaration(external, capsys):
     ],
     ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
          "no-context-status", "no-capabilities", "no-deployment", "no-model-defaults",
-         "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-settings"],
+         "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-switch",
+         "streaming-no-settings"],
 )
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")
