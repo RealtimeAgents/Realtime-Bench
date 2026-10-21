@@ -519,6 +519,19 @@ def test_an_action_waiting_behind_one_that_ends_the_task_never_executes():
     assert _ended(sim) == ("game_decided", "environment", 2.75, 2.75)
 
 
+def test_a_failed_read_after_an_action_lets_the_action_waiting_execute():
+    """The click executes from 2.25 to 2.75 and ends the task; the read after it fails, which tells
+    nothing, as on the turn-based clock. The typing waiting behind it executes then, and the read
+    after the typing finds the end."""
+    calls = (Call(2.25, CLICK, execute_s=0.5), Call(2.5, TYPE))
+    errors = {4: "cdp timeout"}
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=2.75, check_errors=errors), 10.0)
+    assert sim.checks == [0.0, 1.0, 2.0, 2.75, 2.75]
+    assert sim.executed == [(2.25, CLICK), (2.75, TYPE)]
+    assert [data["terminal_after_action"] for data in sim.resolved().values()] == [False, True]
+    assert _ended(sim) == ("game_decided", "environment", 2.75, 2.75)
+
+
 def test_an_action_is_settled_by_the_read_after_it():
     """The click executes from 1.25 to 1.5; the read after it takes until 1.75. The click is applied
     once that read answers, and only then does the typing waiting behind it execute, followed by

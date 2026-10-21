@@ -23,11 +23,12 @@ one that takes none before the first reply, when there is none to give up, inval
 
 The state is read at most once an environment frame, at the frame's grid point, during replies too,
 and once more right after every action executed: that read settles the action, as the one that
-ended the task or not, before anything else runs, so nothing executes once the task has ended. A
-capture out when the action finishes holds that read up, but it stands for one right as the action
-finished: an end it finds is dated there, and the deadline waits for it (N31), as the turn-based
-clock reads right then. A failed read counts as the frame's. Three failed reads in a row
-invalidate the run. Every outcome, the refusals included, is committed to the agent as its
+ended the task or not, before anything else runs, so nothing executes once the task has ended but
+after a failed read, which tells nothing, as on the turn-based clock (turns.py ``_end_checked``).
+A capture out when the action finishes holds that read up, but it stands for one right as the
+action finished: an end it finds is dated there, and the deadline waits for it (N31), as the
+turn-based clock reads right then. A failed read counts as the frame's. Three failed reads in a
+row invalidate the run. Every outcome, the refusals included, is committed to the agent as its
 feedback.
 
 Captures, reads and actions run on lanes of their own. A capture and an action may run at once,
