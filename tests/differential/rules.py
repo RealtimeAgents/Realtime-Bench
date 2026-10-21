@@ -85,7 +85,7 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
     started, and the trace records the projection leaves out, decision by decision. The
     decisions today's loop started after the kernel's end, which the rules left out, go with
     their replies and their requests: on the wall clock every request sent once the kernel's
-    episode is over, a retry of the generation it gave up on too (X3); on the token clock, where
+    episode is over, a retry of the generation it gave up on too (K-a); on the token clock, where
     time stands still while a generation runs, the last ones, those decisions' attempts."""
     started = _started(old) & _started(new)
     gone = sorted(set(old.facts["started_at"]) - _started(old))
@@ -108,19 +108,21 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
         if len(requests[0]) != len(requests[1]):
             problems.append(f"requests: {len(requests[0])} -> {len(requests[1])}")
         problems += differences(old.beyond["usage"], new.beyond["usage"], "usage")[0]
-    synthesized = set(old.beyond["synthesized"])
+    synthesized = old.beyond["synthesized"]
     for kind, by_decision in old.beyond["trace"].items():
         other = new.beyond["trace"][kind]
-        for k in sorted(started - synthesized):
+        for k in sorted(started - set(synthesized)):
             records = other.get(k, [])
             problems += differences(by_decision.get(k, []), records, f"trace.{kind}[{k}]")[0]
-    for k in sorted(started & synthesized):
+    for k in sorted(started & set(synthesized)):
+        expected = synthesized[k]
         streamed = new.beyond["trace"]["OutputChunkReceived"].get(k, [])
-        completed = new.beyond["trace"]["InferenceCompleted"].get(k, [])
-        if streamed or [record["timed_out"] for record in completed] != [True]:
-            problems.append(
-                f"trace[{k}]: not one timed-out InferenceCompleted and nothing streamed"
-            )
+        completed = [
+            {name: _given_up_field(record, name) for name in expected}
+            for record in new.beyond["trace"]["InferenceCompleted"].get(k, [])
+        ]
+        problems += differences([expected], completed, f"trace.InferenceCompleted[{k}]")[0]
+        problems += differences([], streamed, f"trace.OutputChunkReceived[{k}]")[0]
     # A frame captured for a decision that never started is written or not; what is written of
     # it is a frame's record, as for the others.
     frames = old.beyond["trace"]["ObservationCaptured"], new.beyond["trace"]["ObservationCaptured"]
@@ -129,6 +131,12 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
         if k not in started and a != b:
             problems.append(f"trace.ObservationCaptured[{k}]: {a} record(s) -> {b}")
     return problems
+
+
+def _given_up_field(record: dict, name: str):
+    if name == "provider_usage_missing_reason":
+        return (record.get("token_accounting") or {}).get(name)
+    return record.get(name)
 
 
 def _started(p: Projection) -> set[int]:
@@ -160,11 +168,21 @@ def _dropped(script: Script, t_k: float, reached: float) -> int:
     return max(0, crossed - 1)
 
 
-def _give_up(p: Projection, notes: dict, k: int, *, at_deadline: bool = False) -> None:
-    """Decision k's generation was given up on, at the wall deadline or at another end: it
-    keeps its observation and nothing else, and the agent is aborted, unless today's loop
-    aborted it too (its bounded wait ran out)."""
-    notes.setdefault("given_up", {})[k] = at_deadline
+# Why the kernel gave a generation up (_give_up), and the reason the shell's record of the call
+# gives for its missing usage (evaluation/shell.py _Shell._abandoned_on_a_bound).
+GIVEN_UP = {
+    "deadline": "generation_aborted_at_wall_timeout",
+    "task_end": "generation_aborted_at_task_end",
+    "invalid_run": "generation_aborted_at_invalid_run",
+}
+
+
+def _give_up(p: Projection, notes: dict, k: int, reason: str) -> None:
+    """Decision k's generation was given up on, for one of GIVEN_UP's reasons: it keeps its
+    observation and nothing else, and the agent is aborted, unless today's loop aborted it too
+    (its bounded wait ran out). Its reply records are the rules' that name the reason
+    (_abandoned)."""
+    notes.setdefault("given_up", {})[k] = reason
     started = p.facts["started_at"][k]
     if not any(not earlier(at, started) for at in p.facts["aborted_at"]):
         p.episode["aborts"] += 1
@@ -513,7 +531,7 @@ def _x12(script: Script, p: Projection, notes: dict) -> None:
     p.episode["invalidation_records"] = 1
     k = _in_hand_at(p, at)
     notes["ended"] = (at, k)
-    _end_at(script, p, notes, k, at)
+    _end_at(script, p, notes, k, at, "invalid_run")
 
 
 def _x12_tap(script: Script, p: Projection, notes: dict) -> None:
@@ -590,23 +608,26 @@ def _kb(script: Script, p: Projection, notes: dict) -> None:
     _end_at(script, p, notes, k, at)
 
 
-def _end_at(script: Script, p: Projection, notes: dict, k: int | None, at: float) -> None:
-    """The episode ends at ``at`` with decision k in hand, or none."""
+def _end_at(
+    script: Script, p: Projection, notes: dict, k: int | None, at: float, reason: str = "task_end"
+) -> None:
+    """The episode ends at ``at`` with decision k in hand, or none; ``reason`` is GIVEN_UP's,
+    for the generation it gives up on."""
     p.episode["termination"]["end_s"] = round(at, 9)
     p.episode["key_ups"] = key_releases(p.facts["key_ups"], at)
     p.episode["captures"] = [c for c in p.episode["captures"] if earlier(c["timestamp"], at)]
     notes["in_hand"] = None
     if k is not None:
-        _cut(script, p, notes, k, at)
+        _cut(script, p, notes, k, at, reason)
 
 
-def _cut(script: Script, p: Projection, notes: dict, k: int, at: float) -> None:
+def _cut(script: Script, p: Projection, notes: dict, k: int, at: float, reason: str) -> None:
     """Settle decision k as the kernel does when the episode ends at ``at``
     (turns.py TurnPolicy.on_end)."""
     facts, d = p.facts, p.decisions[k]
     _drop_after(p, k)
     if earlier(at, facts["finished_at"].get(k, math.inf)):
-        _give_up(p, notes, k)
+        _give_up(p, notes, k, reason)
         notes["in_hand"] = None
         return
     notes["in_hand"] = k
@@ -692,7 +713,10 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
     """The wall deadline is a timer without today's grace (runner.py _move_timeout): at the
     deadline the kernel freezes the snapshot and gives up on the generation in flight, whose
     decision is not reported; a result back exactly at the deadline is discarded
-    (turns.py TurnPolicy.on_timer, core.py)."""
+    (turns.py TurnPolicy.on_timer, core.py). The shell records that call as one given up at the
+    deadline (decision 48), as today's loop records a bounded wait it gave up; where today's
+    loop waited out its grace for the reply instead, that reply's records are gone
+    (_abandoned)."""
     if not _ended_by_the_deadline(script, p, notes):
         return
     deadline, facts = script.duration_s, p.facts
@@ -701,8 +725,55 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
         if earlier(facts["started_at"].get(k, math.inf), deadline) and (
             finished is None or not earlier(finished, deadline)
         ):
-            _give_up(p, notes, k, at_deadline=True)
+            _give_up(p, notes, k, "deadline")
             notes["in_hand"] = None
+    _abandoned(p, notes, "deadline")
+
+
+def _abandoned(p: Projection, notes: dict, reason: str) -> None:
+    """The reply records of the generations given up on for ``reason``: the shell records each
+    as a call given up on, with no usage and nothing streamed (decision 48, N10;
+    evaluation/shell.py _Shell._abandoned_on_a_bound), and counts no usage of it (decision 37;
+    harnesses/default/harness.py DefaultHarness.accept). Today's loop records a reply that came
+    back as it came, and a bounded wait it gave up on as the shell does, which stays as it is."""
+    trace = p.beyond["trace"]
+    for k, why in sorted(notes.get("given_up", {}).items()):
+        completed = trace["InferenceCompleted"].get(k, [])
+        if why != reason or (why == "deadline" and [r["timed_out"] for r in completed] == [True]):
+            continue
+        started = trace["InferenceStarted"][k][0]
+        usage = completed[0]["frame_usage"] if completed else None
+        _drop_replies(p, k)
+        p.beyond["synthesized"][k] = abandoned_call(started, reason, usage or {})
+
+
+def abandoned_call(started: dict, reason: str, usage: dict) -> dict:
+    """What the record of a call given up on for ``reason`` says (_abandoned), of the call
+    InferenceStarted ``started`` began; ``usage`` is a frame usage, for its fields."""
+    return {
+        "decision": started["decision"],
+        "observation_id": started["observation_id"],
+        "timed_out": reason == "deadline",
+        "stale": reason != "deadline",
+        "error": False,
+        "usage": None,
+        "provider_usage_missing_reason": GIVEN_UP[reason],
+        "frame_usage": dict.fromkeys(usage, 0),
+    }
+
+
+def _u10(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: a generation the task's end gave up on, found by the kernel's periodic check
+    (K-b) or with the think budget (K-i), is recorded as a call given up on (p1b 第五轮 U10;
+    N10); today the reply comes back and is recorded as it came."""
+    _abandoned(p, notes, "task_end")
+
+
+def _u11(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: a generation an invalidation gave up on (X12's periodic read) is recorded as a
+    call given up on (p1b 第五轮 U11; N10); today the reply comes back and is recorded as it
+    came."""
+    _abandoned(p, notes, "invalid_run")
 
 
 def _ended_by_the_deadline(script: Script, p: Projection, notes: dict) -> bool:
@@ -895,21 +966,6 @@ def _x2(script: Script, p: Projection, notes: dict) -> None:
         p.episode["snapshot_after"] -= 1
 
 
-def _x3(script: Script, p: Projection, notes: dict) -> None:
-    """A generation the kernel gave up on at the wall deadline is recorded as the runner records
-    a call it gave up on, InferenceCompleted timed out and nothing streamed (decision 48;
-    evaluation/shell.py _Shell._abandoned_on_a_bound); one given up at another end leaves no
-    reply records. Neither settles a reply that came back: the shell settles none the kernel no
-    longer waits for (_Shell._settle_returned), and the agent counts the usage of accepted
-    results only (decision 37; harnesses/default/harness.py DefaultHarness.accept). Today the
-    runner settles a reply back within its grace, or writes a timed-out one for the bounded wait
-    it gave up (runner.py _decide)."""
-    for k, at_deadline in sorted(notes.get("given_up", {}).items()):
-        _drop_replies(p, k)
-        if at_deadline:
-            p.beyond["synthesized"].append(k)
-
-
 def _drop_replies(p: Projection, k: int) -> None:
     """Decision k's reply records, and the usage its reply added."""
     trace = p.beyond["trace"]
@@ -964,19 +1020,6 @@ def _x7(script: Script, p: Projection, notes: dict) -> None:
     p.beyond["requests"] = rewrite(p.beyond["requests"])
 
 
-def _u7(script: Script, p: Projection, notes: dict) -> None:
-    """The shell takes a result's usage before the kernel accepts it (evaluation/shell.py
-    _Shell._settle), and the agent counts the usage only once the result is accepted
-    (harnesses/default/harness.py DefaultHarness.accept), so every InferenceCompleted's
-    frame_usage is all zeros; today the turn is written at once and the frame's usage is the
-    reply's."""
-    started = _started(p)
-    for k, completed in p.beyond["trace"]["InferenceCompleted"].items():
-        for record in completed:
-            if k in started and record["frame_usage"]:
-                record["frame_usage"] = dict.fromkeys(record["frame_usage"], 0)
-
-
 def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
     """The decision today's loop committed after the first end signal: an end or a failure found
     before its commit, or the wall deadline passing while it paced or waited."""
@@ -1004,6 +1047,8 @@ RULES = (
     Rule("K-i", "think budget and the task's end: the first names the reason", _ki),
     Rule("K-d", "nothing advances after the first end signal", _kd),
     Rule("K-a", "the wall deadline is a timer without grace", _ka),
+    Rule("U10", "a generation the task's end gave up on is recorded as given up", _u10),
+    Rule("U11", "a generation an invalidation gave up on is recorded as given up", _u11),
     Rule(
         "K-m",
         "no empty pacing record after the wall deadline",
@@ -1037,8 +1082,12 @@ RULES = (
     ),
     Rule("U2", "an environment-latched failure is written as RunInvalidated", _u2),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
-    Rule("X3", "a generation given up on is recorded as a call given up on, or not at all", _x3),
-    Rule("U7", "an InferenceCompleted's frame_usage is all zeros under the shell", _u7),
+    Rule(
+        "X3",
+        "a generation given up on leaves no reply records",
+        seen="no longer: the shell records it as a call given up on (decision 48, N10; K-a, U10,"
+        " U11)",
+    ),
     Rule(
         "X5",
         "KernelRecord entries in the episode trace",

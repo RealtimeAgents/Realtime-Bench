@@ -77,9 +77,10 @@ class ScriptedSimulation(Simulation):
     """The simulation with the replayed world's traits it lacks: the task ends once the script's
     ``ends_after`` actions have taken effect; on the wall clock every end check asked within one
     of the script's ``failing_reads_s`` fails; and a failed action, which the environment latches
-    itself while execute() returns, reaches the kernel as Invalidated before the action's answer,
-    as the shell posts it (evaluation/shell.py _Shell._env). A clock step that raises is answered
-    with its error only."""
+    itself while execute() returns, reaches the kernel as its answer with the error and then as
+    the Invalidated the environment latched, as the shell posts them (decision N6;
+    evaluation/shell.py _Shell._execute). A clock step that raises is answered with its error
+    only."""
 
     def __init__(self, config, world, script: Script) -> None:
         super().__init__(config, world)
@@ -89,9 +90,9 @@ class ScriptedSimulation(Simulation):
     def _execute(self, decision: int, action, release_at) -> None:
         world = self.world
         error = world.execute_errors.get(decision)
+        super()._execute(decision, action, release_at)
         if error is not None:
             self.kernel.post(Invalidated("environment", "action_execution_failed", error))
-        super()._execute(decision, action, release_at)
         if decision in world.rejections or error is not None:
             return
         self.applied += 1

@@ -55,10 +55,7 @@ def _draw(rng: random.Random, seed: int) -> Script:
     if rng.random() < 0.05:
         fields["frozen_from"] = rng.randint(1, 3)
     if clock == "wall":
-        # Until p1c answers a failed action before the Invalidated the environment latched, the
-        # kernel settles such an action after the snapshot read (scenarios.PENDING, U5): no wall
-        # script both fails an action and takes time to read the snapshot.
-        if rng.random() < 0.3 and not any(turn.fault for turn in turns):
+        if rng.random() < 0.3:
             fields["snapshot_s"] = rng.choice((0.25, 0.5, 1.5))
     else:
         if rng.random() < 0.1:
