@@ -235,11 +235,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cea506d99f8d81dd433736a0205cbc8fb2d82d41ed3a019fa47d376555205279"
+    "hash": "ef09207d39d4aadbdd5c0a9f8a659ca21ea95930d349f9b762f22fac606af64a"
    },
    "token/None": {
     "config": {
@@ -359,11 +359,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "eda774568d627b270696cec13f7aa582c4376c11a2643712fa16901c7bb150ee"
+    "hash": "b5c0e2f23d7ca7ec72f5357f9a77ac0bdf3d5c1c7dcc3d70fb1572bab0c5ebc4"
    },
    "wall/None": {
     "config": {
@@ -483,11 +483,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a817d3398593d07c7a2d3f1776d301cd4c968bbe340472ddfcbe7dc4dfcc2407"
+    "hash": "2b0552fb87e639574cf16fe5b3413a2e9e6a810f61bebab5c6543467afb9f41c"
    }
   },
   "vendor": "anthropic"
@@ -680,11 +680,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cb1299e3a626b47ba39d30f3239982b6ffcd3dc0b359fa2f694798011b334f0d"
+    "hash": "0d27f674eec819474832d5b60845a2d43ce07d52aba5a0eb9272afbf432ce78a"
    },
    "token/None": {
     "config": {
@@ -804,11 +804,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cbc8be7192123a79328755e7baa5b901681fc1f355a364e7e85ea5f7ae6cd227"
+    "hash": "295c5f756ddd910162452a0e0171b044303c995e991d9be5c8d7f39c88bc0ec3"
    },
    "wall/None": {
     "config": {
@@ -928,11 +928,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ddbf3975da33fdf772baf857124f6f3cbc891bc319920d140713dcd5a32f5f56"
+    "hash": "4abcb42bcfbd591ca97f336be4c49610ffafcff9b267c043028a394d5ba7b06d"
    }
   },
   "vendor": "anthropic"
@@ -1124,11 +1124,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "31fda114f6f95ee54390f0c12d0d16cbeccd2cbf6a03d769c8fcce6e3b699c85"
+    "hash": "0bb58ed290e00e91fa4f2acaf577c7f00c9e00bcb5bec5d224a29db1f0e288a2"
    },
    "token/None": {
     "config": {
@@ -1248,11 +1248,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "606fe43d7c21e61555a98a8b3d49509ae3695eaaa8d525f4901a321f52899092"
+    "hash": "1717deb8e79418646c98d3fb7e89d33e84eec370600623bb1b27bfc625db5145"
    },
    "wall/None": {
     "config": {
@@ -1372,11 +1372,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d9b5f41d8f4761363406934b46e0d316e5048d71e3c50b0da7826ad760d6be74"
+    "hash": "6c689c099b7c1daeae5c2bd566b11005ca0a9a3c6b90bf59b7481d3c87ab4173"
    }
   },
   "vendor": "anthropic"
@@ -1569,11 +1569,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "87aec78a86bdf32eb588f124da1473b67413feabbb277505bde759d18d92dfd0"
+    "hash": "fcd98e7ed83d7787e8ce0ee51b537fb095b41059138aa91347c649be24734005"
    },
    "token/None": {
     "config": {
@@ -1693,11 +1693,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b76b1247a9da80cfc0a346692a1095836ce72a727b5f799184f1128afa19213c"
+    "hash": "5205af7593081c354225eaa51690899e7e37a5758b53a2e37f7a15a46fb8cc48"
    },
    "wall/None": {
     "config": {
@@ -1817,11 +1817,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "68aaa5b281d25499e825af3af3ba15e84ed0b1139b0a0efe6bf48e7387614904"
+    "hash": "1c0123923d14b0632e2097097b40ba49e02dafd38dceec149d228de915543149"
    }
   },
   "vendor": "deepseek"
@@ -2014,11 +2014,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d5ebfe7dfec92cad6eb599f21a8a1ac628dec9355361f4df4c62c3ef7bc6a97a"
+    "hash": "c572efab58a8d348871779fdeb602e6b01b442b0631b5c04eca4aabcdb15792a"
    },
    "token/None": {
     "config": {
@@ -2138,11 +2138,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ab095f224cf2f02ec4f9d3cd9ff882d5a5c313a9e636656e44eb5c54080f0adb"
+    "hash": "df8272059ab8f096001fc32ccd4a8f1c1b1efc7cb6d9cdd8f5c44dd42ca456a9"
    },
    "wall/None": {
     "config": {
@@ -2262,11 +2262,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3eb6cc0f7c939a29fbb850373a4d3e28adb98ce79e96a8862b11e71f9f50960a"
+    "hash": "75fd2e7a4f4bb9e4c7d9e191bae760b0276ad063dc267930b4a6dce9357e0e4a"
    }
   },
   "vendor": "google"
@@ -2468,11 +2468,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "eef66837ade787d2bf4044a3000ac39c6ffa53719ac02f1a65edf560a95a1746"
+    "hash": "a12240836655e63b76432742d99172807ad0432e0afb750e5949c79379565b9e"
    },
    "token/None": {
     "config": {
@@ -2589,11 +2589,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2f8e92b8c503e8d3d9d18728a1cd0179e77a3795467d1368f027444e25ab57ef"
+    "hash": "090b35b17fe9334b19b9cf387fffb26bcefdb306fe2c9889652ae748729294be"
    },
    "wall/None": {
     "config": {
@@ -2710,11 +2710,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9d039a81147d86d1c23bf7a26ee1225e3a75be95c0727d41d71055e6bf84306e"
+    "hash": "31d979827cec1a3832fdcb79e6c3dbd07358f402098157563e7e19654182d76e"
    }
   },
   "vendor": "google"
@@ -2916,11 +2916,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5b4afb15fe4c0428f6b746a6c44678e5c02ec682043a072ae07fdbb887a40639"
+    "hash": "c29212935cd0f36fdbcc8f798536fd9809404899fbd87a7f0fdccd3e3cf2147b"
    },
    "token/None": {
     "config": {
@@ -3037,11 +3037,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6cd3bad63a0da7a02421019dc69ecbefb07517a7f829c680d89fe6e7917cce06"
+    "hash": "cf2adb72858f9bdeae5fc962f2e026a0407549ed3cba9ae3d2e5d4dba1389de6"
    },
    "wall/None": {
     "config": {
@@ -3158,11 +3158,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "48850ee5f8f642b5b575aa474bbdf243bf1fe641cadb72ccb546fa0fcdd499cf"
+    "hash": "6bcc2576dc94c01a37bbf68555d97f075950b9589f1e92d0865c5b073d9cfc8d"
    }
   },
   "vendor": "google"
@@ -3364,11 +3364,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ea576546685128454bb94e5e96afdf4dfb437575ec7ff5681779cb1e1c7bda70"
+    "hash": "89be8f9c07f8c01fc4ae229cb0c680c8d812f780b2af4a2c9545b3856e0951e6"
    },
    "token/None": {
     "config": {
@@ -3485,11 +3485,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6389ea9426db2d8445927d750e1e7168aa35192874e405c18e78242847ee6a39"
+    "hash": "087c19dd5f8d0c2dc7c4ff6816366dbe4cd914c9cfeb8c0b9635347b358d92ce"
    },
    "wall/None": {
     "config": {
@@ -3606,11 +3606,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0e3747df5d4a983964d716fa65aced371502b5a797f5e5cde24524eb80241be0"
+    "hash": "03c61f1b7f3d9c7d788e65a077747bb657a13a4cbdb085ceda869c19e0e9af07"
    }
   },
   "vendor": "google"
@@ -3803,11 +3803,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0501a8ab3d94c78d8e9bd656de6da888272dc8198fd7a08eb227a836607928fa"
+    "hash": "2ef69692a5313306003741d7eb5e72d4262d5ea6fd291f9301f9eb01a6c03987"
    },
    "token/None": {
     "config": {
@@ -3927,11 +3927,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2cdea6d65182a7e945393edfbae9367ac52b206883dc623954242d0ca43d7c9c"
+    "hash": "9caaa37fef9789cd96759ad98b6e7983af63f75fbfdc752cb4c7c4b9ce1067c6"
    },
    "wall/None": {
     "config": {
@@ -4051,11 +4051,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5800ce050d17072b0717313843aaefcdd39600b99f15213e94b6b3e0d24f6a12"
+    "hash": "7b5b27ecf4298161e3ef02ea0004aea5d6a6917cf0888361f95b1326fd959216"
    }
   },
   "vendor": "openai"
@@ -4248,11 +4248,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "99b84a33df5e603564d5eaa6e65c3ea606e7ba6e5fe9ca6f583c733117120c75"
+    "hash": "4d5986ef8cc8c4cb129c84e78c0e83880eae83d052e53a2f1978b0e380735d14"
    },
    "token/None": {
     "config": {
@@ -4372,11 +4372,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ed02a7861d05519a3def0ea1366fc7c2465285ad0aa74bbc0eb212268c26cdc1"
+    "hash": "34b48bfb2826236632157e7f6ebb19237f950dce2d902c5c154738aed360ca9b"
    },
    "wall/None": {
     "config": {
@@ -4496,11 +4496,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bf14d33655448546efb38f2f2c9dc75c54149d0823f1ae4ac455d2ff9f005fe6"
+    "hash": "a03a3f1cb1c0ece57df7e339914141e8a5ef56c02e0dd38bf26193cc41307015"
    }
   },
   "vendor": "openai"
@@ -4685,11 +4685,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0a0b9e3a324de56b2ea5b30869ebdca7c1e8e1d10afbefdf2b8c81f8ccf42259"
+    "hash": "a93039b3b24dbe5e05c369fdb23f4829e9e3331987a291699f2ada1a03d7dc92"
    }
   },
   "vendor": "openai"
@@ -4872,11 +4872,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "21705f024fbea9ecb78c697b78f922afb110d834f17da1274575edaad6a168b7"
+    "hash": "a3699b0619ba01d67dac1fe089f229c224dfa093589263980c59d3ff5707052e"
    },
    "token/None": {
     "config": {
@@ -4987,11 +4987,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f0a80bfc88f1dbf3c1a5e2da715000a46e7cfb2d5244e883bf15b6c6250cdafd"
+    "hash": "6380be8237dd05f278c07d204266efb03f7532d0711d7a949ac684d5a1ac2bda"
    },
    "wall/None": {
     "config": {
@@ -5102,11 +5102,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "faec5c22c2c43401f617cb33c04866a778ad478dfcc88f37861a3eed8ba0065a"
+    "hash": "8ad90362f978d65f62329aed44ccc8e447e132f2e4335e91263b3765d7057f2d"
    }
   },
   "vendor": "openai"
@@ -5290,11 +5290,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fb985b0e246b7a51a90091c911f562e36d4fa274fc5aa5255d87103576bf07a4"
+    "hash": "8947ae414bab605bddec5eafe1de859da6e6feafbdfeadb5d5bf6b3077d24b6f"
    }
   },
   "vendor": "typesafe"
@@ -5487,11 +5487,11 @@
      "token_clock_output_accounting": "provider_or_native_response_capped_at_remaining_episode_capacity_v2",
      "token_clock_timing_policy": "output_tokens_divided_by_tokens_per_frame",
      "tokens_per_frame": 64,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f3f84b7bcd8ecb4aa81144364d8bfdf5057b80b39e9267fa9216190eb258260b"
+    "hash": "55e68a73a2cc586e22f7bdbf38debb790478b56438eb9acc75091d009e5b5064"
    },
    "token/None": {
     "config": {
@@ -5611,11 +5611,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": "fixed_action_at_observation_then_one_frame_per_decision",
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a60ce975ef9350a6dad2b191d9fadae2c3ec88933453e1a8d4ae1ab0cf40430a"
+    "hash": "944e6c7872b1eae9d6a0e75196dfce95c996997b6175869ec71189541030ed85"
    },
    "wall/None": {
     "config": {
@@ -5735,11 +5735,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6a3cd3a99541c1510dcc673e5bb3fcbb4b9a6b66dc266cae5d8ab1db72ef9c58"
+    "hash": "0440eb42399a1dac18a59e6a29c0d1ed0d60cc3df2c3defaa8686b4bd027a192"
    }
   },
   "vendor": "moonshot"
@@ -5942,11 +5942,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "eec4e399140f1dd3d5e4e35f3ad58e50ab8f3638465c6d9d274e9b6360644d22"
+    "hash": "88d6c6ef798783c1d4951d107f644df2ca31fa45e061fb4d44ae86e35a160ee9"
    }
   },
   "vendor": "litellm"
@@ -6152,11 +6152,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c13916a47a721afa6224da2021702f04efd52316ed54a285549334340facfc98"
+    "hash": "a032830eaf08dccf56400c00d6f690e5da161d0f74c85d4decd2f5c325b7d4b6"
    }
   },
   "vendor": "compatible"
@@ -6359,11 +6359,11 @@
      "token_clock_output_accounting": "usage_audit_only_not_charged_v1",
      "token_clock_timing_policy": null,
      "tokens_per_frame": null,
-     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+     "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c438bbc736bd4022a9bbe4b63a9d72f0dc664d585247dd51ea5c8f31c25a2fc9"
+    "hash": "5fad824170e046277858ad3ec7c47d877d3df304a63ec5d50eff0d831412084c"
    }
   },
   "vendor": "compatible"
