@@ -233,7 +233,9 @@ class GeminiLiveDriver(SessionLifecycle):
         "compression_target_tokens": 32_768,
     }
 
-    def __init__(self, config, *, clock=None):
+    def __init__(self, config, *, clock=None, streaming: bool = False):
+        """``streaming``: the session native streaming drives, which pushes frames, triggers
+        replies and reads every message as it arrives."""
         from google import genai as genai
         from google.genai import errors as errors
         from google.genai import types as types
@@ -254,6 +256,7 @@ class GeminiLiveDriver(SessionLifecycle):
             )
         self.config = config
         self.clock = clock or SystemClock()
+        self.streaming = streaming
         self.types = types
         self._api_error_type = errors.APIError
         self._connection_closed_type = ConnectionClosed
@@ -274,7 +277,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._session = None
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._trace_connection: str | None = None  # the trace's id of the last connection opened
-        self._core = SessionCore(self.options, on_delivery=self._delivered)
+        self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
         # The goAway deadline the trace has a wait for, on the open connection.
@@ -390,10 +393,25 @@ class GeminiLiveDriver(SessionLifecycle):
         return False
 
     def _realtime_input_config(self):
+        handling = self.types.ActivityHandling
         return self.types.RealtimeInputConfig(
             automatic_activity_detection=self.types.AutomaticActivityDetection(disabled=True),
-            activity_handling=self.types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            # A streaming trigger is an activity, and must not cut off the reply still running.
+            activity_handling=(
+                handling.NO_INTERRUPTION
+                if self.streaming
+                else handling.START_OF_ACTIVITY_INTERRUPTS
+            ),
             turn_coverage=self.types.TurnCoverage.TURN_INCLUDES_ALL_INPUT,
+        )
+
+    def _context_window_compression(self):
+        settings = self.streaming_settings
+        return self.types.ContextWindowCompressionConfig(
+            trigger_tokens=settings["compression_trigger_tokens"],
+            sliding_window=self.types.SlidingWindow(
+                target_tokens=settings["compression_target_tokens"]
+            ),
         )
 
     def _thinking_config(self):
@@ -429,7 +447,10 @@ class GeminiLiveDriver(SessionLifecycle):
         return declarations
 
     def _live_config(self, seed: SessionSeed, connect: Connect):
-        """The setup of one planned connection."""
+        """The setup of one planned connection. Streaming takes realtime input whatever the
+        model's transport, and has the server compress the context: without it an audio-video
+        session lasts two minutes."""
+        streaming = self.streaming
         return self.types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription=self.types.AudioTranscriptionConfig(),
@@ -438,7 +459,11 @@ class GeminiLiveDriver(SessionLifecycle):
             system_instruction=self.types.Content(
                 parts=[self.types.Part(text=seed.system_instruction)]
             ),
-            session_resumption=self.types.SessionResumptionConfig(handle=connect.resume_handle),
+            # Streaming asks the server which client message each handle covers, so a run's
+            # trace shows it; nothing reads the index yet, as its counting is not documented.
+            session_resumption=self.types.SessionResumptionConfig(
+                handle=connect.resume_handle, transparent=True if streaming else None
+            ),
             history_config=(
                 self.types.HistoryConfig(initial_history_in_client_content=True)
                 if connect.seed
@@ -446,9 +471,10 @@ class GeminiLiveDriver(SessionLifecycle):
             ),
             realtime_input_config=(
                 self._realtime_input_config()
-                if self.options["input_transport"] == "realtime_input"
+                if streaming or self.options["input_transport"] == "realtime_input"
                 else None
             ),
+            context_window_compression=self._context_window_compression() if streaming else None,
         )
 
     def _content(self, content: Content):
@@ -548,6 +574,14 @@ class GeminiLiveDriver(SessionLifecycle):
             "api_key_requested_slot": self._api_key_requested_slot,
             "api_key_pool_size": len(self._api_keys),
         }
+        if self.streaming:
+            self._connect_metadata.update(
+                {
+                    "gemini_live_context_window_compression": dict(self.streaming_settings),
+                    # The server drops the oldest turns past the trigger and does not say which.
+                    "gemini_live_server_context": "unknown",
+                }
+            )
 
     def connection_renewal_reason(self) -> str | None:
         # Let the provider-defined connection lifetime be observable. Reconnect only when Gemini
