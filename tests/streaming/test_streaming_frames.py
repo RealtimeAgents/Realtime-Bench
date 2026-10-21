@@ -105,3 +105,12 @@ def test_a_frame_age_counts_only_the_frames_sent_after_it():
     assert table.age(records[0], 106.5) == {"age_frames": 2, "age_s": 5.5}
     assert table.age(records[2], 106.5) == {"age_frames": 1, "age_s": 3.5}
     assert table.age(records[4], 106.5) == {"age_frames": 0, "age_s": 1.5}
+
+
+def test_a_frame_age_leaves_out_the_frames_sent_after_the_action_arrived():
+    # Another thread can push a frame between the action's arrival and the age reading.
+    table = FrameTable()
+    records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, None) for n in (1, 2, 3)]
+    for frame in (1, 2, 3):
+        table.record_sent(frame, 100.0 + frame + 0.1)
+    assert table.age(records[0], 102.5) == {"age_frames": 1, "age_s": 1.5}
