@@ -264,7 +264,8 @@ class RealtimeRuntime:
 
     def _stop_if_abandoned(self, cancel: threading.Event, before: str) -> None:
         """Stop an aborted generation. _run_turn checks before it applies the retention policy,
-        before it sends its observation and before it starts its reply."""
+        before it sends its observation, before each pressure archive and before it starts its
+        reply."""
         if self._abandoned(cancel):
             raise RetryCancelled(f"generation abandoned before {before}")
 
@@ -565,6 +566,9 @@ class RealtimeRuntime:
             )
             if not status.get("pressure"):
                 break
+            # The count can suspend (a "vllm" counter): by now the history may be the next
+            # generation's, which an aborted one must not archive or cut.
+            self._stop_if_abandoned(cancel, "its pressure archive")
             if self.capabilities.persistent_session:
                 raise RuntimeError(
                     "Request exceeds physical context; driver must implement native context compaction"

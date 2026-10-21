@@ -515,6 +515,52 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
     assert [turn.decision for turn in agent._runtime.turns] == [1]
 
 
+def test_an_abandoned_generation_archives_nothing_under_pressure(tmp_path):
+    """Stateless chat. Generation 1 (decision 0) is aborted while the runtime sizes its request,
+    which suspends where an endpoint counts the request itself (context_counter "vllm",
+    providers/litellm.py ChatCompletionsDriver.request_context_status). Generation 2 (decision 1)
+    runs and is accepted meanwhile. Generation 1's count then reports pressure: the history it
+    would archive is the next generation's, so it stops and leaves the turn, the ledger and the
+    trace as they are."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[1:2])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        driver = agent.driver
+        try:
+            first, second = episode.frames.capture(0), episode.frames.capture(1)
+            entered, release = threading.Event(), threading.Event()
+            sized = driver.request_context_status
+
+            async def counted(request):
+                status = dict(await sized(request))
+                if request.generation == 1 and not entered.is_set():
+                    entered.set()
+                    await asyncio.to_thread(release.wait, WAIT_S)
+                    status["pressure"] = True
+                return status
+
+            driver.request_context_status = counted
+            budget = episode.budget(first.tick_number)
+            box, done = _in_worker(lambda: agent.generate(1, 0, first, budget))
+            assert entered.wait(WAIT_S), "generation 1 sized no request"
+            agent.abort(1)
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            accepted = agent.generate(2, 1, second, episode.budget(second.tick_number))
+            agent.accept(2)
+            release.set()
+            abandoned = _joined(box, done)
+            agent.discard(1)
+            turns = [turn.decision for turn in agent._runtime.turns]
+            archived = agent._runtime.archived_action_count
+        finally:
+            episode.finish()
+    assert abandoned.cancelled and not accepted.cancelled
+    assert len(stub.requests) == 1
+    assert (turns, archived) == ([1], 0)
+    changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]
+    assert not [c for c in changes if c.get("kind") in {"pressure_archive", "ledger_omission"}]
+
+
 def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
     """Luna, aborted while decision 0's question is under way, as the legacy loop's per-move cap
     does. The abort closes the Decisions HTTP client (providers/openai_decisions.py close), and
