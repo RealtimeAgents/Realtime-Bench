@@ -329,7 +329,9 @@ def _the_episode(episode, call_id: str) -> dict:
     assert [(row["type"], row["generation"], row["observation_id"]) for row in rows] == [
         ("reply", 1, FRAMES[0]), ("reply_discarded", 2, FRAMES[0]),
     ]  # fmt: skip
-    summary = summarize_streaming(episode.trace_path, agent.driver.streaming_settings)
+    summary = summarize_streaming(
+        episode.trace_path, agent.driver.streaming_settings, attempt_id=episode.attempt_id
+    )
     assert (summary["frames"]["captured"], summary["frames"]["pushed"]) == (3, 3)
     assert summary["actions"]["outcomes"] == {"applied": 1}
     assert summary["replies"] == {"started": 2, "abandoned": {"deadline": 1}}

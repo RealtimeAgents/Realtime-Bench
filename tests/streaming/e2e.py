@@ -42,6 +42,7 @@ class Episode:
     env: FakeEnvironment
     agent: object
     trace_path: object
+    attempt_id: str  # the episode's in its trace (EpisodeTrace.attempt_id)
     records: list[dict]
     problems: list[str]  # the cassette server's: [] when the session matched it to the end
     logs: list[str]
@@ -88,4 +89,4 @@ def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=
     trace.close()
     validate_episode_trace(path)
     records = [json.loads(line) for line in path.read_text().splitlines()]
-    return Episode(env, agent, path, records, server.finish(), logs)
+    return Episode(env, agent, path, trace.attempt_id, records, server.finish(), logs)

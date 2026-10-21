@@ -785,8 +785,10 @@ STREAMING_SUMMARY_SCHEMA = "realtime_bench.streaming_summary.v1"
 _FRAME_BLOCK = re.compile(r"f\d+\.frame")  # harnesses/streaming/history.py frame_block
 
 
-def summarize_streaming(trace_path, settings: dict | None) -> dict:
-    """The streaming section of a native-streaming run's summary, from its episode trace.
+def summarize_streaming(trace_path, settings: dict | None, *, attempt_id: str) -> dict:
+    """The streaming section of a native-streaming run's summary, from the records of its own
+    attempt (EpisodeTrace.attempt_id) in its episode trace, which a run directory used again holds
+    another attempt's records before.
 
     Frames: those captured and pushed into the session, from the kernel's FrameCaptured and
     FramePushed, and those dropped by reason (FrameDropped). For each frame pushed the agent's
@@ -820,6 +822,8 @@ def summarize_streaming(trace_path, settings: dict | None) -> dict:
     refused = set()  # frame blocks the provider refused
     events = {"KernelRecord", TraceEvent.SESSION_DELIVERY.value, TraceEvent.FRAME_SENT.value}
     for row in rows(trace_path, events):
+        if row["attempt_id"] != attempt_id:
+            continue
         payload = row["payload"]
         if row["event"] == "KernelRecord":
             if payload["kind"] in kernel:
