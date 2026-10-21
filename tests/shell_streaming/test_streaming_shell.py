@@ -72,16 +72,17 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
         ("capture", 0.5, 0.75),
         ("check_end", 1.0, 1.5),
         ("capture", 1.5, 1.75),
-        # The beats at 2 s and 3 s are captured alongside the action; the end check asked at 2 s
-        # holds the gate alone, so it waits for the action.
+        # The beats at 2 s and 3 s are captured alongside the action. The reads due then hold
+        # the gate alone, so they wait for the action, and the read right after the action
+        # stands for them and settles it. Then the read due at 4 s, and the capture due with it;
+        # the beat at 5 s finds that capture out and is skipped.
         ("capture", 2.0, 2.25),
         ("capture", 3.0, 3.25),
         ("execute", 1.775, 3.775),
         ("check_end", 3.775, 4.275),
-        ("capture", 4.275, 4.525),
-        ("check_end", 4.525, 5.025),
-        ("capture", 5.025, 5.275),
-        ("check_end", 5.275, 5.775),
+        ("check_end", 4.275, 4.775),
+        ("capture", 4.775, 5.025),
+        ("check_end", 5.025, 5.525),
         ("snapshot", 6.0, 6.5),
     ]
     # During the action, frames went out and the next reply started on one captured meanwhile.
@@ -94,7 +95,8 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
     assert agent.started == [(1, "obs-1", 0.875), (2, "obs-3", 2.475)]
     assert (agent.accepted, agent.aborted, agent.discarded) == ([1], [(2, 6.0)], [2])
     ((committed_at, outcome),) = agent.committed
-    assert (committed_at, outcome.status, outcome.call_id) == (3.775, "applied", "c0")
+    assert (committed_at, outcome.status, outcome.call_id) == (4.275, "applied", "c0")
+    assert outcome.terminal_after_action is False
     assert (outcome.arrived_at, outcome.frame_age_s) == (1.775, 0.9)
     assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
     assert env._termination == {
@@ -110,7 +112,8 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
     )
     assert env.released_at == 6.5
     records = _records(tmp_path)
-    assert _kernel(records, "FrameDropped") == []  # no beat skipped during the action
+    # No beat skipped during the action; the one at 5 s found a capture out.
+    assert [data["reason"] for data in _kernel(records, "FrameDropped")] == ["capture_busy"]
     (execution,) = [r["payload"] for r in records if r["event"] == "ActionExecution"]
     assert execution == {
         "decision": 0,
@@ -122,14 +125,13 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
 
 
 def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
-    """4.8: the deadline falls at 3 s, during the action. The snapshot goes right after it, ahead
-    of the end check that has waited for the gate since 2 s."""
+    """4.8: the deadline falls at 3 s, during the action. The snapshot goes right after it; the
+    read due at 2 s waited for the action and was never sent."""
     termination, env, agent = _episode(3.0, ONE_CLICK)
     assert env.intervals[4:] == [
         ("capture", 2.0, 2.25),
         ("execute", 1.775, 3.775),
         ("snapshot", 3.775, 4.275),
-        ("check_end", 4.275, 4.775),
     ]
     assert termination == Termination("time_limit", "deadline", 3.0, 4.275, 3.0, 4.275, None)
     ((_, outcome),) = agent.committed
@@ -154,22 +156,21 @@ def test_a_snapshot_the_action_keeps_waiting_past_its_budget_fails():
     assert env._invalid_run["reason"] == "evaluation_snapshot_failed"
 
 
-def test_an_end_check_asked_during_an_action_reads_once_the_action_is_done():
-    """4.9: the end check asked at 2 s has a lane of its own and waits for the gate. The task has
-    ended by then; the episode ends at the time it was asked."""
+def test_an_end_check_due_during_an_action_reads_once_the_action_is_done():
+    """4.9: the end check due at 2 s holds the gate alone, so it waits for the action, and the read
+    right after the action stands for it. The task has ended at 2.5 s; the episode ends at the time
+    that read saw it, and the snapshot goes next."""
 
     def ends(env, clock):
         env.ends_at = 2.5
 
     termination, env, _ = _episode(10.0, ONE_CLICK, env_setup=ends)
-    assert ("check_end", 3.775, 4.275) in env.intervals
     assert (termination.stop_reason, termination.cause, termination.ended_at) == (
         "goal",
         "environment",
-        2.0,
+        3.775,
     )
-    # The capture asked at 4 s held the gate when the end came; the snapshot went next.
-    assert env.intervals[-2:] == [("capture", 4.275, 4.525), ("snapshot", 4.525, 5.025)]
+    assert env.intervals[-2:] == [("check_end", 3.775, 4.275), ("snapshot", 4.275, 4.775)]
 
 
 def test_a_capture_that_cannot_keep_up_skips_the_beats_it_misses(tmp_path):

@@ -41,8 +41,9 @@ the environment right after the action, before the next action can change what i
 those times go to the shell as Executed before the answer. An end check's is EndChecked. A command
 whose run raised is answered with the error, as the turn-based shell answers one.
 
-End checks run on a lane of their own (stream-plan 4.9): the policy may send an Execute while a
-state read, up to 10 s on the wall clock, is out, and the two take the gate in turn.
+End checks run on a lane of their own (stream-plan 4.9). The streaming policy sends one only
+while no capture or action is out, and neither while one is out (kernel/streaming.py ``_proceed``),
+so an end check does not wait behind them for the gate; the gate holds it alone all the same.
 
 At the end the snapshot waits for the action executing to finish (stream-plan 4.8) and goes
 right after it: ``freeze_turn`` gives it the place in the gate's line next after that action,
