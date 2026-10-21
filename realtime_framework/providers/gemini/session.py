@@ -161,7 +161,7 @@ def _block_of(key: tuple) -> str | None:
     return key[1] if key[0] == "block" else None
 
 
-def _unrecorded(state: str, contents: list[tuple]) -> None:
+def _unrecorded(state: str, contents: list[tuple], connection: int | None) -> None:
     pass
 
 
@@ -306,9 +306,10 @@ class SessionCore:
     def __init__(self, options: dict, *, streaming: bool = False, on_delivery=_unrecorded):
         """``options`` are the driver's resolved Live options (live.py live_options);
         ``streaming``: native streaming drives the session, pushing frames, triggering replies
-        and reading every message as it arrives; ``on_delivery(state, contents)`` hears each
-        change in the delivery record, with each key and the history block it carries ("system"
-        for the setup)."""
+        and reading every message as it arrives; ``on_delivery(state, contents, connection)``
+        hears each change in the delivery record, with each key and the history block it carries
+        ("system" for the setup), and the number of the connection written on (None for a seed
+        that failed before its connection counted)."""
         self._completion_signal = options["completion_signal"]
         self.streaming = streaming
         self._on_delivery = on_delivery
@@ -547,19 +548,23 @@ class SessionCore:
             for block_id in ids
             if block_id not in failed
         )
-        self._on_delivery(Delivery.CONFIRMED.value, [(("setup",), "system")])
+        self._on_delivery(Delivery.CONFIRMED.value, [(("setup",), "system")], None)
         for state, ids in ((Delivery.SENT, written), (Delivery.UNKNOWN, failed)):
             if ids:
                 self._on_delivery(
-                    state.value, [(("block", block_id), block_id) for block_id in ids]
+                    state.value, [(("block", block_id), block_id) for block_id in ids], None
                 )
 
-    def _set(self, keys, delivery: Delivery) -> None:
+    def _set(self, keys, delivery: Delivery, connection: int | None = None) -> None:
+        """Record writes on ``connection``, the open one by default; one on a connection closed
+        since is heard, and is no write of the open one."""
         keys = list(keys)
-        for key in keys:
-            self.delivery[key] = delivery
+        connection = self.connection if connection is None else connection
+        if connection == self.connection:
+            for key in keys:
+                self.delivery[key] = delivery
         if keys:
-            self._on_delivery(delivery.value, [(key, _block_of(key)) for key in keys])
+            self._on_delivery(delivery.value, [(key, _block_of(key)) for key in keys], connection)
 
     def observe(self, history: CanonicalRequest) -> Observation:
         """Plan the history view's newest frame, after its feedback, as one input, and record it
@@ -649,15 +654,20 @@ class SessionCore:
         self.sending(("tool_response", call_id) for call_id, _ in pending)
         return pending
 
-    def acknowledgement_sent(self, calls: tuple[tuple, ...]) -> None:
-        """The acknowledgement of ``calls`` (acknowledging) was written, also if an abort closed
-        the connection meanwhile."""
-        self.sent(("tool_response", call_id) for call_id, _ in calls)
-        self.pending_calls.clear()
+    def acknowledgement_sent(self, calls: tuple[tuple, ...], connection: int) -> None:
+        """The acknowledgement of ``calls`` (acknowledging) was written on ``connection``, also
+        if an abort closed it meanwhile."""
+        keys = (("tool_response", call_id) for call_id, _ in calls)
+        self._set(keys, Delivery.SENT, connection)
+        if connection == self.connection:
+            self.pending_calls.clear()
 
-    def acknowledgement_failed(self, calls: tuple[tuple, ...]) -> None:
-        """Its write failed: still pending, the next acknowledgement answers them again."""
-        self.send_failed(("tool_response", call_id) for call_id, _ in calls)
+    def acknowledgement_failed(self, calls: tuple[tuple, ...], connection: int) -> None:
+        """Its write on ``connection`` failed: still pending there, the next acknowledgement
+        answers them again."""
+        self._set(
+            (("tool_response", call_id) for call_id, _ in calls), Delivery.UNKNOWN, connection
+        )
 
     # ---- reads -----------------------------------------------------------------------------
 
