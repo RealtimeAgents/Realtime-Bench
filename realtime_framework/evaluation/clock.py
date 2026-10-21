@@ -347,7 +347,24 @@ def _rows(path):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def summarize_model_timing(directory):
+def summarize_model_timing(directory, *, interaction_mode="turn_based"):
+    """A native-streaming session generates throughout, and its replies are no provider calls to
+    time (harnesses/streaming/agent.py): its timing does not apply."""
+    if interaction_mode == "streaming":
+        return {
+            "schema": "model-timing-v1",
+            "source": None,
+            "definition": "first_model_call_start_to_last_model_call_end_all_phases",
+            "status": "not_applicable",
+            "complete": False,
+            "call_count": 0,
+            "unfinished_calls": 0,
+            "errors": [],
+            "wall_time_s": None,
+            "busy_time_s": None,
+            "known_wall_span_s": None,
+            "known_busy_time_s": None,
+        }
     directory = Path(directory)
     intervals, missing, errors = [], 0, []
     source = "provider_runtime"

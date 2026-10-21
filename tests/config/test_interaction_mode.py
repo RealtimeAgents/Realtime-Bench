@@ -192,6 +192,18 @@ def test_a_run_summary_says_why_its_cost_is_unknown(
     assert (summary["cost_usd"], summary["cost_accounting"]["reason"]) == (None, reason)
 
 
+@pytest.mark.parametrize(
+    "interaction_mode, status", [("turn_based", "unavailable"), ("streaming", "not_applicable")]
+)
+def test_a_streaming_run_times_no_model_call(tmp_path, monkeypatch, interaction_mode, status):
+    """A streaming session generates throughout, and its replies are no model calls to time
+    (evaluation/clock.py summarize_model_timing); a turn-based run whose loop failed timed none
+    (low 5)."""
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", interaction_mode)
+    timing = summary["model_timing"]
+    assert (timing["status"], timing["call_count"], summary["wall_time_s"]) == (status, 0, None)
+
+
 def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch):
     """Without --clock the runner runs the token clock (runner.py main), on which streaming is
     refused. Without --report-root, which refuses it earlier (reporting.prepare_episode_report),

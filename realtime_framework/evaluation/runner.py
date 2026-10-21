@@ -930,7 +930,7 @@ def main():
     )
     from realtime_framework.evaluation.clock import summarize_model_timing
 
-    model_timing = summarize_model_timing(run_dir)
+    model_timing = summarize_model_timing(run_dir, interaction_mode=a.interaction_mode)
     cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
     cost_known_usd = cost_accounting.get("known_cost_usd")
     invalid_run = (getattr(env, "_invalid_run", None) if env is not None else None) or invalid_run
