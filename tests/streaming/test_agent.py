@@ -1066,6 +1066,7 @@ def test_a_reply_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, 
 
 def test_a_push_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, clock):
     agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
     _two_frames(agent, clock)
     agent.abort(6)
     agent.driver.connect_failures = [ConnectionError("1011 internal error")]
@@ -1229,3 +1230,29 @@ def test_a_close_that_outlasts_its_bound_is_logged_not_raised(monkeypatch, clock
     assert "close" in caplog.text
     assert clock.wait(pushed, 1.0)
     assert "error" in pushing
+
+
+def test_a_push_waiting_out_the_backoff_to_reopen_the_session_is_held_meanwhile(monkeypatch, clock):
+    """Between attempts to reopen the session the push waits, not stuck (review-final-streaming
+    中-1, decision N48): a PushHeld before each backoff, a PushResumed as the next attempt
+    starts, whose own time its watchdog counts."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
+    _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ConnectionError("1011 internal error")] * 2
+    agent.push(observation(clock, 3))
+    holds = [
+        (type(event).__name__, event.observation_id, at)
+        for event, at in posted
+        if isinstance(event, (PushHeld, PushResumed))
+    ]
+    assert [(name, observation_id) for name, observation_id, _ in holds] == [
+        ("PushHeld", "obs-3"),
+        ("PushResumed", "obs-3"),
+    ] * 2
+    held, resumed = holds[0][2], holds[1][2]
+    assert resumed - held > 0.5  # the first backoff, 1 s ± 25%
+    assert agent.driver.calls[-1][:2] == ("push", "obs-3")
+    agent.close()

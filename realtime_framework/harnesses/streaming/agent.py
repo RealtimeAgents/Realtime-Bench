@@ -405,7 +405,7 @@ class NativeStreamingAgent(VisionAgentBase):
                     self._gates.append(gate)
                     return gate
             if not on_session:
-                await self._ready(view, renew=True)
+                await self._ready(view, renew=True, push=key)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
@@ -532,14 +532,20 @@ class NativeStreamingAgent(VisionAgentBase):
             generation, decision, self._result(reply, latency), reply.cancel.is_set()
         )
 
-    async def _ready(self, view: CanonicalRequest, *, renew: bool) -> None:
+    async def _ready(self, view: CanonicalRequest, *, renew: bool, push: str | None = None) -> None:
         """Ready the session from ``view``, and renew it if the provider asked for that and
         ``renew``. A failure the driver takes as transient is tried again under the shared
         retry policy (decision 39), as a turn's connect is: nothing was generated on it yet. Each
         attempt starts over from the session's state, which a failed one left closed or broken,
-        so the next opens it again from ``view``."""
+        so the next opens it again from ``view``.
+
+        For the push of observation ``push``, the kernel is told it is held while it waits out
+        a backoff, and resumed as the next attempt starts (decision N48): the backoff is longer
+        than the push watchdog, which still times each attempt."""
 
         async def attempt(number: int) -> None:
+            if number > 1 and push is not None:
+                self._post(PushResumed(push))
             await self.driver.ensure_ready(self._seed, view, self._record_session)
             if renew:
                 await self.driver.renew(self._seed, view, self._record_session)
@@ -552,6 +558,8 @@ class NativeStreamingAgent(VisionAgentBase):
             )
             if delay is None:
                 raise TransportFailureError(failure, exc, number - 1) from exc
+            if push is not None:
+                self._post(PushHeld(push))
 
         frames = [item.block.id for item in view.items if item.block.kind == "frame"]
         await RequestRetry(

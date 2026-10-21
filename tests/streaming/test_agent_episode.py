@@ -151,3 +151,39 @@ def test_a_go_away_during_a_long_reply_leaves_it_to_finish_and_renews_after_it(m
     assert ("interrupt", "streaming-1") not in calls
     renewal = calls.index(("sync", "go_away"))
     assert calls.index(("go_away", "streaming-1")) < renewal < calls.index(("reply", 2))
+
+
+def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(monkeypatch):
+    """The session is closed as the episode starts, and the first push's attempts to reopen it
+    fail three times: with their backoff (10.4 s for this view) and the attempts it takes over
+    12 s, past the push watchdog, with no reply yet to give up. The push is held while it waits
+    between attempts (decision N48), so the run goes on instead of ending invalid
+    (review-final-streaming 中-1)."""
+    clock, records = FakeClock(), []
+    record = _StreamingShell._record
+
+    def recording(shell, entry):
+        records.append(entry)
+        record(shell, entry)
+
+    monkeypatch.setattr(_StreamingShell, "_record", recording)
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock)
+        agent.abort(99)
+        agent.driver.connect_s = 0.5
+        agent.driver.connect_failures = [ConnectionError("1011 internal error")] * 3
+        agent.driver.replies += [Reply(ends_at=1.0)] * 20
+        env = _Env(clock)
+        run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=20.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+        agent.close()
+    assert not env._invalid_run
+    pushed = [e.data for e in records if e.kind == "FramePushed"]
+    assert pushed[0].error is None and pushed[0].sent_at > 12.0
+    kinds = [e.kind for e in records if e.kind in ("PushHeld", "PushResumed")]
+    assert kinds[:6] == ["PushHeld", "PushResumed"] * 3
