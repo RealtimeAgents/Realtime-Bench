@@ -223,8 +223,9 @@ class VisionAgentBase(StreamingAgent):
         entry["_token_accounting"] = result.get("token_accounting")
         self._log_entry(entry)
 
-    def abort(self):
-        """Transport-specific subclasses invalidate their active generation."""
+    def abort(self, generation: int | None = None):
+        """Transport-specific subclasses invalidate their active generation. ``generation`` is
+        the event kernel's number of the generation to abort; None aborts the active one."""
 
     def close(self):
         if self._trajectory_file:
@@ -1806,8 +1807,8 @@ class DefaultHarness(VisionAgentBase):
                 },
             )
 
-    def abort(self):
-        super().abort()
+    def abort(self, generation: int | None = None):
+        super().abort(generation)
         with trace_scope(phase="abort", decision=self._trace_decision):
             self._runtime.abort()
 
