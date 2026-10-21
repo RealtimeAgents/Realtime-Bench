@@ -5,9 +5,9 @@ connection and the input of each observation, as neutral Contents and Parts. Gem
 (live.py) turns them into google-genai types, writes and reads the WebSocket and reads the clock,
 and reports back what it wrote and received. The core keeps the session state and answers with
 the operations to perform: how to open the next connection and what to seed on it, whether a sync
-resumes or rebuilds, which tool calls to acknowledge, which connection and generation a server
-message belongs to and whether that generation's output ends with it. Nothing in it awaits, so
-each call is one transition, in the order of the session.
+resumes or rebuilds, which tool calls to acknowledge and which the server cancels, which
+connection and generation a server message belongs to and whether that generation's output ends
+with it. Nothing in it awaits, so each call is one transition, in the order of the session.
 
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
 <history block id>)`` and ``("tool_response", <call id>)``, each sent once handed to the
@@ -138,6 +138,11 @@ def interaction_status(message) -> str | None:
     return str(getattr(status, "value", status)).rsplit(".", 1)[-1].upper()
 
 
+def _cancelled(message) -> tuple[str, ...]:
+    """The ids of the tool calls a toolCallCancellation cancels, in the server's order."""
+    return tuple(getattr(getattr(message, "tool_call_cancellation", None), "ids", None) or ())
+
+
 @dataclass(frozen=True)
 class Connect:
     """Open the next connection, once the current one is closed.
@@ -185,6 +190,8 @@ class Received:
     complete: bool  # the interaction completes here, by the configured completion signal
     ends: bool  # the generation's output ends with this message
     control: dict  # what a goAway asks of the turn: reconnect after it
+    # The ids of the tool calls this message cancels: not to be executed. The reply goes on.
+    cancelled: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -198,6 +205,7 @@ class Orphan:
     connection: int  # the connection it was read from
     message: Any
     control: dict  # what a goAway asks of the session: reconnect after it
+    cancelled: tuple[str, ...]  # the ids of the tool calls this message cancels, as in Received
 
 
 @dataclass
@@ -489,6 +497,7 @@ class SessionCore:
             complete,
             ends,
             control,
+            _cancelled(message),
         )
 
     def arrived(self, connection: int, message, now: float) -> Received | Orphan:
@@ -505,7 +514,7 @@ class SessionCore:
             if connection == self.connection
             else {}
         )
-        return Orphan(connection, message, control)
+        return Orphan(connection, message, control, _cancelled(message))
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
         update = getattr(message, "session_resumption_update", None)
