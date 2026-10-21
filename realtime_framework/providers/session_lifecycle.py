@@ -22,6 +22,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
 )
+from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 
 _NEVER_CANCELLED = threading.Event()
@@ -36,10 +37,15 @@ class SessionLifecycle:
     (mark_dirty) or a sync left it neither exact nor broken. A connection that an operation
     closes on its way (the one a connect replaces, one past its goAway deadline) changes neither.
 
+    Every wait of the encoder on the clock is written to the trace before it starts
+    (_record_wait): what it waits for, how long, and until which time on the operational clock. A
+    wait of its own (_wait) ends early once its cancel event is set; a bound on an operation (a
+    goAway deadline, a close) ends with the operation, and an abort's close ends the operation.
+
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one and does not raise, and ``interrupt(generation)``; and ``clock``, the operational
-    clock.
+    is one and does not raise, and ``interrupt(generation)``; ``clock``, the operational clock;
+    and ``_trace``, which bind_trace sets.
     """
 
     _connected = False
@@ -133,5 +139,16 @@ class SessionLifecycle:
         """Wait ``seconds`` on the operational clock, as RequestRetry's backoff does. Once
         ``cancel`` is set the generation the wait belongs to is abandoned, and RetryCancelled
         ends the wait."""
+        self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
+
+    def _record_wait(self, wait: str, seconds: float) -> None:
+        self._trace.capture(
+            TraceEvent.SESSION_WAIT,
+            {
+                "wait": wait,
+                "seconds": seconds,
+                "until_monotonic_ns": self.clock.monotonic_ns() + round(seconds * 1e9),
+            },
+        )

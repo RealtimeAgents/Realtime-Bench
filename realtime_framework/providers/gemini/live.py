@@ -475,6 +475,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._last_video_sent_at = None
         self._core.closed()
         if cm is not None:
+            self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
             try:
                 await self.clock.wait_for(
                     cm.__aexit__(None, None, None),
@@ -547,6 +548,7 @@ class GeminiLiveDriver(SessionLifecycle):
         if deadline is None:
             return await operation
         remaining = max(0.0, deadline - self.clock.monotonic())
+        self._record_wait("go_away_deadline", remaining)
         try:
             return await self.clock.wait_for(operation, remaining)
         except asyncio.TimeoutError:

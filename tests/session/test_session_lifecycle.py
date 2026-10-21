@@ -19,6 +19,8 @@ import pytest
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
+    TRANSIENT,
+    TRANSPORT_RETRY,
     ConnectRequest,
     GenerationHandle,
     GenerationRequest,
@@ -27,14 +29,22 @@ from realtime_framework.entity.model import (
     RetryCancelled,
     SessionSeed,
     SyncDisposition,
+    TransportFailure,
 )
-from realtime_framework.entity.records import UNTRACED
+from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
 from tests.fake_clock import FakeClock
 
-from .test_gemini_live_receive import HANG, TURN_COMPLETE, Rig, drain, frame_turn
+from .test_gemini_live_receive import (
+    HANG,
+    TURN_COMPLETE,
+    RecordingClock,
+    Rig,
+    drain,
+    frame_turn,
+)
 from .test_openai_realtime_session import ANSWER, turn, view
 
 SEED = SessionSeed("system instruction", "replay-model", None, 1.0, ANSWER)
@@ -50,6 +60,7 @@ class _Encoder(SessionLifecycle):
 
     def __init__(self, clock: FakeClock):
         self.clock = clock
+        self._trace = UNTRACED
         self.log: list[tuple] = []
         self.syncs: list = []
         self.interrupt_s = 0.0
@@ -231,13 +242,18 @@ def test_a_wait_runs_on_the_clock_and_a_cancel_ends_it():
 
 class _FakeRealtime:
     """client.realtime of the OpenAI SDK: each connect opens a connection, numbered from 1, that
-    logs each client event the driver sends as (connection, type, arguments), and its close."""
+    logs each client event the driver sends as (connection, type, arguments), and its close. The
+    first ``refuse`` connects fail as a dropped connection does."""
 
-    def __init__(self):
+    def __init__(self, refuse: int = 0):
         self.log: list[tuple] = []
         self._numbers = itertools.count(1)
+        self._refuse = refuse
 
     def connect(self, *, model, websocket_connection_options):
+        if self._refuse:
+            self._refuse -= 1
+            raise ConnectionError("connection refused")
         return _FakeConnectionManager(next(self._numbers), self.log)
 
 
@@ -269,7 +285,7 @@ class _FakeConnectionManager:
         self.log.append((self.number, "close", {}))
 
 
-def _openai() -> tuple[OpenAIRealtimeDriver, list]:
+def _openai(refuse: int = 0) -> tuple[OpenAIRealtimeDriver, list]:
     driver = OpenAIRealtimeDriver(
         ModelConfig(
             adapter_type="openai_realtime",
@@ -279,7 +295,7 @@ def _openai() -> tuple[OpenAIRealtimeDriver, list]:
         )
     )
     driver.bind_trace(UNTRACED)
-    realtime = _FakeRealtime()
+    realtime = _FakeRealtime(refuse)
     driver.client = SimpleNamespace(realtime=realtime)
     return driver, realtime.log
 
@@ -398,3 +414,100 @@ def test_gemini_live_rebuilds_a_dirty_session():
     assert rig.log == [("connect", None), ("sleep", 2.0), ("connect", None)]
     ((sync, recorded, _),) = records.calls
     assert (sync.reason, sync.force_rebuild, recorded) == ("runtime_recovery", True, result)
+
+
+# ---- each wait in the trace, before it starts -------------------------------------------------
+
+S = 1_000_000_000  # nanoseconds
+
+
+class _Trace:
+    """An agent trace that keeps what it is given: (event, payload)."""
+
+    def __init__(self):
+        self.events: list[tuple] = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        self.events.append((event, payload))
+
+    @property
+    def waits(self) -> list[tuple]:
+        return [
+            (payload["wait"], payload["seconds"], payload["until_monotonic_ns"])
+            for event, payload in self.events
+            if event == TraceEvent.SESSION_WAIT
+        ]
+
+
+class _FrozenClock(RecordingClock):
+    """Waits are logged, not taken, and the monotonic time stays at 100 s."""
+
+    def monotonic(self) -> float:
+        return 100.0
+
+    def monotonic_ns(self) -> int:
+        return 100 * S
+
+
+def _traced(rig: Rig) -> _Trace:
+    trace = _Trace()
+    rig.driver.clock = _FrozenClock(rig.log)
+    rig.driver.bind_trace(trace)
+    return trace
+
+
+def test_gemini_live_records_the_go_away_deadline_closes_and_the_release_grace():
+    update = {"sessionResumptionUpdate": {"newHandle": "handle-0", "resumable": True}}
+    rig = Rig("gemini-3.8-live", [[update, {"goAway": {"timeLeft": "30s"}}, TURN_COMPLETE], []])
+    trace = _traced(rig)
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        await drain(rig.driver.events(generation))  # the last read is bounded by the goAway
+        renewal = HistorySyncRequest(rig.seed, "go_away", rig.history, generation)
+        await rig.driver.sync_history(renewal)  # closes, waits the grace, resumes
+        await rig.driver.close()
+
+    asyncio.run(run())
+    assert trace.waits == [
+        ("go_away_deadline", 28.0, 128 * S),  # the goAway's 30 s, less the 2 s close margin
+        ("connection_close", 1.0, 101 * S),
+        ("session_release", 2.0, 102 * S),
+        ("connection_close", 1.0, 101 * S),
+    ]
+
+
+def test_gemini_live_records_the_video_waits():
+    rig = Rig("replay-gemini-live", [[]])  # the driver defaults: realtime_input, at 1 fps
+    trace = _traced(rig)
+
+    async def run():
+        await rig.connect()
+        for k in range(2):
+            await rig.driver.send_observation(None, rig.view([frame_turn(j) for j in range(k + 1)]))
+
+    asyncio.run(run())
+    assert trace.waits == [
+        ("video_ingestion", 1.0, 101 * S),
+        ("video_interval", 1.0, 101 * S),  # no time passed since the first video
+        ("video_ingestion", 1.0, 101 * S),
+    ]
+
+
+def test_openai_realtime_records_the_connect_backoff():
+    """The record comes after the failed attempt's ModelAttemptFinished and before RequestRetry
+    waits the delay."""
+    driver, _ = _openai(refuse=1)
+    trace = _Trace()
+    driver.clock = _FrozenClock(log := [])
+    driver.bind_trace(trace)
+    asyncio.run(driver.connect(ConnectRequest(seed=SEED)))
+    delay = TRANSPORT_RETRY.delay_s(1, "empty:connect", TransportFailure(TRANSIENT))
+    assert [(event, payload.get("outcome")) for event, payload in trace.events] == [
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "retry"),
+        (TraceEvent.SESSION_WAIT, None),
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "ok"),
+    ]
+    assert trace.waits == [("connect_backoff", delay, 100 * S + round(delay * S))]
+    assert log == [("sleep", delay)]
