@@ -7,7 +7,9 @@ from __future__ import annotations
 import pytest
 
 from realtime_framework.entity.actions import ActionType
+from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
+from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
 from tests.fake_clock import FakeClock
 
 from .fake_live import (
@@ -212,4 +214,63 @@ def test_a_reply_that_said_nothing_adds_no_output(monkeypatch, clock):
         "obs-3",
         ("system", "f1.frame", "f2.frame", "f3.frame"),
     )
+    agent.close()
+
+
+def _outcome(decision, status, call_id=None, *, action=None, detail="", protocol_failure=None):
+    """The kernel's Commit; the clock fields are not part of the feedback."""
+    return Outcome(
+        decision, status, detail, False, 0.0, 0.0, 0, False, None, None, None, 0,
+        action=action, protocol_failure=protocol_failure, call_id=call_id,
+    )  # fmt: skip
+
+
+def test_each_outcome_is_feedback_on_the_action_its_call_handed_over(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1), _click("c2", 0.75, 9)), 1.0))
+    agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    applied = posted[0]
+    outcomes = [
+        _outcome(3, "applied", "c1", action=applied.action),
+        _outcome(3, INVALID_GROUNDING_FRAME, "c2", detail=FRAME_NOT_IN_TABLE),
+    ]
+    for outcome in outcomes:
+        agent.commit(outcome)
+    agent.push(observation(clock, 3))
+    items = agent.driver.views[-1].items
+    assert [item.block.id for item in items][3:] == [
+        "d3.output",
+        "d3.c1.feedback",
+        "d3.c2.feedback",
+        "f3.frame",
+    ]
+    requested = action_text(applied.action)
+    assert [item.block.text for item in items[4:6]] == [
+        execution_feedback(outcomes[0], requested),
+        execution_feedback(outcomes[1], "none"),
+    ]
+    assert [(a["call_id"], a["requested"], a["result"]) for a in agent.action_history] == [
+        ("c1", requested, "applied"),
+        ("c2", "none", INVALID_GROUNDING_FRAME),
+    ]
+    agent.close()
+
+
+def test_a_reply_that_came_to_no_action_has_feedback_of_its_own(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((Call(0.5, "c1", "fly", {"to": "moon"}),), ends_at=1.0))
+    agent.generate(0, 0, frame, BUDGET)
+    agent.accept(0)
+    outcome = _outcome(0, "none", protocol_failure="invalid_action_output")
+    agent.commit(outcome)
+    agent.push(observation(clock, 3))
+    items = agent.driver.views[-1].items
+    assert [item.block.id for item in items][3:] == ["d0.output", "d0.feedback", "f3.frame"]
+    assert items[4].block.text == execution_feedback(outcome, "none")
     agent.close()
