@@ -1579,6 +1579,7 @@ class DefaultHarness(VisionAgentBase):
         retry_usages = []
         failure_detail = ""
         failure_reason = ""
+        final_error = None
 
         def send(attempt):
             nonlocal collector
@@ -1604,7 +1605,7 @@ class DefaultHarness(VisionAgentBase):
             )
 
         def record(attempt, exc, failure, delay):
-            nonlocal failure_detail, failure_reason
+            nonlocal failure_detail, failure_reason, final_error
             received = received_output(exc)
             if delay is not None:
                 retry_reasons.append(f"{failure.kind}: {exc!r}"[:300])
@@ -1623,6 +1624,7 @@ class DefaultHarness(VisionAgentBase):
                 return
             # A partially received turn cannot be replayed without risking a duplicate action,
             # whatever the cause.
+            final_error = exc
             failure_reason = "provider_stream_interrupted" if received else failure.invalid_reason
             failure_detail = repr(exc)[:500]
             if retry_reasons:
@@ -1654,8 +1656,11 @@ class DefaultHarness(VisionAgentBase):
         except RetryCancelled:
             generation.staged = _Staged(feedback, unattached, inspection_executions)
             return self._cancelled_result(self.clock.monotonic() - started), True
-        except Exception:  # noqa: BLE001, S110 - record() kept the final failure
-            pass
+        except Exception as exc:
+            # Only the failure record() kept as final becomes an invalid decision; anything else
+            # raised on the way (by record() itself, the backoff, the output check) propagates.
+            if exc is not final_error:
+                raise
         else:
             self._attempt_finished(generation, request, len(retry_reasons) + 1, runtime_result)
             # The runtime takes exactly one observation per generation: its own frame.

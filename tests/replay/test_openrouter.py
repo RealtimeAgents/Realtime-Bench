@@ -322,6 +322,32 @@ def test_whole_turn_retry_429_with_retry_after(openrouter_env, tmp_path):
     assert TRANSPORT_RETRY.delay_s(1, key, honored) is None
 
 
+def test_an_error_recording_a_retry_propagates(openrouter_env, tmp_path):
+    """Attempt 1 gets HTTP 503, and recording that failure raises (harnesses/default/harness.py
+    _attempt_failed, standing in for a broken trace write). The retry executor passes the error
+    on (entity/model.py RequestRetry), and the decision raises it: only the request failure that
+    record() kept as final becomes an invalid decision."""
+    openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    unavailable = Failure(503, {"error": {"message": "upstream down", "code": 503}})
+    with openrouter_episode(openrouter_env, tmp_path, [unavailable], **TOKEN_CLOCK) as (
+        stub,
+        _,
+        episode,
+    ):
+        agent = episode.agent
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("the trace refused the record")
+
+        agent._attempt_failed = broken
+        observation = episode.frames.capture(0)
+        agent.configure_decision(episode.budget(observation.tick_number))
+        agent.stream_prefill(observation)
+        with pytest.raises(RuntimeError, match="the trace refused the record"):
+            agent.stream_generate(tick=0)
+    assert len(stub.requests) == 1
+
+
 def test_partial_output_is_not_retried(openrouter_env, tmp_path):
     """The stream breaks off after its first text chunk: LiteLLM raises MidStreamFallbackError
     over httpx.ReadError, which the classifier takes as TRANSIENT (providers/litellm.py
