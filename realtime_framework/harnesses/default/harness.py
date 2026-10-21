@@ -1606,7 +1606,6 @@ class DefaultHarness(VisionAgentBase):
         failure_detail = ""
         failure_reason = ""
         final_error = None
-        failure_category = "provider"
 
         def send(attempt):
             nonlocal collector
@@ -1615,6 +1614,8 @@ class DefaultHarness(VisionAgentBase):
                 return run_once(collector)
 
         def classify(exc):
+            if isinstance(exc, RequestExceedsContext):  # the harness's own; a retry cannot fit
+                return TransportFailure(FATAL)
             if callable(classifier):
                 try:
                     return classifier(exc)
@@ -1632,7 +1633,7 @@ class DefaultHarness(VisionAgentBase):
             )
 
         def record(attempt, exc, failure, delay):
-            nonlocal failure_detail, failure_reason, final_error, failure_category
+            nonlocal failure_detail, failure_reason, final_error
             received = received_output(exc)
             if delay is not None:
                 retry_reasons.append(f"{failure.kind}: {exc!r}"[:300])
@@ -1653,8 +1654,8 @@ class DefaultHarness(VisionAgentBase):
             # whatever the cause.
             final_error = exc
             failure_reason = "provider_stream_interrupted" if received else failure.invalid_reason
-            if isinstance(exc, RequestExceedsContext):  # nothing was sent to the provider
-                failure_reason, failure_category = exc.invalid_reason, "harness"
+            if isinstance(exc, RequestExceedsContext):  # the generation request was not sent
+                failure_reason = exc.invalid_reason
             failure_detail = repr(exc)[:500]
             if retry_reasons:
                 failure_detail = (
@@ -1741,7 +1742,7 @@ class DefaultHarness(VisionAgentBase):
                 "transport_retry_usage": retry_usages,
                 "transport_retry_usage_status": _retry_usage_status(retry_usages),
             }
-            return {
+            result = {
                 "action": None,
                 "thinking": "",
                 "raw": "",
@@ -1749,11 +1750,15 @@ class DefaultHarness(VisionAgentBase):
                 "decision_wall_latency_s": latency,
                 "usage": collector.usage,
                 "output_chunks": collector.chunks,
-                "invalid_category": failure_category,
+                "invalid_category": "provider",
                 "invalid_reason": failure_reason,
                 "invalid_detail": failure_detail,
                 "_trajectory_entry": log_entry,
-            }, False
+            }
+            if isinstance(final_error, RequestExceedsContext):
+                # Its token record (evaluation/clock.py token_record) says why it has no usage.
+                result["provider_usage_missing_reason"] = "request_not_sent"
+            return result, False
 
         output = runtime_result.output
         action_observation = prepared[-1]

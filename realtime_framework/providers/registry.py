@@ -425,6 +425,11 @@ def _check_driver(target: str, driver: type) -> None:
         raise ValueError(
             f"{target!r} has request_context_status() but does not declare request_size_estimation"
         )
+    if estimates and driver.capabilities.persistent_session:
+        raise ValueError(
+            f"{target!r} declares request_size_estimation on a persistent session, whose "
+            "context the runtime cannot archive"
+        )
 
 
 # Catalog

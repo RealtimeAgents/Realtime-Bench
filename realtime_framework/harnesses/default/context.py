@@ -171,7 +171,9 @@ class RealtimeRuntime:
         self._turns: list[CanonicalTurn] = []
         self._archived_action_count = 0
         # The earliest archived actions the ledger leaves out: a request that did not fit with
-        # every turn archived dropped them, and none comes back.
+        # every turn archived dropped them. As archived turns do, they stay out for the rest of
+        # the episode, though a later request would fit with them, so that the history the model
+        # sees does not change back.
         self._omitted_action_count = 0
         self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
         self._buffer = CatchupBuffer()
@@ -289,12 +291,14 @@ class RealtimeRuntime:
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
 
-    def ledger_block(self, ledger: str) -> ContentBlock | None:
+    def ledger_block(self, ledger: str, omitted: int | None = None) -> ContentBlock | None:
         """The ledger as requests carry it: ``ledger`` holds one line per archived action, and
-        the omitted earliest ones give way to a note that counts them."""
-        if self._omitted_action_count:
-            kept = ledger.split("\n")[self._omitted_action_count :]
-            note = self.policy.texts.ledger_omission.format(count=self._omitted_action_count)
+        the ``omitted`` earliest ones (by default the ones left out so far) give way to a note
+        that counts them."""
+        omitted = self._omitted_action_count if omitted is None else omitted
+        if omitted:
+            kept = ledger.split("\n")[omitted:]
+            note = self.policy.texts.ledger_omission.format(count=omitted)
             ledger = "\n".join([note, *kept])
         return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
 
@@ -549,6 +553,8 @@ class RealtimeRuntime:
 
         compactions = 0
         archived_count = 0
+        omitted_blocks = 0
+        omitted_before = self._omitted_action_count
         while True:
             executed_action_ledger = self._action_ledger(action_history)
             canonical = request_builder(
@@ -569,19 +575,28 @@ class RealtimeRuntime:
             # The count can suspend (a "vllm" counter): by now the history may be the next
             # generation's, which an aborted one must not archive or cut.
             self._stop_if_abandoned(cancel, "its pressure archive")
-            if self.capabilities.persistent_session:
-                raise RuntimeError(
-                    "Request exceeds physical context; driver must implement native context compaction"
-                )
             if not self._turns:
                 # Every turn is archived: leave out the earliest archived actions, a block at a
-                # time, before the request is given up.
-                if self._omit_archived_actions(status):
-                    continue
-                raise RequestExceedsContext(
-                    "Task instructions and current observation exceed context capacity with every "
-                    "archived action omitted; use a larger endpoint window"
+                # time, before the request is given up. Once one block was not enough, a count
+                # with every archived action left out tells whether more blocks can help.
+                hopeless = (
+                    omitted_blocks == 1
+                    and self._omitted_action_count < self._archived_action_count
+                    and not await self._fits_with_every_action_omitted(
+                        request, request_builder, incoming, executed_action_ledger
+                    )
                 )
+                self._stop_if_abandoned(cancel, "its pressure archive")
+                if hopeless or not self._omit_archived_actions(status):
+                    raise RequestExceedsContext(
+                        "Task instructions and current observation exceed context capacity with "
+                        "every archived action omitted; use a larger endpoint window"
+                    )
+                omitted_blocks += 1
+                physical_metadata["request_context_omitted_actions"] = (
+                    self._omitted_action_count - omitted_before
+                )
+                continue
             archived = self._turns[: self.policy.turns.block]
             del self._turns[: len(archived)]
             archived_actions = self._record_archived_turns(archived)
@@ -609,6 +624,12 @@ class RealtimeRuntime:
             "history_archived_turns": retention["archived_turns"],
             "history_archived_actions": retention["archived_actions"],
             "history_archived_actions_total": self._archived_action_count,
+            # Only once the ledger leaves actions out: a run that never does records no more.
+            **(
+                {"history_omitted_actions_total": self._omitted_action_count}
+                if self._omitted_action_count
+                else {}
+            ),
             "history_detailed_turns": len(self._turns),
             "history_current_observations": len(incoming),
             "history_prompt_turns": len(self._turns) + len(incoming),
@@ -876,6 +897,16 @@ class RealtimeRuntime:
             request_context=status,
         )
 
+    async def _fits_with_every_action_omitted(
+        self, request, request_builder, incoming, ledger
+    ) -> bool:
+        """Count the request as it would go with every archived action left out, leaving the
+        history as it is."""
+        block = self.ledger_block(ledger, omitted=self._archived_action_count)
+        canonical = request_builder(tuple(self._turns + incoming), block)
+        status = await self.driver.request_context_status(replace(request, canonical=canonical))
+        return not status.get("pressure")
+
     def _omit_archived_actions(self, status) -> int:
         """Leave the next block of the earliest archived actions out of the ledger; returns how
         many, none once every one is out."""
@@ -978,6 +1009,7 @@ class RealtimeRuntime:
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
                     "archived_actions_total": self._archived_action_count,
+                    "omitted_actions_total": self._omitted_action_count,
                     "detailed_turns": len(self._turns),
                     "current_observations": len(incoming),
                     "prompt_turns": len(turns),
