@@ -4,9 +4,10 @@ The first end signal (the deadline, an end the environment reports, an invalidat
 episode at once: the snapshot is frozen, the generation in flight is given up and its late result
 never lands. The environment is asked whether it ended by a periodic check once each environment
 frame, during generations and waits too, and at the loop top only in a frame not read yet; right
-before execution unless it was asked at that same reading, as today's loop asks there (runner.py
-_land_action); and again after every action it executed. Waits, the next frame and the legacy per-move cap are
-timers; a hold's keys are released by the environment's own timer.
+before execution unless it was asked at that same reading, as today's loop asks there
+(legacy_loop.py _land_action); and again after every action it executed, a refused one getting
+instead the periodic check its execution delayed. Waits, the next frame and the legacy per-move
+cap are timers; a hold's keys are released by the environment's own timer.
 
 Every expected value is worked out by hand: from today's runner where the kernel keeps its rules
 (evaluation/runner.py, sandbox/actions.py) and from phase2.md (事件内核; 时间和结束判定) where it
@@ -702,6 +703,26 @@ def test_the_runner_worked_example_of_one_wall_decision():
         outcome.frame_age_s,
     ) == ("applied", approx(2.6), 3, 2, approx(1.85))
     assert sim.captures[1] == (3, approx(3.15))
+
+
+def test_a_periodic_check_an_execution_delayed_is_made_when_the_action_is_refused():
+    # At 60 fps the click landing at 2.5 s executes until 2.8 s and is refused, and the task
+    # ends at 2.7 s. The periodic check due meanwhile was left to the check after the action,
+    # which a refused action does not get (legacy_loop.py _land_action): it is made at 2.8 s instead,
+    # and dates the end there, not at the next frame's check.
+    world = World(
+        replies=[Reply(2.5, CLICK), Reply(9.0)],
+        execute_s=0.3,
+        rejections={0: "click outside the page"},
+        ends_at=2.7,
+        end_reason="won",
+    )
+    sim = _episode(_wall(5.0, env_fps=60.0, input_fps=1.0), world)
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("rejected", False)]
+    assert _asked(sim)[-1] == pytest.approx(2.8)
+    assert sim.after_action[-1] is False
+    assert _ended(sim)[:2] == ("won", "environment")
+    assert sim.termination.ended_at == pytest.approx(2.8)
 
 
 def test_end_checks_stay_on_the_frame_grid_when_an_execution_delays_one():

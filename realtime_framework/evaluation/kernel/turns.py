@@ -204,6 +204,7 @@ class TurnPolicy:
         self._failed_reads = 0  # state reads failed in a row
         self._read_at: float | None = None  # the semantic reading of the last state read
         self._unanswered: int | None = None  # the last state read, until its answer is handled
+        self._periodic_owed = False  # an execution delayed a periodic check, left to the next read
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
@@ -255,9 +256,12 @@ class TurnPolicy:
         elif timer.kind == "end_check":
             # A check a synchronous command delayed past the deadline is not asked: the deadline
             # comes first, as in sandbox/actions.py GuestEnvironment.done. Nor is one an execution
-            # delayed: the check right after the action reads at that reading.
+            # delayed: the check right after the action reads at that reading, or, for an action
+            # refused, which gets none, the check made in its place (_executed).
             if kernel.semantic < self.config.duration_s:
-                if self.phase is not _Phase.EXECUTE:
+                if self.phase is _Phase.EXECUTE:
+                    self._periodic_owed = True
+                else:
                     self._check_end(None)
                 self._schedule_end_check()
         elif timer.kind == "generation_watchdog":
@@ -548,8 +552,11 @@ class TurnPolicy:
             kernel.invalidate("environment", "action_execution_failed", event.error)
             return self._resolve("invalid_run")
         if event.rejection is not None:
-            # A refused action skips the check after execution (legacy_loop.py _land_action).
+            # A refused action skips the check after execution (legacy_loop.py _land_action), but
+            # not a periodic check its execution delayed.
             d.detail = event.rejection
+            if self._periodic_owed:
+                self._check_end(None)
             return self._resolve("rejected")
         if self.token and event.held_keys:
             self._lease(event.held_keys)
@@ -768,6 +775,7 @@ class TurnPolicy:
                 return None
             return None if then is None else then()
         self._read_at = self.kernel.semantic
+        self._periodic_owed = False
         request = self._unanswered = self.kernel.request()
         if then is not None:
             self._awaited = (request, then)
