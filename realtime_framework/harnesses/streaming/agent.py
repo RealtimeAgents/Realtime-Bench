@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -107,6 +108,8 @@ from realtime_framework.providers.registry import adapter_class
 
 if TYPE_CHECKING:
     from realtime_framework.evaluation.kernel.events import Outcome
+
+logger = logging.getLogger(__name__)
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
@@ -844,8 +847,13 @@ class NativeStreamingAgent(VisionAgentBase):
             # The runner closes an agent whose initialize failed, before or after the execution
             # thread started; one that never started has no session to close.
             if self._execution.running:
-                with trace_scope(phase="close"):
-                    self._execution.run(self._close(), timeout=_SESSION_TIMEOUT_S)
+                try:
+                    with trace_scope(phase="close"):
+                        self._execution.run(self._close(), timeout=_SESSION_TIMEOUT_S)
+                except Exception:
+                    # As a turn's close (RealtimeRuntime.close): the episode's outcome is settled
+                    # by now, and stopping the execution thread below ends what is left.
+                    logger.warning("closing the streaming session failed", exc_info=True)
         finally:
             try:
                 self._execution.stop()
