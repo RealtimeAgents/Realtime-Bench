@@ -630,3 +630,11 @@ def test_a_release_the_shell_timer_reports_failed_invalidates_the_run():
     assert sim.termination.invalid == Invalidated(
         "environment", "wall_key_release_failed", "xdotool keyup failed"
     )
+
+
+def test_a_reply_that_handed_actions_over_still_reports_its_protocol_failure():
+    """The reply's click executes; what else it said came to no action, and the agent is told."""
+    reply = Reply(1.0, calls=(Call(0.5, CLICK, "a"),), protocol_failure="malformed_second_call")
+    sim = _run(World(replies=[reply]), 3.0)
+    told = [(o.decision, o.status, o.call_id, o.protocol_failure) for o in sim.outcomes]
+    assert told == [(0, "applied", "a", None), (0, "none", None, "malformed_second_call")]
