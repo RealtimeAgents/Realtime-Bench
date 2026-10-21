@@ -382,7 +382,7 @@ class _Shell:
         try:
             self._loop()
         finally:
-            self.agent_trace.take_back(self._write_handed if self._finished else lambda: None)
+            self.agent_trace.take_back(self._write_handed if self._finished else self._write_held)
 
     def _hand_over(self, record: AgentRecord) -> None:
         """An agent record from the sink's writer. The kernel takes it once nothing else is due
@@ -391,6 +391,19 @@ class _Shell:
         with self._inbox:
             self._held_records.append(record)
         self._wake.set()
+
+    def _write_held(self) -> None:
+        """The loop raised before the end and the shell wraps the episode up without the kernel
+        (_wrap_up): the agent records the kernel had not taken are written unnumbered, as the sink
+        writes them once it has them back."""
+        taken = [event for event in self._posted if isinstance(event, AgentRecord)]
+        for record in taken + list(self._held_records):
+            if self.trace is None or self._trace_failed:
+                return
+            try:
+                self.trace.emit(record.kind, record.data)
+            except Exception:  # noqa: BLE001 - the run is invalid already
+                self._trace_failed = True
 
     def _write_handed(self) -> None:
         """Once the episode is finished: hand the kernel the agent records it has not taken, step
