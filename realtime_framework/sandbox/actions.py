@@ -829,7 +829,7 @@ class GuestEnvironment:
                     "expires_at": max(current["expires_at"] if current else now, expires_at),
                 }
             self._schedule_wall_release()
-            return {
+            result = {
                 "status": "ok",
                 "timestamp": now,
                 "logical_key": chord,
@@ -843,6 +843,11 @@ class GuestEnvironment:
                 "active_holds": self._active_hold_snapshot(),
                 "active_mouse_buttons": sorted(self._held_mouse_buttons),
             }
+            if release_at is not None:
+                # Seconds from the press to the end of the lease: 0 when the kernel's release time
+                # passed before the press, so the keys went up at once.
+                result["lease_seconds"] = round(max(0.0, expires_at - now), 3)
+            return result
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
