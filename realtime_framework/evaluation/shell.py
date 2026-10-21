@@ -1215,7 +1215,9 @@ class _Shell:
         so too, named for what ended the episode (N10), as a synthesized record the token
         totals and the model timing leave out (N34). Only the move over the cap is reported, as
         skipped (kernel/turns.py on_timer); the others end the episode and their decision goes
-        unreported."""
+        unreported (K-a): the token accounting leaves a result settled before, or one the totals
+        count, out of its subtotal of reported decisions, which the report checks the lifecycle
+        against (reporting.py report)."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
@@ -1227,6 +1229,8 @@ class _Shell:
             held.inference = None  # its echo writes nothing more
             if reason == "per_move_cap":
                 self._decision.result = held.result
+            else:
+                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
             if bound is not None:
                 self.log(
                     f"[default] k={held.decision} generation back in "
@@ -1264,6 +1268,8 @@ class _Shell:
         result, inference = self._settle(held, r)
         if reason == "per_move_cap":
             self._decision.result = r
+        elif bound is not None:
+            self.env._token_accounting.leave_unreported(r["token_accounting"])
         self._emit_inference(inference, entry)
         if result.invalid is not None and self.kernel.invalid is None:
             self.post(result.invalid)  # its trajectory row could not be written

@@ -235,6 +235,8 @@ class TokenAccounting:
         self.reported_cost_coverage = 0
         self.cost_detail_sums: dict[str, Decimal] = {}
         self.cost_detail_coverage = Counter()
+        # The responses counted above whose decision goes unreported, and their clock counts.
+        self.unreported = Counter()
 
     def add(self, record):
         # A call given up on at the episode's end has a synthesized record and no usage: the
@@ -278,6 +280,33 @@ class TokenAccounting:
                 continue
             self.cost_detail_sums[key] = self.cost_detail_sums.get(key, Decimal(0)) + amount
             self.cost_detail_coverage[key] += 1
+
+    def leave_unreported(self, record):
+        """Keep ``record``, added already, out of the reported decisions' subtotal: the kernel
+        gave its decision up, and no lifecycle record reports it (shell.py _given_up). The
+        totals keep it."""
+        self.unreported["responses"] += 1
+        value = _number(record, "clock_output_tokens")
+        if value is not None:
+            self.unreported["responses_with_count"] += 1
+            self.unreported["clock_output_tokens"] += value
+
+    def _reported_decisions(self):
+        responses = self.responses - self.unreported["responses"]
+        coverage = self.coverage["clock_output_tokens"] - self.unreported["responses_with_count"]
+        known = self.sums["clock_output_tokens"] - self.unreported["clock_output_tokens"]
+        complete = bool(responses and coverage == responses)
+        return {
+            "responses": responses,
+            "counts": {
+                "clock_output_tokens": {
+                    "total": known if complete else None,
+                    "known_total": known if coverage else None,
+                    "responses_with_count": coverage,
+                    "complete": complete,
+                }
+            },
+        }
 
     def summary(self):
         counts = {}
@@ -332,6 +361,13 @@ class TokenAccounting:
                 "cost_details_response_coverage": dict(self.cost_detail_coverage),
             },
             "counts": counts,
+            # The clock counts of the responses the lifecycle reports, once one goes unreported
+            # (reporting.py report); without it, every response is a reported decision's.
+            **(
+                {"reported_decisions": self._reported_decisions()}
+                if self.unreported["responses"]
+                else {}
+            ),
         }
 
 
