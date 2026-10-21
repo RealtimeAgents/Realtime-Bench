@@ -47,7 +47,7 @@ def _action(record: dict | None) -> Action | None:
     )
 
 
-def _event(record: dict):
+def recorded_event(record: dict):
     """One recorded event, as the kernel got it."""
     fields = dict(record)
     kind = fields.pop("event")
@@ -72,7 +72,7 @@ def _event(record: dict):
     )
 
 
-def _replay(config, lines: list[dict]) -> tuple[Kernel, list]:
+def replay_inputs(config, lines: list[dict]) -> tuple[Kernel, list]:
     """Feed the recorded inputs to a new kernel; return it and the log it wrote."""
     kernel = Kernel(TurnPolicy(config))
     start, *steps = lines
@@ -82,7 +82,7 @@ def _replay(config, lines: list[dict]) -> tuple[Kernel, list]:
     for line in steps:
         assert line["call"] == "step"
         for record in line["events"]:
-            kernel.post(_event(record))
+            kernel.post(recorded_event(record))
         out = kernel.step(line["semantic"], line["ops"])
         assert out is not None  # only calls that handled something are recorded
         entries += [command.entry for command in out if isinstance(command, Record)]
@@ -122,7 +122,7 @@ def test_replaying_the_recorded_inputs_reproduces_the_episode_log(
     path = tmp_path / "kernel_inputs.jsonl"
     episode = run(clock_mode, 3.0, replies, world, inputs_log=path, **fields)
     lines = [json.loads(line) for line in path.read_text().splitlines()]
-    kernel, entries = _replay(episode.config, lines)
+    kernel, entries = replay_inputs(episode.config, lines)
     assert kernel.termination is not None
     assert kernel.termination.stop_reason == episode.env._stop_reason
     written = {}
