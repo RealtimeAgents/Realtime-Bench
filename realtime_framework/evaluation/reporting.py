@@ -1745,7 +1745,8 @@ def report(root):
                             error_reason="result_validation_failed",
                         )
             groups[json.dumps(identity, sort_keys=True)].append(row)
-    output = {"snapshot_utc": datetime.now(timezone.utc).isoformat(), "groups": []}
+    # Outside any episode: over finished runs, after runner main() has returned.
+    output = {"snapshot_utc": datetime.now(timezone.utc).isoformat(), "groups": []}  # noqa: TID251
     for identity_json, rows in groups.items():
         scored = [row for row in rows if row["status"] == "scored"]
         passed = sum(row["solved"] for row in scored)
@@ -1954,7 +1955,8 @@ def reevaluate_main():
     invalid_reason = _invalid_evaluation(result)
     reported_invalid_reason = invalid_reason
     record = {
-        "reevaluated_unix_s": time.time(),
+        # Outside any episode: a finished run, re-evaluated from its saved state.
+        "reevaluated_unix_s": time.time(),  # noqa: TID251
         "source_manifest": "generation_artifact/manifest.json",
         "suite_id": manifest.get("suite_id"),
         "suite_version": manifest.get("suite_version"),
