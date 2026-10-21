@@ -509,6 +509,11 @@ def retry_cancellation(cancel: threading.Event):
         _RETRY_CANCEL.reset(token)
 
 
+def retry_cancel_event() -> threading.Event:
+    """The cancel event of the enclosing retry_cancellation; outside one, an event never set."""
+    return _RETRY_CANCEL.get()
+
+
 def _backoff(clock: Clock, cancel: threading.Event, delay: float) -> None:
     clock.wait(cancel, delay)
 

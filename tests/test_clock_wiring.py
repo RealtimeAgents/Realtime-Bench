@@ -25,8 +25,10 @@ from realtime_framework.entity.model import (
     ChoiceReply,
     ConnectRequest,
     GenerationRequest,
+    RetryCancelled,
     SessionSeed,
     TransportFailure,
+    retry_cancellation,
 )
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import AnswerRequirements
@@ -147,6 +149,60 @@ def test_a_litellm_request_is_paced_on_the_agent_clock(stream, monkeypatch):
         _run(clock, driver.start_generation(None))
     assert built == [1020.0]
     assert litellm_driver._LAST_REQUEST_AT == [1020.0]
+
+
+def _paced_driver(clock, stream, monkeypatch):
+    """A chat_completions driver whose next request must wait 20 s for the pacing interval, and
+    the times at which it built a request."""
+    monkeypatch.setenv("STREAM_MIN_REQUEST_INTERVAL", "30")
+    monkeypatch.setattr(litellm_driver, "_LAST_REQUEST_AT", [990.0])
+    config = ModelConfig(
+        adapter_type="chat_completions",
+        model_name="replay-vlm",
+        api_base_url="http://127.0.0.1:9/v1",
+        api_key="sk-clock-wiring",
+        chat_stream=stream,
+    )
+    driver = create_agent(config, clock=clock).driver
+    built = []
+
+    def request_kwargs(request):
+        built.append(clock.time())
+        raise _Built
+
+    monkeypatch.setattr(driver, "_request_kwargs", request_kwargs)
+    return driver, built
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "complete"])
+def test_a_litellm_request_pacing_wait_is_recorded_before_it_starts(stream, monkeypatch):
+    """The pacing wait is written to the trace before it starts, with its length and the time it
+    ends on the operational clock, as the session encoders record theirs (decision 1)."""
+    clock = FakeClock(wall_origin=1000.0)
+    driver, built = _paced_driver(clock, stream, monkeypatch)
+    trace = _Trace()
+    driver.bind_trace(trace)
+    with pytest.raises(_Built):
+        _run(clock, driver.start_generation(None))
+    wait = {"wait": "request_pacing", "seconds": 20.0, "until_monotonic_ns": 20 * S}
+    assert trace.records == [(TraceEvent.SESSION_WAIT, wait)]
+    assert built == [1020.0]
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "complete"])
+def test_an_abandoned_generation_ends_its_request_pacing_at_once(stream, monkeypatch):
+    """The kernel gives the generation up 5 s into its 20 s pacing wait: the wait ends then, as
+    RequestRetry's backoff does, and RetryCancelled unwinds the request unsent. The interval
+    still counts from the request before, as none was sent."""
+    clock = FakeClock(wall_origin=1000.0)
+    driver, built = _paced_driver(clock, stream, monkeypatch)
+    cancel = clock.event()
+    clock.timer(5.0, cancel.set)
+    with retry_cancellation(cancel), pytest.raises(RetryCancelled):
+        _run(clock, driver.start_generation(None))
+    assert clock.monotonic() == 5.0
+    assert built == []
+    assert litellm_driver._LAST_REQUEST_AT == [990.0]
 
 
 def test_a_choice_question_retries_and_is_timed_on_the_agent_clock(monkeypatch):
