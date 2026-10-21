@@ -422,22 +422,11 @@ def _run_stream_legacy(
                     "invalid_reason": "generation_watchdog_timeout",
                     "invalid_detail": f"generation exceeded {timeout:g}s",
                 }
-            return {
-                "action": None,
-                "latency": round(clock.time() - t0, 2),
-                "timed_out": True,
-                "harness_timeout_reason": timeout_reason,
-                "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
-            }
+            return episode_records.timed_out_result(round(clock.time() - t0, 2), timeout_reason)
         log(f"[default] k={k} generation failed, recovering:\n{err}")
-        return {
-            "action": None,
-            "latency": round(clock.time() - t0, 2),
-            "error": True,
-            "invalid_category": "provider",
-            "invalid_reason": "generation_error",
-            "invalid_detail": err or "adapter returned a non-object generation result",
-        }
+        return episode_records.generation_error(
+            round(clock.time() - t0, 2), err or "adapter returned a non-object generation result"
+        )
 
     def _charge(r, deliberation_s):
         # Charge the deliberation clock for one move and apply the per-move cap. A move whose
@@ -648,7 +637,7 @@ def _run_stream_legacy(
         frame_age_s = None
         if isinstance(observation_timestamp, (int, float)):
             frame_age_s = (
-                max(0.0, (tau_k - r.get("observation_tick", t_k)) * delta_s)
+                max(0.0, (tau_k - r["observation_tick"]) * delta_s)
                 if clock_mode == "token"
                 else max(0.0, action_resolved_at - observation_timestamp)
             )
@@ -678,7 +667,6 @@ def _run_stream_legacy(
                     episode_records.lifecycle_record(
                         r,
                         decision=k,
-                        observation_tick=r.get("observation_tick", t_k),
                         clock_mode=clock_mode,
                         frame_age_s=frame_age_s,
                         action_clock_position=round(tau_k, 9),
@@ -842,8 +830,6 @@ def _run_stream_legacy(
             observation=obs,
             native_output_limit=native_output_limit,
             budget=budget,
-            remaining_clock_tokens=remaining_clock_tokens,
-            clock_mode=clock_mode,
             tokens_per_frame=tokens_per_frame,
         )
         usage_after = episode_records.usage_snapshot(adapter)
@@ -866,12 +852,7 @@ def _run_stream_legacy(
         proposed = r.get("action")
         if proposed is not None and proposed.action_type in {ActionType.DONE, ActionType.FAIL}:
             r["action"] = Action.wait()
-            action_protocol = {
-                **action_protocol,
-                "source": "invalid_action_fallback_wait",
-                "valid_action": False,
-                "protocol_failure": "unsupported_terminal_action",
-            }
+            action_protocol = episode_records.terminal_wait_protocol(action_protocol)
             r["action_protocol"] = action_protocol
         if r.get("action") is not None and not action_protocol.get("protocol_failure"):
             _emit(
