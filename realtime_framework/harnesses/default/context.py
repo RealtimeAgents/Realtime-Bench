@@ -250,6 +250,12 @@ class RealtimeRuntime:
         with self._state_lock:
             return cancel.is_set() or self._state == RuntimeState.CLOSED
 
+    def _stop_if_abandoned(self, cancel: threading.Event, before: str) -> None:
+        """Stop an aborted generation. _run_turn checks before it applies the retention policy,
+        before it sends its observation and before it starts its reply."""
+        if self._abandoned(cancel):
+            raise RetryCancelled(f"generation abandoned before {before}")
+
     def record_execution_feedback(self, feedback: str, decision: int | None = None) -> None:
         """Attach an action's execution feedback to the turn of its decision; with no decision,
         to the newest turn, as the legacy loop reports."""
@@ -446,6 +452,7 @@ class RealtimeRuntime:
             raise ValueError("each generation accepts exactly one observation")
         executed_action_ledger = self._action_ledger(action_history)
         await self._ensure_ready(executed_action_ledger, request_builder)
+        self._stop_if_abandoned(cancel, "its history")
         incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
         # The policy archive and fold apply before the generation, accepted or not: a discarded
         # generation leaves them, and their HistoryChanged records, in place.
@@ -488,9 +495,7 @@ class RealtimeRuntime:
 
         if not incoming:
             raise RuntimeError("no current observation")
-        # An aborted generation sends neither its observation nor its request.
-        if self._abandoned(cancel):
-            raise RetryCancelled("generation abandoned before its request")
+        self._stop_if_abandoned(cancel, "its request")
         history = self.history_view(request_builder, executed_action_ledger, incoming)
         input_refs = [
             await self.driver.send_observation(turn.observation, history) for turn in incoming
@@ -531,6 +536,7 @@ class RealtimeRuntime:
             compactions += 1
             archived_count += len(archived)
 
+        self._stop_if_abandoned(cancel, "its reply")
         self._record_generation_prepared(incoming, physical_metadata, request.generation)
         self._set_state(RuntimeState.GENERATING)
         provider_call_started_monotonic_ns = self.clock.monotonic_ns()
