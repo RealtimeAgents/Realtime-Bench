@@ -487,6 +487,34 @@ X12 = [
         expect=frozenset({"U3", "X2", "X12"}),
         name="token-a-failed-read-after-the-end-seen-inside-a-tap",
     ),
+    # At 240 fps the tap at tick 0.5 steps to 1.5, 2.5, 3.5 and 4.5, reading after each step.
+    # The third failure is its first read: the kernel's tap goes on to 4.5, today's stops at 1.5.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        env_fps=240.0,
+        input_fps=240.0,
+        tokens_per_frame=100,
+        check_errors=(2, 3),
+        tap_check_errors=(1,),
+        expect=frozenset({"U2", "U3", "X2", "X12"}),
+        name="token-a-tap-goes-on-after-the-third-failed-read",
+    ),
+    # As above, with the task over at tick 2: the tap's read at 2.5 sees it and stops the tap.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        env_fps=240.0,
+        input_fps=240.0,
+        tokens_per_frame=100,
+        check_errors=(2, 3),
+        tap_check_errors=(1,),
+        ends_at_s=2.0 / 240.0,
+        expect=frozenset({"U2", "U3", "X2", "X12"}),
+        name="token-a-tap-goes-on-after-the-third-failed-read-to-the-end",
+    ),
     # Wall clock, decisions at 0, 1, 2 and 3 s. At 3 fps the reads within [1.4, 1.6) are the two
     # around decision 1's landing at 1.5 s; the periodic read at 5/3 s succeeds.
     Script(

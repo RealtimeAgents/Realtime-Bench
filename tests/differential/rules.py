@@ -21,6 +21,8 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from realtime_framework.sandbox.actions import TAP_HOLD_S
+
 from .projection import TOLERANCE, Projection, differences, earlier, ends_the_run, key_releases
 from .script import Script
 
@@ -300,6 +302,8 @@ def _x12(script: Script, p: Projection, notes: dict) -> None:
     today's loop on the first; compare() has today's loop fail only that third read
     (x12_plan). On the wall clock it can be a periodic read today's loop never makes: the run
     ends there, invalidated."""
+    if not _wall(script):
+        return _x12_tap(script, p, notes)
     at = p.facts.get("x12_end")
     if at is None:
         return
@@ -309,6 +313,34 @@ def _x12(script: Script, p: Projection, notes: dict) -> None:
     k = _in_hand_at(p, at)
     notes["ended"] = (at, k)
     _end_at(script, p, notes, k, at)
+
+
+def _x12_tap(script: Script, p: Projection, notes: dict) -> None:
+    """Token clock: a failed read does not stop the kernel's tap; it goes on to its end, reading
+    after each step, until a read sees the end (W0's ShellEnvironment.kernel_counts_reads,
+    simulation.py:363-378), and the run ends there. Today's tap stops at the failure
+    (sandbox/actions.py:279-280, 1004-1010)."""
+    failed = [n for kind, n, answer in p.facts["reads"] if kind == "tap" and answer == "failed"]
+    if not failed:
+        return
+    start, tick = p.facts["taps"][-1]
+    target = min(start + TAP_HOLD_S * script.env_fps, script.max_ticks)
+    ends_at = None if script.ends_at_s is None else script.ends_at_s * script.env_fps
+    read = failed[-1]
+    while tick + 1e-9 < target:
+        tick += min(1.0, target - tick)
+        tick = round(tick) if abs(tick - round(tick)) < 1e-9 else tick
+        read += 1
+        if read not in script.tap_check_errors and ends_at is not None and tick >= ends_at:
+            break
+    notes["tap_end"] = tick
+    k = max(k for k, d in p.decisions.items() if d["executed"])
+    p.decisions[k]["resolved"]["environment_tick"] = tick
+    p.decisions[k]["outcome"]["next_observation_tick"] = tick
+    termination = p.episode["termination"]
+    termination["end_s"] = round(tick / script.env_fps, 9)
+    if termination["snapshot_s"] is not None:
+        termination["snapshot_s"] = termination["end_s"]
 
 
 def _kernel_end(script: Script, p: Projection, notes: dict) -> tuple[float, int | None] | None:
@@ -568,6 +600,8 @@ def _kj(script: Script, p: Projection, notes: dict) -> None:
     if _wall(script):
         return
     taps, seconds = p.facts["taps"], 1.0 / script.env_fps
+    if "tap_end" in notes:  # X12 ran the last tap on
+        taps = [*taps[:-1], (taps[-1][0], notes["tap_end"])]
     released = []
     for logged in p.facts["key_ups"]:
         at = logged["at"]
