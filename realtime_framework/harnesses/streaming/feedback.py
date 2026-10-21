@@ -1,6 +1,7 @@
 """What the model is told of each streaming outcome: the text of its execution feedback block
 (phase2.md, native streaming). The streaming policy commits an outcome for every action, the three
-refusals included, and one for a reply that came to no action (evaluation/kernel/streaming.py).
+refusals included, and one for a reply that came to no action or held a protocol failure,
+whatever actions it handed over (evaluation/kernel/streaming.py).
 
 The text is the turn-based execution result (harnesses/default/harness.py _report): what ran, what
 was asked for, and the status, and a note where a done or fail ran as a wait. An action that did
@@ -29,7 +30,8 @@ if TYPE_CHECKING:  # the agent does not import the evaluation package at run tim
 # arrives (evaluation/kernel/streaming.py).
 _RAN = {"applied", "wait"}
 # The policy's statuses of an action a newer one took the place of (SUPERSEDED) and of one whose
-# reply was given up (CANCELLED_GENERATION), and of a reply that came to no action.
+# reply was given up (CANCELLED_GENERATION), and of a reply that came to no action with no protocol
+# failure.
 _NOTES = {
     "superseded": (
         "NOTE: this action was NOT executed: a newer action arrived while another one was "
@@ -40,6 +42,12 @@ _NOTES = {
     ),
     "none": "NOTE: your reply had no valid action, so nothing was executed.",
 }
+# A reply's protocol failure: its outcome is the reply's, beside those of the actions it handed
+# over.
+_PROTOCOL_FAILURE_NOTE = (
+    "NOTE: your reply held something that could not be executed ({failure}); nothing ran for it, "
+    "and each action the reply handed over has its own feedback."
+)
 _FRAME_NOTE = (
     "NOTE: this action was NOT executed because its frame field {why}. Set frame to the FRAME "
     "number drawn on the screenshot the action is based on."
@@ -67,7 +75,10 @@ def execution_feedback(outcome: Outcome, requested: str) -> str:
         return f"{text} {_FRAME_NOTE.format(why=_FRAME_ERRORS[outcome.detail])}"
     if outcome.detail:
         text += f" Detail: {outcome.detail}"
-    note = _NOTES.get(status) or action_result_note(status)
+    if status == "none" and outcome.protocol_failure is not None:
+        note = _PROTOCOL_FAILURE_NOTE.format(failure=outcome.protocol_failure)
+    else:
+        note = _NOTES.get(status) or action_result_note(status)
     if note:
         text += " " + note
     # The policy runs a done or fail as a wait (evaluation/kernel/streaming.py _arrived).
