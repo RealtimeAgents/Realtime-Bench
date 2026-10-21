@@ -9,6 +9,7 @@ through clocked_connection, and the strict cursor finds no difference.
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 
@@ -18,13 +19,15 @@ from realtime_framework.clock import SystemClock
 from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
+from realtime_framework.providers.gemini.live import classify_live_message
 from tests.agent_trace.stubs import WsStub
 from tests.fake_clock import FakeClock
 from tests.replay import baseline
+from tests.replay.ws_gemini_live import WireNormalizer
 
 from . import ws_cassette
 from .clocked_ws import CassetteServer, clocked_connection
-from .openai_session import driver_for, run_on_fake_clock, run_turns
+from .openai_session import driver_for, frame_png, run_on_fake_clock, run_turns
 
 REPLY_TEXTS = ('{"action": "wait"}', '{"action": "click", "x": 1, "y": 2}')
 
@@ -149,3 +152,69 @@ def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
     trace.close()
     with pytest.raises(ValueError, match="send_failed"):
         ws_cassette.from_trace(tmp_path)
+
+
+def _gemini_trace(run_dir, messages) -> None:
+    """A Gemini Live session's messages, ``(direction, message)``, captured as the driver's
+    recording connection captures them (providers/capture.py:266-275, gemini/live.py:271)."""
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette")
+    trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    for direction, message in messages:
+        sink.capture(
+            TraceEvent.SESSION_MESSAGE,
+            {
+                "channel": "gemini_live.ws",
+                "connection_id": "gemini_live.ws-1",
+                "direction": direction,
+            },
+            body=json.dumps(message),
+            classify=classify_live_message,
+        )
+    assert close_agent_trace(sink, None) is None
+    trace.close()
+
+
+def test_a_gemini_session_with_audio_in_a_reply_converts_and_replays(tmp_path):
+    """M1: the client's frames become pixel digests; the server's messages keep their bytes, the
+    audio of a reply included, so a replay sends them back as google-genai parses them. The
+    shapes are the wire's: the client's snake_case blobs (tests/replay/baselines/gemini_live-*),
+    the server's camelCase ones in standard base64 (tests/replay/test_gemini_live.py:185-187)."""
+    frame = base64.urlsafe_b64encode(frame_png(1)).decode()
+    audio = base64.b64encode(bytes(range(256)) * 4).decode()  # standard base64, with "+" and "/"
+    sent = [
+        {"setup": {"model": "models/gemini-live"}},
+        {"realtime_input": {"video": {"data": frame, "mime_type": "image/png"}}},
+    ]
+    received = [
+        {"setupComplete": {}},
+        {
+            "serverContent": {
+                "modelTurn": {
+                    "parts": [{"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": audio}}]
+                }
+            }
+        },
+    ]
+    _gemini_trace(
+        tmp_path,
+        [
+            ("client", sent[0]),
+            ("server", received[0]),
+            ("client", sent[1]),
+            ("server", received[1]),
+        ],
+    )
+    records = ws_cassette.from_trace(tmp_path)
+    video = records[3]["msg"]["realtime_input"]["video"]
+    assert video == {"data": baseline.image_digest(frame_png(1)), "mime_type": "image/png"}
+    assert records[4]["msg"] == received[1]
+
+    cursor = ws_cassette.Cursor(records, WireNormalizer())
+    cursor.open(0.0)
+    cursor.receive(1, sent[0], 0.0)
+    released = cursor.release(1, 1e9)
+    cursor.receive(1, sent[1], 0.0)
+    released += cursor.release(1, 1e9)
+    assert [r["msg"] for r in released] == received
+    assert cursor.finish() == []

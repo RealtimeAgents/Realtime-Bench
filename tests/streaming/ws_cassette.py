@@ -9,8 +9,9 @@ per line:
 
 ``conn`` numbers the connections in the order the client opened them. ``at`` is semantic seconds
 since the episode origin. ``msg`` is a message as JSON, normalized like the replay baselines
-(tests/replay/baseline.py): an image becomes its pixel digest and each of our random ids a
-placeholder numbered by first appearance. An open has no message; a close is
+(tests/replay/baseline.py): each of our random ids becomes a placeholder numbered by first
+appearance, and an image or audio the client sends its digest. The server's messages keep
+everything else as it came, since they are sent back. An open has no message; a close is
 ``{"by": "client" | "server", "code": int}``, with the ``reason`` a server close sends.
 
 The cursor replays a cassette strictly, each connection's records in order. A server record is
@@ -127,6 +128,11 @@ def from_trace(run_dir: Path) -> list[dict]:
     ]
     (channel,) = {message["channel"] for message in messages}
     normalize = NORMALIZERS[channel]()
+    # A server message is sent back as it came but for our ids, a Gemini reply's audio included,
+    # which google-genai parses: RealtimeNormalizer knows every one of our ids and leaves a
+    # Gemini blob as it is. One mapping for both directions.
+    server = RealtimeNormalizer()
+    server._ids, server._counts = normalize._ids, normalize._counts
     numbers: dict[str, int] = {}
     records = []
     for message in messages:
@@ -138,11 +144,11 @@ def from_trace(run_dir: Path) -> list[dict]:
             records.append({"conn": conn, "dir": "open", "at": None, "msg": None})
         body = json.loads(load_body(run_dir / "episode_blobs.pack", message["body"]))
         if message["direction"] == "client":
-            direction, at = "c2s", None
+            record = {"dir": "c2s", "at": None, "msg": normalize(body)}
         else:
-            direction = "s2c"
             at = round((message["captured_wall_time_ns"] - origin_ns) / 1e9, 6)
-        records.append({"conn": conn, "dir": direction, "at": at, "msg": normalize(body)})
+            record = {"dir": "s2c", "at": at, "msg": server(body)}
+        records.append({"conn": conn, **record})
     return records
 
 
