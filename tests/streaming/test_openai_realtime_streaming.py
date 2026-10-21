@@ -319,6 +319,24 @@ def test_a_fold_the_server_fails_leaves_the_session_dirty():
     assert "f2.frame" in driver._session.core.frames
 
 
+def test_a_push_of_a_frame_the_session_holds_waits_for_its_confirmation():
+    """A frame a rebuild replayed, or request_reply pushed before push_frame came, is not pushed
+    again: push_frame returns once it is confirmed, and raises when it was refused."""
+
+    async def scenario():
+        driver, connection = await answering(Server(), stream("FF"))
+        await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=5))
+        connection.queue.put(_clean_close())
+        driver, connection = await answering(_Answers({"f2.frame"}), stream("F"))
+        view = streaming_view(stream("FF"), frames=5)
+        await driver._send_all(driver._session.core.push(view))
+        with pytest.raises(RuntimeError, match="^OpenAI Realtime refused f2.frame: "):
+            await driver.push_frame(_observation(2), view)
+        connection.queue.put(_clean_close())
+
+    _within(scenario())
+
+
 def test_a_connection_that_closes_before_the_frame_is_confirmed_fails_the_push():
     async def scenario():
         driver, connection = await answering(Server(), stream("F"))

@@ -543,24 +543,23 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def push_frame(self, observation: ProviderObservation, history) -> None:
-        """Native streaming: push the frame the streaming history view ends with, which the
-        session lacks, after the feedback the view holds that the session lacks too, and fold
-        the frames the view folds (decision 23). Returns once the server confirmed the frame;
-        raises when the server refused it, which loses that frame alone, or the connection
-        closed first. A fold the server fails leaves the session dirty, for the next
+        """Native streaming: push the newest frame of the streaming history view, after the
+        feedback the view holds that the session lacks, and fold the frames the view folds
+        (decision 23). A frame the session already holds, as a rebuild replayed it or
+        request_reply pushed it, is not pushed again. Returns once the server confirmed the
+        frame; raises when the server refused it, which loses that frame alone, or the
+        connection closed first. A fold the server fails leaves the session dirty, for the next
         ensure_ready to rebuild it from the view."""
         session = self._connected_session()
         core = session.core
-        pushes = core.push(history)
-        await self._send_all(pushes)
+        await self._send_all(core.push(history))
         await self._fold(session, history)
-        frame = pushes[-1]
+        frame = core.frame_push(history)
         await session.receive_until(lambda: core.settled(frame))
         if not core.settled(frame):
             raise session.closed
-        error = core.pushes[frame.event_id].error
-        if error is not None:
-            raise RuntimeError(f"OpenAI Realtime refused {frame.block}: {error!r}")
+        if frame.error is not None:
+            raise RuntimeError(f"OpenAI Realtime refused {frame.block_id}: {frame.error!r}")
 
     async def _fold(self, session: _Session, history) -> None:
         """Bring the session to the view's folds, one edit at a time (queue_edit)."""
@@ -581,8 +580,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Native streaming: ask for a reply on the session as it is, after pushing what the
-        streaming history view ``request.canonical`` holds that the session lacks (the feedback
-        accepted since the newest frame). Its events come as a turn's do."""
+        streaming history view ``request.canonical`` holds that the session lacks: the feedback
+        accepted since the newest frame, and that frame when push_frame has not pushed it yet,
+        which then only waits for its confirmation. Its events come as a turn's do."""
         session = self._connected_session()
         await self._send_all(session.core.push(request.canonical))
         return await self._create_response(session, session.core.start_reply(), request)
