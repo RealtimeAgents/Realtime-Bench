@@ -192,26 +192,31 @@ def test_each_mode_has_its_agent(interaction_mode, agent_class):
 
 
 def test_a_streaming_episode_runs_on_the_streaming_shell(monkeypatch):
-    """runner.run_stream hands a streaming episode its horizon, frame rates, frozen-stream timing
-    and clock to the streaming shell, whose config refuses any clock but the wall clock; the
-    episode has no turns."""
+    """runner.run_stream hands a streaming episode its agent, environment, horizon, frame rates,
+    frozen-stream timing and clock to the streaming shell, with the episode's clocks, log and
+    trace, whose records the run's streaming section is read off; the shell's config refuses any
+    clock but the wall clock. The episode has no turns."""
     from realtime_framework.evaluation import runner
     from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 
     episodes = []
     monkeypatch.setattr(
-        runner, "run_streaming_episode", lambda agent, env, config, **kwargs: episodes.append(config)
+        runner,
+        "run_streaming_episode",
+        lambda agent, env, config, **kwargs: episodes.append((agent, env, config, kwargs)),
     )
+    clocks, trace = object(), object()
 
     def streaming(clock_mode):
         return runner.run_stream(
             "agent", "env", clock_mode=clock_mode, duration_s=300.0, env_fps=2.0, input_fps=1.0,
-            log=print, clocks=object(), interaction_mode="streaming",
+            log=print, trace=trace, clocks=clocks, interaction_mode="streaming",
         )
 
     assert streaming("wall") == []
+    config = StreamingConfig(300.0, 2.0, 1.0, timing=runner.RUNNER_TIMING, clock_mode="wall")
     assert episodes == [
-        StreamingConfig(300.0, 2.0, 1.0, timing=runner.RUNNER_TIMING, clock_mode="wall")
+        ("agent", "env", config, {"clocks": clocks, "log": print, "trace": trace})
     ]
     with pytest.raises(ValueError, match="native streaming runs on the wall clock, not 'token'"):
         streaming("token")
