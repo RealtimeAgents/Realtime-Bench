@@ -243,6 +243,12 @@ class NativeStreamingAgent(VisionAgentBase):
             self._finish_inspection(pushed, "push_failed")
             raise
         self.frames.record_sent(record.frame, self.clock.time())
+        # The kernel's records name the frame by its observation id, the session's by its block:
+        # this ties the two (evaluation/reporting.py summarize_streaming).
+        self._trace.capture(
+            TraceEvent.FRAME_SENT,
+            {"frame": record.frame, "observation_id": observation.metadata.get("observation_id")},
+        )
 
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
         with self._lock:

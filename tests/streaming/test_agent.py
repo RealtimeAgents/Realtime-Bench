@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from realtime_framework.entity.actions import ActionType
+from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import CallsCancelled
 from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
@@ -70,6 +71,34 @@ def test_a_frame_whose_push_failed_leaves_the_view_and_keeps_its_number(monkeypa
     agent.push(observation(clock, 3))
     assert agent.driver.calls[-1] == ("push", "obs-3", ("system", "f1.frame", "f3.frame"))
     assert agent.frames.locate(2) == (None, FRAME_NOT_IN_TABLE)
+    agent.close()
+
+
+class _Records:
+    """An agent's write entry into the episode trace (evaluation/agent_trace.py
+    AgentTraceSink.capture) that keeps each record."""
+
+    def __init__(self):
+        self.records: list[tuple[object, dict]] = []
+
+    def capture(self, event, payload, *, body=None, classify=None) -> None:
+        self.records.append((event, payload))
+
+
+def test_a_frame_that_went_in_is_recorded_under_its_number(monkeypatch, clock):
+    """FrameSent ties the kernel's observation id to the frame-table number the session's
+    delivery records name the frame's block by (evaluation/reporting.py summarize_streaming)."""
+    trace = _Records()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.push(observation(clock, 1))
+    agent.driver.failing.add("obs-2")
+    with pytest.raises(RuntimeError, match="push failed"):
+        agent.push(observation(clock, 2))
+    agent.push(observation(clock, 3))
+    assert [payload for event, payload in trace.records if event is TraceEvent.FRAME_SENT] == [
+        {"frame": 1, "observation_id": "obs-1"},
+        {"frame": 3, "observation_id": "obs-3"},
+    ]
     agent.close()
 
 

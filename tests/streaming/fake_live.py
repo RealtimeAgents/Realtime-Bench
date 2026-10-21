@@ -210,11 +210,14 @@ def observation(clock, n: int) -> Observation:
     return Observation(screenshot(), clock.time(), n, {"observation_id": f"obs-{n}"})
 
 
-def make_agent(monkeypatch, clock, driver=FakeLiveDriver, model=LIVE) -> NativeStreamingAgent:
-    """An initialized agent on ``clock`` whose driver is ``driver``, on ``model``'s policy."""
+def make_agent(
+    monkeypatch, clock, driver=FakeLiveDriver, model=LIVE, trace=UNTRACED
+) -> NativeStreamingAgent:
+    """An initialized agent on ``clock`` whose driver is ``driver``, on ``model``'s policy,
+    writing its records to ``trace``."""
     monkeypatch.setattr(agent_module, "adapter_class", lambda adapter_type: driver)
     config = catalog.to_model_config(model, fps=1.0, reasoning_effort="fixed")
-    agent = NativeStreamingAgent(config, trace=UNTRACED, clock=clock)
+    agent = NativeStreamingAgent(config, trace=trace, clock=clock)
     agent.task_category = "realtime"
     agent.initialize("Click the button.", observation(clock, 0))
     return agent
