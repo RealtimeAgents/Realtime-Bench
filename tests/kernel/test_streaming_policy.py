@@ -27,6 +27,7 @@ from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
     INVALID_GROUNDING_FRAME,
     MISSING_FRAME,
+    FrameTable,
 )
 from tests.kernel.streaming_simulation import Call, Reply, Simulation, World
 
@@ -185,6 +186,21 @@ def test_an_action_executes_at_once_and_reports_its_call_frame_and_age():
     assert (second["frame"], second["frame_age_frames"]) == (1, 1)
     assert (second["started_at"], second["finished_at"]) == (2.0, 2.5)
     assert [d["index"] for d in sim.data("ActionApplied")] == [0, 1]
+
+
+def test_a_frame_age_leaves_out_a_frame_whose_push_failed_as_the_frame_table_does():
+    """Frame 2's push fails at 1 and frame 3 goes out at 2: the typing at 2.5 names frame 1,
+    which only frame 3 was sent after."""
+    calls = (Call(2.5, TYPE, "call-1", frame=1),)
+    sim = _run(World(replies=[Reply(4.0, calls=calls)], push_errors={2: "rejected item"}))
+    assert sim.pushes[:3] == [("obs-0", 1), ("obs-1", 2), ("obs-2", 3)]
+    (resolved,) = sim.resolved().values()
+    assert (resolved["frame"], resolved["frame_age_frames"]) == (1, 1)
+    table = FrameTable()
+    records = [table.register(f"obs-{n}", float(n), {}, None) for n in range(3)]
+    for record in (records[0], records[2]):
+        table.record_sent(record.frame, record.captured_at)
+    assert table.age(records[0], 2.5)["age_frames"] == resolved["frame_age_frames"]
 
 
 def test_a_wait_ends_at_once_and_holds_the_execution_lane_no_longer():

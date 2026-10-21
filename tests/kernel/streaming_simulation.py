@@ -395,7 +395,8 @@ class Simulation:
 
     def _arrive(self, generation: int, call: Call) -> None:
         """Post the call's action with the frame it names and that frame's age now, as the agent
-        does with FrameTable.locate and FrameTable.age."""
+        does with FrameTable.locate and FrameTable.age: the frames sent after it, not those
+        whose push failed."""
         if call.grounding is not None:
             event = ActionArrived(
                 generation,
@@ -418,7 +419,7 @@ class Simulation:
                 call.call_id,
                 frame,
                 round(self.ops - self.sent[frame], 9),
-                newest - frame,
+                sum(sent > frame for sent in self.sent),
             )
         self.kernel.post(event)
 
