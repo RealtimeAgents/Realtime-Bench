@@ -267,7 +267,9 @@ class _StreamingShell:
         def run():
             try:
                 self.agent.push(observation)
-            except Exception:  # noqa: BLE001 - that frame is lost; the kernel goes on
+            # Also a BaseException (entity/model.py RetryCancelled): the answer must come back,
+            # or the kernel would wait for it.
+            except BaseException:  # noqa: BLE001 - that frame is lost; the kernel goes on
                 return FramePushed(observation_id, error=traceback.format_exc())
             return FramePushed(observation_id, self._read())
 

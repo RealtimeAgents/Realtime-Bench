@@ -14,6 +14,7 @@ import json
 
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.events import Invalidated, Termination
@@ -231,3 +232,25 @@ def test_the_shells_own_failure_on_a_lane_invalidates_the_run_as_a_run_exception
     termination, env, _ = _episode(6.0, ONE_CLICK)
     assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
     assert "fingerprint failed" in env._loop_error
+
+
+def test_a_push_that_raises_any_exception_loses_that_frame_only():
+    """A cancellation is a BaseException (entity/model.py:483 RetryCancelled). A push lane that let
+    it through would die with the push held: the next frame would find it busy."""
+    clock = FakeClock()
+    env, agent = FakeEnv(clock), FakeAgent(clock, ONE_CLICK)
+    push, pushes = agent.push, []
+
+    def first_push_cancelled(observation):
+        pushes.append(observation.metadata["observation_id"])
+        if len(pushes) == 1:
+            raise RetryCancelled("abandoned")
+        push(observation)
+
+    agent.push = first_push_cancelled
+    with clock.participant():
+        termination = run_streaming_episode(
+            agent, env, StreamingConfig(duration_s=3.0), clocks=Clocks(clock, clock), log=print
+        )
+    assert termination.invalid is None
+    assert agent.started[0][1] == "obs-2"  # the first reply waits for the first frame that went out
