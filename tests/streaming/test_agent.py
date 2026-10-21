@@ -158,3 +158,58 @@ def test_an_action_in_text_is_parsed_once_the_reply_ended_and_named_by_the_agent
     assert (arrival.call_id, arrival.arrived_at, arrival.frame) == ("text", 4.0, 2)
     assert r["raw"] == action
     agent.close()
+
+
+def test_an_accepted_reply_adds_its_output_to_the_view_and_its_usage_to_the_episode(
+    monkeypatch, clock
+):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    usage = {"output_tokens": 5, "input_tokens": 40, "total_tokens": 45}
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1),), ends_at=1.0, usage=usage))
+    agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    agent.push(observation(clock, 3))
+    view = agent.driver.views[-1]
+    ids = [item.block.id for item in view.items]
+    assert ids == ["system", "f1.frame", "f2.frame", "d3.output", "f3.frame"]
+    output = view.items[3].block
+    assert (output.kind, output.based_on) == ("model_output", "obs-1")
+    assert output.text == '{"action": "click", "x": 10, "y": 20, "button": "left", "frame": 1}'
+    assert (agent.token_usage["output_tokens"], agent.token_usage["responses"]) == (5, 1)
+    agent.close()
+
+
+def test_a_discarded_reply_adds_nothing(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    usage = {"output_tokens": 5}
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1),), ends_at=1.0, usage=usage))
+    agent.generate(7, 3, frame, BUDGET)
+    agent.discard(7)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-1] == (
+        "push",
+        "obs-3",
+        ("system", "f1.frame", "f2.frame", "f3.frame"),
+    )
+    assert agent.token_usage["responses"] == 0
+    agent.close()
+
+
+def test_a_reply_that_said_nothing_adds_no_output(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    agent.generate(0, 0, frame, BUDGET)
+    agent.accept(0)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-1] == (
+        "push",
+        "obs-3",
+        ("system", "f1.frame", "f2.frame", "f3.frame"),
+    )
+    agent.close()

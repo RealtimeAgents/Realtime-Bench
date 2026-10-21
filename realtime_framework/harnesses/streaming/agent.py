@@ -15,7 +15,7 @@ A reply starts on the view. Each function call is parsed as its message is read,
 it names, and posted to the kernel with the time its message came off the wire, in semantic
 seconds from the episode's origin; one whose frame cannot be found arrives refused. One that is no
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
-the reply ended.
+the reply ended. An accepted reply's output joins the view; a discarded one adds nothing.
 """
 
 from __future__ import annotations
@@ -58,7 +58,11 @@ from realtime_framework.harnesses.default.harness import (
     parse_grounded_action,
 )
 from realtime_framework.harnesses.default.request import system_block
-from realtime_framework.harnesses.streaming.history import frame_block, history_view
+from realtime_framework.harnesses.streaming.history import (
+    frame_block,
+    history_view,
+    output_block,
+)
 from realtime_framework.providers.registry import adapter_class
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
@@ -319,6 +323,37 @@ class NativeStreamingAgent(VisionAgentBase):
                 reference["age_frames"],
             )
         self._post(arrival)
+
+    def accept(self, generation: int) -> None:
+        """AcceptResult: the reply's output joins the view, and its usage the episode's."""
+        with self._lock:
+            reply = self._replies.pop(generation)
+            if reply.output:
+                self._blocks.append(
+                    output_block(reply.decision, reply.output, reply.based_on, self.clock.time_ns())
+                )
+        self._accumulate_usage(reply.usage)
+        self._log_reply(reply, "reply")
+
+    def discard(self, generation: int) -> None:
+        """DiscardResult: a reply given up adds nothing."""
+        with self._lock:
+            reply = self._replies.pop(generation)
+        self._log_reply(reply, "reply_discarded")
+
+    def _log_reply(self, reply: _Reply, kind: str) -> None:
+        self._log_entry(
+            {
+                "type": kind,
+                "decision": reply.decision,
+                "generation": reply.generation,
+                "observation_id": reply.own.value.observation_id,
+                "model_output": reply.output,
+                "thinking": "".join(reply.reasoning),
+                "protocol_failure": reply.protocol_failure,
+                "usage": reply.usage,
+            }
+        )
 
     def _result(self, reply: _Reply, latency: float) -> dict:
         """What the shell and the records read of a reply that ended; its actions went to the
