@@ -43,6 +43,15 @@ class FunctionCall(ProviderEvent):
 
 
 @dataclass(frozen=True)
+class FunctionCallsCancelled(ProviderEvent):
+    """The provider cancelled function calls, which are not to be executed; the reply goes on.
+    They are told by call id: they may be an earlier reply's than the one this event comes in."""
+
+    call_ids: tuple[str, ...] = ()
+    received_at: float | None = field(default=None, kw_only=True)  # as for FunctionCall
+
+
+@dataclass(frozen=True)
 class UsageSnapshot(ProviderEvent):
     usage: dict = field(default_factory=dict)
 

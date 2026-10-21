@@ -21,7 +21,11 @@ from google.genai import types
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.entity.events import FunctionCall
+from realtime_framework.entity.events import (
+    FunctionCall,
+    FunctionCallsCancelled,
+    GenerationBoundary,
+)
 from realtime_framework.entity.model import (
     ConnectRequest,
     GenerationRequest,
@@ -299,6 +303,63 @@ def test_a_call_carries_the_time_its_message_came_off_the_wire():
     before, read, events = asyncio.run(run())
     (function_call,) = [event for event in events if isinstance(event, FunctionCall)]
     assert before <= function_call.received_at <= read
+
+
+def cancelled(*call_ids: str) -> dict:
+    return {"toolCallCancellation": {"ids": list(call_ids)}}
+
+
+def test_a_cancellation_is_an_event_and_the_reply_goes_on():
+    """A cancellation is handed over as an event naming the calls by id, in the server's
+    order: here one of an earlier reply, likely executed by now, and one of this reply, not yet;
+    which is which is the kernel's to tell. The reply goes on to its end."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        first = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), TURN_COMPLETE)
+        await drain(rig.driver.events(first))
+        second = await rig.start("turn-1")
+        rig.socket.feed(call("call-1"), cancelled("call-1", "call-0"), TURN_COMPLETE)
+        events = await drain(rig.driver.events(second))
+        await rig.driver.close()
+        return events
+
+    events = asyncio.run(run())
+    (cancellation,) = [e for e in events if isinstance(e, FunctionCallsCancelled)]
+    assert cancellation.call_ids == ("call-1", "call-0")
+    assert (cancellation.generation_id, cancellation.connection, cancellation.generation) == (
+        "turn-1",
+        1,
+        2,
+    )
+    assert cancellation.received_at is not None
+    assert isinstance(events[-1], GenerationBoundary) and events[-1].kind == "turn_complete"
+
+
+def test_a_cancellation_between_replies_comes_with_the_next_reply():
+    """A cancellation that no reply takes, read between two, is handed over first thing in the
+    next reply's events, which it belongs to by id only."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        first = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), TURN_COMPLETE)
+        await drain(rig.driver.events(first))
+        rig.socket.feed(cancelled("call-0"))
+        await settle()
+        second = await rig.start("turn-1")
+        rig.socket.feed(TURN_COMPLETE)
+        events = await drain(rig.driver.events(second))
+        await rig.driver.close()
+        return events
+
+    first_event, *_ = asyncio.run(run())
+    assert isinstance(first_event, FunctionCallsCancelled)
+    assert (first_event.call_ids, first_event.generation_id) == (("call-0",), "turn-1")
+    assert (first_event.connection, first_event.generation) == (1, None)
 
 
 def test_a_failed_read_ends_every_reply_on_the_connection():
