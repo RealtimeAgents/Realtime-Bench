@@ -14,7 +14,7 @@ from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.reporting import EpisodeTrace
 
-from .world import CLICK, ORIGIN, Reply, Trace, World, run
+from .world import CLICK, ORIGIN, Agent, Reply, Trace, World, run
 
 ONE_DECISION = [
     Reply(0.5, CLICK, fields={"thinking": "click it", "action_protocol": {"source": "json"}})
@@ -198,3 +198,34 @@ def test_without_a_trace_the_episode_runs_the_same():
     without = run("wall", 2.0, [Reply(0.5), Reply(0.5)], trace=None)
     assert without.statuses() == with_trace.statuses()
     assert without.env.lifecycle == with_trace.env.lifecycle
+
+
+class HoldingAgent(Agent):
+    """Adds a generation's usage to its own as it accepts the result, as DefaultHarness does
+    (harnesses/default/harness.py)."""
+
+    def __init__(self, clock, replies):
+        super().__init__(clock, replies)
+        self.token_usage = {"output_tokens": 0, "responses": 0}
+
+    def accept(self, generation: int) -> None:
+        super().accept(generation)
+        usage = self.token_usage
+        self.token_usage = {
+            "output_tokens": usage["output_tokens"] + 7,
+            "responses": usage["responses"] + 1,
+        }
+
+
+def test_a_result_s_usage_is_measured_once_the_agent_has_accepted_it():
+    """The frame's usage is what the agent's usage grew by from the generation's start to its
+    result's acceptance; the result's records still sit where the kernel took it."""
+    episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=HoldingAgent)
+    trace = episode.trace
+    usages = [payload["frame_usage"] for payload in trace.payloads("InferenceCompleted")]
+    assert usages == [{"output_tokens": 7, "responses": 1}] * 2
+    events = trace.events()
+    completed = [i for i, event in enumerate(events) if event == "InferenceCompleted"]
+    assert [events[i + 1] for i in completed] == ["ActionProposed"] * 2
+    numbers = [record["kernel_seq"] for record in trace.records]
+    assert numbers == sorted(numbers)

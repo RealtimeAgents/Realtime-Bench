@@ -244,6 +244,7 @@ class _Generation:
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
+    echo: Entry | None = None  # the kernel's record of the result, which those are written under
 
 
 @dataclass
@@ -326,6 +327,7 @@ class _Shell:
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
+        self._accepting: set[int] = set()  # the generations the batch being run accepts
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -431,6 +433,7 @@ class _Shell:
     # ---- commands -----------------------------------------------------------------------------
 
     def _run_all(self, commands: list) -> None:
+        self._accepting = {c.generation for c in commands if isinstance(c, AcceptResult)}
         for command in commands:
             self._run(command)
 
@@ -458,10 +461,12 @@ class _Shell:
                 self._start_generation(command)
             case AbortGeneration(generation=generation):
                 self._abort(generation)
-            # Its records are written by now (the echo comes first); its frame and result go.
+            # Its frame and result go; the records of a settled result follow the agent's accept.
             case AcceptResult(generation=generation):
-                self._decision.result = self._generations.pop(generation).result
+                held = self._generations.pop(generation)
+                self._decision.result = held.result
                 self.agent.accept(generation)
+                self._write_inference(held)
             case DiscardResult(generation=generation):
                 del self._generations[generation]
                 self.agent.discard(generation)
@@ -694,6 +699,21 @@ class _Shell:
             invalid=episode_records.result_invalid(r, agent, clock_mode),
         )
         return result, inference
+
+    def _write_inference(self, held: _Generation) -> None:
+        """The OutputChunkReceived and InferenceCompleted records of a settled result, under the
+        kernel's record of it. An agent that holds its result adds its usage as it accepts it
+        (harnesses/default/harness.py), so the frame's usage is what the usage grew by until now."""
+        if held.echo is None:
+            return
+        chunks, completed = held.inference
+        usage_after = episode_records.usage_snapshot(self.agent)
+        if held.usage_before is not None and usage_after is not None:
+            completed = {
+                **completed,
+                "frame_usage": episode_records.frame_usage(held.usage_before, usage_after),
+            }
+        self._emit_inference((chunks, completed), held.echo)
 
     def _abort(self, generation: int) -> None:
         held = self._generations.get(generation)  # None when its StartGeneration raised
@@ -958,7 +978,13 @@ class _Shell:
                 entry,
             )
         elif kind == "GenerationFinished" and self._generations[data.generation].inference:
-            self._emit_inference(self._generations[data.generation].inference, entry)
+            held = self._generations[data.generation]
+            held.echo = entry
+            # The kernel takes a result in the step that echoes it (kernel/core.py _dispatch),
+            # whose next command is AcceptResult: the records wait for the agent to have it. A
+            # result the kernel discards adds no usage.
+            if data.generation not in self._accepting:
+                self._write_inference(held)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
             self._emit(
                 TraceEvent.ACTION_PROPOSED,
