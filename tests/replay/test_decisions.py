@@ -377,7 +377,7 @@ def test_jev_large_observation(tmp_path):
         tmp_path,
         task=ReplayTask(),
         instruction=TASK_INSTRUCTION,
-        scene=script.TERMS_SCENE,
+        scene=script.terms_scene(script.LARGE_OBSERVATION_DECISION + 1),
     )
     assert not any(r["result"].get("invalid_reason") for r in records)
     k = script.LARGE_OBSERVATION_DECISION
@@ -389,3 +389,73 @@ def test_jev_large_observation(tmp_path):
     assert not any(context["pressure"] for context in contexts)
     assert not any(_runtime(r)["request_context_archived_turns"] for r in records)
     _settle("large_observation", header, records, tmp_path)
+
+
+# JEV windows for decision 24 of the terms scripts, which estimates 38560 bytes with its 24 turns,
+# 37743 with 14 and 36666 with 4 (each archived turn adds its action to the ledger): the first
+# needs two archived blocks; the second is below the system text and the terms alone.
+ARCHIVE_WINDOWS = {"two_blocks": (40000, 3000), "exhausted": (32000, 4000)}
+
+
+def _pressure_archives(run_dir: Path) -> list[dict]:
+    events = [
+        json.loads(line) for line in (run_dir / "episode_trace.jsonl").read_text().splitlines()
+    ]
+    return [
+        e["payload"]
+        for e in events
+        if e["event"] == "HistoryChanged" and e["payload"]["kind"] == "pressure_archive"
+    ]
+
+
+def _play_terms(decisions, window, run_dir):
+    return _play(
+        "jev_decisions",
+        decisions,
+        run_dir,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        scene=script.terms_scene(script.TERMS_ARCHIVE_DECISION + 1),
+        update=dict(zip(("context_window_tokens", "context_reserve_tokens"), window)),
+    )
+
+
+def test_history_overflow_two_blocks(tmp_path):
+    """While the request is over the window, the runtime archives the next block: decision 24
+    sends its request after two (harnesses/default/context.py _run_turn)."""
+    header, records = _play_terms(script.TERMS_ARCHIVE, ARCHIVE_WINDOWS["two_blocks"], tmp_path)
+    k = script.TERMS_ARCHIVE_DECISION
+    assert not any(r["result"].get("invalid_reason") for r in records)
+    archived = [_runtime(r)["request_context_archived_turns"] for r in records]
+    assert archived == [0] * k + [20] + [0] * (len(records) - k - 1)
+    runtime = _runtime(records[k])
+    assert runtime["request_context_compactions"] == 2
+    assert runtime["request_context_before"]["pressure"]
+    assert not runtime["request_context"]["pressure"]
+    assert runtime["history_archived_actions_total"] == 20
+    assert _has_ledger("jev_decisions", _bodies(records[k])[0])
+    changes = _pressure_archives(tmp_path)
+    assert [change["scope"]["decision"] for change in changes] == [k, k]
+    assert [change["ledger"] for change in changes] == [
+        {"archived_actions_before": 0, "archived_actions_after": 10},
+        {"archived_actions_before": 10, "archived_actions_after": 20},
+    ]
+    _settle("history_overflow_two_blocks", header, records, tmp_path)
+
+
+def test_history_overflow_exhausted(tmp_path):
+    """A request still over the window once every turn is archived is not sent: the decision is
+    invalid and the episode ends (harnesses/default/context.py _run_turn)."""
+    header, records = _play_terms(script.TERMS_EXHAUSTED, ARCHIVE_WINDOWS["exhausted"], tmp_path)
+    *_, failed = records
+    assert failed["step"] == script.TERMS_ARCHIVE_DECISION and failed["requests"] == []
+    assert failed["result"]["invalid_reason"] == "provider_request_failed"
+    assert failed["result"]["invalid_detail"] == (
+        "RuntimeError('Task instructions, execution ledger and current observation exceed "
+        "context capacity; use a larger endpoint window')"
+    )
+    assert failed["commit"] is None and failed["action_history_entry"] is None
+    changes = _pressure_archives(tmp_path)
+    assert [change["ledger"]["archived_actions_after"] for change in changes] == [10, 20, 24]
+    assert {change["scope"]["decision"] for change in changes} == {script.TERMS_ARCHIVE_DECISION}
+    _settle("history_overflow_exhausted", header, records, tmp_path)
