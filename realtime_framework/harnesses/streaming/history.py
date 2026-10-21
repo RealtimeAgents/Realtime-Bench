@@ -3,17 +3,19 @@ blocks the streaming agent has accepted (phase2.md, native streaming 上下文�
 
 The agent keeps the blocks in the order it accepted them: each pushed frame under its frame-table
 number, each reply's model output, based on the frame its action names, and each execution
-feedback, attached to the output whose action it reports. The view keeps that order and every
-block's id, so an encoder can diff two views by id. Only the newest frames keep their screenshots;
-an older frame folds as a turn-based frame does, and never gets its screenshot back. Every output
-stays, however old.
+feedback, attached to the output whose action it reports. The view keeps the frames and outputs
+in that order under their ids, so an encoder can diff two views by id. Only the newest frames keep
+their screenshots; an older frame folds as a turn-based frame does, and never gets its screenshot
+back. Every output stays, however old.
 
 Feedback goes where the policy places it (PathPolicy.feedback), as in a turn-based request
-(harnesses/default/request.py _turn_items): as its own block where it arrived, after the frames
-pushed while the action ran, or, with the feedback accepted since the frame before, in front of
-the next frame, which loses it when it folds. The feedback since the newest frame waits for the
-next one at the end of the view, in the same block, which gains a line with each feedback: a
-session that takes feedback between frames, as Gemini Live's reply trigger does, finds it there.
+(harnesses/default/request.py _turn_items). As its own block, it keeps its id and stays where it
+arrived, after the frames pushed while the action ran. In front of the next frame, the feedback
+accepted since the frame before is one block instead, named after its first feedback, after the
+outputs accepted meanwhile; the frame loses it when it folds. The feedback since the newest frame
+waits for the next one at the end of the view, in the same block, which gains a line with each
+feedback: a session that takes feedback between frames, as Gemini Live's reply trigger does, finds
+it there.
 """
 
 from __future__ import annotations

@@ -4,8 +4,9 @@ An action is interpreted against one frame's entry: its SoM marks resolve the ac
 references and its geometry maps the action's image coordinates to the desktop. The entry stays
 when the provider context folds or drops the frame. A streaming action names the frame it is based
 on; a turn-based action is interpreted against the frame of its own generation. A captured frame
-dropped before it is prepared takes no number, so the numbers the model sees have no gaps; the
-streaming policy counts the drops (evaluation/kernel/streaming.py).
+dropped before it is prepared takes no number. A frame whose push failed keeps the number it was
+prepared under, so the numbers the model sees have a gap there. The streaming policy counts both
+as dropped (evaluation/kernel/streaming.py).
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ class FrameTable:
             return record
 
     def record_sent(self, frame: int, sent_unix_s: float) -> None:
+        """``sent_unix_s`` is read with Clock.time(), as age() reads an action's arrival."""
         with self._lock:
             record = self._frames[frame]
             record.send_status = "sent"
