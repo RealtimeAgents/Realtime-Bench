@@ -610,7 +610,7 @@ def external_driver_identity(target: str) -> dict:
         "module": module_name,
         "class": class_name,
         "source_sha256": _entries_sha256(sorted(entries)),
-        "context_policy_row": current_context_policy().for_path(target, {}).api,
+        "context_policy_row": current_context_policy().for_path(target, {}, None).api,
     }
 
 
@@ -697,7 +697,7 @@ def effective_run_config(
 
     adapter_type = model_config.get("adapter_type")
     context_policy = current_context_policy().for_path(
-        adapter_type, model_config["provider_options"]
+        adapter_type, model_config["provider_options"], model_config["context_preset"]
     )
     visual_budget = context_policy.visuals.keep
     visual_fold_block_size = context_policy.visuals.block

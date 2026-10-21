@@ -341,7 +341,9 @@ def test_context_policy_fits_every_catalog_model():
 
 def policy_check(config, **values):
     driver = catalog.adapter_class(config.adapter_type)
-    policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
+    policy = current_context_policy().for_path(
+        config.adapter_type, config.provider_options, config.context_preset
+    )
     return lambda: check_context_policy(driver, replace(policy, **values), config)
 
 
@@ -393,18 +395,28 @@ def test_context_policy_item(key, values, message):
     fails(policy_check(preset(key), **values), message)
 
 
-def test_kimi_k3_runs_only_under_its_preset():
-    """Kimi requires K3's past reasoning back (providers/litellm.py MoonshotDriver); the standard
-    policy sends none."""
-    config = preset("kimi-k3")
-    row = current_context_policy().for_path(config.adapter_type, config.provider_options)
-    assert row.preset == "kimi_k3"
-    standard = {item: STANDARD[item] for item in PRESETS[row.preset]}
-    policy_check(config)()
+def test_kimi_k3_preset_comes_from_its_model_config():
+    """Kimi requires K3's past reasoning back (entity/context_policy.py PRESETS): K3's YAML names
+    the kimi_k3 preset. Another moonshot model runs under the standard values, which send none."""
+    policy = current_context_policy()
+    k3 = preset("kimi-k3")
+    assert k3.context_preset == "kimi_k3"
+    resolved = policy.for_path(k3.adapter_type, k3.provider_options, k3.context_preset)
+    assert (resolved.preset, resolved.reasoning_replay) == ("kimi_k3", True)
+    episode(k3)
+    other = k3.model_copy(update={"model_name": "kimi-other", "context_preset": None})
+    resolved = policy.for_path(other.adapter_type, other.provider_options, other.context_preset)
+    assert resolved == policy.paths["moonshot"]
+    assert {item: getattr(resolved, item) for item in PRESETS["kimi_k3"]} == {
+        item: STANDARD[item] for item in PRESETS["kimi_k3"]
+    }
+    episode(other)
+
+
+def test_model_preset_the_api_cannot_render():
     fails(
-        policy_check(config, preset=None, **standard),
-        "The moonshot API requires past reasoning in later requests; "
-        "its context policy sends none",
+        lambda: episode(preset("claude-opus-5", context_preset="kimi_k3")),
+        "The openrouter API cannot send past reasoning back",
     )
 
 

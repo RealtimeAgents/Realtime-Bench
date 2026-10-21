@@ -18,6 +18,7 @@ import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.litellm import DEFAULT_MOONSHOT_BASE_URL
+from realtime_framework.providers.preflight import check_episode
 
 from . import baseline
 from .build import build_episode
@@ -52,12 +53,12 @@ FIRST_ARCHIVE, ARCHIVED = 50, 10
 PAUSE_SCENARIO = LONG_SCENARIO[:5]
 
 
-def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame):
+def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, **changes):
     monkeypatch.setenv("MOONSHOT_API_KEY", DUMMY_KEY)
     entry = catalog.get(MODEL_KEY)
     config = catalog.to_model_config(  # runner.py:1431-1437, 1548-1553
         MODEL_KEY, fps=FPS, reasoning_effort=entry.defaults["reasoning_effort"]
-    )
+    ).model_copy(update=changes)
     assert config.api_base_url == DEFAULT_MOONSHOT_BASE_URL
     if tokens_per_frame is not None:
         # runner.py:1453-1460
@@ -218,3 +219,26 @@ def test_pause_mode_snapshot(tmp_path, monkeypatch):
         records,
         tmp_path,
     )
+
+
+def test_model_without_a_preset(tmp_path, monkeypatch):
+    """Another moonshot model, whose YAML names no context preset, takes the standard values
+    (entity/context_policy.py): each request replays the earlier replies without their reasoning,
+    and the pre-run checks accept it. Its YAML sets no reasoning_effort either: LiteLLM refuses
+    one for a moonshot model its map does not list."""
+    config, records = _run(
+        tmp_path,
+        monkeypatch,
+        PAUSE_SCENARIO,
+        tokens_per_frame=None,
+        model_name="kimi-other",
+        context_preset=None,
+        reasoning_effort=None,
+    )
+    check_episode(config, clock_mode="token", task=ReplayTask())
+    assert all(_body(r)["model"] == "kimi-other" for r in records)
+    assert not any("reasoning_content" in m for r in records for m in _messages(r))
+    for k, step in enumerate(PAUSE_SCENARIO[:-1]):
+        # Turn k is the newest turn of request k + 1, so its assistant message comes last.
+        *_, replayed = (m for m in _messages(records[k + 1]) if m["role"] == "assistant")
+        assert replayed == {"role": "assistant", "content": step.reply}, f"request {k + 1}"

@@ -27,7 +27,7 @@ from realtime_framework.providers.openai_realtime_session import (
     RealtimeSessionCore,
 )
 
-POLICY = current_context_policy().for_path("openai_realtime", {})
+POLICY = current_context_policy().for_path("openai_realtime", {}, None)
 TEXTS = POLICY.texts
 SYSTEM = system_block("system instruction", None)
 ANSWER = AnswerRequirements("text_json", "standard_vlm")

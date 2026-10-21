@@ -1133,8 +1133,9 @@ class MoonshotDriver(LiteLLMDriver):
         _STREAMING_CHAT,
         protocol_family="moonshot_chat",
         # Kimi's thinking-model guide: for K3, passing reasoning_content back "is required in
-        # multi-turn conversations and tool-call loops".
-        reasoning_replay="required",
+        # multi-turn conversations and tool-call loops". That is K3's requirement, not the API's:
+        # K3's YAML names the kimi_k3 preset, which sends it (entity/context_policy.py PRESETS).
+        reasoning_replay="optional",
     )
     protocol = ChatProtocol(sdk_provider="moonshot", client="openai", usage="kimi")
     deployment = ChatDeployment(

@@ -111,14 +111,16 @@ def test_reasoning_replay():
     silent = turn(2)
     silent.output_reasoning = "R2"
     turns = [reasoned, silent, turn(3)]
-    # Every API but moonshot rebuilds the reply from the model output alone; a reply that was
-    # only reasoning leaves no assistant message.
-    for api in ("chat_completions", "litellm", "openrouter"):
+    # Every API row rebuilds the reply from the model output alone, moonshot's included; a reply
+    # that was only reasoning leaves no assistant message.
+    for api in ("chat_completions", "litellm", "openrouter", "moonshot"):
         assert [m for m in chat_messages(request(api, turns)) if m["role"] == "assistant"] == [
             {"role": "assistant", "content": "A1"}
         ], api
-    # The Kimi K3 preset keeps the reasoning (entity/context_policy.py PRESETS).
-    moonshot = chat_messages(request("moonshot", turns))
+    # Kimi K3's YAML names the kimi_k3 preset, which keeps the reasoning
+    # (entity/context_policy.py PRESETS).
+    k3 = POLICY.for_path("moonshot", {}, "kimi_k3")
+    moonshot = chat_messages(build_request(k3, SYSTEM, tuple(turns), None, ANSWER, CALL))
     assert moonshot[2] == {"role": "assistant", "content": "A1", "reasoning_content": "R1"}
     assert moonshot[4] == {"role": "assistant", "content": "", "reasoning_content": "R2"}
 

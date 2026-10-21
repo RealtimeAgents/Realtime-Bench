@@ -128,7 +128,9 @@ class Rig:
             "function_call", "standard_vlm", tuple(gui_function_declarations())
         )
         self.seed = SessionSeed("system instruction", model, None, 1.0, answer)
-        policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
+        policy = current_context_policy().for_path(
+            config.adapter_type, config.provider_options, config.context_preset
+        )
         call = CallParameters(model, config.reasoning_effort, None)
         self.view = lambda turns: build_request(
             policy,
