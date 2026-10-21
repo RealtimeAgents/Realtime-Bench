@@ -290,6 +290,48 @@ def test_a_wall_wait_across_the_deadline_ends_at_the_deadline():
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.0, 3.0, 3.0, None)
 
 
+def test_a_wall_wait_ends_at_the_deadline_however_late_the_deadline_is_handled():
+    """A 3 s WAIT starts at 1.75 s with the deadline at 3.5 s; the check due at 3 s runs until
+    3.75 s, and only then is the deadline handled. The WAIT ran until the deadline, 1.75 s, as
+    today's sleep(min(duration, remaining)), not until the deadline was handled."""
+    world = World(replies=[Reply(latency=0.75, action=Action.wait(3.0)), Reply(9.0)], check_s=0.75)
+    sim = _run(_wall(3.5), world)
+    (resolved,) = sim.entries("ActionResolved")
+    assert resolved.semantic == 3.75
+    assert resolved.data["action_clock_position"] == 1.75
+    assert resolved.data["execution_result"] == {
+        "duration_simulated_seconds": 1.75,
+        "requested_duration_simulated_seconds": 3.0,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": False,
+    }
+    assert sim.termination == Termination("time_limit", "deadline", 3.5, 3.75, 3.75, 3.75, None)
+
+
+def test_a_wall_wait_the_tasks_end_cuts_short_lasts_until_the_end_is_dated():
+    """A 5 s WAIT from 1.25 s (the reply came back at 1 s, on the frame boundary, and frame 1 was
+    read first). The task ends from 2.5 s; the check asked at 3 s answers so at 3.25 s, and the
+    end is dated by its asking. The WAIT lasted until then, 1.75 s, cut by the task's end."""
+    world = World(
+        replies=[Reply(latency=0.75, action=Action.wait(5.0)), Reply(9.0)],
+        check_s=0.25,
+        ends_at=2.5,
+        end_reason="target_reached",
+    )
+    sim = _run(_wall(10.0), world)
+    assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]
+    (resolved,) = sim.entries("ActionResolved")
+    assert resolved.semantic == 3.25
+    assert resolved.data["execution_result"] == {
+        "duration_simulated_seconds": 1.75,
+        "requested_duration_simulated_seconds": 5.0,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": True,
+    }
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("target_reached", 3.0)
+
+
 def test_a_token_wait_across_the_horizon_ends_at_the_horizon():
     """wait 跨过截止 (token): a 5 s WAIT lands at tick 1 with T = 3. It moves the clock only to the
     horizon, one tick per step with an end check after each, and records that the horizon cut it
