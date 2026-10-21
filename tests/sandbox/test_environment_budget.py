@@ -242,16 +242,6 @@ def test_a_slow_capture_fails_within_its_budget(budgets):
     _spent_the_budget(elapsed)
 
 
-def test_a_state_read_flooded_with_events_fails_within_its_budget(budgets, game):
-    budgets(state_read_s=BUDGET)
-    with FakeGuest() as guest, FakeCDP(mode="flood") as fake:
-        env = _environment(guest, stop_check=game(fake).episode_over)
-        agent, elapsed = _run(env)
-    _invalid(env, "terminal_state_check_failed", "state read")
-    assert agent.statuses == []
-    _spent_the_budget(elapsed)
-
-
 def test_a_state_read_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, game):
     budgets(state_read_s=BUDGET)
     with FakeGuest() as guest, FakeCDP(values={_GET_STATE: PLAYING}) as fake:
@@ -322,19 +312,6 @@ def test_a_token_key_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, g
     _spent_the_budget(elapsed)
 
 
-def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget(budgets, game):
-    # The game reads its snapshot through cdp_eval, which turns the timeout into an empty state;
-    # the read still fails because it returned after its deadline.
-    budgets(snapshot_read_s=BUDGET)
-    with FakeGuest() as guest, FakeCDP(mode="flood") as fake:
-        env = _environment(guest, game(fake), stop_check=lambda: True)
-        agent, elapsed = _run(env)
-    _invalid(env, "evaluation_snapshot_failed", "snapshot read")
-    assert env._termination_snapshot_captured is False
-    assert agent.statuses == []
-    _spent_the_budget(elapsed)
-
-
 # ---- on the fake clock -------------------------------------------------------------------------
 
 
@@ -348,12 +325,16 @@ def _sandbox_call(clock: FakeClock, seconds: float, timeout: float = 120.0) -> N
 
 
 class _ClockGuest:
-    """The guest agent's action endpoint, where each action takes ``seconds`` of ``clock``."""
+    """The guest agent's screenshot and action endpoints; each action takes ``seconds`` of
+    ``clock``."""
 
     def __init__(self, clock: FakeClock | None = None, seconds: float = 0.0):
         self.clock = clock
         self.seconds = seconds
         self.actions: list[ActionType] = []
+
+    def screenshot(self) -> bytes:
+        return SCREENSHOT_PNG
 
     def execute_action(self, action: Action) -> dict:
         self.actions.append(action.action_type)
@@ -390,6 +371,63 @@ def _timed(
         guest, None, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
     )
     return env, task
+
+
+def _run_on(clock: FakeClock, env) -> ScriptedAgent:
+    """Three decisions of run_stream on ``clock``, each clicking."""
+    agent = ScriptedAgent(CLICK)
+    runner.run_stream(
+        agent, env, max_ticks=3, log=lambda line: None, clock_mode="token", clock=clock
+    )
+    return agent
+
+
+def _swallowing_the_timeout(clock: FakeClock) -> None:
+    """A read through cdp_eval (sandbox/browser/clock.py), which turns a timeout into no value; a
+    CDP call that never answers spends the operation's budget."""
+    try:
+        _sandbox_call(clock, 3600.0)
+    except TimeoutError:
+        pass
+
+
+def test_a_state_read_whose_task_swallows_the_timeout_fails_within_its_budget():
+    """The game then raises its own error (realtime_tasks/game/runtime.py episode_over), which
+    the read reports past its budget. That unrelated CDP events do not restart the call's timeout
+    is test_cdp_deadline.py's."""
+    clock = FakeClock()
+
+    def episode_over():
+        _swallowing_the_timeout(clock)
+        raise RuntimeError("game state backend returned no state")
+
+    env, _ = _timed(clock, _ClockGuest(), stop_check=episode_over)
+    with clock.participant():
+        agent = _run_on(clock, env)
+        assert clock.monotonic() == 120.0
+    _invalid(env, "terminal_state_check_failed", "state read", 120.0)
+    assert env._invalid_run["detail"].rstrip().endswith("returned no state)")
+    assert agent.statuses == []
+
+
+def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget():
+    """The game's snapshot is then an empty state (realtime_tasks/game/runtime.py
+    evaluation_snapshot); the read still fails because it returned after its deadline."""
+    clock = FakeClock()
+    task = ClockTask(1.0)
+
+    def evaluation_snapshot():
+        _swallowing_the_timeout(clock)
+        return {"kind": "browser_game", "state": {}}
+
+    task.evaluation_snapshot = evaluation_snapshot
+    env, _ = _timed(clock, _ClockGuest(), task, stop_check=lambda: True)
+    with clock.participant():
+        agent = _run_on(clock, env)
+        assert clock.monotonic() == 16.0
+    _invalid(env, "evaluation_snapshot_failed", "snapshot read", 16.0)
+    assert env._termination_snapshot_captured is False
+    assert agent.statuses == []
 
 
 def test_an_action_and_its_page_barrier_share_one_budget():
