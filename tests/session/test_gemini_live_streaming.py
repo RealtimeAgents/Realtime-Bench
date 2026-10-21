@@ -949,6 +949,28 @@ def test_a_reply_is_refused_while_one_is_in_flight():
     assert unchanged
 
 
+def test_a_reply_read_to_its_end_is_in_flight_until_its_events_are_done():
+    """The reader having read a reply's end, its events() may still acknowledge its calls: the
+    next reply is refused until they are done."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        await rig.driver.request_reply(request)
+        rig.socket.feed(call("call-0"), TURN_COMPLETE)
+        await settle()
+        refused = None
+        try:
+            await rig.driver.request_reply(replace(request, generation_id="turn-1"))
+        except RuntimeError as exc:
+            refused = str(exc)
+        await rig.driver.close()
+        return refused
+
+    assert asyncio.run(run()) == "Gemini Live has a reply in flight on the connection"
+
+
 def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
     """A trigger whose write failed is no reply: its feedback is unknown, no generation takes
     the connection's messages, so a cancellation read later waits for the next reply, as one
