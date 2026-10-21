@@ -849,6 +849,7 @@ def _retry_usage_status(usages):
 from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollector
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.context import RequestExceedsContext
+from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
@@ -1136,8 +1137,16 @@ class DefaultHarness(VisionAgentBase):
         self._context_policy = current_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options, self.config.context_preset
         )
+        # Started by initialize(); close() stops it once the runtime has closed the session.
+        self._execution_thread = ExecutionThread(
+            self.clock, f"execution-thread-{self.driver.capabilities.protocol_family}"
+        )
         self._runtime = RealtimeRuntime(
-            self.driver, self._context_policy, trace=self._trace, clock=self.clock
+            self.driver,
+            self._context_policy,
+            trace=self._trace,
+            execution=self._execution_thread,
+            clock=self.clock,
         )
 
     def _record_provider_usage(self, result, observation, tick, *, stale):
@@ -1187,6 +1196,7 @@ class DefaultHarness(VisionAgentBase):
         # Its inputs are set before initialize() and never change during the episode.
         self._system_block = system_block(fixed, self.clock.time_ns())
         self._answer = self._answer_requirements()
+        self._execution_thread.start()
         with trace_scope(phase="initialize"):
             self._runtime.start(
                 SessionSeed(
@@ -2118,5 +2128,6 @@ class DefaultHarness(VisionAgentBase):
         try:
             with trace_scope(phase="close"):
                 self._runtime.close()
+            self._execution_thread.stop()
         finally:
             super().close()

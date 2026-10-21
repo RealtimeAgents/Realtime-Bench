@@ -34,13 +34,14 @@ from .hermetic import HISTORY_ENV
 
 def wait_for_abort(agent, timeout: float) -> None:
     """Return once the cleanup of the agent's last abort (providers/session_lifecycle.py abort)
-    is done. The abort was submitted first, and the loop starts what it is given in order."""
+    is done. The abort was submitted first, and the execution thread starts what it is given in
+    order."""
     session = agent._runtime.session
 
     async def cleanup_done():
         await asyncio.wait({session._cleanup})
 
-    agent._runtime._submit(cleanup_done(), timeout=timeout)
+    agent._runtime.execution.run(cleanup_done(), timeout=timeout)
 
 
 class ToolRuntime(som.ToolRuntime):

@@ -148,8 +148,10 @@ def test_a_stopped_thread_refuses_work():
 
     with clock.participant():
         thread = _started(clock)
+        assert thread.running
         thread.stop()
         assert thread._loop.is_closed() and not thread._thread.is_alive()
+        assert not thread.running
         for call in (thread.run, thread.submit):
             coroutine = work()
             with pytest.raises(RuntimeError, match="^the execution thread is not running$"):

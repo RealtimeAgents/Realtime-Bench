@@ -122,13 +122,13 @@ def _hold_the_next_open(realtime):
 
 
 def _after_the_abort_runs(runtime) -> None:
-    """Return once the loop has run the abort's cleanup as far as it goes without waiting:
-    the cleanup was scheduled first, and the loop runs what it is given in order."""
+    """Return once the execution thread has run the abort's cleanup as far as it goes without
+    waiting: the cleanup was scheduled first, and the thread runs what it is given in order."""
 
     async def barrier():
         pass
 
-    runtime._submit(barrier())
+    runtime.execution.run(barrier())
 
 
 def _trace(run_dir, event: str) -> list[dict]:

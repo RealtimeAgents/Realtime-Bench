@@ -88,7 +88,6 @@ def action_result_note(status: str, detail: str = "") -> str:
 # Runtime
 """Common session and generation state machine for every catalog model."""
 
-import asyncio as asyncio
 from copy import deepcopy as deepcopy
 from collections.abc import Callable as Callable
 from collections.abc import Iterable as Iterable
@@ -118,6 +117,7 @@ from realtime_framework.entity.model import retry_cancellation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.entity.request import ContentBlock
+from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.request import ledger_block
 from realtime_framework.providers.session_lifecycle import StatelessSession
 from realtime_framework.sandbox.observation.som import without_observation_interactables
@@ -146,13 +146,19 @@ class RealtimeRuntime:
     session encoder (providers/session_lifecycle.py): a live driver is its own, a stateless one is
     presented as a StatelessSession. The runtime tells it when and from which history.
 
-    The synchronous harness may call the agent from disposable worker threads.  One private asyncio
-    loop owns all driver operations, so async WebSocket SDKs and synchronous transports bridged by a
-    driver follow the same generation state machine.
+    The synchronous harness may call the agent from disposable worker threads. Every driver
+    operation runs on the agent's execution thread instead (``execution``), which the agent starts
+    and stops around the runtime.
     """
 
     def __init__(
-        self, driver: RealtimeDriver, policy: PathPolicy, *, trace, clock: Clock | None = None
+        self,
+        driver: RealtimeDriver,
+        policy: PathPolicy,
+        *,
+        trace,
+        execution: ExecutionThread,
+        clock: Clock | None = None,
     ):
         if not isinstance(driver, RealtimeDriver):
             raise TypeError("realtime driver does not implement the required protocol")
@@ -160,7 +166,8 @@ class RealtimeRuntime:
         self.capabilities = driver.capabilities
         self.policy = policy
         self._trace = trace
-        # The operational clock; it makes the loop, so the drivers' waits run on its time.
+        self.execution = execution
+        # The operational clock, which also made the execution thread's loop.
         self.clock = clock or SystemClock()
         self.session = (
             driver
@@ -184,8 +191,6 @@ class RealtimeRuntime:
         self._omitted_action_count = 0
         self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
         self._buffer = CatchupBuffer()
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._thread: threading.Thread | None = None
 
     @property
     def state(self) -> RuntimeState:
@@ -203,45 +208,11 @@ class RealtimeRuntime:
     def archived_action_count(self) -> int:
         return self._archived_action_count
 
-    def _start_loop(self) -> None:
-        if self._loop is not None and not self._loop.is_closed():
-            return
-        loop = self.clock.new_event_loop()
-        ready = threading.Event()
-
-        def run() -> None:
-            asyncio.set_event_loop(loop)
-            ready.set()
-            loop.run_forever()
-
-        thread = threading.Thread(
-            target=run,
-            name=f"realtime-runtime-{self.capabilities.protocol_family}",
-            daemon=True,
-        )
-        thread.start()
-        ready.wait()
-        self._loop = loop
-        self._thread = thread
-
-    def _submit(self, coroutine, timeout: float | None = None):
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            coroutine.close()
-            raise RuntimeError("realtime runtime event loop is not running")
-        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-        if not self.clock.wait(future, timeout):
-            if not future.done():
-                future.cancel()
-            raise TimeoutError(f"realtime runtime operation exceeded {timeout:g}s") from None
-        return future.result()
-
     def start(self, seed: SessionSeed, initial_observation=None, *, timeout: float = 60.0) -> None:
-        self._start_loop()
         self._seed = seed
         if initial_observation is not None:
             self._buffer.enqueue(initial_observation)
-        self._submit(self.session.connect(ConnectRequest(seed=seed)), timeout=timeout)
+        self.execution.run(self.session.connect(ConnectRequest(seed=seed)), timeout=timeout)
 
     def enqueue(self, observation) -> None:
         self._buffer.enqueue(observation)
@@ -274,12 +245,12 @@ class RealtimeRuntime:
 
     def accept_turn(self, turn: CanonicalTurn) -> None:
         """Write an accepted generation's turn into the retained history. The write runs on the
-        loop, where a generation that was abandoned but still runs reads the history."""
+        execution thread, where a generation that was abandoned but still runs reads the history."""
 
         async def write() -> None:
             self._turns.append(turn)
 
-        self._submit(write())
+        self.execution.run(write())
 
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
@@ -647,7 +618,7 @@ class RealtimeRuntime:
         once it is accepted."""
         try:
             with retry_cancellation(cancel):
-                return self._submit(
+                return self.execution.run(
                     self._run_turn(
                         tuple(observations),
                         request,
@@ -673,29 +644,22 @@ class RealtimeRuntime:
                 return
             generation = self._active_generation
         self.session.mark_dirty()
-        loop = self._loop
-        if loop is not None and not loop.is_closed():
-            asyncio.run_coroutine_threadsafe(self.session.abort(generation), loop)
+        if self.execution.running:
+            self.execution.submit(self.session.abort(generation))
 
     def close(self) -> None:
-        """Close the session, once the last abort's cleanup is done or has run for a while."""
+        """Close the session, once the last abort's cleanup is done or has run for a while. The
+        agent stops the execution thread after this."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-        loop = self._loop
-        if loop is not None and not loop.is_closed():
+        if self.execution.running:
             try:
                 # Longer than the session waits for an abort's cleanup, with time to close after.
-                self._submit(self.session.close(), timeout=15.0)
+                self.execution.run(self.session.close(), timeout=15.0)
             except Exception:  # noqa: BLE001, S110 - destructor-style best effort
                 pass
-            loop.call_soon_threadsafe(loop.stop)
-            thread = self._thread
-            if thread is not None:
-                thread.join(timeout=5.0)
-            if not loop.is_running():
-                loop.close()
 
     # ---- agent trace -------------------------------------------------------------------------
     # Each change to the model-visible history is recorded where it happens, so the history at any
