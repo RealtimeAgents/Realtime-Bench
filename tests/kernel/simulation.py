@@ -8,9 +8,9 @@ occupies the shell for its duration, so whatever comes due meanwhile is handled 
 as in the production shells. What other threads produce (a generation's result, an agent record,
 the wall key-release timer) is posted when the simulated time reaches it.
 
-The world plays GuestEnvironment's part only as far as the kernel sees it: a tap moves the token
-tick by 1/60 tick per repeat (sandbox/actions.py:503-514) and a tick within 1e-9 of an integer
-snaps to it (sandbox/actions.py:244-246).
+The world plays GuestEnvironment's part only as far as the kernel sees it: a tap holds the key
+1/60 s per repeat, advancing the token tick in steps of at most one tick (sandbox/actions.py:
+538-548, 240-280), and a tick within 1e-9 of an integer snaps to it (sandbox/actions.py:275-277).
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ from realtime_framework.evaluation.kernel.events import (
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
 
-TAP_TICKS = 1.0 / 60.0  # a token-clock key tap holds the key this long (sandbox/actions.py:23)
+TAP_HOLD_S = 1.0 / 60.0  # a token-clock key tap holds the key this long (sandbox/actions.py:28)
 
 
 @dataclass(frozen=True)
@@ -331,8 +331,7 @@ class Simulation:
         if error is None and rejection is None:
             if self.token and action.action_type is ActionType.KEY:
                 for _ in range(int(action.parameters.get("repeat", 1))):
-                    target = self.tick + TAP_TICKS
-                    self.tick = _snap(self.tick + min(1.0, target - self.tick))
+                    self._tap()
             duration = float(action.parameters.get("duration", 1.0))
             if self.token and action.action_type is ActionType.HOLD_KEY and duration > 1e-9:
                 held = key_identities(action)
@@ -353,6 +352,13 @@ class Simulation:
                 error=error,
             )
         )
+
+    def _tap(self) -> None:
+        """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, one tick at most per step
+        (sandbox/actions.py:137, 245-246, 548)."""
+        target = self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps)
+        while self.tick + 1e-9 < target:
+            self.tick = _snap(self.tick + min(1.0, target - self.tick))
 
     def _wall_release(self, key: str, at: float) -> None:
         if self._releases.get(key) != at:
