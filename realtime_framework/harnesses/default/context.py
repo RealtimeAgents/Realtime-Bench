@@ -156,6 +156,9 @@ class RealtimeRuntime:
         self._compaction_items: list[str] = []
         self._state = RuntimeState.NEW
         self._state_lock = threading.RLock()
+        # One connect or sync of the session at a time: one that an abandoned generation still
+        # runs ends before the next generation readies the session. An abort does not wait.
+        self._session_lock = asyncio.Lock()
         self._active_generation: GenerationHandle | None = None
         self._connected = False
         self._seed: SessionSeed | None = None
@@ -352,12 +355,18 @@ class RealtimeRuntime:
             },
         )
 
-    async def _synchronize(
+    async def _synchronize(self, **sync) -> HistorySyncResult:
+        """_sync, one session operation at a time (_session_lock)."""
+        async with self._session_lock:
+            return await self._sync(**sync)
+
+    async def _sync(
         self,
         *,
         reason: str,
         ledger: str,
         request_builder: RequestBuilder,
+        cancel: threading.Event,
         current_generation: GenerationHandle | None = None,
         force_rebuild: bool = False,
         removed_turns: tuple[CanonicalTurn, ...] = (),
@@ -366,6 +375,7 @@ class RealtimeRuntime:
         seed = self._seed
         if seed is None:
             raise RuntimeError("realtime runtime has no session seed")
+        self._stop_if_abandoned(cancel, "its sync")
         self._set_state(RuntimeState.SYNCHRONIZING)
         try:
             result = await self.driver.sync_history(
@@ -383,6 +393,7 @@ class RealtimeRuntime:
             self._record_sync(reason, force_rebuild, removed_turns, incoming, error=exc)
             raise
         self._record_sync(reason, force_rebuild, removed_turns, incoming, result=result)
+        await self._release_if_abandoned(cancel)
         if result.history_state == ProviderHistoryState.EXACT:
             self._connected = True
             self._set_state(RuntimeState.READY)
@@ -412,30 +423,44 @@ class RealtimeRuntime:
             if self._cleanup_future is future:
                 self._cleanup_future = None
 
-    async def _ensure_ready(self, ledger: str, request_builder: RequestBuilder) -> None:
+    async def _release_if_abandoned(self, cancel: threading.Event) -> None:
+        """An abort that came while this generation connected or synced closed what was open
+        then, not the session this opened or rebuilt: close that too and leave the runtime dirty,
+        so the next generation opens its own."""
+        if self._abandoned(cancel):
+            await self._abort_active(None)
+            raise RetryCancelled("generation abandoned while it readied its session")
+
+    async def _ensure_ready(
+        self, ledger: str, request_builder: RequestBuilder, cancel: threading.Event
+    ) -> None:
         await self._wait_for_cleanup()
-        if self._connected and self.state == RuntimeState.READY:
-            return
-        if self._connected:
-            result = await self._synchronize(
-                reason="runtime_recovery",
-                ledger=ledger,
-                request_builder=request_builder,
-                force_rebuild=True,
+        async with self._session_lock:
+            if self._connected and self.state == RuntimeState.READY:
+                return
+            self._stop_if_abandoned(cancel, "its session")
+            if self._connected:
+                result = await self._sync(
+                    reason="runtime_recovery",
+                    ledger=ledger,
+                    request_builder=request_builder,
+                    cancel=cancel,
+                    force_rebuild=True,
+                )
+                if result.history_state != ProviderHistoryState.EXACT:
+                    raise RuntimeError(f"provider history recovery failed: {result.detail}")
+                return
+            seed = self._seed
+            if seed is None:
+                raise RuntimeError("realtime runtime has not been started")
+            self._set_state(RuntimeState.CONNECTING)
+            await self.driver.connect(
+                ConnectRequest(seed=seed, history=self.history_view(request_builder, ledger))
             )
-            if result.history_state != ProviderHistoryState.EXACT:
-                raise RuntimeError(f"provider history recovery failed: {result.detail}")
-            return
-        seed = self._seed
-        if seed is None:
-            raise RuntimeError("realtime runtime has not been started")
-        self._set_state(RuntimeState.CONNECTING)
-        await self.driver.connect(
-            ConnectRequest(seed=seed, history=self.history_view(request_builder, ledger))
-        )
-        self._record_reconnect()
-        self._connected = True
-        self._set_state(RuntimeState.READY)
+            self._record_reconnect()
+            await self._release_if_abandoned(cancel)
+            self._connected = True
+            self._set_state(RuntimeState.READY)
 
     async def _run_turn(
         self,
@@ -451,7 +476,7 @@ class RealtimeRuntime:
         if len(observations) != 1:
             raise ValueError("each generation accepts exactly one observation")
         executed_action_ledger = self._action_ledger(action_history)
-        await self._ensure_ready(executed_action_ledger, request_builder)
+        await self._ensure_ready(executed_action_ledger, request_builder, cancel)
         self._stop_if_abandoned(cancel, "its history")
         incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
         # The policy archive and fold apply before the generation, accepted or not: a discarded
@@ -470,6 +495,7 @@ class RealtimeRuntime:
                 reason="history_block_compaction",
                 ledger=executed_action_ledger,
                 request_builder=request_builder,
+                cancel=cancel,
                 force_rebuild=(
                     self.capabilities.persistent_session
                     and not self.capabilities.can_compact_history_in_place
@@ -488,7 +514,10 @@ class RealtimeRuntime:
         )
         if reason:
             sync = await self._synchronize(
-                reason=reason, ledger=executed_action_ledger, request_builder=request_builder
+                reason=reason,
+                ledger=executed_action_ledger,
+                request_builder=request_builder,
+                cancel=cancel,
             )
             if sync.history_state != ProviderHistoryState.EXACT:
                 raise RuntimeError(f"connection renewal failed: {sync.detail}")
@@ -616,7 +645,8 @@ class RealtimeRuntime:
 
         # The turn joins the history only once the result is accepted (accept_turn). A sync after
         # the generation already includes it: a result that is discarded was aborted first, and
-        # the abort's close makes the next generation rebuild from the accepted history.
+        # the session that held it is closed, by the abort or by the sync it came during, so the
+        # next generation rebuilds from the accepted history.
         needs_sync = not cancelled and (
             terminal_history != ProviderHistoryState.EXACT or reconnect_required
         )
@@ -625,6 +655,7 @@ class RealtimeRuntime:
                 reason=provider_metadata.get("reconnect_reason", "provider_history_changed"),
                 ledger=executed_action_ledger,
                 request_builder=request_builder,
+                cancel=cancel,
                 current_generation=generation,
                 force_rebuild=False,
                 incoming=(turn,),
