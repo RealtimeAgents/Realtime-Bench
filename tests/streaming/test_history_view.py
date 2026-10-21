@@ -1,6 +1,8 @@
 """The native-streaming history view (harnesses/streaming/history.py): the newest frames keep their
-screenshots, older frames fold as turn-based frames do, and every output and feedback stays in the
-order it was accepted, under its own id."""
+screenshots, older frames fold as turn-based frames do, and every frame and output stays in the
+order it was accepted, under its own id. Feedback goes where the policy places it: as its own
+block, under its own id, where it arrived; or in front of the next frame, in one block for the
+feedback since the frame before, which waits at the end until that frame comes."""
 
 from __future__ import annotations
 
