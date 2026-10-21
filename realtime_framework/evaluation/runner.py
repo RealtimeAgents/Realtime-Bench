@@ -1537,6 +1537,7 @@ def main():
         try:
             generation_artifact = capture_generation_artifact(
                 run_dir,
+                clock=clocks.operational,
                 ctask=ctask,
                 adapter=cfg.adapter_type,
                 model=requested_model_identity["model"],
