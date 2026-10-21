@@ -17,11 +17,13 @@ from realtime_framework.harnesses.default.prompts import (
     ACTION_RESULT_NOTES,
     UNSUPPORTED_TERMINAL_ACTION_FEEDBACK,
 )
+from tests.frames.test_grounding import moving_probe
 from tests.replay import scenario_decisions
 from tests.replay.build import build_episode
 from tests.replay.frames import ReplayTask
 from tests.replay.scenario import (
     CLICK_NAME,
+    CLICK_SUBMIT,
     LONG_SCENARIO,
     OUTSIDE_PAGE,
     TASK_INSTRUCTION,
@@ -50,13 +52,14 @@ def _luna_episode(stub, run_dir):
     )
 
 
-def _chat_episode(stub, run_dir):
+def _chat_episode(stub, run_dir, scene=None):
     return build_episode(
         chat_completions_config(stub.base_url, stream=True),
         run_dir,
         task=ReplayTask(),
         instruction=TASK_INSTRUCTION,
         model_key=CHAT_MODEL_KEY,
+        scene=scene,
     )
 
 
@@ -241,6 +244,62 @@ def test_an_abort_before_the_reply_sends_no_request(tmp_path):
     assert pending.cancelled
     assert stub.requests == [] and stub.unused_replies == 1
     assert agent._runtime.turns == () and agent.action_history == []
+
+
+def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
+    """Turn-based, on a page whose Submit button (P3) moves 120 px right in every frame.
+    Generation 1 is aborted while it still inspects its frame, and enters that frame in the
+    table only after generation 2 has entered its own and sent its request. The newest frame is
+    then generation 1's, yet generation 2's click on P3 is grounded on generation 2's own frame,
+    and that is the frame marked sent."""
+    inspecting, inspected, asked, answer = (threading.Event() for _ in range(4))
+
+    def hold_the_reply(index):
+        asked.set()
+        assert answer.wait(WAIT_S)
+        return False
+
+    with ChatCompletionsStub(replies([Step(CLICK_SUBMIT)]), on_request=hold_the_reply) as stub:
+        episode = _chat_episode(stub, tmp_path, scene={"probe": moving_probe})
+        agent = episode.agent
+        try:
+            late, own = episode.frames.capture(0), episode.frames.capture(1)
+            inspect = agent.tool_runtime.inspect
+
+            def held(observation, **kwargs):
+                if observation is late:
+                    inspecting.set()
+                    assert inspected.wait(WAIT_S)
+                return inspect(observation, **kwargs)
+
+            agent.tool_runtime.inspect = held
+            late_budget, own_budget = (episode.budget(o.tick_number) for o in (late, own))
+            box, done = _in_worker(lambda: agent.generate(1, 0, late, late_budget))
+            assert inspecting.wait(WAIT_S), "generation 1 inspected no frame"
+            agent.abort(1)
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            box2, done2 = _in_worker(lambda: agent.generate(2, 1, own, own_budget))
+            assert asked.wait(WAIT_S), "generation 2 sent no request"
+            inspected.set()
+            abandoned = _joined(box, done)
+            answer.set()
+            pending = _joined(box2, done2)
+            agent.discard(1)
+            agent.accept(2)
+            table = agent.frames
+        finally:
+            episode.finish()
+    own_frame, late_frame = table._frames[1], table._frames[2]
+    assert (own_frame.observation_id, late_frame.observation_id) == (
+        own.metadata["observation_id"],
+        late.metadata["observation_id"],
+    )
+    assert table.latest() is late_frame and abandoned.cancelled
+    assert own_frame.marks["P3"]["point"] != late_frame.marks["P3"]["point"]
+    click = pending.result["action"]
+    assert [click.parameters["x"], click.parameters["y"]] == own_frame.marks["P3"]["point"]
+    assert click.coordinate_transform == own_frame.geometry
+    assert (own_frame.send_status, late_frame.send_status) == ("sent", "prepared")
 
 
 def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):

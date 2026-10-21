@@ -3,7 +3,7 @@
 An action is interpreted against one frame's entry: its SoM marks resolve the action's element
 references and its geometry maps the action's image coordinates to the desktop. The entry stays
 when the provider context folds or drops the frame. A streaming action names the frame it is based
-on; a turn-based action is interpreted against the newest frame.
+on; a turn-based action is interpreted against the frame of its own generation.
 """
 
 from __future__ import annotations
