@@ -1647,6 +1647,9 @@ class DefaultHarness(VisionAgentBase):
             f"{prepared[-1].observation_id}:turn",
             classify,
             record,
+            cancelled=lambda attempt, exc: self._attempt_cancelled(
+                generation, request, attempt, exc
+            ),
             replayable=lambda exc: not received_output(exc),
             clock=self.clock,
         )
@@ -2035,6 +2038,21 @@ class DefaultHarness(VisionAgentBase):
                     "received_output": received_output,
                     "retry_delay_s": delay,
                     "usage": usage,
+                },
+            )
+
+    def _attempt_cancelled(self, generation, request, attempt, exc) -> None:
+        """Record the attempt the generation's cancellation stopped: one not yet sent, or one a
+        nested request unit's cancellation ended before any reply. An attempt whose reply had
+        arrived is recorded by _attempt_finished, with its usage."""
+        with self._attempt_scope(generation, request, attempt):
+            self._trace.capture(
+                TraceEvent.MODEL_ATTEMPT_FINISHED,
+                {
+                    "kind": "generation",
+                    "outcome": "cancelled",
+                    "error": repr(exc)[:500],
+                    "usage": None,
                 },
             )
 
