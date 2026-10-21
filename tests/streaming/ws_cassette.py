@@ -199,7 +199,8 @@ class Cursor:
             self._pending.setdefault(record["conn"], deque()).append((index, record))
         self._normalize = normalizer
         self._opened = 0
-        # Server records released ahead of their time, which ``release`` hands out first.
+        # Server records released ahead of their time, with their index, which ``release`` hands
+        # out first.
         self._ahead: dict[int, deque] = {}
         self._server_closed: set[int] = set()  # nothing more goes on these
         self.problems: list[str] = []
@@ -261,7 +262,8 @@ class Cursor:
 
     def client_closed(self, conn: int, code: int | None, now: float) -> None:
         """The client closed ``conn`` with ``code`` (None for a connection dropped without a
-        close frame)."""
+        close frame). Unlike a message it never goes ahead of a server record: nothing the server
+        sent after it would reach the client."""
         head = self._head(conn)
         if head is None:
             return
@@ -282,6 +284,10 @@ class Cursor:
         """The replay ended with ``conn`` open: the client never closed it."""
         self._problem(LEFT_OPEN.format(conn=conn))
 
+    def unrecordable(self, conn: int, what: str) -> None:
+        """The client sent ``what``, which a recording cannot hold."""
+        self._problem(f"conn {conn}: the client sent {what}")
+
     # ---- what the server does ----------------------------------------------------------------
 
     def release(self, conn: int, now: float) -> list[dict]:
@@ -289,7 +295,7 @@ class Cursor:
         close as recorded."""
         if self.failed or conn in self._server_closed:
             return []
-        released = list(self._ahead.pop(conn, ()))
+        released = [record for _, record in self._ahead.pop(conn, ())]
         while True:
             head = self._head(conn)
             if head is None or not _server_side(head[1]):
@@ -314,13 +320,17 @@ class Cursor:
     def finish(self) -> list[str]:
         """The problems, with the records left unused once the client is done."""
         if not self.failed:
-            for conn, pending in sorted(self._pending.items()):
-                if pending:
-                    index, record = pending[0]
-                    self.problems.append(
-                        f"conn {conn}: {len(pending)} record(s) left unused, from record {index}"
-                        f" ({_label(record['dir'], record['msg'])})"
-                    )
+            for left, records in [
+                ("gone ahead of but never sent", self._ahead),
+                ("left unused", self._pending),
+            ]:
+                for conn, pending in sorted(records.items()):
+                    if pending:
+                        index, record = pending[0]
+                        self.problems.append(
+                            f"conn {conn}: {len(pending)} record(s) {left}, from record {index}"
+                            f" ({_label(record['dir'], record['msg'])})"
+                        )
         return self.problems
 
     # ---- internals ---------------------------------------------------------------------------
@@ -354,7 +364,8 @@ class Cursor:
             return False
         ahead = self._ahead.setdefault(conn, deque())
         while _server_side(pending[0][1]):
-            ahead.append(self._restored(pending.popleft()[1]))
+            index, record = pending.popleft()
+            ahead.append((index, self._restored(record)))
         return True
 
     def _restored(self, record: dict) -> dict:
