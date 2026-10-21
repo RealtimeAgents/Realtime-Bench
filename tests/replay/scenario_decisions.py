@@ -365,10 +365,12 @@ LARGE_OBSERVATION = WEB_LONG[:6]
 LARGE_OBSERVATION_DECISION = 4
 # Decision 24 sees the terms with 24 turns retained (test_decisions.py ARCHIVE_WINDOWS): the
 # runtime archives two blocks before its request goes out, or, under a smaller window, archives
-# every turn and still cannot send it, which ends the episode.
+# every turn and still cannot send it, which ends the episode, or archives every turn and leaves
+# ten actions out, which the decisions after it do too.
 TERMS_ARCHIVE_DECISION = 24
 TERMS_ARCHIVE = WEB_LONG[:26]
 TERMS_EXHAUSTED = [*WEB_LONG[:TERMS_ARCHIVE_DECISION], decision()]
+TERMS_OMISSION = WEB_LONG[:28]
 
 # The long script under a window its ledger outgrows (test_decisions.py LEDGER_WINDOW), up to
 # decision 38: decision 39's frame lists 240 names, which no window this small holds.
