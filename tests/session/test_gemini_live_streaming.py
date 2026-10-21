@@ -1149,6 +1149,33 @@ def test_a_reply_is_read_on_the_connection_it_started_on():
     assert rig.live.sockets[1].sent == [] and left == {}
 
 
+def test_a_reply_on_a_closed_connection_is_bound_by_no_go_away_of_the_new_one():
+    """A goAway on the new connection bounds nothing of a reply read on the one before: past its
+    deadline, that reply still hands over what was read and leaves the new connection open."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        old = await rig.driver.request_reply(request)
+        rig.socket.feed(call("call-0"))
+        await settle()
+        await rig.connect()
+        rig.socket.feed(go_away("0s"))
+        await settle()
+        try:
+            await drain(rig.driver.events(old))
+        except RuntimeError as exc:
+            failure = exc
+        opened = rig.driver._session is not None
+        await rig.driver.close()
+        return failure, opened
+
+    failure, opened = asyncio.run(run())
+    assert str(failure) == "Gemini Live connection 1: a read was cancelled"
+    assert opened
+
+
 def test_a_call_handed_over_after_a_reconnect_is_no_call_of_the_new_connection():
     """A call read before a reconnect, which its reply hands over after it, is pending on the
     connection it was read on only: the new one's records hold none of it, and the next reply
