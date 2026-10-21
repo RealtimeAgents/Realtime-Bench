@@ -78,7 +78,8 @@ def _ids(history) -> tuple[str, ...]:
 class FakeLiveDriver(SessionLifecycle):
     """``calls`` holds each connection operation, push and reply as (name, ...), with the ids
     of the view it was given, and ``views`` each push's view. A push of an observation id in
-    ``failing`` raises. Each reply takes the next of ``replies``."""
+    ``failing`` raises. Each reply takes the next of ``replies``. Once ``renewal_required``, as
+    after a goAway, the session takes no input until a sync renewed it."""
 
     capabilities = RealtimeCapabilities(
         protocol_family="fake_live",
@@ -95,6 +96,7 @@ class FakeLiveDriver(SessionLifecycle):
         self.views: list = []
         self.failing: set[str] = set()
         self.replies: list[Reply] = []
+        self.renewal_required = False
         self.open = False
 
     def bind_trace(self, trace) -> None:
@@ -110,7 +112,7 @@ class FakeLiveDriver(SessionLifecycle):
         return HistorySyncResult(SyncDisposition.REBUILT, ProviderHistoryState.EXACT)
 
     def _open(self) -> None:
-        self.open, self._closed = True, asyncio.Event()
+        self.open, self._closed, self.renewal_required = True, asyncio.Event(), False
 
     async def _close_current(self) -> None:
         if self.open:
@@ -130,17 +132,23 @@ class FakeLiveDriver(SessionLifecycle):
         self.calls.append(("interrupt", generation.generation_id))
 
     def connection_renewal_reason(self) -> str | None:
-        return None
+        return "go_away" if self.renewal_required else None
+
+    def _take_input(self) -> None:
+        if self.renewal_required:
+            raise RuntimeError("the session requires a renewal before input")
 
     async def push_frame(self, observation, history) -> dict:
         self.calls.append(("push", observation.observation_id, _ids(history)))
         self.views.append(history)
+        self._take_input()
         if observation.observation_id in self.failing:
             raise RuntimeError("push failed")
         return {"observation_id": observation.observation_id}
 
     async def request_reply(self, request) -> GenerationHandle:
         self.calls.append(("reply", request.generation, _ids(request.canonical)))
+        self._take_input()
         return GenerationHandle(request.generation_id, opaque=self.replies.pop(0))
 
     async def events(self, generation: GenerationHandle):
