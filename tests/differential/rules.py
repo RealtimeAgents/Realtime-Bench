@@ -145,7 +145,7 @@ def _frames(script: Script, ticks: float) -> float:
 
 
 def _dropped(script: Script, t_k: float, reached: float) -> int:
-    """Input frames a decision crossed but one (runner.py:579-580)."""
+    """Input frames a decision crossed but one (runner.py _apply)."""
     crossed = max(0, _floor(_frames(script, reached)) - _floor(_frames(script, t_k)))
     return max(0, crossed - 1)
 
@@ -182,7 +182,7 @@ def _drop_after(p: Projection, k: int) -> None:
 
 def _grid_check(script: Script, at: float) -> float | None:
     """The first periodic wall end check at or after ``at``: the kernel asks at j / env_fps,
-    j >= 1, while the episode lasts (turns.py:235-240, 671-675)."""
+    j >= 1, while the episode lasts (turns.py TurnPolicy.on_timer, _schedule_end_check)."""
     fps = script.env_fps
     j = max(1, math.ceil(at * fps))
     while j > 1 and (j - 1) / fps >= at:
@@ -206,7 +206,7 @@ def _in_hand_at(p: Projection, at: float) -> int | None:
 
 # ---- X12: which failed read ends the run ------------------------------------------------------
 
-READS_IN_A_ROW = 3  # turns.py:63 READ_FAILURE_LIMIT
+READS_IN_A_ROW = 3  # turns.py READ_FAILURE_LIMIT
 
 
 @dataclass(frozen=True)
@@ -225,7 +225,7 @@ class X12Plan:
 
 def x12_probe(script: Script) -> Script:
     """Today's loop with every scripted failure taken as a read that saw no end: until a third
-    failure in a row the kernel reads the episode the same way (turns.py:691-700)."""
+    failure in a row the kernel reads the episode the same way (turns.py TurnPolicy._count_read)."""
     if _wall(script):
         return script.but(failing_reads_s=())
     return script.but(
@@ -238,9 +238,9 @@ def x12_probe(script: Script) -> Script:
 
 def x12_plan(script: Script, probe: Projection) -> X12Plan:
     """The kernel counts failed reads in the order it handles them: end checks, and on the token
-    clock the reads a key tap makes, before the check after it (turns.py:471-474). A read that
-    succeeds resets the count, whatever it answers; the third failure in a row ends the run. Today
-    the first failure does (sandbox/actions.py:1004-1010)."""
+    clock the reads a key tap makes, before the check after it (turns.py TurnPolicy._executed). A
+    read that succeeds resets the count, whatever it answers; the third failure in a row ends the
+    run. Today the first failure does (sandbox/actions.py GuestEnvironment.done)."""
     if _wall(script):
         return _x12_wall(script, probe)
     failing = {"check": set(script.check_errors), "tap": set(script.tap_check_errors)}
@@ -269,7 +269,7 @@ def x12_plan(script: Script, probe: Projection) -> X12Plan:
 
 def _x12_wall(script: Script, probe: Projection) -> X12Plan:
     """Besides today's reads, the wall kernel reads every 1/env_fps s while the episode lasts
-    (turns.py:235-240, 671-675)."""
+    (turns.py TurnPolicy.on_timer, _schedule_end_check)."""
     fps, end = script.env_fps, probe.episode["termination"]["end_s"]
     reads = [(at, "loop") for at, _ in probe.facts["reads"]]
     j = 1
@@ -307,9 +307,9 @@ def _x12_wall(script: Script, probe: Projection) -> X12Plan:
 
 
 def _x4(script: Script, p: Projection, notes: dict) -> None:
-    """Today's wall tick is int(clock position) (sandbox/actions.py:200-203); the kernel floors the
-    position plus 1e-9 (turns.py:758-762, 146-147). A landing a few ulps short of a whole tick is
-    on the earlier tick today and on that tick in the kernel."""
+    """Today's wall tick is int(clock position) (sandbox/actions.py GuestEnvironment.tick_index);
+    the kernel floors the position plus 1e-9 (turns.py _floor, TurnPolicy._tick). A landing a few
+    ulps short of a whole tick is on the earlier tick today and on that tick in the kernel."""
     if not _wall(script):
         return
     for d in p.decisions.values():
@@ -357,7 +357,8 @@ def _kf2(script: Script, p: Projection, notes: dict) -> None:
 
 def _x1(script: Script, p: Projection, notes: dict) -> None:
     """A wait is time the kernel lets pass, not an action the environment executes
-    (turns.py:455-456); its record has no active holds or mouse buttons (turns.py:528-535)."""
+    (turns.py TurnPolicy._pre_checked); its record has no active holds or mouse buttons
+    (turns.py TurnPolicy._waited)."""
     for d in p.decisions.values():
         d["executed"] = [e for e in d["executed"] if not e["action"].startswith("wait:")]
         if d["wait_record"] is not None:
@@ -366,10 +367,10 @@ def _x1(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _x12(script: Script, p: Projection, notes: dict) -> None:
-    """The kernel invalidates the run on the third failed state read in a row (turns.py:691-700),
-    today's loop on the first; compare() has today's loop fail only that third read
-    (x12_plan). On the wall clock it can be a periodic read today's loop never makes: the run
-    ends there, invalidated."""
+    """The kernel invalidates the run on the third failed state read in a row
+    (turns.py TurnPolicy._count_read), today's loop on the first; compare() has today's loop fail
+    only that third read (x12_plan). On the wall clock it can be a periodic read today's loop never
+    makes: the run ends there, invalidated."""
     if not _wall(script):
         return _x12_tap(script, p, notes)
     at = p.facts.get("x12_end")
@@ -386,8 +387,8 @@ def _x12(script: Script, p: Projection, notes: dict) -> None:
 def _x12_tap(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: a failed read does not stop the kernel's tap; it goes on to its end, reading
     after each step, until a read sees the end (W0's ShellEnvironment.kernel_counts_reads,
-    simulation.py:363-378), and the run ends there. Today's tap stops at the failure
-    (sandbox/actions.py:279-280, 1004-1010)."""
+    simulation.py Simulation._tap), and the run ends there. Today's tap stops at the failure
+    (sandbox/actions.py GuestEnvironment.wait_until_tick, _ended_after_step, done)."""
     failed = [n for kind, n, answer in p.facts["reads"] if kind == "tap" and answer == "failed"]
     if not failed:
         return
@@ -437,8 +438,8 @@ def _kernel_end(script: Script, p: Projection, notes: dict) -> tuple[float, int 
 
 def _kb(script: Script, p: Projection, notes: dict) -> None:
     """The wall clock checks the end every 1/env_fps s, during generations, waits and pacing too
-    (turns.py:205-206, 671-675); an end found so is dated at the asking. Today only the loop top
-    and the checks around landing ask (runner.py:858, 485-504)."""
+    (turns.py TurnPolicy.start, _schedule_end_check); an end found so is dated at the asking. Today
+    only the loop top and the checks around landing ask (runner.py run_stream, _land_action)."""
     found = _kernel_end(script, p, notes)
     if found is None:
         return
@@ -468,7 +469,8 @@ def _end_at(script: Script, p: Projection, notes: dict, k: int | None, at: float
 
 
 def _cut(script: Script, p: Projection, notes: dict, k: int, at: float) -> None:
-    """Settle decision k as the kernel does when the episode ends at ``at`` (turns.py:254-272)."""
+    """Settle decision k as the kernel does when the episode ends at ``at``
+    (turns.py TurnPolicy.on_end)."""
     facts, d = p.facts, p.decisions[k]
     _drop_after(p, k)
     if earlier(at, facts["finished_at"].get(k, math.inf)):
@@ -511,7 +513,7 @@ def _kc(script: Script, p: Projection, notes: dict) -> None:
 
 def _ki(script: Script, p: Projection, notes: dict) -> None:
     """When the think budget runs out and the task ends, the first signal names the reason
-    (core.py:176-186); today the budget always wins (runner.py:700-705)."""
+    (core.py Kernel.end); today the budget always wins (runner.py _finalize)."""
     termination = p.episode["termination"]
     if termination["stop_reason"] != "think_budget":
         return
@@ -529,10 +531,10 @@ def _ki(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _kd(script: Script, p: Projection, notes: dict) -> None:
-    """Token clock: nothing advances after the first end signal (turns.py:556-562, 255). Today a
-    decision skipped before landing (no action, over the budget) skips the check before landing,
-    so after an end found while moving to its action time it still paces to the next frame
-    (runner.py:479-484, 554-563), and the end is dated where that pacing stopped."""
+    """Token clock: nothing advances after the first end signal (turns.py TurnPolicy._resolve,
+    on_end). Today a decision skipped before landing (no action, over the budget) skips the check
+    before landing, so after an end found while moving to its action time it still paces to the
+    next frame (runner.py _land_action, _apply), and the end is dated where that pacing stopped."""
     ended_at = p.facts["ended_at"]
     if _wall(script) or ended_at is None:
         return
@@ -555,9 +557,10 @@ def _kd(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _ka(script: Script, p: Projection, notes: dict) -> None:
-    """The wall deadline is a timer without today's grace (runner.py:294): at the deadline the
-    kernel freezes the snapshot and gives up on the generation in flight, whose decision is not
-    reported; a result back exactly at the deadline is discarded (turns.py:233-234, core.py)."""
+    """The wall deadline is a timer without today's grace (runner.py _move_timeout): at the
+    deadline the kernel freezes the snapshot and gives up on the generation in flight, whose
+    decision is not reported; a result back exactly at the deadline is discarded
+    (turns.py TurnPolicy.on_timer, core.py)."""
     if not _ended_by_the_deadline(script, p, notes):
         return
     deadline, facts = script.duration_s, p.facts
@@ -572,7 +575,7 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
 
 def _ended_by_the_deadline(script: Script, p: Projection, notes: dict) -> bool:
     """Today's wall episode ran into the deadline: nothing else ended it first. A failed
-    snapshot read turns its stop reason into invalid_run afterwards (runner.py:694-701)."""
+    snapshot read turns its stop reason into invalid_run afterwards (runner.py _finalize)."""
     if not _wall(script) or "ended" in notes:
         return False
     termination, ended_by = p.episode["termination"], p.facts["ended_by"]
@@ -581,9 +584,9 @@ def _ended_by_the_deadline(script: Script, p: Projection, notes: dict) -> bool:
 
 def _kg(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot at the first end signal, so on the wall clock it is read
-    then (core.py:176-184), and the record dates the end at that signal even when the read fails
-    (core.py:222-239); today the snapshot is read once the loop has exited, and a failed read
-    dates the end itself (runner.py:674-697, 724-735)."""
+    then (core.py Kernel.end), and the record dates the end at that signal even when the read fails
+    (core.py Kernel._finish); today the snapshot is read once the loop has exited, and a failed
+    read dates the end itself (runner.py _finalize, _termination)."""
     termination = p.episode["termination"]
     if not _wall(script):
         return
@@ -599,8 +602,9 @@ def _kg(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _kh(script: Script, p: Projection, notes: dict) -> None:
-    """A frozen stream invalidates the run without aborting the agent (turns.py:295-299); today
-    the watchdog also calls adapter.abort() (runner.py:226-233)."""
+    """A frozen stream invalidates the run without aborting the agent
+    (turns.py TurnPolicy._captured); today the watchdog also calls adapter.abort()
+    (runner.py _accept_observation)."""
     invalid = p.episode["invalid"]
     if invalid is not None and invalid["reason"] == "observation_stream_frozen":
         p.episode["aborts"] -= 1
@@ -617,7 +621,8 @@ UNUSABLE = {
 
 def _kf(script: Script, p: Projection, notes: dict) -> None:
     """An unusable result still resolves the action it proposed, as invalid_run
-    (turns.py:398-412); today _apply returns before it is resolved (runner.py:433-446)."""
+    (turns.py TurnPolicy._unusable); today _apply returns before it is resolved
+    (runner.py _apply)."""
     invalid = p.episode["invalid"]
     if invalid is None or invalid["reason"] not in UNUSABLE:
         return
@@ -633,8 +638,8 @@ def _kf(script: Script, p: Projection, notes: dict) -> None:
 
 def _kj(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: a lease that ends inside a tap's own 1/60 s is released where the tap ends,
-    by the kernel's next step (turns.py:716-728); today the tap's advance splits there
-    (sandbox/actions.py:548, 246-253)."""
+    by the kernel's next step (turns.py TurnPolicy._advance); today the tap's advance splits there
+    (sandbox/actions.py GuestEnvironment._execute_clock_key, wait_until_tick)."""
     if _wall(script):
         return
     taps, seconds = p.facts["taps"], 1.0 / script.env_fps
@@ -653,8 +658,9 @@ def _kj(script: Script, p: Projection, notes: dict) -> None:
 
 def _kn(script: Script, p: Projection, notes: dict) -> None:
     """A failed read in the check right before landing settles the decision as invalid_run
-    (turns.py:436-447); today the environment's True reads as the task's end and the decision is
-    not_applied_terminal (sandbox/actions.py:1004-1010, runner.py:487-488)."""
+    (turns.py TurnPolicy._skipped); today the environment's True reads as the task's end and the
+    decision is not_applied_terminal (sandbox/actions.py GuestEnvironment.done, runner.py
+    _land_action)."""
     invalid = p.episode["invalid"]
     if invalid is None or invalid["reason"] != "terminal_state_check_failed":
         return
@@ -666,10 +672,10 @@ def _kn(script: Script, p: Projection, notes: dict) -> None:
 
 def _ke(script: Script, p: Projection, notes: dict) -> None:
     """An environment fault that escapes today's loop leaves the decision in hand unreported
-    (runner.py:857-867); the kernel ends the episode on it and reports that decision after the
-    snapshot (turns.py:254-272). A failed token step while pacing reports the decision with its
-    own status and the boundary it reached, as today's loop would have written them
-    (runner.py:554-594)."""
+    (runner.py run_stream); the kernel ends the episode on it and reports that decision after the
+    snapshot (turns.py TurnPolicy.on_end). A failed token step while pacing reports the decision
+    with its own status and the boundary it reached, as today's loop would have written them
+    (runner.py _apply)."""
     invalid = p.episode["invalid"]
     if (
         p.facts["loop_error"] is None
@@ -688,7 +694,8 @@ def _ke(script: Script, p: Projection, notes: dict) -> None:
     # In model-input frames, n / B, and 0 when paused (turns.py TurnPolicy._accept).
     delay = 0.0 if script.tokens_per_frame is None else tokens / script.tokens_per_frame
     if d["resolved"] is None:
-        # The step to the action time failed: the action is not landed (turns.py:414-434).
+        # The step to the action time failed: the action is not landed (turns.py
+        # TurnPolicy._approached).
         tau = t_k + delay * frame_ticks  # runner.py _apply
         d["approach"] = {"from": t_k, "requested": min(tau, script.max_ticks), "to": reached}
         d["resolved"] = {
@@ -744,8 +751,9 @@ def _whole_up(value: float) -> int:
 
 
 def _krel(script: Script, p: Projection, notes: dict) -> None:
-    """A wall hold's lease starts when the kernel sends Execute (turns.py:457-463); today it
-    starts when the environment presses the keys, after its guards (sandbox/actions.py:746)."""
+    """A wall hold's lease starts when the kernel sends Execute (turns.py TurnPolicy._pre_checked);
+    today it starts when the environment presses the keys, after its guards (sandbox/actions.py
+    GuestEnvironment._execute_wall_hold)."""
     if not _wall(script) or not script.execute_s:
         return
     for released in p.episode["key_ups"]:
@@ -753,19 +761,20 @@ def _krel(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _u2(script: Script, p: Projection, notes: dict) -> None:
-    """The kernel writes RunInvalidated for every failure (core.py:166-174), also one the
+    """The kernel writes RunInvalidated for every failure (core.py Kernel.invalidate), also one the
     environment latched itself; today only the runner's own _invalidate writes it
-    (runner.py:197-208)."""
+    (runner.py _invalidate)."""
     if p.episode["invalid"] is not None and p.episode["invalidation_records"] == 0:
         p.episode["invalidation_records"] = 1
 
 
 def _u3(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: once an end check finds the end, or a read fails for the last time, the
-    kernel asks no more (turns.py:677-689, 471-474); when today's environment finds the end
-    inside an advance, or a read inside a tap fails, the loop asks again at its top or after
-    execution (sandbox/actions.py:279-280, runner.py:858, 504). That extra read can also fail and
-    void the run today; the kernel never makes it, so X12's plan never fails it."""
+    kernel asks no more (turns.py TurnPolicy._end_checked, _executed); when today's environment
+    finds the end inside an advance, or a read inside a tap fails, the loop asks again at its top
+    or after execution (sandbox/actions.py GuestEnvironment.wait_until_tick, _ended_after_step,
+    runner.py run_stream, _land_action). That extra read can also fail and void the run today; the
+    kernel never makes it, so X12's plan never fails it."""
     if _wall(script):
         return
     asked = 0
@@ -826,9 +835,9 @@ def _u5(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _x2(script: Script, p: Projection, notes: dict) -> None:
-    """The kernel freezes the snapshot before it reports the decision in hand (core.py:184,
-    turns.py:254-272); today the decision is reported first and the snapshot read after the loop
-    (runner.py:629, 867)."""
+    """The kernel freezes the snapshot before it reports the decision in hand (core.py Kernel.end,
+    turns.py TurnPolicy.on_end); today the decision is reported first and the snapshot read after
+    the loop (runner.py _apply, run_stream)."""
     k = notes["in_hand"] if "in_hand" in notes else _old_in_hand(script, p, notes)
     if k is not None and k in p.decisions and p.decisions[k]["commit"] is not None:
         p.episode["snapshot_after"] -= 1
@@ -917,7 +926,7 @@ RULES = (
     Rule(
         "K-poll",
         "waiting for the next wall frame is a timer, not a 30 ms poll",
-        seen="not observable: FakeEnvironment lands on whole ticks (fake_env.py:113-133)",
+        seen="not observable: FakeEnvironment lands on whole ticks (fake_env.py wait_until_tick)",
     ),
     Rule("U3", "no state read after the token end was found inside an advance", _u3),
     Rule("U2", "an environment-latched failure is written as RunInvalidated", _u2),
