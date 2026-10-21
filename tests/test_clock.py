@@ -148,7 +148,13 @@ def test_retry_backoff_waits_on_the_clock(asynchronous):
     def record(attempt, exc, failure, delay):
         delays.append(delay)
 
-    retry = RequestRetry("unit", lambda exc: TransportFailure(TRANSIENT), record, clock=clock)
+    retry = RequestRetry(
+        "unit",
+        lambda exc: TransportFailure(TRANSIENT),
+        record,
+        cancelled=lambda attempt, exc: None,
+        clock=clock,
+    )
     with clock.participant():
         if asynchronous:
             loop = _running_loop(clock)
