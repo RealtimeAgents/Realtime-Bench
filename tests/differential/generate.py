@@ -22,13 +22,23 @@ from dataclasses import replace
 
 from .rules import ORDER
 from .script import Attempt, Script, Turn, parse
+from .simulated import ties
 
 RATES = ((1.0, 1.0), (60.0, 1.0), (30.0, 7.0), (2.0, 2.0))
 BUDGETS = (64, 100, 160, 256)
 
 
 def generate(seed: int) -> Script:
+    """The script of a seed: the first the seed's draws give that no instant ties on the wall
+    clock's threads (simulated.ties)."""
     rng = random.Random(seed)
+    while True:
+        script = _draw(rng, seed)
+        if not ties(script):
+            return script
+
+
+def _draw(rng: random.Random, seed: int) -> Script:
     clock = rng.choice(("wall", "token", "pause"))
     env_fps, input_fps = rng.choice(RATES)
     frame = 1.0 / input_fps

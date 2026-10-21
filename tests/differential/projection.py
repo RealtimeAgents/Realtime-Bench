@@ -5,8 +5,10 @@ side does not shift every later one. ``compared`` holds what must agree once the
 differences are applied: per decision its observation, allowance, proposed action, the two clock
 moves, the resolution, what the environment executed, the commit and the lifecycle outcome; per
 episode the captures, the token clock's end checks, the key releases, the aborts, the
-invalidation, the termination and where the snapshot fell among the commits. ``facts`` holds what
-only the rules read: the times things happened and side-specific detail, never compared.
+invalidation, the termination and where the snapshot fell among the commits. ``beyond`` holds what
+only the two replayed sides have: the whole requests, the agent's usage and the trace records the
+decisions leave out, compared between the shell and today's loop. ``facts`` holds what only the
+rules read: the times things happened and side-specific detail, never compared.
 
 Times are world seconds from the episode origin, ticks are environment ticks. Sequence numbers,
 real time, record ids and fields only one side writes are left out.
@@ -46,6 +48,7 @@ class Projection:
     side: str
     compared: dict
     facts: dict = field(default_factory=dict)
+    beyond: dict | None = None
 
     @property
     def decisions(self) -> dict[int, dict]:
@@ -56,7 +59,9 @@ class Projection:
         return self.compared["episode"]
 
     def copy(self) -> Projection:
-        return Projection(self.side, copy.deepcopy(self.compared), self.facts)
+        return Projection(
+            self.side, copy.deepcopy(self.compared), self.facts, copy.deepcopy(self.beyond)
+        )
 
 
 def earlier(a: float, b: float) -> bool:

@@ -1,5 +1,7 @@
-"""One differential run: a script through a replay driver and through the simulation, compared
-under the expected differences."""
+"""One differential run: a script played three ways, on the kernel's simulation, through the
+kernel's shell and through today's loop (wave2-plan.md, P4b). The shell and the simulation agree
+exactly; today's loop agrees with the shell once the expected differences the script names are
+applied, in its requests, usage and trace records too."""
 
 from __future__ import annotations
 
@@ -7,6 +9,7 @@ import warnings
 from pathlib import Path
 
 from . import drivers
+from .projection import Projection, differences
 from .replayed import replay
 from .rules import Verdict, check, x12_plan, x12_probe
 from .script import Script
@@ -20,17 +23,24 @@ class ExpectationNotShown(UserWarning):
     """A named script expects a difference it did not show."""
 
 
-def compare(script: Script, run_dir: Path, driver=drivers.legacy) -> Verdict:
+def compare(script: Script, run_dir: Path) -> Verdict:
+    shell = replay(script, _subdir(run_dir, "shell"), drivers.shell)
+    verdict = check(script, _legacy(script, run_dir), shell)
+    verdict.apart, _ = differences(shell.compared, simulate(script).compared)
+    return verdict
+
+
+def _legacy(script: Script, run_dir: Path) -> Projection:
     """A script with failed state reads first plays today's loop once with every failure taken
     as a read that saw no end, to learn the order of its reads; then today's loop plays what X12
     says the kernel does with them (rules.x12_plan)."""
     if not script.fails_reads:
-        return check(script, replay(script, run_dir, driver), simulate(script))
-    probe = replay(x12_probe(script), _subdir(run_dir, "x12-probe"), driver)
+        return replay(script, _subdir(run_dir, "legacy"), drivers.legacy)
+    probe = replay(x12_probe(script), _subdir(run_dir, "x12-probe"), drivers.legacy)
     plan = x12_plan(script, probe)
-    old = replay(plan.script, _subdir(run_dir, "x12-plan"), driver)
+    old = replay(plan.script, _subdir(run_dir, "x12-plan"), drivers.legacy)
     old.facts["x12_end"], old.facts["x12_shown"] = plan.end_at, plan.shown
-    return check(script, old, simulate(script))
+    return old
 
 
 def _subdir(run_dir: Path, name: str) -> Path:
@@ -53,6 +63,9 @@ def record(verdict: Verdict, *, named: bool) -> None:
 
 def describe(verdict: Verdict, limit: int = 40) -> str:
     lines = [f"{verdict.script.name or verdict.script!r}"]
+    if verdict.apart:
+        lines.append(f"{len(verdict.apart)} difference(s) between the shell and the simulation:")
+        lines += [f"  {problem}" for problem in verdict.apart[:limit]]
     if verdict.unexpected:
         lines.append(f"differences the script does not expect: {', '.join(verdict.unexpected)}")
     if verdict.problems:

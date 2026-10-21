@@ -1,6 +1,6 @@
-"""Today's loop against the kernel's simulation on random scripts (generate.py): seeds 0 to 24,
-or as DIFF_SEEDS says: a count ("500") or a range ("500:1000"). A failing script is shrunk to the
-smallest that fails the same way, printed so that it can become a named script."""
+"""Random scripts (generate.py) three ways, as the named ones: seeds 0 to 24, or as DIFF_SEEDS
+says: a count ("500") or a range ("500:1000"). A failing script is shrunk to the smallest that
+fails the same way, printed so that it can become a named script."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import pytest
 from .compare import compare, describe, record
 from .generate import generate, shrink
 from .script import Attempt, Script, Turn
+from .simulated import ties
 
 _first, _, _last = os.environ.get("DIFF_SEEDS", "25").rpartition(":")
 SEEDS = range(int(_first or 0), int(_last))
@@ -36,6 +37,8 @@ def test_random_script(seed, tmp_path_factory):
     failure = _signature(verdict)
 
     def fails(candidate) -> bool:
+        if ties(candidate):
+            return False
         return _signature(compare(candidate, tmp_path_factory.mktemp("shrink"))) == failure
 
     smallest = shrink(script, fails)

@@ -8,11 +8,15 @@ environment operation takes its script's time. Turn k is the reply to decision k
 
 from __future__ import annotations
 
+import itertools
+
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation.kernel.events import (
+    AdvanceClock,
     CheckEnd,
     Commit,
     FreezeSnapshot,
+    Invalidated,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from tests.kernel.simulation import Reply, Simulation, World
@@ -72,8 +76,10 @@ def world(script: Script) -> World:
 
 class ScriptedSimulation(Simulation):
     """The simulation with the replayed world's traits it lacks: the task ends once the script's
-    ``ends_after`` actions have taken effect, and on the wall clock every end check asked within
-    one of the script's ``failing_reads_s`` fails."""
+    ``ends_after`` actions have taken effect; on the wall clock every end check asked within one
+    of the script's ``failing_reads_s`` fails; and a fault the environment latches itself, a
+    failed action or clock step, reaches the kernel as Invalidated before the command's answer,
+    as the shell posts it (evaluation/shell.py _Shell._env)."""
 
     def __init__(self, config, world, script: Script) -> None:
         super().__init__(config, world)
@@ -81,9 +87,12 @@ class ScriptedSimulation(Simulation):
         self.applied = 0
 
     def _execute(self, decision: int, action, release_at) -> None:
-        super()._execute(decision, action, release_at)
         world = self.world
-        if decision in world.rejections or decision in world.execute_errors:
+        error = world.execute_errors.get(decision)
+        if error is not None:
+            self.kernel.post(Invalidated("environment", "action_execution_failed", error))
+        super()._execute(decision, action, release_at)
+        if decision in world.rejections or error is not None:
             return
         self.applied += 1
         if self.applied == self.script.ends_after:
@@ -93,14 +102,69 @@ class ScriptedSimulation(Simulation):
     def _run(self, command) -> None:
         if isinstance(command, CheckEnd) and self.script.read_fails_at(self.semantic()):
             self.world.check_errors[len(self.checks) + 1] = STATE_READ_FAILED
+        if isinstance(command, AdvanceClock):
+            error = self.world.advance_errors.get(len(self.advances) + 1)
+            if error is not None:
+                self.kernel.post(Invalidated("environment", "clock_advance_failed", error))
         super()._run(command)
 
 
 def simulate(script: Script) -> Projection:
-    config = turn_config(script)
-    sim = ScriptedSimulation(config, world(script), script)
+    return project(script, _run(script))
+
+
+def _run(script: Script) -> ScriptedSimulation:
+    sim = ScriptedSimulation(turn_config(script), world(script), script)
     sim.run()
-    return project(script, sim)
+    return sim
+
+
+SAME_S = 1e-9  # closer than this, two times are one instant of the replay's fake clock
+
+
+def ties(script: Script) -> list[str]:
+    """Wall clock: where the shell's own timer and a reply, or the key-release timer and the
+    shell, come due at one instant of the fake clock, which goes first is the scheduler's call,
+    and where two timers fall a few ulps apart the clock's reading decides whether one step takes
+    both (wave2-plan.md, R13). The simulation orders each the same way every time; a random script
+    keeps clear of them. What the tie is, for each found."""
+    if script.clock != "wall":
+        return []
+    sim = _run(script)
+    ended = sim.termination.ended_at
+    replies = [entry[0] for entry in sim._results.values()]
+    # Every timer set, fired or not: one the simulation cancels can fire first in the shell.
+    timers = [entry.data for entry in sim.entries("TimerSet")]
+    found = []
+    checks = [timer["at"] for timer in timers if timer["kind"] == "end_check"]
+    by_check = sim.termination.cause != "deadline" and _near(ended, checks)
+    if by_check and _near(ended, replies):
+        found.append("a reply comes back as a periodic check ends the episode")
+    # The check's answer is filed at the reading it was asked at (kernel/core.py Kernel.step):
+    # where the fake clock cannot hold that instant exactly, the reading lies a few ulps past a
+    # timer due then, which the simulation's exact reading ties with.
+    others = [timer["at"] for timer in timers if timer["kind"] != "end_check"]
+    if by_check and _near(ended, others) and ended * 1024 != round(ended * 1024):
+        found.append("a timer comes due as a periodic check ends the episode")
+    for timer in timers:
+        if timer["kind"] in ("deadline", "per_move_cap") and any(
+            0 < abs(at - timer["at"]) <= SAME_S for at in replies
+        ):
+            found.append(f"a reply comes back a few ulps from the {timer['kind']}")
+    times = sorted({timer["at"] for timer in timers})
+    if any(0 < later - at <= SAME_S for at, later in itertools.pairwise(times)):
+        found.append("two timers come due a few ulps apart")
+    executed = [semantic for _, semantic, _ in sim.executed]
+    for at, _, _ in sim.key_events:
+        if abs(at - ended) <= SAME_S:
+            found.append("a key goes up as the episode ends")
+        if _near(at, executed):
+            found.append("a key goes up as an action runs")
+    return found
+
+
+def _near(at: float, times) -> bool:
+    return any(abs(at - other) <= SAME_S for other in times)
 
 
 def project(script: Script, sim: ScriptedSimulation) -> Projection:
@@ -179,7 +243,8 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
                 if outcome.frame_age_s is None
                 else round(outcome.frame_age_s, 6),
                 "token_delay_frames": outcome.token_delay_frames,
-                "action_output_tokens": outcome.action_output_tokens,
+                # The shell writes none on the wall clock (evaluation/shell.py _Shell._commit).
+                "action_output_tokens": outcome.action_output_tokens if token else None,
                 "post_horizon_output_tokens": outcome.post_horizon_output_tokens,
             }
             commits += 1
