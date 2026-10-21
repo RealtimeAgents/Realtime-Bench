@@ -468,8 +468,10 @@ def test_an_abort_names_one_generation(tmp_path):
 
 
 def test_close_cancels_a_generation_in_flight(tmp_path):
-    """close() at the end of the episode cancels the generations that have not ended: one still
-    preparing its frame then stops before its request and comes back cancelled."""
+    """close() at the end of the episode cancels and discards the generations that have not
+    ended: one still preparing its frame then stops before its request and comes back
+    cancelled, and the agent holds no generation after it. Its tool call, still open when the
+    agent closed, is recorded incomplete."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
@@ -483,7 +485,9 @@ def test_close_cancels_a_generation_in_flight(tmp_path):
         finally:
             episode.finish()
     assert pending.cancelled and pending.result["action"] is None
-    assert stub.requests == []
+    assert stub.requests == [] and agent._generations == []
+    calls = _jsonl(tmp_path / "tool_calls.jsonl")
+    assert [(call.get("outcome"), call.get("incomplete")) for call in calls] == [(None, True)]
 
 
 def test_an_accepted_reply_that_is_no_action_ends_its_tool_call_as_such(tmp_path):
@@ -534,6 +538,30 @@ def test_the_generation_an_episode_ends_on_is_discarded_with_its_records(tmp_pat
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
     assert [r["type"] for r in _jsonl(tmp_path / "trajectory.jsonl")] == ["decision_discarded"]
     assert agent.token_usage == usage
+
+
+def test_close_discards_the_generation_no_one_settled(tmp_path):
+    """The episode ends as generation 2's reply lands: the kernel aborts it, whose worker has
+    returned, and Termination dispatches nothing more (kernel/core.py), so neither AcceptResult
+    nor DiscardResult comes for it. Closing the agent discards it: its provider usage is recorded
+    stale, its tool call superseded and its trajectory row marked discarded; its tokens stay out
+    of token_usage."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            _generate(episode, 1, 0)
+            agent.accept(1)
+            usage = deepcopy(agent.token_usage)
+            last = _generate(episode, 2, 1)
+            agent.abort(2)
+        finally:
+            episode.finish()
+    assert not last.cancelled and len(stub.requests) == 2
+    assert _usage_rows(tmp_path) == [(0, False), (1, True)]
+    assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
+    assert last.result["_trajectory_entry"]["type"] == "decision_discarded"
+    assert agent.token_usage == usage and agent._generations == []
 
 
 def test_a_generation_discarded_while_it_runs_is_dropped_when_it_returns(tmp_path):
