@@ -1,17 +1,20 @@
 """The agent's records through the kernel (evaluation/shell.py ``agent_trace``): during the episode
-its AgentTraceSink hands each to the shell, the kernel numbers it into the episode log once nothing
-else is due, and the shell writes it; once the episode is finished the sink writes them itself
-again."""
+its AgentTraceSink hands each to the shell, the shell gives the kernel one a step, the kernel
+numbers it into the episode log and the shell writes it; once the episode is finished the sink
+writes them itself again."""
 
 from __future__ import annotations
 
 import time
 from typing import ClassVar
 
+import pytest
+
 from realtime_framework.entity.records import TraceEvent, trace_scope
 from realtime_framework.evaluation.kernel.core import Kernel
+from realtime_framework.evaluation.kernel.events import AgentRecord
 
-from .world import Agent, Reply, Trace, World, run
+from .world import CLICK, Agent, Reply, Trace, World, run
 
 
 def _handed(sink, count: int) -> None:
@@ -209,9 +212,10 @@ def test_a_kernel_that_raises_leaves_the_agent_s_records_to_the_sink(tmp_path, m
 
 def test_a_backlog_of_agent_records_does_not_hold_back_a_result_that_came_back(tmp_path):
     """The end check at 2.0 s takes until 2.5 s. Meanwhile the second call records 500 session
-    messages, each 2 ms to write, and comes back at 2.2 s. The kernel takes the result at 2.5 s
-    and its action lands then; the records are written after it, though they came first. How
-    much the agent logs does not decide whether or when its action lands."""
+    messages, each 2 ms to write, and comes back at 2.2 s. The kernel takes the result at 2.5 s,
+    before the records, though they came first. It is given one record a step: the four steps
+    that land the action each write one first, so it lands at 2.508 s, however many more the
+    agent logged."""
     world = World(slow_checks=[(2.0, 2.1, 0.5)])
     episode = run(
         "wall",
@@ -223,8 +227,11 @@ def test_a_backlog_of_agent_records_does_not_hold_back_a_result_that_came_back(t
         agent_trace_pack=tmp_path / "episode_blobs.pack",
     )
     assert episode.statuses() == ["applied", "applied"]
+    completed = [r for r in episode.trace.records if r["event"] == "InferenceCompleted"]
+    assert completed[1]["semantic"] == 2.5
+    assert completed[1]["kernel_seq"] < _agent_records(episode.trace)[0]["kernel_seq"]
     resolved = [record for record in episode.trace.records if record["event"] == "ActionResolved"]
-    assert resolved[1]["semantic"] == 2.5
+    assert resolved[1]["semantic"] == pytest.approx(2.508)
     summary = episode.agent.sink.finish(5.0)
     assert (summary["captures"], summary["written"], summary["error"]) == (500, 500, None)
     assert len(_agent_records(episode.trace)) == 500
@@ -298,3 +305,114 @@ def test_an_agent_record_is_written_as_the_agent_s_whatever_its_name(tmp_path):
     assert episode.statuses() == ["applied", "applied"]
     notes = [record["payload"].get("note") for record in _agent_records(episode.trace)]
     assert notes == ["the agent's own"] * 2
+
+
+class AcceptRecordingAgent(Agent):
+    """Records a history change on the shell's thread as it accepts each result, as DefaultHarness
+    writes its history then, and returns only once the sink has handed it over."""
+
+    def __init__(self, clock, replies):
+        super().__init__(clock, replies)
+        self.captured = 0
+
+    def accept(self, generation: int) -> None:
+        super().accept(generation)
+        with trace_scope(phase="accept", generation=generation):
+            self.sink.capture(TraceEvent.SESSION_STATE_CHANGED, {"accepted": generation})
+        self.captured += 1
+        _handed(self.sink, self.captured)
+
+
+def _seqs(trace, event: str) -> list[int]:
+    return [record["kernel_seq"] for record in trace.records if record["event"] == event]
+
+
+def _termination(trace) -> int:
+    (seq,) = [
+        record["kernel_seq"]
+        for record in trace.records
+        if record["event"] == "KernelRecord" and record["payload"]["kind"] == "Termination"
+    ]
+    return seq
+
+
+def test_agent_records_are_numbered_while_every_read_takes_a_frame(tmp_path):
+    """Each end check takes 1 s, a whole frame, so a timer or an answer is due at every step and
+    the kernel is never idle. Each request record is still numbered after its generation starts
+    and before the next one does, and none after the termination."""
+    episode = run(
+        "wall",
+        10.0,
+        [Reply(0.5)] * 6,
+        World(check_s=1.0),
+        agent_type=RecordingAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    starts = _seqs(episode.trace, "InferenceStarted")
+    requests = _seqs(episode.trace, "ModelRequestSent")
+    assert len(requests) == len(starts) >= 2
+    assert all(start < request for start, request in zip(starts, requests))
+    assert all(request < start for request, start in zip(requests, starts[1:]))
+    assert max(requests) < _termination(episode.trace)
+
+
+def test_a_record_made_at_an_accept_is_numbered_before_the_next_generation_starts(tmp_path):
+    """Token clock, B = 100: each reply's 2000 tokens move the world 20 frames, every step of
+    which the kernel paces, reads and has answered at once, so it is idle only while a generation
+    runs. The history change the agent records as it accepts each result is still numbered before
+    the next generation starts."""
+    episode = run(
+        "token",
+        60.0,
+        [Reply(0.5, CLICK, output_tokens=2000)] * 4,
+        tokens_per_frame=100,
+        agent_type=AcceptRecordingAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    starts = _seqs(episode.trace, "InferenceStarted")
+    accepts = [r["kernel_seq"] for r in _agent_records(episode.trace)]
+    assert len(accepts) >= 2
+    assert all(accept < start for accept, start in zip(accepts, starts[1:]))
+    assert max(accepts) < _termination(episode.trace)
+
+
+def test_a_backlog_handed_while_the_shell_is_idle_holds_back_no_result(tmp_path):
+    """As test_a_backlog_of_agent_records_does_not_hold_back_a_result_that_came_back, but the
+    shell is idle when the 500 records, 2 ms each to write, arrive at 2.1 s. The second result is
+    back at 2.2 s, while they are being written: it lands then, not after the rest of them."""
+    episode = run(
+        "wall",
+        3.0,
+        [Reply(0.5), Reply(0.1)],
+        trace=SlowTrace(),
+        agent_type=BacklogAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.statuses() == ["applied", "applied"]
+    resolved = [record for record in episode.trace.records if record["event"] == "ActionResolved"]
+    assert resolved[1]["semantic"] < 2.3
+
+
+def test_the_record_the_kernel_was_given_is_written_when_it_raises_taking_it(tmp_path, monkeypatch):
+    """The kernel raises in the step that would take an agent record, the first of three the
+    agent made at 2.1 s (N11). That one and the two still held are written, unnumbered."""
+    step = Kernel.step
+
+    def broken(kernel, semantic, ops=None):
+        if any(isinstance(event, AgentRecord) for event in kernel.inbox._events):
+            raise RuntimeError("step broke on an agent record")
+        return step(kernel, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+    episode = run(
+        "wall",
+        3.0,
+        [Reply(0.5), Reply(0.5)],
+        agent_type=HeldRecordsAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.invalid["reason"] == "run_exception"
+    summary = episode.agent.sink.finish(5.0)
+    assert (summary["captures"], summary["written"], summary["error"]) == (3, 3, None)
+    records = _agent_records(episode.trace)
+    assert [record["payload"]["index"] for record in records] == [0, 1, 2]
