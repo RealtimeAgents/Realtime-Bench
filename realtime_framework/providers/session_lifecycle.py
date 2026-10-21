@@ -77,9 +77,13 @@ class SessionLifecycle:
         return result
 
     async def close(self) -> None:
-        await self._settle(_CLEANUP_WAIT_S)
-        self._connected = False
-        await self._close_current()
+        """Close the connection once the last abort's cleanup is done, or has run for
+        _CLEANUP_WAIT_S, or the caller stops waiting, whichever comes first."""
+        try:
+            await self._settle(_CLEANUP_WAIT_S)
+        finally:
+            self._connected = False
+            await self._close_current()
 
     def mark_dirty(self) -> None:
         """A generation on the session failed: the next ensure_ready rebuilds the session if it
