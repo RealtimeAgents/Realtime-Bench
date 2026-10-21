@@ -35,10 +35,11 @@ class SessionLifecycle:
     """A live encoder's session: connected or not, dirty or not, and the last abort's cleanup.
 
     The session is connected once connect() opened it or a sync left it exact, and no longer once
-    close() or abort() closed it or a sync raised or broke it. A connected session is dirty when
-    the provider may hold what the canonical history does not: a generation on it failed
-    (mark_dirty) or a sync left it neither exact nor broken. A connection that an operation
-    closes on its way (the one a connect replaces, one past its goAway deadline) changes neither.
+    close() or abort() closed it or a sync raised an Exception or broke it. A connected session
+    is dirty when the provider may hold what the canonical history does not: a generation on it
+    failed (mark_dirty), a sync left it neither exact nor broken, or a sync was cut short
+    (RetryCancelled, a cancelled task). A connection that an operation closes on its way (the one
+    a connect replaces, one past its goAway deadline) changes neither.
 
     Every wait of the encoder on the clock is written to the trace before it starts
     (_record_wait): what it waits for, how long, and until which time on the operational clock.
@@ -60,6 +61,8 @@ class SessionLifecycle:
         self._connected, self._dirty = True, False
 
     async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+        # Dirty until the sync reports: one cut short may have closed the connection already.
+        self._dirty = True
         try:
             result = await self._sync_history(request)
         except Exception:

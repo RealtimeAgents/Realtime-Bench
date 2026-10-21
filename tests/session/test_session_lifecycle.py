@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +33,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
     TransportFailure,
+    retry_cancellation,
 )
 from realtime_framework.entity.records import UNTRACED, TraceEvent, current_trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
@@ -76,7 +78,7 @@ class _Encoder(SessionLifecycle):
     async def _sync_history(self, request):
         self.log.append(("sync", request.reason, request.force_rebuild, request.history))
         outcome = self.syncs.pop(0)
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
@@ -250,6 +252,32 @@ def test_what_a_sync_leaves_decides_the_next_use(disposition, state, next_use):
     assert [entry[0] for entry in rig.encoder.log] == ([next_use] if next_use else [])
 
 
+@pytest.mark.parametrize(
+    "interruption",
+    [RetryCancelled("generation abandoned"), asyncio.CancelledError()],
+    ids=["retry-cancelled", "task-cancelled"],
+)
+def test_a_sync_cut_short_leaves_the_session_to_be_recovered(interruption):
+    """A sync may close the connection before an abandoned generation's cancellation cuts it
+    short (Gemini's resume does). The runtime is left SYNCHRONIZING then, not READY
+    (context.py:360, 408), so its next use rebuilds the session."""
+    with _rig() as rig:
+        rig.encoder.syncs = [interruption, EXACT]
+
+        async def interrupted_sync():
+            try:
+                await rig.encoder.sync_history(HistorySyncRequest(SEED, "go_away", HISTORY))
+            except BaseException as exc:  # noqa: BLE001 - the interruption under test
+                assert exc is interruption
+            return await rig.ensure_ready()
+
+        assert rig.run(interrupted_sync()) is EXACT
+    assert [entry[:2] for entry in rig.encoder.log] == [
+        ("sync", "go_away"),
+        ("sync", "runtime_recovery"),
+    ]
+
+
 def test_a_wait_runs_on_the_clock_and_a_cancel_ends_it():
     with _rig() as rig:
         rig.run(rig.encoder._wait("session_release", 2.0))
@@ -402,6 +430,31 @@ def test_openai_realtime_rebuilds_a_dirty_session():
     ]
     ((sync, recorded, _),) = records.calls
     assert (sync.reason, sync.force_rebuild, recorded) == ("runtime_recovery", True, result)
+
+
+def test_openai_realtime_recovers_after_an_abandoned_rebuild():
+    """An abandoned generation's rebuild closes the connection, then its connect attempt is
+    cancelled (RequestRetry under a set retry_cancellation). The next use reopens the session."""
+    driver, log = _openai()
+    records = _Records()
+    abandoned = threading.Event()
+    abandoned.set()
+
+    async def run():
+        await driver.connect(ConnectRequest(seed=SEED))
+        with retry_cancellation(abandoned), pytest.raises(RetryCancelled):
+            await driver.sync_history(
+                HistorySyncRequest(SEED, "history_block_compaction", view([]), force_rebuild=True)
+            )
+        return await driver.ensure_ready(SEED, view([]), records)
+
+    result = asyncio.run(run())
+    assert (result.disposition, result.history_state) == (
+        SyncDisposition.REBUILT,
+        ProviderHistoryState.EXACT,
+    )
+    assert _sent(log) == [(1, "session.update"), (1, "close"), (2, "session.update")]
+    assert records.calls[0][0].reason == "runtime_recovery"
 
 
 # ---- Gemini Live on google-genai's session over a scripted socket ---------------------------
