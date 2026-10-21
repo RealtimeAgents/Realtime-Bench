@@ -2,10 +2,11 @@
 
 The first end signal (the deadline, an end the environment reports, an invalidation) stops the
 episode at once: the snapshot is frozen, the generation in flight is given up and its late result
-never lands. The environment is asked whether it ended once each environment frame: on the frame
-grid, during generations and waits too, and at the loop top or right before execution only in a
-frame not read yet; it is asked again after every action. Waits, the next frame and the legacy
-per-move cap are timers; a hold's keys are released by the environment's own timer.
+never lands. The environment is asked whether it ended by a periodic check once each environment
+frame, during generations and waits too, and at the loop top only in a frame not read yet; right
+before execution unless it was asked at that same reading, as today's loop asks there (runner.py
+_land_action); and again after every action it executed. Waits, the next frame and the legacy per-move cap are
+timers; a hold's keys are released by the environment's own timer.
 
 Every expected value is worked out by hand: from today's runner where the kernel keeps its rules
 (evaluation/runner.py, sandbox/actions.py) and from phase2.md (事件内核; 时间和结束判定) where it
@@ -226,16 +227,16 @@ def test_a_result_exactly_at_the_deadline_is_discarded_and_no_check_is_asked_the
 
 
 def test_a_deadline_while_the_check_before_landing_runs_leaves_the_action_unapplied():
-    # The reply comes back at 5 s, on the frame boundary ahead of the periodic check due then, so
-    # frame 5 has not been read and is read before execution; that read takes until 6.25 s.
-    world = World(replies=[Reply(5.0, CLICK)], check_seconds={6: 1.25})
+    world = World(replies=[Reply(5.25, CLICK)], check_s=0.5)
     sim = _episode(_wall(6.0), world)
-    assert sim.captures == [(0, 0.0)]
-    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-    assert _landings(sim) == [(5, 5.0, 5, 0)]
+    # The guard answers at 0.5, so the frame is tick 0 at 0.5; the reply lands at 5.75 and the
+    # check before execution runs until 6.25.
+    assert sim.captures == [(0, 0.5)]
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.75]
+    assert _landings(sim) == [(5, 5.75, 5, 0)]
     assert sim.executed == []
     # Frame age runs to the moment landing begins, before its checks (runner.py _apply).
-    assert sim.outcomes == [_outcome(0, "not_applied_time_limit", 5.0, 6, 5.0)]
+    assert sim.outcomes == [_outcome(0, "not_applied_time_limit", 5.75, 6, 5.25)]
     (resolved,) = _data(sim, "ActionResolved")
     assert resolved["status"] == "not_applied_time_limit"
     assert (resolved["terminal_after_action"], resolved["environment_tick"]) == (False, 6)
@@ -247,10 +248,10 @@ def test_a_deadline_while_the_check_before_landing_runs_leaves_the_action_unappl
 
 def test_the_snapshot_time_is_when_the_shell_took_it_even_when_a_commit_follows():
     # The environment at 2 fps: the click at 5.25 s waits for the next observation, input frame 6
-    # at 6 s, and the check due at 5.5 s, the 13th, runs until 6.25 s. The deadline then settles
+    # at 6 s, and the check due at 5.5 s, the 14th, runs until 6.25 s. The deadline then settles
     # the decision in the step that freezes the snapshot, so the commit (0.25 s) runs right after
     # the snapshot is taken at 6.25.
-    world = World(replies=[Reply(5.25, CLICK), Reply(9.0)], commit_s=0.25, check_seconds={13: 0.75})
+    world = World(replies=[Reply(5.25, CLICK), Reply(9.0)], commit_s=0.25, check_seconds={14: 0.75})
     sim = _episode(_wall(6.0, env_fps=2.0), world)
     assert sim.checks[-1] == (5.5, 5.5)
     names = _names(_from_end(sim))
@@ -263,10 +264,9 @@ def test_a_deadline_during_a_long_execution_keeps_it_applied_and_snapshots_after
     world = World(replies=[Reply(5.25, CLICK)], execute_s=1.5)
     sim = _episode(_wall(6.0), world)
     assert sim.executed == [(0, 5.25, CLICK)]
-    # Frame 5 was read at 5 s, so nothing is read before the execution. The deadline and the end
-    # check due at 6.0 wait for it to return at 6.75; the deadline stops the check, and no check
-    # follows the execution.
-    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    # The deadline and the end check due at 6.0 wait for the execution to return at 6.75; the
+    # deadline stops the check, and no check follows the execution.
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.25]
     assert sim.snapshots == [(6.75, 6.75)]
     assert sim.outcomes == [_outcome(0, "applied", 5.25, 6, 5.25, terminal=True)]
     assert [d["status"] for d in _data(sim, "ActionApplied")] == ["applied"]
@@ -299,27 +299,26 @@ def test_a_deadline_during_a_long_execution_keeps_it_applied_and_snapshots_after
             [],
             ("time_limit", "deadline", 3.0, 3.25),
         ),
-        # The reply at 2 s, on the frame boundary ahead of frame 2's periodic check, is checked
-        # until 3.5 s: the click is not executed.
+        # The reply at 2.5 s is checked until 3 s: the click is not executed.
         (
-            World(replies=[Reply(2.0, CLICK), Reply(9.0)], check_seconds={3: 1.5}),
-            [0.0, 1.0, 2.0],
-            [(0, 0.0)],
-            [0.0],
+            World(replies=[Reply(2.0, CLICK), Reply(9.0)], check_s=0.5),
+            [0.0, 1.0, 2.0, 2.5],
+            [(0, 0.5)],
+            [0.5],
             [],
-            [_outcome(0, "not_applied_time_limit", 2.0, 3, 2.0)],
-            ("time_limit", "deadline", 3.0, 3.5),
-        ),
-        # The click at 1.5 s, in frame 1 read already, is executed until 2.75 s; the periodic
-        # check due at 2 s runs first, until 3 s. The click stays applied and no check follows it.
-        (
-            World(replies=[Reply(1.25, CLICK), Reply(9.0)], check_s=0.25, execute_s=1.25),
-            [0.0, 1.0, 2.75],
-            [(0, 0.25)],
-            [0.25],
-            [(0, 1.5, CLICK)],
-            [_outcome(0, "applied", 1.5, 3, 1.25, terminal=True)],
+            [_outcome(0, "not_applied_time_limit", 2.5, 3, 2.0)],
             ("time_limit", "deadline", 3.0, 3.0),
+        ),
+        # The click at 2 s is executed until 2.75 s; the periodic check due at 2 s runs first,
+        # until 3.25 s. The click stays applied and no check follows it.
+        (
+            World(replies=[Reply(1.0, CLICK), Reply(9.0)], check_s=0.5, execute_s=0.75),
+            [0.0, 1.0, 1.5, 2.75],
+            [(0, 0.5)],
+            [0.5],
+            [(0, 2.0, CLICK)],
+            [_outcome(0, "applied", 1.5, 3, 1.0, terminal=True)],
+            ("time_limit", "deadline", 3.0, 3.25),
         ),
     ],
     ids=["loop-top", "capture", "before-landing", "after-execution"],
@@ -341,17 +340,16 @@ def test_an_answer_handled_after_the_deadline_is_not_acted_on(
     _assert_nothing_after_the_end(sim)
 
 
-def test_an_action_in_a_frame_read_already_is_executed_at_once_and_read_after():
-    # The reply at 4.75 s lands in frame 4, read at 4 s: it is executed at once, with no check
-    # before it (today's loop checks first and executes when that check returns, at 5.5 s). The
-    # check after it runs until 5.5 s, during which the periodic check due at 5 s comes due; the
-    # answer is filed at its asking, 4.75 s, and handled first, then frame 5 is read, until
-    # 6.25 s, past the deadline.
+def test_the_answer_to_the_check_before_landing_goes_before_a_periodic_check_due_after_it():
+    # The reply at 4.75 s is checked until 5.5 s, during which the periodic check due at 5 s comes
+    # due. The answer is filed at its asking, 4.75 s, so the click is executed at 5.5 s, before
+    # the deadline, as today's runner executes it once its check returns. The periodic check then
+    # runs until 6.25 s, past the deadline, and the check after execution is not asked.
     world = World(replies=[Reply(4.0, CLICK), Reply(9.0)], check_s=0.75)
     sim = _episode(_wall(6.0), world)
     assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.75, 5.5]
-    assert sim.executed == [(0, 4.75, CLICK)]
-    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", False)]
+    assert sim.executed == [(0, 5.5, CLICK)]
+    assert sim.outcomes == [_outcome(0, "applied", 4.75, 6, 4.0, terminal=True)]
     assert _ended(sim) == ("time_limit", "deadline", 6.0, 6.25)
 
 
@@ -414,34 +412,33 @@ def test_an_end_found_by_a_periodic_check_during_a_generation_dates_from_the_ask
 
 
 @pytest.mark.parametrize(
-    ("latency", "check_s", "ends_at", "asked", "executed", "outcomes", "ended"),
+    ("latency", "check_s", "ends_at", "asked", "outcomes", "ended"),
     [
-        # The click at 2.75 s lands in frame 2, read at 2 s before the task ended at 2.5 s; the
-        # check after it is asked at 2.75 s, after the end, and answers at 3 s, with the deadline.
+        # The check before landing is asked at 2.75 s, after the task ended at 2.5 s, and answers
+        # at 3 s, with the deadline.
         (
             2.5,
             0.25,
             2.5,
             [0.0, 1.0, 2.0, 2.75],
-            [(0, 2.75, CLICK)],
-            [_outcome(0, "applied", 2.75, 3, 2.5, terminal=True)],
+            [_outcome(0, "not_applied_terminal", 2.75, 3, 2.5)],
             ("game_decided", "environment", 2.75, 3.0),
         ),
         # Checks take 1.25 s: the periodic check due at 2 s is asked at 2.5 s, after the task ended
         # at 2.25 s, and answers at 3.75 s, during the generation.
-        (9.0, 1.25, 2.25, [0.0, 1.25, 2.5], [], [], ("game_decided", "environment", 2.5, 3.75)),
+        (9.0, 1.25, 2.25, [0.0, 1.25, 2.5], [], ("game_decided", "environment", 2.5, 3.75)),
     ],
-    ids=["after-execution", "periodic"],
+    ids=["before-landing", "periodic"],
 )
 def test_an_end_found_by_a_check_asked_before_the_deadline_is_the_tasks_end(
-    latency, check_s, ends_at, asked, executed, outcomes, ended
+    latency, check_s, ends_at, asked, outcomes, ended
 ):
     # The answer comes after the deadline, but the end dates from the asking, before it: the task
     # ended before the time limit (phase2.md, 时间和结束判定; decision 4).
     world = World(replies=[Reply(latency, CLICK)], ends_at=ends_at, check_s=check_s)
     sim = _episode(_wall(3.0), world)
     assert _asked(sim) == asked
-    assert sim.executed == executed
+    assert sim.executed == []
     assert sim.outcomes == outcomes
     assert _fired(sim, "deadline") == []
     assert _ended(sim) == ended
@@ -471,15 +468,15 @@ def test_an_end_found_by_the_check_before_landing_leaves_the_action_unapplied():
     _assert_nothing_after_the_end(sim)
 
 
-def test_an_end_in_a_frame_read_already_is_found_by_the_check_after_the_action():
+def test_an_end_after_the_frames_check_is_found_by_the_check_before_landing():
     # The task ends at 4.25 s, after frame 4 was read at 4 s. The reply at 4.5 s lands in that
-    # frame, which is not read again before execution: the click is executed, and the check after
-    # it finds the end (today's loop reads before landing and leaves the click unapplied).
+    # frame, but at another reading: the wall clock moved on since, so the state is read again
+    # before execution, as today (runner.py _land_action), and the click is not applied.
     world = World(replies=[Reply(4.5, CLICK)], ends_at=4.25, end_reason="target_reached")
     sim = _episode(_wall(10.0), world)
     assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.5]
-    assert sim.executed == [(0, 4.5, CLICK)]
-    assert sim.outcomes == [_outcome(0, "applied", 4.5, 4, 4.5, terminal=True)]
+    assert sim.executed == []
+    assert sim.outcomes == [_outcome(0, "not_applied_terminal", 4.5, 4, 4.5)]
     assert _boundaries(sim) == []
     assert _ended(sim) == ("target_reached", "environment", 4.5, 4.5)
     _assert_nothing_after_the_end(sim)
@@ -488,7 +485,7 @@ def test_an_end_in_a_frame_read_already_is_found_by_the_check_after_the_action()
 def test_an_end_found_by_the_check_after_execution_keeps_the_action_applied():
     world = World(replies=[Reply(4.5, CLICK)], ends_at=4.625, execute_s=0.25)
     sim = _episode(_wall(10.0), world)
-    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.75]
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.5, 4.75]
     assert sim.executed == [(0, 4.5, CLICK)]
     assert _names(_from_end(sim))[:5] == [
         "EpisodeEnded",
@@ -533,13 +530,13 @@ def test_the_check_before_landing_is_asked_once_the_shell_accepted_the_result():
 
 
 def test_an_action_whose_check_after_it_answers_past_the_deadline_is_not_paced():
-    # T = 3. The click back at 2.5 s executes until 2.8 s; the check after it, asked then, answers
-    # "not over" at 3.3 s and is handled first, filed at its asking. Tick 3 is the horizon, so
-    # nothing is paced (runner.py _apply paces only while tick_index() < max_ticks): the decision
-    # commits at once, nothing dropped, and the deadline ends the episode.
-    world = World(replies=[Reply(2.5, CLICK), Reply(9.0)], execute_s=0.3, check_seconds={4: 0.5})
+    # T = 3. The click back at 2.5 s is read before and executes until 2.8 s; the check after it,
+    # asked then, answers "not over" at 3.3 s and is handled first, filed at its asking. Tick 3 is
+    # the horizon, so nothing is paced (runner.py _apply paces only while tick_index() <
+    # max_ticks): the decision commits at once, nothing dropped, and the deadline ends the episode.
+    world = World(replies=[Reply(2.5, CLICK), Reply(9.0)], execute_s=0.3, check_seconds={5: 0.5})
     sim = _episode(_wall(3.0), world)
-    assert _asked(sim) == [0.0, 1.0, 2.0, 2.8]
+    assert _asked(sim) == [0.0, 1.0, 2.0, 2.5, 2.8]
     assert _boundaries(sim) == []
     assert sim.outcomes == [_outcome(0, "applied", 2.5, 3, 2.5)]
     assert _ended(sim) == ("time_limit", "deadline", 3.0, 3.3)
@@ -556,8 +553,7 @@ def test_an_end_during_the_next_frame_wait_still_writes_the_boundary_then_commit
     # tick 4, at 2.0 s.
     assert _landings(sim) == [(2, 2.5, 2, 0)]
     assert _timers(sim, "wake") == [2.0]
-    # The click at 1.25 s lands in frame 2, read at 1 s, and is read once after it.
-    assert _asked(sim) == [0.0, 0.5, 1.0, 1.25, 1.5]
+    assert _asked(sim) == [0.0, 0.5, 1.0, 1.25, 1.25, 1.5]
     # The check at 1.5 s finds the end; the move stops at tick 3, inside input frame 1, which is
     # the only one crossed.
     assert _names(_from_end(sim))[:4] == [
@@ -575,19 +571,20 @@ def test_an_end_during_the_next_frame_wait_still_writes_the_boundary_then_commit
 # ---- the clock and the cadence ----------------------------------------------------------------
 
 
-def test_the_state_is_read_once_a_frame_and_after_every_action():
+def test_the_state_is_read_once_a_frame_again_before_landing_and_after_every_action():
     # The frames are the environment's, one a second. Decision 0's reply is back at 1 s, on the
-    # frame boundary ahead of the periodic check due then, so frame 1 is read before landing and
-    # again after the click; the periodic check due at 1 s then finds frame 1 read and asks
-    # nothing, nor does decision 1's loop top, at 1 s, the click's next observation. Its reply
-    # at 1.5 s lands in frame 1 too: read only after the click. Frames 2 and 3 are read by their
-    # periodic checks, and the loop top in frame 2 reads nothing.
+    # frame boundary ahead of the periodic check due then: it is read before landing and again
+    # after the click; the periodic check due at 1 s then finds frame 1 read, and so does
+    # decision 1's loop top. Its reply at 1.5 s lands in frame 1 too, at another reading: read
+    # before landing and after the click. Frames 2 and 3 are read by their periodic checks, and
+    # the loop top in frame 2 reads no more.
     replies = [Reply(1.0, CLICK), Reply(0.5, CLICK), Reply(9.0)]
     sim = _episode(_wall(4.0), World(replies=replies))
     assert _asked(sim) == [
-        0.0,  # loop top, the first read of frame 0
-        1.0,  # before landing, frame 1 not read yet
+        0.0,  # loop top, the first read
+        1.0,  # before landing
         1.0,  # after the click
+        1.5,  # before landing
         1.5,  # after the click
         2.0,  # frame 2's periodic check
         3.0,  # frame 3's periodic check
@@ -595,6 +592,19 @@ def test_the_state_is_read_once_a_frame_and_after_every_action():
     assert _fired(sim, "end_check") == [(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]
     assert sim.executed == [(0, 1.0, CLICK), (1, 1.5, CLICK)]
     assert _ended(sim) == ("time_limit", "deadline", 4.0, 4.0)
+
+
+def test_the_loop_top_reads_once_a_frame_and_the_check_before_landing_once_a_reading():
+    # Reads take 0.125 s. Decision 0's click is back at 0.625 s, in frame 0, read at 0 s: real
+    # time has moved on, so it is read again before landing, and after the click. The periodic
+    # check reads frame 1 at 1 s; decision 1's loop top, at 1.125 s, is in that frame and reads
+    # no more. So on: before landing and after the click at 1.625 s and 1.75 s, frame 2 at 2 s,
+    # with no read at its loop top, frame 3 at 3 s.
+    replies = [Reply(0.5, CLICK), Reply(0.5, CLICK), Reply(9.0)]
+    sim = _episode(_wall(4.0), World(replies=replies, check_s=0.125))
+    assert _asked(sim) == [0.0, 0.625, 0.75, 1.0, 1.625, 1.75, 2.0, 3.0]
+    assert [semantic for _, semantic in sim.captures] == [0.125, 1.125, 2.125]
+    assert sim.executed == [(0, 0.75, CLICK), (1, 1.75, CLICK)]
 
 
 def test_the_action_lands_at_the_clock_position_and_the_next_frame_is_an_exact_timer():
@@ -655,10 +665,9 @@ def test_end_checks_stay_on_the_frame_grid_when_an_execution_delays_one():
         (6.0, 6.0),
         (7.0, 7.0),
     ]
-    # Frame 2, read at 2.0, is not read again before the execution. The delayed check reads
-    # frame 4 at 4.75 and the check after execution reads it again; the next loop top, in frame
-    # 4, does not.
-    assert _asked(sim) == [0.0, 1.0, 2.0, 4.75, 4.75, 5.0, 6.0, 7.0]
+    # The delayed check and the check after execution both ask at 4.75; the next loop top, at
+    # that same reading, reads no more.
+    assert _asked(sim) == [0.0, 1.0, 2.0, 2.25, 4.75, 4.75, 5.0, 6.0, 7.0]
     # next = max(0 + 1, max(tau 2.25, tick 4)) = 4, already passed; dropped = 4 - 0 - 1.
     assert sim.outcomes == [_outcome(0, "applied", 2.25, 4, 2.25, dropped=3)]
     assert _ended(sim) == ("time_limit", "deadline", 8.0, 8.0)
@@ -671,11 +680,10 @@ def test_a_wait_is_a_timer_and_the_environment_is_asked_during_it():
     world = World(replies=[Reply(1.1, Action.wait(2.2)), Reply(10.0, CLICK)])
     sim = _episode(_wall(6.0), world)
     assert sim.executed == []
-    # The wait runs from 1.1 to 3.3, then the next observation is tick 3, already passed. Frame
-    # 1 was read at 1.0, so nothing is read before the wait; its end is read at 3.3, and the next
-    # loop top, in frame 3, reads nothing.
+    # The wait runs from 1.1 to 3.3, then the next observation is tick 3, already passed: its loop
+    # top, at the reading of the check after the wait, reads no more.
     assert _timers(sim, "wake") == pytest.approx([3.3, 3.0])
-    assert _asked(sim) == pytest.approx([0.0, 1.0, 2.0, 3.0, 3.3, 4.0, 5.0])
+    assert _asked(sim) == pytest.approx([0.0, 1.0, 1.1, 2.0, 3.0, 3.3, 4.0, 5.0])
     (resolved,) = _data(sim, "ActionResolved")
     assert (resolved["status"], resolved["terminal_after_action"]) == ("wait", False)
     assert resolved["execution_result"] == {
@@ -708,7 +716,7 @@ def test_a_wait_is_a_timer_and_the_environment_is_asked_during_it():
             None,
             4.25,
             7.25,
-            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            [0.0, 1.0, 2.0, 3.0, 4.0, 4.25, 5.0],
             6.0,
             "time_limit",
             "deadline",
@@ -720,7 +728,7 @@ def test_a_wait_is_a_timer_and_the_environment_is_asked_during_it():
             2.5,
             1.25,
             4.25,
-            [0.0, 1.0, 2.0, 3.0],
+            [0.0, 1.0, 1.25, 2.0, 3.0],
             3.0,
             "game_decided",
             "environment",
@@ -816,14 +824,13 @@ def test_a_release_the_environments_timer_fails_invalidates_the_run():
 
 @pytest.mark.parametrize("execute_s", [2.0, 1.5], ids=["past-the-deadline", "on-it"])
 def test_no_end_check_is_asked_once_the_deadline_has_passed(execute_s):
-    # The execution runs from 4.5 s over or up to the deadline at 6 s; frame 4 was read at 4 s, so
-    # nothing is read before it. The check due at 5 s comes due only after it returns and is not
-    # asked, so nothing samples the task from the deadline on.
+    # The execution runs from 4.5 s over or up to the deadline at 6 s; the check due at 5 s comes
+    # due only after it returns and is not asked, so nothing samples the task from the deadline on.
     returned = 4.5 + execute_s
     world = World(replies=[Reply(4.5, CLICK)], execute_s=execute_s)
     sim = _episode(_wall(6.0), world)
     assert _fired(sim, "end_check")[-1] == (returned, 5.0)
-    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.5]
     # Not paced after the end: the next observation tick stays the tick at resolution, 6.
     assert sim.outcomes == [_outcome(0, "applied", 4.5, 6, 4.5, terminal=True)]
     assert _ended(sim) == ("time_limit", "deadline", 6.0, returned)
@@ -851,8 +858,8 @@ def test_the_per_move_cap_skips_the_decision_and_the_episode_goes_on(latency):
     ]
     # A move over the cap places no action.
     assert [outcome.action for outcome in sim.outcomes] == [None, CLICK]
-    # Each frame is read once, by its periodic check; the click is read once more after it.
-    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 3.25, 4.0]
+    # The loop tops at 2 s and 4 s read no more than the periodic checks due there.
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 3.25, 3.25, 4.0]
     assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.0)
 
 
@@ -895,9 +902,9 @@ def test_the_think_budget_skips_the_decision_then_ends_after_its_commit():
         _outcome(0, "applied", 1.25, 2, 1.25, dropped=1),
         _outcome(1, "skipped_budget", 3.5, 4, 1.5, dropped=1),
     ]
-    # A skipped action is not checked before or after execution; each frame is read once, by its
-    # periodic check, and the applied click once more after it.
-    assert _asked(sim) == [0.0, 1.0, 1.25, 2.0, 3.0, 4.0]
+    # A skipped action is not checked before or after execution.
+    # The loop top at 2 s reads no more than the periodic check due there.
+    assert _asked(sim) == [0.0, 1.0, 1.25, 1.25, 2.0, 3.0, 4.0]
     kinds = sim.kinds()
     assert kinds.count("OutcomeCommitted") == 2
     assert kinds[kinds.index("EpisodeEnded") - 1] == "OutcomeCommitted"
@@ -940,41 +947,39 @@ def test_three_failed_periodic_checks_in_a_row_invalidate_the_run_during_a_gener
 
 
 @pytest.mark.parametrize(
-    ("latency", "failing", "asked", "status", "terminal", "executed"),
+    ("failing", "asked", "status", "terminal", "executed"),
     [
-        # The reply at 2 s, on the frame boundary ahead of its periodic check, is read before
-        # execution: the loop top, the periodic check at 1 s and that read fail.
-        (2.0, (1, 2, 3), [0.0, 1.0, 2.0], "invalid_run", False, []),
-        # The reply at 2.25 s lands in frame 2, read at 2 s: the periodic checks at 1 s and 2 s and
-        # the read after execution fail.
-        (2.25, (2, 3, 4), [0.0, 1.0, 2.0, 2.25], "applied", True, [(0, 2.25, CLICK)]),
+        ((2, 3, 4), [0.0, 1.0, 2.0, 2.25], "invalid_run", False, []),
+        ((3, 4, 5), [0.0, 1.0, 2.0, 2.25, 2.25], "applied", True, [(0, 2.25, CLICK)]),
     ],
     ids=["before-execution", "after-execution"],
 )
 def test_a_third_failed_check_in_a_row_around_execution_settles_the_decision(
-    latency, failing, asked, status, terminal, executed
+    failing, asked, status, terminal, executed
 ):
-    world = World(replies=[Reply(latency, CLICK)], check_errors=_failing(*failing))
+    world = World(replies=[Reply(2.25, CLICK)], check_errors=_failing(*failing))
     sim = _episode(_wall(10.0), world)
     assert _asked(sim) == asked
     assert sim.executed == executed
-    assert sim.outcomes == [_outcome(0, status, latency, 2, latency, terminal=terminal)]
-    assert _ended(sim) == ("invalid_run", "invalid", latency, latency)
+    assert sim.outcomes == [_outcome(0, status, 2.25, 2, 2.25, terminal=terminal)]
+    assert _ended(sim) == ("invalid_run", "invalid", 2.25, 2.25)
     assert sim.termination.invalid == Invalidated(
         "environment", "terminal_state_check_failed", f"state read {failing[-1]} failed"
     )
     _assert_nothing_after_the_end(sim)
 
 
-@pytest.mark.parametrize("failing", [(1,), (1, 2), (1, 2, 4)], ids=["one", "two", "two-answer-one"])
+@pytest.mark.parametrize(
+    "failing", [(1,), (1, 2), (1, 2, 4, 5)], ids=["one", "two", "two-answer-two"]
+)
 def test_fewer_than_three_failed_checks_in_a_row_leave_the_run_valid(failing):
     # A failed read answers "not over" and the decision goes on as without it; the answer at 2 s
-    # starts the count over, so the failure after execution is one. The task ends at 3 s, seen by
-    # the periodic check filed before the pace move's wake.
+    # starts the count over, so the failures right before and after execution are one and two.
+    # The task ends at 3 s, seen by the periodic check filed before the pace move's wake.
     world = World(replies=[Reply(2.25, CLICK)], ends_at=3.0, check_errors=_failing(*failing))
     sim = _episode(_wall(10.0), world)
-    assert _asked(sim) == [0.0, 1.0, 2.0, 2.25, 3.0]
-    assert _read_errors(sim) == [_failing(*failing).get(check) for check in range(1, 6)]
+    assert _asked(sim) == [0.0, 1.0, 2.0, 2.25, 2.25, 3.0]
+    assert _read_errors(sim) == [_failing(*failing).get(check) for check in range(1, 7)]
     assert sim.executed == [(0, 2.25, CLICK)]
     assert sim.outcomes == [_outcome(0, "applied", 2.25, 3, 2.25, dropped=2)]
     assert sim.entries("RunInvalidated") == []
@@ -982,17 +987,27 @@ def test_fewer_than_three_failed_checks_in_a_row_leave_the_run_valid(failing):
     assert sim.termination.invalid is None
 
 
-def test_failed_reads_at_one_instant_count_in_the_order_they_were_made():
-    # The click is executed from 2.25 s to 3.25 s: the periodic check due at 3 s is asked at
-    # 3.25 s, then the check after execution, both at 3.25 s. The periodic checks at 1 s and 2 s
-    # fail, the first at 3.25 s answers and the second fails: failures in a row 1, 2, 0, 1, so the
-    # run stays valid. A failed read is no end and is handled in its turn, not ahead of an earlier
-    # answer (phase2.md, 时间和结束判定: in a row).
-    world = World(
-        replies=[Reply(2.25, CLICK), Reply(100.0)], execute_s=1.0, check_errors=_failing(2, 3, 5)
-    )
+@pytest.mark.parametrize(
+    ("world", "asked"),
+    [
+        # The click is executed from 2.25 s to 3.25 s: the periodic check due at 3 s is asked at
+        # 3.25 s, then the check after execution, both at 3.25 s.
+        (
+            World(replies=[Reply(2.25, CLICK), Reply(100.0)], execute_s=1.0),
+            [0.0, 1.0, 2.0, 2.25, 3.25, 3.25],
+        ),
+    ],
+    ids=["after-a-long-execution"],
+)
+def test_failed_reads_at_one_instant_count_in_the_order_they_were_made(world, asked):
+    # The reads before and after the last two at one instant fail, the earlier of those two
+    # answers and the later fails: failures in a row 1, 2, 0, 1, so the run stays valid. A failed
+    # read is no end and is handled in its turn, not ahead of an earlier answer (phase2.md,
+    # 时间和结束判定: in a row).
+    failing = (len(asked) - 2, len(asked) - 3, len(asked))
+    world.check_errors = _failing(*failing)
     sim = _episode(_wall(4.0), world)
-    assert _asked(sim)[:5] == [0.0, 1.0, 2.0, 3.25, 3.25]
+    assert _asked(sim)[: len(asked)] == asked
     requests = [event.request for event in _data(sim, "EndChecked")]
     assert requests == sorted(requests)
     assert sim.entries("RunInvalidated") == []
@@ -1043,7 +1058,7 @@ def test_a_failed_execution_invalidates_and_its_decision_is_still_reported():
     )
     sim = _episode(_wall(6.0), world)
     assert sim.executed == [(0, 1.25, CLICK)]
-    assert _asked(sim) == [0.0, 1.0]
+    assert _asked(sim) == [0.0, 1.0, 1.25]
     assert _data(sim, "RunInvalidated") == [
         {
             "category": "environment",

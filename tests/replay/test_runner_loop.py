@@ -229,16 +229,16 @@ CASES = [
         "task_completed",
         env={"stop_check": _decided_after(3, "task_completed")},
     ),
-    # The task is decided at 2.25 s, while decision 2 waits for its reply. Frame 2 was read at
-    # 2.0 s, so no read comes before the action (kernel/turns.py _check_end): it is executed at
-    # 2.5 s, the read right after it sees the end, and the reason defaults to game_decided
-    # (kernel/core.py _finish).
+    # The task is decided at 2.25 s, while decision 2 waits for its reply. The clock has moved on
+    # since frame 2 was read at 2.0 s, so the state is read again before the action
+    # (kernel/turns.py _read_already), as the runner reads it (runner.py _land_action): the
+    # action is not executed, and the reason defaults to game_decided (kernel/core.py _finish).
     Case(
         "environment_done_during_reply",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
         [0.5, 0.5, 0.5],
-        ["applied", "applied", "applied"],
-        ["click", "type", "click"],
+        ["applied", "applied", "not_applied_terminal"],
+        ["click", "type"],
         "game_decided",
         env={"stop_check": lambda env: env.clock.time() >= env.t0 + 2.25},
     ),
@@ -346,16 +346,17 @@ def test_two_failed_state_reads_in_a_row_leave_the_run_valid(tmp_path):
 
 
 def test_a_third_failed_state_read_in_a_row_invalidates_the_run(tmp_path):
-    """The read after decision 1's action at 1.5 s fails too, the third in a row: the run is
-    invalid with the environment's terminal_state_check_failed, and decision 1, whose read after
-    the action the end cut short, is reported as applied."""
+    """The periodic check at 1 s and the reads right before and after decision 1's action at
+    1.5 s fail, the last the third in a row (a failed read answers "not over", so the action is
+    executed): the run is invalid with the environment's terminal_state_check_failed, and
+    decision 1, whose read after the action the end cut short, is reported as applied."""
     run = _run(
         tmp_path,
         [Step(CLICK_NAME), TYPE_ADA],
         [0.5, 0.5],
         stream=True,
         max_minutes=SHORT_MAX_MINUTES,
-        read_failures=frozenset({2, 3, 4}),
+        read_failures=frozenset({4, 5, 6}),
     )
     check_wall_clock_properties(run.env, "invalid_run")
     invalid = run.env._invalid_run
@@ -363,7 +364,7 @@ def test_a_third_failed_state_read_in_a_row_invalidates_the_run(tmp_path):
         "environment",
         "terminal_state_check_failed",
     )
-    assert invalid["detail"].rstrip().endswith("RuntimeError: state read 4 failed")
+    assert invalid["detail"].rstrip().endswith("RuntimeError: state read 6 failed")
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"] * 2
     assert run.env._termination["end_s"] == 1.5
 
