@@ -843,7 +843,7 @@ def test_an_orphan_resumption_update_is_the_latest_handle():
     connected(core)
     clean_reply(core, "turn-0", "handle-0")
     core.push(streaming_view([pushed(0), pushed(1)]))
-    assert arrive(core, update("handle-1")).control == {}
+    assert isinstance(arrive(core, update("handle-1")), Orphan)
     arrive(core, update(None))
     assert core.latest_resume_handle == "handle-1"
     assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) == (

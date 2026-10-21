@@ -266,7 +266,8 @@ class Orphan:
     """One server message that no generation's reply takes, as the core applied it (arrived).
 
     Its goAway still asks for a new connection and its resumption update is still the latest
-    handle; read from a closed connection, it changes nothing.
+    handle; read from a closed connection, it changes nothing. Any calls in it are not pending:
+    no acknowledgement answers a reply the server started of its own accord.
     """
 
     connection: int  # the connection it was read from
