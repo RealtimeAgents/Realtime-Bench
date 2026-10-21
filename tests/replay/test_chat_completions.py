@@ -227,21 +227,22 @@ def test_history_overflow_ledger(tmp_path):
     assert [o["scope"]["decision"] for o in omissions] == list(LEDGER_OMISSIONS)
     assert [o["ledger"]["omitted_actions_after"] for o in omissions] == [10, 20, 30, 40, 50]
     first = LEDGER_OMISSIONS[0]
-    totals = [runtime.get("history_omitted_actions_total") for runtime in runtimes]
-    assert totals == [None] * first + [
-        10 * sum(k >= decision for decision in LEDGER_OMISSIONS)
-        for k in range(first, len(records))
+    omitted = [
+        10 * sum(k >= decision for decision in LEDGER_OMISSIONS) for k in range(len(records))
     ]
+    totals = [runtime.get("history_omitted_actions_total") for runtime in runtimes]
+    assert totals == [n or None for n in omitted]
     omitted_now = [runtime.get("request_context_omitted_actions") for runtime in runtimes]
     assert {k: n for k, n in enumerate(omitted_now) if n} == dict.fromkeys(LEDGER_OMISSIONS, 10)
     header_line, *lines = _messages(records[first - 1])[1]["content"].split("\n")
     assert header_line == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == first - 1
     for k in range(first, len(records)):
         header_line, note, *kept = _messages(records[k])[1]["content"].split("\n")
-        omitted = 10 * sum(k >= decision for decision in LEDGER_OMISSIONS)
         assert header_line == ARCHIVED_ACTION_LEDGER_HEADER
-        assert note == LEDGER_OMISSION.format(count=omitted)
-        assert len(kept) == k - omitted and all(line.startswith("{") for line in kept)
+        assert note == LEDGER_OMISSION.format(count=omitted[k])
+        assert len(kept) == k - omitted[k] and all(line.startswith("{") for line in kept)
+        # The earliest actions are the ones left out; decisions count from 1 in the ledger.
+        assert json.loads(kept[0])["decision"] == omitted[k] + 1
 
     header = {
         "record": "header",

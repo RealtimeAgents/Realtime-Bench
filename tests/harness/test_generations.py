@@ -41,8 +41,8 @@ from tests.replay.scenario import (
 from tests.replay.steps import Step
 from tests.replay.stub import ChatCompletionsStub
 from tests.replay.stub_decisions import DecisionsStub
+from tests.replay.test_chat_completions import LEDGER_WINDOW, chat_completions_config
 from tests.replay.test_chat_completions import MODEL_KEY as CHAT_MODEL_KEY
-from tests.replay.test_chat_completions import chat_completions_config
 from tests.replay.test_openai_realtime import MODEL_KEY as REALTIME_MODEL_KEY
 from tests.replay.test_openai_realtime import realtime_config
 from tests.replay.ws_openai_realtime import RealtimeStub
@@ -1064,6 +1064,76 @@ def test_an_abandoned_generation_archives_nothing_under_pressure(tmp_path):
     assert (turns, archived) == ([1], 0)
     changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]
     assert not [c for c in changes if c.get("kind") in {"pressure_archive", "ledger_omission"}]
+
+
+def test_an_abandoned_generation_omits_nothing_under_pressure(tmp_path):
+    """As above, with every turn archived when the aborted generation's count comes back.
+    Generation 1 (decision 0) is accepted. Generation 2 (decision 1) is aborted while its request
+    is sized. Generation 3 (decision 2) archives decision 0's turn to fit a small window
+    (tests/replay/test_chat_completions.py LEDGER_WINDOW) and waits before its reply. Generation
+    2's count then reports pressure with no turn left: it would cut the ledger, which is the next
+    generation's, so it stops and leaves no action out."""
+    with ChatCompletionsStub(replies([LONG_SCENARIO[0], LONG_SCENARIO[2]])) as stub:
+        config = chat_completions_config(stub.base_url, stream=True).model_copy(
+            update=dict(zip(("context_window_tokens", "context_reserve_tokens"), LEDGER_WINDOW))
+        )
+        episode = build_episode(
+            config,
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=CHAT_MODEL_KEY,
+        )
+        agent = episode.agent
+        driver = agent.driver
+        try:
+            frames = [episode.frames.capture(k) for k in range(3)]
+            budgets = [episode.budget(frame.tick_number) for frame in frames]
+            agent.generate(1, 0, frames[0], budgets[0])
+            agent.accept(1)
+            sizing, sized_release = threading.Event(), threading.Event()
+            replying, reply_release = threading.Event(), threading.Event()
+            sized, start_generation = driver.request_context_status, driver.start_generation
+
+            async def counted(request):
+                status = dict(await sized(request))
+                if request.generation == 2 and not sizing.is_set():
+                    sizing.set()
+                    await asyncio.to_thread(sized_release.wait, WAIT_S)
+                    status["pressure"] = True
+                return status
+
+            async def starting(request):
+                if request.generation == 3:
+                    replying.set()
+                    await asyncio.to_thread(reply_release.wait, WAIT_S)
+                return await start_generation(request)
+
+            driver.request_context_status, driver.start_generation = counted, starting
+            box2, done2 = _in_worker(lambda: agent.generate(2, 1, frames[1], budgets[1]))
+            assert sizing.wait(WAIT_S), "generation 2 sized no request"
+            agent.abort(2)
+            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            box3, done3 = _in_worker(lambda: agent.generate(3, 2, frames[2], budgets[2]))
+            assert replying.wait(WAIT_S), "generation 3 reached no reply"
+            history = (
+                [turn.decision for turn in agent._runtime.turns],
+                agent._runtime.archived_action_count,
+            )
+            sized_release.set()
+            abandoned = _joined(box2, done2)
+            reply_release.set()
+            accepted = _joined(box3, done3)
+            agent.discard(2)
+            agent.accept(3)
+        finally:
+            episode.finish()
+    assert history == ([], 1)  # generation 3 archived decision 0's turn
+    assert abandoned.cancelled and not accepted.cancelled
+    assert len(stub.requests) == 2
+    changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]
+    assert not [c for c in changes if c.get("kind") == "ledger_omission"]
+    assert [c["scope"]["generation"] for c in changes if c.get("kind") == "pressure_archive"] == [3]
 
 
 def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
