@@ -165,7 +165,8 @@ def streaming_blocks(items) -> list[ViewFrame]:
     """Read a native-streaming history view (harnesses/streaming/history.py): its blocks in the
     order the agent accepted them, frames, replies' outputs and execution feedback, each one item
     of the session. Feedback the policy places in front of a frame is that frame's prefix, as a
-    turn-based frame's is."""
+    turn-based frame's is; the feedback waiting at the end for the next frame is not yet any
+    item's."""
     blocks, prefix = [], ""
     for item in items:
         if item.intent.position == "frame_prefix":
@@ -330,7 +331,8 @@ class RealtimeSessionCore:
         """Plan the user item of a native-streaming history view's newest block, a frame with the
         feedback in front of it or an execution feedback, as native streaming pushes it while
         responses and edits are in progress: its create names a client event, so a server error
-        about it refuses this block alone."""
+        about it refuses this block alone, with the feedback in front of a frame, which is in the
+        frame's item."""
         return self._push(streaming_blocks(history.items)[-1])
 
     def _push(self, frame: ViewFrame) -> Create:
@@ -453,7 +455,7 @@ class RealtimeSessionCore:
             self.delivery[operation.key] = Delivery.SENT
 
     def settled(self, operation: Operation) -> bool:
-        """Whether the server answered an operation: acknowledged it, or refused a push."""
+        """Whether the server acknowledged an operation, or refused it as a push."""
         return self.delivery.get(operation.key) in (Delivery.ACKNOWLEDGED, Delivery.REFUSED)
 
     @property
@@ -499,9 +501,11 @@ class RealtimeSessionCore:
     def _held_blocks(self, history: CanonicalRequest) -> list[ViewFrame]:
         """The native-streaming view's blocks an edit covers: those up to the newest one the
         session holds, except the blocks whose push the server refused, which the server does
-        not have. The view's blocks after the newest held one are not pushed yet; the session's
-        blocks the view lacks were pushed after it was made, as a view keeps every block it once
-        had (decision 4.6). The edit leaves them all alone."""
+        not have. Every other block before the newest held one is held: frames and feedback are
+        pushed in the view's order, and a reply's output joins the view only once the reply has
+        ended. The view's blocks after the newest held one are not in the session yet; the
+        session's blocks the view lacks were pushed after it was made, as a view keeps every
+        block it once had (decision 4.6). The edit leaves them all alone."""
         refused = {push.block_id for push in self.pushes.values() if push.error is not None}
         blocks = [frame for frame in streaming_blocks(history.items) if frame.id not in refused]
         held = [index for index, frame in enumerate(blocks) if self._holds(frame.item.block)]
