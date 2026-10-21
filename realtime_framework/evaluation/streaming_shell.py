@@ -378,7 +378,8 @@ class _StreamingShell:
         """The snapshot, next after the action executing (4.8), on its own thread (_freezing). A
         read that raises fails the snapshot, a cancellation's too."""
         env, clock = self.env, self.clocks.operational
-        # The presentation boundary precedes the scorer's snapshot.
+        # The presentation boundary precedes the scorer's snapshot; it moves to when the read
+        # begins, once the gate is the snapshot's.
         env._active_end_unix_s = clock.time()
         env._termination_snapshot_captured = False
         # The Task base class has none (realtime_tasks/types.py).
@@ -425,6 +426,7 @@ class _StreamingShell:
 
     def _read_snapshot(self, snapshotter):
         clock = self.clocks.operational
+        self.env._active_end_unix_s = clock.time()  # after the action, as on the turn-based shell
         with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s, clock=clock):
             return snapshotter()
 
