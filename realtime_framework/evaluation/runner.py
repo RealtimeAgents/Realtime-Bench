@@ -623,7 +623,6 @@ def main():
         is_game = (getattr(ctask, "category", None) == "browser_game") if ctask else False
         env = GuestEnvironment(
             guest,
-            deadline,
             ctask,
             frames_dir=frames_dir,
             honor_fail=(not is_game),
