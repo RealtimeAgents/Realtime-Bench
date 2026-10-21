@@ -21,7 +21,7 @@ import requests
 
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
-from realtime_framework.entity.actions import Action, ActionType, Observation
+from realtime_framework.entity.actions import MAX_ACTION_DURATION, Action, ActionType, Observation
 from realtime_framework.evaluation import runner
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
@@ -42,6 +42,7 @@ GAME = "gh_javascript_pong"
 PLAYING = {"game_state": {"player_returns": 0}, "terminal": {"isTerminal": False}}
 CLICK = Action(ActionType.CLICK, {"x": 10, "y": 10})
 TAP = Action(ActionType.KEY, {"key": "space"})
+DRAG_PATH = {"x1": 0, "y1": 0, "x2": 5, "y2": 5}
 
 
 class ScriptedAgent:
@@ -155,15 +156,19 @@ def _invalid(env, reason: str, operation: str, budget: float = BUDGET) -> None:
     assert f"{operation} took longer than {budget:g} s" in env._invalid_run["detail"]
 
 
-def test_an_action_budget_extends_for_text_input_and_holds_as_the_guest_request_does():
+def test_an_action_budget_extends_only_for_text_input():
+    """A valid action lasts at most MAX_ACTION_DURATION, 10 s (entity/actions.py), so the
+    max(20, duration + 5) of a timed action stays 20 s; text input extends to 120 s as the
+    guest's request does (sandbox/guest.py action_timeout), whose own 10 s a timed action does
+    extend."""
     budget = actions.ENVIRONMENT_BUDGET.action_s
     assert budget == 20.0
     assert action_timeout(CLICK, budget) == 20.0
     assert action_timeout(Action(ActionType.TYPE, {"text": "Ada"}), budget) == 120.0
-    assert action_timeout(Action(ActionType.HOLD_KEY, {"key": "a"}), budget) == 20.0
-    assert action_timeout(Action(ActionType.HOLD_KEY, {"key": "a", "duration": 18}), budget) == 23.0
-    drag = {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 20}
-    assert action_timeout(Action(ActionType.DRAG, drag), budget) == 25.0
+    hold = Action(ActionType.HOLD_KEY, {"key": "a", "duration": MAX_ACTION_DURATION})
+    drag = Action(ActionType.DRAG, {**DRAG_PATH, "duration": MAX_ACTION_DURATION})
+    assert action_timeout(hold, budget) == action_timeout(drag, budget) == 20.0
+    assert action_timeout(drag, 10.0) == 15.0
 
 
 def test_the_freeze_s_snapshot_read_has_16_s_and_a_token_key_event_10_s():
@@ -248,7 +253,7 @@ def test_a_wall_xdotool_command_gets_what_is_left_of_the_action_s_budget(budgets
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 30.0)) == "applied"
+        assert env.execute(Action.hold_key("a", MAX_ACTION_DURATION)) == "applied"
         guest.command_delay = 5.0
         started = time.monotonic()
         status = env.execute(Action(ActionType.KEY, {"key": "a"}))
@@ -459,12 +464,13 @@ def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget():
 
 
 def test_an_action_and_its_page_barrier_share_one_budget():
-    # The guest answers a 12 s drag within the action's 20 s and its own 17 s; the page barrier
-    # never does. Without the shared budget the barrier's own 8 s CDP timeout would apply.
+    # The guest answers the longest drag, 10 s, within the action's 20 s and its own 15 s; the
+    # page barrier never does. Without the shared budget the barrier's own 8 s CDP timeout would
+    # apply.
     clock = FakeClock()
-    guest = _ClockGuest(clock, 15.0)
+    guest = _ClockGuest(clock, 14.0)
     env, _ = _timed(clock, guest, _BarrierTask(clock, 3600.0))
-    drag = Action(ActionType.DRAG, {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 12})
+    drag = Action(ActionType.DRAG, {**DRAG_PATH, "duration": MAX_ACTION_DURATION})
     with clock.participant():
         assert env.execute(drag) == "failed"
         assert clock.monotonic() == 20.0
@@ -516,23 +522,12 @@ def test_a_task_failure_past_the_budget_keeps_its_traceback():
     )
 
 
-@pytest.mark.parametrize(
-    ("action", "seconds"),
-    [
-        pytest.param(Action(ActionType.TYPE, {"text": "Ada"}), 100.0, id="text-input"),
-        pytest.param(
-            Action(ActionType.DRAG, {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 20}),
-            24.0,
-            id="a-20-s-drag",
-        ),
-    ],
-)
-def test_text_input_and_a_timed_action_have_their_extended_budget(action, seconds):
+def test_text_input_has_its_extended_budget():
     clock = FakeClock()
-    env, _ = _timed(clock, _ClockGuest(clock, seconds))
+    env, _ = _timed(clock, _ClockGuest(clock, 100.0))
     with clock.participant():
-        assert env.execute(action) == "applied"
-        assert clock.monotonic() == seconds
+        assert env.execute(Action(ActionType.TYPE, {"text": "Ada"})) == "applied"
+        assert clock.monotonic() == 100.0
     assert getattr(env, "_invalid_run", None) is None
 
 
@@ -584,7 +579,7 @@ def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_
     10 s at first."""
     clock = FakeClock()
     env, _ = _timed(clock, _ClockGuest(clock, 5.3), _BarrierTask(clock, 5.0))
-    drag = Action(ActionType.DRAG, {"x1": 0, "y1": 0, "x2": 5, "y2": 5, "duration": 5})
+    drag = Action(ActionType.DRAG, {**DRAG_PATH, "duration": 5})
     with clock.participant():
         assert env.execute(drag) == "applied"
         assert clock.monotonic() == pytest.approx(10.3)
