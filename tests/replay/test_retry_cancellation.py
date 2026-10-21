@@ -26,6 +26,7 @@ import pytest
 
 import realtime_framework.entity.model as model_module
 import realtime_framework.providers.decisions.selection as selection_module
+import realtime_framework.providers.litellm as litellm_driver
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.model import (
     RATE_LIMITED,
@@ -401,6 +402,55 @@ def test_close_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
     assert len(stub.requests) == 1 and len(backoff.calls) == 1
     assert agent._runtime.turns == () and agent.action_history == []
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
+
+
+class _WaitEntered:
+    """``clock``, but ``entered`` is set as each wait on it starts."""
+
+    def __init__(self, clock):
+        self._clock = clock
+        self.entered = threading.Event()
+
+    def __getattr__(self, name):
+        return getattr(self._clock, name)
+
+    def wait(self, waitable, timeout):
+        self.entered.set()
+        return self._clock.wait(waitable, timeout)
+
+
+def test_abort_during_request_pacing_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
+    """Stateless API. The request pacing interval (providers/litellm.py pace_request) keeps
+    attempt 1 waiting for a minute, longer than any test waits, a wait recorded before it
+    starts. The kernel aborts the generation during it: the wait ends, the request is never
+    sent, and the attempt is recorded as cancelled."""
+    openrouter_env.setenv("STREAM_MIN_REQUEST_INTERVAL", "60")
+    with OpenRouterStub([], route=ROUTE) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = _stateless_episode(tmp_path)
+        agent = episode.agent
+        try:
+            clock = agent.driver.clock = _WaitEntered(agent.driver.clock)
+            openrouter_env.setattr(litellm_driver, "_LAST_REQUEST_AT", [clock.time()])
+            turns = _count_calls(agent._runtime, "_run_turn")
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert clock.entered.wait(WAIT_S), "attempt 1 was not paced"
+            _abort_like_the_kernel(agent)
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+    assert stub.unscripted == 0 and stub.requests == []
+    _check_nothing_kept(agent, turns)
+    (wait,) = _trace(tmp_path, "SessionWait")
+    assert (wait["wait"], wait["scope"]["generation"], wait["scope"]["attempt"]) == (
+        "request_pacing",
+        GENERATION,
+        1,
+    )
+    assert 50 < wait["seconds"] <= 60
+    assert _attempts(tmp_path) == [(1, "cancelled", None)]
+    assert _inspection_outcomes(tmp_path) == ["superseded_by_timeout"]
 
 
 def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
