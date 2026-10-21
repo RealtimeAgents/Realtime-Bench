@@ -9,12 +9,11 @@ scripted world (tests/shell/world.py).
 from __future__ import annotations
 
 import gc
-import time
 
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import DecisionBudget
 
-from .world import CLICK, ORIGIN, Agent, Reply, World, run
+from .world import CLICK, ORIGIN, Reply, World, run
 
 HOLD = Action.hold_key("a", 1.25)
 WAIT = Action.wait(0.5)
@@ -274,24 +273,38 @@ def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_
     assert episode.logs[0].endswith("-> skipped_timeout TIMEOUT")
 
 
-class _SlowAbort(Agent):
-    """Its aborted call hands back before the shell steps again."""
-
-    def abort(self, generation=None) -> None:
-        super().abort(generation)
-        time.sleep(0.002)
+def _decisions(payloads: list[dict]) -> list:
+    return [(p["decision"], p["timed_out"]) for p in payloads]
 
 
-def test_the_late_result_of_a_generation_the_deadline_cut_is_never_settled():
-    """The deadline gives the generation up and ends the episode; the decision goes unreported.
-    Its aborted call hands back at once, but leaves no trajectory row, token record or
-    InferenceCompleted: the runner never handled a late result either."""
-    episode = run("wall", 2.0, [Reply(hang=True)], agent_type=_SlowAbort)
+def test_a_result_back_while_the_shell_is_busy_is_settled_only_if_the_kernel_takes_it():
+    """The end check asked at 1 s takes 1 s; the reply comes back at 1.7 s, during it and after
+    the 1.5 s cap. When the check is over, the cap has given the generation up first: the move's
+    only records are those of the call given up on, and the late result leaves none."""
+    world = World(slow_checks=[(1.0, 1.5, 1.0)])
+    episode = run("wall", 3.0, [Reply(1.7), Reply(0.5)], world, per_move_cap_s=1.5)
+    agent = episode.agent
+    assert episode.statuses() == ["skipped_timeout", "applied"]
+    assert _decisions(episode.trace.payloads("InferenceCompleted")) == [(0, True), (1, False)]
+    assert [(row["decision"], row.get("timed_out")) for row in agent.trajectory] == [
+        (0, True),
+        (1, None),
+    ]
+    assert episode.env._token_accounting.summary()["responses"] == 2
+    assert ("accept", 1) not in agent.calls and ("discard", 1) in agent.calls
+
+
+def test_a_result_the_deadline_beat_while_the_shell_was_busy_leaves_no_records():
+    """The end check asked at 2 s takes 1.5 s; the reply comes back at 2.9 s, during it. When the
+    check is over, the 3 s deadline has given the generation up first and ended the episode: the
+    decision goes unreported and its result is never settled."""
+    world = World(slow_checks=[(2.0, 2.5, 1.5)])
+    episode = run("wall", 3.0, [Reply(2.9)], world)
     assert episode.statuses() == []
-    assert episode.agent.calls[0] == ("abort", 1)
     assert episode.agent.trajectory == []
     assert getattr(episode.env, "_token_accounting", None) is None
     assert "InferenceCompleted" not in episode.trace.events()
+    assert episode.env._termination["stop_reason"] == "time_limit"
 
 
 def test_a_paused_decision_lands_on_its_frame_and_moves_one_frame_on():

@@ -314,7 +314,16 @@ class _Shell:
         while not self._finished:
             # Cleared before the step takes the inbox: a post the step misses sets it again.
             self._wake.clear()
-            commands = self._step()
+            # The results back before the reading are filed at it: the time it takes to settle
+            # them is not theirs, and one back later waits for the next reading. They are settled
+            # only once nothing else is due by then: a deadline or a cap that came first gives
+            # their generation up, and a result the kernel will not take leaves no record.
+            returned = len(self._returned)
+            now = self._read()
+            commands = self._step(now)
+            if commands is None and returned:
+                self._settle_returned(returned)
+                commands = self._step(now)
             if commands is None:
                 self._sleep()
             else:
@@ -350,12 +359,7 @@ class _Shell:
             return self.env.tick_index(), self.clocks.operational.monotonic() - self._origin
         return self.clocks.semantic.time() - self.env.t0, None
 
-    def _step(self):
-        # The results back before the reading are filed at it: the time it takes to settle them
-        # is not theirs, and one back later waits for the next step.
-        returned = len(self._returned)
-        now = self._read()
-        self._settle_returned(returned)
+    def _step(self, now: tuple[float, float | None]):
         with self._inbox:
             self._now = now
             commands = self.kernel.step(*now)
