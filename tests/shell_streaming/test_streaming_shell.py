@@ -25,8 +25,8 @@ from .fakes import Call, FakeAgent, FakeEnv, Reply
 
 CLICK = Action(ActionType.CLICK, {"x": 1, "y": 2})
 # The first reply starts on the first frame, pushed at 0.875 s; its click arrives 0.9 s later and
-# executes from 1.775 s to 3.775 s, while the reply ends at 2.375 s.
-ONE_CLICK = [Reply(1.5, (Call(0.9, CLICK, "c0"),))]
+# executes from 1.775 s to 3.775 s, while the reply ends at 2.475 s.
+ONE_CLICK = [Reply(1.6, (Call(0.9, CLICK, "c0"),))]
 
 
 def _episode(duration_s, replies, *, tmp_path=None, env_setup=None):
@@ -47,7 +47,7 @@ def _episode(duration_s, replies, *, tmp_path=None, env_setup=None):
         )
     if trace is not None:
         trace.close()
-    assert not env.overlapped, "two environment operations ran at once"
+    assert not env.overlapped, "an operation that holds the gate alone ran with another"
     return termination, env, agent
 
 
@@ -72,9 +72,11 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
         ("capture", 0.5, 0.75),
         ("check_end", 1.0, 1.5),
         ("capture", 1.5, 1.75),
+        # The beats at 2 s and 3 s are captured alongside the action; the end check asked at 2 s
+        # holds the gate alone, so it waits for the action.
+        ("capture", 2.0, 2.25),
+        ("capture", 3.0, 3.25),
         ("execute", 1.775, 3.775),
-        # Asked at 2 s, they waited for the action; the beats at 3 s and 4 s found the capture
-        # still under way and were skipped.
         ("check_end", 3.775, 4.275),
         ("capture", 4.275, 4.525),
         ("check_end", 4.525, 5.025),
@@ -82,9 +84,14 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
         ("check_end", 5.275, 5.775),
         ("snapshot", 6.0, 6.5),
     ]
-    # During the action, the second frame went out and the next reply started on it.
-    assert agent.pushed[:2] == [("obs-1", 0.875), ("obs-2", 1.875)]
-    assert agent.started == [(1, "obs-1", 0.875), (2, "obs-2", 2.375)]
+    # During the action, frames went out and the next reply started on one captured meanwhile.
+    assert agent.pushed[:4] == [
+        ("obs-1", 0.875),
+        ("obs-2", 1.875),
+        ("obs-3", 2.375),
+        ("obs-4", 3.375),
+    ]
+    assert agent.started == [(1, "obs-1", 0.875), (2, "obs-3", 2.475)]
     assert (agent.accepted, agent.aborted, agent.discarded) == ([1], [(2, 6.0)], [2])
     ((committed_at, outcome),) = agent.committed
     assert (committed_at, outcome.status, outcome.call_id) == (3.775, "applied", "c0")
@@ -103,7 +110,7 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
     )
     assert env.released_at == 6.5
     records = _records(tmp_path)
-    assert [data["reason"] for data in _kernel(records, "FrameDropped")] == ["capture_busy"] * 2
+    assert _kernel(records, "FrameDropped") == []  # no beat skipped during the action
     (execution,) = [r["payload"] for r in records if r["event"] == "ActionExecution"]
     assert execution == {
         "decision": 0,
@@ -116,13 +123,13 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
 
 def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
     """4.8: the deadline falls at 3 s, during the action. The snapshot goes right after it, ahead
-    of the end check and the capture that have waited for the gate since 2 s."""
+    of the end check that has waited for the gate since 2 s."""
     termination, env, agent = _episode(3.0, ONE_CLICK)
     assert env.intervals[4:] == [
+        ("capture", 2.0, 2.25),
         ("execute", 1.775, 3.775),
         ("snapshot", 3.775, 4.275),
         ("check_end", 4.275, 4.775),
-        ("capture", 4.775, 5.025),
     ]
     assert termination == Termination("time_limit", "deadline", 3.0, 4.275, 3.0, 4.275, None)
     ((_, outcome),) = agent.committed
@@ -161,7 +168,7 @@ def test_an_end_check_asked_during_an_action_reads_once_the_action_is_done():
         "environment",
         2.0,
     )
-    # The capture asked at 2 s held the gate when the end came; the snapshot went next.
+    # The capture asked at 4 s held the gate when the end came; the snapshot went next.
     assert env.intervals[-2:] == [("capture", 4.275, 4.525), ("snapshot", 4.525, 5.025)]
 
 

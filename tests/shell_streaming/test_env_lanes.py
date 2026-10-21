@@ -37,7 +37,9 @@ def _lanes():
     return clock, env, inbox, EnvLanes(env, inbox.post, clock)
 
 
-def test_lanes_run_one_operation_at_a_time_in_the_order_they_asked_for_the_gate():
+def test_each_command_is_answered_once_the_gate_lets_it_run():
+    """The capture runs alongside the action; the end check asked after it holds the gate alone,
+    once the action is done."""
     clock, env, inbox, lanes = _lanes()
     executed: list[Executed] = []
     with clock.participant():
@@ -48,43 +50,48 @@ def test_lanes_run_one_operation_at_a_time_in_the_order_they_asked_for_the_gate(
         lanes.check_end(CheckEnd(7))
         events = inbox.wait_for(3)
     lanes.close()
-    assert not env.overlapped
     assert env.intervals == [
+        ("capture", 0.5, 0.75),
         ("execute", 0.0, 2.0),
-        ("capture", 2.0, 2.25),
-        ("check_end", 2.25, 2.75),
+        ("check_end", 2.0, 2.5),
     ]
     assert events == [
+        (0.75, FrameCaptured("obs-1", 0.0, 0.75)),
         (2.0, ActionExecuted(0, result={"executed": "click"})),
-        (2.25, FrameCaptured("obs-1", 0.0, 2.25)),
-        (2.75, EndChecked(7, False, None)),
+        (2.5, EndChecked(7, False, None)),
     ]
     assert executed == [Executed(0, {"x": 1}, 0.0, 2.0)]
 
 
-def test_an_action_is_read_before_another_operation_can_change_what_it_left():
+@pytest.mark.parametrize(
+    ("by_guest", "answer"),
+    [
+        (True, ActionExecuted(3, result={"error": "HTTP 400"}, rejection="HTTP 400")),
+        (False, ActionExecuted(3, result={"error": "HTTP 400"}, error="HTTP 400")),
+    ],
+)
+def test_a_guest_refusal_is_a_rejection_and_any_other_failure_an_error(by_guest, answer):
+    """A refusal is the model's action failing and the run stays valid; any other failure is the
+    environment's, and the kernel invalidates the run for it (kernel/streaming.py _executed)."""
     clock, env, inbox, lanes = _lanes()
 
-    def refused(action, *, release_at=None):
+    def failed(action, *, release_at=None):
         env._operate("execute")
-        env._last_exec_error, env._last_rejected_by_guest = "HTTP 400", True
+        env._last_exec_error, env._last_rejected_by_guest = "HTTP 400", by_guest
         env._last_execution_result = {"error": "HTTP 400"}
         return "failed"
 
-    env.execute = refused
+    env.execute = failed
     with clock.participant():
         lanes.execute(Execute(3, CLICK), lambda record: None)
-        clock.sleep(0.5)
-        lanes.capture(_frame)  # waits for the gate, then leaves its own results behind
-        events = inbox.wait_for(2)
+        (event,) = [event for _, event in inbox.wait_for(1)]
     lanes.close()
-    assert events[0] == (2.0, ActionExecuted(3, result={"error": "HTTP 400"}, rejection="HTTP 400"))
-    assert env._last_execution_result == {"left": "by a capture"}
+    assert event == answer
 
 
 def test_an_invalid_run_the_environment_latched_is_posted_once_before_the_answer():
     """The action latches the run invalid; meanwhile the key-release timer reports the same
-    record through on_invalid, and a capture after it finds it already latched."""
+    record through on_invalid. A capture alongside the action ended before it."""
     clock, env, inbox, lanes = _lanes()
 
     def latch():
@@ -96,15 +103,14 @@ def test_an_invalid_run_the_environment_latched_is_posted_once_before_the_answer
         lanes.execute(Execute(0, CLICK), lambda record: None)
         clock.sleep(0.5)
         lanes.capture(_frame)
-        events = inbox.wait_for(3)
+        inbox.wait_for(3)
         clock.sleep(1.0)  # nothing more comes
     lanes.close()
-    assert [event for _, event in inbox.events] == [
-        Invalidated("environment", "action_execution_failed", "guest"),
-        ActionExecuted(0, result={"executed": "click"}),
-        FrameCaptured("obs-1", 0.0, 2.25),
+    assert inbox.events == [
+        (0.75, FrameCaptured("obs-1", 0.0, 0.75)),
+        (1.0, Invalidated("environment", "action_execution_failed", "guest")),
+        (2.0, ActionExecuted(0, result={"executed": "click"})),
     ]
-    assert events[0][0] == 1.0
 
 
 def test_an_invalid_run_latched_during_a_capture_is_not_posted_again_by_the_action():
@@ -139,6 +145,7 @@ def test_a_lane_takes_one_command_at_a_time():
 
 
 def test_an_end_check_on_its_own_lane_is_taken_while_an_action_runs():
+    """The end-check lane takes the command at once; the check waits for the action."""
     clock, _, inbox, lanes = _lanes()
     with clock.participant():
         lanes.execute(Execute(0, CLICK), lambda record: None)
@@ -165,34 +172,42 @@ def test_an_operation_that_raises_is_answered_with_its_error():
     assert (events[1].decision, events[2].request, executed) == (4, 9, [])
 
 
-def test_the_snapshot_goes_next_after_the_action_executing_ahead_of_the_reads_waiting():
+def test_the_snapshot_goes_next_after_the_action_executing_ahead_of_an_end_check_waiting():
+    """4.8: the end check asked at 0.5 s waits for the action; the snapshot asked after it goes
+    first, right after the action."""
     clock, env, inbox, lanes = _lanes()
     with clock.participant():
         command = Execute(0, CLICK)
         lanes.execute(command, lambda record: None)
         clock.sleep(0.5)
-        lanes.capture(_frame)  # waits for the action
+        lanes.check_end(CheckEnd(1))
         turn, executing = lanes.freeze_turn()
         assert executing is command
         snapshot = lanes.gate.call(env.task.evaluation_snapshot, turn=turn)
         inbox.wait_for(2)
     lanes.close()
     assert snapshot == {"score": 1}
-    assert env.intervals == [("execute", 0.0, 2.0), ("snapshot", 2.0, 2.5), ("capture", 2.5, 2.75)]
+    assert env.intervals == [
+        ("execute", 0.0, 2.0),
+        ("snapshot", 2.0, 2.5),
+        ("check_end", 2.5, 3.0),
+    ]
     assert lanes.executing is None
 
 
 def test_a_turn_that_does_not_come_in_time_leaves_the_line():
+    """4.8's bound: a snapshot that gives up waiting leaves no turn behind, which would hold the
+    end check after it for good."""
     clock, env, inbox, lanes = _lanes()
     with clock.participant():
         lanes.execute(Execute(0, CLICK), lambda record: None)
         turn, _ = lanes.freeze_turn()
         with pytest.raises(TimeoutError, match="still busy 0.5s later"):
             lanes.gate.call(env.task.evaluation_snapshot, turn=turn, wait=0.5)
-        lanes.capture(_frame)  # takes the gate after the action, nothing ahead of it
+        lanes.check_end(CheckEnd(1))
         inbox.wait_for(2)
     lanes.close()
-    assert env.intervals == [("execute", 0.0, 2.0), ("capture", 2.0, 2.25)]
+    assert env.intervals == [("execute", 0.0, 2.0), ("check_end", 2.0, 2.5)]
 
 
 @pytest.mark.parametrize("check_first", [True, False])
@@ -206,3 +221,39 @@ def test_commands_sent_at_one_instant_take_the_gate_in_the_order_they_were_sent(
     lanes.close()
     order = [name for name, _, _ in env.intervals]
     assert order == (["check_end", "capture"] if check_first else ["capture", "check_end"])
+
+
+def test_a_capture_runs_while_an_action_runs():
+    """M5: a capture and an action share the gate, so new frames come in during a long action."""
+    clock, env, inbox, lanes = _lanes()
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        clock.sleep(0.5)
+        lanes.capture(_frame)
+        inbox.wait_for(2)
+    lanes.close()
+    assert env.intervals == [("capture", 0.5, 0.75), ("execute", 0.0, 2.0)]
+    assert env.concurrent and not env.overlapped
+
+
+def test_an_end_check_holds_the_gate_alone_and_waits_for_the_action():
+    """4.9: an end check runs alone. Asked during the action it waits for it; a capture asked
+    meanwhile goes past it and runs alongside the action, and one asked once the action is done
+    waits behind it. So the check waits at most for the action and one capture."""
+    clock, env, inbox, lanes = _lanes()
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        clock.sleep(0.5)
+        lanes.check_end(CheckEnd(1))
+        clock.sleep(1.375)
+        lanes.capture(_frame)  # at 1.875: runs to 2.125, past the action's end
+        inbox.wait_for(2)
+        lanes.capture(_frame)  # at 2.125, while the check runs
+        inbox.wait_for(4)
+    lanes.close()
+    assert env.intervals == [
+        ("execute", 0.0, 2.0),
+        ("capture", 1.875, 2.125),
+        ("check_end", 2.125, 2.625),
+        ("capture", 2.625, 2.875),
+    ]
