@@ -5122,8 +5122,8 @@
    "benchmark_eligible": false,
    "comparison_scope": "experimental_system",
    "defaults": {
-    "context_reserve_tokens": 1024,
-    "context_window_tokens": 32768,
+    "context_reserve_tokens": 16384,
+    "context_window_tokens": 73728,
     "model_revision": null,
     "reasoning_effort": "fixed",
     "temperature": null,
@@ -5153,8 +5153,8 @@
    "context_counter": "estimate",
    "context_image_tokens": 4096,
    "context_preset": null,
-   "context_reserve_tokens": 1024,
-   "context_window_tokens": 32768,
+   "context_reserve_tokens": 16384,
+   "context_window_tokens": 73728,
    "fps": 1.0,
    "model_name": "typesafe/jev-1.13",
    "model_revision": null,
@@ -5261,8 +5261,8 @@
       "context_counter": "estimate",
       "context_image_tokens": 4096,
       "context_preset": null,
-      "context_reserve_tokens": 1024,
-      "context_window_tokens": 32768,
+      "context_reserve_tokens": 16384,
+      "context_window_tokens": 73728,
       "fps": 1.0,
       "model_name": "typesafe/jev-1.13",
       "model_revision": null,
@@ -5294,7 +5294,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1a59220e49df9fe085507131c30e42c0f4507207f8d0f39402f762e650bd801b"
+    "hash": "fb985b0e246b7a51a90091c911f562e36d4fa274fc5aa5255d87103576bf07a4"
    }
   },
   "vendor": "typesafe"

@@ -38,10 +38,14 @@ class JevDecisionsClient(OpenAIDecisionsClient):
     model_defaults: ClassVar[dict[str, dict]] = {
         "typesafe/jev-1.13": {
             "upstream_provider": "typesafe",
-            # TypeSafe's 32k prompt cap. A Choice answer is a few tokens, and a question whose
-            # criteria do not fit is split by the selection flow, so the reserve stays small.
-            "context_window_tokens": 32768,
-            "context_reserve_tokens": 1024,
+            # TypeSafe caps prompts at 32768 tokens. The estimate counts UTF-8 bytes, so both
+            # values are bytes: 2.25 a token, fewer than the 3.1-3.7 the replay requests take in
+            # o200k tokens; check against TypeSafe's tokenizer once JEV runs for real. The
+            # reserve holds what each question adds outside the estimate, its criteria and
+            # instructions (13.4 KB on the replay page's 255 options), and the answer; a
+            # question that still does not fit is split by the selection flow.
+            "context_window_tokens": 73728,
+            "context_reserve_tokens": 16384,
         },
     }
 

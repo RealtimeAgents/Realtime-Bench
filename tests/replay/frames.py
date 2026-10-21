@@ -247,7 +247,7 @@ def ax_fields(nodes: list[dict]) -> dict:
     return capture_ax_frames(_AxSession(nodes))
 
 
-def _form_ax_nodes(frame: int) -> list[dict]:
+def form_ax_nodes(frame: int) -> list[dict]:
     focused = (("focused", {"type": "booleanOrUndefined", "value": True}),)
     checked = {"type": "tristate", "value": "true" if agree_checked(frame) else "false"}
     disabled = (("disabled", {"type": "boolean", "value": True}),)
@@ -397,7 +397,7 @@ def probe(frame: int, *, text_observation: bool = False) -> dict:
         "active": True,
     }
     if text_observation:
-        window.update(ax_fields(_form_ax_nodes(frame)))
+        window.update(ax_fields(form_ax_nodes(frame)))
     return {**window, "binding": dict(window["binding"]), "windows": [window]}
 
 

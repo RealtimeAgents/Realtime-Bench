@@ -316,6 +316,9 @@ def test_candidate_overflow(api, tmp_path):
 # (context_window_tokens, context_reserve_tokens) small enough that the estimate of decision 12
 # of the long script, and of no earlier one, exceeds the window less the reserve.
 PRESSURE_WINDOWS = {"openai_decisions": (56000, 4000), "jev_decisions": (8192, 512)}
+# JEV's declared window and reserve, in the UTF-8 bytes its estimate counts: TypeSafe's 32768
+# tokens at 2.25 bytes a token (providers/jev/decisions.py model_defaults).
+JEV_WINDOW, JEV_RESERVE = 73728, 16384
 
 
 def _has_ledger(api: str, body: dict) -> bool:
@@ -361,3 +364,28 @@ def test_history_overflow(api, tmp_path):
     assert change["scope"]["decision"] == k and change["policy_item"] == "pressure_archive"
     assert change["ledger"] == {"archived_actions_before": 0, "archived_actions_after": 10}
     _settle("history_overflow", header, records, tmp_path)
+
+
+def test_jev_large_observation(tmp_path):
+    """A 25-32 KB observation fits JEV's window. The estimate counts UTF-8 bytes, and the window
+    is declared in them (providers/jev/decisions.py model_defaults): read as bytes, the 32768
+    tokens it was declared as before would have left no room for this frame, and the decision
+    would have been invalid before any request."""
+    header, records = _play(
+        "jev_decisions",
+        script.LARGE_OBSERVATION,
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        scene=script.TERMS_SCENE,
+    )
+    assert not any(r["result"].get("invalid_reason") for r in records)
+    k = script.LARGE_OBSERVATION_DECISION
+    current = _bodies(records[k])[0]["state"]["history"][-1]
+    assert 25_000 <= len(json.dumps(current, ensure_ascii=False).encode()) <= 32_000
+    contexts = [_runtime(r)["request_context"] for r in records]
+    assert contexts[k]["soft_limit"] == JEV_WINDOW - JEV_RESERVE
+    assert contexts[k]["input_tokens"] > 32768 - 1024  # the window less reserve declared before
+    assert not any(context["pressure"] for context in contexts)
+    assert not any(_runtime(r)["request_context_archived_turns"] for r in records)
+    _settle("large_observation", header, records, tmp_path)

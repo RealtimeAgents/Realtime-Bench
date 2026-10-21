@@ -18,6 +18,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   changed.
 - Every ModelConfig records its context_preset (kimi_k3 for kimi-k3, which its YAML names, and in
   its catalog defaults; None elsewhere), so every run hash changed.
+- jev-1.13 declares its context window and reserve in the UTF-8 bytes its estimate counts: its
+  context_window_tokens, context_reserve_tokens and run hash changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

@@ -321,3 +321,41 @@ CANDIDATE_OVERFLOW = [
 # turns into the ledger, and the questions go out with the shorter history.
 HISTORY_OVERFLOW = WEB_LONG[:14]
 HISTORY_OVERFLOW_ARCHIVE = 12
+
+# A text-heavy frame: the terms of service, in Chinese, below the form. JEV reads them in the
+# accessibility tree (at most 16000 characters, sandbox/browser/ax.py MAX_AX_CHARS), three UTF-8
+# bytes a character, so the frame's observation is 25-32 KB. The Name field is not focused on it,
+# so the terms add no typing candidates (harnesses/jev/candidates.py observation_candidates).
+TERMS_FRAME = 5
+TERMS_CLAUSES = 172
+
+
+def terms_clause(number: int) -> str:
+    return (
+        f"第{number}条：用户在提交表单之前应当完整阅读本服务条款，"
+        "平台仅为完成本次登记而处理所填写的姓名信息。"
+    )
+
+
+def terms_probe(frame: int, *, text_observation: bool = False) -> dict:
+    probe = frames.probe(frame, text_observation=text_observation)
+    if text_observation and frame == TERMS_FRAME:
+        root, *form = frames.form_ax_nodes(frame)
+        region = len(form) + 2  # the form's nodes are 1, the root, to len(form) + 1
+        clauses = range(region + 1, region + 1 + TERMS_CLAUSES)
+        terms = [
+            frames.ax_node(region, "region", "服务条款", children=tuple(clauses)),
+            *(frames.ax_node(n, "StaticText", terms_clause(n - region)) for n in clauses),
+        ]
+        ax = frames.ax_fields(
+            [{**root, "childIds": [*root["childIds"], str(region)]}, *form, *terms]
+        )
+        probe.update(ax)
+        probe["windows"][0].update(ax)
+    return probe
+
+
+TERMS_SCENE = {"probe": terms_probe}
+# Decision 4 sees the terms; the decisions around it are the long script's.
+LARGE_OBSERVATION = WEB_LONG[:6]
+LARGE_OBSERVATION_DECISION = TERMS_FRAME - 1
