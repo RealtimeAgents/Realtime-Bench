@@ -234,9 +234,12 @@ class RealtimeBenchOptions(AgentOptions):
 
     @model_validator(mode="after")
     def validate_integration(self):
+        from realtime_framework.providers.preflight import check_frame_rates
+
         self.seed = task_seed(self.seed)
         if self.model_input_fps is None:
             self.model_input_fps = self.fps
+        check_frame_rates(self.fps, self.model_input_fps)
         if self.api_base and self.base_url and self.api_base != self.base_url:
             raise ValueError("Supply only one of api_base or base_url")
         self.base_url = self.api_base or self.base_url

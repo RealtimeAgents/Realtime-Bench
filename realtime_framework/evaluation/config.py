@@ -355,6 +355,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         validate_model_interaction(
             model_catalog[model]["adapter_type"],
             clock_mode=clock_mode,
+            fps=fps,
             model_input_fps=fps if model_input_fps is None else model_input_fps,
             interaction_mode=interaction_mode,
             tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
@@ -680,6 +681,7 @@ def effective_run_config(
     validate_model_interaction(
         model_config.get("adapter_type"),
         clock_mode=clock_mode,
+        fps=fps,
         model_input_fps=model_config["fps"],
         interaction_mode=interaction_mode,
         tokens_per_frame=tokens_per_frame,

@@ -24,7 +24,7 @@ shell to send it).
 | `-c JOB.yaml` | Harbor job configuration; see [job files](#job-files). |
 | `--ak duration_minutes=5` | Scored time limit per task in minutes (default: 5). |
 | `--ak fps=1` / `--ak seed=42` | Environment frame rate and [task seed](#task-seed) (defaults shown). |
-| `--ak model_input_fps=1` | Frames per second fed to the model; `tokens_per_frame` counts these frames (default: `fps`). |
+| `--ak model_input_fps=1` | Frames per second fed to the model, at most `fps`; `tokens_per_frame` counts these frames (default: `fps`). |
 | `--ak interaction_mode=turn_based` | `turn_based` (default): one frame per model generation. `streaming` pushes frames into a live session (OpenAI Realtime, Gemini Live) on the wall clock and is reported separately; no model supports it yet. |
 | `--ak clock=wall` | `wall` (default) or `token`; see [clocks](#clocks). |
 | `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else its API's default, `low` for most APIs; provider default for `-m provider/model-id` and `chat_completions` presets). |
