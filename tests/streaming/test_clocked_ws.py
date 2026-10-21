@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 
 import pytest
 from websockets.exceptions import ConnectionClosedError
@@ -37,7 +38,10 @@ def _replay(records, client, *, connection=None, real_limit_s=REAL_LIMIT_S) -> l
         def open_connection():
             return connect(f"ws://127.0.0.1:{server.port}/session", create_connection=connection)
 
-        with real_time_limit(real_limit_s, server.drop), clock.participant():
+        def progress():
+            return clock.monotonic(), server.cursor.left
+
+        with real_time_limit(real_limit_s, server.drop, progress), clock.participant():
             client(open_connection, clock)
     return server.finish()
 
@@ -191,14 +195,35 @@ def test_waiting_for_delivery_never_blocks_on_a_read(monkeypatch):
 
 def test_a_client_stuck_in_real_time_fails_instead_of_hanging():
     """websockets' own connection class waits for the timed message in real time, so the fake
-    clock never reaches it; the real-time limit breaks the connections up and fails the replay."""
+    clock never reaches it; the real-time limit breaks the connections up and fails the replay,
+    though the client takes the end of its connection in its stride."""
     records = [_record("open", at=0.0), _record("s2c", {"type": "later"}, 1.0)]
 
     def client(open_connection, clock):
-        open_connection().recv()
+        with pytest.raises(ConnectionClosedError):
+            open_connection().recv()
 
-    with pytest.raises(AssertionError, match="did not finish within 1 real second"):
+    with pytest.raises(AssertionError, match="made no progress for 1 real second"):
         _replay(records, client, connection=ClientConnection, real_limit_s=1.0)
+
+
+def test_a_replay_that_goes_on_making_progress_is_not_stuck():
+    """L6: the limit counts the real time since the last progress, the clock's or the cursor's,
+    so a long replay, slow in real time as each round on Linux's loopback is, goes on."""
+    rounds = 6
+    records = [_record("open", at=0.0)]
+    for n in range(rounds):
+        records += [_record("c2s", {"type": "ping", "n": n}, 0.0), _record("s2c", {"n": n})]
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        for n in range(rounds):
+            time.sleep(0.2)
+            _send(ws, {"type": "ping", "n": n})
+            assert _recv(ws) == {"n": n}
+        ws.close()
+
+    assert _replay(records, client, real_limit_s=0.6) == []
 
 
 def test_a_connection_the_server_ends_twice_raises_nothing():

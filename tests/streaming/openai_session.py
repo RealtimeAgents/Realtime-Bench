@@ -102,14 +102,14 @@ def run_on_fake_clock(
 ):
     """Run ``coroutine`` on an execution thread of the fake clock, as the harness runs driver
     operations (harnesses/default/execution_thread.py), while this thread takes part in the
-    clock: at most ``timeout`` fake seconds and ``real_limit_s`` real ones. A coroutine that did
-    not finish is cancelled when the thread stops, and its cleanup, the driver's close, runs
-    there."""
+    clock: at most ``timeout`` fake seconds, and ``real_limit_s`` real ones in which the fake
+    clock does not move. A coroutine that did not finish is cancelled when the thread stops, and
+    its cleanup, the driver's close, runs there."""
     execution = ExecutionThread(clock, "replay")
     execution.start()
     try:
         future = execution.submit(coroutine)
-        with real_time_limit(real_limit_s, future.cancel), clock.participant():
+        with real_time_limit(real_limit_s, future.cancel, clock.monotonic), clock.participant():
             assert clock.wait(future, timeout), "the coroutine did not finish"
             return future.result()
     finally:

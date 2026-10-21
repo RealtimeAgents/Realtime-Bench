@@ -46,26 +46,30 @@ from .ws_cassette import Cursor, RealtimeNormalizer
 
 RECV_BYTES = 65536
 CLIENT_END_WAIT_S = 10.0  # real seconds, like websockets' close timeout
-REAL_LIMIT_S = 60.0  # real seconds a replay may take
+REAL_LIMIT_S = 60.0  # real seconds a replay may go without progress
 
 
 @contextmanager
-def real_time_limit(seconds: float, expired: Callable[[], None]):
+def real_time_limit(seconds: float, expired: Callable[[], None], progress: Callable[[], object]):
     """Fail a replay that is stuck in real time. A participant busy in real I/O keeps the fake
-    clock from moving and from finding the stall, so the run would hang. Past ``seconds`` real
-    seconds every thread's stack goes to stderr, ``expired()`` breaks the replay up, and the block
-    fails."""
-    hit = threading.Event()
+    clock from moving and from finding the stall, so the run would hang. Once ``progress()`` has
+    returned the same for ``seconds`` real seconds, every thread's stack goes to stderr,
+    ``expired()`` breaks the replay up, and the block fails."""
+    hit, done = threading.Event(), threading.Event()
 
-    def expire():
-        hit.set()
-        faulthandler.dump_traceback(all_threads=True)
-        expired()
+    def watch():
+        last, since = progress(), time.monotonic()
+        while not done.wait(seconds / 10):
+            if (now := progress()) != last:
+                last, since = now, time.monotonic()
+            elif time.monotonic() - since >= seconds:
+                hit.set()
+                faulthandler.dump_traceback(all_threads=True)
+                expired()
+                return
 
-    timer = threading.Timer(seconds, expire)
-    timer.daemon = True
-    timer.start()
-    failure = AssertionError(f"the replay did not finish within {seconds:g} real second(s)")
+    threading.Thread(target=watch, name="real-time-limit", daemon=True).start()
+    failure = AssertionError(f"the replay made no progress for {seconds:g} real second(s)")
     try:
         yield
     except BaseException as exc:
@@ -73,7 +77,7 @@ def real_time_limit(seconds: float, expired: Callable[[], None]):
             raise failure from exc
         raise
     finally:
-        timer.cancel()
+        done.set()
     if hit.is_set():
         raise failure
 
