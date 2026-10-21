@@ -811,8 +811,10 @@ class GuestEnvironment:
         """Press the chord now and release it when the lease expires; never block the loop.
 
         The lease lasts ``duration`` from the press, or to ``release_at`` (semantic seconds since
-        the origin) when the kernel's shell gives it; a press delayed to or close to that time
-        still holds its keys as long as a tap (TAP_HOLD_S), or the whole hold if it is shorter.
+        the origin) when the kernel's shell gives it. A press delayed to or past that time keeps
+        its keys down at least min(duration, TAP_HOLD_S) more after its keydown returned:
+        TAP_HOLD_S is the token clock's tap, 1/60 s (the guest's wall-clock tap is 1/30 s), and a
+        press never holds longer late than on time.
         """
         parts, chord = self._key_chord(action)
         duration = float(action.parameters.get("duration", 1.0))
@@ -824,11 +826,6 @@ class GuestEnvironment:
         with self._wall_lock:
             autorepeat = self._ensure_wall_autorepeat()
             now = self.clocks.semantic.time()
-            expires_at = (
-                now + duration
-                if release_at is None
-                else max(self.t0 + release_at, now + min(duration, TAP_HOLD_S))
-            )
             new_parts = [
                 (identity, wire) for identity, wire in parts if identity not in self._wall_holds
             ]
@@ -836,6 +833,12 @@ class GuestEnvironment:
                 self._wall_command(
                     ["xdotool", "keydown", "--", *(keysyms[identity] for identity, _ in new_parts)]
                 )
+            pressed_at = self.clocks.semantic.time()
+            expires_at = (
+                now + duration
+                if release_at is None
+                else max(self.t0 + release_at, pressed_at + min(duration, TAP_HOLD_S))
+            )
             for identity, wire in parts:
                 current = self._wall_holds.get(identity)
                 self._wall_holds[identity] = {
@@ -859,9 +862,10 @@ class GuestEnvironment:
                 "active_mouse_buttons": sorted(self._held_mouse_buttons),
             }
             if release_at is not None:
-                # How long after the press this hold keeps its keys down; a key an earlier hold
-                # keeps down longer goes up at that one's end.
-                result["lease_seconds"] = round(expires_at - now, 3)
+                # The lease this hold set, from the return of its keydown to the release the timer
+                # will send: that keyup lands when its own request does (later on a retry), and a
+                # key an earlier hold keeps down longer goes up at that one's end.
+                result["lease_seconds"] = round(expires_at - pressed_at, 3)
             return result
 
     def _restore_wall_holds(self, action):
