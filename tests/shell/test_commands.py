@@ -219,6 +219,34 @@ def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_settling_it_to
         assert round(age, 6) == 0.625
 
 
+class _SlowAccept(Agent):
+    """Taking a result into the history takes 0.125 s, after the kernel's reading."""
+
+    def accept(self, generation: int) -> None:
+        super().accept(generation)
+        self.clock.sleep(0.125)
+
+
+def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_accepting_it_took_time():
+    """The kernel lands the result at 0.5 s and the agent takes 0.125 s to accept it before the
+    landing is recorded: the record's resolution time is still the landing's reading, which
+    its frame age counts from."""
+    episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=_SlowAccept)
+    for record in episode.env.lifecycle:
+        assert record["frame_age_at_action_s"] == 0.5
+        age = record["action_resolved_unix_s"] - record["observation_timestamp"]
+        assert round(age, 6) == 0.5
+
+
+def test_a_token_action_is_timed_when_the_clock_got_to_it():
+    """The call takes 0.25 s and its 100 tokens put the action at tick 1; the clock gets there
+    at once. The runner times the resolution then (runner.py _apply): 0.25 s in, operational."""
+    episode = run("token", 3.0, [Reply(0.25, CLICK, output_tokens=100)], tokens_per_frame=100)
+    (resolved, *_) = episode.trace.payloads("ActionResolved")
+    assert resolved["action_resolved_unix_s"] == ORIGIN + 0.25
+    assert episode.env.lifecycle[0]["action_resolved_unix_s"] == ORIGIN + 0.25
+
+
 def test_an_action_the_guest_refuses_is_reported_with_its_reason():
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], World(rejections={0: "bad key"}))
     assert episode.statuses() == ["rejected", "applied"]
@@ -227,13 +255,14 @@ def test_an_action_the_guest_refuses_is_reported_with_its_reason():
     assert episode.invalid is None
 
 
-def test_a_done_reply_lands_as_a_wait_and_its_record_says_why():
-    """The loop has no terminal actions: the kernel lands a DONE as a wait, and the lifecycle
-    record keeps the fallback protocol the runner writes (runner.py _decide)."""
+@pytest.mark.parametrize("terminal", [ActionType.DONE, ActionType.FAIL])
+def test_a_done_reply_lands_as_a_wait_and_its_record_says_why(terminal):
+    """The loop has no terminal actions: the kernel lands a DONE or a FAIL as a wait, and the
+    lifecycle record keeps the fallback protocol the runner writes (runner.py _decide)."""
     episode = run(
         "wall",
         1.0,
-        [Reply(0.5, Action(ActionType.DONE), fields={"action_protocol": {"source": "json"}})],
+        [Reply(0.5, Action(terminal), fields={"action_protocol": {"source": "json"}})],
     )
     outcome = episode.agent.outcomes[0]
     assert (outcome.status, outcome.action, outcome.protocol_failure) == (
@@ -249,11 +278,12 @@ def test_a_done_reply_lands_as_a_wait_and_its_record_says_why():
     assert "ActionProposed" not in episode.trace.events()
 
 
-def test_a_done_reply_over_the_cap_still_records_why_it_was_not_a_done():
+@pytest.mark.parametrize("terminal", [ActionType.DONE, ActionType.FAIL])
+def test_a_done_reply_over_the_cap_still_records_why_it_was_not_a_done(terminal):
     """Its 100 tokens are one second at B = 100, over the 0.5 s cap: the kernel places no action
     and so names no protocol failure (kernel/turns.py _accept). The runner rewrites the protocol
-    of every DONE it was given (runner.py _decide), and the record says so here too."""
-    reply = Reply(0.0, Action(ActionType.DONE), 100, fields={"action_protocol": {"source": "json"}})
+    of every DONE or FAIL it was given (runner.py _decide), and the record says so here too."""
+    reply = Reply(0.0, Action(terminal), 100, fields={"action_protocol": {"source": "json"}})
     episode = run("token", 2.0, [reply, reply], tokens_per_frame=100, per_move_cap_s=0.5)
     assert episode.statuses()[0] == "skipped_timeout"
     assert episode.agent.outcomes[0].protocol_failure is None
@@ -529,4 +559,5 @@ def test_main_waits_for_the_worker_of_a_generation_given_up_on():
     closes the agent (runner.py main, _drain_abandoned)."""
     episode = run("wall", 2.0, [Reply(5.0)], agent_type=_Uninterruptible)
     assert "[default] draining 1 abandoned generate worker(s), <= 30s" in episode.logs
+    assert not any("STILL inside" in line for line in episode.logs)
     assert episode.clock.monotonic() == 5.0

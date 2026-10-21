@@ -281,6 +281,20 @@ def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
     assert getattr(episode.env, "_loop_error", None) is None
 
 
+def test_the_first_failure_is_the_record_though_the_environment_latched_another_after_it():
+    """The lifecycle write of decision 0 fails at 1 s and the snapshot read takes until 2 s; the
+    key held from 0.25 s fails to come up at 1.25 s, meanwhile, and the environment latches
+    that. The run is invalid for the first failure, on env too (runner.py _invalidate)."""
+    world = World(release_failures={0}, lifecycle_errors={0}, snapshot_s=1.0)
+    episode = run("wall", 4.0, [Reply(0.25, Action.hold_key("a", 1.0)), Reply(0.5)], world)
+    assert [call for call, _, _ in episode.env.calls if call != "check_end"][-3:] == [
+        "wall_release",
+        "snapshot",
+        "release_inputs",
+    ]
+    assert episode.invalid["reason"] == "action_lifecycle_write_failed"
+
+
 def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
     """The kernel keeps the end of a long detail (kernel/core.py invalidate); the record main()
     reads stays the environment's, whole, as under the runner (runner.py _invalidate)."""
