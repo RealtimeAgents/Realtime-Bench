@@ -23,12 +23,10 @@ from realtime_framework.entity.model import (
     TRANSIENT,
     TRANSPORT_RETRY,
     ConnectRequest,
-    Deployment,
     GenerationHandle,
     GenerationRequest,
     HistorySyncRequest,
     HistorySyncResult,
-    RealtimeCapabilities,
     RetryCancelled,
     SessionSeed,
     SyncDisposition,
@@ -37,7 +35,6 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.records import UNTRACED, TraceEvent, current_trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
-from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
 from tests.fake_clock import FakeClock
@@ -356,23 +353,6 @@ def test_a_wait_runs_on_the_clock_and_a_cancel_ends_it():
         with pytest.raises(RetryCancelled, match="during the session_release wait$"):
             waiting.result()
         assert rig.clock.monotonic() == 2.5
-
-
-def test_a_persistent_session_must_ready_and_abort_itself():
-    """The catalog's check of a driver class (providers/registry.py): one that declares
-    persistent_session without ensure_ready, abort or mark_dirty is refused."""
-    attributes = {
-        "capabilities": RealtimeCapabilities("replay_session", persistent_session=True),
-        "deployment": Deployment(family="streaming", provider="replay", key_env=None),
-        "model_defaults": {},
-        **{name: lambda self, *args: None for name in catalog._DRIVER_METHODS},
-    }
-    lifecycle = ("ensure_ready", "abort", "mark_dirty")
-    for missing in lifecycle:
-        methods = {name: getattr(SessionLifecycle, name) for name in lifecycle if name != missing}
-        driver = type("SessionDriver", (), {**attributes, **methods})
-        with pytest.raises(ValueError, match=rf"declares persistent_session but has no {missing}"):
-            catalog._check_driver("rtb_ext.session:SessionDriver", driver)
 
 
 # ---- OpenAI Realtime on a fake SDK connection ---------------------------------------------
