@@ -3,10 +3,13 @@
 An action is interpreted against one frame's entry: its SoM marks resolve the action's element
 references and its geometry maps the action's image coordinates to the desktop. The entry stays
 when the provider context folds or drops the frame. A streaming action names the frame it is based
-on; a turn-based action is interpreted against the frame of its own generation. A captured frame
-dropped before it is prepared takes no number. A frame whose push failed keeps the number it was
-prepared under, so the numbers the model sees have a gap there. The streaming policy counts both
-as dropped (evaluation/kernel/streaming.py).
+on; a turn-based action is interpreted against the frame of its own generation.
+
+Only frames prepared for the model take numbers, in order: a captured frame dropped before it is
+prepared takes none. A frame whose push failed keeps the number it was prepared under and the
+number is not given again: it is drawn on the frame's screenshot, and the server may hold the
+frame though the push failed. The numbers the model sees then have a gap there. The streaming
+policy counts both as dropped (evaluation/kernel/streaming.py).
 """
 
 from __future__ import annotations

@@ -96,10 +96,11 @@ class StreamingKernelAgent(KernelAgent, Protocol):
     the newest frame pushed, which it takes for its records only, and returns once the reply
     ended; ``commit`` reports one action's outcome, or a reply's that came to none."""
 
-    def bind_inbox(self, post: Callable[[object], None]) -> None:
+    def bind_inbox(self, post: Callable[[object], None], origin: float) -> None:
         """Before the episode: where a reply's ActionArrived and CallsCancelled go
         (kernel/streaming.py), each posted as its message comes and before ``generate``
-        returns."""
+        returns; and the episode's origin on the wall clock (``env.t0``), from which the
+        semantic seconds they carry count."""
 
     def push(self, observation: Observation) -> None:
         """PushFrame: put the frame into the session. Raises when it did not go out; only that
@@ -149,7 +150,7 @@ class _StreamingShell:
         env = self.env
         env.kernel_counts_reads = True
         env.on_invalid = self.lanes.gate.latched
-        self.agent.bind_inbox(self.post)
+        self.agent.bind_inbox(self.post, env.t0)
         try:
             self._now = self._read()
             self._run_all(self.kernel.start(self._now))
