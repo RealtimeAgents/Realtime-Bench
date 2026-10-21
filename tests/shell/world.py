@@ -57,6 +57,8 @@ class World:
     latches: dict[int, dict] = field(default_factory=dict)
     tap_checks: dict[int, tuple] = field(default_factory=dict)  # decision -> last_end_checks
     advance_errors: dict[int, str] = field(default_factory=dict)  # step_clock call -> fault
+    release_errors: dict[int, str] = field(default_factory=dict)  # release_keys call -> fault
+    render_errors: dict[int, str] = field(default_factory=dict)  # render call -> fault
     release_failures: set[int] = field(default_factory=set)  # decisions whose wall release fails
     lifecycle_errors: set[int] = field(default_factory=set)  # decisions
     renders: bool = True  # render_current_frame commits a frame
@@ -91,6 +93,8 @@ class Environment:
         self.checks = 0
         self.applied = 0
         self.advances = 0
+        self.releases = 0
+        self.renders = 0
         self.horizon = None
         self._frozen = None
         self._last_exec_error = None
@@ -206,10 +210,16 @@ class Environment:
         self.clocks.semantic.frame = _snap(self.clocks.semantic.frame + step)
 
     def release_keys(self, keys: tuple[str, ...]) -> None:
+        self.releases += 1
         self.log("release_keys", keys=keys)
+        if self.releases in self.world.release_errors:
+            raise RuntimeError(self.world.release_errors[self.releases])
 
     def render_current_frame(self):
+        self.renders += 1
         self.log("render")
+        if self.renders in self.world.render_errors:
+            raise RuntimeError(self.world.render_errors[self.renders])
         return {"rendered": True} if self.world.renders else None
 
     def release_inputs(self) -> None:
