@@ -292,7 +292,6 @@ class GeminiLiveDriver(SessionLifecycle):
         self._trace_connection: str | None = None  # the trace's id of the last connection opened
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
-        self._writing = asyncio.Lock()  # streaming: held while a push or a trigger is written
         self._last_video_sent_at: float | None = None
         # The goAway deadline the trace has a wait for, on the open connection.
         self._go_away_wait_recorded: float | None = None
@@ -704,10 +703,14 @@ class GeminiLiveDriver(SessionLifecycle):
     async def push_frame(self, observation: ProviderObservation, history: CanonicalRequest) -> dict:
         """Streaming: push the history view's newest frame, one the session does not hold yet,
         on the realtime_input video stream and then its text, outside any activity, so that it
-        starts no reply. A push and a trigger do not interleave their messages."""
-        session = self._session_for_input()
-        push = self._core.push(history)
-        async with self._writing:
+        starts no reply.
+
+        A push and a trigger hold the session as a connection operation does
+        (SessionLifecycle): their messages do not interleave, none goes to a connection being
+        replaced, and one given up while it waits has planned nothing."""
+        async with self._session_lock():
+            session = self._session_for_input()
+            push = self._core.push(history)
             try:
                 for item in push.inputs:
                     await self._send_realtime(session, item)
@@ -719,19 +722,24 @@ class GeminiLiveDriver(SessionLifecycle):
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Streaming: start the next reply with one activity, holding the execution feedback of
-        ``request.canonical`` that the session lacks (SessionCore.trigger). Its generation starts
-        before the activity goes out, so that the reader takes the reply's first message for
-        it; the session's NO_INTERRUPTION leaves a reply still running alone."""
-        session = self._session_for_input()
-        generation = await self.start_generation(request)
-        trigger = self._core.trigger(request.canonical)
-        async with self._writing:
+        ``request.canonical`` that the session lacks (SessionCore.trigger), once the reply before
+        it ended: a connection carries one reply at a time. Its generation starts before the
+        activity goes out, so that the reader takes the reply's first message for it. The
+        session's NO_INTERRUPTION keeps the activity from cutting off what the server may still
+        be generating. It holds the session as push_frame does."""
+        async with self._session_lock():
+            session = self._session_for_input()
+            if self._activity_open:
+                raise RuntimeError("Gemini Live input activity is already open")
+            generation = await self.start_generation(request)
+            trigger = self._core.trigger(request.canonical)
             self._activity_open = True
             try:
                 for item in trigger.inputs:
                     await self._send_realtime(session, item)
             except BaseException:
-                # An incomplete activity cannot be resumed as canonical context.
+                # An incomplete activity cannot be resumed as canonical context: the session is
+                # rebuilt before the next reply, and its seed replays the feedback.
                 self._core.send_failed(trigger.keys)
                 self._replies.pop(request.generation_id, None)
                 raise
