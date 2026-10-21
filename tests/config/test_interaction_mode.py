@@ -71,10 +71,13 @@ def test_the_runner_records_streaming(runner_cells):
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
-def run_main(tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="wall") -> dict:
+def run_main(
+    tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="wall", loop=None
+) -> dict:
     """runner.main() in this interpreter with the export probe's stand-ins for the container, the
     guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
-    decision loop that fails at once, so the run ends invalid. The interaction mode each agent is
+    decision loop that fails at once, so the run ends invalid, or that is ``loop(env, trace)``
+    and returns its timeline. The interaction mode each agent is
     built for is appended to ``agents``, and the one the loop is run in to ``loops``;
     ``clock_mode`` None leaves --clock out. Returns the run summary."""
     import sys
@@ -111,9 +114,11 @@ def run_main(tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="
     registered = tasks.get
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
 
-    def run_stream(adapter, env, **loop):
-        loops.append(loop["interaction_mode"])
-        raise RuntimeError("decision loop failed")
+    def run_stream(adapter, env, **kwargs):
+        loops.append(kwargs["interaction_mode"])
+        if loop is None:
+            raise RuntimeError("decision loop failed")
+        return loop(env, kwargs["trace"])
 
     monkeypatch.setattr(runner, "run_stream", run_stream)
     for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
@@ -143,6 +148,34 @@ def test_a_streaming_run_summary_records_the_mode(tmp_path, monkeypatch):
     assert summary["runtime_config"]["interaction_mode"] == "streaming"
     assert summary["streaming"]["context_control"] == "approximate"
     assert summary["streaming"]["frames"]["pushed"] == 0
+
+
+def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
+    tmp_path, monkeypatch
+):
+    """A trace record written in part, with the next one after it on its line
+    (reporting.py EpisodeTrace.emit), keeps the trace's rows from being read (reporting.rows): the
+    run is invalid for it, and the rest of its summary stands."""
+    termination = {"stop_reason": "time_limit", "end_s": 300.0, "snapshot_s": 300.5,
+                   "snapshot_delay_s": 0.5}  # fmt: skip
+
+    def loop(env, trace):
+        with trace.path.open("a") as cut:
+            cut.write('{"event": "KernelRecord", "payload": ')
+        env._stop_reason, env._termination = "time_limit", termination
+        # The snapshot the shell froze for the scorer (streaming_shell.py _freeze).
+        snapshot = {
+            "state": {"ok": True}, "evaluation": {"resolved": True, "evaluation_version": 1},
+        }  # fmt: skip
+        env._termination_snapshot, env._termination_snapshot_captured = snapshot, True
+        return []
+
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming", loop=loop)
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("harness", "streaming_summary_failed")
+    assert "JSONDecodeError" in invalid["detail"]
+    assert (summary["stop_reason"], summary["termination"]) == ("invalid_run", termination)
+    assert summary["streaming"] is None
 
 
 def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch):
