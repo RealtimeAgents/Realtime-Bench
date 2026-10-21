@@ -622,3 +622,13 @@ def test_openai_realtime_records_the_connect_backoff():
     ]
     assert trace.waits == [("connect_backoff", delay, 100 * S + round(delay * S))]
     assert log == [("sleep", delay)]
+
+
+def test_close_records_its_wait_for_an_abort():
+    with _rig() as rig:
+        trace = rig.encoder._trace = _Trace()
+        rig.encoder.interrupt_s = 1.0
+        rig.thread.submit(rig.encoder.abort(GENERATION))
+        rig.run(rig.encoder.close())
+        rig.run(rig.encoder.close())  # no abort left to wait for
+    assert trace.waits == [("abort_cleanup", 10.0, 10 * S)]

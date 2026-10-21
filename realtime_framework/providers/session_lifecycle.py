@@ -41,8 +41,9 @@ class SessionLifecycle:
     (RetryCancelled, a cancelled task). A connection that an operation closes on its way (the one
     a connect replaces, one past its goAway deadline) changes neither.
 
-    Every wait of the encoder on the clock is written to the trace before it starts
+    Every timed wait of the encoder on the clock is written to the trace before it starts
     (_record_wait): what it waits for, how long, and until which time on the operational clock.
+    ensure_ready's wait for an abort's cleanup has no time bound and is not recorded.
     _wait takes a cancel event and ends early once it is set; a bound on an operation (a goAway
     deadline, a close) ends with the operation, and an abort's close ends the operation.
 
@@ -144,6 +145,8 @@ class SessionLifecycle:
         cleanup = self._cleanup
         if cleanup is None:
             return
+        if timeout is not None:
+            self._record_wait("abort_cleanup", timeout)
         try:
             await self.clock.wait_for(asyncio.wait({cleanup}), timeout)
         except TimeoutError:
