@@ -10,11 +10,13 @@ kernel, three in a row invalidate the run, the ones a token key tap makes inside
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
 
-from .world import CLICK, Agent, Reply, World, run
+from .world import CLICK, Agent, Environment, Reply, World, run
 
 TAP = Action(ActionType.KEY, {"key": "a"})
 
@@ -101,6 +103,42 @@ def test_a_failed_trajectory_row_of_a_move_over_the_cap_invalidates_the_run():
     assert episode.invalid["reason"] == "trajectory_write_failed"
     assert "OSError: trajectory disk full" in episode.invalid["detail"]
     assert episode.env._stop_reason == "invalid_run"
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_generation_that_raises_comes_back_failed_though_logging_it_fails():
+    """The worker hands its result back whatever happens on the way: here the log line about the
+    failure raises (runner.py _bounded_call hands back in a finally)."""
+    lines = []
+
+    def log(line: str) -> None:
+        if "generation failed" in line:
+            raise BrokenPipeError("stdout closed")
+        lines.append(line)
+
+    episode = run("wall", 3.0, [Reply(0.5, raises="provider down")], log=log)
+    # The worker ends with the log's error once it has handed back; it ends within this test.
+    for thread in threading.enumerate():
+        if thread.name == "generation-1":
+            thread.join(5)
+    assert episode.invalid["reason"] == "generation_error"
+    assert not any("STILL inside a native call" in line for line in lines)
+
+
+class _UnfinishableEnvironment(Environment):
+    """Refuses the termination record."""
+
+    def __setattr__(self, name, value):
+        if name == "_termination":
+            raise RuntimeError("read-only")
+        super().__setattr__(name, value)
+
+
+def test_the_shell_stops_at_the_finish_though_writing_the_termination_raises():
+    """Nothing more is asked after the finish (kernel/core.py), so the shell stops there."""
+    episode = run("wall", 1.0, [Reply(0.5)], env_type=_UnfinishableEnvironment)
+    assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
+    assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
 class _Cancelled(BaseException):

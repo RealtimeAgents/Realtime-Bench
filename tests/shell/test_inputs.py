@@ -6,6 +6,7 @@ real run's inputs after a change needs (phase2.md, 怎么验证)."""
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -15,7 +16,7 @@ from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Record
 from realtime_framework.evaluation.kernel.turns import TurnPolicy
 
-from .world import CLICK, Reply, World, run
+from .world import CLICK, Environment, Reply, World, run
 
 TAP = Action(ActionType.KEY, {"key": "a"})
 # Fields the JSON line holds as lists.
@@ -127,3 +128,21 @@ def test_replaying_the_recorded_inputs_reproduces_the_episode_log(
     ]
     kinds = [r["payload"]["kind"] for r in episode.trace.records if r["event"] == "KernelRecord"]
     assert kinds == [e.kind for e in entries if e.kind not in MAPPED]
+
+
+class _LockedResult(Environment):
+    """An execution record that cannot be copied."""
+
+    def execute(self, action, *, release_at=None):
+        status = super().execute(action, release_at=release_at)
+        self._last_execution_result = {"lock": threading.Lock()}
+        return status
+
+
+def test_an_input_the_log_cannot_hold_leaves_the_episode_to_finish(tmp_path):
+    episode = run(
+        "wall", 2.0, [Reply(0.5)] * 2, inputs_log=tmp_path / "inputs.jsonl", env_type=_LockedResult
+    )
+    assert episode.statuses() == ["applied", "applied"]
+    assert episode.env._stop_reason == "time_limit"
+    assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
