@@ -39,6 +39,7 @@ from realtime_framework.providers.gemini.session import Content
 from realtime_framework.providers.gemini.session import Part
 from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
+from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ class _Receiver:
             )
 
 
-class GeminiLiveDriver:
+class GeminiLiveDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="gemini_live",
         persistent_session=True,
@@ -275,6 +276,8 @@ class GeminiLiveDriver:
         self._core = SessionCore(self.options)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
+        # The goAway deadline the trace has a wait for, on the open connection.
+        self._go_away_wait_recorded: float | None = None
         self._connect_metadata: dict = {}
 
     def _client_for_slot(self, index: int):
@@ -472,8 +475,10 @@ class GeminiLiveDriver:
         self._receiver = None
         self._activity_open = False
         self._last_video_sent_at = None
+        self._go_away_wait_recorded = None
         self._core.closed()
         if cm is not None:
+            self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
             try:
                 await self.clock.wait_for(
                     cm.__aexit__(None, None, None),
@@ -483,10 +488,8 @@ class GeminiLiveDriver:
                 pass
         return cm is not None
 
-    async def connect(self, request: ConnectRequest) -> None:
-        await self._connect_once(request)
-
-    async def _connect_once(self, request: ConnectRequest) -> None:
+    async def _connect(self, request: ConnectRequest) -> None:
+        """One attempt: a Gemini Live connect has no retry of its own."""
         replacing = await self._close_current()
         connect = self._core.connect(request.history, request.resume_handle, replacing=replacing)
         if connect.release_grace:
@@ -494,7 +497,7 @@ class GeminiLiveDriver:
             # atomic operation. Apply the grace period to every reconnect/history replay, including
             # a retry whose failed predecessor no longer has a local context manager. This is
             # wall-clock-only and avoids briefly exceeding a one-session provider quota.
-            await self.clock.sleep_async(_SESSION_RELEASE_GRACE_S)
+            await self._wait("session_release", _SESSION_RELEASE_GRACE_S)
         config = self._live_config(request.seed, connect)
         cm = self.client.aio.live.connect(model=request.seed.model_name, config=config)
         try:
@@ -548,6 +551,10 @@ class GeminiLiveDriver:
         if deadline is None:
             return await operation
         remaining = max(0.0, deadline - self.clock.monotonic())
+        # One wait until the deadline, however many reads it bounds; none once it has passed.
+        if remaining > 0 and deadline != self._go_away_wait_recorded:
+            self._go_away_wait_recorded = deadline
+            self._record_wait("go_away_deadline", remaining, until=deadline)
         try:
             return await self.clock.wait_for(operation, remaining)
         except asyncio.TimeoutError:
@@ -596,8 +603,9 @@ class GeminiLiveDriver:
             if self._last_video_sent_at is not None:
                 # Video frames arrive no faster than the model-input frame rate.
                 interval = 1.0 / self.config.fps
-                await self.clock.sleep_async(
-                    max(0.0, interval - (self.clock.monotonic() - self._last_video_sent_at))
+                await self._wait(
+                    "video_interval",
+                    max(0.0, interval - (self.clock.monotonic() - self._last_video_sent_at)),
                 )
             await session.send_realtime_input(
                 video=self.types.Blob(
@@ -607,7 +615,7 @@ class GeminiLiveDriver:
             )
             self._last_video_sent_at = self.clock.monotonic()
             # Let media ingestion catch up before the corresponding SoM text arrives.
-            await self.clock.sleep_async(1.0)
+            await self._wait("video_ingestion", 1.0)
             await session.send_realtime_input(text=frame.text)
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.
@@ -1068,7 +1076,7 @@ class GeminiLiveDriver:
                 {"interrupt_error": repr(exc)[:300]},
             )
 
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+    async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         resume_error = None
         try:
             current = request.current_generation
@@ -1080,7 +1088,7 @@ class GeminiLiveDriver:
             )
             if handle:
                 try:
-                    await self._connect_once(
+                    await self._connect(
                         ConnectRequest(
                             seed=request.seed,
                             resume_handle=handle,
@@ -1099,7 +1107,7 @@ class GeminiLiveDriver:
                 except Exception as exc:  # noqa: BLE001 - fall through to canonical replay
                     resume_error = repr(exc)[:300]
             # Renew and replay with the same task credential, including resume failure fallback.
-            await self._connect_once(ConnectRequest(seed=request.seed, history=request.history))
+            await self._connect(ConnectRequest(seed=request.seed, history=request.history))
             return HistorySyncResult(
                 SyncDisposition.REBUILT,
                 ProviderHistoryState.EXACT,
@@ -1121,6 +1129,3 @@ class GeminiLiveDriver:
                 ProviderHistoryState.UNKNOWN,
                 detail=repr(exc)[:500],
             )
-
-    async def close(self) -> None:
-        await self._close_current()
