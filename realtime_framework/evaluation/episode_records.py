@@ -1,6 +1,7 @@
 """What one decision leaves on the record: its output caps and their audit, what its result is
 annotated with, the output tokens its clock is charged with and its token accounting, whether its
-result is usable, the payloads of its trace events and its action lifecycle record.
+result is usable, its frame's identity for the frozen-stream check, the payloads of its trace events
+and its action lifecycle record.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -329,6 +330,21 @@ def frame_output_tokens(r: dict) -> int | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
         return int(value)
     return clock_output_tokens(r)[0]
+
+
+def observation_fingerprint(observation: Observation) -> tuple:
+    """The producer's identity of a frame: its observation id, tick and screenshot digest. The
+    same identity repeated while time moves on is a frozen stream."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    digest = metadata.get("screenshot_sha256")
+    if not digest:
+        shot = getattr(observation, "screenshot", b"") or b""
+        digest = hashlib.sha256(shot).hexdigest()
+    return (
+        metadata.get("observation_id"),
+        getattr(observation, "tick_number", None),
+        digest,
+    )
 
 
 # ---- trace payloads ---------------------------------------------------------------------------
