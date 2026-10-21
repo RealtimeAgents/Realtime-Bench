@@ -20,7 +20,6 @@ Scripts:
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import contextlib
 import json
@@ -526,8 +525,8 @@ def test_driver_default_short(live_env, tmp_path):
 
 
 class _SleepRecordingClock(SystemClock):
-    """The driver's clock, whose async sleeps (live.py:530, 633-646) only advance its monotonic
-    time and are recorded; everything else is real time."""
+    """The driver's clock, whose waits (live.py:496, 597-610) only advance its monotonic time
+    and are recorded; everything else is real time."""
 
     def __init__(self):
         self.now = 0.0
@@ -536,10 +535,10 @@ class _SleepRecordingClock(SystemClock):
     def monotonic(self) -> float:
         return self.now
 
-    async def sleep_async(self, seconds):
-        self.sleeps.append(seconds)
-        self.now += seconds
-        await asyncio.sleep(0)
+    def wait(self, waitable, timeout):
+        self.sleeps.append(timeout)
+        self.now += timeout
+        return False
 
 
 def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):

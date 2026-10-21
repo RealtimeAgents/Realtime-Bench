@@ -493,7 +493,7 @@ class GeminiLiveDriver(SessionLifecycle):
             # atomic operation. Apply the grace period to every reconnect/history replay, including
             # a retry whose failed predecessor no longer has a local context manager. This is
             # wall-clock-only and avoids briefly exceeding a one-session provider quota.
-            await self.clock.sleep_async(_SESSION_RELEASE_GRACE_S)
+            await self._wait("session_release", _SESSION_RELEASE_GRACE_S)
         config = self._live_config(request.seed, connect)
         cm = self.client.aio.live.connect(model=request.seed.model_name, config=config)
         try:
@@ -595,8 +595,9 @@ class GeminiLiveDriver(SessionLifecycle):
             if self._last_video_sent_at is not None:
                 # Video frames arrive no faster than the model-input frame rate.
                 interval = 1.0 / self.config.fps
-                await self.clock.sleep_async(
-                    max(0.0, interval - (self.clock.monotonic() - self._last_video_sent_at))
+                await self._wait(
+                    "video_interval",
+                    max(0.0, interval - (self.clock.monotonic() - self._last_video_sent_at)),
                 )
             await session.send_realtime_input(
                 video=self.types.Blob(
@@ -606,7 +607,7 @@ class GeminiLiveDriver(SessionLifecycle):
             )
             self._last_video_sent_at = self.clock.monotonic()
             # Let media ingestion catch up before the corresponding SoM text arrives.
-            await self.clock.sleep_async(1.0)
+            await self._wait("video_ingestion", 1.0)
             await session.send_realtime_input(text=frame.text)
             # Native audio activity must contain audio. This fixed 100-ms silent carrier
             # has no task information; its input usage is audited, never output-charged.

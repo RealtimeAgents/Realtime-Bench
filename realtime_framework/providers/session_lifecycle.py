@@ -3,12 +3,13 @@
 A session encoder keeps one provider session open across generations. Whether that session can
 take the next generation, and the cleanup an abort leaves behind for the next use to wait for, do
 not depend on the protocol: SessionLifecycle keeps both, and readies or aborts the session through
-the encoder's own connection operations.
+the encoder's own connection operations. The encoder's own waits run through it too.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 
 from realtime_framework.entity.events import ProviderHistoryState
@@ -17,10 +18,13 @@ from realtime_framework.entity.model import (
     GenerationHandle,
     HistorySyncRequest,
     HistorySyncResult,
+    RetryCancelled,
     SessionSeed,
     SyncDisposition,
 )
 from realtime_framework.entity.request import CanonicalRequest
+
+_NEVER_CANCELLED = threading.Event()
 
 
 class SessionLifecycle:
@@ -34,7 +38,8 @@ class SessionLifecycle:
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one and does not raise, and ``interrupt(generation)``.
+    is one and does not raise, and ``interrupt(generation)``; and ``clock``, the operational
+    clock.
     """
 
     _connected = False
@@ -121,3 +126,12 @@ class SessionLifecycle:
         await asyncio.wait({cleanup})
         if self._cleanup is cleanup:
             self._cleanup = None
+
+    async def _wait(
+        self, wait: str, seconds: float, cancel: threading.Event = _NEVER_CANCELLED
+    ) -> None:
+        """Wait ``seconds`` on the operational clock, as RequestRetry's backoff does. Once
+        ``cancel`` is set the generation the wait belongs to is abandoned, and RetryCancelled
+        ends the wait."""
+        if await asyncio.to_thread(self.clock.wait, cancel, seconds):
+            raise RetryCancelled(f"generation abandoned during the {wait} wait")
