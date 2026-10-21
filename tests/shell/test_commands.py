@@ -393,3 +393,77 @@ def test_without_a_snapshot_reader_the_termination_has_no_snapshot_time():
     }
     assert episode.env._termination_snapshot_captured is False
     assert episode.invalid is None
+
+
+def test_the_snapshot_is_timed_when_its_read_returned():
+    """The read at the 1 s deadline takes 0.5 s; the termination record has when it returned and
+    how late that was (runner.py _finalize)."""
+    episode = run("wall", 1.0, [Reply(0.5)], World(snapshot_s=0.5))
+    assert episode.env._termination == {
+        "stop_reason": "time_limit",
+        "end_s": 1.0,
+        "snapshot_s": 1.5,
+        "snapshot_delay_s": 0.5,
+    }
+    assert episode.env._active_end_unix_s == ORIGIN + 1.0
+
+
+def test_a_snapshot_read_over_its_budget_invalidates_the_run():
+    """The freeze reads the snapshot within 16 s (decision 3); a read of 17 s fails."""
+    episode = run("wall", 1.0, [Reply(0.5)], World(snapshot_s=17.0))
+    assert episode.invalid["reason"] == "evaluation_snapshot_failed"
+    assert "snapshot read took longer than 16 s" in episode.env._termination_snapshot_error
+    assert episode.env._termination["snapshot_s"] is None
+
+
+def test_the_token_end_time_is_kept_to_nine_places():
+    """At 29.97 fps a 15 s horizon is 449.55 ticks, 14.999999999999998 s back in seconds; to
+    nine places it is the time limit, which reporting counts as a timeout (decision 4)."""
+    reply = Reply(0.0, CLICK, output_tokens=10**6)
+    episode = run("token", 15.0, [reply], fps=29.97, tokens_per_frame=100)
+    assert episode.statuses() == ["not_applied_tick_limit"]
+    assert episode.env._termination["end_s"] == 15.0
+
+
+def test_the_wall_delay_is_the_latency_in_environment_ticks():
+    episode = run("wall", 2.0, [Reply(0.5), Reply(0.25)], fps=2.0)
+    assert [entry[2] for entry in episode.timeline] == [1.0, 0.5]
+
+
+def test_the_frames_a_token_decision_crossed_are_counted_as_dropped():
+    """250 tokens at B = 100 are 2.5 frames: the next frame is the third after the observed one,
+    and the two in between were dropped."""
+    replies = [Reply(0.0, CLICK, output_tokens=250), Reply(0.0, CLICK, output_tokens=100)]
+    episode = run("token", 5.0, replies, tokens_per_frame=100)
+    assert episode.env.lifecycle[0]["dropped_intermediate_frames"] == 2
+    assert episode.env._dropped_intermediate_frames == sum(
+        record["dropped_intermediate_frames"] for record in episode.env.lifecycle
+    )
+
+
+def test_a_render_that_commits_no_frame_is_recorded_as_none():
+    """A landing on the next frame asks for a render; a task without a renderer commits none."""
+    episode = run(
+        "token",
+        2.0,
+        [Reply(0.0, CLICK, output_tokens=100)],
+        World(renders=False),
+        tokens_per_frame=100,
+    )
+    assert "render" in [call for call, _, _ in episode.env.calls]
+    assert episode.env.lifecycle[0]["post_action_rendered"] is False
+
+
+class _Uninterruptible(Agent):
+    """Its call runs its course whatever the abort, as a Decision call does."""
+
+    def abort(self, generation=None) -> None:
+        self.calls.append(("abort", generation))
+
+
+def test_main_waits_for_the_worker_of_a_generation_given_up_on():
+    """The deadline gives up a 5 s call at 2 s; main()'s drain waits for its worker before it
+    closes the agent (runner.py main, _drain_abandoned)."""
+    episode = run("wall", 2.0, [Reply(5.0)], agent_type=_Uninterruptible)
+    assert "[default] draining 1 abandoned generate worker(s), <= 30s" in episode.logs
+    assert episode.clock.monotonic() == 5.0

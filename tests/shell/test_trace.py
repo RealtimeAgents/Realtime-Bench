@@ -163,7 +163,18 @@ def test_a_failed_trace_write_invalidates_the_run():
     assert episode.invalid["reason"] == "episode_trace_write_failed"
     assert "OSError: trace disk full" in episode.invalid["detail"]
     assert episode.env._stop_reason == "invalid_run"
-    assert "ActionApplied" not in episode.trace.events()  # nothing is written after it
+    # Nothing is written after the failed write: its InferenceCompleted came last.
+    assert episode.trace.events()[-1] == "InferenceCompleted"
+
+
+def test_each_decision_writes_its_frame_under_its_own_number():
+    episode = run("wall", 3.0, [Reply(0.5)] * 3)
+    captured = episode.trace.payloads("ObservationCaptured")
+    assert [(p["decision"], p["observation_id"]) for p in captured] == [
+        (0, "obs-0"),
+        (1, "obs-1"),
+        (2, "obs-2"),
+    ]
 
 
 def test_a_failed_trace_checkpoint_invalidates_the_run():
