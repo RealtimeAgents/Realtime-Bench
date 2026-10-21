@@ -1308,6 +1308,7 @@ def main():
                     clock=clocks.operational,
                 ),
                 clock=clocks.operational,
+                env_fps=env_fps,
             )
         finally:
             # The cleanup below closes what setup made, also when one of its steps failed.
@@ -1970,13 +1971,16 @@ def set_up_agent(
     model: str,
     open_capture,
     clock=None,
+    env_fps: float | None = None,
 ) -> None:
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
     ``instruction`` is the task description and ``model`` the model identity the tool trace
     records. ``open_capture(text_observation)`` returns the scene capture for the observation
     form the model's context policy names. ``clock`` is the episode's operational clock, which
-    the agent reads (real time when omitted). What this makes is recorded in ``setup``.
+    the agent reads (real time when omitted). ``env_fps`` is the environment frame rate, which
+    the clock note describes where it differs from the model-input rate ``cfg.fps``. What this
+    makes is recorded in ``setup``.
     """
     clock = clock or SystemClock()
     # Every pre-run rule on the model, clock, interaction mode and task, before any is built.
@@ -1990,6 +1994,7 @@ def set_up_agent(
         tokens_per_frame=tokens_per_frame,
         clock_mode=clock_mode,
         category=getattr(ctask, "category", None),
+        env_fps=env_fps,
     )
     setup.stage = "environment_setup"
 

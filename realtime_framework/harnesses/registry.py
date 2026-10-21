@@ -18,9 +18,10 @@ def create_agent(config, log_dir=None, *, trace=UNTRACED, clock=None):
     return DefaultHarness(config, log_dir=log_dir, trace=trace, clock=clock)
 
 
-def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
+def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category, env_fps=None):
     """Apply the run's clock note, task category, scenario prompt and clock mode before
-    initialize(). ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``."""
+    initialize(). ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``;
+    ``env_fps`` is the environment's (``fps`` when omitted)."""
     from realtime_framework.harnesses.default.prompts import budget_clock_prompt
     from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 
@@ -28,6 +29,7 @@ def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category):
         fps,
         tokens_per_frame,
         clock_mode,
+        env_fps,
     )
     # Role/rules vary by scenario family; the task-specific objective is injected separately.
     agent.system_prompt_override = system_prompt_for_category(

@@ -80,6 +80,8 @@ def test_environment_rate_above_the_cap_starts(runner_cells):
     assert cell["frame_rates"] == {"env_fps": 2.0, "model_input_fps": 1.0}
     assert cell["runtime_config"]["fps"] == 2.0
     assert cell["clock_prompt"].startswith("WALL CLOCK: observations are scheduled at 1 fps. ")
+    # Where the rates differ the note also says what the ticks it shows count.
+    assert "at the first environment tick (2 per second) at or after" in cell["clock_prompt"]
     # The identity the report expects is computed from the same two rates.
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
@@ -92,11 +94,25 @@ def test_token_clock_charges_b_per_model_input_frame(runner_cells):
     assert cell["frame_rates"] == {"env_fps": 60.0, "model_input_fps": 1.0}
     prompt = cell["clock_prompt"]
     assert "observations are scheduled at f=1 frames per simulated second" in prompt
+    assert "at the first environment tick (60 per simulated second) at or after" in prompt
     assert "kappa=B*f=100 charged tokens per simulated second" in prompt
     # The task clock counts environment ticks: B per tick, the same kappa.
     task_clock = cell["task"]["task_clock"]
     assert (task_clock["fps"], task_clock["tokens_per_world_second"]) == (60.0, 100.0)
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
+
+
+def test_pause_mode_steps_to_the_next_frame_where_the_rates_differ():
+    """At 30/7 frames are due every 30/7 ticks and observed at whole ticks, so after an action
+    the world moves 5 or 4 ticks, never exactly 1/7 s; at equal rates the note is unchanged."""
+    from realtime_framework.harnesses.default.prompts import budget_clock_prompt
+
+    split = budget_clock_prompt(7.0, None, "token", env_fps=30.0)
+    assert "The environment then advances to the next scheduled frame, and" in split
+    assert "1/f seconds" not in split
+    equal = budget_clock_prompt(7.0, None, "token", env_fps=7.0)
+    assert equal == budget_clock_prompt(7.0, None, "token")
+    assert "advances exactly one frame interval (1/f seconds), and" in equal
 
 
 def test_model_input_rate_above_the_cap_is_refused(runner_cells):

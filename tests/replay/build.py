@@ -124,11 +124,13 @@ def build_episode(
     before_initialize=None,
     scene: dict | None = None,
     clock=None,
+    env_fps: float | None = None,
 ) -> Episode:
     """``model_key`` stands for the catalog key the runner records as the model identity.
     ``before_initialize(agent)`` runs on the new agent, before initialize() may open a
     connection. ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other
-    than the form. ``clock`` is the agent's clock (real time when omitted)."""
+    than the form. ``clock`` is the agent's clock (real time when omitted). ``env_fps`` is the
+    environment frame rate main() passes set_up_agent, when it is not ``config.fps``."""
 
     def checked_create_agent(*args, **kwargs):
         agent = create_agent(*args, **kwargs)
@@ -165,6 +167,7 @@ def build_episode(
                 task, text_observation=text_observation, fps=config.fps, **(scene or {})
             ),
             clock=clock,
+            env_fps=env_fps,
         )
     return Episode(
         agent=setup.agent,
