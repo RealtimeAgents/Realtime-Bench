@@ -875,7 +875,13 @@ class TurnPolicy:
         return self.kernel.semantic * self.config.env_fps
 
     def _semantic_of(self, tick: float) -> float:
-        return tick if self.token else tick / self.config.env_fps
+        """The semantic time of a tick. On the wall clock the horizon's is the deadline, a few ulp
+        past horizon / env_fps once the horizon snapped to a whole tick."""
+        if self.token:
+            return tick
+        if tick >= self.config.max_ticks - 1e-9:
+            return self.config.duration_s
+        return tick / self.config.env_fps
 
     def _frames(self, ticks: float) -> float:
         """Environment ticks as input frames."""
