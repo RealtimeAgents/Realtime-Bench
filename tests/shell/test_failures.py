@@ -99,7 +99,7 @@ def test_a_bound_past_a_start_that_raised_gives_up_a_generation_that_never_start
     assert episode.invalid["reason"] == "run_exception"
     raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
     assert "adapter transport output cap" in raised[0]
-    assert not any("_abandoned_on_a_bound" in line for line in raised)
+    assert not any("in _given_up" in line for line in raised)
     if not config:
         assert len(raised) == 1
 

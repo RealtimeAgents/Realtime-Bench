@@ -1,8 +1,9 @@
 """What one decision leaves on the record: the result of a generation that raised or was given up
-on at a bound or by the watchdog, its output caps and their audit, what its result is annotated with, the output tokens
-its clock is charged with and its token accounting, whether its result is usable, the protocol of a
-DONE or FAIL landed as a wait, its frame's identity for the frozen-stream check, the payloads of its
-trace events and its action lifecycle record.
+on at a bound, by the watchdog or at the episode's end, its output caps and their audit, what its
+result is annotated with, the output tokens its clock is charged with and its token accounting,
+whether its result is usable, the protocol of a DONE or FAIL landed as a wait, its frame's
+identity for the frozen-stream check, the payloads of its trace events and its action lifecycle
+record.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -44,6 +45,19 @@ def timed_out_result(latency: float, reason: str) -> dict:
         "timed_out": True,
         "harness_timeout_reason": reason,
         "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
+    }
+
+
+def abandoned_result(latency: float, reason: str) -> dict:
+    """The result of a call given up on when the episode ended by ``reason`` (``task_end`` or
+    ``invalid_run``) before the call came back: no action, and no usage reported for it. The
+    runner never gave one up so: it checked nothing during a generation."""
+    return {
+        "action": None,
+        "latency": latency,
+        "stale": True,
+        "harness_abort_reason": reason,
+        "provider_usage_missing_reason": f"generation_aborted_at_{reason}",
     }
 
 
@@ -352,7 +366,9 @@ def result_invalid(r: dict, adapter, clock_mode: str) -> Invalidated | None:
         and r.get("action") is None
         and r.get("harness_timeout_reason") in {"wall_deadline", "per_move_cap"}
     )
-    if not inspection_ok and not harness_wall_timeout:
+    # Nor has a call given up on at the episode's end (abandoned_result).
+    harness_abort = r.get("harness_abort_reason") is not None
+    if not inspection_ok and not harness_wall_timeout and not harness_abort:
         return Invalidated(
             "tool",
             "inspection_protocol_error",

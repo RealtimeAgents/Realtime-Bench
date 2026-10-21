@@ -406,7 +406,60 @@ def test_a_generation_given_up_on_at_the_tasks_end_did_not_time_out():
     episode = run("wall", 3.0, [Reply(hang=True)], World(ends_at=1.5, end_reason="won"))
     assert episode.env._termination["stop_reason"] == "won"
     assert not any("TIMED OUT" in line for line in episode.logs)
-    assert episode.trace.payloads("InferenceCompleted") == []
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["stale"], p["timed_out"]) for p in completed] == [(0, True, False)]
+
+
+class _ToolAgent(Agent):
+    """With a tool runtime a result needs its inspection proof (episode_records.result_invalid)."""
+
+    tool_runtime = object()
+
+
+@pytest.mark.parametrize(
+    ("world", "action", "reason", "latency"),
+    [
+        (World(ends_at=1.5, end_reason="won"), CLICK, "task_end", 1.0),
+        (World(release_failures={0}), Action.hold_key("a", 0.75), "invalid_run", 0.25),
+    ],
+    ids=["task-end", "invalid"],
+)
+def test_a_generation_the_episode_ended_on_is_recorded_as_a_call_given_up_on(
+    world, action, reason, latency
+):
+    """N10: the second call starts at 1 s and never answers. The task's end, seen by the end
+    check at 2 s, or the key held from 0.5 s failing to come up at 1.25 s ends the episode
+    during it. As for the deadline (decision 48), the call leaves a record of one given up on:
+    an InferenceCompleted, a trajectory row and a token record without usage, named for what
+    ended the episode. The decision is not reported, and the agent is asked to abort the call
+    and nothing more: closing it discards the generation no one settled (harness.py close)."""
+    replies = [Reply(0.5, action, output_tokens=40), Reply(hang=True)]
+    episode = run("wall", 3.0, replies, world)
+    assert episode.statuses() == ["applied"]
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["stale"], p["timed_out"], p["latency_s"]) for p in completed] == [
+        (0, False, False, 0.5),
+        (1, True, False, latency),
+    ]
+    rows = [(row["decision"], row.get("harness_abort_reason")) for row in episode.agent.trajectory]
+    assert rows == [(0, None), (1, reason)]
+    summary = episode.env._token_accounting.summary()
+    assert summary["responses"] == 2
+    assert summary["provider_usage_missing_reasons"][f"generation_aborted_at_{reason}"] == 1
+    assert summary["counts"]["provider_output_tokens"]["complete"] is False
+    assert summary["counts"]["provider_output_tokens"]["known_total"] == 40
+    calls = [call for call in episode.agent.calls if call[1] == 2]
+    assert calls == [("abort", 2)]
+
+
+def test_a_generation_the_tasks_end_gave_up_on_needs_no_inspection_proof():
+    """The record of a call given up on has no model decision to inspect: the episode the task
+    ended stays valid, as one the deadline ended does (episode_records.result_invalid)."""
+    world = World(ends_at=0.5, end_reason="won")
+    episode = run("wall", 3.0, [Reply(hang=True)], world, agent_type=_ToolAgent)
+    assert episode.invalid is None
+    assert episode.env._termination["stop_reason"] == "won"
+    assert [row.get("harness_abort_reason") for row in episode.agent.trajectory] == ["task_end"]
 
 
 @pytest.mark.parametrize(
