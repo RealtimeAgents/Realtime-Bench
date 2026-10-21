@@ -110,6 +110,10 @@ class Push:
     item_id: str
     error: object | None = None
 
+    @property
+    def key(self) -> tuple[str, str]:
+        return ("create", self.item_id)
+
 
 @dataclass(frozen=True)
 class EditBatch:
@@ -199,13 +203,15 @@ class Generation:
     """One response on this connection: its number on the connection, the frame it answers (None
     for a native-streaming reply, which answers the session as it is), its response id once the
     server created it, the output items the server made for it, the client event that cancels
-    it, and its server events not yet taken, in arrival order."""
+    it, the client event of a native-streaming reply's response.create, and its server events
+    not yet taken, in arrival order."""
 
     number: int
     answered: SentFrame | None
     response_id: str | None = None
     output_item_ids: list[str] = field(default_factory=list)
     cancel_event_id: str | None = None
+    request_event_id: str | None = None
     events: deque = field(default_factory=deque)
     # When native streaming's reader received each completed output text, by server event id.
     received_at: dict[str, float] = field(default_factory=dict)
@@ -405,6 +411,17 @@ class RealtimeSessionCore:
             and frame.id not in refused
         ]
 
+    def frame_push(self, history: CanonicalRequest) -> Push:
+        """The push of the newest frame of a native-streaming history view on this connection,
+        once push or a rebuild's replay planned it: a block is pushed once per connection."""
+        frames = [
+            block.id
+            for block in streaming_blocks(history.items)
+            if block.item.block.kind == "frame"
+        ]
+        (push,) = (push for push in self.pushes.values() if push.block_id == frames[-1])
+        return push
+
     def _push(self, frame: ViewFrame) -> Create:
         user = self._frame_create(frame, event_id=self._new_id("push"))
         self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
@@ -538,8 +555,8 @@ class RealtimeSessionCore:
         if self.delivery[operation.key] is Delivery.UNKNOWN:
             self._on_delivery("unknown", [(operation.key, operation.block)])
 
-    def settled(self, operation: Operation) -> bool:
-        """Whether the server acknowledged an operation, or refused it."""
+    def settled(self, operation: Operation | Push) -> bool:
+        """Whether the server acknowledged an operation or a push's create, or refused it."""
         return self.delivery.get(operation.key) in (Delivery.ACKNOWLEDGED, Delivery.REFUSED)
 
     @property
@@ -638,11 +655,17 @@ class RealtimeSessionCore:
     def start_reply(self) -> Generation:
         """Register the response native streaming is about to request on the session as it is,
         before its response.create goes out and after the push of what the reply should see; it
-        takes its events as start_generation's does."""
+        takes its events as start_generation's does. Its response.create names the client event
+        request_event_id, so a server error about it is the reply's alone."""
         self._generations += 1
-        generation = Generation(self._generations, None)
+        generation = Generation(self._generations, None, request_event_id=self._new_id("reply"))
         self._requested.append(generation)
         return generation
+
+    @property
+    def replying(self) -> bool:
+        """Whether a response requested on this connection has not ended yet."""
+        return bool(self._requested or self._responses)
 
     def receive(self, event) -> bool:
         """Apply one server event of this connection, in arrival order. Returns whether a state
@@ -678,10 +701,18 @@ class RealtimeSessionCore:
                 taken = True
             if not about_edit:
                 live = [*self._requested, *self._responses.values()]
-                cancelled = [g for g in live if event_id and g.cancel_event_id == event_id]
-                for generation in cancelled or live:
+                named = [
+                    g
+                    for g in live
+                    if event_id and event_id in (g.cancel_event_id, g.request_event_id)
+                ]
+                for generation in named or live:
                     generation.events.append(event)
                     taken = True
+                for generation in named:
+                    if generation.request_event_id == event_id and generation in self._requested:
+                        # The server made no response for the response.create it refused.
+                        self._requested.remove(generation)
             return taken
         if kind.startswith("response."):
             generation = self._response_of(kind, event)

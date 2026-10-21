@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
+import contextvars
 import errno
 import logging as logging
 import os as os
@@ -141,9 +142,9 @@ class _Session:
         """Read every event as it arrives until the connection ends, and hand each to the core
         with the time ``clock`` reads then (native streaming)."""
         self._clock, self._read_one = clock, asyncio.Event()
-        # The reader runs in the context of the call that starts it: the trace records every
-        # message it reads in that call's scope.
-        self._reader = asyncio.create_task(self._read_all())
+        # The reader reads for the connection, whatever reply is in progress, not for the call
+        # that opened it: in an empty context the trace records what it reads in no scope.
+        self._reader = asyncio.create_task(self._read_all(), context=contextvars.Context())
 
     async def _read_all(self) -> None:
         try:
@@ -151,11 +152,16 @@ class _Session:
                 await self._receive()
                 self._read_one.set()
         except asyncio.CancelledError:
-            # Only a close that may have left the connection open cancels the reader: the
-            # session is over all the same for whoever waits on it.
+            # Only a close that may have left the connection open, or the end of the loop,
+            # cancels the reader: the session is over all the same for whoever waits on it, and
+            # the read its thread is blocked in ends only once the socket closes.
             self.failure = ConnectionError("OpenAI Realtime session closed")
             self._read_one.set()
+            self._conn._connection.close_socket()
             raise
+        except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
+            self.failure = exc
+            self._read_one.set()
 
     async def stop_reading(self, *, closed: bool) -> None:
         """Once the connection is closed, wait for the reader to end; a connection that may
@@ -277,8 +283,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         naming a network or host that is down or unreachable, a failed name lookup
         (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends before the
         upgrade response, with websockets' InvalidMessage caused by EOFError; these are
-        transient. Another OSError is local (a permission, a missing file, an address the host
-        lacks) and fatal.
+        transient. Every other OSError is fatal: a local fault (a permission, a missing file, an
+        invalid argument), and with them EADDRNOTAVAIL, ENOBUFS and an OSError without an errno
+        (a name lookup that returned no address), which can pass, as ephemeral ports or buffers
+        run out, but are not told apart from one.
         """
         transient = (
             ConnectionClosed,
@@ -336,15 +344,13 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise ValueError(f"Realtime client ID kind is too long: {kind!r}")
         return prefix + uuid.uuid4().hex[:suffix_length]
 
-    def _send(self, operation: Operation) -> None:
-        """Send one planned conversation item create or delete."""
-        if self._conn is None:
-            raise RuntimeError("OpenAI Realtime session is not connected")
+    def _send(self, conn, operation: Operation) -> None:
+        """Send one planned conversation item create or delete on the SDK connection ``conn``."""
         if isinstance(operation, Delete):
             kwargs = {"item_id": operation.item_id}
             if operation.event_id is not None:
                 kwargs["event_id"] = operation.event_id
-            self._wire(self._conn.conversation.item.delete, **kwargs)
+            self._wire(conn.conversation.item.delete, **kwargs)
             return
         content = [
             {
@@ -372,15 +378,16 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             kwargs["previous_item_id"] = operation.previous_item_id
         if operation.event_id is not None:
             kwargs["event_id"] = operation.event_id
-        self._wire(self._conn.conversation.item.create, **kwargs)
+        self._wire(conn.conversation.item.create, **kwargs)
 
-    async def _send_all(self, operations) -> None:
-        """Send planned operations in order; the session core records what became of each."""
-        core = self._session.core
+    async def _send_all(self, session: _Session, operations) -> None:
+        """Send operations planned on ``session`` in order, on its own connection; its core
+        records what became of each."""
+        core = session.core
         for operation in operations:
             core.sending(operation)
             try:
-                await asyncio.to_thread(self._send, operation)
+                await asyncio.to_thread(self._send, session._conn, operation)
             except BaseException:
                 core.send_failed(operation)
                 raise
@@ -476,7 +483,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         if self.streaming:
             session.read_continuously(self.clock)
             replay = session.core.replay_streaming(request.history)
-            await self._send_all(replay)
+            await self._send_all(session, replay)
             # A fold anchors a frame on the item its confirmation says the server put it after:
             # the session takes pushes once the replay's are settled.
             pushed = [op for op in replay if op.event_id is not None]
@@ -484,7 +491,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             if not all(map(session.core.settled, pushed)):
                 raise session.closed
         else:
-            await self._send_all(session.core.replay(request.history))
+            await self._send_all(session, session.core.replay(request.history))
 
     def _connect_finished(self, attempt, outcome, error=None, failure=None, delay=None) -> None:
         """One ModelAttemptFinished per open_session attempt of the shared connect retry, and one
@@ -509,8 +516,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
         # The history ends with this observation's frame, after the feedback on the actions
         # before it.
-        core = self._connected_session().core
-        await self._send_all([*core.new_feedback(history), core.observe(history)])
+        session = self._connected_session()
+        core = session.core
+        await self._send_all(session, [*core.new_feedback(history), core.observe(history)])
         return {}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
@@ -532,39 +540,45 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         response = {"max_output_tokens": request.transport_output_token_cap}
         if self.config.reasoning_effort is not None:
             response["reasoning"] = {"effort": self.config.reasoning_effort}
-        await asyncio.to_thread(
-            self._wire,
-            self._conn.response.create,
-            response=response,
-        )
+        kwargs = {"response": response}
+        if core_generation.request_event_id is not None:
+            kwargs["event_id"] = core_generation.request_event_id
+        await asyncio.to_thread(self._wire, session._conn.response.create, **kwargs)
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def push_frame(self, observation: ProviderObservation, history) -> None:
-        """Native streaming: push the frame the streaming history view ends with, which the
-        session lacks, after the feedback the view holds that the session lacks too, and fold
-        the frames the view folds (decision 23). Returns once the server confirmed the frame;
-        raises when the server refused it, which loses that frame alone, or the connection
-        closed first. A fold the server fails leaves the session dirty, for the next
-        ensure_ready to rebuild it from the view."""
-        session = self._connected_session()
-        core = session.core
-        pushes = core.push(history)
-        await self._send_all(pushes)
-        await self._fold(session, history)
-        frame = pushes[-1]
+        """Native streaming: push the newest frame of the streaming history view, after the
+        feedback the view holds that the session lacks, and fold the frames the view folds
+        (decision 23). A frame the session already holds, as a rebuild replayed it or
+        request_reply pushed it, is not pushed again. Returns once the server confirmed the
+        frame; raises when the server refused it, which loses that frame alone, or the
+        connection closed first. A fold the server fails leaves the session dirty, for the next
+        ensure_ready to rebuild it from the view.
+
+        It plans and writes holding the session as a connection operation does
+        (SessionLifecycle), so its writes go to the session it planned them on once a connect
+        in progress took its replay; it waits for the server without holding it, so a rebuild
+        meanwhile closes that session, which fails the push."""
+        async with self._session_lock():
+            session = self._connected_session()
+            core = session.core
+            await self._send_all(session, core.push(history))
+            batch = core.queue_edit(history)
+            if batch is not None:
+                await self._send_all(session, batch.operations)
+        await self._fold(session, batch)
+        frame = core.frame_push(history)
         await session.receive_until(lambda: core.settled(frame))
         if not core.settled(frame):
             raise session.closed
-        error = core.pushes[frame.event_id].error
-        if error is not None:
-            raise RuntimeError(f"OpenAI Realtime refused {frame.block}: {error!r}")
+        if frame.error is not None:
+            raise RuntimeError(f"OpenAI Realtime refused {frame.block_id}: {frame.error!r}")
 
-    async def _fold(self, session: _Session, history) -> None:
-        """Bring the session to the view's folds, one edit at a time (queue_edit)."""
+    async def _fold(self, session: _Session, batch) -> None:
+        """Bring the session to the view's folds, one edit at a time (queue_edit): wait for the
+        server to answer the edit sent, then send the view kept behind it, as push_frame writes."""
         core = session.core
-        batch = core.queue_edit(history)
         while batch is not None:
-            await self._send_all(batch.operations)
             await self._wait_for_item_edits(session)
             try:
                 core.finish_edit()
@@ -574,15 +588,25 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 )
                 self.mark_dirty()
                 return
-            batch = core.next_edit()
+            async with self._session_lock():
+                batch = core.next_edit()
+                if batch is not None:
+                    await self._send_all(session, batch.operations)
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Native streaming: ask for a reply on the session as it is, after pushing what the
-        streaming history view ``request.canonical`` holds that the session lacks (the feedback
-        accepted since the newest frame). Its events come as a turn's do."""
-        session = self._connected_session()
-        await self._send_all(session.core.push(request.canonical))
-        return await self._create_response(session, session.core.start_reply(), request)
+        streaming history view ``request.canonical`` holds that the session lacks: the feedback
+        accepted since the newest frame, and that frame when push_frame has not pushed it yet,
+        which then only waits for its confirmation. Its events come as a turn's do. A connection
+        carries one reply at a time: asked for before the one in progress ended, it raises and
+        writes nothing. It holds the session as push_frame's writes do, so the reply goes to the
+        session it pushed to."""
+        async with self._session_lock():
+            session = self._connected_session()
+            if session.core.replying:
+                raise RuntimeError("OpenAI Realtime reply already in progress")
+            await self._send_all(session, session.core.push(request.canonical))
+            return await self._create_response(session, session.core.start_reply(), request)
 
     async def events(self, generation: GenerationHandle):
         session, core_generation = generation.opaque
@@ -705,10 +729,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 return
 
     async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
-        if self._conn is None:
+        session, core_generation = generation.opaque
+        # A response on a session closed or replaced since was closed with its connection.
+        if self._session is not session:
             return InterruptResult(ProviderHistoryState.UNKNOWN)
         kwargs = {}
-        _, core_generation = generation.opaque
         response_id = core_generation.response_id
         if response_id:
             kwargs["response_id"] = response_id
@@ -716,7 +741,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs["event_id"] = cancel_event_id
         core_generation.cancel_event_id = cancel_event_id
         try:
-            await asyncio.to_thread(self._wire, self._conn.response.cancel, **kwargs)
+            await asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs)
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
         except Exception as exc:  # noqa: BLE001 - provider control boundary
             return InterruptResult(
@@ -773,7 +798,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
 
         try:
             batch = session.core.begin_edit(request.history)
-            await self._send_all(batch.operations)
+            await self._send_all(session, batch.operations)
             await self._wait_for_item_edits(session)
             session.core.finish_edit()
         except Exception as exc:  # noqa: BLE001 - a partial edit requires canonical replay
@@ -812,7 +837,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             if not output_ids:
                 raise RuntimeError("response did not expose output item IDs")
             # The response answered the newest frame; its output replaces what the server kept.
-            await self._send_all(self._session.core.repair(request.history, output_ids))
+            session = self._session
+            await self._send_all(session, session.core.repair(request.history, output_ids))
             return HistorySyncResult(
                 SyncDisposition.EXACT,
                 ProviderHistoryState.EXACT,
