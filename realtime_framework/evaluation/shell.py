@@ -330,6 +330,8 @@ class _Shell:
         # A post and the step that takes it from the inbox, in one order.
         self._inbox = threading.Lock()
         self._posted: list = []  # posted since the last step
+        # The agent's records the kernel has not taken yet (_hand_over).
+        self._held_records: deque[AgentRecord] = deque()
         self._inputs = None  # the open inputs log
         self._timers: list[float] = []  # heap of when the timers the kernel set come due
         self._returned: deque[_Generation] = deque()  # results the workers handed back
@@ -376,17 +378,26 @@ class _Shell:
     def _episode(self) -> None:
         if self.agent_trace is None:
             return self._loop()
-        self.agent_trace.hand_over(self.post)
+        self.agent_trace.hand_over(self._hand_over)
         try:
             self._loop()
         finally:
             self.agent_trace.take_back(self._write_handed if self._finished else lambda: None)
 
+    def _hand_over(self, record: AgentRecord) -> None:
+        """An agent record from the sink's writer. The kernel takes it once nothing else is due
+        (_loop), one at a time: a backlog of them, however long it takes to write, holds back no
+        result that came back and no timer."""
+        with self._inbox:
+            self._held_records.append(record)
+        self._wake.set()
+
     def _write_handed(self) -> None:
-        """Once the episode is finished: step the kernel through what is still due, the agent
-        records handed over before the sink took them back among it, and write the records. The
-        kernel handles nothing after the end, so any other event's echo is only a
-        KernelRecord."""
+        """Once the episode is finished: hand the kernel the agent records it has not taken, step
+        it through what is still due, the records among it, and write them. The kernel handles
+        nothing after the end, so any other event's echo is only a KernelRecord."""
+        while self._held_records:
+            self.post(self._held_records.popleft())
         now = self._read()
         while True:
             with self._inbox:
@@ -424,10 +435,12 @@ class _Shell:
                 if not self.token:
                     now = self._read()
             commands = self._step(now)
-            if commands is None:
-                self._sleep()
-            else:
+            if commands is not None:
                 self._run_all(commands)
+            elif self._held_records:
+                self.post(self._held_records.popleft())
+            else:
+                self._sleep()
 
     def post(self, event) -> None:
         """Hand the kernel an event, from any thread, and wake the shell."""
