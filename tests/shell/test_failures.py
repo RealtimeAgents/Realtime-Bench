@@ -134,6 +134,16 @@ def test_the_environment_keeps_its_reason_for_a_tap_whose_advance_failed():
     assert getattr(episode.env, "_loop_error", None) is None
 
 
+def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
+    """The kernel keeps the end of a long detail (kernel/core.py invalidate); the record main()
+    reads stays the environment's, whole, as under the runner (runner.py _invalidate)."""
+    detail = "x" * 3000
+    latched = {"category": "environment", "reason": "clock_advance_failed", "detail": detail}
+    episode = run("token", 3.0, [Reply(0.0, TAP)], World(latches={0: latched}))
+    assert episode.invalid == latched
+    assert episode.trace.payloads("RunInvalidated")[0]["detail"] == detail[-2000:]
+
+
 def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
     """The environment latches clock_advance_failed and raises, which escaped the legacy loop:
     the reason is the environment's and the traceback is the summary's error."""

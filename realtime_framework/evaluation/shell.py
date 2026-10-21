@@ -813,8 +813,13 @@ class _Shell:
         env._stop_reason = termination.stop_reason
         env._think_spent = self.policy.spent
         env._dropped_intermediate_frames = self.policy.dropped_frames
-        if termination.invalid is not None:
-            env._invalid_run = _invalid_record(termination.invalid)
+        invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
+        # The record of a failure the environment latched itself is its own, the detail whole.
+        if invalid is not None and (
+            latched is None
+            or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
+        ):
+            env._invalid_run = _invalid_record(invalid)
         self._finished = True
 
     # ---- the episode trace --------------------------------------------------------------------
