@@ -950,6 +950,16 @@ def _model_identity(requested_model, requested_adapter=None):
     }
 
 
+def task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps):
+    """B in the task clock's frames, which are environment ticks. The task clock records
+    tokens_per_frame times its fps, the environment's, as the tokens per world second
+    (realtime_tasks/types.py clock_snapshot), which is then B times the model-input fps; at
+    equal rates it gets B as given."""
+    if tokens_per_frame is None or env_fps == model_input_fps:
+        return tokens_per_frame
+    return tokens_per_frame * model_input_fps / env_fps
+
+
 def _metric_avg(env, name):
     values = list(getattr(env, name, []) or []) if env is not None else []
     return round(sum(values) / len(values), 6) if values else None
@@ -1246,7 +1256,9 @@ def main():
         ctask = custom_tasks.get(a.task)
         ctask.configure_seed(a.seed)
         task = ctask.description()
-        ctask.configure_clock(a.clock, env_fps, tokens_per_frame)
+        ctask.configure_clock(
+            a.clock, env_fps, task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps)
+        )
         url = ctask.provision()
         if url:
             R.open_local_url_in_container(url, debug_port=getattr(ctask, "dbg_port", None))

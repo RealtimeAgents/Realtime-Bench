@@ -27,6 +27,7 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.records import TraceEvent
+from realtime_framework.evaluation import runner
 
 from . import baseline
 from .build import build_episode
@@ -215,7 +216,12 @@ def test_token_clock(case, monkeypatch, tmp_path):
         fps=case.model_input_fps,
         reasoning_effort=entry.defaults["reasoning_effort"],
     )
-    task = ClockTask(case.env_fps, case.tokens_per_frame)  # runner.py:1536
+    task = ClockTask(  # as main() configures the task clock
+        case.env_fps,
+        runner.task_clock_tokens_per_frame(
+            case.tokens_per_frame, case.env_fps, case.model_input_fps
+        ),
+    )
     with OpenRouterStub(case.replies, route=ROUTE) as stub:
         monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
         episode = build_episode(
