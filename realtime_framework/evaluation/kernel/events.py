@@ -21,7 +21,7 @@ class Clock(str, Enum):
     # Environment ticks on the token clock, which only the kernel moves; seconds since the episode
     # origin on the wall clock.
     SEMANTIC = "semantic"
-    # Watchdogs, backoff and pacing, in seconds. On the wall clock it is the semantic clock.
+    # Watchdogs, in seconds. On the wall clock it is the semantic clock.
     OPS = "ops"
 
 
