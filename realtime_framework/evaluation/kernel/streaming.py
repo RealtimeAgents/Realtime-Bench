@@ -794,11 +794,12 @@ class StreamingPolicy:
     def _end_checked(self, event: EndChecked) -> None:
         kernel = self.kernel
         asked_at = self._asked.pop(event.request)
+        # The read after an action stands for one as the action finished (N31).
+        at = asked_at if self.current is None else self.current.finished_at
         # A read that fails once the episode is over still counts.
-        if self._count_read(event.error):
+        if self._count_read(event.error, at):
             return
         if event.ended:
-            at = asked_at if self.current is None else self.current.finished_at
             return kernel.end("environment", at, reason=event.reason)
         if self._deadline_due:
             return kernel.end("deadline", self.config.duration_s)
@@ -817,15 +818,16 @@ class StreamingPolicy:
         """The environment frame the clock is in."""
         return _floor(self.kernel.semantic * self.config.env_fps)
 
-    def _count_read(self, error: str | None) -> bool:
-        """Count one state read; True when it is the failure that invalidates the run."""
+    def _count_read(self, error: str | None, at: float) -> bool:
+        """Count one state read; True when it is the failure that invalidates the run, which ends
+        where that read stands, as an end a read sees does (N44)."""
         if error is None:
             self._failed_reads = 0
             return False
         self._failed_reads += 1
         if self._failed_reads < READ_FAILURE_LIMIT:
             return False
-        self.kernel.invalidate("environment", "terminal_state_check_failed", error)
+        self.kernel.invalidate("environment", "terminal_state_check_failed", error, at=at)
         return True
 
     def _schedule(self, kind: str, fps: float) -> None:

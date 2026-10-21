@@ -359,13 +359,27 @@ def test_the_environment_end_is_dated_by_the_check_that_saw_it():
 def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_answers_after():
     """The reads at 0 and 1 fail; the one asked at 2 is answered at 3.5, after the deadline, and is
     the third failure in a row. The end waited for it, as the turn-based kernel files the answer
-    before the deadline, and the run is invalid from its answer on."""
+    before the deadline, and the run is invalid, dated where that read was asked (N44)."""
     errors = {1: "cdp timeout", 2: "cdp timeout", 3: "cdp timeout"}
     sim = _run(World(check_errors=errors, check_times={3: 1.5}), 3.0)
-    assert _ended(sim) == ("invalid_run", "invalid", 3.5, 3.5)
+    assert _ended(sim) == ("invalid_run", "invalid", 2.0, 3.5)
     assert sim.termination.invalid == Invalidated(
         "environment", "terminal_state_check_failed", "cdp timeout"
     )
+
+
+def test_a_third_failed_read_after_an_action_is_dated_where_the_action_finished():
+    """The reads at 0 and 1 fail. The click executes from 1.25 to 1.5 alongside the capture at 1,
+    which takes until 2; the read after the click waits for it and fails too, the third in a row.
+    It stands for a read as the click finished (N31), so the run is invalid from 1.5 (N44)."""
+    world = World(
+        replies=[Reply(10.0, calls=(Call(1.25, CLICK, execute_s=0.25),))],
+        check_errors={1: "cdp timeout", 2: "cdp timeout", 3: "cdp timeout"},
+        capture_times={2: 1.0},
+    )
+    sim = _run(world, 5.0)
+    assert sim.checks == [0.0, 1.0, 2.0]
+    assert _ended(sim) == ("invalid_run", "invalid", 1.5, 2.0)
 
 
 # ---- the end ------------------------------------------------------------------------------------
