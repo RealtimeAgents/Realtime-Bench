@@ -604,3 +604,112 @@ def test_a_pushing_view_with_no_frame_in_common_keeps_every_sent_frame():
     batch = core.begin_edit(history, pushing=True)
     assert shape(batch.operations) == [("delete", item_id, None, True) for item_id in items]
     assert batch.removed == ("d0.frame",)
+
+
+def acknowledge(core: RealtimeSessionCore, operations) -> None:
+    for op in operations:
+        core.receive(deleted(op.item_id) if isinstance(op, Delete) else done(op.item_id))
+
+
+def test_a_queued_edit_waits_for_the_one_before_it():
+    """Views that arrive while an edit waits are kept, the newest replacing the older; once the
+    edit is finished, the newest is planned against the session it left."""
+    turns = [turn(k, f"a{k}") for k in range(4)]
+    core = opened(turns)
+    assistant = {k: f.assistant_item_ids[-1] for k, f in core.frames.items()}
+    users = {k: f.user_item_id for k, f in core.frames.items()}
+    turns[0].fold_visual()
+    first = core.queue_edit(view(turns))
+    assert shape(first.operations) == [
+        ("delete", users["d0.frame"], None, True),
+        ("create", "user", "root", True),
+    ]
+    sent(core, first.operations)
+    turns[1].fold_visual()
+    assert core.queue_edit(view(turns)) is None
+    turns[2].fold_visual()
+    assert core.queue_edit(view(turns)) is None
+    assert core.next_edit() is None
+
+    acknowledge(core, first.operations)
+    assert core.edit_answered and core.next_edit() is None
+    assert core.finish_edit() is first
+    second = core.next_edit()
+    assert shape(second.operations) == [
+        ("delete", users["d1.frame"], None, True),
+        ("create", "user", assistant["d0.frame"], True),
+        ("delete", users["d2.frame"], None, True),
+        ("create", "user", assistant["d1.frame"], True),
+    ]
+    assert core.next_edit() is None
+    sent(core, second.operations)
+    acknowledge(core, second.operations)
+    assert core.finish_edit() is second
+    assert [f.folded for f in core.frames.values()] == [True, True, True, False]
+
+
+def test_a_queued_view_the_session_cannot_reach_is_refused_before_any_plan():
+    turns = [turn(0, "a0"), turn(1, "a1")]
+    core = opened(turns)
+    turns[0].fold_visual()
+    batch = core.queue_edit(view(turns))
+    sent(core, batch.operations)
+    assert core.queue_edit(view([turn(0, "a0"), turn(1, "a1")])) is None
+    acknowledge(core, batch.operations)
+    core.finish_edit()
+    with pytest.raises(
+        RuntimeError,
+        match=r"^Realtime history edit refused: provider visual state cannot be unfolded in place$",
+    ):
+        core.next_edit()
+    assert core.next_edit() is None
+    # Nothing was planned, so the next view is planned at once.
+    assert core.queue_edit(view(turns)) is not None
+
+
+def test_frames_dropped_while_a_response_streams_lose_no_event():
+    """Native streaming in small: while a response streams, a frame is pushed and queued edits
+    archive the two oldest frames, assistant items included, then fold the next one. The view
+    was made before the push. The response's events and the acknowledgements of the edit and of
+    the push arrive interleaved, and each reaches its state; the pushed frame stays, and the
+    response's output joins the frame it answered."""
+    turns = [turn(0, "a0"), turn(1, "a1"), turn(2, "a2"), turn(3)]
+    core = opened(turns[:3])
+    pushed = core.push(view(turns))
+    sent(core, [pushed])
+    generation = core.start_generation("d3.frame")
+    archive = core.queue_edit(view(turns[2:3], ledger="L"))
+    sent(core, archive.operations)
+    turns[2].fold_visual()
+    assert core.queue_edit(view(turns[2:3], ledger="L")) is None
+
+    created, added, text, finished = response_events()
+    *deletes, ledger = archive.operations
+    assert len(deletes) == 4 and isinstance(ledger, Create)
+    acks = [deleted(op.item_id) for op in deletes]
+    for event in (
+        created,
+        acks[0],
+        done(pushed.item_id),
+        acks[1],
+        added,
+        acks[2],
+        text,
+        done(ledger.item_id),
+        acks[3],
+        finished,
+    ):
+        assert core.receive(event)
+    assert list(generation.events) == [created, added, text, finished]
+    assert core.edit_answered
+    assert core.finish_edit() is archive
+    assert core.delivery[pushed.key] == Delivery.ACKNOWLEDGED
+    assert all(core.delivery[op.key] == Delivery.ACKNOWLEDGED for op in archive.operations)
+    assert list(core.frames) == ["d2.frame", "d3.frame"]
+    assert core.frames["d3.frame"].assistant_item_ids == ["srv_1"]
+
+    fold = core.next_edit()
+    assert shape(fold.operations) == [
+        ("delete", core.frames["d2.frame"].user_item_id, None, True),
+        ("create", "user", ledger.item_id, True),
+    ]

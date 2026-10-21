@@ -197,6 +197,8 @@ class RealtimeSessionCore:
         self._edit: EditBatch | None = None
         self._unconfirmed: set[tuple[str, str]] = set()
         self._edit_error = None
+        # The history view a native-streaming edit keeps until the edit before it is finished.
+        self._queued: CanonicalRequest | None = None
         # The responses in progress. The server answers each response.create with a
         # response.created in the order it received them, so a requested response waits here for
         # its id; every later event of a response names that id.
@@ -446,6 +448,25 @@ class RealtimeSessionCore:
             if sent is not None:
                 sent.user_item_id, sent.text, sent.folded = planned
         return batch
+
+    def queue_edit(self, history: CanonicalRequest) -> EditBatch | None:
+        """Plan a native-streaming edit to the history view, leaving out the frames newer than the
+        newest one the view and the session both hold, or keep the view while an edit is not
+        finished: one edit is sent at a time. Returns the batch to send now, if any."""
+        self._queued = history
+        return self.next_edit()
+
+    def next_edit(self) -> EditBatch | None:
+        """Plan the view a native-streaming edit kept, once the edit before it is finished. Only
+        the newest view kept is planned, as each is the whole session wanted. A view the session
+        cannot reach in place raises before anything is planned, and is dropped."""
+        if self._edit is not None or self._queued is None:
+            return None
+        history, self._queued = self._queued, None
+        problem = self.in_place_problem(history, pushing=True)
+        if problem is not None:
+            raise RuntimeError(f"Realtime history edit refused: {problem}")
+        return self.begin_edit(history, pushing=True)
 
     def start_generation(self, frame_id: str) -> Generation:
         """Register the response about to be requested for a sent frame. The first
