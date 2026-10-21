@@ -76,6 +76,34 @@ def test_a_decision_budget_the_adapter_refuses_invalidates_the_run_before_the_ge
     assert "InferenceStarted" not in episode.trace.events()
 
 
+class _SlowNoTransportCap(Agent):
+    """The adapter takes 0.2 s to refuse the decision budget."""
+
+    def transport_output_token_cap(self, cap):
+        self.clock.sleep(0.2)
+        return 0
+
+
+@pytest.mark.parametrize(
+    ("duration", "config"),
+    [(0.1, {}), (3.0, {"per_move_cap_s": 0.1})],
+    ids=["deadline", "cap"],
+)
+def test_a_bound_past_a_start_that_raised_gives_up_a_generation_that_never_started(
+    duration, config
+):
+    """StartGeneration raises 0.2 s in, past the bound, which the kernel handles before the
+    run_exception: it gives up a generation that never started. (Over the cap, the kernel then
+    reports the move skipped, and that commit has no result to record.)"""
+    episode = run("wall", duration, [Reply(0.5)], agent_type=_SlowNoTransportCap, **config)
+    assert episode.invalid["reason"] == "run_exception"
+    raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
+    assert "adapter transport output cap" in raised[0]
+    assert not any("_abandoned_on_a_bound" in line for line in raised)
+    if not config:
+        assert len(raised) == 1
+
+
 def test_a_generation_that_raises_is_an_unusable_result():
     episode = run("wall", 3.0, [Reply(0.5, raises="provider down")])
     _finalized(episode, 0.5)

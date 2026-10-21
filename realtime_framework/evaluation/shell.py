@@ -940,6 +940,8 @@ class _Shell:
         over the cap is reported, as skipped (kernel/turns.py on_timer); the other two end the
         episode and their decision goes unreported."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
+        if held is None:
+            return  # its StartGeneration raised
         bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
         if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
             bound = "provider_watchdog"
