@@ -51,3 +51,9 @@ class RenewalFlagOnly(ExternalChatDriver):
 
 class OutputCapFlagOnly(ExternalChatDriver):
     capabilities = replace(ExternalChatDriver.capabilities, maps_output_cap=True)
+
+
+class StreamingNoSettings(ExternalChatDriver):
+    capabilities = replace(
+        ExternalChatDriver.capabilities, interaction_modes=frozenset({"turn_based", "streaming"})
+    )

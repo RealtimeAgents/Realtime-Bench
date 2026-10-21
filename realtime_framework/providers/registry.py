@@ -466,6 +466,12 @@ def _check_driver(target: str, driver: type) -> None:
     # The runtime also reads a persistent session's state (RealtimeRuntime.state).
     if driver.capabilities.persistent_session and not hasattr(driver, "state"):
         raise ValueError(f"{target!r} declares persistent_session but has no state")
+    if "streaming" in driver.capabilities.interaction_modes and not isinstance(
+        getattr(driver, "streaming_settings", None), dict
+    ):
+        raise ValueError(
+            f"{target!r} declares streaming but no streaming_settings (a dict class attribute)"
+        )
     estimates = driver.capabilities.request_size_estimation
     if callable(getattr(driver, "request_context_status", None)) and not estimates:
         raise ValueError(
