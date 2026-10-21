@@ -190,7 +190,8 @@ class Received:
     complete: bool  # the interaction completes here, by the configured completion signal
     ends: bool  # the generation's output ends with this message
     control: dict  # what a goAway asks of the turn: reconnect after it
-    # The ids of the tool calls this message cancels: not to be executed. The reply goes on.
+    # The ids of the tool calls this message cancels: not to be executed. It does not end the
+    # reply.
     cancelled: tuple[str, ...]
 
 

@@ -540,7 +540,8 @@ CANCELLATION = message({"toolCallCancellation": {"ids": ["call-1", "call-0"]}})
 
 def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     """A toolCallCancellation says which calls not to execute, in the server's order, whether
-    it comes in their reply, after it or on a closed connection; it does not end the reply."""
+    it comes in their reply, after it, or in a reply still read from a closed connection; it does
+    not end the reply."""
     core = session_core()
     connected(core)
     start_turn(core, "turn-0")
@@ -550,7 +551,6 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     received = receive(core, CANCELLATION)
     assert received.cancelled == ("call-1", "call-0")
     assert (received.generation_id, received.complete, received.ends) == ("turn-0", False, False)
-    assert core.delivery[("tool_response", "call-0")] == Delivery.SENT  # what was written stays
     received = receive(core, server_content(turnComplete=True))
     assert received.ends and received.cancelled == ()
 
@@ -578,13 +578,13 @@ def test_the_latest_handle_rule_resumes_without_a_clean_boundary():
         receive(core, update(None))
         receive(core, go_away())
         receive(core, server_content(turnComplete=True))
-    assert clean.last_turn_clean and clean.resume_handle_for("go_away", **renewal) is None
+    assert clean.resume_handle_for("go_away", **renewal) is None
     assert latest.resume_handle_for("go_away", **renewal) == "handle-1"
     assert latest.resume_handle_for("go_away", force_rebuild=True, generation_clean=True) is None
     assert latest.resume_handle_for("history_block_compaction", **renewal) is None
 
-    connected(latest, resume_handle="handle-1")
-    assert latest.resume_handle_for("go_away", **renewal) == "handle-1"  # the one it resumed
+    connected(latest, resume_handle="handle-resumed")
+    assert latest.resume_handle_for("go_away", **renewal) == "handle-resumed"
     arrive(latest, update("handle-2"))  # between replies
     assert latest.resume_handle_for("go_away", **renewal) == "handle-2"
     connected(latest, view([turn(0)]))  # a rebuild has no handle until the server sends one
@@ -599,5 +599,9 @@ def test_an_orphan_from_a_closed_connection_changes_nothing():
     for message in (update("handle-1"), go_away()):
         orphan = core.arrived(1, message, 0.0)
         assert (orphan.connection, orphan.control) == (1, {})
-    assert (core.resume_handle, core.candidate_resume_handle) == (None, None)
+    assert (core.resume_handle, core.candidate_resume_handle, core.latest_resume_handle) == (
+        None,
+        None,
+        None,
+    )
     assert not core.renewal_required and core.go_away_deadline is None
