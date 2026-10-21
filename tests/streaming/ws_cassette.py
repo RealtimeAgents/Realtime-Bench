@@ -1,8 +1,9 @@
 """WebSocket cassettes for the native streaming tests: the recording format and its strict cursor.
 
 A cassette holds one live session's messages, both ways, in the order the client saw them. It
-verifies our side only, such as frames sent, cancels, reconnects and late actions; it does not
-reproduce the server's state or the model's output (phase2.md, native streaming). One JSON object
+verifies our side only, such as frames sent, cancels and late actions, and reconnects a
+hand-written script closes the connection for; it does not reproduce the server's state or the
+model's output (phase2.md, native streaming). One JSON object
 per line:
 
     {"conn": 1, "dir": "open" | "c2s" | "s2c" | "close", "at": 1.25 | null, "msg": ...}
@@ -21,7 +22,9 @@ It is sent with this session's ids in place of the placeholders. What the client
 matched against the next client record: a message must equal it once normalized, and the client
 must do it when the clock reads the record's ``at``. A null ``at`` there is not compared.
 A connection whose recording ends without a close may be closed by the client any time after its
-last record: the episode trace, which recordings are converted from, has no closes.
+last record: the episode trace, which recordings are converted from, has no closes. One the client
+leaves open is a problem; in a converted recording it is what a connection the server closed
+replays as.
 
 Cassettes come two ways (stream-plan 4.19). A hand-written script runs on the fake clock, where
 our side's times are as exact as the script's, so it gives every client record its time. A
@@ -35,7 +38,7 @@ The first difference is a problem, and after it nothing more is released:
   record after it has a time;
 - a message that differs from the recording, or one beyond it, or one sent at another time;
 - a connection the recording does not have, or a close where it has more records;
-- at the end, records left unused.
+- a connection the client leaves open, and at the end, records left unused.
 
 To turn a smoke test's run into a recording:
 
@@ -78,6 +81,10 @@ class RealtimeNormalizer(baseline.Normalizer):
 # (providers/openai_realtime.py:188-190, providers/gemini/live.py:271).
 NORMALIZERS = {"openai_realtime.ws": RealtimeNormalizer, "gemini_live.ws": WireNormalizer}
 _PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
+LEFT_OPEN = (
+    "conn {conn}: still open when the replay ended; a converted recording has no closes, so a"
+    " connection the server closed replays as one the client waits on"
+)
 # Times on the fake clock agree to within this: a wait until ``at`` ends at ``now + (at - now)``,
 # which can round one ulp short of ``at``.
 _SLACK_S = 1e-9
@@ -110,8 +117,11 @@ def from_trace(run_dir: Path) -> list[dict]:
 
     The trace records no handshake (providers/capture.py:8-9) and no close: the recording
     connection captures handshake failures, sends and receives only (capture.py:303-331). So a
-    connection opens before its first message, and the cassette has no closes. The failed
-    handshakes and sends the trace does record have no cassette form yet and raise.
+    connection opens before its first message, and the cassette has no closes. A session whose
+    server closed a connection converts all the same, into one whose client waits on that
+    connection when it is replayed, which the replay reports as a connection left open; replaying
+    it right needs the trace to record closes. The failed handshakes and sends the trace does
+    record have no cassette form yet and raise.
     """
     events = [
         json.loads(line)
@@ -257,6 +267,10 @@ class Cursor:
             )
         else:
             self._take(conn, now)
+
+    def left_open(self, conn: int) -> None:
+        """The replay ended with ``conn`` open: the client never closed it."""
+        self._problem(LEFT_OPEN.format(conn=conn))
 
     # ---- what the server does ----------------------------------------------------------------
 

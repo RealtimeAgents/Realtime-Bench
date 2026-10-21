@@ -103,6 +103,7 @@ class CassetteServer:
         self._lock = threading.Lock()
         self._listener = socket.create_server(("127.0.0.1", 0))
         self._closing = False
+        self.dropped = False  # the server ended its connections, which then read as ended
         self._threads: list[threading.Thread] = []
         self._sockets: list[socket.socket] = []
         # The request path of each upgrade, in order, and any error a connection thread raised.
@@ -127,6 +128,7 @@ class CassetteServer:
 
     def drop(self) -> None:
         """End every connection at once, without a closing handshake."""
+        self.dropped = True
         for sock in self._sockets:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -210,7 +212,10 @@ class _Connection:
                 continue  # the next timed record is due
             if not self._read() and self.protocol.close_rcvd is None and not self.closing:
                 with server._lock:
-                    cursor.client_closed(self.number, None, server._now())  # dropped, no close
+                    if server.dropped:
+                        cursor.left_open(self.number)
+                    else:
+                        cursor.client_closed(self.number, None, server._now())  # no close frame
             for frame in self.protocol.events_received():
                 with server._lock:
                     self._received(frame, server._now())
