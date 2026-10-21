@@ -464,6 +464,29 @@ X12 = [
         expect=frozenset({"U2", "U3", "X2", "X12"}),
         name="token-a-failed-read-inside-a-tap-counts",
     ),
+    # The task ends at 0.51 s, between check 3 and the read inside the tap, which sees the end and
+    # stops the tap; the kernel learns of it from check 4 at the same tick.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        tokens_per_frame=100,
+        ends_at_s=0.51,
+        expect=frozenset({"X2"}),
+        name="token-the-end-seen-inside-a-tap",
+    ),
+    # As above, but check 4 fails: the kernel only counts it, paces to tick 1 and finds the end
+    # there; today's loop voids the run on it.
+    Script(
+        "token",
+        3.0,
+        TAP_FIRST,
+        tokens_per_frame=100,
+        ends_at_s=0.51,
+        check_errors=(4,),
+        expect=frozenset({"U3", "X2", "X12"}),
+        name="token-a-failed-read-after-the-end-seen-inside-a-tap",
+    ),
     # Wall clock, decisions at 0, 1, 2 and 3 s. At 3 fps the reads within [1.4, 1.6) are the two
     # around decision 1's landing at 1.5 s; the periodic read at 5/3 s succeeds.
     Script(

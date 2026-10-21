@@ -65,6 +65,14 @@ def earlier(a: float, b: float) -> bool:
     return a < b - TOLERANCE
 
 
+def ends_the_run(in_tap: bool, answer: str | None) -> bool:
+    """Whether the kernel's episode is over after a token state read that answered ``answer``
+    (None, "task", "failed" or "invalid_run"): an end check that saw the end or did not read; a
+    read inside a tap only when it failed for the last time, since one that sees the end only
+    stops the tap and the end check after it tells the kernel (turns.py:471-474)."""
+    return answer == "failed" if in_tap else bool(answer)
+
+
 def key_releases(released: list[dict], until: float) -> list[dict]:
     """One entry per key released up to the episode's end ``until``, in time order: a chord's
     keys can go up in one call or one call each, and what goes up later belongs to the wind-down,

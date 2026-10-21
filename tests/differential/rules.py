@@ -21,7 +21,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .projection import TOLERANCE, Projection, differences, earlier, key_releases
+from .projection import TOLERANCE, Projection, differences, earlier, ends_the_run, key_releases
 from .script import Script
 
 
@@ -191,7 +191,7 @@ def x12_plan(script: Script, probe: Projection) -> X12Plan:
     in_a_row = 0
     for kind, read, answer in probe.facts["reads"]:
         if read not in failing[kind]:
-            if answer:
+            if ends_the_run(kind == "tap", answer):
                 break  # the end came before a third failure in a row
             in_a_row = 0
             continue
@@ -687,17 +687,17 @@ def _u2(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _u3(script: Script, p: Projection, notes: dict) -> None:
-    """Token clock: once a read finds the end, or fails for the last time, the kernel asks no more
-    (turns.py:677-689, 471-474); when today's environment finds it inside an advance or a tap,
-    the loop asks again after execution or at its top (sandbox/actions.py:279-280,
-    runner.py:504, 858). That extra read can also fail and void the run today; the kernel never
-    makes it, so X12's plan never fails it."""
+    """Token clock: once an end check finds the end, or a read fails for the last time, the
+    kernel asks no more (turns.py:677-689, 471-474); when today's environment finds the end
+    inside an advance, or a read inside a tap fails, the loop asks again at its top or after
+    execution (sandbox/actions.py:279-280, runner.py:858, 504). That extra read can also fail and
+    void the run today; the kernel never makes it, so X12's plan never fails it."""
     if _wall(script):
         return
     asked = 0
     for kind, _, answer in p.facts["reads"]:
         asked += kind == "check"
-        if answer:
+        if ends_the_run(kind == "tap", answer):
             del p.episode["checks"][asked:]
             return
 
