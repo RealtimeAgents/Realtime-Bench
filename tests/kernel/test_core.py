@@ -288,15 +288,27 @@ def test_termination_records_the_rule_time_and_the_snapshot_time():
     assert termination.invalid is None
 
 
-def test_an_invalidation_after_the_end_still_makes_the_run_invalid():
+@pytest.mark.parametrize(
+    ("cause", "reason"),
+    [
+        ("deadline", None),
+        ("environment", "task_success"),
+        ("horizon", None),
+        ("think_budget", None),
+    ],
+    ids=["deadline", "environment", "horizon", "think-budget"],
+)
+def test_an_invalidation_after_the_end_still_makes_the_run_invalid(cause, reason):
+    # The invalid run comes before every other stop reason, the task's own included (runner.py
+    # _finalize).
     kernel, _ = _kernel()
-    kernel.end("deadline", 300.0)
+    kernel.end(cause, 300.0, reason=reason)
     kernel._flush()
     kernel.post(Invalidated("provider", "action_commit_feedback_failed"))
     kernel.step(300.0)
     _finish(kernel, 300.1)
     assert kernel.termination.stop_reason == "invalid_run"
-    assert kernel.termination.cause == "deadline"
+    assert kernel.termination.cause == cause
     assert kernel.termination.invalid.reason == "action_commit_feedback_failed"
 
 

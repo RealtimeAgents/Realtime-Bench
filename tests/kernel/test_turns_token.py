@@ -724,6 +724,19 @@ def test_a_wait_cut_short_by_the_horizon_reports_the_horizon():
     assert (sim.termination.stop_reason, sim.termination.ended_at) == ("tick_limit", 5)
 
 
+def test_a_wait_ending_exactly_on_the_horizon_is_not_cut_short():
+    # T = 3: a 2 s wait from tau = 1 asks for exactly T, which no horizon cuts
+    # (sandbox/actions.py GuestEnvironment.execute: past T + 1e-9 only).
+    sim = _run(_token(3), Reply(action=Action.wait(2.0), output_tokens=256))
+    assert _record(sim, "ActionResolved", 0)["execution_result"] == {
+        "duration_simulated_seconds": 2.0,
+        "requested_duration_simulated_seconds": 2.0,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": False,
+    }
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("tick_limit", 3)
+
+
 @pytest.mark.parametrize("wait", [Action.wait(), Action.wait(0.0)], ids=["no-duration", "zero"])
 def test_a_wait_of_zero_seconds_does_not_move_the_clock(wait):
     # A wait of 0 s lets no time pass (sandbox/actions.py:832, 842); tau = 1 = next, and a wait is
@@ -767,6 +780,67 @@ def test_the_legacy_think_budget_skips_the_action_and_ends_after_its_outcome():
         "think_budget",
         2,
     )
+
+
+@pytest.mark.parametrize(
+    ("reply", "limits", "world", "status", "stop_reason"),
+    [
+        # The approach's first step fails: the invalid run before no action.
+        (
+            Reply(output_tokens=384),
+            {},
+            {"advance_errors": {1: "renderer crashed"}},
+            "invalid_run",
+            "invalid_run",
+        ),
+        # 0.5 s of deliberation uses up a 0.5 s budget: no action before the budget.
+        (Reply(output_tokens=128), {"think_budget_s": 0.5}, {}, "none", "think_budget"),
+        # 1.5 s is over the 1 s cap, which uses up a 1 s budget: the timeout before the budget.
+        (
+            Reply(action=CLICK, output_tokens=384),
+            {"per_move_cap_s": 1.0, "think_budget_s": 1.0},
+            {},
+            "skipped_timeout",
+            "think_budget",
+        ),
+        # Over the budget, the approach meets the end at 1: the budget before the end.
+        (
+            Reply(action=CLICK, output_tokens=384),
+            {"think_budget_s": 0.5},
+            {"ends_at": 1},
+            "skipped_budget",
+            "game_decided",
+        ),
+        # With no action, the approach meets the end at 1: no action before the end.
+        (Reply(output_tokens=384), {}, {"ends_at": 1}, "none", "game_decided"),
+    ],
+    ids=[
+        "invalid-before-none",
+        "none-before-budget",
+        "timeout-before-budget",
+        "budget-before-end",
+        "none-before-end",
+    ],
+)
+def test_the_skip_order_tests_each_rule_before_the_next(reply, limits, world, status, stop_reason):
+    # The invalid run, no action or a timeout, the budget, then the end (runner.py _land_action).
+    sim = _run(_token(10, **limits), reply, **world)
+    assert [outcome.status for outcome in sim.outcomes] == [status]
+    assert sim.termination.stop_reason == stop_reason
+
+
+def test_a_move_over_the_per_move_cap_costs_the_cap_against_the_think_budget():
+    # Budget 2 s, cap 1 s. 3 s over the cap costs 1 s, then 0.5 s, then over the cap again: 2.5 s
+    # >= 2 s, and the episode ends once that decision is reported (runner.py _charge).
+    sim = _run(
+        _token(10, per_move_cap_s=1.0, think_budget_s=2.0),
+        Reply(action=CLICK, output_tokens=768),
+        Reply(action=CLICK, output_tokens=128),
+        Reply(action=CLICK, output_tokens=768),
+    )
+    statuses = [outcome.status for outcome in sim.outcomes]
+    assert statuses == ["skipped_timeout", "applied", "skipped_timeout"]
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("think_budget", 7)
 
 
 @pytest.mark.parametrize(
@@ -1026,6 +1100,34 @@ def test_the_allowance_is_the_frames_left_times_b(duration_s, allowances):
     )
 
 
+def test_the_allowance_tolerates_float_noise():
+    # T = 2.3, B = 10: at t_k = 2, (2.3 - 2) * 10 = 2.9999999999999982, and floor(x + 1e-9) = 3
+    # (runner.py:867-870).
+    sim = _run(
+        _token(2.3, 10),
+        Reply(output_tokens=20),
+        Reply(action=CLICK, output_tokens=3),
+    )
+    assert [e.data["remaining_clock_tokens"] for e in sim.entries("InferenceStarted")] == [23, 3]
+
+
+def test_a_failure_while_the_clock_runs_out_to_the_horizon_still_ends_the_episode():
+    # T = 2.5, B = 1: the click lands on 2, the frame there has no allowance, and the step to 2.5,
+    # the third advance, fails. Nothing is settled in hand, and the episode ends invalid.
+    sim = _run(
+        _token(2.5, 1),
+        Reply(latency=1.0, action=CLICK, output_tokens=2),
+        advance_errors={3: "renderer crashed"},
+    )
+    assert [tick for tick, _ in sim.captures] == [0, 2]
+    assert [outcome.status for outcome in sim.outcomes] == ["applied"]
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", 2)
+    assert termination.invalid == Invalidated(
+        "environment", "clock_advance_failed", "renderer crashed"
+    )
+
+
 def test_with_no_allowance_left_the_clock_runs_to_the_horizon_without_a_generation():
     # T = 5 + 1/512. Decision 0 spends floor(T * 256 + 1e-9) = 1280 tokens and lands on 5, its next
     # frame; at t_k = 5, remaining = floor(256/512 + 1e-9) = 0, so that frame starts no generation
@@ -1123,6 +1225,24 @@ def test_the_provider_watchdog_bounds_a_generation_at_300_operational_seconds(
     assert (timer["kind"], timer["clock"], timer["at"]) == ("generation_watchdog", "ops", 300.0)
     assert sim.termination.stop_reason == stop_reason
     assert [outcome.status for outcome in sim.outcomes] == statuses
+
+
+def test_the_watchdog_runs_from_the_operational_reading_at_the_start_of_the_call():
+    # Decision 1 starts at tick 1 but 10 operational seconds in, so its watchdog is due at 310 s;
+    # its 295 s call is back at 305 s, inside it.
+    sim = _run(
+        _token(10),
+        Reply(latency=10.0, action=CLICK, output_tokens=256),
+        Reply(latency=295.0, action=CLICK, output_tokens=256),
+        _idle(8),
+    )
+    timers = [entry.data for entry in sim.entries("TimerSet")]
+    assert [timer["at"] for timer in timers if timer["kind"] == "generation_watchdog"] == [
+        300.0,
+        310.0,
+        605.0,
+    ]
+    assert sim.termination.invalid is None
 
 
 def test_a_watchdog_timeout_abandons_the_generation_and_discards_its_late_result():

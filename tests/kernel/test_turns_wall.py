@@ -423,6 +423,16 @@ def test_an_end_found_by_a_check_asked_before_the_deadline_is_the_tasks_end(
     _assert_nothing_after_the_end(sim)
 
 
+def test_an_end_found_by_a_check_makes_a_result_back_during_it_stale():
+    # The check at 2 s finds the end (from 1.5 s) and answers at 2.25 s; the reply came back at
+    # 2.15 s meanwhile. The end is dated 2 s, before the result, which is discarded.
+    world = World(replies=[Reply(1.9, CLICK)], ends_at=1.5, check_s=0.25)
+    sim = _episode(_wall(10.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.0]
+    assert (sim.accepted, sim.discarded, sim.outcomes) == ([], [1], [])
+    assert _ended(sim) == ("game_decided", "environment", 2.0, 2.25)
+
+
 def test_an_end_found_by_the_check_before_landing_leaves_the_action_unapplied():
     world = World(replies=[Reply(4.5, CLICK)], ends_at=4.25, end_reason="target_reached")
     sim = _episode(_wall(10.0), world)
@@ -693,16 +703,18 @@ def test_a_release_the_shells_timer_fails_invalidates_the_run():
     _assert_nothing_after_the_end(sim)
 
 
-def test_no_end_check_is_asked_once_the_deadline_has_passed():
-    # The execution runs from 4.5 to 6.5 over the deadline at 6.0; the check due at 5.0 comes due
-    # only after it returns and is not asked, so nothing samples the task after the deadline.
-    world = World(replies=[Reply(4.5, CLICK)], execute_s=2.0)
+@pytest.mark.parametrize("execute_s", [2.0, 1.5], ids=["past-the-deadline", "on-it"])
+def test_no_end_check_is_asked_once_the_deadline_has_passed(execute_s):
+    # The execution runs from 4.5 s over or up to the deadline at 6 s; the check due at 5 s comes
+    # due only after it returns and is not asked, so nothing samples the task from the deadline on.
+    returned = 4.5 + execute_s
+    world = World(replies=[Reply(4.5, CLICK)], execute_s=execute_s)
     sim = _episode(_wall(6.0), world)
-    assert _fired(sim, "end_check")[-1] == (6.5, 5.0)
+    assert _fired(sim, "end_check")[-1] == (returned, 5.0)
     assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.5]
     # Not paced after the end: the next observation tick stays the tick at resolution, 6.
     assert sim.outcomes == [_outcome(0, "applied", 4.5, 6, 4.5, terminal=True)]
-    assert _ended(sim) == ("time_limit", "deadline", 6.0, 6.5)
+    assert _ended(sim) == ("time_limit", "deadline", 6.0, returned)
 
 
 # ---- the legacy caps --------------------------------------------------------------------------
@@ -749,6 +761,15 @@ def test_the_per_move_cap_is_at_least_a_tenth_of_a_second():
     assert sim.outcomes[0] == _outcome(0, "skipped_timeout", 0.1, 1, 0.1)
     assert [outcome.status for outcome in sim.outcomes] == ["skipped_timeout"] * 3
     assert _ended(sim) == ("time_limit", "deadline", 3.0, 3.0)
+
+
+def test_a_call_over_the_per_move_cap_costs_the_cap_against_the_think_budget():
+    # Budget 1.5 s, cap 1 s: each call outlasts the cap and costs 1 s (runner.py _charge). The
+    # second brings the spend to 2 s >= 1.5 s, and the episode ends once it is reported, at 2 s.
+    world = World(replies=[Reply(5.0, CLICK)] * 3)
+    sim = _episode(_wall(10.0, per_move_cap_s=1.0, think_budget_s=1.5), world)
+    assert [outcome.status for outcome in sim.outcomes] == ["skipped_timeout", "skipped_timeout"]
+    assert _ended(sim) == ("think_budget", "think_budget", 2.0, 2.0)
 
 
 def test_the_think_budget_skips_the_decision_then_ends_after_its_commit():
