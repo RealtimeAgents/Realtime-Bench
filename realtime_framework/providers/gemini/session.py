@@ -676,6 +676,11 @@ class SessionCore:
         """The connection's reader failed: no reply is read on it any more."""
         self.replies.pop(connection, None)
 
+    def reply_abandoned(self) -> None:
+        """The reply started on the open connection will not come (its trigger did not go out):
+        its generation takes none of the connection's messages."""
+        self.replies.pop(self.connection, None)
+
     def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
         monotonic clock). With no generation's reply being read on that connection the message is
