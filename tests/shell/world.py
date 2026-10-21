@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
 from realtime_framework.clock import Clocks, FrameClock
@@ -300,6 +301,7 @@ class Trace:
 
 @dataclass
 class Episode:
+    config: TurnConfig
     env: Environment
     agent: Agent
     trace: Trace | None
@@ -327,6 +329,7 @@ def run(
     timing: RunnerTimingConfig | None = None,
     trace=Trace,
     agent_type: type[Agent] = Agent,
+    inputs_log: Path | None = None,
     **config,
 ) -> Episode:
     """One episode through run_episode on a fresh fake clock; the abandoned workers are drained
@@ -347,6 +350,8 @@ def run(
     trace = trace() if trace is Trace else trace
     logs: list[str] = []
     with clock.participant():
-        timeline = run_episode(agent, env, turn, clocks=clocks, log=logs.append, trace=trace)
+        timeline = run_episode(
+            agent, env, turn, clocks=clocks, log=logs.append, trace=trace, inputs_log=inputs_log
+        )
         env._drain_abandoned()
-    return Episode(env, agent, trace, clock, timeline, logs)
+    return Episode(turn, env, agent, trace, clock, timeline, logs)
