@@ -922,6 +922,9 @@ class _Shell:
 
     def _freeze(self) -> None:
         error = self._read_snapshot()
+        # Should the reading after it raise, a wrap-up does not read the snapshot again; only the
+        # token clock's reading can raise, and its world stood still meanwhile.
+        self._frozen_at = self._now[0]
         semantic, ops = self._read()  # when the read returned
         self._frozen_at = semantic
         self.post(SnapshotFrozen(semantic, semantic if ops is None else ops, error))
@@ -969,18 +972,7 @@ class _Shell:
 
     def _terminate(self, termination: Termination) -> None:
         env = self.env
-        ticks_per_s = self.config.env_fps if self.token else 1.0
-        end_s = termination.ended_at / ticks_per_s
-        snapshot_s = termination.snapshot_at / ticks_per_s if self._snapshot_read else None
-        env._termination = {
-            "stop_reason": termination.stop_reason,
-            "end_s": round(end_s, 9),
-            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-        }
-        env._stop_reason = termination.stop_reason
-        env._think_spent = self.policy.spent
-        env._dropped_intermediate_frames = self.policy.dropped_frames
+        # The verdict first: main() reads it whatever else could be written (runner.py main).
         invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
         # The record of a failure the environment latched itself is its own, the detail whole.
         if invalid is not None and (
@@ -988,6 +980,23 @@ class _Shell:
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
             env._invalid_run = _invalid_record(invalid)
+        env._stop_reason = termination.stop_reason
+        ticks_per_s = self.config.env_fps if self.token else 1.0
+        end_s = termination.ended_at / ticks_per_s
+        # A snapshot read whose reading after it failed is one the kernel took as failed.
+        snapshot_s = (
+            termination.snapshot_at / ticks_per_s
+            if self._snapshot_read and termination.snapshot_at is not None
+            else None
+        )
+        env._termination = {
+            "stop_reason": termination.stop_reason,
+            "end_s": round(end_s, 9),
+            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
+            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
+        }
+        env._think_spent = self.policy.spent
+        env._dropped_intermediate_frames = self.policy.dropped_frames
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
@@ -997,6 +1006,8 @@ class _Shell:
         record written. A failure on the way is only logged."""
         self._escaped(failure)
         env = self.env
+        # What the environment latched by now came first; a failure during the wrap-up after.
+        latched = getattr(env, "_invalid_run", None)
         try:
             for generation in list(self._generations):
                 self._abort(generation)
@@ -1006,7 +1017,6 @@ class _Shell:
                 # The token clock's world stands still meanwhile; its reading may be what raised.
                 self._frozen_at = semantic if self.token else self._read()[0]
             self._release_inputs()
-            latched = getattr(env, "_invalid_run", None)
             first = self.kernel.invalid is None and latched is None
             termination = _escaped_termination(
                 self.kernel,

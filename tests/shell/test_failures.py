@@ -368,12 +368,83 @@ def test_a_result_whose_settling_raised_is_recorded_once(monkeypatch):
     assert len(raised) == 1
 
 
+def test_a_failure_during_the_wrap_up_comes_after_the_one_it_wraps_up(monkeypatch):
+    """The kernel raises at 1 s; the key held from 0.5 s fails to come up at 2.25 s, while the
+    wrap-up reads the snapshot. The run_exception came first, and the run is invalid for it."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 1.0)
+    world = World(release_failures={0}, snapshot_s=1.5)
+    episode = run("wall", 4.0, [Reply(0.5, Action.hold_key("a", 1.75)), Reply(hang=True)], world)
+    _wrapped_up(episode, 1.0, snapshot_at=2.5)
+    assert episode.invalid["reason"] == "run_exception"
+    assert [p["reason"] for p in episode.trace.payloads("RunInvalidated")] == ["run_exception"]
+
+
+def test_a_failure_the_kernel_had_keeps_its_record_over_the_environments(monkeypatch):
+    """The second call fails at 1.1 s and the kernel ends the episode for it; the key held from
+    0.5 s fails to come up at 1.5 s, while the snapshot is read, and the kernel raises at its
+    next step. The run is invalid for the kernel's failure, as its trace record says."""
+    _breaks(monkeypatch, Kernel, "step", lambda kernel, *_: kernel.ending is not None)
+    world = World(release_failures={0}, snapshot_s=1.0)
+    replies = [Reply(0.5, Action.hold_key("a", 1.0)), Reply(0.1, raises="provider down")]
+    episode = run("wall", 4.0, replies, world)
+    assert episode.invalid["reason"] == "generation_error"
+    assert [p["reason"] for p in episode.trace.payloads("RunInvalidated")] == ["generation_error"]
+
+
+class _TicksGoneAfterTheSnapshot(Environment):
+    """The tick reading raises once the snapshot was read: every time, or ``once``."""
+
+    once = False
+
+    def _snapshot(self) -> dict:
+        snapshot = super()._snapshot()
+        self.snapshotted = True
+        return snapshot
+
+    def tick_index(self) -> float:
+        if getattr(self, "snapshotted", False):
+            if self.once:
+                self.snapshotted = False
+            raise RuntimeError("tick_index broke")
+        return super().tick_index()
+
+
+class _TickGoneOnceAfterTheSnapshot(_TicksGoneAfterTheSnapshot):
+    once = True
+
+
+def test_a_snapshot_whose_reading_raised_is_not_read_again():
+    """The horizon ends the episode at tick 2; the snapshot is read, and every reading of the
+    clock after it raises. The wrap-up does not read the snapshot again: the token clock's
+    world stood still meanwhile, at tick 2."""
+    replies = [Reply(0.0, CLICK, output_tokens=100)] * 2
+    episode = run("token", 2.0, replies, tokens_per_frame=100, env_type=_TicksGoneAfterTheSnapshot)
+    _wrapped_up(episode, 2.0)
+    assert episode.invalid["reason"] == "run_exception"
+
+
+def test_a_snapshot_whose_reading_raised_once_still_leaves_a_termination_record():
+    """As above, but only the first reading after the snapshot raises: the kernel, which still
+    holds, takes the run_exception and the snapshot as failed and finishes, and the termination
+    record says the run ended at the horizon with no snapshot time."""
+    replies = [Reply(0.0, CLICK, output_tokens=100)] * 2
+    env_type = _TickGoneOnceAfterTheSnapshot
+    episode = run("token", 2.0, replies, tokens_per_frame=100, env_type=env_type)
+    termination = episode.env._termination
+    assert (termination["end_s"], termination["snapshot_s"]) == (2.0, None)
+    assert termination["stop_reason"] == "invalid_run"
+    assert episode.invalid["reason"] == "run_exception"
+
+
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
     """The kernel raises, and the environment refuses the termination record: run_episode
     still returns, and the failure is logged."""
     _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 1.0)
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], env_type=_UnfinishableEnvironment)
     assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
+    # The run's verdict is latched first: main() reads it whatever else was written.
+    assert episode.invalid["reason"] == "run_exception"
+    assert episode.env._stop_reason == "invalid_run"
     assert any(
         line.startswith("[default] wrapping up the episode failed:") for line in episode.logs
     )
