@@ -1,0 +1,232 @@
+"""WebSocket cassettes for the native streaming tests: the recording format and its strict cursor.
+
+A cassette holds one live session's messages, both ways, in the order the client saw them. It
+verifies our side only, such as frames sent, cancels, reconnects and late actions; it does not
+reproduce the server's state or the model's output (phase2.md, native streaming). One JSON object
+per line:
+
+    {"conn": 1, "dir": "open" | "c2s" | "s2c" | "close", "at": 1.25 | null, "msg": ...}
+
+``conn`` numbers the connections in the order the client opened them. ``at`` is semantic seconds
+since the episode origin. ``msg`` is a message as JSON, normalized like the replay baselines
+(tests/replay/baseline.py): an image becomes its pixel digest and each of our random ids a
+placeholder numbered by first appearance. An open has no message; a close is
+``{"by": "client" | "server", "code": int}``, with the ``reason`` a server close sends.
+
+The cursor replays a cassette strictly, each connection's records in order. A server record is
+released once the client has done everything recorded before it on that connection: at once when
+its ``at`` is null (a reactive message), otherwise once the clock reads ``at`` (a timed message).
+It is sent with this session's ids in place of the placeholders. What the client does next is
+matched against the next client record: a message must equal it once normalized and, when the
+replay compares times (``tolerance_s``), arrive within the tolerance of its ``at``; a null ``at``
+is not compared. A connection whose recording ends without a close may be closed by the client
+any time after its last record: the episode trace, which recordings are converted from, has no
+closes.
+
+The first difference is a problem, and after it nothing more is released:
+- a message sent early: the next record is a server message that is not due yet;
+- a message that differs from the recording, or one beyond it;
+- a connection the recording does not have, or a close where it has more records;
+- at the end, records left unused.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections import deque
+from pathlib import Path
+
+from tests.replay import baseline
+
+DIRECTIONS = ("open", "c2s", "s2c", "close")
+_PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
+
+
+def write(path: Path, records: list[dict]) -> None:
+    lines = [json.dumps(record, sort_keys=True, ensure_ascii=False) for record in records]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def read(path: Path) -> list[dict]:
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for record in records:
+        assert record.keys() == {"conn", "dir", "at", "msg"}, record
+        assert record["dir"] in DIRECTIONS, record
+    return records
+
+
+def _server_side(record: dict) -> bool:
+    return record["dir"] == "s2c" or (record["dir"] == "close" and record["msg"]["by"] == "server")
+
+
+def _label(direction: str, message) -> str:
+    if direction == "open":
+        return "open"
+    if direction == "close":
+        return f"{message['by']} close {message['code']}"
+    # OpenAI Realtime names each event in "type"; a Gemini Live message is its one top-level key.
+    return f"{direction} {message.get('type') or next(iter(message), '')}"
+
+
+class Cursor:
+    """The strict cursor over one cassette. ``normalizer`` is this session's
+    baseline.Normalizer (or a subclass): one mapping for every message the client sends, and the
+    one the server's placeholders are restored from. Times are semantic seconds since the origin.
+    """
+
+    def __init__(self, records: list[dict], normalizer, *, tolerance_s: float | None = None):
+        self._pending: dict[int, deque] = {}
+        for index, record in enumerate(records):
+            self._pending.setdefault(record["conn"], deque()).append((index, record))
+        self._normalize = normalizer
+        self._tolerance_s = tolerance_s
+        self._opened = 0
+        self.problems: list[str] = []
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.problems)
+
+    # ---- what the client does ----------------------------------------------------------------
+
+    def open(self, now: float) -> int | None:
+        """The client opened its next connection; its number, or None when it is not recorded."""
+        self._opened += 1
+        conn = self._opened
+        head = self._head(conn)
+        if head is None or head[1]["dir"] != "open":
+            self._problem(f"conn {conn}: opened, but the recording {self._next(conn)}")
+            return None
+        self._take(conn, now)
+        return conn
+
+    def receive(self, conn: int, message: dict, now: float) -> None:
+        """A message the client sent. The server releases what is due before it reads one, so a
+        server record still next was not due: the client sent this one early."""
+        actual = self._normalize(message)
+        head = self._head(conn)
+        if head is not None and _server_side(head[1]):
+            index, record = head
+            self._problem(
+                f"conn {conn} record {index}: {_label('c2s', actual)} sent at t={now:g}, before"
+                f" the recorded {_label(record['dir'], record['msg'])} at t={record['at']:g}"
+            )
+            return
+        if head is None or head[1]["dir"] != "c2s":
+            self._problem(
+                f"conn {conn}: {_label('c2s', actual)} sent, but the recording {self._next(conn)}"
+            )
+            return
+        index, record = head
+        differences = [
+            "msg" + problem.removeprefix("record[0]")
+            for problem in baseline.compare([record["msg"]], [actual])
+        ]
+        if differences:
+            self._problem(
+                f"conn {conn} record {index}: {_label('c2s', record['msg'])} differs:\n  "
+                + "\n  ".join(differences[:20])
+            )
+            return
+        self._take(conn, now)
+
+    def client_closed(self, conn: int, code: int | None, now: float) -> None:
+        """The client closed ``conn`` with ``code`` (None for a connection dropped without a
+        close frame)."""
+        head = self._head(conn)
+        if head is None:
+            return
+        index, record = head
+        if record["dir"] != "close" or record["msg"]["by"] != "client":
+            self._problem(
+                f"conn {conn}: the client closed it ({code}), but the recording {self._next(conn)}"
+            )
+        elif record["msg"]["code"] != code:
+            self._problem(
+                f"conn {conn} record {index}: the client closed it with {code}, recorded"
+                f" {record['msg']['code']}"
+            )
+        else:
+            self._take(conn, now)
+
+    # ---- what the server does ----------------------------------------------------------------
+
+    def release(self, conn: int, now: float) -> list[dict]:
+        """The server records due on ``conn``, in order: messages with this session's ids, and a
+        close as recorded."""
+        released = []
+        while not self.failed:
+            head = self._head(conn)
+            if head is None or not _server_side(head[1]):
+                break
+            record = head[1]
+            if record["at"] is not None and record["at"] > now:
+                break
+            self._pending[conn].popleft()
+            if record["dir"] == "s2c":
+                record = {**record, "msg": self._restore(record["msg"])}
+            released.append(record)
+        return released
+
+    def next_due(self, conn: int) -> float | None:
+        """When the timed server record next on ``conn`` comes due; None when none is next."""
+        head = self._head(conn)
+        if head is None or self.failed or not _server_side(head[1]):
+            return None
+        return head[1]["at"]
+
+    def finish(self) -> list[str]:
+        """The problems, with the records left unused once the client is done."""
+        if not self.failed:
+            for conn, pending in sorted(self._pending.items()):
+                if pending:
+                    index, record = pending[0]
+                    self.problems.append(
+                        f"conn {conn}: {len(pending)} record(s) left unused, from record {index}"
+                        f" ({_label(record['dir'], record['msg'])})"
+                    )
+        return self.problems
+
+    # ---- internals ---------------------------------------------------------------------------
+
+    def _head(self, conn: int):
+        pending = self._pending.get(conn)
+        return pending[0] if pending else None
+
+    def _next(self, conn: int) -> str:
+        head = self._head(conn)
+        if head is None:
+            return "has nothing more on it"
+        index, record = head
+        return f"has {_label(record['dir'], record['msg'])} next (record {index})"
+
+    def _take(self, conn: int, now: float) -> None:
+        index, record = self._pending[conn].popleft()
+        at = record["at"]
+        if self._tolerance_s is not None and at is not None and abs(now - at) > self._tolerance_s:
+            self._problem(
+                f"conn {conn} record {index}: {_label(record['dir'], record['msg'])} at"
+                f" t={now:g}, recorded at t={at:g}"
+            )
+
+    def _problem(self, problem: str) -> None:
+        if not self.failed:
+            self.problems.append(problem)
+
+    def _restore(self, message):
+        """``message`` with each placeholder of an id the client sent replaced by that id. An id
+        the server made up keeps its placeholder, which the client then echoes as it is."""
+        raw = {placeholder: original for original, placeholder in self._normalize._ids.items()}
+
+        def restore(value):
+            if isinstance(value, dict):
+                return {name: restore(item) for name, item in value.items()}
+            if isinstance(value, list):
+                return [restore(item) for item in value]
+            if isinstance(value, str):
+                return _PLACEHOLDER.sub(lambda match: raw.get(match[0], match[0]), value)
+            return value
+
+        return restore(message)
