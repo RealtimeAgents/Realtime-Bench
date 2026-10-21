@@ -8,12 +8,13 @@ executing each run on a lane of their own, standing for the shell's other thread
 is posted when the command's time is up, so the kernel goes on handling events meanwhile. A lane
 takes one command at a time; one more while it is busy is a policy bug.
 
-As in the streaming shell (evaluation/env_lanes.py), captures, end checks, actions and the snapshot
-share one gate, first come first served: an operation reads the task, presses keys or takes its
-frame once the gate is its, not when it was asked for. The snapshot runs on a thread of its own and
-goes next after the operation holding the gate, ahead of those waiting (``EnvLanes.freeze_turn``);
-the shell bounds that wait by the action's budget, which no script here runs into. Commit runs on
-the shell's own thread and occupies it.
+The environment has a lock by resource, as the streaming shell's (evaluation/env_lanes.py) is to
+have it after decision 50: a capture and an action may hold it together, an end check and the
+snapshot only alone, first come first served. An operation reads the task, presses keys or takes
+its frame once it holds the lock, not when it was asked for. The snapshot runs on a thread of its
+own and goes ahead of those waiting, after those holding the lock (``EnvLanes.freeze_turn``); the
+shell bounds that wait by the action's budget, which no script here runs into. Commit runs on the
+shell's own thread and occupies it.
 
 Every command is checked as it runs (one generation in flight at most; nothing captured, pushed,
 started, asked or executed at or after the deadline or after the end), and every finished episode
@@ -72,6 +73,8 @@ from tests.kernel.simulation import key_identities
 
 # Commands that act in the world, which nothing may run at or after the deadline or the end.
 IN_WORLD = (Capture, PushFrame, StartGeneration, CheckEnd, Execute)
+# The operations that hold the environment's lock alone; a capture and an action share it.
+ALONE = {"check", "snapshot"}
 ENDED = {"invalid_run", "not_applied_time_limit", "not_applied_terminal"}
 REFUSED_LATE = ENDED | {CANCELLED_GENERATION}  # an action its reply hands over once given up
 WITHDRAWN = ENDED | {CANCELLED_CALL, CANCELLED_GENERATION}  # a cancelled call's action not run
@@ -165,8 +168,10 @@ class Simulation:
         self.commands: list = []
         self.checks: list[float] = []  # when each end check read the task
         self.captures: list[float] = []  # when each capture took its frame
-        # (operation, asked, took the gate, let it go) of every operation on the gate.
-        self.operations: list[tuple[str, float, float, float]] = []
+        # (operation, asked, took the lock, let it go, the order it took the lock in) of every
+        # operation on the lock.
+        self.operations: list[tuple[str, float, float, float, int]] = []
+        self._takes = itertools.count()
         self.pushes: list[tuple[str | None, int]] = []  # (observation, frame) of each push
         self.sent: dict[int, float] = {}  # frame -> its capture time, once it went out
         self.executed: list[tuple[float, Action]] = []  # (start, action)
@@ -191,8 +196,8 @@ class Simulation:
         self._in_flight: int | None = None
         self._busy: set[str] = set()  # the lanes running a command
         self._stuck_push: str | None = None  # the frame a stuck push holds
-        self._holder: str | None = None  # the operation holding the gate
-        self._line: deque[Callable] = deque()  # the operations waiting for it, in order
+        self._holders: set[str] = set()  # the operations holding the lock
+        self._line: deque[tuple[bool, Callable]] = deque()  # (alone, take) waiting, in order
         self._observed: dict[str | None, float] = {}  # observation -> capture time
         self._calls: dict[int, tuple[Action, Call]] = {}  # id(action) -> (action, its call)
         self._releases: dict[str, float] = {}  # key -> its latest release time
@@ -273,33 +278,40 @@ class Simulation:
         self._later(self.ops + seconds, finish)
 
     def _gated(self, lane: str, seconds: float, run: Callable, *, ahead: bool = False) -> None:
-        """Run an operation on its lane once it holds the gate: ``run()`` acts on the world then
-        and returns what posts its answer once the operation lets the gate go, ``seconds`` later.
-        ``ahead`` puts it next after the holder, ahead of those waiting."""
+        """Run an operation on its lane once it holds the lock: ``run()`` acts on the world then
+        and returns what posts its answer once the operation lets the lock go, ``seconds`` later.
+        An end check or the snapshot holds it alone, a capture or an action with each other; an
+        operation waits behind those that asked before it, or with ``ahead`` before them all."""
         assert lane not in self._busy, f"the {lane} lane is busy"
         self._busy.add(lane)
-        asked = self.ops
+        asked, alone = self.ops, lane in ALONE
 
         def take() -> None:
-            self._holder, started = lane, self.ops
+            self._holders.add(lane)
+            started, order = self.ops, next(self._takes)
             answer = run()
 
             def let_go() -> None:
-                self.operations.append((lane, asked, started, self.ops))
+                self.operations.append((lane, asked, started, self.ops, order))
                 self._busy.discard(lane)
-                self._holder = None
-                if self._line:
-                    self._line.popleft()()
+                self._holders.discard(lane)
+                while self._line and self._may_take(self._line[0][0]):
+                    self._line.popleft()[1]()
                 answer()
 
             self._later(started + seconds, let_go)
 
-        if self._holder is None:
+        if not self._line and self._may_take(alone):
             take()
         elif ahead:
-            self._line.appendleft(take)
+            self._line.appendleft((alone, take))
         else:
-            self._line.append(take)
+            self._line.append((alone, take))
+
+    def _may_take(self, alone: bool) -> bool:
+        if alone:
+            return not self._holders
+        return not self._holders & ALONE
 
     # ---- commands ---------------------------------------------------------------------------
 
@@ -565,29 +577,38 @@ class Simulation:
                     command.generation,
                 )
         assert not set(self.accepted) & set(self.discarded)
-        # The policy keeps one environment operation out at a time: each one it asks for takes
-        # the gate when it is asked, so it acts in the world before the deadline, as asked.
-        gated = [op for op in self.operations if op[0] != "snapshot"]
-        for name, asked, started, _ in gated:
+        # The policy sends a read only while no capture or action is out, and neither while a
+        # read is out: each takes the lock when it is asked, so it acts in the world before the
+        # deadline, as asked, and no read overlaps a capture or an action.
+        gated = sorted((op for op in self.operations if op[0] != "snapshot"), key=lambda op: op[4])
+        for name, asked, started, *_ in gated:
             assert started == asked, f"the {name} asked at {asked} waited until {started}"
+        reads = [op for op in gated if op[0] == "check"]
+        for read in reads:
+            for op in gated:
+                if op[0] != "check":
+                    assert not (op[2] < read[3] and read[2] < op[3]), f"{op} overlaps {read}"
         # The state is read at most once a frame, but right after an action; an action applied
-        # while the episode ran is followed by that read before anything else takes the
-        # environment (decision 31).
+        # while the episode ran is followed by that read before another action executes
+        # (decision 31).
+        executions = [op for op in gated if op[0] == "execute"]
+        for before, after in itertools.pairwise(reads):
+            frame = math.floor(after[2] * self.config.env_fps + 1e-9)
+            if frame == math.floor(before[2] * self.config.env_fps + 1e-9):
+                between = [op for op in executions if before[4] < op[4] < after[4]]
+                assert between, f"frame {frame} read twice"
         applied = {
             data["started_at"]: data
             for data in self.resolved().values()
             if data["status"] == "applied" and data["action"].action_type is not ActionType.WAIT
         }
-        read = None
-        for before, after in itertools.pairwise([(None, 0.0, 0.0, 0.0), *gated]):
-            if after[0] == "check":
-                frame = math.floor(after[2] * self.config.env_fps + 1e-9)
-                assert frame != read or before[0] == "execute", f"frame {frame} read twice"
-                read = frame
-            if before[0] == "execute" and not applied.get(before[2], {}).get(
-                "terminal_after_action", True
-            ):
-                assert after[0] == "check", f"no read after {before}"
+        for execution, following in itertools.zip_longest(executions, executions[1:]):
+            if applied.get(execution[2], {}).get("terminal_after_action", True):
+                continue
+            until = math.inf if following is None else following[4]
+            assert any(execution[4] < read[4] < until for read in reads), (
+                f"no read after {execution}"
+            )
         # Every action that arrived has exactly one outcome, recorded and committed; the nth
         # arrival is action n. Only a real action is a proposal, as on the turn-based clock.
         arrivals = self.entries("ActionArrived")
