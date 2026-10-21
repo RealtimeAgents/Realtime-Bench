@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from realtime_framework.clock import Clocks, FrameClock
+from realtime_framework.entity.actions import Action
 from realtime_framework.sandbox.actions import GuestEnvironment
 from realtime_framework.sandbox.budget import BudgetExceeded
 
@@ -113,3 +114,58 @@ def test_the_legacy_loop_s_end_check_keeps_its_budget_on_the_wall_clock():
     with clock.participant():
         assert env.done() is False
     assert getattr(env, "_invalid_run", None) is None
+
+
+# ---- step_clock -----------------------------------------------------------------------------
+
+
+def _advances(task):
+    return [(event["frames"], len(event["key_events"])) for event in _of(task, "advance")]
+
+
+def _of(task, *kinds):
+    return [event for event in task.events if event["event"] in kinds]
+
+
+def test_a_clock_step_neither_ends_at_a_lease_nor_releases_nor_checks_the_end():
+    checks = []
+    env, task = _token(stop_check=lambda: checks.append(env.tick_index()))
+    assert env.execute(Action.hold_key("a", 0.5)) == "applied"
+    env.step_clock(1.0)
+    assert _advances(task) == [(1.0, 0)]
+    assert env.tick_index() == 1 and "a" in env._held_keys
+    assert _of(task, "keyUp") == [] and checks == []
+
+
+def test_a_clock_step_stops_at_the_episode_horizon():
+    env, task = _token()
+    env.set_episode_horizon(1.5)
+    for _ in range(3):
+        env.step_clock(1.0)
+    assert _advances(task) == [(1.0, 0), (0.5, 0)]
+    assert env.tick_index() == 1.5
+
+
+def test_clock_steps_deliver_the_auto_repeat_of_a_held_key_as_the_legacy_wait_does():
+    legacy, legacy_task = _token()
+    shell, shell_task = _token()
+    for env in (legacy, shell):
+        assert env.execute(Action.hold_key("left", 5.0)) == "applied"
+    legacy.wait_until_tick(3)
+    for _ in range(3):
+        shell.step_clock(1.0)
+    assert shell_task.events == legacy_task.events
+    assert _advances(shell_task) == [(1.0, 10), (1.0, 20), (1.0, 20)]
+
+
+def test_a_failed_clock_step_raises_and_latches_the_advance_failure():
+    env, task = _token()
+
+    def advance_clock(frames=1, key_events=()):
+        raise RuntimeError("browser frame advanced without a compositor commit")
+
+    task.advance_clock = advance_clock
+    with pytest.raises(RuntimeError, match="compositor commit"):
+        env.step_clock(1.0)
+    assert env._invalid_run["reason"] == "clock_advance_failed"
+    assert env.tick_index() == 0
