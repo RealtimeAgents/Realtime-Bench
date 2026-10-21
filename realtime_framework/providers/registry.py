@@ -360,8 +360,9 @@ _DECLARED_METHODS = {
     "connection_renewal": ("connection_renewal_reason",),
     "request_size_estimation": ("request_context_status",),
     "maps_output_cap": ("transport_output_token_cap",),
-    # A persistent session readies and aborts itself (providers/session_lifecycle.py).
-    "persistent_session": ("ensure_ready", "abort"),
+    # What a persistent session's encoder readies, aborts and marks its session with
+    # (providers/session_lifecycle.py).
+    "persistent_session": ("ensure_ready", "abort", "mark_dirty"),
 }
 
 
