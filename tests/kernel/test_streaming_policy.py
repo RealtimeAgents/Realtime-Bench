@@ -384,15 +384,24 @@ def test_the_deadline_beats_an_arrival_filed_before_it():
     assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.75)
 
 
-def test_the_deadline_beats_an_execution_answered_before_it():
+@pytest.mark.parametrize(
+    ("ends_at", "ended"),
+    [
+        (None, ("time_limit", "deadline", 5.0, 5.75)),
+        (4.75, ("game_decided", "environment", 4.75, 5.75)),
+    ],
+)
+def test_the_deadline_waits_for_the_read_after_an_execution_answered_before_it(ends_at, ended):
     """The click ends at 4.75 as the refused action arrives; the refusal's feedback holds the shell
-    until 5.75, and the click's answer, filed at 4.75, is handled then. The deadline ends the
-    episode first, and the click is its last action, as on the turn-based clock."""
+    until 5.75, and the click's answer, filed at 4.75, is handled then. The deadline waits for the
+    read after the click (N31), and the click is the last action; an end that read finds is dated
+    where the click finished."""
     calls = (Call(0.5, CLICK, execute_s=4.25), Call(4.75, TYPE, grounding=MISSING_FRAME))
-    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=1.0))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=1.0, ends_at=ends_at))
+    assert sim.checks[-1] == 5.75
     assert sim.statuses() == ["applied", INVALID_GROUNDING_FRAME]
     assert sim.resolved()[0]["terminal_after_action"] is True
-    assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.75)
+    assert _ended(sim) == ended
 
 
 def test_the_deadline_beats_a_watchdog_due_before_it():
@@ -547,6 +556,43 @@ def test_a_read_across_the_deadline_that_finds_no_end_ends_the_episode_at_the_de
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.5, 3.5, None)
 
 
+def _click_during_a_capture(capture_s: float, ends_at: float | None) -> Simulation:
+    """The click executes from 4.1 to 4.6 alongside the capture due at 4, which takes
+    ``capture_s``; the read after the click waits for that capture."""
+    world = World(
+        replies=[Reply(10.0, calls=(Call(4.1, CLICK, "c", execute_s=0.5),))],
+        ends_at=ends_at,
+        end_reason="goal",
+        capture_times={5: capture_s},
+    )
+    return _run(world)
+
+
+def test_the_deadline_waits_for_the_read_after_an_action_behind_a_capture_across_it():
+    """N31: the capture runs until 5.2, past the deadline. The deadline waits for the read after
+    the click, made once the capture is done; the end it finds is dated where the click finished,
+    as the turn-based clock reads right then."""
+    sim = _click_during_a_capture(1.2, ends_at=4.6)
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 5.2]
+    assert sim.termination == Termination("goal", "environment", 4.6, 5.2, 5.2, 5.2, None)
+    assert sim.resolved()[0]["terminal_after_action"] is True
+
+
+def test_an_end_the_read_after_an_action_finds_is_dated_where_the_action_finished():
+    """The capture runs until 4.8, before the deadline; the read after the click waits for it,
+    and the end it finds is dated at 4.6 all the same."""
+    sim = _click_during_a_capture(0.8, ends_at=4.6)
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 4.8]
+    assert _ended(sim) == ("goal", "environment", 4.6, 4.8)
+
+
+def test_a_read_after_an_action_past_the_deadline_that_finds_no_end_ends_it_at_the_deadline():
+    sim = _click_during_a_capture(1.2, ends_at=None)
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 5.2]
+    assert sim.termination == Termination("time_limit", "deadline", 5.0, 5.2, 5.2, 5.2, None)
+    assert sim.statuses() == ["applied"]
+
+
 def test_an_action_that_arrives_while_the_end_waits_for_a_read_is_settled_by_that_end():
     """The click arrives at 3.25, while the end waits for the read asked at 2."""
     world = World(
@@ -645,8 +691,9 @@ def test_every_frame_captured_is_pushed_or_counted_as_dropped():
 
 def test_an_action_answered_past_the_deadline_is_settled_before_the_one_waiting():
     """The click ends at 4.75 as a refused action arrives; that feedback holds the shell until
-    5.75, when the click's answer is handled past the deadline. The click is settled first, with
-    the time it really finished, then the end settles the typing waiting behind it."""
+    5.75, when the click's answer is handled past the deadline and the read after it is made. The
+    click is settled first, with the time it really finished, then the end settles the typing
+    waiting behind it."""
     calls = (
         Call(0.5, CLICK, "a", execute_s=4.25),
         Call(1.0, TYPE, "b"),
