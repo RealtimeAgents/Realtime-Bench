@@ -204,6 +204,15 @@ def test_main_reports_the_termination_the_loop_latched(tmp_path, reason, solved,
     )
 
 
+def test_main_stamps_the_generation_artifact_on_the_operational_clock(tmp_path):
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    manifest = json.loads((tmp_path / "run" / "generation_artifact" / "manifest.json").read_text())
+    assert task.origin + SNAPSHOT_AT_S <= manifest["captured_unix_s"] <= clock.now
+
+
 class RecordingAgent(FakeAgent):
     """Records a request as it generates, and returns once its sink has handed the record over."""
 

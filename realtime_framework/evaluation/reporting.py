@@ -102,6 +102,7 @@ def resolve_run_identity(
 def capture_generation_artifact(
     run_dir: Path,
     *,
+    clock: Clock,
     ctask=None,
     adapter=None,
     model=None,
@@ -123,7 +124,8 @@ def capture_generation_artifact(
     inference boundary; it is written verbatim so the saved artifact and the run summary score the
     identical frozen state (re-sampling here would fold a second, later live read and let the two
     disagree). Returns the manifest that is also atomically written to
-    generation_artifact/manifest.json.
+    generation_artifact/manifest.json; its capture time is read on ``clock``, the episode's
+    operational clock.
     """
     artifact_dir = Path(run_dir) / "generation_artifact"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +146,7 @@ def capture_generation_artifact(
     )
     manifest = {
         "artifact_version": 2,
-        "captured_unix_s": time.time(),
+        "captured_unix_s": clock.time(),
         **run_identity,
         "category": getattr(ctask, "category", None),
         "instance_id": getattr(ctask, "task_id", None),
