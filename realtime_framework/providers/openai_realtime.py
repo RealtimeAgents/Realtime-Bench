@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
+import errno
 import logging as logging
 import os as os
 import socket
@@ -64,6 +65,14 @@ _CLIENT_ID_MAX_LENGTH = 32
 # What the trace links to an item create as its answers; the first is its acknowledgement. The
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
+# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
+_NETWORK_ERRNOS = {
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.ENETDOWN,
+    errno.EHOSTDOWN,
+    errno.ENETRESET,
+}
 
 
 def classify_realtime_message(direction: str, message: dict):
@@ -257,10 +266,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         only when it has received no output or usage for the failed turn, so rebuilding from
         canonical history cannot duplicate a completed action.
 
-        A connect attempt fails below HTTP with a ConnectionError (refused or reset), a failed
-        name lookup (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends
-        before the upgrade response, with websockets' InvalidMessage caused by EOFError; these
-        are transient. Another OSError is local (a permission, a missing file) and fatal.
+        A connect attempt fails below HTTP with a ConnectionError (refused or reset), an OSError
+        naming a network or host that is down or unreachable, a failed name lookup
+        (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends before the
+        upgrade response, with websockets' InvalidMessage caused by EOFError; these are
+        transient. Another OSError is local (a permission, a missing file, an address the host
+        lacks) and fatal.
         """
         transient = (
             ConnectionClosed,
@@ -276,7 +287,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             # A reconnect inside the turn already spent the shared retry budget.
             if isinstance(current, TransportFailureError):
                 return current.failure
-            if isinstance(current, transient):
+            if isinstance(current, transient) or (
+                isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS
+            ):
                 return TransportFailure(TRANSIENT)
             # A refused WebSocket upgrade (websockets InvalidStatus) carries its HTTP response.
             status = getattr(current, "status_code", None) or getattr(
