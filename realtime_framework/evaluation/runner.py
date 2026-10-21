@@ -116,12 +116,15 @@ def run_stream(
     per_move_cap_s=None,
     log=print,
     trace=None,
+    agent_trace=None,
     clocks=None,
 ):
     """Run one episode on the event kernel's shell (shell.run_episode) and return its timeline.
     The horizon in world seconds and the two frame rates are main()'s own values: the kernel's
     frame arithmetic takes the rates, which tick lengths would give back only to within an ulp.
-    ``clocks`` are the episode's (realtime_framework/clock.py), real ones when omitted."""
+    ``agent_trace`` is the agent's AgentTraceSink on ``trace``, whose records the kernel numbers
+    during the episode. ``clocks`` are the episode's (realtime_framework/clock.py), real ones when
+    omitted."""
     config = TurnConfig(
         clock_mode,
         duration_s,
@@ -139,6 +142,7 @@ def run_stream(
         clocks=clocks or episode_clocks(clock_mode, env_fps),
         log=log,
         trace=trace,
+        agent_trace=agent_trace,
     )
 
 
@@ -1479,6 +1483,7 @@ def main():
                 per_move_cap_s=per_move_cap,
                 log=lambda m: print(m, flush=True),
                 trace=episode_trace,
+                agent_trace=agent_trace,
                 clocks=clocks,
             )
             error = getattr(env, "_loop_error", None)
