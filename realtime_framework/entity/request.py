@@ -61,7 +61,8 @@ class ContentBlock:
     source: Source
     time: BlockTime
     # frame: prompt with its SoM block (folded: the placeholder); output: text or action JSON;
-    # feedback: the execution result; ledger: its JSON Lines; system: the instruction;
+    # feedback: the execution result; ledger: its JSON Lines, after a note once the earliest are
+    # left out; system: the instruction;
     # tools: the exchanges as text when the policy replays them as a transcript.
     text: str = ""
     image: FrameImage | None = None  # unfolded frames of screenshot observations only
@@ -73,7 +74,7 @@ class ContentBlock:
     reasoning: str = ""  # output: set only when the policy replays reasoning
     initial_text: str = ""  # tools: model text before the first call
     exchanges: tuple[ToolExchange, ...] = ()
-    revision: int | None = None  # ledger: archived action count it covers
+    revision: int | None = None  # ledger: archived action count, those left out included
 
 
 @dataclass(frozen=True)

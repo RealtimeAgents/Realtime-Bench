@@ -33,7 +33,8 @@ def system_block(text: str, wall_ns: int | None) -> ContentBlock:
 
 
 def ledger_block(text: str, revision: int, wall_ns: int | None) -> ContentBlock | None:
-    """The archived-action ledger (JSON Lines), or None before the first archive."""
+    """The archived-action ledger (JSON Lines, after a note once the earliest are left out),
+    or None before the first archive."""
     if not text:
         return None
     return ContentBlock(

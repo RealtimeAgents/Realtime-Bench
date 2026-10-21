@@ -6,13 +6,13 @@ from __future__ import annotations
 Version 1 copied what each code path did before the policy existed; every later version makes
 one change (see CONTEXT_POLICY_VERSION), to one item, except version 2, which changed generic
 LiteLLM's reasoning and verbatim replay (items 6 and 7) together. A change that alters what some
-model is shown bumps the version; moving a preset from an API row to the model that needs it
-alters nothing shown and keeps it. The values count in the effective run config and therefore in
-its hash. Every item is read from here: retention, feedback placement, the ledger role, reasoning
-and verbatim replay, pressure archiving, the Decision history form, the tool-call replay format,
-the prompts (item 11) and the observation form (item 12); the encoders take their fixed texts
-(item 5) from here, and ContextPolicy.for_path takes Gemini's tool-call replay format from the
-model's provider_options.
+model is shown bumps the version (in phase 2 once, at its release: see CONTEXT_POLICY_VERSION);
+moving a preset from an API row to the model that needs it alters nothing shown and keeps it.
+The values count in the effective run config and therefore in its hash. Every item is read from
+here: retention, feedback placement, the ledger role, reasoning and verbatim replay, pressure
+archiving, the Decision history form, the tool-call replay format, the prompts (item 11) and the
+observation form (item 12); the encoders take their fixed texts (item 5) from here, and
+ContextPolicy.for_path takes Gemini's tool-call replay format from the model's provider_options.
 
 An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
 then its own. A preset comes from one of two places. A row's applies to every model of its API:
@@ -51,6 +51,12 @@ from realtime_framework.entity.records import _jsonable
 #    one-option question.
 # 6: text-JSON prompts: "All generated output tokens count." only under a finite B, and frame
 #    texts that stay true on older frames.
+# Since 6, phase 2 changes what models are shown without bumping the version; its release bumps
+# it once for all of them (decision 28). They include: a request still over the window with
+# every turn archived leaves out the earliest archived actions, a note in their place, and JEV's
+# ledger header then says every listed action is kept; Gemini Live and Luna frames name their own
+# screen, as the text-JSON frames do; the clock note names the environment ticks when the two
+# frame rates differ; the notes on a done run as a wait and on a decision with no accepted answer.
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
@@ -83,7 +89,9 @@ GEMINI_QUEUED_TOOL_RESPONSE = {
 @dataclass(frozen=True)
 class Retention:
     keep: int  # screenshots: active images; turns: verbatim turns
-    block: int  # screenshots: fold block; turns: archive block, also under context pressure
+    # screenshots: fold block; turns: archive block, also under context pressure, and the block
+    # of archived actions a request that still does not fit leaves out
+    block: int
 
 
 @dataclass(frozen=True)
