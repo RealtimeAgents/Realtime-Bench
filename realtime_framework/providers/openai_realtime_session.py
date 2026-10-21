@@ -290,10 +290,29 @@ class RealtimeSessionCore:
         self.pushes[user.event_id] = Push(frame.id, user.item_id)
         return user
 
-    def in_place_problem(self, history: CanonicalRequest) -> str | None:
+    def _covered(self, frames: list[ViewFrame]) -> tuple[list[ViewFrame], set[str]]:
+        """Split a history view made while frames are pushed at the newest frame both the view
+        and the mirror hold. An edit covers the view's frames up to that one. The view's frames
+        after it are not in the mirror, not pushed yet or refused, and the mirror's frames after
+        it were pushed after the view was made: the edit leaves both alone. With no frame in
+        common, the mirror's frames the view dropped cannot be told from those pushed after it,
+        so the edit leaves them all; the next edit that shares a frame drops the old ones."""
+        held = [index for index, frame in enumerate(frames) if frame.id in self.frames]
+        if not held:
+            return [], set(self.frames)
+        order = list(self.frames)
+        newest = order.index(frames[held[-1]].id)
+        return frames[: held[-1] + 1], set(order[newest + 1 :])
+
+    def in_place_problem(self, history: CanonicalRequest, *, pushing: bool = False) -> str | None:
         """Why the history view cannot be reached by editing this conversation, if it cannot.
-        Checked before the first operation is sent, so a refused edit sends nothing."""
-        for frame in history_frames(history.items)[1]:
+        Checked before the first operation is sent, so a refused edit sends nothing. With
+        ``pushing`` (native streaming pushes frames while views are made), the frames the edit
+        leaves to their pushes are not checked."""
+        frames = history_frames(history.items)[1]
+        if pushing:
+            frames = self._covered(frames)[0]
+        for frame in frames:
             sent = self.frames.get(frame.id)
             if sent is None:
                 return "retained turn is missing its provider user item ID"
@@ -301,24 +320,32 @@ class RealtimeSessionCore:
                 return "provider visual state cannot be unfolded in place"
         return None
 
-    def begin_edit(self, history: CanonicalRequest) -> EditBatch:
+    def begin_edit(self, history: CanonicalRequest, *, pushing: bool = False) -> EditBatch:
         """Plan one in-place edit to the history view, which then waits for the server to
-        confirm each of its operations."""
+        confirm each of its operations. With ``pushing`` it leaves out the frames newer than the
+        newest one the view and the mirror both hold."""
         ledger, frames = history_frames(history.items)
-        batch = self._edit_batch(ledger, frames, history.policy.texts)
+        newer: set[str] = set()
+        if pushing:
+            frames, newer = self._covered(frames)
+        batch = self._edit_batch(ledger, frames, history.policy.texts, newer)
         self._edit, self._edit_error = batch, None
         self._unconfirmed = {op.key for op in batch.operations}
         return batch
 
     def _edit_batch(
-        self, ledger: RequestItem | None, frames: list[ViewFrame], texts: FixedTexts
+        self,
+        ledger: RequestItem | None,
+        frames: list[ViewFrame],
+        texts: FixedTexts,
+        newer: set[str],
     ) -> EditBatch:
         """Plan one in-place edit from the history view, in send order: delete the items of sent
-        frames the view no longer holds, replace the ledger if its text changed, then replace each
-        user item whose text changed or whose screenshot folded, after the item before it. Every
-        operation names its client event."""
+        frames the view no longer holds, except those pushed after it (``newer``), replace the
+        ledger if its text changed, then replace each user item whose text changed or whose
+        screenshot folded, after the item before it. Every operation names its client event."""
         operations: list[Operation] = []
-        retained = {frame.id for frame in frames}
+        retained = {frame.id for frame in frames} | newer
         for frame_id, sent in self.frames.items():
             if frame_id not in retained:
                 for item_id in (sent.user_item_id, *sent.assistant_item_ids):

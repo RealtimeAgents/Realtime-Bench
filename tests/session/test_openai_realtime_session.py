@@ -530,3 +530,77 @@ def test_an_error_about_a_push_refuses_that_frame_alone():
     unnamed = error(None)
     assert core.receive(unnamed)
     assert list(generation.events) == [unnamed]
+
+
+@pytest.mark.parametrize("pushing", [True, False])
+def test_a_pushing_edit_leaves_out_frames_pushed_after_the_view(pushing):
+    """A view made before the newest push archives decision 0 and folds decision 1. Pushing, the
+    edit leaves the newer frame where it is; the turn-based edit deletes it, as it was never
+    meant to meet one."""
+    turns = [turn(k, f"a{k}") for k in range(3)]
+    core = opened(turns)
+    pushed = core.push(view([*turns, turn(3)]))
+    sent(core, [pushed])
+    archived = [core.frames["d0.frame"].user_item_id, *core.frames["d0.frame"].assistant_item_ids]
+    folded = core.frames["d1.frame"].user_item_id
+    turns[1].fold_visual()
+    history = view(turns[1:], ledger="L")
+    assert core.in_place_problem(history, pushing=pushing) is None
+
+    batch = core.begin_edit(history, pushing=pushing)
+    newer = [] if pushing else [pushed.item_id]
+    assert batch.deleted == {*archived, *newer, folded}
+    assert batch.removed == (("d0.frame",) if pushing else ("d0.frame", "d3.frame"))
+    assert list(batch.frames) == ["d1.frame", "d2.frame"]
+    for op in sent(core, batch.operations):
+        core.receive(deleted(op.item_id) if isinstance(op, Delete) else done(op.item_id))
+    core.finish_edit()
+    expected = ["d1.frame", "d2.frame", "d3.frame"] if pushing else ["d1.frame", "d2.frame"]
+    assert list(core.frames) == expected
+    if pushing:
+        assert core.frames["d3.frame"].user_item_id == pushed.item_id
+
+
+def test_a_pushing_edit_leaves_out_frames_not_pushed_yet():
+    """A view that already holds a frame the core has not pushed: the turn-based check refuses
+    it, the pushing one leaves the frame to its push. A frame missing before the newest one the
+    mirror holds is still refused."""
+    turns = [turn(0, "a0"), turn(1, "a1"), turn(2)]
+    core = opened(turns[:2])
+    first = core.frames["d0.frame"].user_item_id
+    turns[0].fold_visual()
+    history = view(turns)
+    assert core.in_place_problem(history) == "retained turn is missing its provider user item ID"
+    assert core.in_place_problem(history, pushing=True) is None
+    batch = core.begin_edit(history, pushing=True)
+    assert shape(batch.operations) == [
+        ("delete", first, None, True),
+        ("create", "user", "root", True),
+    ]
+    assert list(batch.frames) == ["d0.frame", "d1.frame"]
+
+    gap = opened([turn(0, "a0"), turn(2, "a2")])
+    assert (
+        gap.in_place_problem(view([turn(0, "a0"), turn(1, "a1"), turn(2, "a2")]), pushing=True)
+        == "retained turn is missing its provider user item ID"
+    )
+
+
+def test_a_pushing_view_with_no_frame_in_common_keeps_every_sent_frame():
+    """Such a view cannot tell the frames it dropped from those pushed after it, so the edit
+    keeps them all; the next view that shares a frame with the session drops the old ones."""
+    core = opened([turn(0, "a0")])
+    items = [core.frames["d0.frame"].user_item_id, *core.frames["d0.frame"].assistant_item_ids]
+    history = view([turn(1)], ledger="L")
+    assert core.in_place_problem(history, pushing=True) is None
+    batch = core.begin_edit(history, pushing=True)
+    assert shape(batch.operations) == [("create", ROLES[POLICY.ledger_role], "root", True)]
+    assert (batch.removed, batch.frames) == ((), {})
+    for op in sent(core, batch.operations):
+        core.receive(done(op.item_id))
+    core.finish_edit()
+
+    sent(core, [core.push(history)])
+    batch = core.begin_edit(history, pushing=True)
+    assert shape(batch.operations) == [("delete", item_id, None, True) for item_id in items]
+    assert batch.removed == ("d0.frame",)
