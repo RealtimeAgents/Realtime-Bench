@@ -3,8 +3,9 @@
 runner.main() takes it as --interaction-mode, records it in the run identity (the episode start,
 run_config.json and its hash, the expected summary and the run summary) and passes it to the
 pre-run checks (providers/preflight.py check_interaction_mode). Run plans, the Harbor agent's
-options, each trial's task.json and the trial worker carry it to the runner. No driver declares
-streaming yet, so every streaming run is refused before the agent is built.
+options, each trial's task.json and the trial worker carry it to the runner. No registered driver
+declares streaming yet, so a streaming run of a catalog model is refused before the agent is
+built; the tests that need one let Gemini Live declare it.
 """
 
 from __future__ import annotations
@@ -63,22 +64,29 @@ def test_the_runner_refuses_streaming(runner_cells):
     assert runner_cells[GAME]["error"] == f"ValueError: {UNSUPPORTED}"
 
 
-def run_main(tmp_path, monkeypatch, *argv) -> dict:
+def run_main(tmp_path, monkeypatch, *argv, agents=None) -> dict:
     """runner.main() in this interpreter with the export probe's stand-ins for the container, the
     guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
-    decision loop that fails at once, so the run ends invalid. Returns the run summary."""
+    decision loop that fails at once, so the run ends invalid. Each agent built is appended to
+    ``agents``. Returns the run summary."""
     import sys
 
     import realtime_tasks.registry as tasks
     from realtime_framework.clock import Clocks, SystemClock
     from realtime_framework.evaluation import effective_config as probe
     from realtime_framework.evaluation import reporting, runner
-    from realtime_framework.sandbox import desktop
+    from realtime_framework.sandbox import apptainer, desktop
 
     for name in ("build_image_if_needed", "start_container", "_start_screensaver_keepalive"):
         monkeypatch.setattr(desktop, name, lambda *args, **kwargs: None)
     monkeypatch.setattr(desktop, "_start_screen_recording", lambda run_dir=None: False)
+    monkeypatch.setattr(apptainer, "build_image", lambda name: None)  # main() with --report-root
     monkeypatch.setattr(reporting, "finalize_video", lambda run_dir: None)
+    agents = [] if agents is None else agents
+
+    def create_agent(config, **kwargs):
+        agents.append(config)
+        return probe._Agent(config)
 
     class NoSleeps(SystemClock):
         """main()'s setup waits take no time here."""
@@ -90,7 +98,7 @@ def run_main(tmp_path, monkeypatch, *argv) -> dict:
     monkeypatch.setattr(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock))
     monkeypatch.setattr(runner, "GuestClient", probe._Guest)
     monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
-    monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))
+    monkeypatch.setattr(runner, "create_agent", create_agent)
     registered = tasks.get
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
 
@@ -117,12 +125,45 @@ def test_the_run_summary_records_the_mode(tmp_path, monkeypatch):
 
 
 def test_a_refused_streaming_run_records_the_mode(tmp_path, monkeypatch):
-    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming")
+    """Without --report-root, which refuses it earlier (reporting.prepare_episode_report), the
+    runner's own check refuses the run before it builds the agent (providers/preflight.py
+    check_episode), so no live session is opened."""
+    agents = []
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming", agents=agents)
     assert summary["error"].strip().endswith(f"ValueError: {UNSUPPORTED}")
+    assert agents == []
     assert summary["interaction_mode"] == "streaming"
     # Refused before its configuration was resolved, it pushed no frame.
     assert summary["streaming"]["context_control"] is None
     assert summary["streaming"]["frames"]["pushed"] == 0
+
+
+def test_a_streaming_run_keeps_the_hash_it_expected(streaming_gemini, tmp_path, monkeypatch):
+    """Where a driver declares streaming, the runner's run configuration hashes to the one
+    reporting.prepare_episode_report expected before the run, the model YAML's streaming settings
+    included: either side leaving the mode or the settings out would fail the run's report."""
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / f"{GEMINI}.yaml").write_text(
+        (catalog.MODELS_DIR / f"{GEMINI}.yaml").read_text()
+        + "streaming:\n  compression_trigger_tokens: 100000\n"
+    )
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+    catalog._catalog_entries.cache_clear()
+    try:
+        # The arguments the expected identity reads as given, as Harbor's trial passes them.
+        summary = run_main(
+            tmp_path, monkeypatch, "--interaction-mode", "streaming", "--protocol", "wall-clock",
+            "--reasoning-effort", "fixed", "--report-root", str(tmp_path / "report"),
+        )
+    finally:
+        catalog._catalog_entries.cache_clear()
+    (expected,) = json.loads((tmp_path / "summary.json").read_text())["runs"]
+    run_config = json.loads((tmp_path / "run" / "run_config.json").read_text())
+    assert (expected["interaction_mode"], run_config["interaction_mode"]) == ("streaming",) * 2
+    assert run_config["streaming"]["compression_trigger_tokens"] == 100_000
+    assert expected["runtime_config_hash"] == run_config["runtime_config_hash"]
+    assert summary["runtime_config_hash"] == run_config["runtime_config_hash"]
 
 
 def test_the_report_compares_the_mode(tmp_path):
@@ -153,7 +194,7 @@ runtime:
 def test_a_run_plan_carries_the_mode_to_the_runner(tmp_path):
     """``rtbench run -c PLAN``, as tests/config/test_frame_rates.py follows the frame rates: the
     plan's runtime becomes the Harbor agent's options, the trial's task.json and command, the
-    trial's plan, and the runner's arguments, which reach its decision loop."""
+    trial's plan, and the runner's arguments, which its episode start records."""
     plan = tmp_path / "turn_based.yaml"
     plan.write_text(PLAN.format(mode="turn_based"))
     entry = f"harbor:{plan}"
