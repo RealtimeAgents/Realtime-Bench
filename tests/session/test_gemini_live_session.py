@@ -820,17 +820,22 @@ CANCELLATION = message({"toolCallCancellation": {"ids": ["call-1", "call-0"]}})
 
 def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     """A toolCallCancellation says which calls not to execute, in the server's order, whether
-    it comes in their reply, after it, or in a reply still read from a closed connection; it does
-    not end the reply."""
+    it comes in their reply, after it, in a reply still read from a closed connection or after
+    that reply; it does not end the reply, and changes neither what was written nor which calls
+    the next acknowledgement answers."""
     core = session_core(streaming=True)
     connected(core)
     start_reply(core, "turn-0")
-    core.calls_received([("call-0", "click"), ("call-1", "key")])
+    core.calls_received([("call-0", "click")])
     core.acknowledging()
     core.acknowledgement_sent()
+    core.calls_received([("call-1", "key")])
+    written = dict(core.delivery)
     received = receive(core, CANCELLATION)
     assert received.cancelled == ("call-1", "call-0")
     assert (received.generation_id, received.complete, received.ends) == ("turn-0", False, False)
+    assert core.delivery == written
+    assert core.acknowledging() == (("call-1", "key"),)
     received = receive(core, server_content(turnComplete=True))
     assert received.ends and received.cancelled == ()
 
@@ -840,6 +845,8 @@ def test_a_cancellation_names_the_calls_and_the_reply_goes_on():
     start_reply(core, "turn-1")
     connected(core, streaming_view([pushed(0)]))
     assert core.received(1, CANCELLATION, 0.0).cancelled == ("call-1", "call-0")
+    core.received(1, server_content(turnComplete=True), 0.0)
+    assert core.arrived(1, CANCELLATION, 0.0).cancelled == ("call-1", "call-0")
 
 
 def test_streaming_resumes_with_the_latest_resumable_handle():

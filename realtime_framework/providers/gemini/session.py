@@ -255,7 +255,9 @@ class Received:
     ends: bool  # the generation's output ends with this message
     control: dict  # what a goAway asks of the turn: reconnect after it
     # The ids of the tool calls this message cancels: not to be executed. It does not end the
-    # reply.
+    # reply. They may be an earlier reply's: tell them by call id, not by this message's
+    # generation. A cancelled call still pending is acknowledged all the same; the driver
+    # acknowledges a message's calls before it reads the next, so none is pending then.
     cancelled: tuple[str, ...]
 
 
