@@ -11,9 +11,29 @@ from __future__ import annotations
 import asyncio
 import itertools
 
-from realtime_framework.entity.events import ProviderHistoryState
-from realtime_framework.entity.model import HistorySyncRequest, HistorySyncResult, SyncDisposition
+import pytest
+
+from realtime_framework.entity.events import (
+    GenerationBoundary,
+    ProviderHistoryState,
+    TextDelta,
+    UsageSnapshot,
+)
+from realtime_framework.entity.model import (
+    ConnectRequest,
+    GenerationRequest,
+    HistorySyncRequest,
+    HistorySyncResult,
+    SessionSeed,
+    SyncDisposition,
+)
+from realtime_framework.entity.records import UNTRACED
+from realtime_framework.entity.request import AnswerRequirements
+from realtime_framework.harnesses.default.frames import FrameTable
+from realtime_framework.harnesses.streaming.history import frame_block
 from realtime_framework.providers.openai_realtime import _Session
+from tests.fake_clock import FakeClock
+from tests.replay import baseline
 from tests.session.test_openai_realtime_receive import (
     SEED,
     _clean_close,
@@ -22,6 +42,7 @@ from tests.session.test_openai_realtime_receive import (
     _within,
 )
 from tests.session.test_openai_realtime_session import (
+    TEXTS,
     done,
     new_core,
     response_events,
@@ -29,6 +50,16 @@ from tests.session.test_openai_realtime_session import (
     server,
     stream,
     streaming_view,
+)
+
+from .clocked_ws import CassetteServer, clocked_connection
+from .openai_session import (
+    MODEL_KEY,
+    SYSTEM_INSTRUCTION,
+    _observation,
+    driver_for,
+    frame_png,
+    run_on_fake_clock,
 )
 
 
@@ -161,3 +192,232 @@ def test_a_streaming_sync_rebuilds_the_session():
     for reason in ("history_block_compaction", "provider_history_changed"):
         _within(driver._sync_history(HistorySyncRequest(SEED, reason, history)))
     assert rebuilt == ["history_block_compaction", "provider_history_changed"]
+
+
+# ---- a streaming session against a cassette, on the fake clock -------------------------------
+
+PLACEHOLDER = TEXTS.folded_visual
+SESSION_UPDATE = {
+    "type": "session.update",
+    "session": {
+        "type": "realtime",
+        "output_modalities": ["text"],
+        "instructions": SYSTEM_INSTRUCTION,
+        "truncation": "disabled",
+    },
+}
+RESPONSE_CREATE = {
+    "type": "response.create",
+    "response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}},
+}
+USAGE = {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}
+
+
+def c2s(msg: dict) -> dict:
+    return {"conn": 1, "dir": "c2s", "at": None, "msg": msg}
+
+
+def s2c(msg: dict, at: float | None = None) -> dict:
+    return {"conn": 1, "dir": "s2c", "at": at, "msg": msg}
+
+
+def push(user: int, frame: int, push_event: int) -> dict:
+    image = f"data:image/png;{baseline.image_digest(frame_png(frame))}"
+    content = [
+        {"type": "input_text", "text": f"frame {frame}"},
+        {"type": "input_image", "image_url": image},
+    ]
+    item = {"id": f"<rtb_user-{user}>", "type": "message", "role": "user", "content": content}
+    return c2s(
+        {"type": "conversation.item.create", "item": item, "event_id": f"<rtb_push-{push_event}>"}
+    )
+
+
+def fold(deleted: int, delete_event: int, placeholder: int, create_event: int, after: str):
+    item = {
+        "id": f"<rtb_user-{placeholder}>",
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": PLACEHOLDER}],
+    }
+    return [
+        c2s(
+            {
+                "type": "conversation.item.delete",
+                "item_id": f"<rtb_user-{deleted}>",
+                "event_id": f"<rtb_delete-{delete_event}>",
+            }
+        ),
+        c2s(
+            {
+                "type": "conversation.item.create",
+                "item": item,
+                "previous_item_id": after,
+                "event_id": f"<rtb_create-{create_event}>",
+            }
+        ),
+    ]
+
+
+def item_done(user: int, previous: str | None) -> dict:
+    item = {"id": f"<rtb_user-{user}>"}
+    return s2c({"type": "conversation.item.done", "item": item, "previous_item_id": previous})
+
+
+def item_deleted(user: int) -> dict:
+    return s2c({"type": "conversation.item.deleted", "item_id": f"<rtb_user-{user}>"})
+
+
+def reply_event(kind: str, at: float, **fields) -> dict:
+    return s2c({"type": kind, "response_id": "resp_1", **fields}, at)
+
+
+# One reply runs from 0.2 s to 2.0 s while frames 2 and 3 are pushed, at 1.0 s and 1.5 s, each
+# folding the frame before it (K = 1). The server made the reply's item before frame 2 came,
+# which so follows it; frame 2's placeholder goes there too. Frame 3 is refused.
+RECORDS = [
+    {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+    c2s(SESSION_UPDATE),
+    push(1, 1, 1),
+    item_done(1, None),
+    c2s(RESPONSE_CREATE),
+    s2c({"type": "response.created", "response": {"id": "resp_1"}}, 0.2),
+    reply_event("response.output_item.added", 0.2, item={"id": "srv_item_1"}),
+    reply_event("response.output_text.delta", 0.5, delta='{"action": '),
+    push(2, 2, 2),
+    *fold(1, 1, 3, 1, "root"),
+    item_done(2, "srv_item_1"),
+    item_deleted(1),
+    item_done(3, None),
+    reply_event("response.output_text.delta", 1.2, delta='"wait"}'),
+    push(4, 3, 3),
+    *fold(2, 2, 5, 2, "srv_item_1"),
+    s2c(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "refused",
+                "event_id": "<rtb_push-3>",
+            },
+        }
+    ),
+    item_deleted(2),
+    item_done(5, "srv_item_1"),
+    reply_event(
+        "response.output_text.done",
+        1.9,
+        event_id="evt_text",
+        item_id="srv_item_1",
+        output_index=0,
+        content_index=0,
+        text='{"action": "wait"}',
+    ),
+    s2c(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp_1",
+                "status": "completed",
+                "output": [{"id": "srv_item_1"}],
+                "usage": USAGE,
+            },
+        },
+        2.0,
+    ),
+    {"conn": 1, "dir": "close", "at": None, "msg": {"by": "client", "code": 1000}},
+]
+
+
+def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
+    """Frames go in while a reply streams, each fold of an older frame confirmed between the
+    reply's events, none of which is lost; a refused frame is lost alone; closing the session
+    ends its reader. The cassette checks every message the driver sent, and when."""
+    clock, table, blocks = FakeClock(), FrameTable(), []
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+
+    def frame(k: int):
+        observation = _observation(k)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        blocks.append(frame_block(record, observation))
+        return observation, streaming_view(blocks, frames=1)
+
+    async def scenario(driver):
+        await driver.connect(ConnectRequest(seed=seed))
+        observation, view = frame(1)
+        await driver.push_frame(observation, view)
+        handle = await driver.request_reply(
+            GenerationRequest("reply-1", None, "inf", "wall", canonical=view)
+        )
+        reply = asyncio.create_task(_collect(driver.events(handle)))
+        await asyncio.sleep(1.0)
+        await driver.push_frame(*frame(2))
+        await asyncio.sleep(0.5)
+        with pytest.raises(RuntimeError, match="^OpenAI Realtime refused f3.frame: "):
+            await driver.push_frame(*frame(3))
+        events = await reply
+        session = driver._session
+        await driver.close()
+        return events, handle, session
+
+    with CassetteServer(RECORDS, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED)
+        driver.interaction_mode = "streaming"
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        events, handle, session = run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+
+    assert [type(event) for event in events] == [
+        GenerationBoundary,
+        TextDelta,
+        TextDelta,
+        UsageSnapshot,
+        GenerationBoundary,
+    ]
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == '{"action": "wait"}'
+    _, reply = handle.opaque
+    assert reply.received_at == {"evt_text": 1.9}
+    core = session.core
+    assert {k: (f.folded, f.text) for k, f in core.frames.items()} == {
+        "f1.frame": (True, PLACEHOLDER),
+        "f2.frame": (True, PLACEHOLDER),
+    }
+    assert session.closed is not None and session.failure is None
+    assert session._reader.done() and session._reader.exception() is None
+
+
+async def _collect(events) -> list:
+    return [event async for event in events]
+
+
+class _Responses:
+    """Stands in for the SDK connection's response resource: keeps each response.create."""
+
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+        self.response = self
+
+    def create(self, **kwargs) -> None:
+        self.created.append(kwargs)
+
+
+def test_a_reply_goes_out_after_the_feedback_the_session_lacks():
+    """Feedback accepted after the newest frame, an item of its own under separate_message, is
+    pushed before the reply's response.create, so the reply sees it; the reply answers no frame."""
+    driver, core = _offline_driver(), new_core()
+    sent(core, core.push(streaming_view(stream("FR"))))
+    driver._session = _Session(1, _FakeConnection(), core)
+    driver._conn = responses = _Responses()
+    pushed = []
+    driver._send = pushed.append
+    request = GenerationRequest(
+        "reply-2", None, "inf", "wall", canonical=streaming_view(stream("FRB"))
+    )
+    handle = _within(driver.request_reply(request))
+    assert [(op.block, op.text) for op in pushed] == [("d1.feedback", "fb1")]
+    assert responses.created == [
+        {"response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}}}
+    ]
+    _, reply = handle.opaque
+    assert reply.answered is None
