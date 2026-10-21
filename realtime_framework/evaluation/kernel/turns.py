@@ -16,7 +16,9 @@ read only a tick not read yet; a tap's own reads, in the environment, are the re
 it steps to. On the wall clock the periodic check, during generations too, and the loop top read
 only an environment frame not read yet, the periodic check the frame it is handled in; the check
 before landing reads unless the state was read at that same reading, as real time moves on
-within a frame.
+within a frame. A periodic check an execution delays is left to the check right after the
+action, or, for a refused action, which gets none, made when the refusal is handled. A check left
+out for a read made already goes on once that read has answered.
 
 The three clocks differ in five places: the bound on one call, the action time, whether the clock
 moves to the action time before landing, the finite-B allowance, and the frame age. Frame times use
@@ -203,6 +205,8 @@ class TurnPolicy:
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
         self._failed_reads = 0  # state reads failed in a row
         self._read_at: float | None = None  # the semantic reading of the last state read
+        self._unanswered: int | None = None  # the last state read, until its answer is handled
+        self._periodic_owed = False  # an execution delayed a periodic check, left to the next read
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
@@ -254,9 +258,12 @@ class TurnPolicy:
         elif timer.kind == "end_check":
             # A check a synchronous command delayed past the deadline is not asked: the deadline
             # comes first, as in sandbox/actions.py GuestEnvironment.done. Nor is one an execution
-            # delayed: the check right after the action reads at that reading.
+            # delayed: the check right after the action reads at that reading, or, for an action
+            # refused, which gets none, the check made in its place (_executed).
             if kernel.semantic < self.config.duration_s:
-                if self.phase is not _Phase.EXECUTE:
+                if self.phase is _Phase.EXECUTE:
+                    self._periodic_owed = True
+                else:
                     self._check_end(None)
                 self._schedule_end_check()
         elif timer.kind == "generation_watchdog":
@@ -547,8 +554,11 @@ class TurnPolicy:
             kernel.invalidate("environment", "action_execution_failed", event.error)
             return self._resolve("invalid_run")
         if event.rejection is not None:
-            # A refused action skips the check after execution (legacy_loop.py _land_action).
+            # A refused action skips the check after execution (legacy_loop.py _land_action), but
+            # not a periodic check its execution delayed.
             d.detail = event.rejection
+            if self._periodic_owed:
+                self._check_end(None)
             return self._resolve("rejected")
         if self.token and event.held_keys:
             self._lease(event.held_keys)
@@ -757,13 +767,18 @@ class TurnPolicy:
     ) -> None:
         """Ask whether the episode is over; ``then`` runs when it is not. A check right after an
         action always reads; any other is not asked when it would read what was read already
-        (_read_already), and ``then`` runs at once."""
+        (_read_already), and ``then`` runs once that read has answered: at once, or when its
+        answer is handled, should another event due earlier have come first."""
         if then is not None and self._past_deadline():
             return
         if not after_action and self._read_already(before_landing=before_landing):
+            if then is not None and self._unanswered is not None:
+                self._awaited = (self._unanswered, then)
+                return None
             return None if then is None else then()
         self._read_at = self.kernel.semantic
-        request = self.kernel.request()
+        self._periodic_owed = False
+        request = self._unanswered = self.kernel.request()
         if then is not None:
             self._awaited = (request, then)
         self.kernel.emit(CheckEnd(request))
@@ -778,9 +793,11 @@ class TurnPolicy:
     def _end_checked(self, event: EndChecked) -> None:
         kernel = self.kernel
         asked_at = kernel.asked_at(event.request)
+        if self._unanswered == event.request:
+            self._unanswered = None
         if kernel.ending is not None:
             return
-        if self._count_read(event.error):
+        if self._count_read(event.error, asked_at):
             return
         if event.ended:
             return kernel.end("environment", asked_at, reason=event.reason)
@@ -789,15 +806,16 @@ class TurnPolicy:
             self._awaited = None
             then()
 
-    def _count_read(self, error: str | None) -> bool:
-        """Count one state read; True when it is the failure that invalidates the run."""
+    def _count_read(self, error: str | None, asked_at: float | None = None) -> bool:
+        """Count one state read; True when it is the failure that invalidates the run, which ends
+        when that read was asked, as an end a read sees does (legacy_loop.py _end_reported)."""
         if error is None:
             self._failed_reads = 0
             return False
         self._failed_reads += 1
         if self._failed_reads < READ_FAILURE_LIMIT:
             return False
-        self.kernel.invalidate("environment", "terminal_state_check_failed", error)
+        self.kernel.invalidate("environment", "terminal_state_check_failed", error, at=asked_at)
         return True
 
     # ---- moving the semantic clock ----------------------------------------------------------
@@ -885,8 +903,7 @@ class TurnPolicy:
         the same position, which every step of a move makes new. On the wall clock it is the same
         environment frame, except right before landing, where it must be the same reading: real
         time moves on within a frame, and an end since keeps the action from landing, as the
-        runner reads right before it executes (legacy_loop.py _land_action). Without ``or
-        before_landing`` the check before landing too reads once a frame."""
+        legacy loop reads right before it executes (legacy_loop.py _land_action)."""
         last = self._read_at
         if last is None:
             return False

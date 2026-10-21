@@ -192,15 +192,17 @@ class Kernel:
         self.record("GenerationAbandoned", generation=generation, reason=reason)
         self.emit(AbortGeneration(generation))
 
-    def invalidate(self, category: str, reason: str, detail=None) -> None:
-        """Latch the first non-model failure; it ends the episode and the run is never scored."""
+    def invalidate(self, category: str, reason: str, detail=None, at: float | None = None) -> None:
+        """Latch the first non-model failure; it ends the episode and the run is never scored.
+        The end is dated ``at``, the reading being handled unless the failure is dated otherwise,
+        as a state read is by its asking."""
         if self.invalid is None:
             # The end of a traceback names the exception (legacy_loop.py _invalidate).
             self.invalid = Invalidated(
                 category, reason, None if detail is None else str(detail)[-2000:]
             )
             self.record(TraceEvent.RUN_INVALIDATED.value, **asdict(self.invalid))
-        self.end("invalid", self.semantic)
+        self.end("invalid", self.semantic if at is None else at)
 
     def end(self, cause: str, at: float, reason: str | None = None) -> None:
         """The first end signal fixes the cause, freezes the snapshot, interrupts the generation
