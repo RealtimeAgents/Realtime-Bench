@@ -310,6 +310,20 @@ def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
     return task, request, report
 
 
+# A streaming run summary's section (reporting.summarize_streaming), as far as the report reads it.
+SECTION = {
+    "schema": "realtime_bench.streaming_summary.v1",
+    "context_control": "approximate",
+    "frames": {
+        "captured": 300, "pushed": 290, "push_failed": 1, "dropped": 10,
+        "dropped_by_reason": {"capture_busy": 4, "push_failed": 1, "superseded": 5},
+        "confirmed": 0, "refused": 0,
+    },
+    "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
+    "replies": {"started": 41, "abandoned": {"deadline": 1}},
+}
+
+
 def _report_root(tmp_path, monkeypatch, interaction_mode, streaming=None):
     """A one-task local report root as runner.main() leaves it with --report-root: the identity
     reporting.prepare_episode_report expects before the run, and a scored run summary of a solved
@@ -356,21 +370,10 @@ def test_only_a_streaming_report_has_a_streaming_section(streaming_gemini, tmp_p
     assert group["scored"] == 1
     assert "streaming" not in group and "streaming" not in group["tasks"][0]
 
-    section = {
-        "schema": "realtime_bench.streaming_summary.v1",
-        "context_control": "approximate",
-        "frames": {
-            "captured": 300, "pushed": 290, "push_failed": 1, "dropped": 10,
-            "dropped_by_reason": {"capture_busy": 4, "push_failed": 1, "superseded": 5},
-            "confirmed": 0, "refused": 0,
-        },
-        "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
-        "replies": {"started": 41, "abandoned": {"deadline": 1}},
-    }
-    root = _report_root(tmp_path / "streaming", monkeypatch, "streaming", section)
+    root = _report_root(tmp_path / "streaming", monkeypatch, "streaming", SECTION)
     (group,) = report(root)["groups"]
     assert group["scored"] == 1
-    assert group["tasks"][0]["streaming"] == section
+    assert group["tasks"][0]["streaming"] == SECTION
     assert group["streaming"] == {
         "context_control": "approximate",
         "frames": {
@@ -381,6 +384,19 @@ def test_only_a_streaming_report_has_a_streaming_section(streaming_gemini, tmp_p
         "actions": {"arrived": 40, "outcomes": {"applied": 30, "superseded": 10}},
         "replies": {"started": 41, "abandoned": {"deadline": 1}},
     }
+
+
+def test_a_streaming_run_summary_without_its_section_is_not_scored(
+    streaming_gemini, tmp_path, monkeypatch
+):
+    from realtime_framework.evaluation.reporting import report
+
+    (group,) = report(_report_root(tmp_path, monkeypatch, "streaming"))["groups"]
+    assert (group["scored"], group["invalid"]) == (0, 1)
+    (task,) = group["tasks"]
+    assert (task["status"], task["error_reason"]) == ("invalid", "result_validation_failed")
+    assert "streaming" not in task
+    assert group["streaming"]["context_control"] is None
 
 
 def test_harbor_verify_compares_the_mode():

@@ -1876,9 +1876,13 @@ def report(root):
                         # Exclude partially recorded tasks from pooled token distributions.
                         charged_tokens=known if len(known) == len(tokens) else [],
                         charged_tokens_complete=complete,
+                        # summarize_streaming's, which every streaming run summary has.
+                        **(
+                            {"streaming": summary["streaming"]}
+                            if identity["interaction_mode"] == "streaming"
+                            else {}
+                        ),
                     )
-                    if "streaming" in summary:
-                        row["streaming"] = summary["streaming"]
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     row["error"] = str(exc)
                     if row["outcome"] != "error":
