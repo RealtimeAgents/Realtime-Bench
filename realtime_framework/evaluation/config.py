@@ -418,6 +418,7 @@ from pathlib import Path as Path
 
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
 from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import validate_model_interaction
 from realtime_framework.entity.actions import SOM_REPRESENTATION_VERSION
 from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
@@ -672,6 +673,9 @@ def effective_run_config(
             raise ValueError("time-aware-token-v1 requires a token clock")
         if think_budget_s is not None or per_move_cap_s is not None:
             raise ValueError("time-aware-token-v1 does not use separate deliberation caps")
+    check_streaming_options(
+        interaction_mode, think_budget_s=think_budget_s, per_move_cap_s=per_move_cap_s
+    )
     model_config = dict(model_config)
     model_config.pop("api_key", None)
     environment = {
@@ -851,6 +855,12 @@ def identity_main(argv=None) -> int:
             entry.adapter_type, clock_mode=args.clock, tokens_per_frame=tokens_per_frame
         )
     except UnsupportedTokenBudget as exc:
+        parser.error(str(exc))
+    try:
+        check_streaming_options(
+            args.interaction_mode, think_budget_s=think_budget, per_move_cap_s=per_move_cap
+        )
+    except ValueError as exc:
         parser.error(str(exc))
     config = catalog.to_model_config(
         args.model,

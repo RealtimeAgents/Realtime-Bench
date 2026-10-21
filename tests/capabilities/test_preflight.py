@@ -732,6 +732,82 @@ def test_streaming_frame_rate_cap_of_openai_realtime_trial(capsys):
     )
 
 
+# The turn-based deliberation caps, which a streaming episode has no turns for (N41).
+
+CAPS = [
+    (["--think-budget-s", "5"], "Streaming does not support --think-budget-s"),
+    (["--per-move-cap-s", "2"], "Streaming does not support --per-move-cap-s"),
+    (
+        ["--think-budget-s", "5", "--per-move-cap-s", "2"],
+        "Streaming does not support --think-budget-s or --per-move-cap-s",
+    ),
+]
+CAP_IDS = ["think-budget", "per-move-cap", "both"]
+
+
+@pytest.mark.parametrize("caps, message", CAPS, ids=CAP_IDS)
+def test_streaming_refuses_deliberation_caps_runner(capsys, caps, message):
+    usage_error(
+        capsys,
+        runner_main("--model", "gemini-live", "--task", WEB, "--clock", "wall",
+                    "--interaction-mode", "streaming", *caps),
+        message,
+    )
+
+
+@pytest.mark.parametrize("caps, message", CAPS, ids=CAP_IDS)
+def test_streaming_refuses_deliberation_caps_identity(capsys, caps, message):
+    from realtime_framework.evaluation.config import identity_main
+
+    usage_error(
+        capsys,
+        lambda: identity_main(["--model", "gemini-live", "--task", WEB, "--fps", "1",
+                               "--max-minutes", "5", "--protocol", "wall-clock", "--clock",
+                               "wall", "--interaction-mode", "streaming", *caps]),
+        message,
+    )
+
+
+@pytest.mark.parametrize(
+    "think_budget_s, per_move_cap_s, message",
+    [(5.0, None, CAPS[0][1]), (None, 2.0, CAPS[1][1]), (5.0, 2.0, CAPS[2][1])],
+    ids=CAP_IDS,
+)
+def test_streaming_refuses_deliberation_caps_run_config(think_budget_s, per_move_cap_s, message):
+    """effective_run_config, which reporting.prepare_episode_report computes the expected hash
+    with; a turn-based wall-clock run keeps its caps."""
+
+    def run_config(interaction_mode):
+        return effective_run_config(
+            model_config=preset("gemini-live"), fps=1.0, max_minutes=5.0, protocol="wall-clock",
+            think_budget_s=think_budget_s, per_move_cap_s=per_move_cap_s, clock_mode="wall",
+            interaction_mode=interaction_mode,
+        )
+
+    fails(lambda: run_config("streaming"), message)
+    config = run_config("turn_based")
+    assert (config["think_budget_s"], config["per_move_cap_s"]) == (think_budget_s, per_move_cap_s)
+
+
+def test_harbor_carries_no_deliberation_caps(capsys):
+    """Harbor's agent options and the trial worker it runs take neither cap, so no Harbor request
+    hands one to a streaming run."""
+    from pydantic import ValidationError
+
+    from realtime_framework.evaluation._trial import main
+    from realtime_framework.evaluation.harbor import RealtimeBenchOptions
+
+    for field in ("think_budget_s", "per_move_cap_s"):
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            RealtimeBenchOptions(interaction_mode="streaming", **{field: 5.0})
+    usage_error(
+        capsys,
+        lambda: main(["--catalog-model", "gemini-live", "--task", WEB, "--interaction-mode",
+                      "streaming", "--think-budget-s", "5", "--dry-run"]),
+        "unrecognized arguments: --think-budget-s 5",
+    )
+
+
 def test_streaming_frame_rate_cap_plan(tmp_path):
     """The plan's model-input rate defaults to its environment rate."""
     fails(
