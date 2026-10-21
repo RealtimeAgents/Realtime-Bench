@@ -23,14 +23,28 @@ without it the run is compared with tests/replay/baselines/.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import realtime_framework.providers.registry as catalog
+from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.entity.model import CanonicalTurn
+from realtime_framework.entity.model import GenerationRequest
+from realtime_framework.entity.model import ProviderObservation
+from realtime_framework.entity.records import UNTRACED
+from realtime_framework.entity.request import AnswerRequirements
+from realtime_framework.entity.request import CallParameters
+from realtime_framework.harnesses.default.request import build_request
+from realtime_framework.harnesses.default.request import ledger_block
+from realtime_framework.harnesses.default.request import system_block
 
 from . import baseline
 from .build import build_episode
@@ -299,3 +313,55 @@ def test_short_scenario_pause_mode(tmp_path, monkeypatch):
         records,
         tmp_path,
     )
+
+
+def test_instruction_ledger_joins_the_system_field(monkeypatch):
+    """A ledger in the instruction role leaves the driver as the system message after the system
+    instruction (providers/litellm.py chat_messages). LiteLLM sends that leading run of system
+    messages as the top-level system field (litellm/llms/anthropic/chat/transformation.py:
+    2052-2059; litellm/litellm_core_utils/prompt_templates/mid_conversation_system.py:99-107)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", DUMMY_KEY)
+    frame = ProviderObservation(
+        observation=Observation(b"raw", 100.0, 0.0, {"observation_id": "o0"}),
+        prompt="FRAME",
+        image_bytes=b"png",
+        mime_type="image/png",
+        image_detail="auto",
+        geometry={},
+    )
+    ledger = ledger_block('{"decision": 0}', 1, None)
+    usage = {"input_tokens": 10, "output_tokens": 1}
+    with AnthropicMessagesStub([Reply("ok", usage, {"output_tokens": 2})]) as stub:
+        config = anthropic_config(stub.base_url)
+        policy = current_context_policy().for_path(
+            config.adapter_type, config.provider_options, config.context_preset
+        )
+        request = build_request(
+            replace(policy, ledger_role="instruction"),
+            system_block("SYSTEM", None),
+            (CanonicalTurn(observation=frame, decision=1),),
+            ledger,
+            AnswerRequirements("text_json", "standard_vlm"),
+            CallParameters(config.model_name, config.reasoning_effort, None),
+        )
+        driver = catalog.adapter_class("anthropic_messages")(config)
+        driver.bind_trace(UNTRACED)
+
+        async def send():
+            generation = GenerationRequest(
+                "turn-1", None, config.native_output_limit, "token", canonical=request
+            )
+            handle = await driver.start_generation(generation)
+            async for _ in driver.events(handle):
+                pass
+            await driver.close()
+
+        asyncio.run(send())
+    (received,) = stub.requests
+    body = json.loads(received.body)
+    assert [block["text"] for block in body["system"]] == [
+        "SYSTEM",
+        ARCHIVED_ACTION_LEDGER_HEADER + "\n" + ledger.text,
+    ]
+    assert [turn["role"] for turn in body["messages"]] == ["user"]
+    assert [block["type"] for block in body["messages"][0]["content"]] == ["text", "image"]
