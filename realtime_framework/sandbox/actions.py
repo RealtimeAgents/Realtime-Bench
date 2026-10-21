@@ -151,12 +151,14 @@ class GuestEnvironment:
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
-        # The identities of the keys the last execute() leased with a hold_key, for the kernel's
-        # shell, which ends the leases itself.
+        # The identities of the keys the last execute() leased with a token-clock hold_key, for
+        # the kernel's shell, which ends the leases itself; () on the wall clock, whose release
+        # timer ends them.
         self.last_held_keys = ()
         # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
-        # makes go to last_end_checks (None for a read that answered, the error of one that
-        # failed) instead of done(), which invalidates the run at the first failure.
+        # makes go to last_end_checks (the error of a read that failed, None otherwise, also when
+        # the task has no end check) instead of done(), which invalidates the run at the first
+        # failure.
         self.kernel_counts_reads = False
         self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
@@ -274,7 +276,7 @@ class GuestEnvironment:
 
     def _ended_after_step(self):
         """The end check after each token step of wait_until_tick. When the kernel counts failed
-        reads, a failed one goes to last_end_checks and the advance goes on."""
+        reads, every check goes to last_end_checks, and after a failed one the advance goes on."""
         if not self.kernel_counts_reads:
             return self.done()
         try:
@@ -407,8 +409,10 @@ class GuestEnvironment:
         self._release_clock_keys(keys)
 
     def _clock_key_up(self, identities):
-        """Release these held token-clock keys in one keyUp; a key that is not held is skipped."""
-        selected = [identity for identity in identities if identity in self._held_keys]
+        """Release these held token-clock keys in one keyUp, in the order they were pressed; a key
+        that is not held is skipped."""
+        wanted = set(identities)
+        selected = [identity for identity in self._held_keys if identity in wanted]
         if not selected:
             return
         chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
@@ -827,7 +831,7 @@ class GuestEnvironment:
                     "expires_at": max(current["expires_at"] if current else now, expires_at),
                 }
             self._schedule_wall_release()
-            return {
+            result = {
                 "status": "ok",
                 "timestamp": now,
                 "logical_key": chord,
@@ -841,6 +845,11 @@ class GuestEnvironment:
                 "active_holds": self._active_hold_snapshot(),
                 "active_mouse_buttons": sorted(self._held_mouse_buttons),
             }
+            if release_at is not None:
+                # Seconds from the press to the end of the lease: 0 when the kernel's release time
+                # passed before the press, so the keys went up at once.
+                result["lease_seconds"] = round(max(0.0, expires_at - now), 3)
+            return result
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
