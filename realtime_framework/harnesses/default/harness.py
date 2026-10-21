@@ -14,6 +14,7 @@ from realtime_framework.harnesses.default.parsing import _literal_object
 from realtime_framework.harnesses.default.parsing import unique_object
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.usage import normalize_provider_token_usage
 from realtime_framework.entity.actions import ActionTranslator
@@ -692,6 +693,9 @@ from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
+from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
+from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import bind_action
 from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
@@ -815,7 +819,6 @@ from dataclasses import replace as replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.harnesses.default.parsing import resolve_action_output
-from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import GenerationOutput
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import PendingDecision
@@ -851,9 +854,6 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
-from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
-from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
-from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
@@ -1066,7 +1066,6 @@ class _Staged:
     result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
-    protocol_failure: str | None = None
     # Its trajectory row, which finalize_decision_audit writes from the result.
     audit: dict | None = None
 
@@ -1074,7 +1073,8 @@ class _Staged:
 @dataclass
 class _Generation:
     """One generation's own state. An abandoned generation can still be running when the next
-    one starts, so none of it is kept on the agent."""
+    one starts, so it works on this alone; what the agent keeps of a generation is set when it
+    starts (DefaultHarness._open)."""
 
     number: int | None  # the kernel's generation number; None when the legacy loop drives
     decision: int
@@ -1087,6 +1087,9 @@ class _Generation:
     choice: tuple | None = None
     frame: FrameRecord | None = None  # its observation's frame-table record
     staged: _Staged | None = None
+    # Set as generate() returns; ``discarded`` when discard() came before, to drop it then.
+    returned: bool = False
+    discarded: bool = False
 
 
 class DefaultHarness(VisionAgentBase):
@@ -1110,8 +1113,9 @@ class DefaultHarness(VisionAgentBase):
         self._trace_decision = None
         # The generations that have not ended; abort() and close() cancel them.
         self._generations: list[_Generation] = []
-        # Kernel generations aborted before their worker started generate().
+        # Kernel generations aborted, and discarded, before their worker started generate().
         self._cancelled_early: set[int] = set()
+        self._discarded_early: set[int] = set()
         self._generations_lock = threading.Lock()
         # The episode's operational clock; the runtime, the driver and the retry wait read it.
         self.clock = clock or SystemClock()
@@ -1312,7 +1316,9 @@ class DefaultHarness(VisionAgentBase):
     def _open(
         self, number, decision, provider_output_tokens, transport_output_tokens, clock_mode
     ) -> _Generation:
-        """Start a generation's state; abort() reaches it until the generation ends."""
+        """Start a generation's state; abort() reaches it until the generation ends. The agent
+        keeps the newest generation's decision, for abort()'s trace, and its action cap, which
+        the runner audits against the decision's allowance once the result is back."""
         generation = _Generation(
             number,
             decision,
@@ -1325,18 +1331,24 @@ class DefaultHarness(VisionAgentBase):
             if number in self._cancelled_early:
                 self._cancelled_early.remove(number)
                 generation.cancel.set()
-            self._generations.append(generation)
+            if number in self._discarded_early:
+                self._discarded_early.remove(number)
+                generation.discarded = True
+            else:
+                self._generations.append(generation)
         self._trace_decision = decision
+        self._frame_action_max_tokens = native_output_limit(
+            self.config.native_output_limit, provider_output_tokens
+        )
         return generation
 
-    def _close(self, generation: _Generation) -> None:
+    def _close(
+        self, generation: _Generation | None = None, number: int | None = None
+    ) -> _Generation:
+        """End a generation: the legacy loop's ``generation``, or the kernel's ``number``."""
         with self._generations_lock:
-            self._generations.remove(generation)
-
-    def _take(self, number: int) -> _Generation:
-        """End the kernel's generation ``number``."""
-        with self._generations_lock:
-            (generation,) = [g for g in self._generations if g.number == number]
+            if generation is None:
+                (generation,) = [g for g in self._generations if g.number == number]
             self._generations.remove(generation)
         return generation
 
@@ -1364,14 +1376,33 @@ class DefaultHarness(VisionAgentBase):
             budget.transport_output_tokens,
             budget.clock_mode,
         )
-        result, cancelled = self._generate(state, [observation])
+        try:
+            result, cancelled = self._generate(state, [observation])
+        finally:
+            with self._generations_lock:
+                state.returned = True
+                discarded = state.discarded
+            if discarded:
+                self._drop(state)
         return PendingDecision(generation, decision, result, cancelled, state.staged)
 
     def accept(self, generation: int) -> None:
-        self._write(self._take(generation))
+        self._write(self._close(number=generation))
 
     def discard(self, generation: int) -> None:
-        self._drop(self._take(generation))
+        """DiscardResult. At the end of an episode the shell also discards a generation whose
+        worker is still running, or has not started generate() yet, which the kernel has
+        aborted by then: it is dropped as generate() returns."""
+        with self._generations_lock:
+            state = next((g for g in self._generations if g.number == generation), None)
+            if state is None:
+                self._discarded_early.add(generation)
+                return
+            self._generations.remove(state)
+            if not state.returned:
+                state.discarded = True
+                return
+        self._drop(state)
 
     def stream_generate(self, tick=0):
         """The legacy loop's decision on the newest prefilled frame. Its result is written at
@@ -1410,7 +1441,7 @@ class DefaultHarness(VisionAgentBase):
         self.action_history.append({"tick": self.tick_count, **staged.record})
         self._accumulate_usage(result.output.usage)
         self._end_tool_calls(
-            staged, "action_protocol_error" if staged.protocol_failure else "completed"
+            staged, "action_protocol_error" if staged.record["protocol_failure"] else "completed"
         )
 
     def _drop(self, generation: _Generation) -> None:
@@ -1522,11 +1553,6 @@ class DefaultHarness(VisionAgentBase):
             }
             return result, False
 
-        action_limit = native_output_limit(
-            self.config.native_output_limit, generation.provider_output_tokens
-        )
-        # The runner audits it against the decision's allowance once the result is back.
-        self._frame_action_max_tokens = action_limit
         configured_provider_cap = generation.provider_output_tokens
         provider_cap = None if configured_provider_cap is None else int(configured_provider_cap)
         configured_transport_cap = generation.transport_output_tokens
@@ -1791,7 +1817,6 @@ class DefaultHarness(VisionAgentBase):
                 "protocol_failure": action_protocol.get("protocol_failure"),
                 "parse_mode": action_protocol.get("parse_mode"),
             },
-            action_protocol.get("protocol_failure"),
         )
 
         token_fields = dict(output.token_fields)
@@ -2072,12 +2097,19 @@ class DefaultHarness(VisionAgentBase):
         if generation is None:
             scope = {"decision": self._trace_decision}
         else:
+            # A generation aborted before its worker started generate() has no decision yet.
             scope = {"decision": aborted[0].decision if aborted else None, "generation": generation}
         with trace_scope(phase="abort", **scope):
             self._runtime.abort()
 
     def close(self):
+        """Cancel the generations that have not ended, and discard the event kernel's: one the
+        episode ended on gets no AcceptResult or DiscardResult after Termination."""
+        with self._generations_lock:
+            unsettled = [g.number for g in self._generations if g.number is not None]
         self._cancel()
+        for number in unsettled:
+            self.discard(number)
         try:
             with trace_scope(phase="close"):
                 self._runtime.close()
