@@ -240,11 +240,13 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     provider watchdog (kernel/turns.py on_timer) fires at 300 s of it, or at the run's own
     STREAM_PROVIDER_WATCHDOG_S, which run_stream hands the kernel with the rest of
     RUNNER_TIMING: the run is invalid with the provider's generation_watchdog_timeout, the world
-    still at frame 0, and the generation is aborted without a report."""
+    still at frame 0, and the generation is aborted without a report, logged as the legacy loop
+    logged a call the watchdog gave up on (legacy_loop.py _run_step)."""
     if watchdog_s is not None:
         timing = dataclasses.replace(runner.RUNNER_TIMING, provider_watchdog_s=watchdog_s)
         monkeypatch.setattr(runner, "RUNNER_TIMING", timing)
     expected = runner.RUNNER_TIMING.provider_watchdog_s
+    logs = []
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     task = ClockTask(1.0)
     env = GuestEnvironment(
@@ -262,7 +264,7 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
             env,
             clock_mode="token",
             duration_s=SHORT_MAX_MINUTES * 60,
-            log=lambda line: None,
+            log=logs.append,
             clocks=env.clocks,
         )
         ended_at = clock.monotonic()
@@ -276,3 +278,5 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     assert (env.tick_index(), task.world_time()) == (0, 0.0)
     assert agent.aborted.is_set()
     assert (timeline, agent.outcomes) == ([], [])
+    line = f"[default] k=0 generation TIMED OUT (>{expected}s, provider_watchdog) — discarded"
+    assert line in logs
