@@ -31,6 +31,7 @@ from realtime_framework.entity.model import (
     HistorySyncRequest,
     HistorySyncResult,
     PushReceipt,
+    RuntimeState,
     SessionSeed,
     SyncDisposition,
 )
@@ -671,6 +672,55 @@ def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed()
         "f2.frame": False,
         "f3.frame": False,
     }
+
+
+def _closed_by_server(code: int) -> list[dict]:
+    """The server closes a native-streaming session's connection at 0.3 s with ``code``, no reply
+    in progress; the session is rebuilt at 0.5 s on a second connection from a view of one
+    frame."""
+    rebuilt = [c2s(SESSION_UPDATE), push(1, 1, 1), item_done(1, None)]
+    return [
+        {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+        c2s(SESSION_UPDATE),
+        {
+            "conn": 1,
+            "dir": "close",
+            "at": 0.3,
+            "msg": {"by": "server", "code": code, "reason": "x"},
+        },
+        {"conn": 2, "dir": "open", "at": 0.5, "msg": None},
+        *({**record, "conn": 2} for record in rebuilt),
+        {"conn": 2, "dir": "close", "at": None, "msg": {"by": "client", "code": 1000}},
+    ]
+
+
+@pytest.mark.parametrize("code", [1000, 1011])
+def test_a_connection_the_server_ends_leaves_the_session_to_be_rebuilt(code):
+    """A native-streaming connection the server closes, normally or not, leaves the session
+    dirty, as Gemini Live's: the next ensure_ready rebuilds it from the view on a new connection
+    instead of handing on the dead one."""
+    clock, table = FakeClock(), FrameTable()
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+    observation = _observation(1)
+    record = table.register(observation.observation_id, 0.0, {}, None)
+    history = streaming_view([frame_block(record, observation)], frames=2)
+
+    async def scenario(driver):
+        await driver.connect(ConnectRequest(seed=seed))
+        await asyncio.sleep(0.5)
+        ended = driver.state
+        await driver.ensure_ready(seed, history, lambda *args, **kwargs: None)
+        rebuilt = driver.state
+        await driver.close()
+        return ended, rebuilt
+
+    with CassetteServer(_closed_by_server(code), clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        ended, rebuilt = run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+    assert (ended, rebuilt) == (RuntimeState.DIRTY, RuntimeState.READY)
 
 
 # The server closes a rebuilt session's connection before it confirmed the replay.
