@@ -406,23 +406,22 @@ class GuestEnvironment:
         ended; a key that is not held is skipped."""
         self._release_clock_keys(keys)
 
-    def _release_clock_keys(self, identities=None):
-        selected = (
-            list(self._held_keys)
-            if identities is None
-            else [identity for identity in identities if identity in self._held_keys]
-        )
+    def _clock_key_up(self, identities):
+        """Release these held token-clock keys in one keyUp; a key that is not held is skipped."""
+        selected = [identity for identity in identities if identity in self._held_keys]
         if not selected:
             return
+        chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
+        self._clock_key_event("keyUp", chord, held_modifiers=self._held_modifiers(exclude=selected))
+        for identity in selected:
+            self._held_keys.pop(identity, None)
+        if self._repeat_key in selected:
+            self._repeat_key = None
+
+    def _release_clock_keys(self, identities):
+        """_clock_key_up, invalidating the run when it fails."""
         try:
-            chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
-            self._clock_key_event(
-                "keyUp", chord, held_modifiers=self._held_modifiers(exclude=selected)
-            )
-            for identity in selected:
-                self._held_keys.pop(identity, None)
-            if self._repeat_key in selected:
-                self._repeat_key = None
+            self._clock_key_up(identities)
         except Exception as exc:
             self._invalid_run = {
                 "category": "environment",
@@ -875,10 +874,11 @@ class GuestEnvironment:
             self._held_mouse_buttons.discard(button)
 
     def release_inputs(self):
-        """Best-effort episode cleanup for every stateful input primitive."""
+        """Best-effort episode cleanup for every stateful input primitive. It runs once the
+        outcome is latched: a failure raises for the caller to log and leaves the run as it was."""
         try:
             if self.clock_mode == "token" and hasattr(self.task, "clock_key_event"):
-                self._release_clock_keys()
+                self._clock_key_up(list(self._held_keys))
             if self.clock_mode != "token":
                 self._release_wall_holds()
         finally:

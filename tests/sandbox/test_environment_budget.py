@@ -316,12 +316,25 @@ def _cdp_call(clock: FakeClock, seconds: float) -> None:
     deadline.remaining()
 
 
-def _keyed(clock: FakeClock, **options) -> tuple[actions.GuestEnvironment, ClockTask]:
+class _ClockGuest:
+    """The guest agent's action endpoint, which answers every action at once."""
+
+    def __init__(self):
+        self.actions: list[ActionType] = []
+
+    def execute_action(self, action: Action) -> dict:
+        self.actions.append(action.action_type)
+        return {"status": "ok"}
+
+
+def _keyed(
+    clock: FakeClock, guest: _ClockGuest | None = None, **options
+) -> tuple[actions.GuestEnvironment, ClockTask]:
     """A GuestEnvironment on the token clock at 1 fps, timed on ``clock``, whose task takes key
     input as a game's does (tests/replay/clock_task.py)."""
     task = ClockTask(1.0)
     env = actions.GuestEnvironment(
-        None, None, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
+        guest, None, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
     )
     return env, task
 
@@ -412,3 +425,26 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
         assert clock.monotonic() == budget
     _invalid(env, "clock_key_release_failed", "key release", budget)
     assert env.tick_index() == 0.5
+
+
+@pytest.mark.parametrize(
+    ("release", "error"),
+    [
+        pytest.param(lambda clock: _cdp_call(clock, 60.0), "key release took longer", id="slow"),
+        pytest.param(lambda clock: 1 / 0, "division by zero", id="failing"),
+    ],
+)
+def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(release, error):
+    """release_inputs runs once run_stream has latched the outcome, and the runner only logs its
+    failure (evaluation/runner.py _finalize); main() would still take an invalid run latched here
+    for the run's."""
+    clock = FakeClock()
+    guest = _ClockGuest()
+    env, task = _keyed(clock, guest)
+    env.execute(Action.hold_key("a", 5.0))
+    env.execute(Action(ActionType.MOUSE_DOWN, {"button": "left"}))
+    task.clock_key_event = lambda *args, **kwargs: release(clock)
+    with clock.participant(), pytest.raises(Exception, match=error):
+        env.release_inputs()
+    assert getattr(env, "_invalid_run", None) is None
+    assert guest.actions == [ActionType.MOUSE_DOWN, ActionType.MOUSE_UP]
