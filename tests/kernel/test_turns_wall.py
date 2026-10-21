@@ -648,6 +648,26 @@ def test_a_hold_longer_to_execute_than_to_last_is_released_on_time():
     assert sim.key_events == [(1.75, "up", ("a",))]
 
 
+def test_a_release_the_shells_timer_fails_invalidates_the_run():
+    # The shell's timer cannot lift "a" at 1.25 s, during the second generation, and answers with
+    # the error, as the environment gives up on a wall release after its retries
+    # (sandbox/actions.py GuestEnvironment._wall_release_due).
+    replies = [Reply(0.25, Action.hold_key("a", 1.0)), Reply(5.0, CLICK)]
+    world = World(replies=replies, release_errors={1: "xdotool keyup failed"})
+    sim = _episode(_wall(3.0), world)
+    assert sim.key_events == []
+    assert _data(sim, "RunInvalidated") == [
+        {
+            "category": "environment",
+            "reason": "wall_key_release_failed",
+            "detail": "xdotool keyup failed",
+        }
+    ]
+    assert _data(sim, "GenerationAbandoned") == [{"generation": 2, "reason": "invalid"}]
+    assert _ended(sim) == ("invalid_run", "invalid", 1.25, 1.25)
+    _assert_nothing_after_the_end(sim)
+
+
 def test_no_end_check_is_asked_once_the_deadline_has_passed():
     # The execution runs from 4.5 to 6.5 over the deadline at 6.0; the check due at 5.0 comes due
     # only after it returns and is not asked, so nothing samples the task after the deadline.

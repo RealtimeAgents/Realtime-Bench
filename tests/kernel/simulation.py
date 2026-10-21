@@ -106,6 +106,8 @@ class World:
     # End check inside a key tap (1-based over all taps, apart from the others) -> fault.
     tap_check_errors: dict[int, str] = field(default_factory=dict)
     advance_errors: dict[int, str] = field(default_factory=dict)  # AdvanceClock (1-based) -> fault
+    # Key release (1-based, by ReleaseKeys or the wall release timer) -> fault.
+    release_errors: dict[int, str] = field(default_factory=dict)
     commit_errors: dict[int, str] = field(default_factory=dict)  # decision -> fault
     snapshot_error: str | None = None
 
@@ -144,6 +146,7 @@ class Simulation:
         self.captures: list[tuple[float, float]] = []  # (tick, timestamp) of every frame
         self.executed: list[tuple[int, float, Action]] = []  # (decision, semantic, action)
         self.advances: list[float] = []  # every AdvanceClock step
+        self.releases = 0  # key releases tried
         self.key_events: list[tuple[float, str, tuple[str, ...]]] = []  # (semantic, up, keys)
         self.renders: list[float] = []
         self.outcomes: list = []
@@ -275,8 +278,7 @@ class Simulation:
                     self.tick = _snap(self.tick + step)
                 kernel.post(ClockStepped(error))
             case ReleaseKeys(keys=keys):
-                self.key_events.append((self.semantic(), "up", keys))
-                kernel.post(KeysReleased(keys))
+                kernel.post(KeysReleased(keys, self._release(keys)))
             case RenderFrame():
                 self.renders.append(self.semantic())
                 kernel.post(FrameRendered(True))
@@ -379,9 +381,16 @@ class Simulation:
                 break
         return reads
 
+    def _release(self, keys: tuple[str, ...]) -> str | None:
+        """Release keys; the error of a scripted failure, which releases nothing."""
+        self.releases += 1
+        error = self.world.release_errors.get(self.releases)
+        if error is None:
+            self.key_events.append((self.semantic(), "up", keys))
+        return error
+
     def _wall_release(self, key: str, at: float) -> None:
         if self._releases.get(key) != at:
             return
         del self._releases[key]
-        self.key_events.append((self.ops, "up", (key,)))
-        self.kernel.post(KeysReleased((key,)))
+        self.kernel.post(KeysReleased((key,), self._release((key,))))
