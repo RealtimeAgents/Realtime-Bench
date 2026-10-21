@@ -81,12 +81,6 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
     reasoning = turn.output_reasoning if policy.reasoning_replay else ""
     if turn.output or reasoning:
         items.append(RequestItem(_output(turn, reasoning=reasoning), Intent("model", "in_order")))
-    # Stateless transports rebuild from this canonical sequence on every request. Attach each
-    # action's actual execution result at its causal position, rather than appending a growing
-    # duplicate ledger after the newest observation. Older turns form a stable prefix after their
-    # SoM text is retired, until a block fold/archive changes it.
-    if policy.feedback == "separate_message" and turn.execution_feedback:
-        items.append(RequestItem(_feedback(turn), Intent("input", "in_order")))
     if policy.tool_call_replay is not None:
         exchanges = turn.provider_refs.get("native_tool_exchanges", [])
         initial_text = turn.provider_refs.get("native_initial_text", "")
@@ -117,6 +111,13 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
                 ),
             )
             items.append(RequestItem(tools, Intent("model", "in_order")))
+    # Stateless transports rebuild from this canonical sequence on every request, and a session
+    # replays it. Attach each action's actual execution result at its causal position, after the
+    # action and its tool rounds, rather than appending a growing duplicate ledger after the
+    # newest observation. Older turns form a stable prefix after their SoM text is retired, until
+    # a block fold/archive changes it.
+    if policy.feedback == "separate_message" and turn.execution_feedback:
+        items.append(RequestItem(_feedback(turn), Intent("input", "in_order")))
     return items
 
 
