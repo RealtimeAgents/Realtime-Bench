@@ -77,17 +77,33 @@ class _SlowTrajectory(Agent):
         self.clock.sleep(0.01)
 
 
-def test_a_result_is_filed_when_it_came_back_not_when_it_was_settled():
-    """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after. It is
-    handled as of its return, so its action is proposed, and it lands in frame 2, read at 2 s,
-    so nothing is read before execution: the kernel, at the reading taken before the settling,
-    executes it, and the shell runs it once the result is settled, 5 ms past the deadline. (The
-    runner's check at landing would leave it unapplied, runner.py _land_action.)"""
+def test_a_result_settled_across_the_deadline_does_not_land():
+    """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after it;
+    the kernel gets it at the reading taken after the settling. The deadline came first, and
+    nothing lands after it (phase2.md, 时间和结束判定): the generation is given up and the decision
+    goes unreported. The call did come back in time, so its records are written, once."""
     episode = run("wall", 3.0, [Reply(2.995)], agent_type=_SlowTrajectory)
-    assert episode.statuses() == ["applied"]
-    assert [p["decision"] for p in episode.trace.payloads("ActionProposed")] == [0]
-    executed = [time for call, time, _ in episode.env.calls if call == "execute"]
-    assert executed == [pytest.approx(3.005)]
+    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+    assert episode.statuses() == []
+    assert "ActionProposed" not in episode.trace.events()
+    assert [p["decision"] for p in episode.trace.payloads("InferenceCompleted")] == [0]
+    assert len(episode.agent.trajectory) == 1
+    assert episode.agent.calls == [("discard", 1)]
+    assert episode.env._termination["stop_reason"] == "time_limit"
+
+
+def test_a_result_settled_across_the_cap_is_the_moves_only_record():
+    """The result comes back 5 ms before the 1.5 s cap and settling it ends 5 ms after it; the
+    kernel gets it after the cap and reports the move skipped. Its records are the call's own,
+    once: none is made up for a call given up on."""
+    replies = [Reply(1.495), Reply(0.5)]
+    episode = run("wall", 3.0, replies, agent_type=_SlowTrajectory, per_move_cap_s=1.5)
+    assert episode.statuses() == ["skipped_timeout", "applied"]
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["timed_out"]) for p in completed] == [(0, False), (1, False)]
+    rows = episode.agent.trajectory
+    assert [(row["decision"], row.get("timed_out")) for row in rows] == [(0, None), (1, None)]
+    assert episode.env.lifecycle[0]["model_latency_s"] == pytest.approx(1.495)
 
 
 def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_moved():
