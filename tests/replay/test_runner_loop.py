@@ -38,8 +38,14 @@ from .loop import (
     resolved,
     run_loop,
 )
-from .scenario import CLICK_AGREE, CLICK_NAME, CLICK_SUBMIT, LONG_SCENARIO, TASK_INSTRUCTION
-from .scenario import replies
+from .scenario import (
+    CLICK_AGREE,
+    CLICK_NAME,
+    CLICK_SUBMIT,
+    LONG_SCENARIO,
+    TASK_INSTRUCTION,
+    replies,
+)
 from .steps import Step
 from .stub import ChatCompletionsStub
 from .test_chat_completions import MODEL_KEY, chat_completions_config
