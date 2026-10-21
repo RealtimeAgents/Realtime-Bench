@@ -127,8 +127,9 @@ RequestBuilder = Callable[[tuple[CanonicalTurn, ...], ContentBlock | None], Cano
 
 
 def session_frame_text(observation) -> str:
-    """The prompt the live drivers send for one ProviderObservation, after the feedback
-    prefixed to it."""
+    """A frame's prompt after the feedback the frame_prefix placement opens it with, as one
+    text, which the history_som_* counts read. No live driver declares that placement now: for
+    them it is the prompt."""
     prefix = observation.feedback_prefix
     return f"{prefix}\n{observation.prompt}" if prefix else observation.prompt
 
@@ -624,8 +625,6 @@ class RealtimeRuntime:
         the result, for accept_turn once it is accepted."""
         with self._lock:
             self._running.add(cancel)
-            if self._closed:
-                cancel.set()
         try:
             with retry_cancellation(cancel):
                 return self.execution.run(
@@ -657,8 +656,7 @@ class RealtimeRuntime:
                 return
             generation = self._active_generation
         self.session.mark_dirty()
-        if self.execution.running:
-            self.execution.submit(self.session.abort(generation))
+        self.execution.submit(self.session.abort(generation))
 
     def close(self) -> None:
         """Abandon the generations under way, then close the session, once the last abort's
@@ -670,6 +668,8 @@ class RealtimeRuntime:
             self._closed = True
             for cancel in self._running:
                 cancel.set()
+        # The runner closes an agent whose initialize failed, before or after the execution
+        # thread started; one that never started has no session to close.
         if self.execution.running:
             try:
                 # Longer than the session waits for an abort's cleanup, with time to close after.
