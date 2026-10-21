@@ -13,7 +13,7 @@ import gc
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
-from realtime_framework.entity.config import DecisionBudget
+from realtime_framework.entity.config import DecisionBudget, RunnerTimingConfig
 
 from .world import CLICK, ORIGIN, Agent, Reply, World, run
 
@@ -406,6 +406,40 @@ def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
     spent = run("wall", 5.0, [Reply(1.0), Reply(1.0)], think_budget_s=1.5)
     assert spent.env._stop_reason == "think_budget"
     assert "[think] deliberation budget exhausted: 2.0s >= 1.5s -> forfeit" in spent.logs
+
+
+def test_a_result_back_at_the_cap_itself_came_too_late():
+    """The reply comes back at 1.5 s, as the 1.5 s cap falls due, during the end check asked at
+    1 s, which takes 1 s. The kernel handles a bound due at the same time first, so the result
+    came too late: the move's records are those of the call given up on."""
+    world = World(slow_checks=[(1.0, 1.5, 1.0)])
+    episode = run("wall", 3.0, [Reply(1.5), Reply(0.5)], world, per_move_cap_s=1.5)
+    assert episode.statuses() == ["skipped_timeout", "applied"]
+    assert _decisions(episode.trace.payloads("InferenceCompleted")) == [(0, True), (1, False)]
+
+
+def test_the_timed_out_lines_give_the_bounds_as_the_runner_takes_them():
+    """The runner's cap is at least 0.1 s, its watchdog the configured seconds, whatever float
+    the start and the due time make of them (runner.py _move_timeout); the deadline line gives
+    the seconds from the call's start, to two places."""
+    capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=0.05)
+    assert "[default] k=0 generation TIMED OUT (>0.1s, per_move_cap) — discarded" in capped.logs
+    replies = [Reply(0.1, CLICK, output_tokens=100), Reply(hang=True)]
+    timing = RunnerTimingConfig(provider_watchdog_s=0.3)
+    watched = run("token", 20.0, replies, tokens_per_frame=100, timing=timing)
+    line = "[default] k=1 generation TIMED OUT (>0.3s, provider_watchdog) — discarded"
+    assert line in watched.logs
+    cut = run("wall", 1.0, [Reply(0.25), Reply(hang=True)], fps=10.0)
+    assert "[default] k=1 generation TIMED OUT (>0.7s, wall_deadline) — discarded" in cut.logs
+
+
+def test_a_call_the_tasks_end_gave_up_on_is_timed_to_two_places():
+    """The end checks take 70 ms each, so the readings are not round; the end, seen by the check
+    asked at 1.93 s, is at 1.93 s, and the call that started at 1 s ran 0.93 s by then."""
+    world = World(ends_at=1.45, end_reason="won", check_s=0.07)
+    episode = run("wall", 5.0, [Reply(0.5, CLICK), Reply(hang=True)], world)
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["latency_s"]) for p in completed] == [(0, 0.5), (1, 0.93)]
 
 
 def test_a_generation_given_up_on_at_the_tasks_end_did_not_time_out():
