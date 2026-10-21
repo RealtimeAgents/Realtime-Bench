@@ -223,8 +223,9 @@ def test_the_next_observation_is_on_the_input_grid(
         ((60, 1), 100, 2.0, 100, [200, 100], "not_applied_tick_limit", 120.0),
         # T = 30 ticks = 7 input frames, 7 * 7 = 49. The first action (one frame, 30/7 ticks) is
         # observed at tick 5, which leaves (30 - 5) * 7/30 = 5.83 frames: floor(5.83 * 7) = 40
-        # tokens, 40 * 30/49 = 24.49 ticks, so the clamped action lands before T, at 29.49.
-        ((30, 7), 7, 1.0, 7, [49, 40], "applied", 5 + 40 * 30 / 49),
+        # tokens, 40 * 30/49 = 24.49 ticks, short of T; the response runs past the horizon, so the
+        # action lands at T all the same.
+        ((30, 7), 7, 1.0, 7, [49, 40], "not_applied_tick_limit", 30.0),
         # T = 6 ticks; 6 frames * 100, then 5 * 100 from tick 1; 500 tokens reach T.
         ((2, 2), 100, 3.0, 100, [600, 500], "not_applied_tick_limit", 6.0),
     ],
