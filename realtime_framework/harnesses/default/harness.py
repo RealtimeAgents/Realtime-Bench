@@ -695,7 +695,6 @@ from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMP
 from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import bind_action
 from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
-from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
 
 
 @dataclass(frozen=True)
@@ -704,9 +703,6 @@ class InteractionProfile:
     action_space: str | None = None
     output_contract: str = STREAM_OUTPUT_CONTRACT
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
-    # Opens each frame's interactables (bind_observation); choice profiles replace the whole
-    # frame text (harnesses/jev/observation.py).
-    interactables_header: str = OBSERVATION_INTERACTABLES_HEADER
     # How an action names its frame under streaming.
     frame_reference_rules: str | None = None
 
@@ -744,9 +740,7 @@ class InteractionProfile:
 
 
 STANDARD_VLM_PROFILE = InteractionProfile(
-    "standard_vlm",
-    interactables_header=FRAME_INTERACTABLES_HEADER,
-    frame_reference_rules=FRAME_REFERENCE_RULES,
+    "standard_vlm", frame_reference_rules=FRAME_REFERENCE_RULES
 )
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
@@ -958,7 +952,7 @@ def bind_observation(agent, observation, prompt, tick):
             model_image_mime_subtype=prepared.mime_subtype,
         )
         prompt = observation_prompt_with_interactables(
-            prompt, execution.get("text") or "", agent.interaction_profile.interactables_header
+            prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
         )
     value = ProviderObservation(
         observation=observation,
