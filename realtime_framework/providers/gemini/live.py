@@ -540,6 +540,10 @@ class GeminiLiveDriver(SessionLifecycle):
         self._last_video_sent_at = None
         self._go_away_wait_recorded = None
         self._core.closed()
+        if self.streaming:
+            # Closing cut off whatever the session was taking: it is rebuilt, not resumed. A
+            # renewal's connect plans its own resume after this.
+            self._core.unresumable()
         if reading is not None:
             # Its replies end with the cancelled read, not with whatever the close would raise.
             reading.cancel()
@@ -753,7 +757,8 @@ class GeminiLiveDriver(SessionLifecycle):
         After a goAway, a push and a trigger raise RenewalRequired until the session is renewed.
         The reply in flight then still ends on this connection; renew() once it has ended
         resumes the session with the latest resumable handle (SessionCore.resume_handle_for),
-        or rebuilds it from the history where there is none."""
+        or rebuilds it from the history where there is none, or where this driver closed the
+        connection (an abort) or a trigger did not go out whole."""
         async with self._session_lock():
             session = self._session_for_input()
             if self._activity_open:
@@ -795,6 +800,7 @@ class GeminiLiveDriver(SessionLifecycle):
                 if trigger is not None:
                     self._core.send_failed(trigger.keys)
                 self._core.reply_abandoned()
+                self._core.unresumable()
                 self._replies.pop(request.generation_id, None)
                 raise
             self._activity_open = False

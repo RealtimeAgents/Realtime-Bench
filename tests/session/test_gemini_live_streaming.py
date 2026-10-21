@@ -936,6 +936,44 @@ def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply
     assert [wire(message) for message in rig.socket.sent] == ["video", ("text", "frame 2")]
 
 
+@pytest.mark.parametrize("lost", ["abort", "failed trigger"])
+def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
+    """Once an abort closed the connection, or a trigger did not go out whole, what the session
+    holds is not known: the goAway renewal rebuilds it from the history, though a resumable
+    handle had come, and the seed replays the feedback."""
+    rig = Rig()
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+    ]
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        rig.socket.feed(update("handle-1"))
+        await settle()
+        if lost == "abort":
+            generation = await rig.driver.request_reply(request)
+            rig.socket.feed(GO_AWAY)
+            await settle()
+            await rig.driver.abort(generation)
+        else:
+            rig.socket.fail = lambda message: wire(message) == "activityEnd"
+            with pytest.raises(RuntimeError):
+                await rig.driver.request_reply(request)
+            rig.socket.feed(GO_AWAY)
+            await settle()
+        result = await rig.driver.renew(rig.seed, rig.view(blocks), lambda *_, **__: None)
+        await rig.driver.close()
+        return result
+
+    result = asyncio.run(run())
+    assert result.disposition == SyncDisposition.REBUILT
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, None]
+    assert "d1.feedback" in rig.driver._core.carried
+
+
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
     rig = Rig()
 

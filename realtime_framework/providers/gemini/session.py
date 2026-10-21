@@ -676,6 +676,13 @@ class SessionCore:
         """The connection's reader failed: no reply is read on it any more."""
         self.replies.pop(connection, None)
 
+    def unresumable(self) -> None:
+        """What the session holds is not known any more (an abort closed its connection, a
+        trigger did not go out whole): no handle resumes it, and the next connection rebuilds it
+        from the history."""
+        self.latest_resume_handle = None
+        self.resume_handle = None
+
     def reply_abandoned(self) -> None:
         """The reply started on the open connection will not come (its trigger did not go out):
         its generation takes none of the connection's messages."""
