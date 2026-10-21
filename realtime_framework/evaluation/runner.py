@@ -41,6 +41,7 @@ Runtime invariants:
 import hashlib as hashlib, math as math, traceback as traceback
 
 from realtime_framework.clock import SystemClock
+from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.config import DEFAULT_MODE
 
 from realtime_framework.entity.actions import Action
@@ -209,63 +210,6 @@ def run_stream(
             log(f"[invalid-run] {category}:{reason}" + (f" — {detail}" if detail else ""))
             _emit(TraceEvent.RUN_INVALIDATED, value)
         return getattr(env, "_invalid_run")
-
-    def _action_record(action):
-        if action is None:
-            return None
-        return {
-            "action_type": action.action_type.value,
-            "parameters": action.parameters,
-            "coordinate_space": action.coordinate_space,
-            "coordinate_transform": action.coordinate_transform,
-        }
-
-    def _usage_snapshot():
-        try:
-            value = getattr(adapter, "token_usage", None)
-            value = value() if callable(value) else value
-            return dict(value) if isinstance(value, dict) else None
-        except Exception:
-            return None
-
-    def _usage_number(usage, *names):
-        if not isinstance(usage, dict):
-            return None
-        for name in names:
-            value = usage.get(name)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-                return int(value)
-        return None
-
-    def _clock_output_tokens(r):
-        """Return the complete native output count and its clock source.
-
-        Remote cells must use the API's response-level output usage. Local native runtimes use the
-        token IDs emitted by that runtime.
-        """
-        provider_missing = r.get("provider_usage_missing_reason")
-        if not provider_missing:
-            value = r.get("provider_output_tokens")
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-                return int(value), "provider_reported_output_usage"
-            value = _usage_number(r.get("usage"), "output_tokens", "completion_tokens")
-            if value is not None:
-                return value, "provider_reported_output_usage"
-            value = _usage_number(r.get("frame_usage"), "output_tokens", "completion_tokens")
-            if value is not None:
-                return value, "provider_reported_output_usage_delta"
-        value = r.get("native_received_output_tokens")
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-            return int(value), (
-                r.get("native_received_output_tokens_source") or "native_runtime_output_tokens"
-            )
-        return None, None
-
-    def _frame_output_tokens(r):
-        value = r.get("clock_output_tokens")
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-            return int(value)
-        return _clock_output_tokens(r)[0]
 
     def _frame_at(tick):
         """The last model-input frame due at or before ``tick``."""
@@ -520,7 +464,7 @@ def run_stream(
             )
             return "invalid_run", False, False
 
-        output_tokens = _frame_output_tokens(r)
+        output_tokens = episode_records.frame_output_tokens(r)
         if clock_mode == "token" and tokens_per_frame is not None:
             if output_tokens is None:
                 _invalidate(
@@ -617,7 +561,7 @@ def run_stream(
         action_result = {
             "decision": k,
             "observation_id": r.get("observation_id"),
-            "action": _action_record(action),
+            "action": episode_records.action_record(action),
             "status": status,
             "terminal_after_action": terminal_after_action,
             "action_clock_position": round(tau_k, 9),
@@ -785,7 +729,7 @@ def run_stream(
                         "action_token_cap": r.get("action_token_cap"),
                         "status": status,
                         "terminal_after_action": terminal_after_action,
-                        "action": _action_record(action),
+                        "action": episode_records.action_record(action),
                         "execution_result": getattr(env, "_last_execution_result", None),
                         "coordinate_trace": getattr(env, "_last_coordinate_trace", None),
                         "clock_advance": (
@@ -993,7 +937,7 @@ def run_stream(
             adapter.stream_prefill(obs)
             return adapter.stream_generate(tick=k)
 
-        usage_before = _usage_snapshot()
+        usage_before = episode_records.usage_snapshot(adapter)
         _emit(
             TraceEvent.INFERENCE_STARTED,
             {
@@ -1043,7 +987,7 @@ def run_stream(
             for name in ("provider_response_status", "provider_response_status_reason"):
                 if r.get(name) is None and runtime_metadata.get(name) is not None:
                     r[name] = runtime_metadata[name]
-        usage_after = _usage_snapshot()
+        usage_after = episode_records.usage_snapshot(adapter)
         if usage_before is not None and usage_after is not None:
             keys = set(usage_before) | set(usage_after)
             r["frame_usage"] = {
@@ -1054,7 +998,7 @@ def run_stream(
                 if isinstance(usage_before.get(name, 0), (int, float))
                 and isinstance(usage_after.get(name, 0), (int, float))
             }
-        clock_output_tokens, clock_output_tokens_source = _clock_output_tokens(r)
+        clock_output_tokens, clock_output_tokens_source = episode_records.clock_output_tokens(r)
         if (
             remaining_clock_tokens is not None
             and clock_output_tokens is not None
@@ -1232,7 +1176,7 @@ def run_stream(
                 {
                     "decision": k,
                     "observation_id": metadata.get("observation_id"),
-                    "action": _action_record(r.get("action")),
+                    "action": episode_records.action_record(r.get("action")),
                     "thinking": r.get("thinking"),
                     "protocol": action_protocol,
                     "action_output_tokens": r.get("action_output_tokens"),
