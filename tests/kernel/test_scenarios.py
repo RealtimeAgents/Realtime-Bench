@@ -415,7 +415,7 @@ def test_a_token_hold_expiring_between_frames_splits_the_step():
     assert sim.termination == Termination("tick_limit", "horizon", 2.0, 2.0, 1.0, 1.0, None)
 
 
-def test_a_wall_hold_is_released_by_the_shell_timer_between_frames():
+def test_a_wall_hold_is_released_by_the_environments_timer_between_frames():
     """按键在两帧之间到期 (wall): a 1 s hold pressed at 0.25 s is due up at 1.25 s, between the frames
     at 1 s and 2 s. The press carries its release time to the environment, whose own timer lifts
     the key on time though the shell is busy reporting the outcome from 1 s to 1.5 s; the kernel
