@@ -1107,9 +1107,10 @@ class DefaultHarness(VisionAgentBase):
 
     interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
-    # "turn_based" or "streaming", set with the run's settings before initialize(). Streaming
-    # draws each frame's number on its screenshot, asks every action for the frame it is based
-    # on, and interprets the action against that frame.
+    # A streaming run builds NativeStreamingAgent instead (harnesses/registry.py create_agent);
+    # only tests set "streaming" here before initialize(), which draws each frame's number on its
+    # screenshot, asks every action for the frame it is based on, and interprets the action
+    # against that frame.
     interaction_mode = "turn_based"
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
