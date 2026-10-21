@@ -33,7 +33,7 @@ from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.request import ledger_block
 from realtime_framework.sandbox.observation.som import without_observation_interactables
 
-_ROLES = {"frame": "input", "model_output": "model", "execution_feedback": "input"}
+_KIND_ROLES = {"frame": "input", "model_output": "model", "execution_feedback": "input"}
 
 
 @dataclass(frozen=True)
@@ -46,9 +46,10 @@ class StreamingRetention:
     # fold placeholder in place of its text; "text", its text with its element list; "prompt",
     # its text without the element list.
     older_frames: Literal["placeholder", "text", "prompt"]
-    # "all": every output and feedback stays. "archive": the policy's turn window counts replies
-    # as the turn-based one counts turns, and the replies it archives leave for the action ledger.
-    text: Literal["all", "archive"]
+    # "all": every reply stays, with its feedback. "archive": the policy's turn window counts
+    # replies as the turn-based one counts turns, and the replies it archives leave for the
+    # action ledger.
+    replies: Literal["all", "archive"]
 
 
 def frame_block(frame: FrameRecord, observation: ProviderObservation) -> ContentBlock:
@@ -115,7 +116,9 @@ def history_view(
     frames = [index for index, block in enumerate(blocks) if block.kind == "frame"]
     older = set(frames[: max(0, len(frames) - retention.frames)])
     outputs = [index for index, block in enumerate(blocks) if block.kind == "model_output"]
-    archived = _archived_replies(len(outputs), policy.turns) if retention.text == "archive" else 0
+    archived = (
+        _archived_replies(len(outputs), policy.turns) if retention.replies == "archive" else 0
+    )
     cut = outputs[archived - 1] if archived else -1
     archived_ids = {blocks[index].id for index in outputs[:archived]}
     items = [RequestItem(system, Intent("instruction", "head"))]
@@ -137,7 +140,7 @@ def history_view(
             if index < cut:
                 continue
             block = _older_frame(block, retention.older_frames, policy)
-        items.append(RequestItem(block, Intent(_ROLES[block.kind], "in_order")))
+        items.append(RequestItem(block, Intent(_KIND_ROLES[block.kind], "in_order")))
     return CanonicalRequest(
         policy=policy, history_form="turns", items=tuple(items), answer=answer, call=call
     )
