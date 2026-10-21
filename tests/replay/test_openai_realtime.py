@@ -405,7 +405,7 @@ def test_rejected_upgrade_retries_connect(tmp_path):
     providers/openai_realtime.py:257-263) fails one open_session attempt, and connect() tries a
     new connection after the shared backoff (providers/openai_realtime.py:435-454)."""
     steps = LONG_SCENARIO[:2]
-    with RealtimeStub(replies(steps), reject_upgrades=1) as stub:
+    with RealtimeStub(replies(steps), reject_upgrades=(1,)) as stub:
         records = _run(stub, steps, tmp_path, "rejected-upgrade")
     first, second = records[-1]["connections"]
     assert first["rejected"] == 503 and first["close"] is None

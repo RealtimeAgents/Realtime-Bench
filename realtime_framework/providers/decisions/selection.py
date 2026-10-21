@@ -269,7 +269,8 @@ class ChoiceDecision:
         failure=None,
         delay=None,
     ):
-        """One ModelAttemptFinished per question attempt of the per-question retry."""
+        """One ModelAttemptFinished per question attempt of the per-question retry, and one
+        without a start for the attempt a cancellation stopped before it was sent."""
         payload = {
             "kind": "choice_question",
             "outcome": outcome,
@@ -283,7 +284,7 @@ class ChoiceDecision:
                 else None
             ),
             "usage": reply.usage if reply is not None else None,
-            "latency_s": self.clock.monotonic() - started,
+            "latency_s": self.clock.monotonic() - started if started is not None else None,
         }
         with self._attempt_scope(transport_attempt):
             self.trace.capture(TraceEvent.MODEL_ATTEMPT_FINISHED, payload)
@@ -333,8 +334,12 @@ class ChoiceDecision:
                 }
             )
 
+        def cancelled(attempt, exc):
+            self._attempt_finished(attempt, None, question, "cancelled", error=exc)
+
         key = f"{self.selection.observation_id}:{len(self.calls)}"
-        return await RequestRetry(key, classify, record, clock=self.clock).run_async(send)
+        retry = RequestRetry(key, classify, record, cancelled=cancelled, clock=self.clock)
+        return await retry.run_async(send)
 
     async def _compose_text(self):
         inventory = self.selection.text_composition
