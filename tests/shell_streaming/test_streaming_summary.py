@@ -44,7 +44,7 @@ class ConfirmingAgent(FakeAgent):
     def _deliver(self, state, block):
         contents = [{"key": ["create", f"item-{block}"], "block": block}]
         self._capture(
-            TraceEvent.SESSION_DELIVERY, state=state, connection="conn-1", contents=contents
+            TraceEvent.SESSION_DELIVERY, state=state, connection_id="conn-1", contents=contents
         )
 
     def _capture(self, event, **fields):
