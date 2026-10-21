@@ -182,6 +182,10 @@ class VisionAgentBase(StreamingAgent):
                 "error": result.get("invalid_detail"),
                 "usage": result.get("usage"),
             }
+            # The shell's record of a call given up on at the episode's end, which the model
+            # timing leaves out (evaluation/clock.py summarize_model_timing, N34).
+            if result.get("harness_abort_reason"):
+                entry["harness_abort_reason"] = result["harness_abort_reason"]
         finalized_fields = (
             "decision",
             "observation_id",

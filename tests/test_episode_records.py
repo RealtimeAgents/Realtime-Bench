@@ -6,6 +6,7 @@ the payloads of its trace events and its action lifecycle record."""
 from __future__ import annotations
 
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ import pytest
 from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.clock import TokenAccounting
+from realtime_framework.evaluation.clock import TokenAccounting, summarize_model_timing
 from realtime_framework.evaluation.kernel.events import Invalidated
 
 OBSERVATION = Observation(b"png", 1_000.5, 3.0, {"observation_id": "o3"})
@@ -252,6 +253,58 @@ def test_output_past_the_allowance_is_billed_but_not_charged():
     r = {"usage": {"output_tokens": 300}}
     episode_records.account_tokens(r, 0, env)
     assert r["clock_output_tokens"] == 0 and r["post_horizon_output_tokens"] == 300
+
+
+USAGE = {
+    "prompt_tokens": 1000,
+    "completion_tokens": 20,
+    "total_tokens": 1020,
+    "prompt_tokens_details": {"cached_tokens": 0},
+    "completion_tokens_details": {"reasoning_tokens": 0},
+}
+
+
+def test_a_call_the_episodes_end_gave_up_on_stays_out_of_the_token_totals():
+    """N34: the record of a call the task's end or an invalidation gave up on is synthesized. It
+    keeps its token record, which says so, but the episode's totals leave it out: those of the
+    accepted calls stay complete. One the deadline gave up on still leaves them incomplete
+    (decision 48)."""
+    env = _Env()
+    accepted = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    episode_records.account_tokens(accepted, None, env)
+    abandoned = episode_records.abandoned_result(0.9, "task_end")
+    episode_records.account_tokens(abandoned, None, env)
+    assert abandoned["token_accounting"]["harness_abort_reason"] == "task_end"
+    record_reason = abandoned["token_accounting"]["provider_usage_missing_reason"]
+    assert record_reason == "generation_aborted_at_task_end"
+    assert "harness_abort_reason" not in accepted["token_accounting"]
+    summary = env._token_accounting.summary()
+    assert summary["responses"] == 1 and summary["provider_usage_missing_reasons"] == {}
+    assert summary["counts"]["provider_output_tokens"]["complete"] is True
+    episode_records.account_tokens(episode_records.timed_out_result(2.0, "wall_deadline"), 0, env)
+    summary = env._token_accounting.summary()
+    assert summary["responses"] == 2
+    assert summary["counts"]["provider_output_tokens"]["complete"] is False
+
+
+def _trajectory(tmp_path, rows: list[dict]):
+    (tmp_path / "trajectory.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return summarize_model_timing(tmp_path)
+
+
+def test_the_model_timing_leaves_out_a_call_the_episodes_end_gave_up_on(tmp_path):
+    """N34: that call has no provider timing, and the model timing of the calls made stays
+    complete. One the deadline gave up on still leaves it partial (decision 48)."""
+    called = {
+        "decision": 0,
+        "realtime_runtime": {"provider_call_started_monotonic_ns": 1_000_000_000},
+        "provider_call_wall_latency_s": 0.5,
+    }
+    abandoned = {"decision": 1, "harness_abort_reason": "task_end"}
+    timing = _trajectory(tmp_path, [called, abandoned])
+    assert (timing["status"], timing["call_count"], timing["wall_time_s"]) == ("complete", 1, 0.5)
+    timing = _trajectory(tmp_path, [called, {"decision": 1}])
+    assert (timing["status"], timing["unfinished_calls"]) == ("partial", 1)
 
 
 def test_a_result_without_a_count_charges_nothing():
@@ -585,6 +638,16 @@ def test_inference_completed_reports_the_result_and_its_flags():
     assert (payload["stale"], payload["timed_out"], payload["error"]) == (True, True, False)
     assert all(type(payload[flag]) is bool for flag in ("stale", "timed_out", "error"))
     assert episode_records.inference_completed({}, 0, None)["post_horizon_output_tokens"] == 0
+
+
+def test_inference_completed_names_a_call_the_episodes_end_gave_up_on():
+    """N34: its record is synthesized; only such a record has the field."""
+    payload = episode_records.inference_completed(
+        episode_records.abandoned_result(0.9, "invalid_run"), 1, "o1"
+    )
+    assert (payload["stale"], payload["harness_abort_reason"]) == (True, "invalid_run")
+    timed_out = episode_records.timed_out_result(2.0, "wall_deadline")
+    assert "harness_abort_reason" not in episode_records.inference_completed(timed_out, 1, "o1")
 
 
 def test_action_proposed_keeps_the_thinking_and_the_protocol():
