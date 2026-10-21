@@ -203,6 +203,7 @@ class TurnPolicy:
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
         self._failed_reads = 0  # state reads failed in a row
         self._read_at: float | None = None  # the semantic reading of the last state read
+        self._unanswered: int | None = None  # the last state read, until its answer is handled
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
@@ -757,13 +758,17 @@ class TurnPolicy:
     ) -> None:
         """Ask whether the episode is over; ``then`` runs when it is not. A check right after an
         action always reads; any other is not asked when it would read what was read already
-        (_read_already), and ``then`` runs at once."""
+        (_read_already), and ``then`` runs once that read has answered: at once, or when its
+        answer is handled, should another event due earlier have come first."""
         if then is not None and self._past_deadline():
             return
         if not after_action and self._read_already(before_landing=before_landing):
+            if then is not None and self._unanswered is not None:
+                self._awaited = (self._unanswered, then)
+                return None
             return None if then is None else then()
         self._read_at = self.kernel.semantic
-        request = self.kernel.request()
+        request = self._unanswered = self.kernel.request()
         if then is not None:
             self._awaited = (request, then)
         self.kernel.emit(CheckEnd(request))
@@ -778,6 +783,8 @@ class TurnPolicy:
     def _end_checked(self, event: EndChecked) -> None:
         kernel = self.kernel
         asked_at = kernel.asked_at(event.request)
+        if self._unanswered == event.request:
+            self._unanswered = None
         if kernel.ending is not None:
             return
         if self._count_read(event.error):

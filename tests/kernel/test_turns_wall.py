@@ -22,12 +22,17 @@ import pytest
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.config import RunnerTimingConfig
+from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AcceptResult,
     Capture,
     CheckEnd,
+    EndChecked,
     Execute,
     Finish,
+    FrameCaptured,
+    GenerationFinished,
+    GenerationResult,
     Invalidated,
     Outcome,
     Record,
@@ -35,7 +40,7 @@ from realtime_framework.evaluation.kernel.events import (
     SetTimer,
     StartGeneration,
 )
-from realtime_framework.evaluation.kernel.turns import TurnConfig
+from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
 from tests.kernel.simulation import Reply, Simulation, World
 from tests.kernel.test_scenarios import _past_the_deadline
 
@@ -608,6 +613,52 @@ def test_the_loop_top_reads_once_a_frame_and_the_check_before_landing_once_a_rea
     assert _asked(sim) == [0.0, 0.625, 0.75, 1.0, 1.625, 1.75, 2.0, 3.0]
     assert [semantic for _, semantic in sim.captures] == [0.125, 1.125, 2.125]
     assert sim.executed == [(0, 0.75, CLICK), (1, 1.75, CLICK)]
+
+
+def test_an_action_does_not_land_before_the_answer_to_a_read_made_at_its_reading():
+    # The second read, from 1 s, and the third, from 2.3 s, take 1.3 s and 0.9 s, so the reply
+    # back at 2.3 s is accepted from 3.2 s to 3.3 s, and its landing is due at 3.2 s. The check
+    # due at 3 s is asked at 3.3 s, instantly, and sees the end the task reached then. The landing
+    # comes due first, at that same reading: the state was read there, but its answer is not
+    # handled yet, so the action waits for it instead of landing, and is not applied.
+    world = World(
+        replies=[Reply(2.3, CLICK), Reply(9.0)],
+        check_seconds={2: 1.3, 3: 0.9},
+        accept_s=0.1,
+        ends_at=3.3,
+        end_reason="won",
+    )
+    sim = _episode(_wall(10.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.3, 3.3]
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == ["not_applied_terminal"]
+    assert _ended(sim)[:3] == ("won", "environment", 3.3)
+
+
+def test_an_end_due_with_the_landing_is_handled_before_it():
+    # Driven by hand. The reply comes back at 1 s and is accepted at once, which leaves its
+    # landing due at 1 s; another thread's invalidation is filed at that same reading. An end
+    # comes before a completion (Priority.CONTROL before Priority.COMPLETION): the run ends first,
+    # and the action lands nowhere, with no check asked before a landing.
+    kernel = Kernel(TurnPolicy(_wall(10.0)))
+    (check,) = [c for c in kernel.start(0.0) if isinstance(c, CheckEnd)]
+    kernel.post(EndChecked(check.request))
+    assert any(isinstance(c, Capture) for c in kernel.step(0.0))
+    kernel.post(FrameCaptured("obs-0", 0, 0.0, ("frame-0", 0, "sha-0")))
+    (start,) = [c for c in kernel.step(0.0) if isinstance(c, StartGeneration)]
+    kernel.post(GenerationFinished(start.generation, GenerationResult(action=CLICK, latency=1.0)))
+    accepted = kernel.step(1.0)
+    assert AcceptResult(start.generation) in accepted
+    assert [c.at for c in accepted if isinstance(c, SetTimer)] == [1.0]  # the landing
+    kernel.post(Invalidated("harness", "episode_trace_write_failed", "disk full"))
+    out = kernel.step(1.0)
+    kinds = [c.entry.kind for c in out if isinstance(c, Record)]
+    assert kinds[:2] == ["Invalidated", "RunInvalidated"]
+    assert not any(isinstance(c, (CheckEnd, Execute)) for c in out)
+    (resolved,) = [
+        c.entry.data for c in out if isinstance(c, Record) and c.entry.kind == "ActionResolved"
+    ]
+    assert resolved["status"] == "invalid_run"
 
 
 def test_the_action_lands_at_the_clock_position_and_the_next_frame_is_an_exact_timer():
