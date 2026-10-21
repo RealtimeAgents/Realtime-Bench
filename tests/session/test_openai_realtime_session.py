@@ -240,11 +240,17 @@ def test_each_change_in_delivery_is_heard_with_its_block():
     frame = core.observe(view([turn(0, "a0"), turn(1)]))
     core.sending(frame)
     core.send_failed(frame)
+    # A write that raised after the server already confirmed it stays confirmed.
+    later = core.observe(view([turn(0, "a0"), turn(1), turn(2)]))
+    core.sending(later)
+    core.receive(done(later.item_id))
+    core.send_failed(later)
     assert heard == [
         ("sent", [(user.key, "d0.frame")]),
         ("confirmed", [(assistant.key, "d0.output")]),
         ("confirmed", [(user.key, "d0.frame")]),
         ("unknown", [(frame.key, "d1.frame")]),
+        ("confirmed", [(later.key, "d2.frame")]),
     ]
 
 
