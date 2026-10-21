@@ -11,7 +11,9 @@ the wall key-release timer) is posted when the simulated time reaches it.
 The world plays GuestEnvironment's part only as far as the kernel sees it: a tap holds the key
 1/60 s per repeat, advancing the token tick in steps of at most one tick with an end check after
 each (sandbox/actions.py:538-548, 240-280), and a tick within 1e-9 of an integer snaps to it
-(sandbox/actions.py:275-277).
+(sandbox/actions.py:275-277). Unlike the environment, a tap's steps are neither cut where a lease
+ends nor stopped at the horizon (sandbox/actions.py:243-254), and its end checks see ``ends_at``
+only: ``ends_from_check`` stands for a web task's own timers, and only games tap on the task clock.
 """
 
 from __future__ import annotations
@@ -101,7 +103,8 @@ class World:
     rejections: dict[int, str] = field(default_factory=dict)  # decision -> the guest's refusal
     execute_errors: dict[int, str] = field(default_factory=dict)  # decision -> environment fault
     check_errors: dict[int, str] = field(default_factory=dict)  # end check (1-based) -> fault
-    tap_check_errors: dict[int, str] = field(default_factory=dict)  # ... inside a key tap
+    # End check inside a key tap (1-based over all taps, apart from the others) -> fault.
+    tap_check_errors: dict[int, str] = field(default_factory=dict)
     advance_errors: dict[int, str] = field(default_factory=dict)  # AdvanceClock (1-based) -> fault
     commit_errors: dict[int, str] = field(default_factory=dict)  # decision -> fault
     snapshot_error: str | None = None
