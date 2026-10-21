@@ -1,5 +1,6 @@
-"""What one decision leaves on the record: its output caps and their audit, the output tokens its
-clock is charged with, whether its result is usable, and the action as the trace keeps it.
+"""What one decision leaves on the record: its output caps and their audit, what its result is
+annotated with, the output tokens its clock is charged with and its token accounting, whether its
+result is usable, and the action as the trace keeps it.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -11,8 +12,9 @@ from __future__ import annotations
 
 import traceback
 
-from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.config import DecisionBudget
+from realtime_framework.evaluation.clock import TokenAccounting, token_record
 from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.sandbox.observation.som import valid_inspection_proof
 
@@ -63,52 +65,6 @@ def decision_budget(
     )
 
 
-def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:
-    """Record the adapter's handoff and action caps for the decision on ``r``. Raises RuntimeError
-    when together they exceed the provider allowance."""
-    handoff_cap = int(getattr(adapter, "_frame_handoff_max_tokens", 0) or 0)
-    action_cap = int(
-        getattr(
-            adapter,
-            "_frame_action_max_tokens",
-            budget.runtime_output_tokens,
-        )
-        or 0
-    )
-    # A decision that was invalidated before generation (e.g. inspection_protocol_error)
-    # never recomputed the adapter's per-decision caps, so they still describe the previous
-    # decision; auditing them against this decision's allowance would raise spuriously.
-    if (
-        budget.provider_output_tokens is not None
-        and r.get("invalid_reason") is None
-        and handoff_cap + action_cap > budget.provider_output_tokens
-    ):
-        raise RuntimeError(
-            f"adapter decision output caps exceed provider transport allowance: "
-            f"handoff={handoff_cap} + action={action_cap} > {budget.provider_output_tokens}"
-        )
-    r.update(
-        {
-            "handoff_token_cap": handoff_cap,
-            "action_token_cap": action_cap,
-            "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
-            "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
-        }
-    )
-
-
-def action_record(action: Action | None) -> dict | None:
-    """An action as the trace and the lifecycle record keep it."""
-    if action is None:
-        return None
-    return {
-        "action_type": action.action_type.value,
-        "parameters": action.parameters,
-        "coordinate_space": action.coordinate_space,
-        "coordinate_transform": action.coordinate_transform,
-    }
-
-
 def usage_snapshot(adapter) -> dict | None:
     """The adapter's cumulative token usage, or None when it reports none or reading it fails."""
     try:
@@ -117,6 +73,70 @@ def usage_snapshot(adapter) -> dict | None:
         return dict(value) if isinstance(value, dict) else None
     except Exception:  # noqa: BLE001 - usage that cannot be read is usage not reported
         return None
+
+
+def annotate_result(
+    r: dict,
+    *,
+    decision: int,
+    observation: Observation,
+    observation_batch: list[dict],
+    native_output_limit: int | None,
+    budget: DecisionBudget,
+    remaining_clock_tokens: int | None,
+    clock_mode: str,
+    tokens_per_frame: int | None,
+) -> None:
+    """Add to a generation result what its decision was given: the observation, the output caps
+    (provider and transport caps the adapter reports stay), the clock allowance and how the clock
+    delays the action; and the provider's response status from the runtime metadata when the
+    result has none."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    r.update(
+        {
+            "decision": decision,
+            "observation_id": metadata.get("observation_id"),
+            "observation_tick": observation.tick_number,
+            "observation_batch": observation_batch,
+            "observation_timestamp": observation.timestamp,
+            "decision_output_cap": budget.runtime_output_tokens,
+            "native_output_limit": native_output_limit,
+            "runtime_output_token_cap": budget.runtime_output_tokens,
+            "provider_output_token_cap": r.get(
+                "provider_output_token_cap", budget.provider_output_tokens
+            ),
+            "transport_output_token_cap": r.get(
+                "transport_output_token_cap", budget.transport_output_tokens
+            ),
+            "remaining_clock_tokens": remaining_clock_tokens,
+            "clock_delay_clock": (
+                "simulated_token_clock" if clock_mode == "token" else "wall_clock"
+            ),
+            "clock_delay_definition": (
+                "complete_clock_output_tokens_divided_by_tokens_per_frame"
+                if clock_mode == "token" and tokens_per_frame is not None
+                else "paused_environment_no_generation_delay"
+                if clock_mode == "token"
+                else "complete_decision_wall_latency"
+            ),
+        }
+    )
+    runtime_metadata = r.get("realtime_runtime")
+    if isinstance(runtime_metadata, dict):
+        for name in ("provider_response_status", "provider_response_status_reason"):
+            if r.get(name) is None and runtime_metadata.get(name) is not None:
+                r[name] = runtime_metadata[name]
+
+
+def frame_usage(before: dict, after: dict) -> dict:
+    """What one generation added to the adapter's cumulative usage, counter by counter."""
+    keys = set(before) | set(after)
+    return {
+        name: max(0, int(after.get(name, 0) or 0) - int(before.get(name, 0) or 0))
+        for name in keys
+        if isinstance(before.get(name, 0), (int, float))
+        and isinstance(after.get(name, 0), (int, float))
+    }
 
 
 def _usage_number(usage, *names):
@@ -155,13 +175,82 @@ def clock_output_tokens(r: dict) -> tuple[int | None, str | None]:
     return None, None
 
 
-def frame_output_tokens(r: dict) -> int | None:
-    """The output tokens that place the decision's action: the clock count already settled on
-    ``r``, else the count its sources give now."""
-    value = r.get("clock_output_tokens")
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-        return int(value)
-    return clock_output_tokens(r)[0]
+def account_tokens(r: dict, remaining_clock_tokens: int | None, env) -> None:
+    """Settle the result's clock output tokens and its token record, and add the record to the
+    episode's token accounting on ``env``. Output past the remaining allowance is billed but not
+    charged to the clock: the clock count stops at the allowance and the excess is kept as
+    post-horizon tokens."""
+    count, source = clock_output_tokens(r)
+    if remaining_clock_tokens is not None and count is not None and count > remaining_clock_tokens:
+        r["unclamped_clock_output_tokens"] = count
+        r["post_horizon_output_tokens"] = count - remaining_clock_tokens
+        count = remaining_clock_tokens
+        source = f"episode_horizon_clamped:{source or 'unknown'}"
+    r["clock_output_tokens"] = count
+    r["clock_output_tokens_source"] = source
+    r["action_output_tokens"] = count
+    r["remaining_clock_tokens"] = remaining_clock_tokens
+    r.setdefault("unclamped_clock_output_tokens", None)
+    r.setdefault("post_horizon_output_tokens", 0)
+    r["token_accounting"] = token_record(r)
+    for name in (
+        "provider_input_tokens",
+        "provider_output_tokens",
+        "provider_total_tokens",
+        "provider_reasoning_output_tokens",
+        "provider_visible_output_tokens",
+        "provider_audio_output_tokens",
+        "provider_output_tokens_source",
+        "provider_reasoning_output_tokens_source",
+        "provider_visible_output_tokens_source",
+        "provider_visible_output_tokens_missing_reason",
+        "provider_audio_output_tokens_source",
+        "provider_audio_output_tokens_missing_reason",
+        "provider_token_normalization_schema",
+        "provider_token_semantics",
+        "provider_protocol_family",
+        "provider_upstream",
+    ):
+        r[name] = r["token_accounting"].get(name)
+    accounting = getattr(env, "_token_accounting", None)
+    if accounting is None:
+        accounting = TokenAccounting()
+        env._token_accounting = accounting
+    accounting.add(r["token_accounting"])
+
+
+def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:
+    """Record the adapter's handoff and action caps for the decision on ``r``. Raises RuntimeError
+    when together they exceed the provider allowance."""
+    handoff_cap = int(getattr(adapter, "_frame_handoff_max_tokens", 0) or 0)
+    action_cap = int(
+        getattr(
+            adapter,
+            "_frame_action_max_tokens",
+            budget.runtime_output_tokens,
+        )
+        or 0
+    )
+    # A decision that was invalidated before generation (e.g. inspection_protocol_error)
+    # never recomputed the adapter's per-decision caps, so they still describe the previous
+    # decision; auditing them against this decision's allowance would raise spuriously.
+    if (
+        budget.provider_output_tokens is not None
+        and r.get("invalid_reason") is None
+        and handoff_cap + action_cap > budget.provider_output_tokens
+    ):
+        raise RuntimeError(
+            f"adapter decision output caps exceed provider transport allowance: "
+            f"handoff={handoff_cap} + action={action_cap} > {budget.provider_output_tokens}"
+        )
+    r.update(
+        {
+            "handoff_token_cap": handoff_cap,
+            "action_token_cap": action_cap,
+            "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
+            "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
+        }
+    )
 
 
 def finalize_decision_audit(adapter, r: dict) -> str | None:
@@ -219,3 +308,24 @@ def result_invalid(r: dict, adapter, clock_mode: str) -> Invalidated | None:
             (proof or {}).get("protocol_error") or (proof or {}).get("status"),
         )
     return None
+
+
+def frame_output_tokens(r: dict) -> int | None:
+    """The output tokens that place the decision's action: the clock count already settled on
+    ``r``, else the count its sources give now."""
+    value = r.get("clock_output_tokens")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return int(value)
+    return clock_output_tokens(r)[0]
+
+
+def action_record(action: Action | None) -> dict | None:
+    """An action as the trace and the lifecycle record keep it."""
+    if action is None:
+        return None
+    return {
+        "action_type": action.action_type.value,
+        "parameters": action.parameters,
+        "coordinate_space": action.coordinate_space,
+        "coordinate_transform": action.coordinate_transform,
+    }

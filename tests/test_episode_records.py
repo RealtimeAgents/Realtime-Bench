@@ -1,6 +1,7 @@
 """The records one decision leaves (evaluation/episode_records.py), called directly rather than
-through run_stream: the output caps and their audit, the output-token source the clock is charged
-with, whether a result is usable and the action as the trace keeps it."""
+through run_stream: the output caps and their audit, what a result is annotated with, the
+output-token source the clock is charged with and the token accounting, whether a result is usable
+and the action as the trace keeps it."""
 
 from __future__ import annotations
 
@@ -8,10 +9,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.kernel.events import Invalidated
+
+OBSERVATION = Observation(b"png", 1_000.5, 3.0, {"observation_id": "o3"})
+BATCH = [{"observation_id": "o3", "tick": 3.0, "timestamp": 1_000.5}]
 
 
 def _adapter(native_output_limit=None, **attributes):
@@ -53,6 +58,129 @@ def test_a_transport_cap_that_is_not_a_positive_integer_or_inf_is_refused(mapped
     adapter = _adapter(4_096, transport_output_token_cap=lambda cap: mapped)
     with pytest.raises(ValueError, match="transport output cap"):
         episode_records.decision_budget(adapter, None, "wall")
+
+
+def _annotate(r, budget, remaining, clock_mode, tokens_per_frame):
+    episode_records.annotate_result(
+        r,
+        decision=3,
+        observation=OBSERVATION,
+        observation_batch=BATCH,
+        native_output_limit=128_000,
+        budget=budget,
+        remaining_clock_tokens=remaining,
+        clock_mode=clock_mode,
+        tokens_per_frame=tokens_per_frame,
+    )
+    return r
+
+
+def test_a_result_is_annotated_with_its_observation_caps_and_clock():
+    budget = DecisionBudget(2_560, 2_560, "inf", "token")
+    r = _annotate({"action": None, "latency": 1.25}, budget, 2_560, "token", 256)
+    assert r == {
+        "action": None,
+        "latency": 1.25,
+        "decision": 3,
+        "observation_id": "o3",
+        "observation_tick": 3.0,
+        "observation_batch": BATCH,
+        "observation_timestamp": 1_000.5,
+        "decision_output_cap": 2_560,
+        "native_output_limit": 128_000,
+        "runtime_output_token_cap": 2_560,
+        "provider_output_token_cap": 2_560,
+        "transport_output_token_cap": "inf",
+        "remaining_clock_tokens": 2_560,
+        "clock_delay_clock": "simulated_token_clock",
+        "clock_delay_definition": "complete_clock_output_tokens_divided_by_tokens_per_frame",
+    }
+
+
+def test_the_clock_definitions_follow_the_clock_mode():
+    budget = DecisionBudget(None, None, None, "token")
+    r = _annotate({}, budget, None, "token", None)
+    assert (r["clock_delay_clock"], r["clock_delay_definition"]) == (
+        "simulated_token_clock",
+        "paused_environment_no_generation_delay",
+    )
+    r = _annotate({}, DecisionBudget(None, None, None, "wall"), None, "wall", None)
+    assert (r["clock_delay_clock"], r["clock_delay_definition"]) == (
+        "wall_clock",
+        "complete_decision_wall_latency",
+    )
+
+
+def test_caps_and_a_response_status_the_adapter_reports_are_kept():
+    budget = DecisionBudget(4_096, 4_096, 4_096, "wall")
+    runtime = {"provider_response_status": "incomplete", "provider_response_status_reason": "max"}
+    r = {
+        "provider_output_token_cap": 2_048,
+        "transport_output_token_cap": None,
+        "provider_response_status_reason": "length",
+        "realtime_runtime": runtime,
+    }
+    _annotate(r, budget, None, "wall", None)
+    assert r["provider_output_token_cap"] == 2_048 and r["transport_output_token_cap"] is None
+    assert r["provider_response_status"] == "incomplete"
+    assert r["provider_response_status_reason"] == "length"
+
+
+def test_frame_usage_is_the_growth_of_each_numeric_counter():
+    before = {"output_tokens": 100, "input_tokens": 50, "model": "m", "cached_tokens": 9}
+    after = {"output_tokens": 160, "input_tokens": 40, "model": "m", "reasoning_tokens": 7}
+    assert episode_records.frame_usage(before, after) == {
+        "output_tokens": 60,
+        "input_tokens": 0,
+        "cached_tokens": 0,
+        "reasoning_tokens": 7,
+    }
+
+
+class _Env:
+    pass
+
+
+def test_tokens_within_the_allowance_are_charged_whole():
+    env, r = _Env(), {"provider_output_tokens": 300, "remaining_clock_tokens": None}
+    episode_records.account_tokens(r, 2_560, env)
+    assert r["clock_output_tokens"] == r["action_output_tokens"] == 300
+    assert r["clock_output_tokens_source"] == "provider_reported_output_usage"
+    assert r["remaining_clock_tokens"] == 2_560
+    assert r["unclamped_clock_output_tokens"] is None and r["post_horizon_output_tokens"] == 0
+    accounting = r["token_accounting"]
+    assert (
+        accounting["clock_output_tokens"] == 300 and accounting["remaining_clock_tokens"] == 2_560
+    )
+    assert r["provider_output_tokens"] == accounting["provider_output_tokens"] == 300
+    assert "provider_upstream" in r and "provider_token_semantics" in r
+    assert env._token_accounting.responses == 1
+    assert env._token_accounting.sums["clock_output_tokens"] == 300
+
+
+def test_output_past_the_allowance_is_billed_but_not_charged():
+    env = _Env()
+    env._token_accounting = totals = TokenAccounting()
+    r = {"native_received_output_tokens": 500, "native_received_output_tokens_source": "ids"}
+    episode_records.account_tokens(r, 256, env)
+    assert (r["clock_output_tokens"], r["action_output_tokens"]) == (256, 256)
+    assert r["clock_output_tokens_source"] == "episode_horizon_clamped:ids"
+    assert (r["unclamped_clock_output_tokens"], r["post_horizon_output_tokens"]) == (500, 244)
+    assert env._token_accounting is totals and totals.responses == 1
+    assert totals.sums["post_horizon_output_tokens"] == 244
+    r = {"usage": {"output_tokens": 300}}
+    episode_records.account_tokens(r, 0, env)
+    assert r["clock_output_tokens"] == 0 and r["post_horizon_output_tokens"] == 300
+
+
+def test_a_result_without_a_count_charges_nothing():
+    r = {"provider_usage_missing_reason": "generation_aborted_at_wall_timeout"}
+    episode_records.account_tokens(r, None, _Env())
+    assert r["clock_output_tokens"] is None and r["clock_output_tokens_source"] is None
+    assert r["token_accounting"]["provider_usage_status"] == "unavailable"
+    r = {"native_received_output_tokens": 40}
+    episode_records.account_tokens(r, None, _Env())
+    assert r["clock_output_tokens"] == 40 and r["post_horizon_output_tokens"] == 0
 
 
 def test_the_cap_audit_records_the_handoff_and_action_caps():
