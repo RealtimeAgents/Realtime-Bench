@@ -18,6 +18,13 @@ class NotAnEncoder:
     model_defaults: ClassVar[dict[str, dict]] = {}
 
 
+class NoClock(ExternalChatDriver):
+    """Written to the contract before drivers took the episode clock."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+
 class NoContextStatus(ExternalChatDriver):
     request_context_status = None
 
