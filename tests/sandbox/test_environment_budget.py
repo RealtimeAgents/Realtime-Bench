@@ -342,6 +342,35 @@ def test_an_action_and_its_page_barrier_share_one_budget():
     assert guest.actions == [ActionType.DRAG]
 
 
+def test_a_call_that_ran_out_of_the_operation_s_budget_is_its_failure():
+    """The CDP call inside the advance spends the advance's deadline and fails with its message,
+    which the operation does not repeat."""
+    clock = FakeClock()
+    env, task = _timed(clock)
+    task.advance_clock = lambda frames=1, key_events=(): _sandbox_call(clock, 3600.0)
+    with clock.participant(), pytest.raises(TimeoutError):
+        env.wait_until_tick(1)
+    assert env._invalid_run["reason"] == "clock_advance_failed"
+    assert env._invalid_run["detail"] == "clock advance took longer than 120 s"
+
+
+def test_a_task_failure_past_the_budget_keeps_its_traceback():
+    clock = FakeClock()
+
+    def read_the_game_state():
+        clock.sleep(121.0)
+        raise RuntimeError("no state")
+
+    env, _ = _timed(clock, stop_check=read_the_game_state)
+    with clock.participant():
+        assert env.done()
+    detail = env._invalid_run["detail"]
+    assert "in read_the_game_state" in detail
+    assert detail.rstrip().endswith(
+        "BudgetExceeded: state read took longer than 120 s (RuntimeError: no state)"
+    )
+
+
 def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_10_s():
     """Each stays within its own timeout (10 s, 8 s); an action has 20 s for both, where it had
     10 s at first."""
