@@ -10,12 +10,14 @@ from realtime_framework.entity.actions import ActionType
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
 from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
+from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
 from tests.fake_clock import FakeClock
 
 from .fake_live import (
     BUDGET,
     REALTIME,
     Call,
+    Fail,
     Reply,
     Text,
     TextLiveDriver,
@@ -273,4 +275,84 @@ def test_a_reply_that_came_to_no_action_has_feedback_of_its_own(monkeypatch, clo
     items = agent.driver.views[-1].items
     assert [item.block.id for item in items][3:] == ["d0.output", "d0.feedback", "f3.frame"]
     assert items[4].block.text == execution_feedback(outcome, "none")
+    agent.close()
+
+
+def _on_worker(clock, run):
+    """``run()`` on a thread of the clock's, as the shell runs a reply; its value or exception
+    comes back in the dict once the event is set."""
+    done, out = clock.event(), {}
+
+    def worker():
+        try:
+            out["value"] = run()
+        except BaseException as exc:  # noqa: BLE001 - the test reads it
+            out["error"] = exc
+        finally:
+            done.set()
+
+    clock.start_thread(worker, name="reply")
+    return done, out
+
+
+def test_an_abort_interrupts_the_reply_and_closes_the_session_before_it_returns(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1),), ends_at=100.0))
+    done, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    agent.abort(7)
+    assert agent.driver.calls[-2:] == [("interrupt", "streaming-7"), ("close",)]
+    assert clock.wait(done, 1.0)
+    assert out["value"].cancelled
+    assert [a.call_id for a in posted] == ["c1"]
+    agent.discard(7)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2:] == [
+        ("connect", ("system", "f1.frame", "f2.frame")),
+        ("push", "obs-3", ("system", "f1.frame", "f2.frame", "f3.frame")),
+    ]
+    agent.close()
+
+
+def test_a_reply_aborted_before_its_worker_started_never_starts(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.abort(7)
+    assert agent.driver.calls[-1] == ("close",)
+    pending = agent.generate(7, 3, frame, BUDGET)
+    assert pending.cancelled
+    assert not [call for call in agent.driver.calls if call[0] == "reply"]
+    agent.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("stream broke"),
+        GoAwayDeadlineExceeded("gemini_live_go_away_deadline_before_turn_complete"),
+    ],
+)
+def test_a_reply_that_fails_partway_raises_and_the_session_is_rebuilt_before_it_is_used(
+    monkeypatch, clock, error
+):
+    """A reply that failed after it handed an action over, or that outlived its connection's
+    goAway deadline, which the encoder takes as incomplete: the run cannot be scored. The
+    session may still hold the reply, so the next push recovers it from the view first."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1), Fail(0.75, error)), ends_at=1.0))
+    with pytest.raises(type(error)):
+        agent.generate(7, 3, frame, BUDGET)
+    assert [a.call_id for a in posted] == ["c1"]
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2:] == [
+        ("sync", "runtime_recovery", ("system", "f1.frame", "f2.frame")),
+        ("push", "obs-3", ("system", "f1.frame", "f2.frame", "f3.frame")),
+    ]
     agent.close()
