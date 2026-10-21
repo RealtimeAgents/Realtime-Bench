@@ -463,6 +463,29 @@ def test_a_generation_the_episode_ended_on_is_recorded_as_a_call_given_up_on(
     assert calls == [("abort", 2)]
 
 
+def test_a_call_the_tasks_end_gave_up_on_ran_until_the_end_signal():
+    """The end check asked at 2 s takes 0.3 s and sees the task over: the episode ended at 2 s
+    (decision 32), and the call that started at 1 s ran 1 s by then, however late the shell got
+    to it."""
+    world = World(ends_at=1.5, end_reason="won", slow_checks=[(2.0, 2.5, 0.3)])
+    episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)], world)
+    assert episode.env._termination["end_s"] == 2.0
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["latency_s"]) for p in completed] == [(0, 0.5), (1, 1.0)]
+
+
+def test_a_settled_result_the_tasks_end_gave_up_on_is_not_logged_as_timed_out():
+    """The result comes back at 1.9 s, during the end check asked at 1 s, which takes 1 s and
+    sees the task over. Settled, its records are its own; no bound came, so nothing is
+    logged about one."""
+    world = World(ends_at=0.5, end_reason="won", slow_checks=[(1.0, 1.5, 1.0)])
+    episode = run("wall", 3.0, [Reply(1.9)], world)
+    assert episode.env._termination["stop_reason"] == "won"
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["stale"]) for p in completed] == [(0, False)]
+    assert not any("settled past" in line or "TIMED OUT" in line for line in episode.logs)
+
+
 def test_a_generation_the_tasks_end_gave_up_on_needs_no_inspection_proof():
     """The record of a call given up on has no model decision to inspect: the episode the task
     ended stays valid, as one the deadline ended does (episode_records.result_invalid)."""

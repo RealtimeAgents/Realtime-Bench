@@ -16,6 +16,7 @@ import threading
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.turns import TurnPolicy
 
@@ -351,6 +352,20 @@ def test_a_kernel_that_raises_before_taking_the_environments_failure_keeps_it(mo
         "detail": "keyup failed",
     }
     assert episode.trace.payloads("RunInvalidated") == []
+
+
+def test_a_result_whose_settling_raised_is_recorded_once(monkeypatch):
+    """Settling the first result raises after its trajectory row was written: the run is invalid
+    for run_exception, and the kernel gives the generation up for it. The call came back; it
+    is recorded as far as settling it got, and not again as one given up on."""
+    _breaks(monkeypatch, episode_records, "result_invalid", lambda *args: True)
+    episode = run("wall", 3.0, [Reply(0.5)])
+    assert episode.invalid["reason"] == "run_exception"
+    assert [row["decision"] for row in episode.agent.trajectory] == [0]
+    assert [row.get("harness_abort_reason") for row in episode.agent.trajectory] == [None]
+    assert episode.trace.payloads("InferenceCompleted") == []
+    raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
+    assert len(raised) == 1
 
 
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
