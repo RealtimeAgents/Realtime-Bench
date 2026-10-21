@@ -365,7 +365,7 @@ retried only while no model output, usage, or call has been received, and always
 history, so a retry can never replay or duplicate a model action. SDK-level retries stay disabled
 so every attempt is recorded. Retry time is part of the decision: on the wall clock the world keeps
 running; on the token clock a request without output charges no tokens. Once the runner abandons
-a decision, none of its request units is sent again.
+a decision, none of its request units is sent again, and each records the attempt that stopped.
 """
 
 TRANSIENT = "transient"  # connection loss, timeout, 408, 5xx, overloaded
@@ -529,8 +529,8 @@ class RequestRetry:
     key: str  # the request unit's stable jitter key
     classify: Callable[[BaseException], TransportFailure | None]
     record: Callable[[int, BaseException, TransportFailure, float | None], None]
+    cancelled: Callable[[int, RetryCancelled], None]
     replayable: Callable[[BaseException], bool] = lambda exc: True
-    cancelled: Callable[[int, RetryCancelled], None] = lambda attempt, exc: None
     clock: Clock = field(default_factory=SystemClock)
 
     def run(self, send):
