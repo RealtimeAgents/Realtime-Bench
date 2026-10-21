@@ -156,6 +156,9 @@ class _Session:
             self.failure = ConnectionError("OpenAI Realtime session closed")
             self._read_one.set()
             raise
+        except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
+            self.failure = exc
+            self._read_one.set()
 
     async def stop_reading(self, *, closed: bool) -> None:
         """Once the connection is closed, wait for the reader to end; a connection that may
