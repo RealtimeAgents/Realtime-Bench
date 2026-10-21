@@ -365,8 +365,10 @@ class RealtimeSessionCore:
 
     def new_feedback(self, history: CanonicalRequest) -> list[Create]:
         """Plan the feedback items of the sent frames whose action's execution feedback the
-        history view now holds and the conversation does not yet: they belong to the newest
-        frames sent, so each goes at the end. The history ends with the frame to observe next."""
+        history view now holds and the conversation does not yet. The turn-based loop commits
+        each action, and with it its feedback, before it observes the next frame, so such a
+        frame is the newest sent and its feedback goes at the end. The history ends with the
+        frame to observe next."""
         operations = []
         for frame in history_frames(history.items)[1][:-1]:
             sent = self.frames[frame.id]

@@ -475,7 +475,7 @@ def test_two_responses_in_flight_each_get_their_own_answer():
     the rebuild before it connects (RequestRetry, entity/model.py), and _run_turn checks it before
     it sends the observation (harnesses/default/context.py). A decision abandoned after
     that check can still start its response, but only on the connection abort() closes: the next
-    decision waits for that cleanup and opens a new connection (_ensure_ready), whose core never
+    decision waits for that cleanup and opens a new connection (ensure_ready), whose core never
     observed the abandoned frame, so start_generation there fails on it. Hence the core test.
     """
     core = opened([turn(0, "a0"), turn(1), turn(2)])

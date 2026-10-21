@@ -499,7 +499,7 @@ _RETRY_CANCEL: contextvars.ContextVar[threading.Event] = contextvars.ContextVar(
 @contextlib.contextmanager
 def retry_cancellation(cancel: threading.Event):
     """Cancel every request unit sent in this context once ``cancel`` is set. Like trace_scope,
-    the ContextVar follows the call into the runtime's event loop."""
+    the ContextVar follows the call onto the agent's execution thread."""
     token = _RETRY_CANCEL.set(cancel)
     try:
         yield

@@ -515,9 +515,10 @@ class SessionCore:
         """Plan the history view's newest frame, after its feedback, as one input, and record it
         as being written: no handle resumes the session until its turn completes cleanly.
 
-        Of the separate feedback, only that of the turn before the frame can be new: the session
-        holds every earlier turn's, sent before the frames after it, seeded or resumed. It is
-        new unless this connection was seeded with it."""
+        Of the separate feedback, only that of the turn before the frame can be new: the
+        turn-based loop commits each action, and with it its feedback, before it observes the
+        next frame, so the session holds every earlier turn's, sent before the frames after it,
+        seeded or resumed. It is new unless this connection was seeded with it."""
         frames = [index for index, item in enumerate(history.items) if item.block.kind == "frame"]
         current = history.items[frames[-1]]
         frame = current.block
