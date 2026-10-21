@@ -125,6 +125,21 @@ def test_the_only_snapshot_frozen_record_is_main_s():
     assert _kernel_kinds(episode.trace)[-1] == "Termination"
 
 
+def test_the_frame_that_shows_the_stream_frozen_is_not_written_as_captured():
+    """From the second frame on every capture repeats one identity; the third of them freezes the
+    stream. The runner writes no frame its check stops (runner.py _decide): the trace has the
+    frames of the three decisions made, and the fourth only as the kernel's record."""
+    episode = run("wall", 10.0, [Reply(0.5)] * 5, World(frozen_from=1))
+    assert episode.invalid["reason"] == "observation_stream_frozen"
+    captured = episode.trace.payloads("ObservationCaptured")
+    assert [(p["decision"], p["observation_id"]) for p in captured] == [
+        (0, "obs-0"),
+        (1, "obs-1"),
+        (2, "obs-1"),
+    ]
+    assert _kernel_kinds(episode.trace).count("FrameCaptured") == 1
+
+
 def test_an_invalidation_without_a_detail_is_written_as_the_runner_writes_it():
     episode = run("wall", 1.0, [Reply(0.5, fields={"invalid_reason": "history_sync_failed"})])
     assert episode.trace.payloads("RunInvalidated") == [
