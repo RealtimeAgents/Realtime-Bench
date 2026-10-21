@@ -43,24 +43,28 @@ class Verdict:
     unused: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     close: list[str] = field(default_factory=list)
+    apart: list[str] = field(default_factory=list)  # between the shell and the simulation
 
     @property
     def ok(self) -> bool:
-        return not self.problems and not self.unexpected
+        return not self.problems and not self.unexpected and not self.apart
 
 
 def check(script: Script, old: Projection, new: Projection) -> Verdict:
+    """Today's loop, ``old``, against the shell, ``new``: the projections once the rules have
+    rewritten the old one, then what the projection leaves out (_beyond)."""
     current = old.copy()
     notes: dict = {}
     verdict = Verdict(script)
     for rule in RULES:
         if rule.rewrite is None:
             continue
-        before = copy.deepcopy(current.compared)
+        before = copy.deepcopy((current.compared, current.beyond))
         rule.rewrite(script, current, notes)
-        if current.compared != before:
+        if (current.compared, current.beyond) != before:
             verdict.triggered.append(rule.id)
     verdict.problems, verdict.close = differences(current.compared, new.compared)
+    verdict.problems += _beyond(script, current, new)
     if verdict.close and "X4" not in verdict.triggered:
         verdict.triggered.append("X4")
     if old.facts.get("x12_shown") and "X12" not in verdict.triggered:
@@ -69,6 +73,56 @@ def check(script: Script, old: Projection, new: Projection) -> Verdict:
     verdict.unexpected = [rule for rule in verdict.triggered if rule not in script.expect]
     verdict.unused = sorted(set(script.expect) - set(verdict.triggered), key=ORDER.index)
     return verdict
+
+
+def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
+    """The whole requests and the usage (wave2-plan.md, P4 投影), over the decisions both sides
+    started, and the trace records the projection leaves out, decision by decision. The
+    decisions today's loop started after the kernel's end, which the rules left out, go with
+    their replies and their requests: on the wall clock every request sent once the kernel's
+    episode is over, a retry of the generation it gave up on too (X3); on the token clock, where
+    time stands still while a generation runs, the last ones, those decisions' attempts."""
+    started = _started(old) & _started(new)
+    gone = sorted(set(old.facts["started_at"]) - _started(old))
+    end = old.episode["termination"]["end_s"]
+    old = old.copy()
+    for k in gone:
+        _drop_replies(old, k)
+    sent = old.beyond["requests"]
+    if _wall(script):
+        sent = [
+            r for r, at in zip(sent, old.facts["requested_at"], strict=True) if earlier(at, end)
+        ]
+    else:
+        sent = sent[: len(sent) - sum(len(script.turns[k].attempts) for k in gone)]
+    problems = []
+    requests = sent, new.beyond["requests"]
+    for index, (a, b) in enumerate(zip(*requests)):
+        problems += differences(a, b, f"requests[{index}]")[0]
+    if _started(old) == _started(new):
+        if len(requests[0]) != len(requests[1]):
+            problems.append(f"requests: {len(requests[0])} -> {len(requests[1])}")
+        if old.beyond["usage"] is not None:
+            problems += differences(old.beyond["usage"], new.beyond["usage"], "usage")[0]
+    for kind, by_decision in old.beyond["trace"].items():
+        other = new.beyond["trace"][kind]
+        for k in sorted(started - set(old.beyond["racing"])):
+            records = [_shared(kind, record) for record in other.get(k, [])]
+            problems += differences(by_decision.get(k, []), records, f"trace.{kind}[{k}]")[0]
+    return problems
+
+
+# Trace fields only the shell writes (evaluation/shell.py _Shell._start_generation), left out as
+# fields of one side are (wave2-plan.md, P4 投影).
+SHELL_ONLY = {"InferenceStarted": ("generation", "remaining_clock_tokens")}
+
+
+def _shared(kind: str, record: dict) -> dict:
+    return {name: value for name, value in record.items() if name not in SHELL_ONLY.get(kind, ())}
+
+
+def _started(p: Projection) -> set[int]:
+    return {k for k, d in p.compared["decisions"].items() if d["observed"] is not None}
 
 
 # ---- helpers ----------------------------------------------------------------------------------
@@ -96,9 +150,10 @@ def _dropped(script: Script, t_k: float, reached: float) -> int:
     return max(0, crossed - 1)
 
 
-def _give_up(p: Projection, k: int) -> None:
+def _give_up(p: Projection, notes: dict, k: int) -> None:
     """Decision k's generation was given up on: it keeps its observation and nothing else, and
     the agent is aborted, unless today's loop aborted it too (its bounded wait ran out)."""
+    notes.setdefault("given_up", set()).add(k)
     started = p.facts["started_at"][k]
     if not any(not earlier(at, started) for at in p.facts["aborted_at"]):
         p.episode["aborts"] += 1
@@ -274,19 +329,6 @@ def _x4(script: Script, p: Projection, notes: dict) -> None:
                 record[name] = whole
 
 
-def _u1(script: Script, p: Projection, notes: dict) -> None:
-    """The kernel's Outcome carries the result's output tokens on the wall clock too
-    (turns.py:342-346, 637); today's lifecycle writes None there (runner.py:459-462)."""
-    if not _wall(script):
-        return
-    for k, d in p.decisions.items():
-        outcome = d["outcome"]
-        if outcome is None or outcome["action_output_tokens"] is not None:
-            continue
-        if p.facts["timeout_reasons"].get(k) is None and k < len(script.turns):
-            outcome["action_output_tokens"] = script.turns[k].output_tokens
-
-
 def _x1(script: Script, p: Projection, notes: dict) -> None:
     """A wait is time the kernel lets pass, not an action the environment executes
     (turns.py:455-456); its record has no active holds or mouse buttons (turns.py:528-535)."""
@@ -404,7 +446,7 @@ def _cut(script: Script, p: Projection, notes: dict, k: int, at: float) -> None:
     facts, d = p.facts, p.decisions[k]
     _drop_after(p, k)
     if earlier(at, facts["finished_at"].get(k, math.inf)):
-        _give_up(p, k)
+        _give_up(p, notes, k)
         notes["in_hand"] = None
         return
     notes["in_hand"] = k
@@ -498,7 +540,7 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
         if earlier(facts["started_at"].get(k, math.inf), deadline) and (
             finished is None or not earlier(finished, deadline)
         ):
-            _give_up(p, k)
+            _give_up(p, notes, k)
             notes["in_hand"] = None
 
 
@@ -708,6 +750,55 @@ def _u3(script: Script, p: Projection, notes: dict) -> None:
             return
 
 
+def _u4(script: Script, p: Projection, notes: dict) -> None:
+    """Token clock: the environment latches a failed clock step itself, and the shell hands
+    the kernel that Invalidated before the step's answer (evaluation/shell.py _Shell._env). The
+    episode ends first, and a wait in hand is cut short as by any end (turns.py TurnPolicy.on_end,
+    _waited), a wait with the episode over after it; the failed step's answer, which would
+    settle it as a failed action (turns.py _step_failed), comes too late. Today the environment
+    reports the failed action (sandbox/actions.py GuestEnvironment._execution_failed)."""
+    invalid = p.episode["invalid"]
+    if _wall(script) or invalid is None or invalid["reason"] != "clock_advance_failed":
+        return
+    for d in p.decisions.values():
+        # Only a wait today's environment failed itself (its record holds the error); one whose
+        # step to the action time failed is K-e's.
+        if "error" not in (d["wait_record"] or {}):
+            continue
+        resolved, proposed = d["resolved"], d["proposed"]
+        start, reached = d["approach"]["to"], resolved["environment_tick"]
+        requested = float(proposed.split(":")[1])
+        elapsed = round(max(0.0, (reached - start) / script.env_fps), 9)
+        horizon_truncates = start + requested * script.env_fps > script.max_ticks + 1e-9
+        by_horizon = horizon_truncates and reached >= script.max_ticks - 1e-9
+        d["wait_record"] = {
+            "duration_simulated_seconds": elapsed,
+            "requested_duration_simulated_seconds": requested,
+            "truncated_by_episode_horizon": by_horizon,
+            "truncated_by_terminal_condition": elapsed + 1e-9 < requested and not by_horizon,
+        }
+        d["applied"] = True
+        for record in (resolved, d["commit"], d["outcome"]):
+            record["status"] = "wait"
+        resolved["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
+
+
+def _u5(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: the environment latches a failed action itself, and the shell hands the
+    kernel that Invalidated before the action's answer (evaluation/shell.py _Shell._env). The
+    episode ends first and freezes the snapshot (kernel/core.py Kernel.end); the action's
+    decision settles on its answer after that (turns.py TurnPolicy.on_end), at the tick the
+    snapshot read left. Today the loop settles it as the action fails."""
+    invalid = p.episode["invalid"]
+    if not _wall(script) or invalid is None or invalid["reason"] != "action_execution_failed":
+        return
+    tick = _floor((p.episode["termination"]["end_s"] + script.snapshot_s) * script.env_fps)
+    for k, d in p.decisions.items():
+        if k < len(script.turns) and script.turns[k].fault and d["outcome"] is not None:
+            d["resolved"]["environment_tick"] = tick
+            d["outcome"]["next_observation_tick"] = tick
+
+
 def _x2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot before it reports the decision in hand (core.py:184,
     turns.py:254-272); today the decision is reported first and the snapshot read after the loop
@@ -715,6 +806,40 @@ def _x2(script: Script, p: Projection, notes: dict) -> None:
     k = notes["in_hand"] if "in_hand" in notes else _old_in_hand(script, p, notes)
     if k is not None and k in p.decisions and p.decisions[k]["commit"] is not None:
         p.episode["snapshot_after"] -= 1
+
+
+def _x3(script: Script, p: Projection, notes: dict) -> None:
+    """A generation the kernel gave up on leaves no reply records: the shell settles no result
+    the kernel no longer waits for (evaluation/shell.py _Shell._settle_returned). Today the
+    runner settles a reply back within its grace, or writes a timed-out one for the bounded wait
+    it gave up (runner.py _decide). Its usage counts when the reply came back before the abort,
+    which follows the snapshot read (kernel/core.py Kernel.end). On the fake clock a reply at the
+    very instant of the end races it: whether the shell settled the result first, records and
+    all (evaluation/shell.py _Shell._step), is the scheduler's call, and its records are not
+    compared; nor is the usage of a reply at the instant of the abort."""
+    end = p.episode["termination"]["end_s"]
+    abort_at = end + (script.snapshot_s if _wall(script) else 0.0)
+    for k in sorted(notes.get("given_up", ())):
+        back = p.facts["finished_at"].get(k)
+        if back is None or earlier(abort_at, back):
+            _drop_replies(p, k)
+            continue
+        if earlier(end, back):
+            _drop_replies(p, k, usage=False)
+        else:
+            p.beyond["racing"].append(k)
+        if not earlier(back, abort_at):
+            p.beyond["usage"] = None
+
+
+def _drop_replies(p: Projection, k: int, *, usage: bool = True) -> None:
+    """Decision k's reply records, and the usage its reply added."""
+    trace = p.beyond["trace"]
+    trace["OutputChunkReceived"].pop(k, None)
+    for completed in trace["InferenceCompleted"].pop(k, []):
+        for name, value in (completed["frame_usage"] or {}).items():
+            if usage and p.beyond["usage"] is not None:
+                p.beyond["usage"][name] -= value
 
 
 def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
@@ -733,7 +858,6 @@ def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
 
 RULES = (
     Rule("X4", "ticks and frame positions agree within 1e-9", _x4),
-    Rule("U1", "wall Outcome.action_output_tokens carries the result's tokens", _u1),
     Rule("X1", "a wait is not executed by the environment; its record has no holds", _x1),
     Rule("X12", "the third failed state read in a row invalidates the run", _x12),
     Rule("K-b", "the wall clock checks the end every 1/env_fps s", _kb),
@@ -770,8 +894,10 @@ RULES = (
     ),
     Rule("U3", "no state read after the token end was found inside an advance", _u3),
     Rule("U2", "an environment-latched failure is written as RunInvalidated", _u2),
+    Rule("U4", "a token wait whose step fails is cut short as by the end", _u4),
+    Rule("U5", "a failed wall action settles at the tick after the snapshot read", _u5),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
-    Rule("X3", "no synthetic InferenceCompleted for a given-up generation", seen="shell only"),
+    Rule("X3", "a generation the kernel gave up on writes no reply and no usage", _x3),
     Rule("X5", "KernelRecord entries in the episode trace", seen="shell only"),
     Rule("X6", "a timed-out step's feedback does not rewrite the previous record", seen="P2"),
     Rule("X7", "DONE turned into a wait is reported as actual=wait", seen="P2"),

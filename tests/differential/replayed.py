@@ -11,6 +11,7 @@ read. The agent parses each reply with its own parser; nothing here knows the lo
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from pathlib import Path
@@ -20,9 +21,10 @@ import realtime_framework.providers.registry as catalog
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.records import TraceEvent, _jsonable
+from realtime_framework.evaluation import episode_records
 from realtime_framework.sandbox.actions import ActionRejected, GuestEnvironment
 from tests.fake_clock import FakeClock
-from tests.replay.baseline import action_record
+from tests.replay.baseline import REAL_TIME_FIELDS, Normalizer, action_record
 from tests.replay.build import build_episode
 from tests.replay.clock_task import ClockTask
 from tests.replay.fake_env import FakeEnvironment, Hang
@@ -72,12 +74,13 @@ def _replies(script: Script) -> list:
 
 class _Trace:
     """Stands in for EpisodeTrace: keeps each event's payload as EpisodeTrace serializes it, and
-    the world time it was written at."""
+    the world time it was written at. What the kernel's shell adds to each record (kernel_seq,
+    semantic, ops) is dropped (wave2-plan.md, P4 投影)."""
 
     def __init__(self, env, now):
         self._env, self._now = env, now
 
-    def emit(self, event, payload=None):
+    def emit(self, event, payload=None, **_):
         name = event.value if isinstance(event, TraceEvent) else str(event)
         self._env.log("trace", event=name, payload=_jsonable(payload or {}), at=self._now())
 
@@ -175,7 +178,20 @@ class WallEnvironment(_Latched, FakeEnvironment):
         self.log("diff.check", at=asked, answer=cause)
         return over
 
-    def execute(self, action):
+    def check_end(self) -> tuple[bool, str | None]:
+        """The kernel's shell reads the task here; a failed read raises (sandbox/actions.py
+        GuestEnvironment.check_end)."""
+        asked = self.now()
+        failed = self.script.read_fails_at(asked)
+        if not failed:
+            ended, reason = super().check_end()
+        self.clock.sleep(self.script.check_s)
+        self.log("diff.check", at=asked, answer="failed" if failed else "task" if ended else None)
+        if failed:
+            raise RuntimeError(STATE_READ_FAILED)
+        return ended, reason
+
+    def execute(self, action, *, release_at=None):
         self.log(
             "diff.execute",
             at=self.now(),
@@ -184,8 +200,8 @@ class WallEnvironment(_Latched, FakeEnvironment):
         self.clock.sleep(self.script.execute_s)
         refused = self.decision in self.rejections or self.decision in self.failures
         if action.action_type is ActionType.HOLD_KEY and not refused:
-            self._hold(action)
-        status = super().execute(action)
+            self._hold(action, release_at)
+        status = super().execute(action, release_at=release_at)
         if action.action_type is ActionType.WAIT:
             self._last_execution_result.update(
                 {
@@ -197,15 +213,22 @@ class WallEnvironment(_Latched, FakeEnvironment):
             )
         return status
 
-    def _hold(self, action) -> None:
+    def model_request(self, index: int) -> bool:
+        self.log("diff.request", request=index, at=self.now())
+        return super().model_request(index)
+
+    def _hold(self, action, release_at: float | None) -> None:
+        """The lease lasts the hold's duration from the press, or to the kernel's ``release_at``,
+        seconds since the origin (sandbox/actions.py GuestEnvironment._execute_wall_hold)."""
         duration = float(action.parameters.get("duration", 1.0))
         if duration <= 0:
             return
         parts, _ = GuestEnvironment._key_chord(action)
         with self._lock:
             now = self.clock.time()
+            expires_at = now + duration if release_at is None else self.t0 + release_at
             for identity, _ in parts:
-                self._leases[identity] = max(self._leases.get(identity, now), now + duration)
+                self._leases[identity] = max(self._leases.get(identity, now), expires_at)
             self._schedule_release()
 
     def _schedule_release(self) -> None:
@@ -346,11 +369,7 @@ class TokenWorld(_Latched, TokenEnvironment):
         return observation
 
     def done(self) -> bool:
-        if self._in_tap:
-            self._tap_reads += 1
-        else:
-            self._checks += 1
-        tick, before = self._logical_tick, self._invalid_run
+        tick, before = self._count_read(), self._invalid_run
         over = super().done()
         if not over:
             answer = None
@@ -358,19 +377,48 @@ class TokenWorld(_Latched, TokenEnvironment):
             answer = "invalid_run"
         else:
             answer = "task" if self._invalid_run is None else "failed"
+        self._answered(tick, answer)
+        return over
+
+    def check_end(self) -> tuple[bool, str | None]:
+        """The kernel's shell reads the task here, and so do a tap's steps under it
+        (sandbox/actions.py GuestEnvironment._ended_after_step); a failed read raises."""
+        tick = self._count_read()
+        try:
+            ended, reason = super().check_end()
+        except Exception:
+            self._answered(tick, "failed")
+            raise
+        self._answered(tick, "task" if ended else None)
+        return ended, reason
+
+    def _count_read(self) -> float:
+        if self._in_tap:
+            self._tap_reads += 1
+        else:
+            self._checks += 1
+        return self._logical_tick
+
+    def _answered(self, tick: float, answer: str | None) -> None:
         self._saw_end = self._saw_end or (answer == "task" and not self._in_tap)
         read = self._tap_reads if self._in_tap else self._checks
         self.log("diff.check", tick=tick, in_tap=self._in_tap, read=read, answer=answer)
-        return over
 
-    def execute(self, action):
+    def execute(self, action, *, release_at=None):
         self._in_tap = action.action_type is ActionType.KEY
         try:
-            status = super().execute(action)
+            status = super().execute(action, release_at=release_at)
         finally:
             self._in_tap = False
         self._applied += status == "applied"
         return status
+
+    def release_keys(self, keys) -> None:
+        """The kernel's release of keys whose lease ended. Inside a tap the environment releases
+        them itself, where the lease ends; the kernel's release comes after the tap and finds them
+        gone (K-j). The shell side's key releases are these, as the kernel decides them."""
+        self.log("diff.release_keys", tick=self._logical_tick, keys=sorted(keys))
+        super().release_keys(keys)
 
     def _release_clock_keys(self, identities=None):
         selected = list(self._held_keys) if identities is None else identities
@@ -387,7 +435,7 @@ def replay(script: Script, run_dir: Path, driver=drivers.legacy) -> Projection:
         env = _replay_wall(script, run_dir, driver, config)
     else:
         env = _replay_token(script, run_dir, driver, config)
-    return project(script, env)
+    return project(script, env, driver.__name__)
 
 
 def _replay_wall(script, run_dir, driver, config) -> WallEnvironment:
@@ -410,10 +458,12 @@ def _replay_wall(script, run_dir, driver, config) -> WallEnvironment:
             model_key=CHAT_MODEL_KEY,
             clock_mode="wall",
             clock=clock,
+            env_fps=script.env_fps,
         )
         env = WallEnvironment(_frames(episode.frames, script), clock, script)
         box.append(env)
         _drive(episode, env, script, driver, config, Clocks(clock, clock), env.now)
+        env.requests = _requests(stub)
     return env
 
 
@@ -439,12 +489,24 @@ def _replay_token(script, run_dir, driver, config) -> TokenWorld:
             model_key=OPENROUTER_MODEL_KEY,
             clock_mode="token",
             tokens_per_frame=script.tokens_per_frame,
+            env_fps=script.env_fps,
         )
         env = TokenWorld(_frames(episode.frames, script), task, script)
         _drive(
             episode, env, script, driver, config, Clocks(env.clocks.semantic, env.clock), env.now
         )
+        env.requests = _requests(stub)
     return env
+
+
+def _requests(stub) -> list[dict]:
+    """What the stub received, as the replay baselines normalize it (tests/replay/baseline.py):
+    one placeholder numbering of random ids per episode, images by their pixels."""
+    normalize = Normalizer()
+    return [
+        normalize({"path": request.path, "body": json.loads(request.body)})
+        for request in stub.requests
+    ]
 
 
 def _drive(episode, env, script, driver, config, clocks, now) -> None:
@@ -477,6 +539,7 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
         )
     finally:
         env._drain_abandoned()
+        env.usage = episode_records.usage_snapshot(agent)
         episode.finish()
 
 
@@ -516,6 +579,12 @@ def _frames(frames, script: Script):
 
 # ---- projection -------------------------------------------------------------------------------
 
+# Trace records outside the projection's decisions (wave2-plan.md, P4 投影).
+TRACED = ("ObservationCaptured", "InferenceStarted", "OutputChunkReceived", "InferenceCompleted")
+# A capture's latency is measured on the operational clock, real time on the token clock
+# (sandbox/actions.py GuestEnvironment.capture).
+TRACE_REAL_TIME = REAL_TIME_FIELDS | {"capture_latency_s"}
+
 OUTCOME_FIELDS = (
     "status",
     "terminal_after_action",
@@ -529,21 +598,23 @@ OUTCOME_FIELDS = (
 )
 
 
-def project(script: Script, env) -> Projection:
+def project(script: Script, env, side: str) -> Projection:
     """The environment's log, in order: the runner's trace events and calls into the
     environment, what the agent was told, and what the subclasses above log (``diff.*``)."""
     token = script.mode == "token"
     seconds = 1.0 / script.env_fps
     decisions: dict[int, dict] = {}
+    normalize = Normalizer(TRACE_REAL_TIME)
 
     def of(k: int) -> dict:
         return decisions.setdefault(k, decision())
 
     captures, checks, key_ups = [], [], []
     started_at, finished_at, resolved_at, committed_at, timeout_reasons = {}, {}, {}, {}, {}
-    taps, reads, records, aborts = [], [], 0, 0
+    taps, reads, records, aborts, requested = [], [], 0, 0, []
     commits, snapshot_after, aborted_at, output_tokens = 0, None, [], {}
     first_end, ended_before_commit = None, {}
+    trace = {kind: {} for kind in TRACED}
     for call in env.calls:
         name = call["call"]
         ends = name == "diff.invalid" or (
@@ -553,6 +624,8 @@ def project(script: Script, env) -> Projection:
             first_end = call
         if name == "trace":
             event, payload, at = call["event"], call["payload"], call["at"]
+            if event in TRACED:
+                trace[event].setdefault(payload.get("decision"), []).append(normalize(payload))
             if event == "InferenceStarted":
                 of(payload["decision"])["observed"] = payload["observation_tick"]
                 started_at[payload["decision"]] = at
@@ -595,6 +668,11 @@ def project(script: Script, env) -> Projection:
                 of(payload["decision"])["applied"] = True
             elif event == "RunInvalidated":
                 records += 1
+            elif event == "KernelRecord" and payload["kind"] == "GenerationAbandoned":
+                # The kernel's own count: the shell interrupts only a generation still running
+                # (evaluation/shell.py _Shell._abort), which at one instant is the scheduler's
+                # call.
+                aborts += 1
         elif name == "agent.commit_action":
             # The environment numbers its calls by capture, and each decision captures once.
             k = call["decision"]
@@ -631,15 +709,19 @@ def project(script: Script, env) -> Projection:
                 checks.append(call["tick"])
         elif name == "diff.check" and call["answer"] not in ("invalid_run", "deadline"):
             reads.append((call["at"], call["answer"]))
-        elif name == "diff.key_up" and not call["finalizing"]:
+        elif name == "diff.release_keys" and side == "shell":
+            key_ups.append({"at": call["tick"] * seconds, "keys": call["keys"], "in_tap": False})
+        elif name == "diff.key_up" and not call["finalizing"] and not (token and side == "shell"):
             if token:
                 key_ups.append(
                     {"at": call["tick"] * seconds, "keys": call["keys"], "in_tap": call["in_tap"]}
                 )
             else:
                 key_ups.append({"at": call["at"], "keys": call["keys"]})
-        elif name == "agent.abort" and not call["finalizing"]:
-            aborts += 1
+        elif name == "diff.request":
+            requested.append(call["at"])
+        elif name == "agent.abort":
+            aborts += side == "legacy"
             aborted_at.append(call["at"])
     invalid = getattr(env, "_invalid_run", None)
     termination = env._termination
@@ -684,5 +766,9 @@ def project(script: Script, env) -> Projection:
         "ended_at": ended_at,
         "ended_before_commit": ended_before_commit,
         "loop_error": getattr(env, "_loop_error", None),
+        "requested_at": requested,  # wall clock: when each request reached the stub
     }
-    return Projection("legacy", {"decisions": decisions, "episode": episode}, facts)
+    # The trace records by decision, normalized as the replay baselines are.
+    # "racing": decisions whose reply records are not compared (rules._x3).
+    beyond = {"requests": env.requests, "usage": env.usage, "trace": trace, "racing": []}
+    return Projection(side, {"decisions": decisions, "episode": episode}, facts, beyond)

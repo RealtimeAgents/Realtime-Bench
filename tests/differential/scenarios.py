@@ -85,7 +85,7 @@ FRAME_RATES = [
         3.75,
         _timed(["click", "type:Ada", "click"], [0.5, 1.25, 0.875]),
         env_fps=60.0,
-        expect=frozenset({"K-a", "K-g", "U1"}),
+        expect=frozenset({"K-a", "K-g", "X3"}),
         name="frame_rates-wall-60_1",
     ),
     Script(
@@ -94,7 +94,7 @@ FRAME_RATES = [
         _timed(["click", "type:Ada", "click", "click"], [0.1, 0.2, 0.05, 0.5]),
         env_fps=30.0,
         input_fps=7.0,
-        expect=frozenset({"K-a", "K-g", "U1", "X4"}),
+        expect=frozenset({"K-a", "K-g", "X3", "X4"}),
         name="frame_rates-wall-30_7",
     ),
     Script(
@@ -103,7 +103,7 @@ FRAME_RATES = [
         _timed(["click", "type:Ada", "click"], [0.25, 0.75, 0.5]),
         env_fps=2.0,
         input_fps=2.0,
-        expect=frozenset({"K-a", "K-g", "U1"}),
+        expect=frozenset({"K-a", "K-g", "X3"}),
         name="frame_rates-wall-2_2",
     ),
 ]
@@ -117,14 +117,14 @@ RUNNER_LOOP = [
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, LATE_REPLY_S]),
-        expect=frozenset({"K-a", "K-g", "U1"}),
+        expect=frozenset({"K-a", "K-g", "X3"}),
         name="runner-late_reply",
     ),
     Script(
         "wall",
         SHORT_S,
         _timed(["click", "done", "click", "click"], [0.5, 0.5, 0.5, LATE_REPLY_S]),
-        expect=frozenset({"K-a", "K-g", "U1", "X1"}),
+        expect=frozenset({"K-a", "K-g", "X1", "X3"}),
         name="runner-done_reply",
     ),
     Script(
@@ -133,7 +133,7 @@ RUNNER_LOOP = [
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click"),),
         ends_after=3,
         end_reason="task_completed",
-        expect=frozenset({"U1", "X2"}),
+        expect=frozenset({"X2"}),
         name="runner-environment_done",
     ),
     Script(
@@ -141,21 +141,21 @@ RUNNER_LOOP = [
         SHORT_S,
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click"),),
         ends_at_s=2.25,
-        expect=frozenset({"U1", "X2"}),
+        expect=frozenset({"X2"}),
         name="runner-environment_done_during_reply",
     ),
     Script(
         "wall",
         SHORT_S,
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click", attempts=HANG),),
-        expect=frozenset({"K-a", "K-g", "U1"}),
+        expect=frozenset({"K-a", "K-g", "X3"}),
         name="runner-bounded_call_timeout",
     ),
     Script(
         "wall",
         SHORT_S,
         (Turn("click"), Turn("type:Ada", fault="guest connection reset"), Turn("click")),
-        expect=frozenset({"U1", "U2", "X2"}),
+        expect=frozenset({"U2", "X2"}),
         name="runner-environment_failure",
     ),
 ]
@@ -194,7 +194,7 @@ LONG = Script(
         Turn(word, attempts=(Attempt(latency),), rejected=LONG_REJECTED.get(k))
         for k, (word, latency) in enumerate(zip(LONG_WORDS, LONG_LATENCIES, strict=True))
     ),
-    expect=frozenset({"K-a", "K-g", "U1", "X1", "X4"}),
+    expect=frozenset({"K-a", "K-g", "X1", "X3"}),
     name="runner-long",
 )
 
@@ -206,7 +206,7 @@ MISSING = [
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, 0.75]),
-        expect=frozenset({"K-a", "U1"}),
+        expect=frozenset({"K-a", "X3"}),
         name="wall-result-at-the-deadline",
     ),
     # Decision 2 starts a 5 s wait at 2.5 s; the deadline cuts it at 3.75 s.
@@ -214,7 +214,7 @@ MISSING = [
         "wall",
         SHORT_S,
         _timed(["click", "type:Ada", "wait:5"], [0.5, 0.5, 0.5]),
-        expect=frozenset({"U1", "X1", "X2"}),
+        expect=frozenset({"X1", "X2"}),
         name="wall-wait-across-the-deadline",
     ),
     # Decision 3's request fails twice with HTTP 503 at once, as in test_runner_clock: the first
@@ -225,7 +225,7 @@ MISSING = [
         SHORT_S,
         _timed(FORM[:3], [0.5] * 3)
         + (Turn("click", attempts=(Attempt(0.0, 503), Attempt(0.0, 503), Attempt(0.5))),),
-        expect=frozenset({"K-a", "K-g", "U1"}),
+        expect=frozenset({"K-a", "K-g", "X3"}),
         name="wall-retry-across-the-deadline",
     ),
     # A 0.5 s hold pressed at 0.25 s is released at 0.75 s, between the frames at 0 and 1 s.
@@ -233,7 +233,7 @@ MISSING = [
         "wall",
         2.5,
         _timed(["hold:shift:0.5", "click", "click"], [0.25, 0.25, 0.25]),
-        expect=frozenset({"U1", "X2"}),
+        expect=frozenset({"X2"}),
         name="wall-hold-between-frames",
     ),
     # A 0.5 s hold at tick 0 on a 1 fps token clock ends at tick 0.5, between frames 0 and 1.
@@ -250,7 +250,7 @@ MISSING = [
         6.0,
         _timed(["click"] * 5, [0.5] * 5),
         frozen_from=1,
-        expect=frozenset({"K-h", "U1"}),
+        expect=frozenset({"K-h"}),
         name="wall-frozen-stream",
     ),
     Script(
@@ -276,7 +276,7 @@ PER_RULE = [
         _timed(FORM, [0.5] * 4),
         env_fps=4.0,
         ends_at_s=2.25,
-        expect=frozenset({"K-b", "K-g", "U1"}),
+        expect=frozenset({"K-b", "K-g", "X3"}),
         name="wall-ends-during-a-reply",
     ),
     # K-b: the check at 0.75 s finds the end while decision 0 paces to the frame at 1 s.
@@ -286,7 +286,7 @@ PER_RULE = [
         _timed(FORM, [0.25] * 4),
         env_fps=4.0,
         ends_at_s=0.6,
-        expect=frozenset({"K-b", "K-g", "U1", "X2"}),
+        expect=frozenset({"K-b", "K-g", "X2"}),
         name="wall-ends-while-pacing",
     ),
     # K-c: the check at 2 s finds the end in the middle of a 2.5 s wait started at 0.25 s.
@@ -295,7 +295,7 @@ PER_RULE = [
         SHORT_S,
         _timed(["wait:2.5", "click", "click"], [0.25] * 3),
         ends_at_s=1.5,
-        expect=frozenset({"K-b", "K-c", "K-g", "U1", "X1", "X2"}),
+        expect=frozenset({"K-b", "K-c", "K-g", "X1", "X2"}),
         name="wall-wait-cut-by-the-end",
     ),
     # K-rel: the hold takes effect 0.125 s after the Execute, once the guards and focus ran.
@@ -304,7 +304,7 @@ PER_RULE = [
         2.5,
         _timed(["hold:shift:0.5", "click", "click"], [0.25] * 3),
         execute_s=0.125,
-        expect=frozenset({"K-rel", "U1", "X2"}),
+        expect=frozenset({"K-rel", "X2"}),
         name="wall-hold-pressed-after-the-guards",
     ),
     # K-i: decision 1 runs out of the think budget and skips its action; the check at 1.75 s
@@ -316,7 +316,7 @@ PER_RULE = [
         env_fps=4.0,
         think_budget_s=0.75,
         ends_at_s=1.75,
-        expect=frozenset({"K-g", "K-i", "U1", "X2"}),
+        expect=frozenset({"K-g", "K-i", "X2"}),
         name="wall-think-budget-and-the-end",
     ),
     # K-l: the per-move cap gives up on a 0.5 s reply after 0.4 s.
@@ -523,7 +523,7 @@ X12 = [
         _timed(FORM, [0.5] * 4),
         env_fps=3.0,
         failing_reads_s=((1.4, 1.6),),
-        expect=frozenset({"U1", "X2", "X12"}),
+        expect=frozenset({"X2", "X12"}),
         name="wall-two-failed-reads-are-tolerated",
     ),
     # At 8 fps the periodic reads at 1.25 and 1.375 s fail, then the read before decision 1
@@ -535,7 +535,7 @@ X12 = [
         _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
         env_fps=8.0,
         failing_reads_s=((1.2, 1.6),),
-        expect=frozenset({"K-n", "U1", "U2", "X2", "X4"}),
+        expect=frozenset({"K-n", "U2", "X2"}),
         name="wall-third-failed-read-is-todays-first",
     ),
     # The periodic reads at 1.125, 1.25 and 1.375 s fail while decision 1 waits for its reply:
@@ -546,7 +546,7 @@ X12 = [
         _timed(FORM, [0.5] * 4),
         env_fps=8.0,
         failing_reads_s=((1.1, 1.45),),
-        expect=frozenset({"K-g", "U1", "X12"}),
+        expect=frozenset({"K-g", "X12", "X3"}),
         name="wall-third-failed-read-during-a-reply",
     ),
     # Two failed periodic reads, a successful one at 1.375 s, then the two around decision 1's
@@ -557,7 +557,7 @@ X12 = [
         _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
         env_fps=8.0,
         failing_reads_s=((1.1, 1.3), (1.4, 1.48)),
-        expect=frozenset({"U1", "X2", "X4", "X12"}),
+        expect=frozenset({"X2", "X12"}),
         name="wall-a-successful-read-resets-the-count",
     ),
 ]
@@ -573,7 +573,7 @@ EARLY_END = [
         ends_after=3,
         end_reason="task_success",
         snapshot_s=1.5,
-        expect=frozenset({"U1", "X2"}),
+        expect=frozenset({"X2"}),
         name="wall-early-end-snapshot-past-the-deadline",
     ),
 ]

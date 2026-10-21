@@ -1,10 +1,10 @@
-"""The loops a replayed script can run under, all called the way the production shell will be:
+"""The loops a replayed script runs under, both called the way main() calls them:
 
     driver(agent, env, config, *, clocks, log, trace) -> timeline
 
-with ``config`` the episode's TurnConfig, as main() would build it, and the timeline in
-run_stream's shape (k, t_k, d_ticks, tau_k, action). ``legacy`` is today's loop; the shell's
-run_episode (wave2-plan.md, P1 对外接口) takes this signature as it is.
+with ``config`` the episode's TurnConfig and the timeline in run_stream's shape (k, t_k, d_ticks,
+tau_k, action). ``legacy`` is today's loop and ``shell`` the kernel's (wave2-plan.md, P1 对外接口);
+the environment the script's world is built on is the same for both.
 """
 
 from __future__ import annotations
@@ -12,10 +12,11 @@ from __future__ import annotations
 from realtime_framework.clock import Clocks
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.runner import run_stream
+from realtime_framework.evaluation.shell import run_episode
 
 
 def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
-    """run_stream with the arguments main() passes it (evaluation/runner.py:1421-1434)."""
+    """run_stream with the arguments main() passes it (evaluation/runner.py main)."""
     return run_stream(
         agent,
         env,
@@ -30,3 +31,9 @@ def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> lis
         trace=trace,
         clock=clocks.operational,
     )
+
+
+def shell(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
+    """run_episode (evaluation/shell.py). Until P2 the agent's kernel methods are the defaults
+    that run the legacy turn (entity/harness.py StreamingAgent.generate)."""
+    return run_episode(agent, env, config, clocks=clocks, log=log, trace=trace)
