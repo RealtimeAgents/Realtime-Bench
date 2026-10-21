@@ -20,6 +20,20 @@ BUDGET = DecisionBudget(
     clock_mode="token",
 )
 OBSERVATION = Observation(screenshot=b"", timestamp=2.0, tick_number=2)
+OUTCOME = Outcome(
+    decision=3,
+    status="rejected",
+    detail="lands outside the page",
+    terminal_after_action=False,
+    action_clock_position=2.0,
+    next_observation_tick=3,
+    dropped_intermediate_frames=0,
+    post_action_rendered=False,
+    frame_age_s=0.0,
+    token_delay_frames=0.0,
+    action_output_tokens=0,
+    post_horizon_output_tokens=0,
+)
 
 
 class LegacyAgent(StreamingAgent):
@@ -73,19 +87,26 @@ def test_accept_and_discard_leave_the_agent_alone_and_commit_reports_the_outcome
     agent.accept(7)
     agent.discard(8)
     assert agent.calls == []
-    outcome = Outcome(
-        decision=3,
-        status="rejected",
-        detail="lands outside the page",
-        terminal_after_action=False,
-        action_clock_position=2.0,
-        next_observation_tick=3,
-        dropped_intermediate_frames=0,
-        post_action_rendered=False,
-        frame_age_s=0.0,
-        token_delay_frames=0.0,
-        action_output_tokens=0,
-        post_horizon_output_tokens=0,
-    )
-    agent.commit(outcome)
+    agent.commit(OUTCOME)
     assert agent.calls == [("commit_action", "rejected", "lands outside the page")]
+
+
+class FrameAgent(StreamingAgent):
+    """A frame-driven adapter with only the methods the legacy loop requires: it reports no
+    outcome and has nothing to interrupt (runner.py ``_commit`` and ``_bounded_call`` skip a
+    missing commit_action and abort)."""
+
+    def initialize(self, task_instruction, initial_observation):
+        pass
+
+    def discard_pending_observations(self):
+        pass
+
+
+def test_the_kernel_agent_methods_run_on_an_agent_with_only_the_required_ones():
+    """StreamingAgent is a KernelAgent by itself: commit and abort, with a generation number or
+    without, do nothing on an adapter that reports and interrupts nothing."""
+    agent = FrameAgent()
+    agent.commit(OUTCOME)
+    agent.abort(7)
+    agent.abort()

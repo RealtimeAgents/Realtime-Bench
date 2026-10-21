@@ -216,11 +216,6 @@ class VisionAgentBase(StreamingAgent):
         entry["_token_accounting"] = result.get("token_accounting")
         self._log_entry(entry)
 
-    def abort(self, generation: int | None = None):
-        """Transport-specific subclasses invalidate their active generation. ``generation`` is
-        the event kernel's number of the generation to abort, always the active one: the
-        turn-based kernel aborts only the generation in flight."""
-
     def close(self):
         if self._trajectory_file:
             self._trajectory_file.close()
