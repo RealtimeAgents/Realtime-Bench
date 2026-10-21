@@ -10,10 +10,11 @@ the wall key-release timer) is posted when the simulated time reaches it.
 
 The world plays GuestEnvironment's part only as far as the kernel sees it: a tap holds the key
 1/60 s per repeat, advancing the token tick in steps of at most one tick with an end check after
-each (sandbox/actions.py:538-548, 240-280), and a tick within 1e-9 of an integer snaps to it
-(sandbox/actions.py:275-277). Unlike the environment, a tap's steps are neither cut where a lease
-ends nor stopped at the horizon (sandbox/actions.py:243-254), and its end checks see ``ends_at``
-only: ``ends_from_check`` stands for a web task's own timers, and only games tap on the task clock.
+each and never past the horizon (sandbox/actions.py:538-548, 240-280), and a tick within 1e-9 of
+an integer snaps to it (sandbox/actions.py:275-277). Unlike the environment, a tap's steps are not
+cut where a lease ends (sandbox/actions.py:248-254), and its end checks see ``ends_at`` only:
+``ends_from_check`` stands for a web task's own timers, and only games tap on the task clock. The
+render barrier commits a frame unless ``renderer`` is False, as for a task without a renderer.
 """
 
 from __future__ import annotations
@@ -99,6 +100,7 @@ class World:
     advance_s: float = 0.0
     commit_s: float = 0.0
     snapshot_s: float = 0.0
+    renderer: bool = True  # whether the task commits a frame at the token render barrier
     frozen_from: int | None = None  # from this capture on every frame repeats the same identity
     capture_errors: dict[int, str] = field(default_factory=dict)  # capture (1-based) -> fault
     rejections: dict[int, str] = field(default_factory=dict)  # decision -> the guest's refusal
@@ -282,7 +284,7 @@ class Simulation:
                 kernel.post(KeysReleased(keys, self._release(keys)))
             case RenderFrame():
                 self.renders.append(self.semantic())
-                kernel.post(FrameRendered(True))
+                kernel.post(FrameRendered(world.renderer))
             case Commit(outcome=outcome):
                 self._spend(world.commit_s)
                 self.outcomes.append(outcome)
@@ -368,12 +370,12 @@ class Simulation:
         )
 
     def _tap(self) -> list[str | None]:
-        """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, one tick at most per step,
-        and the end is checked after each step, within the action's time; a check that sees the
-        end stops the tap (sandbox/actions.py:137, 245-280, 548). A failed check does not: its
-        error goes to the kernel in ActionExecuted.end_checks."""
+        """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, at most to the horizon,
+        one tick at most per step, and the end is checked after each step, within the action's
+        time; a check that sees the end stops the tap (sandbox/actions.py:137, 243-280, 548). A
+        failed check does not: its error goes to the kernel in ActionExecuted.end_checks."""
         world, reads = self.world, []
-        target = self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps)
+        target = min(self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps), self.config.max_ticks)
         while self.tick + 1e-9 < target:
             self.tick = _snap(self.tick + min(1.0, target - self.tick))
             self.tap_checks.append(self.tick)
