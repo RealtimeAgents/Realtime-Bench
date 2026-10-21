@@ -166,6 +166,15 @@ def _attempts(run_dir) -> list[tuple]:
     ]
 
 
+def _cancelled(run_dir, kind: str) -> list[tuple]:
+    """The error and the latency recorded for each attempt of ``kind`` a cancellation stopped."""
+    return [
+        (a.get("error"), a.get("latency_s"))
+        for a in _trace(run_dir, "ModelAttemptFinished")
+        if a["kind"] == kind and a["outcome"] == "cancelled"
+    ]
+
+
 def _connects(run_dir) -> list[tuple]:
     return [
         (a["scope"]["phase"], a["scope"]["connect_attempt"], a["outcome"])
@@ -330,6 +339,9 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
     ]
     assert sent == [(0, GENERATION, 1)]
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
+    assert _cancelled(tmp_path, "generation") == [
+        ("RetryCancelled('generation abandoned before attempt 2')", None)
+    ]
     assert _inspection_outcomes(tmp_path) == ["superseded_by_timeout"]
 
 
@@ -721,6 +733,9 @@ def test_session_abort_during_connect_backoff(tmp_path, monkeypatch):
         ("decision", 1, "retry"),
         ("decision", 2, "cancelled"),
     ]
+    assert _cancelled(tmp_path, "session_connect") == [
+        ("RetryCancelled('generation abandoned before attempt 2')", None)
+    ]
 
 
 def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkeypatch):
@@ -800,6 +815,10 @@ def test_decision_abort_during_question_backoff(tmp_path, monkeypatch):
     assert agent._runtime.turns == () and agent.action_history == []
     assert _questions(tmp_path) == [(0, 0, 1, "retry"), (0, 0, 2, "cancelled")]
     assert _attempts(tmp_path) == [(1, "cancelled", None)]  # the turn the question was in
+    # The question never went out again, so its cancelled attempt took no time.
+    assert _cancelled(tmp_path, "choice_question") == [
+        ("RetryCancelled('generation abandoned before attempt 2')", None)
+    ]
 
 
 def test_decision_abort_between_questions(tmp_path, monkeypatch):

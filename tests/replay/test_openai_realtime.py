@@ -503,11 +503,12 @@ class _ConnectAttempts:
 )
 def test_network_fault_retries_connect(fault, monkeypatch):
     """connect()'s retry (providers/openai_realtime.py _connect) on failures below HTTP: a
-    connection closed or reset before the upgrade response (websockets InvalidMessage, from
-    EOFError), TLS answered in plain HTTP (ssl.SSLError), and a failed name lookup
-    (socket.gaierror; hermetic.py refuses every lookup but loopback). classify_transport_error
-    takes each as TRANSIENT, so connect() makes the shared policy's four attempts
-    (entity/model.py TRANSPORT_RETRY) and then fails with its retries spent."""
+    connection closed as it is accepted (mostly websockets' ConnectionClosedError, sometimes
+    InvalidMessage from EOFError, as the close races the handshake), one reset after the request
+    (InvalidMessage, from EOFError), TLS answered in plain HTTP (ssl.SSLError), and a failed
+    name lookup (socket.gaierror; hermetic.py refuses every lookup but loopback).
+    classify_transport_error takes each as TRANSIENT, so connect() makes the shared policy's four
+    attempts (entity/model.py TRANSPORT_RETRY) and then fails with its retries spent."""
     waits = []
     monkeypatch.setattr(
         model_module, "_backoff", lambda clock, cancel, seconds: waits.append(seconds)
