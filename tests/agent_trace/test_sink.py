@@ -51,7 +51,10 @@ def test_records_are_stamped_on_the_operational_clock(tmp_path):
     started, request, closed = _events(tmp_path)
     assert (started["wall_time_ns"], started["monotonic_ns"]) == (1_000 * S, 0)
     for record in (request, closed):
-        assert (record["wall_time_ns"], record["monotonic_ns"]) == (1_002_500_000_000, 2_500_000_000)
+        assert (record["wall_time_ns"], record["monotonic_ns"]) == (
+            1_002_500_000_000,
+            2_500_000_000,
+        )
     payload = request["payload"]
     assert payload["captured_wall_time_ns"] == 1_002_500_000_000
     assert payload["captured_monotonic_ns"] == 2_500_000_000

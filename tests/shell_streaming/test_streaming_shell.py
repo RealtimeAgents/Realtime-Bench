@@ -38,7 +38,9 @@ def _episode(duration_s, replies, *, tmp_path=None, env_setup=None):
     if env_setup is not None:
         env_setup(env, clock)
     trace = (
-        None if tmp_path is None else EpisodeTrace(tmp_path / "trace.jsonl", run_id="s", clock=clock)
+        None
+        if tmp_path is None
+        else EpisodeTrace(tmp_path / "trace.jsonl", run_id="s", clock=clock)
     )
     logs: list[str] = []
     with clock.participant():
