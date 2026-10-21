@@ -18,9 +18,10 @@ Write down the numbers each check asks for ([what to report](#what-to-report)).
 
 ## Before you start
 
-- **Streaming must be switched on.** The checks apply once both live drivers declare streaming
-  and the runner runs the native-streaming agent. Before that every streaming run is refused
-  before it starts, with `The openai_realtime API does not support streaming` (or `gemini_live`).
+- Both live drivers take `interaction_mode=streaming`, and the runner then runs the
+  native-streaming agent (`realtime_framework/harnesses/streaming/agent.py`) on the streaming
+  shell. A streaming run on the token clock, or of any other API, is refused before it starts.
+  OpenAI Realtime streams at most 1 fps until check 8 finds its rate.
 - A Linux host with Apptainer (fakeroot) and uv, as for any run ([README](../README.md)). Run
   `uv sync`, then `uv run rtbench setup` once to build the images.
 - Put `OPENAI_API_KEY` and `GEMINI_API_KEY` in `.env` at the repository root. A Harbor trial reads
@@ -115,6 +116,9 @@ In the episode's directory:
     `episode_blobs.pack`.
   - `event: "SessionDelivery"`: what became of what the session wrote: `state` (`sent`,
     `confirmed`, `refused`, `unknown`) and `contents`, whose `block` is `f<n>.frame` for frame `n`.
+  - `event: "FrameSent"`: the number `n` (`frame`) a frame went into the session under, by its
+    `observation_id`. It ties a frame's `FrameCaptured` and `FramePushed` to its block's
+    `SessionDelivery`, so each frame's capture, push and confirmation line up.
   - `event: "SessionWait"`: a wait the driver took, with `wait` and `seconds`.
 
 Counting records:
@@ -315,9 +319,12 @@ so check it indirectly, on one streaming and one turn-based run of a web task:
 
 ### 8. OpenAI Realtime's frame-rate cap
 
-review-stream-identity, low 8. The driver declares no `max_video_fps`, so no rate is refused.
-Run `gpt-realtime-2` at `--agent-kwarg fps=1 --agent-kwarg model_input_fps=1`, then 2, then
-higher, on a game task. At each rate:
+review-stream-identity, low 8. OpenAI Realtime declares `max_streaming_fps=1.0` in
+`realtime_framework/providers/openai_realtime.py`, a placeholder that refuses a faster streaming
+run (`openai_realtime streams at most 1 fps; requested 2`). For this check raise it in a local
+copy of the code (the harness is then `+dev`, which a smoke test does not mind). Run
+`gpt-realtime-2` at `--agent-kwarg fps=1 --agent-kwarg model_input_fps=1`, then 2, then higher, on
+a game task. At each rate:
 
 - `streaming.frames.send_to_confirm_s` (p95) against the frame period `1/fps`;
 - `streaming.frames.push_failed` and `dropped_by_reason` (`late`, `superseded`, `capture_busy`);
@@ -325,7 +332,8 @@ higher, on a game task. At each rate:
 - `run_summary.json` `avg_capture_latency_s`: a slow capture limits the rate as well.
 
 Pass at a rate: confirmations stay under the frame period, no push fails, no error, and drops do
-not grow with the rate. Report the highest rate that passes, for the driver to declare.
+not grow with the rate. Report the highest rate that passes, for the driver to declare as its
+`max_streaming_fps`.
 
 ### 9. OpenAI Realtime's wire, as the session core assumes it
 
