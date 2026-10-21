@@ -180,6 +180,22 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
     assert episode.agent._clock_mode == "token"
 
 
+def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
+    """The runner times an action's resolution when it lands, before the check right before
+    execution (runner.py _apply). With end checks of 125 ms the frame age and the resolution
+    time still agree, for an executed action and for a wait the kernel lets pass."""
+    episode = run("wall", 4.0, [Reply(0.5), Reply(0.5, Action.wait(1.0))], World(check_s=0.125))
+    env = episode.env
+    assert episode.statuses() == ["applied", "wait"]
+    resolved = [p["action_resolved_unix_s"] for p in episode.trace.payloads("ActionResolved")]
+    assert resolved == [record["action_resolved_unix_s"] for record in env.lifecycle]
+    for record in env.lifecycle:
+        age = record["action_resolved_unix_s"] - record["observation_timestamp"]
+        assert round(age, 6) == record["frame_age_at_action_s"] == 0.5
+    (executed,) = [time for call, time, _ in env.calls if call == "execute"]
+    assert resolved[0] - env.t0 == executed - 0.125  # before the check right before execution
+
+
 def test_an_action_the_guest_refuses_is_reported_with_its_reason():
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], World(rejections={0: "bad key"}))
     assert episode.statuses() == ["rejected", "applied"]
