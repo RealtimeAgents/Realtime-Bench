@@ -164,12 +164,14 @@ class SessionLifecycle:
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
 
-    def _record_wait(self, wait: str, seconds: float) -> None:
+    def _record_wait(self, wait: str, seconds: float, until: float | None = None) -> None:
+        """``until`` is the end of a wait bounded by a deadline, on the operational clock; a
+        wait without one ends ``seconds`` from now."""
+        if until is None:
+            until_ns = self.clock.monotonic_ns() + round(seconds * 1e9)
+        else:
+            until_ns = round(until * 1e9)
         self._trace.capture(
             TraceEvent.SESSION_WAIT,
-            {
-                "wait": wait,
-                "seconds": seconds,
-                "until_monotonic_ns": self.clock.monotonic_ns() + round(seconds * 1e9),
-            },
+            {"wait": wait, "seconds": seconds, "until_monotonic_ns": until_ns},
         )

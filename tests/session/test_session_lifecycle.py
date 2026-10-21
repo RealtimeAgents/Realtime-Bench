@@ -632,3 +632,37 @@ def test_close_records_its_wait_for_an_abort():
         rig.run(rig.encoder.close())
         rig.run(rig.encoder.close())  # no abort left to wait for
     assert trace.waits == [("abort_cleanup", 10.0, 10 * S)]
+
+
+class _TickingClock(RecordingClock):
+    """Waits are logged, not taken; each read of the monotonic time finds it 1 ms later."""
+
+    def __init__(self, log: list):
+        super().__init__(log)
+        self._reads = itertools.count()
+
+    def monotonic(self) -> float:
+        return 100.0 + next(self._reads) / 1000
+
+    def monotonic_ns(self) -> int:
+        return round(self.monotonic() * S)
+
+
+def test_gemini_live_bounds_each_read_by_the_one_go_away_deadline():
+    """The reads after a goAway wait until the same deadline, whenever each starts."""
+    transcript = {"serverContent": {"outputTranscription": {"text": "partial"}}}
+    rig = Rig("gemini-3.8-live", [[{"goAway": {"timeLeft": "30s"}}, transcript, TURN_COMPLETE]])
+    trace = _Trace()
+    rig.driver.clock = _TickingClock(rig.log)
+    rig.driver.bind_trace(trace)
+
+    async def run():
+        await rig.connect()
+        await drain(rig.driver.events(await rig.start("turn-0")))
+
+    asyncio.run(run())
+    deadline = round(rig.driver._core.go_away_deadline * S)
+    assert [(wait, until) for wait, _, until in trace.waits] == [
+        ("go_away_deadline", deadline),
+        ("go_away_deadline", deadline),
+    ]
