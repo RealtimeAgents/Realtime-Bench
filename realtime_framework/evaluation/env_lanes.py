@@ -42,7 +42,7 @@ an operation that holds it waits.
 The streaming policy reaches neither that rule nor the snapshot's place after an action still
 waiting (``freeze_turn`` below): it sends no capture while an end check or the snapshot waits, and
 no action waits for the gate (kernel/streaming.py ``_proceed``). They are the gate's rules for
-whoever sends those all the same, and tests/shell_streaming/test_env_lanes.py holds them.
+whoever sends those all the same, and tests/shell_streaming/test_env_gate.py holds them.
 
 Like the turn-based shell, the gate compares ``_invalid_run`` before and after each operation and
 posts what the environment latched itself before the operation's answer; it posts each record
