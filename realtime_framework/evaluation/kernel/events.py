@@ -138,7 +138,8 @@ class ActionExecuted:
     # The state reads of a tap's end checks, in order, each (ended, reason, error): an answer and
     # the task's reason when it names one, or (False, None, the error) for one that failed. They
     # count toward the failed reads in a row like the kernel's own checks. One that saw the end
-    # stopped the tap's advance; the check right after execution asks again.
+    # stopped the tap's advance, and the episode ends at the tick the action finished, by the
+    # task's reason.
     end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
 
     @property
