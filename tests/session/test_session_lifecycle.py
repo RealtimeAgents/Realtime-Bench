@@ -716,6 +716,14 @@ def test_close_records_its_wait_for_an_abort():
     assert trace.waits == [("abort_cleanup", 10.0, 10 * S)]
 
 
+def test_close_records_no_wait_for_an_abort_already_done():
+    with _rig() as rig:
+        trace = rig.encoder._trace = _Trace()
+        rig.run(rig.encoder.abort(GENERATION))
+        rig.run(rig.encoder.close())
+    assert trace.waits == []
+
+
 class _TickingClock(RecordingClock):
     """Waits are logged, not taken; each read of the monotonic time finds it 1 ms later."""
 
@@ -761,3 +769,39 @@ def test_gemini_live_records_no_wait_for_a_go_away_deadline_already_past():
 
     asyncio.run(run())
     assert trace.waits == [("connection_close", 1.0, 101 * S)]
+
+
+class _AdvancingClock(RecordingClock):
+    """Waits are logged, not taken, and move the monotonic time on by what they wait."""
+
+    def __init__(self, log: list):
+        super().__init__(log)
+        self.now = 100.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def monotonic_ns(self) -> int:
+        return round(self.now * S)
+
+    def wait(self, waitable, timeout):
+        self.now += timeout
+        return super().wait(waitable, timeout)
+
+
+def test_gemini_live_neither_records_nor_takes_a_wait_of_no_time():
+    """At 1 fps the second video is due once the first one's 1 s ingestion wait is over: its
+    interval wait would last no time, so there is none."""
+    rig = Rig("replay-gemini-live", [[]])
+    trace = _Trace()
+    rig.driver.clock = _AdvancingClock(rig.log)
+    rig.driver.bind_trace(trace)
+
+    async def run():
+        await rig.connect()
+        for k in range(2):
+            await rig.driver.send_observation(None, rig.view([frame_turn(j) for j in range(k + 1)]))
+
+    asyncio.run(run())
+    assert trace.waits == [("video_ingestion", 1.0, 101 * S), ("video_ingestion", 1.0, 102 * S)]
+    assert rig.log == [("connect", None), ("sleep", 1.0), ("sleep", 1.0)]
