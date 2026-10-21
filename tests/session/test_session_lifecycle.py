@@ -45,6 +45,7 @@ from tests.fake_clock import FakeClock
 from .test_gemini_live_receive import (
     HANG,
     TURN_COMPLETE,
+    FakeLive,
     RecordingClock,
     Rig,
     drain,
@@ -533,20 +534,24 @@ S = 1_000_000_000  # nanoseconds
 
 
 class _Trace:
-    """An agent trace that keeps what it is given, and the scope: (event, payload, scope)."""
+    """An agent trace that keeps what it is given, and the scope: (event, payload, scope). Each
+    SessionWait also goes into ``log`` as ("record", wait), beside what the test logs there."""
 
-    def __init__(self):
+    def __init__(self, log: list | None = None):
         self.events: list[tuple] = []
+        self._log = log
 
     def capture(self, event, payload, *, body=None, classify=None):
         self.events.append((event, payload, current_trace_scope()))
+        if event == "SessionWait" and self._log is not None:
+            self._log.append(("record", payload["wait"]))
 
     @property
     def waits(self) -> list[tuple]:
         return [
             (payload["wait"], payload["seconds"], payload["until_monotonic_ns"])
             for event, payload, _ in self.events
-            if event == TraceEvent.SESSION_WAIT
+            if event == "SessionWait"  # the name the episode trace carries
         ]
 
 
@@ -560,11 +565,43 @@ class _FrozenClock(RecordingClock):
         return 100 * S
 
 
+def _log_closes(live: FakeLive) -> None:
+    """Each connection ``live`` opens also logs its close, as ("exit",)."""
+    connect, log = live.connect, live._log
+
+    def logged_connect(*, model, config):
+        manager = connect(model=model, config=config)
+
+        class Logged:
+            async def __aenter__(self):
+                return await manager.__aenter__()
+
+            async def __aexit__(self, *exc):
+                log.append(("exit",))
+                return await manager.__aexit__(*exc)
+
+        return Logged()
+
+    live.connect = logged_connect
+
+
 def _traced(rig: Rig) -> _Trace:
-    trace = _Trace()
+    """Records go into the rig's log too, beside its connects, closes and waits."""
+    trace = _Trace(rig.log)
     rig.driver.clock = _FrozenClock(rig.log)
     rig.driver.bind_trace(trace)
+    _log_closes(rig.live)
     return trace
+
+
+def test_a_wait_is_recorded_with_the_time_it_ends_before_it_starts():
+    """On a clock that moves, a record written after the wait would end 2 s later."""
+    with _rig() as rig:
+        trace = rig.encoder._trace = _Trace()
+        rig.clock.sleep(5.0)
+        rig.run(rig.encoder._wait("video_ingestion", 2.0))
+        assert rig.clock.monotonic() == 7.0
+    assert trace.waits == [("video_ingestion", 2.0, 7 * S)]
 
 
 def test_gemini_live_records_the_go_away_deadline_closes_and_the_release_grace():
@@ -586,6 +623,18 @@ def test_gemini_live_records_the_go_away_deadline_closes_and_the_release_grace()
         ("connection_close", 1.0, 101 * S),
         ("session_release", 2.0, 102 * S),
         ("connection_close", 1.0, 101 * S),
+    ]
+    # Each record comes before what it waits for: the close, the release grace.
+    assert rig.log == [
+        ("connect", None),
+        ("record", "go_away_deadline"),
+        ("record", "connection_close"),
+        ("exit",),
+        ("record", "session_release"),
+        ("sleep", 2.0),
+        ("connect", "handle-0"),
+        ("record", "connection_close"),
+        ("exit",),
     ]
 
 
@@ -610,8 +659,9 @@ def test_openai_realtime_records_the_connect_backoff():
     """The record comes after the failed attempt's ModelAttemptFinished and before RequestRetry
     waits the delay."""
     driver, _ = _openai(refuse=1)
-    trace = _Trace()
-    driver.clock = _FrozenClock(log := [])
+    log = []
+    trace = _Trace(log)
+    driver.clock = _FrozenClock(log)
     driver.bind_trace(trace)
     asyncio.run(driver.connect(ConnectRequest(seed=SEED)))
     delay = TRANSPORT_RETRY.delay_s(1, "empty:connect", TransportFailure(TRANSIENT))
@@ -621,7 +671,7 @@ def test_openai_realtime_records_the_connect_backoff():
         (TraceEvent.MODEL_ATTEMPT_FINISHED, "ok", {"connect_attempt": 2}),
     ]
     assert trace.waits == [("connect_backoff", delay, 100 * S + round(delay * S))]
-    assert log == [("sleep", delay)]
+    assert log == [("record", "connect_backoff"), ("sleep", delay)]
 
 
 def test_close_records_its_wait_for_an_abort():

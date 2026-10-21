@@ -340,7 +340,7 @@ def run_episode(
             records, results = run_live_steps(episode, steps, stub)
             last = len(stub.events)
         finally:
-            episode.agent.close()
+            episode.finish()
     header = {
         "record": "header",
         "api": "gemini_live",
@@ -356,6 +356,18 @@ def run_episode(
     closing = {"record": "close", "frames": step_frames(stub, last)}
     records = [header, {"record": "initialize", "frames": initialize}, *records, closing]
     return records, results, stub
+
+
+def session_waits(run_dir: Path) -> list[str]:
+    """What the driver waited for, in order: the SessionWait records of the episode trace,
+    written before each wait (providers/session_lifecycle.py _record_wait)."""
+    lines = (run_dir / "episode_trace.jsonl").read_text(encoding="utf-8").splitlines()
+    return [e["payload"]["wait"] for e in map(json.loads, lines) if e["event"] == "SessionWait"]
+
+
+# Each rebuild closes the connection and waits out the session release before it reconnects;
+# agent.close() closes the last connection.
+REBUILD_WAITS = ["connection_close", "session_release"] * len(REBUILD_STEPS) + ["connection_close"]
 
 
 @contextlib.contextmanager
@@ -481,6 +493,7 @@ def test_long_scenario(preset, live_env, tmp_path):
         check_rebuilds(steps, results)
         check_rejection_feedback(steps)
         check_token_clock(steps, config)
+    assert session_waits(tmp_path / "run") == REBUILD_WAITS
 
 
 DEFAULT_SCENARIO = [
@@ -522,6 +535,19 @@ def test_driver_default_short(live_env, tmp_path):
         for parts in calls:
             assert parts[0]["thoughtSignature"] == "skip_thought_signature_validator"
             assert all("thoughtSignature" not in part for part in parts[1:])
+    # realtime_input waits after each video; a later video waits out the frame interval first,
+    # unless a new connection came between. The two reads after the goAway are bounded by it.
+    assert session_waits(tmp_path / "run") == [
+        "video_ingestion",
+        "video_interval",
+        "video_ingestion",
+        "go_away_deadline",
+        "go_away_deadline",
+        "connection_close",
+        "session_release",
+        "video_ingestion",
+        "connection_close",
+    ]
 
 
 class _SleepRecordingClock(SystemClock):
@@ -569,6 +595,14 @@ def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
         sent = [next(iter(message)) for message in client_messages(record, "realtime_input")]
         assert sent == list(REALTIME_INPUT_ORDER)
     assert clock.sleeps == [1.0, 3.0, 1.0, 3.0, 1.0]
+    assert session_waits(tmp_path / "run") == [
+        "video_ingestion",
+        "video_interval",
+        "video_ingestion",
+        "video_interval",
+        "video_ingestion",
+        "connection_close",
+    ]
 
 
 def test_resume_failure_short(live_env, tmp_path):
@@ -601,3 +635,13 @@ def test_resume_failure_short(live_env, tmp_path):
         assert (sync["disposition"], sync["detail"]) == ("rebuilt", "go_away")
         assert sync["session_connect_mode"] == "canonical_history_replay"
         assert "Session resumption handle is invalid." in sync["resume_error"]
+    # The resume closes the old connection and waits the release; its refused setup is closed by
+    # google-genai, and the replay that follows waits the release again.
+    assert session_waits(tmp_path / "run") == [
+        "go_away_deadline",
+        "go_away_deadline",
+        "connection_close",
+        "session_release",
+        "session_release",
+        "connection_close",
+    ]
