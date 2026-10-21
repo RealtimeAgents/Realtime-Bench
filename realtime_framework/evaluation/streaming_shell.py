@@ -74,7 +74,12 @@ from realtime_framework.evaluation.kernel.streaming import (
     StreamingConfig,
     StreamingPolicy,
 )
-from realtime_framework.evaluation.shell import KernelAgent, ShellEnvironment, _invalid_record
+from realtime_framework.evaluation.shell import (
+    KernelAgent,
+    ShellEnvironment,
+    _escaped_termination,
+    _invalid_record,
+)
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.guest import action_timeout
@@ -127,6 +132,8 @@ class _StreamingShell:
         self._frames: dict[str | None, Observation] = {}
         self._frames_lock = threading.Lock()
         self._replies: dict[int, threading.Event] = {}  # generation -> set once its worker ended
+        self._frozen: threading.Event | None = None  # set once the snapshot FreezeSnapshot took
+        self._frozen_at: float | None = None  # the reading it was frozen at
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -138,17 +145,20 @@ class _StreamingShell:
         env.kernel_counts_reads = True
         env.on_invalid = self.lanes.gate.latched
         self.agent.bind_inbox(self.post)
-        self._now = self._read()
-        self._run_all(self.kernel.start(self._now))
-        while self._termination is None:
-            # Cleared before the step takes the inbox: a post the step misses sets it again.
-            self._wake.clear()
+        try:
             self._now = self._read()
-            commands = self.kernel.step(self._now)
-            if commands is None:
-                self._sleep()
-            else:
-                self._run_all(commands)
+            self._run_all(self.kernel.start(self._now))
+            while self._termination is None:
+                # Cleared before the step takes the inbox: a post the step misses sets it again.
+                self._wake.clear()
+                self._now = self._read()
+                commands = self.kernel.step(self._now)
+                if commands is None:
+                    self._sleep()
+                else:
+                    self._run_all(commands)
+        except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
+            self._wrap_up(traceback.format_exc())
         return self._termination
 
     def post(self, event) -> None:
@@ -217,6 +227,7 @@ class _StreamingShell:
             case Commit(outcome=outcome):
                 self._commit(outcome)
             case FreezeSnapshot():
+                self._frozen = self.clocks.operational.event()
                 self.clocks.operational.start_thread(self._freeze, name="snapshot")
             case ReleaseInputs():
                 try:
@@ -380,6 +391,8 @@ class _StreamingShell:
                 self._snapshot_read = True
         env._termination_snapshot_error = error
         at = self._read()  # when the read returned
+        self._frozen_at = at
+        self._frozen.set()
         self.post(SnapshotFrozen(at, at, error))
 
     def _read_snapshot(self, snapshotter):
@@ -404,6 +417,34 @@ class _StreamingShell:
         self.lanes.close()
         self._push_lane.close()
         self._termination = termination
+
+    def _wrap_up(self, failure: str) -> None:
+        """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell
+        does (evaluation/shell.py _Shell._wrap_up). The replies running are given up, the
+        snapshot taken unless FreezeSnapshot took it, the inputs released and the termination
+        written. A failure on the way is only logged."""
+        self._raised(failure)
+        try:
+            for generation in list(self._replies):
+                self._abort(generation)
+            if self._frozen is None:
+                self._frozen = self.clocks.operational.event()
+                self._freeze()
+            else:
+                self.clocks.operational.wait(self._frozen, None)
+            self._handle(ReleaseInputs())
+            latched = getattr(self.env, "_invalid_run", None)
+            first = self.kernel.invalid is None and latched is None
+            termination = _escaped_termination(
+                self.kernel, self._now, self._now, self._frozen_at, failure, latched
+            )
+            self._finish(termination)
+            if first:  # the run_exception is the first failure: recorded as the kernel's are
+                record = _invalid_record(termination.invalid)
+                self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
+                self._write(TraceEvent.RUN_INVALIDATED, record)
+        except Exception:  # noqa: BLE001 - the episode is over either way
+            self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
 
     # ---- the episode trace --------------------------------------------------------------------
 
