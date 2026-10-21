@@ -10,11 +10,11 @@ the wall key-release timer) is posted when the simulated time reaches it.
 
 The world plays GuestEnvironment's part only as far as the kernel sees it: a tap holds the key
 1/60 s per repeat, advancing the token tick in steps of at most one tick with an end check after
-each and never past the horizon (sandbox/actions.py:538-548, 240-280), and a tick within 1e-9 of
-an integer snaps to it (sandbox/actions.py:275-277). Unlike the environment, a tap's steps are not
-cut where a lease ends (sandbox/actions.py:248-254), and its end checks see ``ends_at`` only:
-``ends_from_check`` stands for a web task's own timers, and only games tap on the task clock. The
-render barrier commits a frame unless ``renderer`` is False, as for a task without a renderer.
+each and never past the horizon, and a tick within 1e-9 of an integer snaps to it
+(sandbox/actions.py GuestEnvironment._execute_clock_key, GuestEnvironment.wait_until_tick). Unlike
+the environment, a tap's steps are not cut where a lease ends, and its end checks see ``ends_at``
+only: ``ends_from_check`` stands for a web task's own timers, and only games tap on the task clock.
+The render barrier commits a frame unless ``renderer`` is False, as for a task without a renderer.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ from realtime_framework.evaluation.kernel.events import (
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
 
-TAP_HOLD_S = 1.0 / 60.0  # a token-clock key tap holds the key this long (sandbox/actions.py:28)
+TAP_HOLD_S = 1.0 / 60.0  # sandbox/actions.py TAP_HOLD_S: how long a token key tap holds its key
 
 
 @dataclass(frozen=True)
@@ -372,8 +372,9 @@ class Simulation:
     def _tap(self) -> list[str | None]:
         """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, at most to the horizon,
         one tick at most per step, and the end is checked after each step, within the action's
-        time; a check that sees the end stops the tap (sandbox/actions.py:137, 243-280, 548). A
-        failed check does not: its error goes to the kernel in ActionExecuted.end_checks."""
+        time; a check that sees the end stops the tap (sandbox/actions.py
+        GuestEnvironment._execute_clock_key, GuestEnvironment.wait_until_tick). A failed check
+        does not: its error goes to the kernel in ActionExecuted.end_checks."""
         world, reads = self.world, []
         target = min(self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps), self.config.max_ticks)
         while self.tick + 1e-9 < target:

@@ -230,7 +230,7 @@ def test_a_deadline_while_the_check_before_landing_runs_leaves_the_action_unappl
     assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.75]
     assert _landings(sim) == [(5, 5.75, 5, 0)]
     assert sim.executed == []
-    # Frame age runs to the moment landing begins, before its checks (runner.py:571).
+    # Frame age runs to the moment landing begins, before its checks (runner.py _apply).
     assert sim.outcomes == [_outcome(0, "not_applied_time_limit", 5.75, 6, 5.25)]
     (resolved,) = _data(sim, "ActionResolved")
     assert resolved["status"] == "not_applied_time_limit"
@@ -345,7 +345,7 @@ def test_the_answer_to_the_check_before_landing_goes_before_a_periodic_check_due
 
 def test_a_deadline_inside_the_next_frame_wait_stops_it_at_the_deadline():
     sim = _episode(_wall(5.5), World(replies=[Reply(5.25, CLICK)]))
-    # next = min(max(0 + 1, ceil(5.25)), T = 5.5) = 5.5 (runner.py:600-606); the deadline beats the
+    # next = min(max(0 + 1, ceil(5.25)), T = 5.5) = 5.5 (runner.py _apply); the deadline beats the
     # wake due with it, the move stops at tick 5 and every frame crossed but one was dropped.
     assert _timers(sim, "wake") == [5.5]
     assert _boundaries(sim) == [(5, 5.5, 5, 4)]
@@ -658,8 +658,8 @@ def test_each_hold_carries_the_end_of_its_own_lease_and_the_shell_keeps_the_late
     executes = [c for c in sim.commands if isinstance(c, Execute)]
     assert [(c.decision, c.release_at) for c in executes] == expected
     # The shell, as Execute asks of it, keeps a held key down until its later end
-    # (sandbox/actions.py:723-727); the simulated shell's timer lifts "a" at
-    # max(4.25, 5.25, 4.75) = 5.25, together with "b".
+    # (sandbox/actions.py GuestEnvironment._execute_wall_hold); the simulated shell's timer lifts
+    # "a" at max(4.25, 5.25, 4.75) = 5.25, together with "b".
     assert sim.key_events == [(5.25, "up", ("a",)), (5.25, "up", ("b",))]
     assert len(sim.entries("KeysReleased")) == 2
 

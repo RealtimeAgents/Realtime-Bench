@@ -82,7 +82,7 @@ def _pace(sim: Simulation, decision: int) -> dict:
 
 
 def _inference_to_action(decision, from_tick, requested, to_tick, tokens, per_frame=B) -> dict:
-    """The record of the move to the action time (runner.py:555-568)."""
+    """The record of the move to the action time (runner.py _apply)."""
     return {
         "decision": decision,
         "phase": "inference_to_action",
@@ -97,7 +97,7 @@ def _inference_to_action(decision, from_tick, requested, to_tick, tokens, per_fr
 
 
 def _to_boundary(decision, from_tick, next_tick, rendered, dropped) -> dict:
-    """The record of a completed move to the next frame (runner.py:626-639)."""
+    """The record of a completed move to the next frame (runner.py _apply)."""
     return {
         "decision": decision,
         "phase": "action_to_observation_boundary",
@@ -126,7 +126,7 @@ def _outcome(
     post_horizon: int = 0,
 ) -> Outcome:
     """An outcome as today's runner reports it. ``tau`` is the action clock position and ``delay``
-    the token delay in frames, which at env_fps 1 is also the frame age (runner.py:648-655)."""
+    the token delay in frames, which at env_fps 1 is also the frame age (runner.py _apply)."""
     return Outcome(
         decision=decision,
         status=status,
@@ -162,7 +162,7 @@ def _clock(sim: Simulation) -> list:
 def test_an_action_crossing_a_boundary_lands_at_its_token_time_and_drops_the_crossed_frame():
     # t_k = 10 after an idle decision; n = 300: tau = 10 + 300/256 = 11.171875, reached in steps of
     # 1.0 and 0.171875. boundary = ceil(11.171875) = 12, next = min(max(10 + 1, 12), 20) = 12,
-    # dropped = 12 - 10 - 1 = 1 (runner.py:600-625).
+    # dropped = 12 - 10 - 1 = 1 (runner.py _apply).
     sim = _run(_token(20), _idle(10), Reply(action=CLICK, output_tokens=300), _idle(8))
     assert _approach(sim, 1) == _inference_to_action(1, 10, 11.171875, 11.171875, 300)
     assert sim.executed == [(1, 11.171875, CLICK)]
@@ -176,7 +176,7 @@ def test_an_action_crossing_a_boundary_lands_at_its_token_time_and_drops_the_cro
 
 def test_an_action_landing_exactly_on_a_boundary_renders_before_the_next_frame():
     # n = 256: tau = 11 = boundary, next = max(11, 11) = 11. The pace move is empty and the action
-    # was applied, so the frame is rendered at 11 (runner.py:615-623); dropped = 11 - 10 - 1 = 0.
+    # was applied, so the frame is rendered at 11 (runner.py _apply); dropped = 11 - 10 - 1 = 0.
     sim = _run(_token(20), _idle(10), Reply(action=CLICK, output_tokens=256), _idle(9))
     assert sim.executed == [(1, 11, CLICK)]
     assert sim.renders == [11]
@@ -187,9 +187,9 @@ def test_an_action_landing_exactly_on_a_boundary_renders_before_the_next_frame()
 
 
 def test_a_key_tap_on_an_exact_boundary_moves_the_next_frame_without_a_render():
-    # n = 256: tau = 11, but the tap holds the key 1/60 s, 1/60 tick at 1 fps
-    # (sandbox/actions.py:513), so the boundary of max(11, 11 + 1/60) is 12 and next = 12;
-    # dropped = 12 - 10 - 1 = 1.
+    # n = 256: tau = 11, but the tap holds the key 1/60 s, 1/60 tick at 1 fps (sandbox/actions.py
+    # GuestEnvironment._execute_clock_key), so the boundary of max(11, 11 + 1/60) is 12 and
+    # next = 12; dropped = 12 - 10 - 1 = 1.
     tapped = 11 + 1 / 60
     sim = _run(_token(20), _idle(10), Reply(action=TAP, output_tokens=256), _idle(8))
     assert sim.executed == [(1, 11, TAP)]
@@ -203,10 +203,10 @@ def test_a_key_tap_on_an_exact_boundary_moves_the_next_frame_without_a_render():
 
 @pytest.mark.parametrize("tokens", [256, 300, 1000], ids=["exactly-b", "over-b", "far-over-b"])
 def test_an_action_reaching_the_horizon_is_clamped_and_not_applied(tokens):
-    # T = 20, t_k = 19: remaining = floor(1 * 256 + 1e-9) = 256 (runner.py:867-870). Output past it
-    # is billed, not charged (runner.py:983-993): tau = 19 + 256/256 = 20 = T. The check before
-    # landing finds tick >= T (runner.py:528-531); nothing is paced, and the next loop top ends at
-    # the horizon (runner.py:842, 802-803).
+    # T = 20, t_k = 19: remaining = floor(1 * 256 + 1e-9) = 256 (runner.py _decide). Output past it
+    # is billed, not charged (episode_records.py account_tokens): tau = 19 + 256/256 = 20 = T. The
+    # check before landing finds tick >= T (runner.py _land_action); nothing is paced, and the next
+    # loop top ends at the horizon (runner.py run_stream, _finalize).
     sim = _run(_token(20), _idle(19), Reply(action=CLICK, output_tokens=tokens))
     assert sim.entries("InferenceStarted")[1].data["remaining_clock_tokens"] == 256
     assert _record(sim, "ActionProposed", 1)["action_output_tokens"] == 256
@@ -258,7 +258,8 @@ def test_a_response_past_the_allowance_lands_at_the_horizon_though_the_allowance
 
 def test_an_end_reported_at_the_horizon_beats_the_tick_limit():
     # The task ends from tick 20 = T on: the approach's check at 20 finds it before anything tests
-    # the horizon, so the environment's reason is the stop reason (runner.py:526-529, 791-803).
+    # the horizon, so the environment's reason is the stop reason (runner.py _land_action,
+    # _finalize).
     sim = _run(
         _token(20),
         _idle(19),
@@ -290,17 +291,17 @@ def test_the_end_is_checked_where_todays_loop_polls_it():
         Reply(action=CLICK, output_tokens=768),
     )
     assert _asked(sim) == [
-        0,  # loop top (runner.py:842)
-        1,  # each approach step (sandbox/actions.py:248)
+        0,  # loop top (runner.py run_stream)
+        1,  # each approach step (sandbox/actions.py GuestEnvironment.wait_until_tick)
         1.5,
-        1.5,  # before landing (runner.py:528)
-        1.5,  # after landing (runner.py:545)
-        2,  # each pace step (sandbox/actions.py:248)
+        1.5,  # before landing (runner.py _land_action)
+        1.5,  # after landing (runner.py _land_action)
+        2,  # each pace step (sandbox/actions.py GuestEnvironment.wait_until_tick)
         2,  # loop top
         3,  # approach
         4,
         5,
-        5,  # before landing, which then finds tick >= T (runner.py:530)
+        5,  # before landing, which then finds tick >= T (runner.py _land_action)
         5,  # loop top, which then ends at the horizon
     ]
     assert [outcome.status for outcome in sim.outcomes] == ["applied", "not_applied_tick_limit"]
@@ -322,7 +323,7 @@ def test_the_next_frame_is_the_first_boundary_after_the_action(
     tokens, tau, next_tick, dropped, rendered
 ):
     # t_k = 0, T = 10: next = min(max(floor(t_k) + 1, boundary(max(tau, tick))), T) and
-    # dropped = max(0, floor(next + 1e-9) - floor(t_k) - 1) (runner.py:600-625).
+    # dropped = max(0, floor(next + 1e-9) - floor(t_k) - 1) (runner.py _apply).
     sim = _run(_token(10), Reply(action=CLICK, output_tokens=tokens), _idle(10 - next_tick))
     assert sim.executed == [(0, tau, CLICK)]
     assert _pace(sim, 0) == _to_boundary(0, tau, next_tick, rendered, dropped)
@@ -339,8 +340,8 @@ def test_the_next_frame_is_the_first_boundary_after_the_action(
 
 
 def test_the_next_frame_never_passes_the_horizon():
-    # T = 5.5, n = 1344: tau = 5.25, boundary 6, next = min(max(1, 6), 5.5) = 5.5 (runner.py:606);
-    # dropped = floor(5.5 + 1e-9) - 0 - 1 = 4. The loop top at 5.5 ends at the horizon.
+    # T = 5.5, n = 1344: tau = 5.25, boundary 6, next = min(max(1, 6), 5.5) = 5.5 (runner.py
+    # _apply); dropped = floor(5.5 + 1e-9) - 0 - 1 = 4. The loop top at 5.5 ends at the horizon.
     sim = _run(_token(5.5), Reply(action=CLICK, output_tokens=1344))
     assert sim.executed == [(0, 5.25, CLICK)]
     assert _asked(sim) == [0, 1, 2, 3, 4, 5, 5.25, 5.25, 5.25, 5.5, 5.5]
@@ -356,9 +357,10 @@ def test_the_next_frame_never_passes_the_horizon():
     ids=["just-above", "just-below"],
 )
 def test_an_action_within_1e9_of_a_boundary_counts_as_on_it(tokens, first_step):
-    # B = 10**10 puts tau = n/B within 1e-10 of tick 1. The approach stops within 1e-9 of it and
-    # the tick snaps to 1 (sandbox/actions.py:219, 245-246); a boundary within 1e-9 of an integer
-    # is that integer (runner.py:601-605), so next = max(0 + 1, 1) = 1 and the frame is rendered.
+    # B = 10**10 puts tau = n/B within 1e-10 of tick 1. The approach stops within 1e-9 of it and the
+    # tick snaps to 1 (sandbox/actions.py GuestEnvironment.wait_until_tick); a boundary within 1e-9
+    # of an integer is that integer (runner.py _whole_up), so next = max(0 + 1, 1) = 1 and the frame
+    # is rendered.
     per_frame = 10**10
     tau = tokens / per_frame
     sim = _run(
@@ -376,9 +378,9 @@ def test_an_action_within_1e9_of_a_boundary_counts_as_on_it(tokens, first_step):
 
 
 def test_a_decision_without_an_action_still_moves_the_clock_and_paces():
-    # Status none asks nothing before or after landing (runner.py:522-523), but the clock still
+    # Status none asks nothing before or after landing (runner.py _land_action), but the clock still
     # goes to tau = 300/256 and on to next = 2, so an empty decision cannot repeat within one frame
-    # (runner.py:592-608).
+    # (runner.py _apply).
     sim = _run(_token(10), Reply(output_tokens=300), _idle(8))
     assert _asked(sim) == [0, 1, 1.171875, 2, 2, *range(3, 11), 10]
     assert sim.advances[:3] == [1.0, 0.171875, 0.828125]
@@ -411,7 +413,7 @@ def test_a_decision_without_an_action_still_moves_the_clock_and_paces():
 )
 def test_only_an_applied_action_on_an_exact_boundary_renders(action, rejection, status, renders):
     # n = 256: tau = 1 = next, so every one of these has an empty pace move; only status applied
-    # commits the frame (runner.py:615-623).
+    # commits the frame (runner.py _apply).
     sim = _run(
         _token(10),
         Reply(action=action, output_tokens=256),
@@ -445,9 +447,9 @@ def test_the_next_frame_is_taken_from_where_a_key_tap_left_the_clock(
     repeat, next_tick, dropped, rendered
 ):
     # The tap lands at tau = 1, and the environment holds the key 1/60 s per repeat inside the
-    # action, 1/60 tick at 1 fps (sandbox/actions.py:503-514); the kernel takes the boundary from
-    # max(tau, tick) = 1 + repeat/60 (runner.py:600). Sixty repeats end exactly on 2, so that pace
-    # move is empty and the frame is rendered.
+    # action, 1/60 tick at 1 fps (sandbox/actions.py GuestEnvironment._execute_clock_key); the
+    # kernel takes the boundary from max(tau, tick) = 1 + repeat/60 (runner.py _apply). Sixty
+    # repeats end exactly on 2, so that pace move is empty and the frame is rendered.
     tap = Action(ActionType.KEY, {"key": "space", "repeat": repeat})
     sim = _run(_token(10), Reply(action=tap, output_tokens=256), _idle(10 - next_tick))
     assert sim.executed == [(0, 1, tap)]
@@ -472,8 +474,9 @@ def test_the_next_frame_is_taken_from_where_a_key_tap_left_the_clock(
 
 def test_a_lease_ending_inside_a_move_splits_the_step_and_releases_before_the_check():
     # Decision 0 holds "a" for 1.5 s at tick 0: the lease ends at 0 + 1.5 * env_fps = 1.5
-    # (sandbox/actions.py:546-547). Decision 1 lands at tau = 2; its approach from 1 is cut at 1.5,
-    # where the key is released before the end check (sandbox/actions.py:221-228, 244-249).
+    # (sandbox/actions.py GuestEnvironment._execute_clock_key). Decision 1 lands at tau = 2; its
+    # approach from 1 is cut at 1.5, where the key is released before the end check
+    # (sandbox/actions.py GuestEnvironment.wait_until_tick).
     sim = _run(
         _token(10),
         Reply(action=Action.hold_key("a", 1.5), output_tokens=0),
@@ -527,7 +530,7 @@ def test_a_failed_key_release_invalidates_the_run():
 @pytest.mark.parametrize(("again", "released_at"), [(0.5, 2), (3.0, 4)], ids=["shorter", "longer"])
 def test_holding_a_held_key_again_only_extends_its_lease(again, released_at):
     # A 2 s hold from tick 0 ends at 2; holding "a" again at tick 1 for ``again`` seconds leaves
-    # max(2, 1 + again) (sandbox/actions.py:564-573).
+    # max(2, 1 + again) (sandbox/actions.py GuestEnvironment._execute_clock_key).
     sim = _run(
         _token(10),
         Reply(action=Action.hold_key("a", 2.0), output_tokens=0),
@@ -588,8 +591,8 @@ def test_a_lease_that_ended_during_a_key_tap_is_released_by_the_kernel_after_the
 
 def test_a_wait_passes_its_time_in_checked_steps_without_reaching_the_environment():
     # n = 256: the wait starts at tau = 1 and lets 2.5 s pass, 2.5 ticks at env_fps 1, in steps of
-    # at most one tick with a check after each (sandbox/actions.py:843-844, 214-249); next =
-    # max(1, ceil(3.5)) = 4 and dropped = 4 - 0 - 1 = 3.
+    # at most one tick with a check after each (sandbox/actions.py GuestEnvironment.execute,
+    # GuestEnvironment.wait_until_tick); next = max(1, ceil(3.5)) = 4 and dropped = 4 - 0 - 1 = 3.
     sim = _run(_token(10), Reply(action=Action.wait(2.5), output_tokens=256), _idle(6))
     assert sim.executed == []
     assert sim.advances[:5] == [1.0, 1.0, 1.0, 0.5, 0.5]
@@ -610,8 +613,8 @@ def test_a_wait_passes_its_time_in_checked_steps_without_reaching_the_environmen
 
 def test_a_wait_cut_short_by_the_end_reports_the_terminal_condition():
     # The task ends from tick 3 on: the wait from 1 stops at the check at 3, after 2 of its 2.5 s
-    # (sandbox/actions.py:248-249, 848-866). The action ended the episode: nothing is paced and no
-    # further check is asked.
+    # (sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute). The action
+    # ended the episode: nothing is paced and no further check is asked.
     sim = _run(
         _token(10),
         Reply(action=Action.wait(2.5), output_tokens=256),
@@ -707,8 +710,8 @@ def test_a_wait_cut_short_by_a_third_failed_read_stays_a_wait():
 
 def test_a_wait_cut_short_by_the_horizon_reports_the_horizon():
     # T = 5, n = 1024: the wait starts at tau = 4 and asks for 4 + 2.5 > T, so it stops at 5 after
-    # 1 s (sandbox/actions.py:217-218, 837-857). The check after it still runs; nothing is paced
-    # past T, and the next loop top ends at the horizon.
+    # 1 s (sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute). The
+    # check after it still runs; nothing is paced past T, and the next loop top ends at the horizon.
     sim = _run(_token(5), Reply(action=Action.wait(2.5), output_tokens=1024))
     assert _asked(sim) == [0, 1, 2, 3, 4, 4, 5, 5, 5]
     assert sim.advances == [1.0] * 5
@@ -739,8 +742,8 @@ def test_a_wait_ending_exactly_on_the_horizon_is_not_cut_short():
 
 @pytest.mark.parametrize("wait", [Action.wait(), Action.wait(0.0)], ids=["no-duration", "zero"])
 def test_a_wait_of_zero_seconds_does_not_move_the_clock(wait):
-    # A wait of 0 s lets no time pass (sandbox/actions.py:832, 842); tau = 1 = next, and a wait is
-    # never rendered (runner.py:615-619).
+    # A wait of 0 s lets no time pass (sandbox/actions.py GuestEnvironment.execute); tau = 1 = next,
+    # and a wait is never rendered (runner.py _apply).
     sim = _run(_token(10), Reply(action=wait, output_tokens=256), _idle(9))
     assert sim.advances == [1.0] * 10
     assert _asked(sim)[:5] == [0, 1, 1, 1, 1]
@@ -760,10 +763,10 @@ def test_a_wait_of_zero_seconds_does_not_move_the_clock(wait):
 
 
 def test_the_legacy_think_budget_skips_the_action_and_ends_after_its_outcome():
-    # Budget 1 s; each decision deliberates 128/256 = 0.5 s (runner.py:490-492, 506). Decision 0
+    # Budget 1 s; each decision deliberates 128/256 = 0.5 s (runner.py _apply). Decision 0
     # lands at 0.5. Decision 1 brings the spend to 1.0 >= 1: skipped_budget, asked nothing before
-    # landing (runner.py:524-525), paced from 1.5 to 2; the episode then ends with no loop top
-    # (runner.py:1170-1172).
+    # landing (runner.py _land_action), paced from 1.5 to 2; the episode then ends with no loop top
+    # (runner.py _decide).
     sim = _run(
         _token(10, think_budget_s=1.0),
         Reply(action=CLICK, output_tokens=128),
@@ -854,9 +857,10 @@ def test_a_move_over_the_per_move_cap_costs_the_cap_against_the_think_budget():
 def test_an_end_found_before_landing_leaves_the_action_unapplied(
     tokens, ends_at, end_check, tau, reached, asked
 ):
-    # The end stops the approach where it is found (sandbox/actions.py:248-249), or is found by the
-    # check right before landing (runner.py:528-529): not_applied_terminal, nothing paced
-    # (runner.py:595-599), and no check after the end.
+    # The end stops the approach where it is found (sandbox/actions.py
+    # GuestEnvironment.wait_until_tick), or is found by the check right before landing (runner.py
+    # _land_action): not_applied_terminal, nothing paced (runner.py _apply), and no check after the
+    # end.
     sim = _run(
         _token(10),
         Reply(action=CLICK, output_tokens=tokens),
@@ -882,8 +886,8 @@ def test_an_end_found_before_landing_leaves_the_action_unapplied(
 
 
 def test_a_rejected_action_skips_the_check_after_execution_but_still_paces():
-    # n = 384: tau = 1.5. A refused action is not followed by a check (runner.py:533-537), is paced
-    # to next = 2 and reports the guest's reason (runner.py:674).
+    # n = 384: tau = 1.5. A refused action is not followed by a check (runner.py _land_action), is
+    # paced to next = 2 and reports the guest's reason (runner.py _apply).
     sim = _run(
         _token(10),
         Reply(action=CLICK, output_tokens=384),
@@ -908,14 +912,14 @@ def test_a_rejected_action_skips_the_check_after_execution_but_still_paces():
 @pytest.mark.parametrize("fault", ["rejections", "execute_errors"], ids=["refused", "failed"])
 def test_a_refused_or_failed_action_keeps_the_environments_execution_record(fault):
     # The outcome record carries whatever execution record the environment left, a refusal or a
-    # failure included (runner.py:582; sandbox/actions.py:817).
+    # failure included (runner.py _apply; sandbox/actions.py GuestEnvironment._execution_failed).
     sim = _run(_token(10), Reply(action=CLICK, output_tokens=256), _idle(9), **{fault: {0: "no"}})
     assert _record(sim, "ActionResolved", 0)["execution_result"] == {"action": "click"}
 
 
 def test_an_execution_failure_invalidates_the_run_and_is_still_reported():
-    # A failed execution invalidates the run (runner.py:538-541) with no check after it and no
-    # pacing (runner.py:595-599); unlike an unusable result it is still committed (runner.py:674).
+    # A failed execution invalidates the run (runner.py _land_action) with no check after it and no
+    # pacing (runner.py _apply); unlike an unusable result it is still committed (runner.py _apply).
     sim = _run(
         _token(10),
         Reply(action=CLICK, output_tokens=384),
@@ -933,8 +937,9 @@ def test_an_execution_failure_invalidates_the_run_and_is_still_reported():
 
 
 def test_a_failed_clock_advance_invalidates_the_run_and_settles_the_decision():
-    # The first approach step fails (sandbox/actions.py:235-241). The decision in hand is settled
-    # by the skip order, whose first test is the invalid run (runner.py:520-521), and committed.
+    # The first approach step fails (sandbox/actions.py GuestEnvironment.wait_until_tick). The
+    # decision in hand is settled by the skip order, whose first test is the invalid run (runner.py
+    # _land_action), and committed.
     sim = _run(
         _token(10),
         Reply(action=CLICK, output_tokens=384),
@@ -955,8 +960,9 @@ def test_a_failed_clock_advance_invalidates_the_run_and_settles_the_decision():
 
 def test_no_frame_is_rendered_after_a_failed_clock_advance():
     # n = 384: the click lands at 1.5 and the pace step to 2, the third advance, fails. The render
-    # barrier only follows a pace move that succeeded without moving the clock (runner.py:608-623);
-    # a failed one raises first (sandbox/actions.py:235-241), and nothing lands after the end.
+    # barrier only follows a pace move that succeeded without moving the clock (runner.py _apply); a
+    # failed one raises first (sandbox/actions.py GuestEnvironment.wait_until_tick), and nothing
+    # lands after the end.
     sim = _run(
         _token(10),
         Reply(action=CLICK, output_tokens=384),
@@ -978,9 +984,9 @@ def test_no_frame_is_rendered_after_a_failed_clock_advance():
 def test_a_move_over_the_per_move_cap_is_skipped_but_still_moves_the_clock(
     tokens, status, next_tick, dropped, rendered, executed
 ):
-    # On the token clock the legacy cap is held against token-derived seconds n/B/env_fps
-    # (runner.py:302-305, 422-432): 1.5 s > 1 s drops the action, which was still proposed, and the
-    # clock still goes to tau = 1.5 and on to next = 2.
+    # On the token clock the legacy cap is held against token-derived seconds n/B/env_fps (runner.py
+    # _move_timeout, _charge): 1.5 s > 1 s drops the action, which was still proposed, and the clock
+    # still goes to tau = 1.5 and on to next = 2.
     tau = tokens / B
     sim = _run(
         _token(10, per_move_cap_s=1.0),
@@ -1062,9 +1068,9 @@ def test_the_third_failed_read_in_a_row_invalidates_the_run(
 
 def test_a_tap_that_sees_the_end_stops_and_the_check_after_it_ends_the_episode():
     # Paused at 120 fps, a tap at tick 0 is two ticks. The task ends at tick 1, which the tap's
-    # first check sees: the environment stops there (sandbox/actions.py:279-280), and the check
-    # right after execution, at the same tick, reports the end. The loop top and the check before
-    # the tap are at 0.
+    # first check sees: the environment stops there (sandbox/actions.py
+    # GuestEnvironment.wait_until_tick), and the check right after execution, at the same tick,
+    # reports the end. The loop top and the check before the tap are at 0.
     sim = _run(
         _token(10, None, env_fps=120), Reply(action=TAP), ends_at=1, end_reason="target_reached"
     )
@@ -1085,7 +1091,7 @@ def test_a_tap_that_sees_the_end_stops_and_the_check_after_it_ends_the_episode()
 )
 def test_the_allowance_is_the_frames_left_times_b(duration_s, allowances):
     # remaining = floor((T - t_k) * B + 1e-9) at t_k = 0 and, after a click paced to 2, at t_k = 2
-    # (runner.py:867-870); the second decision spends exactly that and lands on T.
+    # (runner.py _decide); the second decision spends exactly that and lands on T.
     sim = _run(
         _token(duration_s),
         Reply(action=CLICK, output_tokens=300),
@@ -1102,7 +1108,7 @@ def test_the_allowance_is_the_frames_left_times_b(duration_s, allowances):
 
 def test_the_allowance_tolerates_float_noise():
     # T = 2.3, B = 10: at t_k = 2, (2.3 - 2) * 10 = 2.9999999999999982, and floor(x + 1e-9) = 3
-    # (runner.py:867-870).
+    # (runner.py _decide).
     sim = _run(
         _token(2.3, 10),
         Reply(output_tokens=20),
@@ -1131,7 +1137,7 @@ def test_a_failure_while_the_clock_runs_out_to_the_horizon_still_ends_the_episod
 def test_with_no_allowance_left_the_clock_runs_to_the_horizon_without_a_generation():
     # T = 5 + 1/512. Decision 0 spends floor(T * 256 + 1e-9) = 1280 tokens and lands on 5, its next
     # frame; at t_k = 5, remaining = floor(256/512 + 1e-9) = 0, so that frame starts no generation
-    # and the clock is advanced to T with a check (runner.py:871-873).
+    # and the clock is advanced to T with a check (runner.py _decide).
     horizon = 5 + 1 / 512
     sim = _run(_token(horizon), _idle(5))
     assert [tick for tick, _ in sim.captures] == [0, 5]
@@ -1149,7 +1155,7 @@ def test_with_no_allowance_left_the_clock_runs_to_the_horizon_without_a_generati
 
 @pytest.mark.parametrize("action", [CLICK, None], ids=["proposed", "no-action"])
 def test_missing_output_usage_invalidates_a_finite_b_run_before_anything_is_paced(action):
-    # Finite B needs the output count (runner.py:480-487): the run is invalid before the clock
+    # Finite B needs the output count (runner.py _apply): the run is invalid before the clock
     # moves, nothing is paced or committed, and a proposed action still gets its outcome record.
     sim = _run(_token(10), Reply(action=action, output_tokens=None))
     assert sim.termination.invalid == Invalidated(
@@ -1174,7 +1180,7 @@ def test_missing_output_usage_invalidates_a_finite_b_run_before_anything_is_pace
 
 
 def test_missing_output_usage_is_allowed_when_paused():
-    # Unlimited B charges no tokens, so it needs no count (runner.py:493-499).
+    # Unlimited B charges no tokens, so it needs no count (runner.py _apply).
     sim = _run(_token(10, None), Reply(action=CLICK), ends_at=1)
     assert sim.termination.invalid is None
     assert sim.outcomes == [
@@ -1195,7 +1201,7 @@ def test_missing_output_usage_is_allowed_when_paused():
     ids=["click", "key-tap", "wait"],
 )
 def test_a_paused_action_lands_on_the_observed_tick(action, status, advances, next_tick, dropped):
-    # Unlimited B: tau = t_k whatever the output (runner.py:493-499), so 5000 tokens move nothing;
+    # Unlimited B: tau = t_k whatever the output (runner.py _apply), so 5000 tokens move nothing;
     # the next frame is max(t_k + 1, boundary(tick)): 1 after a click or a tap, 3 after a 2.5 s
     # wait, with 2 frames dropped (A1 section 1.4). The task ends once that frame is reached.
     sim = _run(_token(10, None), Reply(action=action, output_tokens=5000), ends_at=next_tick)
@@ -1219,7 +1225,7 @@ def test_the_provider_watchdog_bounds_a_generation_at_300_operational_seconds(
     latency, stop_reason, statuses
 ):
     # The token clock bounds a call only by the provider watchdog, 300 s by default
-    # (runner.py:310-311); past it the run is invalid (runner.py:396-404).
+    # (runner.py _move_timeout); past it the run is invalid (runner.py _run_step).
     sim = _run(_token(10), Reply(latency=latency, action=CLICK, output_tokens=256), _idle(9))
     timer = sim.entries("TimerSet")[0].data
     assert (timer["kind"], timer["clock"], timer["at"]) == ("generation_watchdog", "ops", 300.0)
@@ -1246,7 +1252,7 @@ def test_the_watchdog_runs_from_the_operational_reading_at_the_start_of_the_call
 
 
 def test_a_watchdog_timeout_abandons_the_generation_and_discards_its_late_result():
-    # The result is due at 301 s. At 300 s the run is invalid (runner.py:396-404); the snapshot is
+    # The result is due at 301 s. At 300 s the run is invalid (runner.py _run_step); the snapshot is
     # frozen and the generation written off before it is interrupted (phase2.md, 事件内核). The 5 s
     # snapshot lets the late result arrive, and it is discarded unseen.
     sim = _run(_token(10), Reply(latency=301.0, action=CLICK, output_tokens=256), snapshot_s=5.0)
@@ -1268,7 +1274,7 @@ def test_a_watchdog_timeout_abandons_the_generation_and_discards_its_late_result
 @pytest.mark.parametrize("verb", [ActionType.DONE, ActionType.FAIL], ids=["done", "fail"])
 def test_a_done_or_fail_proposal_becomes_a_wait_without_a_proposal_record(verb):
     # The loop has no terminal actions: the proposal becomes a wait tagged as a protocol failure,
-    # which is not recorded as proposed (runner.py:1143-1163).
+    # which is not recorded as proposed (runner.py _decide).
     sim = _run(_token(10), Reply(action=Action(verb), output_tokens=256), _idle(9))
     assert sim.entries("ActionProposed") == []
     resolved = _record(sim, "ActionResolved", 0)
@@ -1313,7 +1319,7 @@ def test_the_outcome_names_the_action_the_decision_came_to(
     reply, cap, status, action, protocol_failure
 ):
     # The agent's feedback reports what was executed: a DONE is reported as the wait it became,
-    # with the protocol failure that made it one (runner.py:1218-1228).
+    # with the protocol failure that made it one (runner.py _decide).
     sim = _run(_token(10, per_move_cap_s=cap), reply, _idle(9))
     outcome = sim.outcomes[0]
     assert (outcome.status, outcome.action, outcome.protocol_failure) == (
@@ -1324,7 +1330,7 @@ def test_the_outcome_names_the_action_the_decision_came_to(
 
 
 def test_a_decisions_records_follow_todays_trace_order():
-    # A1 H13 without the records the kernel does not write (runner.py:921-1165, 555-639).
+    # A1 H13 without the records the kernel does not write (runner.py _decide, _apply).
     sim = _run(_token(10), Reply(action=CLICK, output_tokens=300), _idle(8))
     kinds = {
         "InferenceStarted",

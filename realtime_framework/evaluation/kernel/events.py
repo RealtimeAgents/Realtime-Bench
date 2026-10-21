@@ -59,7 +59,7 @@ class Timer:
 
 @dataclass(frozen=True)
 class Invalidated:
-    """A non-model failure. The run is never scored (runner.py:171-180)."""
+    """A non-model failure. The run is never scored (runner.py _invalidate)."""
 
     category: str
     reason: str
@@ -104,12 +104,12 @@ class GenerationResult:
 
     action: Action | None = None
     # Complete output tokens to charge to the token clock, chosen by the shell in the runner's
-    # source order (runner.py:209-231); None when the provider reported none.
+    # source order (episode_records.py clock_output_tokens); None when the provider reported none.
     output_tokens: int | None = None
     latency: float = 0.0  # the agent's decision latency in seconds, charged on the wall clock
     protocol_failure: str | None = None
     # An unusable result: the generation's own failure, or an invalid inspection proof, in the
-    # runner's order (runner.py:455-477).
+    # runner's order (episode_records.py result_invalid).
     invalid: Invalidated | None = None
 
 
