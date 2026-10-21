@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from realtime_framework.clock import Clocks
+from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.sandbox.actions import GuestEnvironment
+from realtime_framework.sandbox.budget import BudgetExceeded
 
 from ..fake_clock import FakeClock
 from ..replay.clock_task import ClockTask
@@ -82,3 +83,33 @@ def test_a_failed_end_check_raises_and_leaves_the_run_valid():
 def test_an_end_check_without_a_task_check_never_ends():
     env, _ = _token()
     assert env.check_end() == (False, None)
+
+
+@pytest.mark.parametrize(("clock_mode", "budget_s"), [("wall", 10.0), ("token", 120.0)])
+def test_one_end_check_is_bounded_by_the_budget_of_its_clock(clock_mode, budget_s):
+    """On the wall clock the kernel asks at the environment rate and one read gets 10 s; on the
+    token clock it gets state_read_s, 120 s, as before."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    takes = iter([budget_s - 1.0, budget_s + 1.0])
+
+    def stop_check():
+        clock.sleep(next(takes))
+        return False
+
+    if clock_mode == "wall":
+        env = _wall(clock, 1_000.0, stop_check=stop_check)
+    else:
+        env, _ = _token(stop_check=stop_check, clocks=Clocks(FrameClock(1.0), clock))
+    with clock.participant():
+        assert env.check_end() == (False, None)
+        with pytest.raises(BudgetExceeded, match=f"state read took longer than {budget_s:g} s"):
+            env.check_end()
+    assert getattr(env, "_invalid_run", None) is None
+
+
+def test_the_legacy_loop_s_end_check_keeps_its_budget_on_the_wall_clock():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock, 1_000.0, stop_check=lambda: clock.sleep(11.0))
+    with clock.participant():
+        assert env.done() is False
+    assert getattr(env, "_invalid_run", None) is None
