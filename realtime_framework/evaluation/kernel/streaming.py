@@ -19,9 +19,11 @@ reply starts in the same step. The shell runs the abort first, which returns onc
 cleaned the session up, and the next reply rebuilds it from the accepted history (phase2.md,
 什么时候触发生成).
 
-The environment is asked whether the episode is over on the environment frame grid, during replies
-too; three failed reads in a row invalidate the run. Every outcome, the refusals included, is
-committed to the agent as its feedback.
+The state is read at most once an environment frame, at the frame's grid point, during replies too,
+and once more right after every action executed: that read settles the action, as the one that
+ended the task or not, before anything else runs, so nothing executes once the task has ended. A
+failed read counts as the frame's. Three failed reads in a row invalidate the run. Every outcome,
+the refusals included, is committed to the agent as its feedback.
 
 Captures, reads and actions run on lanes of their own, but the shell lets only one of them at a
 time into the environment (evaluation/env_lanes.py EnvGate). The policy keeps one out at a time
@@ -187,7 +189,7 @@ class StreamingPolicy:
         self.generation: int | None = None  # the reply in flight
         self.abandoned: set[int] = set()  # replies given up
         self.actions: list[_Action] = []
-        self.current: _Action | None = None  # the action executing
+        self.current: _Action | None = None  # the action executing, or the read after it out
         self.waiting: _Action | None = None  # the newest action that arrived meanwhile
         self._executing = False  # its Execute is out
         self.frames_pushed = 0
@@ -202,6 +204,7 @@ class StreamingPolicy:
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
         self._check_due = False  # a read came due while another operation was out
+        self._read_frame: int | None = None  # the environment frame read last
         self._failed_reads = 0  # state reads failed in a row
         self._reply_watchdog: int | None = None
         self._push_watchdog: int | None = None
@@ -280,8 +283,9 @@ class StreamingPolicy:
             kernel.end("deadline", timer.at)
         elif timer.kind == "end_check":
             if not self._stopped():
-                self._check_due = True
-                self._proceed()
+                if self._frame() != self._read_frame:
+                    self._check_due = True
+                    self._proceed()
                 self._schedule("end_check", config.env_fps)
         elif timer.kind == "next_frame":
             if not self._stopped():
@@ -305,14 +309,18 @@ class StreamingPolicy:
         self._report()
 
     def on_end(self) -> None:
-        """The reply in flight was given up and the action waiting will not execute; the action
-        executing settles when its answer arrives."""
+        """The reply in flight was given up and the action waiting will not execute; an action
+        whose read was out is the episode's last, and one executing settles when its answer
+        arrives."""
         if self.generation is not None:
             self.abandoned.add(self.generation)
             self.generation = None
         self._reply_watchdog = self._push_watchdog = None
         self._queued = None
         self._check_due = self._capture_due = False
+        if self.current is not None and not self._executing:
+            after, self.current = self.current, None
+            self._resolve(after, "applied", terminal_after_action=True)
         if self.waiting is not None:
             waiting, self.waiting = self.waiting, None
             self._resolve(waiting, self._ended())
@@ -488,7 +496,7 @@ class StreamingPolicy:
         kernel = self.kernel
         # Past the deadline the action ran across it: the end comes first.
         self._stopped()
-        a, self.current, self._executing = self.current, None, False
+        a, self._executing = self.current, False
         # When the action took the environment and returned, as the lane read them; a run that
         # raised before it was read has neither.
         if event.finished_at is None:
@@ -498,14 +506,20 @@ class StreamingPolicy:
         # A refusal or a failure leaves its own execution record (sandbox/actions.py:817).
         a.execution_result = event.result
         if event.error is not None:
+            self.current = None
             kernel.invalidate("environment", "action_execution_failed", event.error)
             return self._resolve(a, "invalid_run")
         if event.rejection is not None:
+            # A refused action changed nothing to read, as on the turn-based clock.
+            self.current = None
             self._resolve(a, "rejected", event.rejection)
-        else:
-            # The end, if it came meanwhile, froze the snapshot after this action finished.
-            self._resolve(a, "applied", terminal_after_action=kernel.ending is not None)
-        self._proceed()
+            return self._proceed()
+        if kernel.ending is not None:
+            # The end came while it ran and froze the snapshot after it: it is the last action.
+            self.current = None
+            return self._resolve(a, "applied", terminal_after_action=True)
+        # An action can end the task at once: the read after it settles it (decision 31).
+        self._ask()
 
     def _calls_cancelled(self, event: CallsCancelled) -> None:
         # Past the deadline the end settles the action waiting first.
@@ -642,21 +656,33 @@ class StreamingPolicy:
 
     def _ask(self) -> None:
         """Read the state now: no other operation is out, so the read samples the task now, the
-        time its end is dated by."""
+        time its end is dated by. It is this frame's read, and whichever came due meanwhile."""
         self._check_due = False
         kernel = self.kernel
+        self._read_frame = self._frame()
         request = kernel.request()
         self._asked[request] = kernel.semantic
         kernel.emit(CheckEnd(request))
 
     def _end_checked(self, event: EndChecked) -> None:
+        kernel = self.kernel
         asked_at = self._asked.pop(event.request)
         # A read that fails once the episode is over still counts.
         if self._count_read(event.error):
             return
         if event.ended:
-            return self.kernel.end("environment", asked_at, reason=event.reason)
+            return kernel.end("environment", asked_at, reason=event.reason)
+        if kernel.ending is not None:
+            return
+        # No action executes while a read is out: ``current`` is the one this read follows.
+        if self.current is not None:
+            after, self.current = self.current, None
+            self._resolve(after, "applied")
         self._proceed()
+
+    def _frame(self) -> int:
+        """The environment frame the clock is in."""
+        return _floor(self.kernel.semantic * self.config.env_fps)
 
     def _count_read(self, error: str | None) -> bool:
         """Count one state read; True when it is the failure that invalidates the run."""
