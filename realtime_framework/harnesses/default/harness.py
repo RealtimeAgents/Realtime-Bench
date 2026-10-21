@@ -1266,6 +1266,17 @@ class DefaultHarness(VisionAgentBase):
             return tuple(render_digest(request, compact_ledger=False))
         return chat_messages(request)
 
+    @staticmethod
+    def _cancelled_result(latency: float) -> dict:
+        return {
+            "action": None,
+            "thinking": "",
+            "raw": "",
+            "latency": latency,
+            "usage": None,
+            "stale": True,
+        }
+
     def _invalid_observation_result(self, proof, latency=0.0):
         protocol = {
             "source": "invalid_action_fallback_wait",
@@ -1416,6 +1427,9 @@ class DefaultHarness(VisionAgentBase):
         written into the history; what accepting the result writes is kept in
         ``generation.staged``."""
         tick = generation.decision
+        if generation.cancel.is_set():
+            # Aborted before its worker got here: nothing is inspected, entered or sent.
+            return self._cancelled_result(0.0), True
         if not observations:
             return {
                 "action": None,
@@ -1621,14 +1635,7 @@ class DefaultHarness(VisionAgentBase):
                 runtime_result = retry.run(send)
         except RetryCancelled:
             generation.staged = _Staged(feedback, inspection_executions)
-            return {
-                "action": None,
-                "thinking": "",
-                "raw": "",
-                "latency": self.clock.monotonic() - started,
-                "usage": None,
-                "stale": True,
-            }, True
+            return self._cancelled_result(self.clock.monotonic() - started), True
         except Exception:  # noqa: BLE001, S110 - record() kept the final failure
             pass
         else:
