@@ -46,6 +46,7 @@ from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
+from realtime_framework.entity.model import retry_cancel_event
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import trace_scope
 from realtime_framework.providers.capture import sync_ws_connection
@@ -359,9 +360,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             )
             if delay is None:
                 raise TransportFailureError(failure, exc, attempt - 1) from exc
-            # RequestRetry waits the delay on self.clock once this returns.
-            with trace_scope(connect_attempt=attempt):
-                self._record_wait("connect_backoff", delay)
+            # RequestRetry waits the delay on self.clock once this returns, unless the
+            # generation was abandoned.
+            if not retry_cancel_event().is_set():
+                with trace_scope(connect_attempt=attempt):
+                    self._record_wait("connect_backoff", delay)
 
         # The session the connect resumes: the newest retained frame, or none at all.
         frames = [] if request.history is None else history_frames(request.history.items)[1]
