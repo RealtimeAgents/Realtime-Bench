@@ -90,3 +90,19 @@ def test_pause_mode_observes_every_model_input_frame_at_the_first_tick_at_or_aft
     assert agent.statuses == ["none"] * frames
     assert [r["dropped_intermediate_frames"] for r in lifecycle(env)] == [0] * frames
     assert env._stop_reason == "tick_limit"
+
+
+def test_a_response_past_the_horizon_is_not_applied_when_its_allowance_is_not_whole():
+    """30/7, B=256, 5 minutes = 9000 ticks. Decision 0's 10 tokens land at 0.17; frame 1 (4.29)
+    is observed at tick 5. From there 8995 ticks are 2098.83 frames, 537301.33 tokens: a response
+    of 10^7 tokens is charged 537301 of them, which would land at 8999.994, inside the horizon.
+    The whole response lands past it, so the wait is not applied and the clock stops at 9000."""
+    env, agent = run(30.0, 7.0, 256, 5.0, [(None, 10), (Action.wait(1.0), 10**7)])
+    records = lifecycle(env)
+    assert captured_ticks(env) == [0, 5]
+    assert [r["remaining_clock_tokens"] for r in records] == [537600, 537301]
+    assert records[1]["post_horizon_output_tokens"] == 10**7 - 537301
+    assert agent.statuses == ["none", "not_applied_tick_limit"]
+    assert records[1]["action_clock_position"] == 9000.0
+    assert env.tick_index() == 9000.0
+    assert env._stop_reason == "tick_limit"
