@@ -36,6 +36,8 @@ the request is built and sent, and the reply validated, the way that model does.
 - Of the model's settings only ``extra_body`` is taken (Luna's route); the client carries the
   key, headers and timeout. The state may hold images: Luna's screenshots travel inside it.
 - Only Choice questions are asked, so only Choice answers are read.
+- Only the asked answers are read: an answer to a question not asked is ignored, as these
+  clients always did, where Pydantic AI rejects the reply.
 - The reply is parsed as ``json.loads`` parses it and validated in strict mode (a count must be
   a JSON integer, a probability a JSON number); its usage counts have no default.
 - The reply also names its upstream, which must be the pinned one, and its model, which must be
@@ -97,12 +99,11 @@ async def decide(
         raise ValueError("Decisions response did not come from the configured upstream provider")
     if parsed["model"] != model and not parsed["model"].startswith(model + "-"):
         raise ValueError("Decisions response model differs from the requested model family")
-    if parsed["answers"].keys() != questions.keys():
-        raise ValueError(
-            "Invalid response from the Decisions API: answer names do not match the questions"
-        )
     for name, question in questions.items():
-        answer = parsed["answers"][name]
+        try:
+            answer = _answer_adapter.validate_python(parsed["answers"].get(name), strict=True)
+        except ValidationError as e:
+            raise ValueError(f"Invalid response from the Decisions API: {e}") from e
         probabilities = answer["probabilities"]
         valid = (
             answer["choice"] in question["criteria"]
@@ -158,11 +159,12 @@ class _DecisionsResponse(TypedDict):
 
     provider: str
     model: str
-    answers: dict[str, _ChoiceAnswer]
+    answers: dict[str, Any]
     usage: _Usage
 
 
 _response_adapter = TypeAdapter(_DecisionsResponse)
+_answer_adapter = TypeAdapter(_ChoiceAnswer)
 
 
 def _error_body(response: httpx.Response) -> object:

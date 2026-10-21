@@ -232,6 +232,13 @@ VALID = {
         api, probabilities={"b": 0.0, "a": 0.0}, extra="kept"
     ),
     "zero_confidence": lambda api: _answer(api, confidence=0),
+    # Only the asked answers are read.
+    "answer_not_asked": lambda api: _reply(
+        api, answers={**_reply(api)["answers"], "other": _reply(api)["answers"]["next_action"]}
+    ),
+    "invalid_answer_not_asked": lambda api: _reply(
+        api, answers={**_reply(api)["answers"], "other": {"type": "refusal"}, "none": None}
+    ),
 }
 
 
@@ -276,9 +283,6 @@ INVALID = {
     "no_answers": lambda api: _without(_reply(api), "answers"),
     "no_answer": lambda api: _reply(api, answers={}),
     "answers_not_a_mapping": lambda api: _reply(api, answers=[]),
-    "answer_not_asked": lambda api: _reply(
-        api, answers={**_reply(api)["answers"], "other": _reply(api)["answers"]["next_action"]}
-    ),
     "refusal": lambda api: _reply(
         api, answers={"next_action": {"type": "refusal", "refusal": "no"}}
     ),
