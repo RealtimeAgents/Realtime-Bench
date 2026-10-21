@@ -93,12 +93,21 @@ class OpenAIDecisionsClient(DecisionEncoder):
             raise RuntimeError(f"Decisions requires {config.api_key_env or 'OPENROUTER_API_KEY'}")
         if not config.upstream_provider:
             raise ValueError("Decisions requires a pinned upstream_provider")
-        self.client = httpx.AsyncClient(
-            base_url=config.api_base_url or "https://openrouter.ai/api/alpha/",
-            headers={"Authorization": f"Bearer {key}"},
+        self.api_key = key
+        self.client = self._new_client()
+
+    def _new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self.config.api_base_url or "https://openrouter.ai/api/alpha/",
+            headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=30.0,
             event_hooks=HttpCapture(self, "decisions.http", "choice_question").hooks,
         )
+
+    async def connect(self, request):
+        # An abort closes the client (close below); the decision after it connects again.
+        if self.client.is_closed:
+            self.client = self._new_client()
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
