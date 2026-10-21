@@ -13,13 +13,16 @@ answer, so a command that answer brings finds it free.
 
 The gate is the shell's lock on the environment. The task code is not thread-safe and does not
 change in phase 2: a game's end check folds the state it reads into its peak score unlocked, as its
-snapshot does (realtime_tasks/game/runtime.py:536-543, 548, 587), and the environment adapter
-latches its end and its invalid run unlocked (GuestEnvironment.check_end, _execution_failed). A
-capture only reads the task (sandbox/observation/capture.py:228, 261); an action's calls into it
-are its page barriers (sandbox/actions.py:1022-1025, 1046), and only an action writes what the
-action lane reads after it (actions.py:930-941, 978-1063). So a capture and an action share the
-gate and run at once, and new frames come in while a long action runs (phase2.md, native
-streaming). An end check, the snapshot and the release of the inputs hold it alone.
+snapshot does (realtime_tasks/game/runtime.py _CatalogGame.episode_over, evaluation_snapshot and
+_sample), and the environment adapter latches its end and its invalid run unlocked
+(GuestEnvironment.check_end, _execution_failed). A capture only reads the task
+(sandbox/observation/capture.py BrowserSceneCapture: ``interactable_providers`` and
+``captured_frame_is_current``); an action's calls into it are its page barriers
+(``begin_gui_action`` and ``complete_gui_action``, in GuestEnvironment.execute), and only an action
+writes what the action lane reads after it (GuestEnvironment.execute, _execution_failed). So a
+capture and an action share the gate and run at once, and new frames come in while a long action
+runs (phase2.md, native streaming). An end check, the snapshot and the release of the inputs hold
+it alone.
 
 Sharing the gate is not sharing the browser's connection. A CDP call's timeout spends the wait for
 its session's lock (sandbox/browser/cdp.py PersistentCDPClient), which the action's page barriers
@@ -35,6 +38,11 @@ hold it alone, which waits for that action anyway. What waits to hold the gate a
 the action and for the captures that run alongside it, each within its own budget, and frames
 keep coming meanwhile. Waiting for the gate is a wait on the clock, so a fake clock moves on while
 an operation that holds it waits.
+
+The streaming policy reaches neither that rule nor the snapshot's place after an action still
+waiting (``freeze_turn`` below): it sends no capture while an end check or the snapshot waits, and
+no action waits for the gate (kernel/streaming.py ``_proceed``). They are the gate's rules for
+whoever sends those all the same, and tests/shell_streaming/test_env_lanes.py holds them.
 
 Like the turn-based shell, the gate compares ``_invalid_run`` before and after each operation and
 posts what the environment latched itself before the operation's answer; it posts each record
@@ -58,10 +66,11 @@ while no capture or action is out, and neither while one is out (kernel/streamin
 so an end check does not wait behind them for the gate; the gate holds it alone all the same.
 
 At the end the snapshot waits for the action executing to finish (stream-plan 4.8) and goes
-right after it: ``freeze_turn`` gives it the place in the gate's line next after that action,
-ahead of the others that were waiting, as the turn-based shell takes it right after the action on
-its one thread. Its wait is bounded by whoever takes it: the streaming shell's bound is the larger
-of the action's budget and a capture's, for a capture alongside the action (N32).
+right after it: ``freeze_turn`` gives it the place in the gate's line next after that action, or
+first when the action holds the gate already, ahead of the others that were waiting, as the
+turn-based shell takes it right after the action on its one thread. Its wait is bounded by
+whoever takes it: the streaming shell's bound is the larger of the action's budget and a
+capture's, for a capture alongside the action (N32).
 """
 
 from __future__ import annotations

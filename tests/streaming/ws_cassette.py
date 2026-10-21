@@ -62,8 +62,8 @@ DIRECTIONS = ("open", "c2s", "s2c", "close")
 
 class RealtimeNormalizer(baseline.Normalizer):
     """baseline.Normalizer, and two of our OpenAI Realtime ids the replay baselines never meet: the
-    event ids of a pushed frame (providers/openai_realtime_session.py:290) and of a cancel
-    (providers/openai_realtime.py:548)."""
+    event ids of a pushed frame (providers/openai_realtime_session.py RealtimeSessionCore._push)
+    and of a cancel (providers/openai_realtime.py OpenAIRealtimeDriver.interrupt)."""
 
     IDS = (
         ("rtb_push", re.compile(r"rtb_push_[0-9a-f]+")),
@@ -78,7 +78,7 @@ class RealtimeNormalizer(baseline.Normalizer):
 
 
 # The normalizer of each live channel's messages: the drivers' trace channels
-# (providers/openai_realtime.py:188-190, providers/gemini/live.py:271).
+# (providers/openai_realtime.py and providers/gemini/live.py, each driver's __init__).
 NORMALIZERS = {"openai_realtime.ws": RealtimeNormalizer, "gemini_live.ws": WireNormalizer}
 _PLACEHOLDER = re.compile(r"<[a-z_]+-\d+>")
 LEFT_OPEN = (
@@ -108,15 +108,17 @@ def from_trace(run_dir: Path) -> list[dict]:
     """The cassette of the live session in ``run_dir``'s episode trace.
 
     The agent trace records each message a driver sends just before it writes it, and each one it
-    receives when it reads it, with the connection that carried it (providers/capture.py:266-370),
-    in the order they were captured (evaluation/agent_trace.py:179-196); the bodies are in the
+    receives when it reads it, with the connection that carried it (providers/capture.py
+    _session_capture), in the order they were captured (evaluation/agent_trace.py
+    AgentTraceSink.capture); the bodies are in the
     blob pack. A server message's ``at`` is its capture's wall time less the episode origin the
     runner records in ActiveLoopStarted (evaluation/runner.py main), which on the wall clock
     is semantic time; the client's records have none, so only their order is compared. A retried
     run appends attempts; the last one with that record is taken.
 
-    The trace records no handshake (providers/capture.py:8-9) and no close: the recording
-    connection captures handshake failures, sends and receives only (capture.py:303-331). So a
+    The trace records no handshake (providers/capture.py, its docstring) and no close: the
+    recording connection captures handshake failures, sends and receives only (capture.py
+    sync_ws_connection, async_ws_connection). So a
     connection opens before its first message, and the cassette has no closes. A session whose
     server closed a connection converts all the same, into one whose client waits on that
     connection when it is replayed, which the replay reports as a connection left open; replaying

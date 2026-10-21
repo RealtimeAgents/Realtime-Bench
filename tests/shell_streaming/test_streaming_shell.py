@@ -557,7 +557,7 @@ def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monke
 
 
 def test_a_push_that_raises_any_exception_loses_that_frame_only():
-    """A cancellation is a BaseException (entity/model.py:483 RetryCancelled). A push lane that let
+    """A cancellation is a BaseException (entity/model.py RetryCancelled). A push lane that let
     it through would die with the push held: the next frame would find it busy."""
     clock = FakeClock()
     env, agent = FakeEnv(clock), FakeAgent(clock, ONE_CLICK)

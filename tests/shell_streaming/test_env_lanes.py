@@ -305,7 +305,7 @@ def test_a_lane_closed_right_after_its_command_ends_once_it_answered():
 
 
 def test_an_operation_that_raises_a_base_exception_is_answered_too():
-    """L6: RetryCancelled is a BaseException (entity/model.py:483); a lane that let it through
+    """L6: RetryCancelled is a BaseException (entity/model.py); a lane that let it through
     would die with its command held, and the kernel would wait for that answer for good."""
     clock, env, inbox, lanes = _lanes()
 

@@ -1,20 +1,21 @@
 """Whether the OpenAI Realtime driver's blocking receive runs on the fake clock (stream-plan 2.6).
 
 The driver reads with ``event = await asyncio.to_thread(self._conn.recv)``
-(providers/openai_realtime.py:135). On a loop the fake clock made, that runs on a thread the clock
-starts, and the SDK's recv blocks there in websockets' message queue
+(providers/openai_realtime.py _Session._receive). On a loop the fake clock made, that runs on a
+thread the clock starts, and the SDK's recv blocks there in websockets' message queue
 (openai/resources/realtime/realtime.py:822; websockets/sync/messages.py:87): the clock sees a busy
 thread and never moves, so a server message due later never comes. With clocked_connection
 passed through the driver's own seam, the connection class it hands the SDK as
-``create_connection`` (openai_realtime.py:188-190, 331-336), the receive waits on the clock, and
-the driver, its SDK and its send path run unchanged.
+``create_connection`` (OpenAIRealtimeDriver ``_ws_connection``, set in __init__ and passed in
+open_session), the receive waits on the clock, and the driver, its SDK and its send path run
+unchanged.
 
 cassettes/openai_realtime-timed-reply.jsonl is one turn, converted from a session against the
 stub of test_cassette_from_trace.py, its one text delta split in two, and then timed by hand: the
 acknowledgements are reactive, the response starts at 0.2 s, its two text deltas arrive at 0.5 s
 and 0.8 s and it is done at 1.0 s, when the driver closes. The server messages come in the order
-the driver read them: it reads only while it waits for something (openai_realtime.py:105), first
-after response.create.
+the driver read them: it reads only while it waits for something (openai_realtime.py _Session),
+first after response.create.
 """
 
 from __future__ import annotations

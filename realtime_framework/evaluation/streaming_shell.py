@@ -4,7 +4,9 @@
 as evaluation/shell.py drives the turn-based policy: it reads the clock, runs the commands each
 ``step`` returns, posts their answers, and in between waits for a post or for the next timer the
 kernel set. What differs is where the commands run: the shell's own thread never waits for the
-environment or for the session (phase2.md, native streaming).
+environment or for the session (phase2.md, native streaming). One command waits for the gate on
+it, ReleaseInputs, which the kernel sends once every operation it sent is answered: the gate is
+free by then.
 
 - Captures, actions and end checks run on the environment lanes, behind the shell's gate
   (evaluation/env_lanes.py): a capture and an action share it, so frames keep coming during a
