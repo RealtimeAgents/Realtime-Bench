@@ -631,11 +631,13 @@ class _Shell:
         # The cap, however late the shell got to it: the kernel charges the move that much.
         latency = round(self._cap_due - held.started_semantic, 2)
         r = episode_records.timed_out_result(latency, entry.data["reason"])
-        _, (chunks, completed) = self._settle(held, r)
+        result, (chunks, completed) = self._settle(held, r)
         self._decision.result = r
         for chunk in chunks:
             self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
         self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
+        if result.invalid is not None:  # its trajectory row could not be written
+            self.post(result.invalid)
 
     def _abort(self, generation: int) -> None:
         held = self._generations.get(generation)  # None when its StartGeneration raised
