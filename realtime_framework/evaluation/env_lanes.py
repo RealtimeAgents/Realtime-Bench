@@ -17,8 +17,10 @@ not change in phase 2: a game's end check folds the state it reads into its peak
 its invalid run unlocked (GuestEnvironment.check_end, _execution_failed). A capture enters the
 task too (sandbox/observation/capture.py:228, 261), as an action does (sandbox/actions.py:931-932),
 so every operation holds the gate and no two run at once: a capture waits for an action that holds
-it. The gate goes to its waiters in the order they asked, and waiting for it is a wait on the
-clock, so a fake clock moves on while an operation that holds it waits.
+it. A lane takes its place in the gate's line when it is given the command, so the environment
+runs the kernel's commands in the order the kernel sent them, also those it sent in one step to
+two lanes. Waiting for the gate is a wait on the clock, so a fake clock moves on while an
+operation that holds it waits.
 
 Like the turn-based shell, the gate compares ``_invalid_run`` before and after each operation and
 posts what the environment latched itself before the operation's answer; it posts each record
@@ -42,6 +44,7 @@ which one executes (``executing``) and when it is done (``action_done``).
 
 from __future__ import annotations
 
+import functools
 import threading
 import traceback
 from collections import deque
@@ -71,14 +74,28 @@ class EnvGate:
         self._waiting: deque[threading.Event] = deque()  # one per waiter, in the order it asked
         self._posted: dict | None = None
 
-    def call(self, operation: Callable[..., Any], *args, **kwargs):
-        """Run one environment operation under the gate. An invalid run the environment latched
-        itself, with its own reason, goes to the kernel before the operation returns."""
-        self._acquire()
+    def reserve(self) -> threading.Event:
+        """A place in the gate's line, which ``call`` waits for."""
+        turn = self._clock.event()
+        with self._mutex:
+            if self._held:
+                self._waiting.append(turn)
+            else:
+                self._held = True
+                turn.set()
+        return turn
+
+    def call(self, operation: Callable[..., Any], *args, turn: threading.Event | None = None):
+        """Run one environment operation under the gate once its ``turn`` comes, a place it takes
+        now unless one is given. An invalid run the environment latched itself, with its own
+        reason, goes to the kernel before the operation returns."""
+        turn = self.reserve() if turn is None else turn
+        # The holder hands the gate on by setting the next turn.
+        self._clock.wait(turn, None)
         try:
             latched = getattr(self._env, "_invalid_run", None)
             try:
-                return operation(*args, **kwargs)
+                return operation(*args)
             finally:
                 invalid = getattr(self._env, "_invalid_run", None)
                 if invalid is not None and invalid is not latched:
@@ -94,16 +111,6 @@ class EnvGate:
             self._posted = record
         self._post(Invalidated(record["category"], record["reason"], record.get("detail")))
 
-    def _acquire(self) -> None:
-        with self._mutex:
-            if not self._held:
-                self._held = True
-                return
-            turn = self._clock.event()
-            self._waiting.append(turn)
-        # The holder hands the gate on by setting it.
-        self._clock.wait(turn, None)
-
     def _release(self) -> None:
         with self._mutex:
             if self._waiting:
@@ -115,20 +122,25 @@ class EnvGate:
 class Lane:
     """One thread that runs one command at a time and posts the answer each one returns."""
 
-    def __init__(self, name: str, post: Callable[[object], None], clock) -> None:
+    def __init__(
+        self, name: str, post: Callable[[object], None], clock, gate: EnvGate | None = None
+    ) -> None:
         self.name = name
-        self._post, self._clock = post, clock
+        self._post, self._clock, self._gate = post, clock, gate
         self._mutex = threading.Lock()
         self._command: Callable[[], object] | None = None
         self._closed = False
         self._ready = clock.event()
         clock.start_thread(self._run, name=f"env-lane-{name}")
 
-    def submit(self, command: Callable[[], object]) -> None:
-        """Run ``command`` next; it returns the answer to post and never raises."""
+    def submit(self, command: Callable[..., object]) -> None:
+        """Run ``command`` next; it returns the answer to post and never raises. On the gate, the
+        lane takes its place in the gate's line now and passes it as ``command(turn)``."""
         with self._mutex:
             assert not self._closed, f"the {self.name} lane is closed"
             assert self._command is None, f"the {self.name} lane is still running a command"
+            if self._gate is not None:
+                command = functools.partial(command, self._gate.reserve())
             self._command = command
         self._ready.set()
 
@@ -172,9 +184,9 @@ class EnvLanes:
         self.env = env
         self._clock = clock
         self.gate = EnvGate(env, post, clock)
-        self._capture = Lane("capture", post, clock)
-        self._action = Lane("action", post, clock)
-        self._end_check = Lane("end-check", post, clock)
+        self._capture = Lane("capture", post, clock, self.gate)
+        self._action = Lane("action", post, clock, self.gate)
+        self._end_check = Lane("end-check", post, clock, self.gate)
         self.executing: Execute | None = None  # the command the action lane runs
         self._idle = clock.event()  # set while no action executes
         self._idle.set()
@@ -182,9 +194,9 @@ class EnvLanes:
     def capture(self, captured: Callable[[Observation], FrameCaptured]) -> None:
         """Capture: answer with ``captured(observation)``, which the lane calls."""
 
-        def run():
+        def run(turn):
             try:
-                return captured(self.gate.call(self.env.capture))
+                return captured(self.gate.call(self.env.capture, turn=turn))
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
                 return FrameCaptured(error=traceback.format_exc())
 
@@ -194,9 +206,9 @@ class EnvLanes:
         """Execute: hand ``executed`` what the action lane read, then answer with
         ActionExecuted."""
 
-        def run():
+        def run(turn):
             try:
-                answer, record = self.gate.call(self._act, command)
+                answer, record = self.gate.call(self._act, command, turn=turn)
                 executed(record)
                 return answer
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
@@ -214,9 +226,9 @@ class EnvLanes:
         return self._clock.wait(self._idle, wait)
 
     def check_end(self, command: CheckEnd) -> None:
-        def run():
+        def run(turn):
             try:
-                ended, reason = self.gate.call(self.env.check_end)
+                ended, reason = self.gate.call(self.env.check_end, turn=turn)
             except Exception:  # noqa: BLE001 - the kernel counts the failed read
                 return EndChecked(command.request, error=traceback.format_exc())
             return EndChecked(command.request, ended, reason)

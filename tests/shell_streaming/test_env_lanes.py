@@ -250,3 +250,16 @@ def test_the_action_lane_says_when_the_action_it_runs_is_done():
     lanes.close()
     assert done == [(False, 0.5), (True, 2.0)]
     assert lanes.executing is None
+
+
+@pytest.mark.parametrize("check_first", [True, False])
+def test_commands_sent_at_one_instant_take_the_gate_in_the_order_they_were_sent(check_first):
+    clock, env, inbox, lanes = _lanes()
+    sends = [lambda: lanes.check_end(CheckEnd(1)), lambda: lanes.capture(_frame)]
+    with clock.participant():
+        for send in sends if check_first else sends[::-1]:
+            send()
+        inbox.wait_for(2)
+    lanes.close()
+    order = [name for name, _, _ in env.intervals]
+    assert order == (["check_end", "capture"] if check_first else ["capture", "check_end"])
