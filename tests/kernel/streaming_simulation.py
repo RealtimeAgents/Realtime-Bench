@@ -49,7 +49,6 @@ from realtime_framework.evaluation.kernel.events import (
     GenerationFinished,
     GenerationResult,
     Invalidated,
-    KeysReleased,
     OutcomeCommitted,
     Record,
     ReleaseInputs,
@@ -128,7 +127,7 @@ class World:
     ends_at: float | None = None  # the task reports its end from this time on
     end_reason: str | None = None
     start_s: float = 0.0  # the policy starts this long after the episode origin
-    # (time, event) other threads post: an invalidation, a release timer's answer.
+    # (time, event) other threads post, such as an invalidation.
     posts: tuple[tuple[float, object], ...] = ()
     capture_s: float = 0.0
     push_s: float = 0.0
@@ -529,6 +528,9 @@ class Simulation:
         self._gated("execute", seconds, press)
 
     def _release(self, key: str, at: float) -> None:
+        """The environment's own release timer. It tells the kernel nothing of a release that
+        worked; one that failed for good goes through on_invalid (sandbox/actions.py
+        GuestEnvironment._wall_release_due)."""
         if self._releases.get(key) != at:
             return
         del self._releases[key]
@@ -537,7 +539,6 @@ class Simulation:
             self.kernel.post(Invalidated("environment", "wall_key_release_failed", error))
             return
         self.key_events.append((self.ops, (key,)))
-        self.kernel.post(KeysReleased((key,)))
 
     # ---- what every run keeps ---------------------------------------------------------------
 
