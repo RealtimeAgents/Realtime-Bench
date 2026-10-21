@@ -28,6 +28,8 @@ import os
 from pathlib import Path
 
 import pytest
+from openai.resources.realtime.realtime import RealtimeSessionResource
+from websockets.exceptions import ConnectionClosedError
 
 import realtime_framework.entity.model as model_module
 from realtime_framework.entity.config import ModelConfig
@@ -415,6 +417,34 @@ def test_rejected_upgrade_retries_connect(tmp_path):
     assert [event["type"] for event in initialize["events"]] == ["session.update"]
     assert all(_connections_used(r) == [2] for r in _steps(records))
     _compare_with_baseline("token-rejected-upgrade", records, baseline.trajectory(tmp_path))
+    assert session_waits(tmp_path) == ["connect_backoff"]
+
+
+def test_connect_that_fails_after_the_upgrade_closes_its_connection(tmp_path, monkeypatch):
+    """connect()'s first attempt opens the WebSocket, then its session.update fails as on a
+    dropped connection (ConnectionClosedError, TRANSIENT). The attempt closes the connection it
+    opened (providers/openai_realtime.py _connect) before connect() opens a new one after the
+    shared backoff; the episode runs on that one."""
+    update = RealtimeSessionResource.update
+    failed = []
+
+    def update_once(self, **kwargs):
+        if not failed:
+            failed.append(kwargs)
+            raise ConnectionClosedError(None, None)
+        return update(self, **kwargs)
+
+    monkeypatch.setattr(RealtimeSessionResource, "update", update_once)
+    steps = LONG_SCENARIO[:2]
+    with RealtimeStub(replies(steps)) as stub:
+        records = _run(stub, steps, tmp_path, "failed-session-update")
+    assert len(failed) == 1
+    first, _ = records[-1]["connections"]
+    assert first["rejected"] is None and first["close"] == {"received": 1000, "sent": 1000}
+    (initialize,) = records[1]["client_events"]
+    assert initialize["connection"] == 2
+    assert [event["type"] for event in initialize["events"]] == ["session.update"]
+    assert all(_connections_used(r) == [2] for r in _steps(records))
     assert session_waits(tmp_path) == ["connect_backoff"]
 
 
