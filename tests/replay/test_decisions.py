@@ -44,7 +44,8 @@ BASELINES = Path(__file__).parent / "baselines"
 DUMMY_KEY = "replay-dummy-key"
 # api -> (catalog key = configs/models/<key>.yaml, upstream provider the response must name).
 # Luna's upstream is the YAML's upstream_provider; JEV's comes from its driver's model_defaults
-# (providers/jev/decisions.py:31-33; registry.py:277-278, 299-300; decisions/protocol.py decide).
+# (providers/jev/decisions.py model_defaults; registry.py load_definitions;
+# decisions/protocol.py decide).
 APIS = {
     "openai_decisions": ("gpt-6-luna-decisions", "openai"),
     "jev_decisions": ("jev-1.13", "typesafe"),
@@ -61,8 +62,8 @@ JEV_LEDGER_HEADER = "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs;"
 
 @pytest.fixture(autouse=True)
 def dummy_key(monkeypatch):
-    """The YAMLs name OPENROUTER_API_KEY (openai_decisions.py:82); create_agent's .env loading
-    only fills unset variables (providers/registry.py:38), so this dummy wins."""
+    """The YAMLs name OPENROUTER_API_KEY (OpenAIDecisionsClient.__init__); create_agent's .env
+    loading only fills unset variables (providers/registry.py:38), so this dummy wins."""
     monkeypatch.setenv("OPENROUTER_API_KEY", DUMMY_KEY)
 
 

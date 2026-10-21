@@ -55,7 +55,7 @@ class DecisionsStub:
     @property
     def base_url(self) -> str:
         """A model YAML base_url as the catalog stores it, without a trailing slash
-        (providers/registry.py:222); httpx joins ``decisions`` below it."""
+        (providers/registry.py validate_connection); httpx joins ``decisions`` below it."""
         return f"http://127.0.0.1:{self._server.server_address[1]}/api/alpha"
 
     def load(self, script) -> None:
@@ -80,8 +80,9 @@ class DecisionsStub:
         index = len(self.requests) - 1
         if not self._script:
             self.unscripted += 1
-            # HTTP 400 is FATAL for the per-question retry (entity/model.py:418-426), so a
-            # question beyond the script fails its decision at once instead of being retried.
+            # HTTP 400 is FATAL for the per-question retry (entity/model.py
+            # classify_http_failure), so a question beyond the script fails its decision at once
+            # instead of being retried.
             return 400, _error(400, "request beyond the script")
         entry = self._script.pop(0)
         if isinstance(entry, Failure):
