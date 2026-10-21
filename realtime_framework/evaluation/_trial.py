@@ -180,6 +180,7 @@ def main(argv=None):
         validate_model_interaction(
             entry.adapter_type,
             clock_mode=args.clock,
+            fps=args.fps,
             model_input_fps=model_input_fps,
             interaction_mode=args.interaction_mode,
             tokens_per_frame=tokens_per_frame,
