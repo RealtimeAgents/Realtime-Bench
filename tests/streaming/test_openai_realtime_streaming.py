@@ -18,6 +18,7 @@ from realtime_framework.entity.events import (
     GenerationBoundary,
     ProviderHistoryState,
     TextDelta,
+    TextDone,
     UsageSnapshot,
 )
 from realtime_framework.entity.model import (
@@ -483,12 +484,16 @@ def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
         GenerationBoundary,
         TextDelta,
         TextDelta,
+        TextDone,
         UsageSnapshot,
         GenerationBoundary,
     ]
     assert "".join(e.text for e in events if isinstance(e, TextDelta)) == '{"action": "wait"}'
     _, reply = handle.opaque
     assert reply.received_at == {"evt_text": 1.9}
+    # The completed text comes with the time it came off the wire (decisions 19 and 4.17).
+    (completed,) = (event for event in events if isinstance(event, TextDone))
+    assert (completed.text, completed.received_at) == ('{"action": "wait"}', 1.9)
     core = session.core
     assert {k: (f.folded, f.text) for k, f in core.frames.items()} == {
         "f1.frame": (True, PLACEHOLDER),

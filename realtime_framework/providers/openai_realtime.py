@@ -38,6 +38,7 @@ from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
+from realtime_framework.entity.events import TextDone
 from realtime_framework.entity.events import UsageSnapshot
 from realtime_framework.providers.litellm import object_dict
 from realtime_framework.entity.model import FATAL
@@ -631,6 +632,21 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                     "visible",
                     **numbers,
                 )
+                continue
+            if event_type == "response.output_text.done":
+                # Native streaming's reader recorded when it came off the wire
+                # (RealtimeSessionCore.arrived); a turn's reader records no time.
+                received_at = core_generation.received_at.get(getattr(event, "event_id", None))
+                if received_at is not None:
+                    sequence += 1
+                    yield TextDone(
+                        generation.generation_id,
+                        sequence,
+                        event_type,
+                        getattr(event, "text", "") or "",
+                        received_at=received_at,
+                        **numbers,
+                    )
                 continue
             if event_type == "response.done":
                 response = getattr(event, "response", None)
