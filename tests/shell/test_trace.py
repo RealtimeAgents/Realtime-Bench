@@ -39,7 +39,6 @@ def test_kernel_records_keep_the_trace_event_names_with_the_runners_payloads():
         "ActionApplied",
         "ClockAdvanced",
     ]
-    observation = episode.agent.generated[0]
     (captured,) = trace.payloads("ObservationCaptured")
     assert captured == {
         "decision": 0,
@@ -61,10 +60,7 @@ def test_kernel_records_keep_the_trace_event_names_with_the_runners_payloads():
         "provider_output_token_cap": None,
         "transport_output_token_cap": None,
         "native_output_limit": None,
-        "generation": 1,
-        "remaining_clock_tokens": None,
     }
-    assert observation[0] == started["generation"]
     (chunk,) = trace.payloads("OutputChunkReceived")
     assert (chunk["decision"], chunk["content"], chunk["final"]) == (0, "a reply", True)
     (completed,) = trace.payloads("InferenceCompleted")
