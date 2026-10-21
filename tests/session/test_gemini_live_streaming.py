@@ -1073,6 +1073,27 @@ def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
     assert "d1.feedback" in rig.driver._core.carried
 
 
+def test_a_handle_that_comes_after_a_failed_trigger_resumes_nothing_either():
+    """A resumable handle the server sends on the connection once a trigger did not go out whole
+    resumes its session no more than one before: the goAway renewal rebuilds it."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        with pytest.raises(RuntimeError):
+            await rig.driver.request_reply(request)
+        rig.socket.feed(update("handle-2"), GO_AWAY)
+        await settle()
+        result = await rig.driver.renew(rig.seed, rig.view([pushed(1)]), lambda *_, **__: None)
+        await rig.driver.close()
+        return result
+
+    assert asyncio.run(run()).disposition == SyncDisposition.REBUILT
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, None]
+
+
 def test_an_acknowledgement_written_after_a_reconnect_is_recorded_on_its_connection():
     """An acknowledgement whose write returns once the next connection is open is sent on the
     connection it went out on, and is no write of the new one."""
