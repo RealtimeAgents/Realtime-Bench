@@ -68,7 +68,7 @@ class Deadline:
 
     def overrun(self) -> bool:
         """Whether a wait ran out of this deadline or it has passed."""
-        return self.expired or (self.at is not None and self.clock.monotonic() >= self.at)
+        return self.expired or self.clock.monotonic() >= self.at
 
 
 @contextmanager

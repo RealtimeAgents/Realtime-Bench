@@ -132,7 +132,9 @@ class EnvironmentBudgetConfig:
     # Send one key event, a press or a release, under the token clock; a tap's frame between its
     # press and its release is a clock advance. The guest's request timeout for a key.
     key_event_s: float = 10.0
-    capture_s: float = 120.0  # capture one observation; the CDP call default
+    # Capture one observation: the page probes, the guest's screenshots and the wait for the render
+    # fence. As long as one CDP call may take by default.
+    capture_s: float = 120.0
     state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
     # The same read when the kernel's shell asks on the wall clock, at the environment rate. Three
     # failed reads in a row invalidate the run, so a wedged environment ends it in about 30 s.
