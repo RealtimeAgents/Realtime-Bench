@@ -70,7 +70,9 @@ class Invalidated:
 
 @dataclass(frozen=True)
 class EndChecked:
-    """The environment's answer to CheckEnd. Asking also samples a game's score."""
+    """The environment's answer to CheckEnd. Asking also samples a game's score. A failed read
+    is no end, only a failure toward the reads in a row, so it is handled in its turn, as an
+    answer is: the count follows the order of the reads."""
 
     request: int
     ended: bool = False
@@ -79,7 +81,7 @@ class EndChecked:
 
     @property
     def priority(self) -> Priority:
-        return Priority.CONTROL if self.ended or self.error else Priority.COMPLETION
+        return Priority.CONTROL if self.ended else Priority.COMPLETION
 
 
 @dataclass(frozen=True)
