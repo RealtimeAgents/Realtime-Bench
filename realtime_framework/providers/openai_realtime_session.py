@@ -178,6 +178,8 @@ class Generation:
     cancel_event_id: str | None = None
     events: deque = field(default_factory=deque)
     output_id: str | None = None
+    # When native streaming's reader received each completed output text, by server event id.
+    received_at: dict[str, float] = field(default_factory=dict)
 
 
 class RealtimeSessionCore:
@@ -201,6 +203,9 @@ class RealtimeSessionCore:
         self.ledger_text = ""
         # Every operation handed to the connection, by Operation.key.
         self.delivery: dict[tuple[str, str], Delivery] = {}
+        # When native streaming's reader received the first event that confirmed each operation,
+        # by Operation.key, on the driver's clock.
+        self.acknowledged_at: dict[tuple[str, str], float] = {}
         # Every block native streaming pushed, by the client event of its create.
         self.pushes: dict[str, Push] = {}
         # The items of each reply native streaming requested, by the output block it becomes.
@@ -546,10 +551,9 @@ class RealtimeSessionCore:
         """Apply one server event of this connection, in arrival order. Returns whether a state
         took it: an operation it confirms, or the push, edit or response it is about."""
         kind = getattr(event, "type", "")
-        if kind in _CREATE_ACKS:
-            return self._confirm(("create", str(getattr(getattr(event, "item", None), "id", ""))))
-        if kind == "conversation.item.deleted":
-            return self._confirm(("delete", str(getattr(event, "item_id", ""))))
+        key = self._acknowledged(kind, event)
+        if key is not None:
+            return self._confirm(key)
         if kind == "error":
             error = getattr(event, "error", None)
             event_id = getattr(error, "event_id", None)
@@ -581,6 +585,32 @@ class RealtimeSessionCore:
             self._response_event(generation, kind, event)
             return True
         return False
+
+    def arrived(self, event, now: float) -> bool:
+        """Apply one server event as native streaming's reader does, which reads every event as it
+        arrives, at ``now`` on the driver's clock: as receive() does, and record when the server
+        acknowledged an operation and when a reply's completed output text came in. An action
+        parsed from that text arrived then (decisions 19 and 4.17)."""
+        if not self.receive(event):
+            return False
+        kind = getattr(event, "type", "")
+        key = self._acknowledged(kind, event)
+        if key is not None:
+            self.acknowledged_at.setdefault(key, now)
+        elif kind == "response.output_text.done":
+            generation = self._responses[getattr(event, "response_id", None)]
+            generation.received_at[getattr(event, "event_id", None)] = now
+        return True
+
+    @staticmethod
+    def _acknowledged(kind: str, event) -> tuple[str, str] | None:
+        """The operation a server event acknowledges, by Operation.key, if it is an
+        acknowledgement."""
+        if kind in _CREATE_ACKS:
+            return ("create", str(getattr(getattr(event, "item", None), "id", "")))
+        if kind == "conversation.item.deleted":
+            return ("delete", str(getattr(event, "item_id", "")))
+        return None
 
     def _confirm(self, key: tuple[str, str]) -> bool:
         self._unconfirmed.discard(key)
