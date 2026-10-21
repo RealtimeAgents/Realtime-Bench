@@ -1,47 +1,52 @@
 # 新旧对跑签字报告（P4b）
 
-这份报告是 runner 切换（P1c）的合入门槛（wave2-plan.md 第 2 节 P1c、P4）。对齐的是 `unify-phase2` 的 `b3288a2`。
+这份报告是 runner 切换（P1c）的合入门槛（wave2-plan.md 第 2 节 P1c、P4）。对齐的是 `unify-phase2` 的 `cc2c853`，加上本分支把 token 那一半旧循环代码搬出生产环境的两个提交（`d4ecfd6`、`1b8c589`）。签字跑完时主线到了 `377b167`，多出的 20 个提交都在流式部分：其中 `core.py` 按 `ActionExecuted.finished_at` 归档动作的回答，而回合制外壳和模拟都不填这个字段，所以不影响这里的对跑。
 
 ## 1. 对跑的是什么
 
-- **代码**：分支 `unify2-p4a`，基于 `unify-phase2` 的 `b3288a2`。和上次签字（`55b0082`）相比，多合入了：
+- **代码**：分支 `unify2-p4a`，基于 `unify-phase2` 的 `cc2c853`。和对齐 `55b0082` 的那次签字相比，多合入了：
   - p1c 的切换：
     - `main()` 跑在外壳上（`dffd397`）；
     - 外壳先投动作自己的回答，再投环境锁存的 Invalidated（`3f7fcb8`，N6）；
     - 接纳以后才取用量（`73ca9a3`）；
     - 旧循环原样搬到 `tests/differential/legacy_loop.py`（`883c735`，第 11 条），runner 去掉了内核没有的截止宽限；
-  - kernel-fix 第六、七轮：
+  - kernel-fix 第六、七轮和第九到十一轮：
     - 墙钟动作在外壳 accept 之后的读数上落地（N25）；
     - 墙钟落地前在新读数上照读（N26 取 (b)）；
+    - 读失败判无效记在发问时刻（N44）；
   - p1b 第四到七轮：
     - L1–L8；
     - 任务结束、判无效时放弃的生成合成记录（N10），这些记录不进 token 统计（N34）；
     - 外壳兜住内核和读数抛的异常（N11）；
   - token 回放替身的运维时钟随世界时间走（`a3a8d76`）；
-  - 原生流式 agent、流式报表，以及默认 harness、回放归一化的几处改动。
+  - 只有旧循环用的环境代码搬出生产的 `GuestEnvironment`（第 11 条），放进 `tests/differential/legacy_environment.py`：
+    - 墙钟那一半（截止）由 p1c 第七轮搬，叫 `LegacyWallClock`；
+    - token 那一半（`done()`、内核不计读时点按和步进里的读）由本分支搬，叫 `LegacyStateReads`；
+  - N43、原生流式 agent 和 OpenAI Realtime、Gemini Live 的修正轮、stream-wire 第三四轮、流式报表，以及默认 harness、回放归一化的几处改动。
 - **三方**：
   - 离散事件模拟（`simulated.py`）；
   - 外壳 `run_episode`（`drivers.shell`）；
   - 旧循环 `legacy_loop._run_stream_legacy`（`drivers.legacy`，参数照切换前的 `main()` 传）。
 
-  外壳和旧循环用同一个回放世界：真 agent、回放桩、`FakeEnvironment` 或 `GuestEnvironment` 的子类。墙钟下每局一个新的假时钟。
+  外壳和旧循环用同一个回放世界：真 agent、回放桩，墙钟下是 `FakeEnvironment` 的子类，token 和暂停下是混入了 `LegacyStateReads` 的 `GuestEnvironment` 子类（外壳设了 `kernel_counts_reads`，走生产的那条路）。墙钟下每局一个新的假时钟。
 - **范围**：只覆盖 HTTP 类 API。墙钟下是 chat_completions，token 和暂停下是 openrouter；live 编码器不进对跑（R15）。
 
 ## 2. 结论
 
-1. **外壳对离散事件模拟：完全一致。** 62 个具名脚本、2016 个随机种子（0–2015）都一致。投影里的浮点按 1e-9 的容差比（X4）。这一轮比较的范围扩大了：
+1. **外壳对离散事件模拟：完全一致。** 62 个具名脚本、2016 个随机种子（0–2015）都一致。投影里的浮点按 1e-9 的容差比（X4）。第四轮起比较的范围扩大了：
    - 墙钟下每次读状态的时刻和答案；
    - 内核放弃的生成，外壳有没有中止；
    - 每个决策的记录有没有写两遍。
-2. **外壳对旧循环：除了清单内的差异，只剩一条清单外的 U14，要读状态有耗时才出现。** 交协调者拍板，见第 7 节。
+2. **外壳对旧循环：除了清单内的差异，没有清单外的差异。** `b3288a2` 那次签字剩下的 U14 已由 N44 消掉（第 7 节）。
 3. **清单本身的变化**：
    - U4、U5 去掉了：p1c 按 N6 修了外壳，两个具名脚本按旧循环的结局断言，不再标 xfail。
-   - 上次签字时自编的 U7（`frame_usage` 全为 0）在 `73ca9a3` 以后消失了，这个编号现在是 p1b 的。
+   - `55b0082` 那次签字时自编的 U7（`frame_usage` 全为 0）在 `73ca9a3` 以后消失了，这个编号现在是 p1b 的。
    - X3 不再出现：放弃的生成，外壳都合成"放弃的调用"记录，归 K-a（截止）、U10（任务结束）、U11（判无效）。
-   - N26 (b) 以后，KF5d 作废，K-n 又出现了。这一轮中途自编过一条 U13（旧循环落地前多读那一次的耗时），也随 N26 (b) 消失了；U13 这个编号现在是 p1b 第七轮的。
+   - N26 (b) 以后，KF5d 作废，K-n 又出现了。第四轮中途自编过一条 U13（旧循环落地前多读那一次的耗时），也随 N26 (b) 消失了；U13 这个编号现在是 p1b 第七轮的。
+   - U14（读失败判无效的结束时刻）由 N44 消掉：内核和旧循环都记在发问时刻。
    - 补了 N29 要的读状态、采帧有耗时的具名脚本：K-b 扩写的推迟、D47 都有脚本钉住。耗时覆盖到哪见第 4 节。
 4. **连跑 20 次**：同时跑 20 次、依次跑 20 次，都没有偶发失败（第 6 节）。
-5. **全量 rtest**：`RTEST TOTAL: 2235 passed, 0 failed or errored`，等于本地 `pytest --collect-only` 收集到的 2235 个。
+5. **全量 rtest**：`RTEST TOTAL: 2346 passed, 0 failed or errored`，等于本地 `pytest --collect-only` 收集到的 2346 个。
 
 ## 3. 怎么比
 
@@ -58,7 +63,7 @@
 - **旧循环对外壳**：
   - 旧投影按编号规则（`rules.py`）改写以后要和外壳一致。
   - 另外整份比请求（按回放基线的归一化），比 agent 的用量，并按决策比投影外的四种轨迹记录：ObservationCaptured、InferenceStarted、OutputChunkReceived、InferenceCompleted。
-  - 这一轮新加两项：
+  - 第四轮新加两项：
     - 除 wait 以外每个动作的 `execution_result`；
     - token 下任务时钟收到的键事件。
   - 规则删掉的决策（内核结束以后旧循环才开始的），连同它们的请求、回复记录和用量一起不比。
@@ -118,7 +123,7 @@
 | K-d | 出现 | `token-skipped-decision-after-the-end`、`token-think-budget-and-the-end` | 9 | |
 | K-e | 出现 | `token-advance-fails-while-approaching`、`token-advance-fails-while-pacing` | 33 | |
 | K-f | 出现 | `token-missing-usage` | 47 | |
-| K-g | 出现 | 墙钟 17 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束的那次读返回以后；截止落在一次读期间时，那次读完以后 |
+| K-g | 出现 | 墙钟 16 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束或第三次读失败的那次读返回以后（结束记在发问时刻，N44）；截止落在一次读期间时，那次读完以后 |
 | K-h | 出现 | `wall-frozen-stream`、`token-frozen-stream` | 19 | |
 | K-i | 出现 | `wall-think-budget-and-the-end`、`token-think-budget-and-the-end` | 4 | |
 | K-j | 出现 | `token-lease-ends-inside-a-tap` | 4 | |
@@ -160,32 +165,36 @@
 | U10 | 出现 | `wall-ends-during-a-reply`、`wall-ends-during-a-reply-and-reads-take-time` | 91 | 任务结束时放弃的生成，外壳合成"放弃的调用"记录（`stale`，`harness_abort_reason: task_end`，缺用量原因 `generation_aborted_at_task_end`，不进 token 统计）；旧循环那条是真实回复（N10、N34） |
 | U11 | 出现 | `wall-third-failed-read-during-a-reply` | — | 同上，判无效时放弃（`invalid_run`）。随机脚本不生成墙钟读失败 |
 | U13 | 不比 | — | — | p1b 第七轮：已整理、后被内核丢弃的结果，轨迹行类型是 `decision`。对跑不比轨迹行 |
-| U14 | 出现，清单外 | `wall-a-failed-read-takes-time` | — | 见第 7 节 |
+| U14 | 已由 N44 消掉 | `wall-a-failed-read-takes-time` 现在两边的结束和快照时刻相同 | — | 读失败判无效，内核原来记在读返回时、旧循环记在发问时；N44 以后内核也记在发问时（`98a60cd`） |
 
 ## 6. 连跑 20 次和随机扫描
 
-在 VM 上跑默认集合 `tests/differential`，共 91 个：62 个具名脚本、25 个随机种子、4 个自测（缩减两个、签名一个、种子参数一个）。
+在 VM 上跑默认集合 `tests/differential`，共 104 个：62 个具名脚本、25 个随机种子、4 个自测（缩减两个、签名一个、种子参数一个）、13 个旧循环环境的测试（`test_legacy_environment.py`）。
 
-- 20 个进程同时跑：20 次都是 `91 passed`，每次 178.23–183.03 s。
-- 20 次依次跑：20 次都是 `91 passed`，每次 146.44–158.92 s。
+- 20 个进程同时跑：20 次都是 `104 passed`，每次 164.82–169.90 s。
+- 20 次依次跑：20 次都是 `104 passed`，每次 145.95–156.12 s。
 
 随机种子 0–2015（32 个进程）全部通过。各规则触发的次数：
 
 > KF5 1292、X1 1083、X2 801、K-g 385、K-a 313、X7 252、U2 157、X12 122、K-b 120、U10 91、X4 51、K-f 47、K-e 33、K-h 19、K-c 12、K-d 9、K-j 4、K-i 4、KF4 1；15 个种子没有任何差异。
 
-## 7. 清单外的，交协调者
+## 7. 清单外的差异
 
-- **U14：墙钟下读状态失败判无效，内核把结束记在读返回的时刻，旧循环记在发问的时刻。**
-  - 内核在 `EndChecked` 回来时数到第三次失败，用当时的读数判无效（`turns.py` `TurnPolicy._count_read`、`core.py` `Kernel.invalidate`）。
-  - 旧循环 `_end_reported` 记的是发问时刻 `queried_at`（`legacy_loop.py`），生产的 `GuestEnvironment.done()` 读失败时锁存无效并返回 True，也走这条路。
-  - 读到任务结束时，两边都记在发问时刻（`TurnPolicy._end_checked` 用 `asked_at`），所以这是内核自己前后不一致的一处。终止记录的 `end_s` 和快照时刻差一次读的耗时；生产里墙钟下读状态是 CDP 调用，一次几十毫秒。
-  - 两种改法：内核对读失败也用 `asked_at`，或者接受为预期差异。
-  - 编号接着 p1b 第七轮的 U13 往下编。
+一条不剩。
+
+- 前几次签字的清单外差异的去向：
+  - U2、U3、U6 由 N5 收进清单；
+  - U4、U5 由 p1c 按 N6 修了外壳；
+  - 自编的 U7 在 `73ca9a3` 以后消失；
+  - 自编的 U13 在 N26 (b) 以后消失；
+  - U14 由 N44 消掉。
+- U14 是什么：墙钟下读状态失败判无效时，内核原来把结束记在读返回的时刻，旧循环记在发问的时刻。读到任务结束时两边都记在发问时刻，所以那是内核自己前后不一致的一处。kernel-fix 第九到十一轮让 `Kernel.invalidate` 取那次读的发问时刻（`98a60cd`），具名脚本 `wall-a-failed-read-takes-time` 现在两边的结束和快照时刻相同，规则也删了。
 
 另外要知道的：
 
-- 墙钟回放替身 `WallEnvironment.done()` 原来先锁存读失败、再花读的时间，已经改成和 `GuestEnvironment` 一样读完才锁存。这只影响 `tests/differential`。
+- 墙钟回放替身 `WallEnvironment.done()` 原来先锁存读失败、再花读的时间，已经改成和旧循环的环境（`LegacyStateReads.done()`）一样读完才锁存。这只影响 `tests/differential`。
 - `tests/differential/legacy_loop.py` 是主线原样搬来的，`ruff check` 报 43 处（行长等）。本分支没改它，lint 只查框架自己的文件。
+- 生产 `GuestEnvironment.execute` 在 `honor_fail` 时，把 DONE、FAIL 记成 `_done`，现在只有 `LegacyStateReads.done()` 读它。内核把 DONE 当 wait 跑，不交给环境（`turns.py`），所以外壳下走不到这一段。它属于 `execute`，不在这次搬的范围内，留着没动。
 
 ## 8. 怎么跑
 
