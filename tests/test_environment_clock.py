@@ -59,14 +59,27 @@ def test_wall_wait_is_cut_at_the_deadline():
         assert env.time_remaining() == 0.0 and env.past_deadline() and env.done()
 
 
+class _SleepRecordingClock(FakeClock):
+    def __init__(self):
+        super().__init__(wall_origin=ORIGIN)
+        self.sleeps = []
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        super().sleep(seconds)
+
+
 def test_wall_wait_for_the_next_tick_polls_every_30_ms():
-    clock = FakeClock(wall_origin=ORIGIN)
+    """From 0.51 s the wait sleeps 30 ms at a time and wakes on the first poll past tick 2."""
+    clock = _SleepRecordingClock()
     env = _wall(clock, 10.0)
     with clock.participant():
-        clock.sleep(0.5)
+        clock.sleep(0.51)
+        clock.sleeps.clear()
         env.wait_until_tick(2)
         assert env.tick_index() == 2
-        assert 2.0 <= clock.monotonic() <= 2.03 + 1e-9
+        assert clock.sleeps == [0.03] * 50
+        assert clock.monotonic() == pytest.approx(2.01)
 
 
 def test_wall_hold_is_released_by_a_timer_on_the_clock():
