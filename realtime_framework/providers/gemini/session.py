@@ -13,9 +13,10 @@ with it. Nothing in it awaits, so each call is one transition, in the order of t
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
 <history block id>)`` and ``("tool_response", <call id>)``, each unknown while it is written,
 sent once written, confirmed when the server acknowledges it (only the setup is:
-setupComplete) and unknown when its write failed. A resumed session also holds what the server
-restored from the handle, which this record does not list. Each change but the start of a write
-is handed to ``on_delivery``, which the driver writes to the event log.
+setupComplete) and unknown when its write failed. A seed is recorded only once the connection
+counts, as sent; its blocks are heard as unknown when its write failed. A resumed session also
+holds what the server restored from the handle, which this record does not list. Each change but
+the start of a write is handed to ``on_delivery``, which the driver writes to the event log.
 """
 
 from __future__ import annotations
@@ -257,7 +258,8 @@ class Received:
     # The ids of the tool calls this message cancels: not to be executed. It does not end the
     # reply. They may be an earlier reply's: tell them by call id, not by this message's
     # generation. A cancelled call still pending is acknowledged all the same; the driver
-    # acknowledges a message's calls before it reads the next, so none is pending then.
+    # acknowledges a message's calls before it takes the reply's next message, so none is
+    # pending then.
     cancelled: tuple[str, ...]
 
 
@@ -329,9 +331,10 @@ class SessionCore:
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         # Streaming: the execution feedback a seed or a trigger has handed to a connection of the
-        # session, over the episode, the text handed by block id. A resume keeps it: what a
-        # trigger handed after the handle the session resumed from is lost with the server's
-        # state, and no trigger hands it again.
+        # session, over the episode, the text handed by block id; a trigger's counts from when
+        # it is planned, and one whose write failed leaves the session to be rebuilt, whose
+        # seed replays it. A resume keeps it: what a trigger handed after the handle the session
+        # resumed from is lost with the server's state, and no trigger hands it again.
         self.carried: dict[str, str] = {}
         # The generation whose reply is being read, by connection, until the reply ends.
         self.replies: dict[int, _Generation] = {}

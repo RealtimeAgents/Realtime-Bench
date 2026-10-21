@@ -445,17 +445,18 @@ def test_observation_delivery(model, failing):
 
 
 class DeliveryLog:
-    """The SessionDelivery events the driver writes: each state, the blocks, and how many
-    messages the socket had taken by then."""
+    """The SessionDelivery events the driver writes: each state, the blocks, the connection,
+    and how many messages the socket had taken by then."""
 
-    def __init__(self, socket: FakeSocket):
-        self.socket = socket
+    def __init__(self, sent):
+        self.sent = sent  # the socket's sent messages, as a callable of nothing
         self.events: list[tuple] = []
 
     def capture(self, event, payload, **_) -> None:
         if event == TraceEvent.SESSION_DELIVERY:
             blocks = [content["block"] for content in payload["contents"]]
-            self.events.append((payload["state"], blocks, len(self.socket.sent)))
+            state = (payload["state"], blocks, payload["connection"], len(self.sent()))
+            self.events.append(state)
 
 
 @pytest.mark.parametrize(
@@ -467,7 +468,7 @@ def test_an_observation_counts_as_sent_once_written(model, messages):
     """The observation's blocks are sent once the last message carrying them went out: its
     client content, or its activity's end."""
     rig = Rig(model, [[]])
-    log = DeliveryLog(rig.live.sockets[0])
+    log = DeliveryLog(lambda: rig.live.sockets[0].sent)
     rig.driver.bind_trace(log)
 
     async def run():
@@ -475,15 +476,20 @@ def test_an_observation_counts_as_sent_once_written(model, messages):
         await rig.driver.send_observation(None, rig.view([frame_turn(0)]))
 
     asyncio.run(run())
-    assert log.events == [("confirmed", ["system"], 0), ("sent", ["d0.frame"], messages)]
+    connection = "gemini_live.ws-1"
+    assert log.events == [
+        ("confirmed", ["system"], connection, 0),
+        ("sent", ["d0.frame"], connection, messages),
+    ]
 
 
 def test_a_seed_that_failed_is_unknown():
-    """A seed whose write failed leaves its blocks unknown; the connection never counted."""
+    """A seed whose write failed leaves its blocks unknown on the connection it was written on;
+    that connection never counted."""
     rig = Rig("gemini-3.8-live", [[]])
     socket = rig.live.sockets[0]
     socket.fail = lambda message: "client_content" in message
-    log = DeliveryLog(socket)
+    log = DeliveryLog(lambda: socket.sent)
     rig.driver.bind_trace(log)
 
     async def run():
@@ -492,7 +498,7 @@ def test_a_seed_that_failed_is_unknown():
             await rig.driver.connect(ConnectRequest(seed=rig.seed, history=history))
 
     asyncio.run(run())
-    assert log.events == [("unknown", ["d0.frame"], 0)]
+    assert log.events == [("unknown", ["d0.frame"], "gemini_live.ws-1", 0)]
 
 
 TRANSCRIPT = {"serverContent": {"outputTranscription": {"text": "partial"}}}
