@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 # A streaming action whose frame cannot be found is rejected, not executed (phase2.md, 动作的定位依据).
 INVALID_GROUNDING_FRAME = "invalid_grounding_frame"
-# Why: the action names no frame, names it with something other than an integer, or names a
-# frame that was never sent.
+# The frame cannot be found because the action names no frame, names it with something other
+# than an integer, or names a frame that was never sent.
 MISSING_FRAME = "missing_frame"
 INVALID_FRAME_SYNTAX = "invalid_frame_syntax"
 FRAME_NOT_IN_TABLE = "frame_not_in_table"
