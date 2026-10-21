@@ -332,7 +332,7 @@ EXTENDED = "gemini-3.8-live-extended-thinking"
     "config, message",
     [
         (
-            gemini(model_name="gemini-3.1-flash-live-preview",
+            gemini(model_name="gemini-3.8-live", reasoning_effort="fixed",
                    provider_options={"tool_response_scheduling": "silent"}),
             "Silent Gemini tool responses require non-blocking tools",
         ),
@@ -341,6 +341,24 @@ EXTENDED = "gemini-3.8-live-extended-thinking"
                    provider_options={"tool_behavior": "non_blocking"}),
             "gemini-3.1-flash-live-preview calls functions synchronously only; "
             "use tool_behavior=blocking",
+        ),
+        # Both 3.1 faults in one message, so fixing one does not raise the other.
+        (
+            gemini(model_name="gemini-3.1-flash-live-preview",
+                   provider_options={"tool_behavior": "non_blocking",
+                                     "tool_response_scheduling": "silent"}),
+            (
+                "gemini-3.1-flash-live-preview calls functions synchronously only; "
+                "use tool_behavior=blocking and tool_response_scheduling=omit"
+            ),
+        ),
+        (
+            gemini(model_name="gemini-3.1-flash-live-preview",
+                   provider_options={"tool_response_scheduling": "silent"}),
+            (
+                "gemini-3.1-flash-live-preview calls functions synchronously only; "
+                "use tool_response_scheduling=omit"
+            ),
         ),
         (
             preset("gemini-3.8-live", reasoning_effort="low"),
@@ -368,8 +386,8 @@ EXTENDED = "gemini-3.8-live-extended-thinking"
             ),
         ),
     ],
-    ids=["silent-blocking", "3.1-non-blocking", "3.8-live-effort", "extended-effort",
-         "extended-options", "extended-silent"],
+    ids=["silent-blocking", "3.1-non-blocking", "3.1-non-blocking-silent", "3.1-silent",
+         "3.8-live-effort", "extended-effort", "extended-options", "extended-silent"],
 )
 def test_gemini_model_contract(config, message):
     fails(lambda: episode(config), message)
