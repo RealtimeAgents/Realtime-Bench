@@ -278,6 +278,29 @@ def test_a_reply_s_messages_reach_its_events_as_they_arrive():
     assert [next(iter(message)) for message in rig.socket.sent] == ["tool_response"]
 
 
+def test_a_call_carries_the_time_its_message_came_off_the_wire():
+    """A call's arrival is when the reader read its message, on the driver's monotonic clock,
+    not when its events() got to it."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        before = rig.driver.clock.monotonic()
+        rig.socket.feed(call("call-0"))
+        await settle()
+        read = rig.driver.clock.monotonic()
+        await asyncio.sleep(0.05)
+        rig.socket.feed(TURN_COMPLETE)
+        events = await drain(rig.driver.events(generation))
+        await rig.driver.close()
+        return before, read, events
+
+    before, read, events = asyncio.run(run())
+    (function_call,) = [event for event in events if isinstance(event, FunctionCall)]
+    assert before <= function_call.received_at <= read
+
+
 def test_a_failed_read_ends_every_reply_on_the_connection():
     """A read that fails ends the reader: the reply waiting raises the failure, and so does
     every later reply on that connection."""
