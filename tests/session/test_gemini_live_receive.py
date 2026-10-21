@@ -99,14 +99,14 @@ async def _yield(value):
 
 
 class RecordingClock(SystemClock):
-    """Real time, except that the driver's sleeps are logged instead of taken."""
+    """Real time, except that the driver's waits are logged instead of taken."""
 
     def __init__(self, log: list):
         self._log = log
 
-    async def sleep_async(self, seconds: float) -> None:
-        self._log.append(("sleep", seconds))
-        await asyncio.sleep(0)
+    def wait(self, waitable, timeout):
+        self._log.append(("sleep", timeout))
+        return False
 
 
 class Rig:

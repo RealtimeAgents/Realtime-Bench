@@ -24,6 +24,7 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     HistorySyncRequest,
     HistorySyncResult,
+    RetryCancelled,
     SessionSeed,
     SyncDisposition,
 )
@@ -209,6 +210,20 @@ def test_what_a_sync_leaves_decides_the_next_use(disposition, state, next_use):
         rig.encoder.log.clear()
         rig.run(rig.ensure_ready())
     assert [entry[0] for entry in rig.encoder.log] == ([next_use] if next_use else [])
+
+
+def test_a_wait_runs_on_the_clock_and_a_cancel_ends_it():
+    with _rig() as rig:
+        rig.run(rig.encoder._wait("session_release", 2.0))
+        assert rig.clock.monotonic() == 2.0
+        cancel = rig.clock.event()
+        waiting = rig.thread.submit(rig.encoder._wait("session_release", 2.0, cancel))
+        rig.clock.sleep(0.5)
+        cancel.set()
+        assert rig.clock.wait(waiting, 10.0)
+        with pytest.raises(RetryCancelled, match="during the session_release wait$"):
+            waiting.result()
+        assert rig.clock.monotonic() == 2.5
 
 
 # ---- OpenAI Realtime on a fake SDK connection ---------------------------------------------
