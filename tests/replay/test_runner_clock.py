@@ -14,15 +14,16 @@ import json
 import math
 
 import realtime_framework.entity.model as model_module
-from realtime_framework.clock import Clocks
-from realtime_framework.entity.model import TRANSPORT_RETRY
+from realtime_framework.clock import Clocks, FrameClock
+from realtime_framework.entity.model import TRANSPORT_RETRY, PendingDecision
 from realtime_framework.evaluation import runner
 from realtime_framework.sandbox.actions import GuestEnvironment
 
 from ..fake_clock import FakeClock
 from .build import build_episode
+from .clock_task import ClockTask
 from .fake_env import FakeEnvironment
-from .frames import CLOCK_ORIGIN, ReplayTask
+from .frames import CLOCK_ORIGIN, FrameSource, ReplayTask
 from .loop import check_wall_clock_properties, commit_statuses, run_loop
 from .scenario import CLICK_AGREE, CLICK_NAME, CLICK_SUBMIT, TASK_INSTRUCTION, replies
 from .steps import Step
@@ -200,3 +201,69 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
     assert t_k == 2 and tau_k == 2.5
     assert math.isclose(waited["duration_simulated_seconds"], 3.75 - tau_k, abs_tol=1e-6)
     assert math.isclose(env._active_end_unix_s, deadline, abs_tol=1e-6)
+
+
+class _HangingAgent:
+    """A KernelAgent (evaluation/shell.py) whose generation never comes back: it waits on the
+    clock until it is aborted."""
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.aborted = clock.event()
+        self.outcomes = []
+
+    def generate(self, generation, decision, observation, budget) -> PendingDecision:
+        self.clock.wait(self.aborted, None)
+        result = {"action": None, "latency": 0.0, "stale": True}
+        return PendingDecision(generation, decision, result, cancelled=True)
+
+    def accept(self, generation) -> None:
+        pass
+
+    def discard(self, generation) -> None:
+        pass
+
+    def commit(self, outcome) -> None:
+        self.outcomes.append(outcome)
+
+    def abort(self, generation=None) -> None:
+        self.aborted.set()
+
+
+def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run():
+    """Pause mode at 1 fps on GuestEnvironment: decision 0's generation never comes back. Token
+    time stands still while a model generates and only operational time moves, so the kernel's
+    provider watchdog (kernel/turns.py on_timer) fires at 300 s of it: the run is invalid with
+    the provider's generation_watchdog_timeout, the world still at frame 0, and the generation is
+    aborted without a report."""
+    clock = FakeClock(wall_origin=CLOCK_ORIGIN)
+    task = ClockTask(1.0)
+    env = GuestEnvironment(
+        _Guest(),
+        None,
+        task,
+        scene_capture=FrameSource(task, text_observation=False, fps=1.0),
+        clock_mode="token",
+        clocks=Clocks(FrameClock(1.0), clock),
+    )
+    agent = _HangingAgent(clock)
+    with clock.participant():
+        timeline = runner.run_stream(
+            agent,
+            env,
+            clock_mode="token",
+            duration_s=SHORT_MAX_MINUTES * 60,
+            log=lambda line: None,
+            clocks=env.clocks,
+        )
+        ended_at = clock.monotonic()
+        env._drain_abandoned()
+    assert env._invalid_run == {
+        "category": "provider",
+        "reason": "generation_watchdog_timeout",
+        "detail": "generation exceeded 300s",
+    }
+    assert ended_at == runner.PROVIDER_WATCHDOG_S == 300.0
+    assert (env.tick_index(), task.world_time()) == (0, 0.0)
+    assert agent.aborted.is_set()
+    assert (timeline, agent.outcomes) == ([], [])

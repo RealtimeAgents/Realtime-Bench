@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest import mock
@@ -542,3 +543,29 @@ def test_a_failed_trajectory_write_invalidates_the_run(tmp_path):
     assert [p["status"] for p in resolved(run.env).values()] == ["applied", "invalid_run"]
     assert [e["action"]["action_type"] for e in run.env.executions] == ["click"]
     check_wall_clock_properties(run.env, "invalid_run")
+
+
+def test_a_worker_given_up_at_the_deadline_is_drained_however_long_the_snapshot_takes(
+    tmp_path, monkeypatch
+):
+    """bounded_call_timeout with the snapshot's read taking 0.2 s of real time, in which the fake
+    clock stands still. The worker the kernel gave up on at the deadline ends only once virtual
+    time moves on, so the drain after the snapshot finds it still running whatever real time has
+    passed (shell.py _drain_abandoned): the run is the baseline's."""
+    evaluation_snapshot = FakeEnvironment._evaluation_snapshot
+
+    def slow_evaluation_snapshot(env):
+        time.sleep(0.2)
+        return evaluation_snapshot(env)
+
+    monkeypatch.setattr(FakeEnvironment, "_evaluation_snapshot", slow_evaluation_snapshot)
+    (case,) = [case for case in CASES if case.name == "bounded_call_timeout"]
+    run = _run(
+        tmp_path,
+        case.steps,
+        case.latencies,
+        stream=True,
+        max_minutes=SHORT_MAX_MINUTES,
+        **case.env,
+    )
+    _compare(case.name, run, {"stream": True})
