@@ -37,6 +37,18 @@ class FunctionCall(ProviderEvent):
     call_id: str = ""
     name: str = ""
     arguments: dict = field(default_factory=dict)
+    # For a driver that reads every message as it arrives: when it read the call's message, on
+    # its operational clock, which is when the call came off the wire.
+    received_at: float | None = field(default=None, kw_only=True)
+
+
+@dataclass(frozen=True)
+class FunctionCallsCancelled(ProviderEvent):
+    """The provider cancelled function calls, which are not to be executed; the reply goes on.
+    They are told by call id: they may be an earlier reply's than the one this event comes in."""
+
+    call_ids: tuple[str, ...] = ()
+    received_at: float | None = field(default=None, kw_only=True)  # as for FunctionCall
 
 
 @dataclass(frozen=True)

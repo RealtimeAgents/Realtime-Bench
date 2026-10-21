@@ -11,11 +11,12 @@ connection and generation a server message belongs to and whether that generatio
 with it. Nothing in it awaits, so each call is one transition, in the order of the session.
 
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
-<history block id>)`` and ``("tool_response", <call id>)``, each sent once handed to the
-connection, confirmed when the server acknowledges it (only the setup is: setupComplete) and
-unknown when its send failed. A resumed session also holds what the server restored from the
-handle, which this record does not list. Each change is handed to ``on_delivery``, which the
-driver writes to the event log.
+<history block id>)`` and ``("tool_response", <call id>)``, each unknown while it is written,
+sent once written, confirmed when the server acknowledges it (only the setup is:
+setupComplete) and unknown when its write failed. A seed is recorded only once the connection
+counts, as sent; its blocks are heard as unknown when its write failed. A resumed session also
+holds what the server restored from the handle, which this record does not list. Each change but
+the start of a write is handed to ``on_delivery``, which the driver writes to the event log.
 """
 
 from __future__ import annotations
@@ -255,7 +256,10 @@ class Received:
     ends: bool  # the generation's output ends with this message
     control: dict  # what a goAway asks of the turn: reconnect after it
     # The ids of the tool calls this message cancels: not to be executed. It does not end the
-    # reply.
+    # reply. They may be an earlier reply's: tell them by call id, not by this message's
+    # generation. A cancelled call still pending is acknowledged all the same; the driver
+    # acknowledges a message's calls before it takes the reply's next message, so none is
+    # pending then.
     cancelled: tuple[str, ...]
 
 
@@ -264,7 +268,8 @@ class Orphan:
     """One server message that no generation's reply takes, as the core applied it (arrived).
 
     Its goAway still asks for a new connection and its resumption update is still the latest
-    handle; read from a closed connection, it changes nothing.
+    handle; read from a closed connection, it changes nothing. Any calls in it are not pending:
+    no acknowledgement answers a reply the server started of its own accord.
     """
 
     connection: int  # the connection it was read from
@@ -314,18 +319,22 @@ class SessionCore:
         self._generations = 0  # generations started on the open connection
         self.connection: int | None = None  # the open connection's number, from 1
         self.delivery: dict[tuple, Delivery] = {}  # what the client wrote on it
+        # The clean-boundary state a turn-based renewal resumes by; streaming reads none of it.
         self.candidate_resume_handle: str | None = None  # latest resumption update of this turn
+        self.resume_handle: str | None = None  # promoted at a clean interaction boundary
+        self.last_turn_clean = False
         # (id, name) of the tool calls received and not yet acknowledged.
         self.pending_calls: list[tuple] = []
         self.go_away_deadline: float | None = None  # on the driver's monotonic clock
-        self.resume_handle: str | None = None  # promoted at a clean interaction boundary
         # Since the connection was planned: the latest handle the server called resumable, else
         # the one the connection resumes. Streaming resumes with it.
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
-        self.last_turn_clean = False
-        # The execution feedback a seed or a trigger has handed to a connection of the session,
-        # over the episode: the text handed, by block id.
+        # Streaming: the execution feedback a seed or a trigger has handed to a connection of the
+        # session, over the episode, the text handed by block id; a trigger's counts from when
+        # it is planned, and one whose write failed leaves the session to be rebuilt, whose
+        # seed replays it. A resume keeps it: what a trigger handed after the handle the session
+        # resumed from is lost with the server's state, and no trigger hands it again.
         self.carried: dict[str, str] = {}
         # The generation whose reply is being read, by connection, until the reply ends.
         self.replies: dict[int, _Generation] = {}
@@ -341,16 +350,17 @@ class SessionCore:
         self.resume_handle = resume_handle
         self.latest_resume_handle = resume_handle
         contents, seeded = self._seed(history)
-        feedback = [] if history is None else [item.block for item in history.items]
+        # Only streaming triggers read what the seed carries.
+        items = history.items if history is not None and self.streaming else ()
         return Connect(
             resume_handle,
             tuple(history_batches(contents)),
             seeded,
             release_grace=replacing or bool(contents),
             carried=tuple(
-                (block.id, block.text)
-                for block in feedback
-                if block.kind == "execution_feedback" and block.id in seeded
+                (item.block.id, item.block.text)
+                for item in items
+                if item.block.kind == "execution_feedback" and item.block.id in seeded
             ),
         )
 
@@ -361,9 +371,11 @@ class SessionCore:
         canonical action of the native call that its turn's tool block carries, so it has no
         Content of its own; an execution feedback of its own is a text Content after the turn's
         tool rounds. The streaming view (harnesses/streaming/history.py) has no tool blocks:
-        each reply's output and each execution feedback, whether its own block or one in front of
-        a frame, is a text Content, in the view's order, as a trigger carries feedback, and a
-        frame is its own text, as a push sends it.
+        each reply's output that said anything and each execution feedback, whether its own
+        block or one in front of a frame, is a text Content, in the view's order, and a frame is
+        its own text, as a push sends it. That order is not the one the live session got them
+        in: there each feedback came with the trigger after it, after the frames pushed
+        meanwhile.
         """
         if history is None:
             return [], ()
@@ -390,6 +402,8 @@ class SessionCore:
                     continue
                 contents += tool_contents
             elif self.streaming and block.kind in ("model_output", "execution_feedback"):
+                if not block.text:
+                    continue
                 contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
             elif _is_feedback(item):
                 contents.append(_feedback_content(item))
@@ -473,7 +487,7 @@ class SessionCore:
         self.connection = self._connections
         self.delivery = {}
         self._set([("setup",)], Delivery.CONFIRMED)
-        self.sending(("block", block_id) for block_id in connect.seeded)
+        self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
@@ -490,7 +504,7 @@ class SessionCore:
         renewal resumes: turn-based only after a clean interaction, with the handle promoted at
         it; streaming, which has few clean boundaries, with the latest handle the server called
         resumable, whatever was sent or read after it, so the session it restores may lack input
-        or output the history has."""
+        or output the history has, or hold output the history lacks."""
         if self.streaming:
             return self.latest_resume_handle if reason == "go_away" and not force_rebuild else None
         if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
@@ -500,11 +514,24 @@ class SessionCore:
     # ---- writes ----------------------------------------------------------------------------
 
     def sending(self, keys) -> None:
-        """Record writes as handed to the connection, before any answer can arrive."""
+        """Record writes that start: unknown until written (sent) or failed (send_failed); the
+        event log hears neither until then."""
+        for key in keys:
+            self.delivery[key] = Delivery.UNKNOWN
+
+    def sent(self, keys) -> None:
+        """The writes returned: the connection took them."""
         self._set(keys, Delivery.SENT)
 
     def send_failed(self, keys) -> None:
         self._set(keys, Delivery.UNKNOWN)
+
+    def seed_failed(self, connect: Connect) -> None:
+        """A write of the seed failed before the connection counted: what it carried is unknown."""
+        self._on_delivery(
+            Delivery.UNKNOWN.value,
+            [(("block", block_id), block_id) for block_id in connect.seeded],
+        )
 
     def _set(self, keys, delivery: Delivery) -> None:
         keys = list(keys)
@@ -560,7 +587,9 @@ class SessionCore:
 
     def trigger(self, history: CanonicalRequest) -> Trigger:
         """Plan the activity that starts a streaming session's next reply, with what the session
-        lacks of the history view's execution feedback, and record it as being written.
+        lacks of the history view's execution feedback, and record it as being written. Start
+        the reply's generation (start_generation) before the activity goes out: read as it
+        arrives, the reply's first message would otherwise be an orphan, and its calls lost.
 
         The feedback is in blocks of its own or in blocks in front of frames, as the policy
         places it (PathPolicy.feedback). A block in front of the next frame gains a line with each
@@ -599,11 +628,15 @@ class SessionCore:
         self.sending(("tool_response", call_id) for call_id, _ in pending)
         return pending
 
-    def acknowledgement_sent(self) -> None:
+    def acknowledgement_sent(self, calls: tuple[tuple, ...]) -> None:
+        """The acknowledgement of ``calls`` (acknowledging) was written, also if an abort closed
+        the connection meanwhile."""
+        self.sent(("tool_response", call_id) for call_id, _ in calls)
         self.pending_calls.clear()
 
-    def acknowledgement_failed(self) -> None:
-        self.send_failed(("tool_response", call_id) for call_id, _ in self.pending_calls)
+    def acknowledgement_failed(self, calls: tuple[tuple, ...]) -> None:
+        """Its write failed: still pending, the next acknowledgement answers them again."""
+        self.send_failed(("tool_response", call_id) for call_id, _ in calls)
 
     # ---- reads -----------------------------------------------------------------------------
 
