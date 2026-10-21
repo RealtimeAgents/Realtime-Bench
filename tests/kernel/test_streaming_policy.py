@@ -418,13 +418,18 @@ def test_the_deadline_waits_for_the_read_after_an_execution_answered_before_it(e
     assert _ended(sim) == ended
 
 
-def test_the_deadline_waits_for_the_read_after_an_action_answered_while_the_shell_is_busy():
+@pytest.mark.parametrize("input_fps", [1.0, 30.0])
+def test_the_deadline_waits_for_the_read_after_an_action_answered_while_the_shell_is_busy(
+    input_fps,
+):
     """The click finishes at 4.75 and ends the task; its answer comes while the refusal's feedback,
     from 4.7, holds the shell until 5.7. It is filed where the click finished, before the deadline,
     so the deadline waits for the read after it (N31), as for an answer filed before the shell
-    was held."""
+    was held. At 30 frames a second a grid point between 4.7 and 4.75 is handled at 5.7 first; it
+    leaves the end to the deadline's own timer, which comes after the click's answer."""
     calls = (Call(0.5, CLICK, "a", execute_s=4.25), Call(4.7, TYPE, "b", grounding=MISSING_FRAME))
-    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=1.0, ends_at=4.75))
+    world = World(replies=[Reply(10.0, calls=calls)], commit_s=1.0, ends_at=4.75)
+    sim = _run(world, input_fps=input_fps)
     assert sim.checks == [0.0, 5.7]
     assert _ended(sim) == ("game_decided", "environment", 4.75, 5.7)
     assert sim.resolved()[0]["terminal_after_action"] is True
@@ -443,7 +448,8 @@ def test_the_deadline_beats_a_watchdog_due_before_it():
 def test_the_deadline_beats_a_cancellation_filed_before_it():
     """The typing waits behind the click, which executes until 6.5. The refusal at 4.5 is given as
     feedback until 5.5; the cancellation of the typing's call, filed at 4.5 too, is handled then,
-    and the deadline settles the typing first."""
+    past the deadline, and withdraws nothing: the typing is left to the deadline, which settles
+    it once its timer comes, after the cancellation."""
     calls = (
         Call(0.5, CLICK, "a", execute_s=6.0),
         Call(1.0, TYPE, "b"),
@@ -453,7 +459,7 @@ def test_the_deadline_beats_a_cancellation_filed_before_it():
     sim = _run(World(replies=[reply], commit_s=1.0))
     assert sim.statuses() == ["applied", "not_applied_time_limit", INVALID_GROUNDING_FRAME]
     assert sim.data("CallCancelled") == [
-        {"index": 1, "generation": 1, "call_id": "b", "status": "not_applied_time_limit"}
+        {"index": 1, "generation": 1, "call_id": "b", "status": None}
     ]
     assert _ended(sim) == ("time_limit", "deadline", 5.0, 6.5)
 
