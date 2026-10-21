@@ -5,6 +5,7 @@ the view each connection operation is given."""
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import replace
 
 import pytest
@@ -26,6 +27,7 @@ from .fake_live import (
     Error,
     Fail,
     GoAway,
+    Hang,
     RecordingToolRuntime,
     RecordingTrace,
     Reply,
@@ -971,3 +973,58 @@ def test_a_push_waiting_for_a_renewal_goes_in_once_the_reply_is_accepted_whateve
     assert operations.index(("sync", "go_away")) < operations.index(("push", "obs-3"))
     assert clock.wait(next_reply, 10.0)
     agent.close()
+
+
+def test_closing_while_a_reply_thread_retires_its_frame_finishes_every_frame(
+    monkeypatch, clock, tmp_path
+):
+    """The episode ended with a reply's worker still in generate(): stopping the execution thread
+    wakes it, and it retires its frame while close() finishes the frames left. Fixed here so: the
+    worker retires once close is finishing the first frame. close() neither raises nor loses a
+    frame's inspection, and still closes the tool runtime (review-final-streaming 中-6)."""
+    agent = make_agent(monkeypatch, clock, log_dir=tmp_path)
+    closing, retired = clock.event(), clock.event()
+    worker_ids = set()
+
+    class GatedToolRuntime(RecordingToolRuntime):
+        closed = False
+
+        def finish(self, execution, **fields):
+            if threading.get_ident() not in worker_ids and not closing.is_set():
+                closing.set()
+                assert clock.wait(retired, 5.0)
+            super().finish(execution, **fields)
+
+        def close(self):
+            self.closed = True
+
+    runtime = GatedToolRuntime()
+    agent.bind_tool_runtime(runtime)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    retire = agent._retire
+
+    def gated_retire():
+        if threading.get_ident() in worker_ids:
+            assert clock.wait(closing, 5.0)
+            retire()
+            retired.set()
+        else:
+            retire()
+
+    monkeypatch.setattr(agent, "_retire", gated_retire)
+    first = observation(clock, 1)
+    agent.push(first)
+    agent.driver.replies.append(Reply((Hang(0.25),), ends_at=100.0))
+
+    def reply():
+        worker_ids.add(threading.get_ident())
+        return agent.generate(7, 3, first, BUDGET)
+
+    replied, _ = _on_worker(clock, reply)
+    clock.sleep(0.5)
+    agent.push(observation(clock, 2))
+    agent.push(observation(clock, 3))
+    agent.close()
+    assert clock.wait(replied, 5.0)
+    assert sorted(row[0] for row in runtime.rows) == ["obs-1", "obs-2", "obs-3"]
+    assert runtime.closed

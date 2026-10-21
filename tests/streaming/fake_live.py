@@ -98,6 +98,14 @@ class Error:
 
 
 @dataclass(frozen=True)
+class Hang:
+    """From ``at`` seconds into the reply nothing comes, and closing the connection does not end
+    it either: only its cancellation, as stopping the execution thread cancels it, does."""
+
+    at: float
+
+
+@dataclass(frozen=True)
 class GoAway:
     """The server asks for a new connection ``at`` seconds into the reply: from then on the
     session takes no input until it is renewed."""
@@ -234,6 +242,8 @@ class FakeLiveDriver(SessionLifecycle):
             received = self.clock.monotonic()
             if isinstance(message, Fail):
                 raise message.error
+            if isinstance(message, Hang):
+                await asyncio.Event().wait()
             if isinstance(message, GoAway):
                 self.calls.append(("go_away", generation.generation_id))
                 self.renewal_required = True
