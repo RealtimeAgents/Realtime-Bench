@@ -22,7 +22,7 @@ from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.env_lanes import EnvLanes
 from realtime_framework.evaluation.kernel.core import Kernel
-from realtime_framework.evaluation.kernel.events import Invalidated, Termination
+from realtime_framework.evaluation.kernel.events import Invalidated, SnapshotFrozen, Termination
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.evaluation.streaming_shell import run_streaming_episode
@@ -286,8 +286,7 @@ def test_a_snapshot_whose_thread_did_not_start_is_answered_as_failed(monkeypatch
     assert "RuntimeError: no thread" in env._loop_error
 
 
-@pytest.mark.parametrize("kernel_breaks", [False, True], ids=["kernel-holds", "kernel-raises"])
-def test_a_snapshot_whose_thread_raised_is_answered_as_failed(monkeypatch, kernel_breaks):
+def test_a_snapshot_whose_thread_raised_is_answered_as_failed(monkeypatch):
     """The snapshot's thread raises as it takes its place at the gate: the kernel is answered
     that the snapshot failed, as for a command that raised, and the run is invalid."""
 
@@ -295,12 +294,48 @@ def test_a_snapshot_whose_thread_raised_is_answered_as_failed(monkeypatch, kerne
         raise RuntimeError("no turn")
 
     monkeypatch.setattr(EnvLanes, "freeze_turn", freeze_turn)
-    if kernel_breaks:
-        _step_breaks(monkeypatch, lambda kernel, semantic: kernel.ending is not None)
     termination, env, _ = _episode(3.0, ONE_CLICK)
     assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
     assert termination.invalid.reason == "run_exception"
     assert "RuntimeError: no turn" in env._loop_error
+
+
+@pytest.mark.parametrize("first", ["snapshot", "kernel"])
+def test_the_first_of_a_failed_snapshot_and_a_kernel_that_raises_is_the_error(monkeypatch, first):
+    """The snapshot's thread raises at the gate, and the kernel raises too. Each runs on a thread
+    of its own, at the same instant unless one is made to come later: here the kernel raises at
+    the step after the snapshot's failed answer was posted, or the snapshot's thread raises 0.1 s
+    after the kernel did. The first is the summary's error and the run's, as the runner kept the
+    exception that escaped its loop (runner.py _run_stream_legacy); the wrap-up waits for the
+    snapshot's thread either way."""
+    clocks = []
+
+    def freeze_turn(lanes):
+        if first == "kernel":
+            clocks[0].sleep(0.1)
+        raise RuntimeError("no turn")
+
+    monkeypatch.setattr(EnvLanes, "freeze_turn", freeze_turn)
+    answered = []
+    post = Kernel.post
+
+    def recording(kernel, event):
+        if isinstance(event, SnapshotFrozen):
+            answered.append(event)
+        post(kernel, event)
+
+    monkeypatch.setattr(Kernel, "post", recording)
+    if first == "snapshot":
+        _step_breaks(monkeypatch, lambda kernel, semantic: bool(answered))
+    else:
+        _step_breaks(monkeypatch, lambda kernel, semantic: kernel.ending is not None)
+    termination, env, _ = _episode(
+        3.0, ONE_CLICK, env_setup=lambda env, clock: clocks.append(clock)
+    )
+    assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
+    error = "RuntimeError: no turn" if first == "snapshot" else "RuntimeError: step broke"
+    assert error in env._loop_error
+    assert error in termination.invalid.detail and error in env._invalid_run["detail"]
 
 
 def _refuses_the_record(monkeypatch) -> None:
