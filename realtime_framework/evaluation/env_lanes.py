@@ -184,7 +184,7 @@ class Lane:
         self._command: Callable[[], object] | None = None
         self._closed = False
         self._ready = clock.event()
-        clock.start_thread(self._run, name=f"env-lane-{name}")
+        self._thread = clock.start_thread(self._run, name=f"env-lane-{name}")
 
     def submit(self, command: Callable[..., object]) -> threading.Event | None:
         """Run ``command`` next; it returns the answer to post and never raises. On the gate, the
@@ -212,14 +212,16 @@ class Lane:
             self._clock.wait(self._ready, None)
             with self._mutex:
                 self._ready.clear()
-                command, closed = self._command, self._closed
+                command = self._command
             if command is not None:
                 answer = command()
                 with self._mutex:
                     self._command = None
                 self._post(answer)
-            elif closed:
-                return
+            # A close that came with the command or while it ran woke the thread only once.
+            with self._mutex:
+                if self._closed and self._command is None:
+                    return
 
 
 @dataclass(frozen=True)
@@ -253,7 +255,9 @@ class EnvLanes:
         def run(turn):
             try:
                 return captured(self.gate.call(self.env.capture, turn=turn))
-            except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
+            # Also a BaseException (entity/model.py RetryCancelled): the answer must come back,
+            # or the kernel would wait for it.
+            except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 return FrameCaptured(error=traceback.format_exc())
 
         self._capture.submit(run)
@@ -267,7 +271,7 @@ class EnvLanes:
                 answer, record = self.gate.call(self._act, command, turn=turn)
                 executed(record)
                 return answer
-            except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
+            except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 return ActionExecuted(command.decision, error=traceback.format_exc())
             finally:
                 self.executing = self._executing_turn = None
@@ -285,7 +289,7 @@ class EnvLanes:
         def run(turn):
             try:
                 ended, reason = self.gate.call(self.env.check_end, turn=turn)
-            except Exception:  # noqa: BLE001 - the kernel counts the failed read
+            except BaseException:  # noqa: BLE001 - the kernel counts the failed read
                 return EndChecked(command.request, error=traceback.format_exc())
             return EndChecked(command.request, ended, reason)
 
