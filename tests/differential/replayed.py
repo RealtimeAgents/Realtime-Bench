@@ -5,9 +5,8 @@ Wall clock: the chat_completions agent against ChatCompletionsStub and a FakeEnv
 (tests/replay/fake_env.py), all on one fake clock per episode (tests/fake_clock.py), so every
 reply, operation and wait takes exactly the script's time. Token clock and paused: the openrouter
 agent against OpenRouterStub and GuestEnvironment itself on a task clock
-(tests/replay/token_env.py); operational time moves a step at every reading (_Operational), which
-the token clock's world time does not read. The agent parses each reply with its own parser;
-nothing here knows the loop's rules.
+(tests/replay/token_env.py), whose operational clock reads the world's seconds. The agent parses
+each reply with its own parser; nothing here knows the loop's rules.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.clock import Clocks, SystemClock
+from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
@@ -29,7 +28,7 @@ from tests.replay.baseline import REAL_TIME_FIELDS, Normalizer, action_record
 from tests.replay.build import build_episode
 from tests.replay.clock_task import ClockTask
 from tests.replay.fake_env import FakeEnvironment, Hang
-from tests.replay.frames import CLOCK_ORIGIN, ReplayTask
+from tests.replay.frames import ReplayTask
 from tests.replay.scenario import TASK_INSTRUCTION
 from tests.replay.stub import ChatCompletionsStub, Failure, Reply
 from tests.replay.stub_openrouter import OpenRouterStub
@@ -155,6 +154,7 @@ class WallEnvironment(_Latched, FakeEnvironment):
         self.deadline = self.t0 + script.duration_s
         self.script = script
         self._after_action = False  # the next read follows an executed action
+        self._landing = False  # the next read is the one before landing: a frame was captured
         self._last_asked: float | None = None  # when the last state read was asked
         self._lock = threading.RLock()
         self._leases: dict[str, float] = {}
@@ -170,17 +170,20 @@ class WallEnvironment(_Latched, FakeEnvironment):
         self.clock.sleep(self.script.capture_s)
         observation = self.frames.capture(tick, at=self.clock.time())
         self.log("env.capture", tick=tick, at=self.now())
+        self._landing = True
         return observation
 
     def _kernels(self, asked: float) -> bool:
-        """Whether the kernel makes this read too (decision 31; turns.py TurnPolicy._check_end):
-        every one under its shell; of today's, the one after an executed action and the first at
-        a frame's start, where the kernel's periodic read falls, the episode's start too. Today's
-        others, at the loop top or before landing within a frame, fail nowhere."""
-        if self.kernel_counts_reads or self._after_action:
+        """Whether the kernel makes this read too (decision 31, N26; turns.py
+        TurnPolicy._check_end): every one under its shell; of today's, the one after an executed
+        action, the one before landing on a reading not read at already, and the first at a
+        frame's start, where the kernel's periodic read falls, the episode's start too. Today's
+        others, at the loop top within a frame, fail nowhere."""
+        landing, self._landing = self._landing, False
+        first = self._last_asked is None or earlier(self._last_asked, asked)
+        if self.kernel_counts_reads or self._after_action or (landing and first):
             return True
         ticks = asked * self.fps
-        first = self._last_asked is None or earlier(self._last_asked, asked)
         return abs(ticks - round(ticks)) <= 1e-9 and first
 
     def done(self) -> bool:
@@ -350,26 +353,6 @@ class _Guest:
         return {"status": "ok"}
 
 
-class _Operational(SystemClock):
-    """The token clock's operational clock: it waits in real time, its times stay at CLOCK_ORIGIN
-    as token_env.py's do, and each reading is a microsecond past the one before. Both loops take
-    a stream as frozen only while operational time moves on (turns.py _FrozenStream, runner.py
-    ObservationStreamWatchdog), as it does in production; the token watchdog's 300 s are never
-    reached."""
-
-    def __init__(self) -> None:
-        self._readings = 0
-        self._lock = threading.Lock()
-
-    def time(self) -> float:
-        return CLOCK_ORIGIN
-
-    def monotonic(self) -> float:
-        with self._lock:
-            self._readings += 1
-            return self._readings * 1e-6
-
-
 class TokenWorld(_Latched, TokenEnvironment):
     """TokenEnvironment with the script's end, failed state reads and advances, refusals and
     faults, and a log of every end check and key release with the tick it happened at. The step,
@@ -392,7 +375,6 @@ class TokenWorld(_Latched, TokenEnvironment):
         self._advances = 0
         self._applied = 0
         super().__init__(frames, task, max_minutes=script.duration_s / 60, stop_check=self._stop)
-        self.clock = _Operational()
         self.g = _Guest(self)
         task.failure = self._advance_failure
 

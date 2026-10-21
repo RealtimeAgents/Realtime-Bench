@@ -10,6 +10,6 @@ test_named.py) and the random ones (generate.py, test_random.py) check that noth
 and the session summary (conftest.py) says which differences each script showed. REPORT.md is the
 sign-off.
 
-When today's loop is archived after sign-off, it moves here unchanged as legacy_loop.py, and
-drivers.legacy calls it from there.
+Today's loop is legacy_loop.py, the turn loop main() ran before the kernel's shell, moved here
+unchanged (decision 11); drivers.legacy calls it.
 """

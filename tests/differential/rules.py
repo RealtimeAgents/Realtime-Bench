@@ -8,16 +8,16 @@ that did not trigger is reported. Rules without a rewrite cannot show between to
 simulation; ``seen`` says where they can.
 
 U-numbered rules are differences found after the plan's list: U2 by this framework, put on the
-list by N5 (with U3 and U6, which KF5 and p1b's fix of L3 took up); U10 and U11 by p1b (N10); U13
-and U14 by this framework, not decided yet. KF-numbered ones are kernel-fix's, D47 is p1b's name
-for decision 47; p1c numbers decision 31, KF5 and KF5d here, X18, and the token clock's ticks
-turned into equal floats X17.
+list by N5 (with U3 and U6, which KF5 and p1b's fix of L3 took up); U7 to U13 by p1b, U10 and U11
+recorded by N10 and N34; U14 by this framework, not decided yet. KF-numbered ones are kernel-fix's, D47 is p1b's name for decision 47; p1c
+numbers decision 31, KF5 and KF5d here, X18, and the token clock's ticks turned into equal floats
+X17.
 
 The old side's times come from its facts: when each generation started and returned, when each
 decision was resolved, executed and committed, and every end check with its answer. The random
 scripts' operations take no time, but for reading the evaluation snapshot. Named scripts give
 captures and state reads their time (scenarios.TIMED; N29), and the rules for it (K-b, D47, K-g,
-U13, U14) hold where a read is shorter than an environment frame, no reply comes back at the
+U14) hold where a read is shorter than an environment frame, no reply comes back at the
 instant a read is asked, and each decision paces to its next frame: what today's extra reads
 delay is not carried into the next decision.
 """
@@ -441,98 +441,6 @@ def _cut_checks(script: Script, p: Projection, extras: tuple[str, ...]) -> None:
     p.facts = {**p.facts, "check_extras": [extra for _, extra in kept]}
 
 
-def _kf5d(script: Script, p: Projection, notes: dict) -> None:
-    """Wall clock: an action landing in a frame already read is executed at once, without a read
-    before it (decision 31; turns.py TurnPolicy._pre_checked); today the loop reads before landing
-    and settles an action that finds an end come since as not_applied_terminal
-    (runner.py _land_action). The kernel finds it later: an action that took effect, by the read
-    after it; a wait (a done or a reply without one is a wait of no time) when its time is up or
-    at the next periodic read, which cuts it short; a refused action, which is read after by
-    nobody, at the next periodic read while it paces."""
-    if not _wall(script) or script.ends_at_s is None or "ended" in notes:
-        return
-    fps = script.env_fps
-    for k, d in p.decisions.items():
-        resolved = d["resolved"]
-        if resolved is None or resolved["status"] != "not_applied_terminal":
-            continue
-        # Without today's read before landing, which took its time.
-        landed = p.facts["resolved_at"][k] - script.check_s * _reads_before_landing(p, k, None)
-        if not earlier(_floor(landed * fps) / fps, script.ends_at_s):
-            continue  # the frame's own read saw the end
-        periodic = (_floor(landed * fps) + 1) / fps
-        turn, word = script.turns[k], parse(script.turns[k].action)
-        if turn.rejected:
-            notes["ended"], notes["read_end"] = (
-                (_landed_refused(script, p, k, landed, periodic), k),
-                True,
-            )
-        elif word.kind in ("wait", "done", "garbage"):
-            end = _landed_wait(script, p, k, landed, periodic, word.seconds or 0.0)
-            notes["ended"], notes["read_end"] = (end, k), True
-        else:
-            for record in (resolved, d["commit"], d["outcome"]):
-                record["status"] = "applied"
-            resolved["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
-            d["applied"] = True
-            d["executed"] = [{"at": landed, "action": d["proposed"]}]
-            p.beyond["results"][k] = {}  # as FakeEnvironment answers, its number aside
-
-
-def _landed_wait(
-    script: Script, p: Projection, k: int, landed: float, periodic: float, seconds: float
-) -> float:
-    """A wait landed after the end came: it runs out, or the next periodic read cuts it short
-    (turns.py TurnPolicy._waited); at one instant its timer goes first (Priority.COMPLETION)."""
-    d = p.decisions[k]
-    cut = earlier(periodic, landed + seconds)
-    end = periodic if cut else landed + seconds
-    tick = _floor(end * script.env_fps)
-    for record in (d["resolved"], d["commit"], d["outcome"]):
-        record["status"] = "wait"
-    d["resolved"]["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
-    d["resolved"]["environment_tick"] = d["outcome"]["next_observation_tick"] = tick
-    d["applied"], d["executed"] = True, []
-    d["wait_record"] = {
-        "duration_simulated_seconds": round(end - landed, 9),
-        "requested_duration_simulated_seconds": seconds,
-        "truncated_by_episode_horizon": False,
-        "truncated_by_terminal_condition": cut,
-    }
-    p.episode["termination"]["end_s"] = round(end, 9)
-    return end
-
-
-def _landed_refused(script: Script, p: Projection, k: int, landed: float, periodic: float) -> float:
-    """A refused action landed after the end came: no read follows a refusal, and the next
-    periodic read finds the end while the decision paces to its next frame
-    (turns.py TurnPolicy._executed, _resolve, on_end)."""
-    d = p.decisions[k]
-    frame_ticks = script.env_fps / script.input_fps
-    tick, t_k = _floor(landed * script.env_fps), d["observed"]
-    next_frame = max(_floor(t_k / frame_ticks) + 1, _whole_up(tick / frame_ticks))
-    next_tick = min(_whole_up(next_frame * frame_ticks), script.max_ticks)
-    reached = min(next_tick, _floor(periodic * script.env_fps))
-    dropped = _dropped(script, t_k, reached)
-    for record in (d["resolved"], d["commit"], d["outcome"]):
-        record["status"] = "rejected"
-    d["commit"]["detail"] = script.turns[k].rejected
-    p.beyond["results"][k] = {"error": script.turns[k].rejected}  # as FakeEnvironment answers
-    d["resolved"]["terminal_after_action"] = d["outcome"]["terminal_after_action"] = False
-    d["executed"] = [{"at": landed, "action": d["proposed"]}]
-    d["boundary"] = {
-        "from": tick,
-        "requested": next_tick,
-        "to": reached,
-        "rendered": False,
-        "dropped": dropped,
-    }
-    d["outcome"]["next_observation_tick"] = next_tick
-    d["outcome"]["dropped_intermediate_frames"] = dropped
-    p.episode["termination"]["end_s"] = round(periodic, 9)
-    return periodic
-
-
 def _x1(script: Script, p: Projection, notes: dict) -> None:
     """A wait is time the kernel lets pass, not an action the environment executes
     (turns.py TurnPolicy._pre_checked); its record has no active holds or mouse buttons
@@ -817,14 +725,17 @@ def abandoned_call(started: dict, reason: str, usage: dict) -> dict:
         "error": False,
         "usage": None,
         "provider_usage_missing_reason": GIVEN_UP[reason],
+        # The episode's end names itself; the deadline's record is the bound's (N34).
+        "harness_abort_reason": None if reason == "deadline" else reason,
         "frame_usage": dict.fromkeys(usage, 0),
     }
 
 
 def _u10(script: Script, p: Projection, notes: dict) -> None:
     """Wall clock: a generation the task's end gave up on, found by the kernel's periodic check
-    (K-b) or with the think budget (K-i), is recorded as a call given up on (p1b 第五轮 U10;
-    N10); today the reply comes back and is recorded as it came."""
+    (K-b) or with the think budget (K-i), is recorded as a call given up on, marked with its
+    reason and left out of the token totals (p1b 第五轮 U10; N10, N34); today the reply comes back
+    and is recorded as it came."""
     _abandoned(p, notes, "task_end")
 
 
@@ -923,6 +834,21 @@ def _kj(script: Script, p: Projection, notes: dict) -> None:
             at = ends[0] * seconds
         released.append({"at": at, "keys": logged["keys"]})
     p.episode["key_ups"] = key_releases(released, p.episode["termination"]["end_s"])
+
+
+def _kn(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: a failed read right before landing settles the decision as invalid_run
+    (turns.py TurnPolicy._count_read, _resolve), now that the kernel reads there again (N26);
+    today the environment's True reads as the task's end and the decision is
+    not_applied_terminal (sandbox/actions.py GuestEnvironment.done; legacy_loop.py
+    _land_action). The token clock's kernel reads on no tick read already (KF5b)."""
+    invalid = p.episode["invalid"]
+    if not _wall(script) or invalid is None or invalid["reason"] != "terminal_state_check_failed":
+        return
+    for d in p.decisions.values():
+        for record in (d["resolved"], d["commit"], d["outcome"]):
+            if record is not None and record["status"] == "not_applied_terminal":
+                record["status"] = "invalid_run"
 
 
 def _ke(script: Script, p: Projection, notes: dict) -> None:
@@ -1035,21 +961,6 @@ def _read_under_way(script: Script, at: float) -> float | None:
     return asked
 
 
-def _reads_before_landing(p: Projection, k: int, landed: float | None) -> int:
-    """Today's reads the kernel does not make (WallEnvironment._kernels) from decision k's result
-    to its landing at ``landed``, or to its resolution: the read before landing
-    (runner.py _land_action)."""
-    back = p.facts["finished_at"].get(k)
-    until = p.facts["resolved_at"].get(k) if landed is None else landed
-    if back is None or until is None:
-        return 0
-    return sum(
-        1
-        for at, _, kernels in p.facts["reads"]
-        if not kernels and not earlier(at, back) and earlier(at, until)
-    )
-
-
 def _move_landing(script: Script, p: Projection, k: int, landed: float, delta: float) -> None:
     """Decision k's action, today landed at ``landed``, lands ``delta`` s later, and what runs from
     its landing with it: the hold's lease (K-rel), a wait the deadline cuts, and an end found at
@@ -1080,24 +991,6 @@ def _move_landing(script: Script, p: Projection, k: int, landed: float, delta: f
         termination["end_s"] = round(termination["end_s"] + delta, 9)
         if termination["snapshot_s"] is not None:
             termination["snapshot_s"] = round(termination["snapshot_s"] + delta, 9)
-
-
-def _u13(script: Script, p: Projection, notes: dict) -> None:
-    """Wall clock, reads taking time: today's loop reads the task before landing an action
-    (runner.py _land_action); the kernel makes no such read in a frame it has read already and
-    lands the action at once (decision 31; turns.py TurnPolicy._pre_checked; KF5d), so the action
-    and what runs from it come that read's time earlier. Not in the list: N29 lists K-b's delay
-    only. kernel-fix 第六轮 N26 (b) reads before landing again where the reading has changed."""
-    if not _wall(script) or not script.check_s:
-        return
-    for k in sorted(p.decisions):
-        landed = p.facts["executed_at"].get(k)
-        if landed is None or p.decisions[k]["resolved"] is None:
-            continue
-        reads = _reads_before_landing(p, k, landed)
-        if reads:
-            notes.setdefault("landed", {})[k] = landed - reads * script.check_s
-            _move_landing(script, p, k, landed, -reads * script.check_s)
 
 
 def _u14(script: Script, p: Projection, notes: dict) -> None:
@@ -1147,9 +1040,10 @@ def _kb_landing(script: Script, p: Projection, notes: dict) -> None:
                 record["action_clock_position"] + delay * fps, 9
             )
         d["outcome"]["frame_age_s"] = round(d["outcome"]["frame_age_s"] + delay, 6)
-        landed = notes.get("landed", {}).get(k, p.facts["executed_at"].get(k))
+        # Both read before landing, the kernel once the read under way has returned (N26).
+        landed = p.facts["executed_at"].get(k)
         if landed is not None:
-            _move_landing(script, p, k, landed, taken - landed)
+            _move_landing(script, p, k, landed, delay)
 
 
 def _u2(script: Script, p: Projection, notes: dict) -> None:
@@ -1245,7 +1139,17 @@ RULES = (
     Rule("X1", "a wait is not executed by the environment; its record has no holds", _x1),
     Rule("X12", "the third failed state read in a row invalidates the run", _x12),
     Rule("K-b", "the wall clock checks the end every 1/env_fps s", _kb),
-    Rule("KF5d", "a wall action in a frame already read lands before the end is read", _kf5d),
+    Rule(
+        "KF10",
+        "a wall action lands at the reading after the shell accepted its result",
+        seen="not observable: the replay accepts in no time; the landing timer's records are"
+        " KernelRecords (X5)",
+    ),
+    Rule(
+        "KF5d",
+        "a wall action in a frame already read lands before the end is read",
+        seen="no longer: the kernel reads before landing on a new reading (N26 (b))",
+    ),
     Rule("K-c", "a wall wait is a timer the end interrupts", _kc),
     Rule("K-i", "think budget and the task's end: the first names the reason", _ki),
     Rule("K-d", "nothing advances after the first end signal", _kd),
@@ -1262,14 +1166,9 @@ RULES = (
     Rule("K-h", "a frozen stream does not abort the agent", _kh),
     Rule("K-f", "an unusable result resolves its action as invalid_run", _kf),
     Rule("K-j", "a lease ending inside a token tap is released where the tap ends", _kj),
-    Rule(
-        "K-n",
-        "a failed read before landing is invalid_run, not not_applied_terminal",
-        seen="no longer: the kernel does not read before landing (decision 31, KF5b, KF5d)",
-    ),
+    Rule("K-n", "a failed read before landing is invalid_run, not not_applied_terminal", _kn),
     Rule("K-e", "an escaping fault: the decision in hand is settled and reported", _ke),
     Rule("K-rel", "a wall hold's lease starts at Execute", _krel),
-    Rule("U13", "no read before landing in a frame read already, a read's time earlier", _u13),
     Rule("K-b", "a result back during a periodic read is taken once it returns", _kb_landing),
     Rule("U14", "a failed wall read invalidates the run when it returns, not when asked", _u14),
     Rule(
@@ -1313,6 +1212,11 @@ RULES = (
         "KF7",
         "a result back before the deadline and settled past it is discarded",
         seen="not scripted: the replay settles a result in no time",
+    ),
+    Rule(
+        "U13",
+        "a result settled and then discarded writes its trajectory row as a decision's",
+        seen="not compared: the trajectory rows (p1b 第七轮 U13)",
     ),
     Rule(
         "U12",

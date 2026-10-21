@@ -4,17 +4,17 @@
 
 with ``config`` the episode's TurnConfig and the timeline in the legacy loop's shape (k, t_k,
 d_ticks, tau_k, action). ``legacy`` is the turn loop main() ran before the switch, kept to run side
-by side (runner.py _run_stream_legacy; decision 11 archives it here as legacy_loop.py), and
-``shell`` the kernel's (wave2-plan.md, P1 对外接口); the environment the script's world is built on
-is the same for both.
+by side (legacy_loop.py _run_stream_legacy; decision 11), and ``shell`` the kernel's
+(wave2-plan.md, P1 对外接口); the environment the script's world is built on is the same for both.
 """
 
 from __future__ import annotations
 
 from realtime_framework.clock import Clocks
 from realtime_framework.evaluation.kernel.turns import TurnConfig
-from realtime_framework.evaluation.runner import _run_stream_legacy
 from realtime_framework.evaluation.shell import run_episode
+
+from .legacy_loop import _run_stream_legacy
 
 
 def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
