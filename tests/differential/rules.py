@@ -418,13 +418,11 @@ def _cut(script: Script, p: Projection, notes: dict, k: int, at: float) -> None:
 
 
 def _kc(script: Script, p: Projection, notes: dict) -> None:
-    """A wall wait is a kernel timer that the end interrupts (turns.py:507-536); today the
-    environment sleeps it out, cut only at the deadline (sandbox/actions.py:877-880). On the token
-    clock the kernel steps the wait itself, so a step that fails cuts it short like an end
-    (turns.py:730-734, 266-267); today the environment turns that failure into a failed action
-    (sandbox/actions.py:904-905)."""
+    """A wall wait is a kernel timer that the end interrupts, and the record says the terminal
+    condition cut it (turns.py _wait_record); today the environment sleeps it out, cut only at
+    the deadline, which neither side flags (sandbox/actions.py GuestEnvironment.execute)."""
     if not _wall(script):
-        return _kc_token(script, p)
+        return
     ended = notes.get("ended")
     if ended is None or ended[1] is None:
         return
@@ -435,40 +433,12 @@ def _kc(script: Script, p: Projection, notes: dict) -> None:
     if record is None or landed is None or earlier(at, landed) or not earlier(at, resolved):
         return
     record["duration_simulated_seconds"] = round(max(0.0, at - landed), 9)
+    record["truncated_by_terminal_condition"] = True
     tick = _floor(at * script.env_fps)
     d["resolved"]["environment_tick"] = tick
     d["resolved"]["terminal_after_action"] = True
     d["outcome"]["terminal_after_action"] = True
     d["outcome"]["next_observation_tick"] = tick
-
-
-def _kc_token(script: Script, p: Projection) -> None:
-    invalid = p.episode["invalid"]
-    if invalid is None or invalid["reason"] != "clock_advance_failed":
-        return
-    for d in p.decisions.values():
-        resolved, proposed = d["resolved"], d["proposed"] or ""
-        if (
-            resolved is None
-            or resolved["status"] != "invalid_run"
-            or not proposed.startswith("wait:")
-        ):
-            continue
-        start, reached = d["approach"]["to"], resolved["environment_tick"]
-        requested = float(proposed.split(":")[1])
-        elapsed = round(max(0.0, (reached - start) / script.env_fps), 9)
-        horizon_truncates = start + requested * script.env_fps > script.max_ticks + 1e-9
-        by_horizon = horizon_truncates and reached >= script.max_ticks - 1e-9
-        d["wait_record"] = {
-            "duration_simulated_seconds": elapsed,
-            "requested_duration_simulated_seconds": requested,
-            "truncated_by_episode_horizon": by_horizon,
-            "truncated_by_terminal_condition": elapsed + 1e-9 < requested and not by_horizon,
-        }
-        d["applied"] = True
-        for record in (resolved, d["commit"], d["outcome"]):
-            record["status"] = "wait"
-        resolved["terminal_after_action"] = d["outcome"]["terminal_after_action"] = True
 
 
 def _ki(script: Script, p: Projection, notes: dict) -> None:
@@ -647,9 +617,11 @@ def _ke(script: Script, p: Projection, notes: dict) -> None:
     reached = p.episode["checks"][-1]
     t_k, tokens = d["observed"], p.facts["output_tokens"].get(k)
     frame_ticks = script.env_fps / script.input_fps
+    # In model-input frames, n / B, and 0 when paused (turns.py TurnPolicy._accept).
+    delay = 0.0 if script.tokens_per_frame is None else tokens / script.tokens_per_frame
     if d["resolved"] is None:
         # The step to the action time failed: the action is not landed (turns.py:414-434).
-        tau = t_k + tokens / script.tokens_per_frame * frame_ticks  # runner.py:450
+        tau = t_k + delay * frame_ticks  # runner.py _apply
         d["approach"] = {"from": t_k, "requested": min(tau, script.max_ticks), "to": reached}
         d["resolved"] = {
             "status": "invalid_run",
@@ -665,7 +637,7 @@ def _ke(script: Script, p: Projection, notes: dict) -> None:
             "next_observation_tick": reached,
             "dropped_intermediate_frames": 0,
             "post_action_rendered": False,
-            "token_delay_frames": tau - t_k,
+            "token_delay_frames": delay,
             "action_output_tokens": tokens,
             "post_horizon_output_tokens": 0,
             "frame_age_s": round((tau - t_k) / script.env_fps, 6),
@@ -691,7 +663,7 @@ def _ke(script: Script, p: Projection, notes: dict) -> None:
         "next_observation_tick": next_tick,
         "dropped_intermediate_frames": dropped,
         "post_action_rendered": False,
-        "token_delay_frames": tau - t_k,
+        "token_delay_frames": delay,
         "action_output_tokens": tokens,
         "post_horizon_output_tokens": 0,
         "frame_age_s": round((tau - t_k) / script.env_fps, 6),
