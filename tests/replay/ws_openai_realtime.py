@@ -518,7 +518,7 @@ def run_steps(episode: Episode, steps: list[Step], stub: RealtimeStub) -> list[d
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
         mark = stub.mark()
-        budget = episode.budget(observation.tick_number)  # t_k: runner.py _decide
+        budget = episode.budget(observation.tick_number)  # t_k: legacy_loop.py _decide
         agent.configure_decision(budget)
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)

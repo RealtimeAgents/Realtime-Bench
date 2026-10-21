@@ -93,7 +93,7 @@ def test_accept_and_discard_leave_the_agent_alone_and_commit_reports_the_outcome
 
 class FrameAgent(StreamingAgent):
     """A frame-driven adapter with only the methods the legacy loop requires: it reports no
-    outcome and has nothing to interrupt (runner.py ``_commit`` and ``_bounded_call`` skip a
+    outcome and has nothing to interrupt (legacy_loop.py ``_commit`` and ``_bounded_call`` skip a
     missing commit_action and abort)."""
 
     def initialize(self, task_instruction, initial_observation):

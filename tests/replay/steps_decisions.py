@@ -54,7 +54,8 @@ def run_decisions(
         first_request = len(stub.requests)
         history_length = len(agent.action_history)
         stub.load(step.script)
-        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py _decide
+        # The budget at t_k (legacy_loop.py _decide).
+        agent.configure_decision(episode.budget(observation.tick_number))
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)
         agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry

@@ -2,7 +2,7 @@
 policy, on both clocks where they apply.
 
 Every expectation is worked out from the rules, not read off a run: today's loop where phase 2
-keeps it (runner.py run_stream) and phase2.md where it changes it (事件内核; 时间和结束判定).
+keeps it (legacy_loop.py _run_stream_legacy) and phase2.md where it changes it (事件内核; 时间和结束判定).
 The first end signal ends the episode at once: it freezes the snapshot, writes off and interrupts
 the generation in flight, and stops every timer; the decision in hand is settled with the skip
 order and reported; a late result is discarded. At one instant an end beats a completion, which
@@ -242,7 +242,7 @@ def test_a_wall_result_exactly_at_the_deadline_is_discarded():
 def test_a_token_action_at_the_horizon_is_not_applied():
     """正好在截止时落地 (token): 200 tokens at B = 100 from tick 0 put the action at tau = 2 = T.
     The clock reaches the horizon before execution, so the action is not applied, and the horizon
-    ends the episode at the next loop top (runner.py _land_action, run_stream)."""
+    ends the episode at the next loop top (legacy_loop.py _land_action, _run_stream_legacy)."""
     sim = _run(_token(2.0), World(replies=[Reply(latency=1.0, action=CLICK, output_tokens=200)]))
     starts = [command for command in sim.commands if isinstance(command, StartGeneration)]
     assert [start.remaining_clock_tokens for start in starts] == [200]  # floor(2 * 100)
@@ -264,7 +264,7 @@ def test_a_token_action_at_the_horizon_is_not_applied():
 def test_a_wall_wait_across_the_deadline_ends_at_the_deadline():
     """wait 跨过截止 (wall): a 5 s WAIT starts at 0.5 s with the deadline at 3 s. The WAIT is a
     kernel timer the end interrupts: it ran 2.5 s, as today's sleep(min(duration, remaining)), and
-    is reported as wait with the episode over (runner.py _land_action)."""
+    is reported as wait with the episode over (legacy_loop.py _land_action)."""
     sim = _run(_wall(3.0), World(replies=[Reply(latency=0.5, action=Action.wait(5.0))]))
     (resolved,) = sim.entries("ActionResolved")
     assert resolved.semantic == 3.0
@@ -278,7 +278,7 @@ def test_a_wall_wait_across_the_deadline_ends_at_the_deadline():
     assert (outcome.status, outcome.terminal_after_action) == ("wait", True)
     assert (outcome.action_clock_position, outcome.frame_age_s) == (0.5, 0.5)
     # A WAIT is no environment call; the state is read before it, at 0.5 s, as before any action
-    # (runner.py _land_action), and no end check is asked after the deadline.
+    # (legacy_loop.py _land_action), and no end check is asked after the deadline.
     assert sim.executed == []
     assert sim.checks == [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0), (2.0, 2.0)]
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.0, 3.0, 3.0, None)
@@ -510,7 +510,7 @@ def test_the_records_of_a_retry_across_the_deadline_are_numbered_and_its_result_
 def test_a_frozen_stream_invalidates_the_run(config, reply, ended_at, ops_at):
     """画面冻结: from the second capture on the producer repeats one frame. The third identical
     frame, with operational time moved on, invalidates the run before a fourth generation starts
-    (runner.py _accept_observation; observation_freeze_n = 3)."""
+    (legacy_loop.py _accept_observation; observation_freeze_n = 3)."""
     sim = _run(config, World(replies=[reply] * 3, frozen_from=1))
     assert len(sim.captures) == 4
     assert len(sim.entries("InferenceStarted")) == 3
@@ -534,7 +534,7 @@ def test_a_generation_spanning_several_frames_drops_them():
     """一次生成跨过好几帧 (token): 350 tokens at B = 100 from tick 0 put the action at 3.5. The clock
     moves 1, 1, 1, 0.5 with an end check after each step, the action lands at 3.5, the next
     observation is at ceil(3.5) = 4, and of the 4 frames crossed 3 were dropped
-    (runner.py _apply)."""
+    (legacy_loop.py _apply)."""
     replies = [
         Reply(latency=1.0, action=CLICK, output_tokens=350),
         Reply(latency=1.0, action=CLICK, output_tokens=100),
@@ -573,7 +573,7 @@ def test_a_wall_generation_spanning_several_frames_drops_them():
     """一次生成跨过好几帧 (wall): a 2.5 s call from the frame at 0 s lands at 2.5 s, tick 2.5, with
     the end checked at 1 s and 2 s meanwhile; the next observation is at ceil(2.5) = 3 s, and of
     the 3 frames crossed 2 were dropped. The wall clock keeps no dropped-frame total
-    (runner.py _apply)."""
+    (legacy_loop.py _apply)."""
     sim = _run(_wall(5.0), World(replies=[Reply(latency=2.5, action=CLICK), Reply(latency=10.0)]))
     assert sim.executed == [(0, 2.5, CLICK)]
     # Loop top; every second; before and after execution; at 3 s the periodic check (set before
@@ -597,7 +597,7 @@ def test_an_action_exactly_on_a_frame_boundary_renders_the_frame():
     """恰好落在帧边界 (token): 100 tokens at B = 100 put the click on tick 1, which is also the next
     observation; the move there is empty, so the frame is rendered at that tick before the next
     capture. A key tap on the next boundary moves the clock 1/60 tick itself, so the clock goes on
-    to ceil(2 + 1/60) = 3 and nothing is rendered (runner.py _apply)."""
+    to ceil(2 + 1/60) = 3 and nothing is rendered (legacy_loop.py _apply)."""
     tap = Action(ActionType.KEY, {"key": "a"})
     replies = [
         Reply(latency=1.0, action=CLICK, output_tokens=100),
@@ -632,7 +632,7 @@ def test_a_wall_action_exactly_on_a_frame_boundary_lands_before_the_check():
     """恰好落在帧边界 (wall): a 2 s call lands exactly on the frame at 2 s. The result, a completion,
     is handled before the end check due then, a start; the next observation is that frame, so the
     move to it is empty, and the wall clock renders nothing extra (the render barrier in
-    runner.py _apply is token only). Frame 1 was crossed during the call and dropped."""
+    legacy_loop.py _apply is token only). Frame 1 was crossed during the call and dropped."""
     sim = _run(_wall(5.0), World(replies=[Reply(latency=2.0, action=CLICK), Reply(latency=10.0)]))
     assert sim.executed == [(0, 2.0, CLICK)]
     (outcome,) = sim.outcomes
@@ -662,10 +662,10 @@ def test_a_wall_action_exactly_on_a_frame_boundary_lands_before_the_check():
 
 
 def test_output_past_the_allowance_is_clamped_and_not_applied():
-    """总帧数截断 (token): with T = 2 and B = 100 the second decision observes tick 1 and has
-    floor((2 - 1) * 100) = 100 tokens left. Its 180 tokens are clamped to 100, the other 80 are
-    billed past the horizon, the action time is T, so the action is not applied and the episode
-    ends at the horizon (runner.py _decide, _land_action; episode_records.py account_tokens)."""
+    """总帧数截断 (token): with T = 2 and B = 100 the second decision observes tick 1 and has floor((2 -
+    1) * 100) = 100 tokens left. Its 180 tokens are clamped to 100, the other 80 are billed past the
+    horizon, the action time is T, so the action is not applied and the episode ends at the horizon
+    (legacy_loop.py _decide, _land_action; episode_records.py account_tokens)."""
     replies = [
         Reply(latency=1.0, action=CLICK, output_tokens=100),
         Reply(latency=1.0, action=CLICK, output_tokens=180),
@@ -689,7 +689,7 @@ def test_output_past_the_allowance_is_clamped_and_not_applied():
 def test_with_no_allowance_left_the_clock_moves_to_the_horizon():
     """总帧数截断 (token): with T = 2.5 and B = 1 the frame at tick 2 has floor(0.5 * 1) = 0 tokens
     left. No generation starts; the clock moves to T with an end check and the episode ends there
-    (runner.py _decide)."""
+    (legacy_loop.py _decide)."""
     sim = _run(
         _token(2.5, tokens_per_frame=1),
         World(replies=[Reply(latency=1.0, action=CLICK, output_tokens=2)]),
@@ -713,8 +713,8 @@ def _paused(latencies: tuple[float, float, float]) -> Simulation:
 
 
 def test_paused_mode_lands_on_the_observed_tick_and_advances_one_frame():
-    """暂停模式: B unlimited. Each action lands on its observed tick whatever its output length,
-    missing usage is no failure, and the clock then moves exactly one frame (runner.py _apply)."""
+    """暂停模式: B unlimited. Each action lands on its observed tick whatever its output length, missing
+    usage is no failure, and the clock then moves exactly one frame (legacy_loop.py _apply)."""
     sim = _paused((0.1, 50.0, 250.0))
     assert [tick for tick, _ in sim.captures] == [0, 1, 2]
     assert [semantic for _, semantic, _ in sim.executed] == [0, 1, 2]
@@ -793,7 +793,7 @@ def test_in_paused_mode_generation_latency_changes_nothing_in_world_time():
 )
 def test_an_end_beats_a_landing_at_the_same_instant(config, world, checks, termination):
     """The task's end at the instant the action would land wins: the action is not applied
-    (runner.py _land_action) and the end is dated at that instant."""
+    (legacy_loop.py _land_action) and the end is dated at that instant."""
     sim = _run(config, world)
     (outcome,) = sim.outcomes
     assert (outcome.status, outcome.terminal_after_action) == ("not_applied_terminal", False)
@@ -869,7 +869,7 @@ def test_the_deadline_during_a_synchronous_execution_waits_for_it():
     """The deadline falls due while the shell executes an action that takes 1 s (2.5 s to 3.5 s).
     The kernel handles it once the shell returns: the end is dated at the deadline, the snapshot is
     taken after the operation, and the executed action is reported applied with the episode over
-    (runner.py _land_action; phase2.md 时间和结束判定, 冻结的延迟有上限)."""
+    (legacy_loop.py _land_action; phase2.md 时间和结束判定, 冻结的延迟有上限)."""
     sim = _run(_wall(3.0), World(replies=[Reply(latency=2.5, action=CLICK)], execute_s=1.0))
     assert sim.executed == [(0, 2.5, CLICK)]
     (outcome,) = sim.outcomes
@@ -892,8 +892,8 @@ def test_the_deadline_during_a_synchronous_execution_waits_for_it():
 )
 def test_a_stale_result_never_lands(interruptible, discarded_at):
     """A legacy 1 s per-move cap gives up on the first call at 1 s: that decision is skipped as a
-    timeout, charged the cap, and the episode goes on (runner.py _charge). A Decision-style call
-    goes on asking and returns at its own time, 2.5 s; an interruptible one hands back at once.
+    timeout, charged the cap, and the episode goes on (legacy_loop.py _charge). A Decision-style
+    call goes on asking and returns at its own time, 2.5 s; an interruptible one hands back at once.
     Either way its result is stale: discarded while later decisions run, never executed, and the
     call's records are numbered with no other effect."""
     first = Reply(
@@ -938,10 +938,10 @@ def test_a_stale_result_never_lands(interruptible, discarded_at):
 
 def test_every_proposed_action_is_resolved_exactly_once():
     """A refused action and an unusable result are each resolved once. The refusal is reported with
-    the guest's reason and renders nothing at the boundary (runner.py _land_action); the result
+    the guest's reason and renders nothing at the boundary (legacy_loop.py _land_action); the result
     without token usage on a finite-B clock invalidates the run first and gets no feedback
-    (runner.py _apply; episode_records.py result_invalid), then an invalid_run resolution, which
-    today's loop does not write."""
+    (legacy_loop.py _apply; episode_records.py result_invalid), then an invalid_run resolution,
+    which today's loop does not write."""
     replies = [
         Reply(latency=1.0, action=CLICK, output_tokens=100),
         Reply(latency=1.0, action=CLICK),
@@ -1049,7 +1049,8 @@ def test_the_outcome_carries_the_action_the_decision_came_to_whatever_came_of_it
 ):
     """Outcome.action is the action the decision came to, a DONE already the wait it became, and
     Outcome.protocol_failure why, whatever its status: the status says whether it was executed, as
-    in today's lifecycle record (runner.py _apply). A move over the per-move cap comes to none."""
+    in today's lifecycle record (legacy_loop.py _apply). A move over the per-move cap comes to
+    none."""
     sim = _run(config, world)
     (outcome,) = sim.outcomes[:1]
     assert (outcome.status, outcome.action, outcome.protocol_failure) == (

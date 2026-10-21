@@ -65,22 +65,22 @@ def _boundaries(sim: Simulation) -> list[dict]:
 
 
 def _today_remaining(max_ticks: float, t_k: float, tokens_per_frame: int) -> int:
-    return max(0, math.floor((max_ticks - t_k) * tokens_per_frame + 1e-9))  # runner.py _decide
+    return max(0, math.floor((max_ticks - t_k) * tokens_per_frame + 1e-9))  # legacy_loop.py _decide
 
 
 def _today_tau(t_k: float, tokens: int, tokens_per_frame: int) -> float:
-    return t_k + tokens / tokens_per_frame  # runner.py _apply
+    return t_k + tokens / tokens_per_frame  # legacy_loop.py _apply
 
 
 def _today_next(t_k: float, tau: float, tick: float, max_ticks: float) -> float:
-    action_end = max(tau, tick)  # runner.py _apply
+    action_end = max(tau, tick)  # legacy_loop.py _apply
     rounded = round(action_end)
     boundary = int(rounded) if abs(action_end - rounded) < 1e-9 else math.ceil(action_end)
     return min(max(math.floor(t_k) + 1, boundary), max_ticks)
 
 
 def _today_dropped(t_k: float, post_after: float) -> int:
-    crossed = max(0, math.floor(post_after + 1e-9) - math.floor(t_k))  # runner.py _apply
+    crossed = max(0, math.floor(post_after + 1e-9) - math.floor(t_k))  # legacy_loop.py _apply
     return max(0, crossed - 1)
 
 
@@ -151,7 +151,7 @@ def test_at_equal_rates_the_rules_are_todays_expressions(rates, duration_s):
 def test_the_action_time_is_in_environment_ticks(rates, tokens_per_frame, tokens, tau):
     """N tokens are N * env_fps / (B * input_fps) environment ticks; the clock steps there, at
     most one tick a step, before the action lands. The frame age is that time in seconds and the
-    token delay N / B input frames, as today's loop records it (runner.py _apply)."""
+    token delay N / B input frames, as today's loop records it (legacy_loop.py _apply)."""
     env_fps, input_fps = rates
     replies = [Reply(latency=1.0, action=CLICK, output_tokens=tokens), NEVER]
     sim = _run(_config("token", rates, 10.0, tokens_per_frame), replies)
@@ -266,7 +266,7 @@ def test_a_large_allowance_is_rounded_down_within_float_noise():
     52998400 tokens are 529.984 frames, 3312.4 ticks; frame 530 (3312.5) is observed at tick 3313.
     The 4187 ticks left are 669.92 frames, exactly 66992000 tokens, which floats put a
     hundred-millionth of a token below: past a fixed 1e-9, within 1e-12 of the allowance
-    (runner.py _decide). A response of all of them lands on the horizon, none of it past it."""
+    (legacy_loop.py _decide). A response of all of them lands on the horizon, none of it past it."""
     replies = [
         Reply(latency=1.0, output_tokens=52998400),
         Reply(latency=1.0, action=CLICK, output_tokens=66992000),
@@ -336,7 +336,7 @@ def test_a_paused_episode_ends_at_a_horizon_off_the_tick_grid():
     move to the next frame, cut at the horizon, ends at 0.2 + (0.85 - 0.2), a float just below
     0.85. A move is done within 1e-9 of its target, so the horizon is reached there: the loop
     top ends the episode instead of observing that tick again and again, as today's loop does
-    (runner.py run_stream compares the horizon exactly)."""
+    (legacy_loop.py _run_stream_legacy compares the horizon exactly)."""
     sim = _run(_config("token", (1, 1), 0.85), [Reply(latency=0.5, action=Action.wait(0.2))] * 3)
     assert [tick for tick, _ in sim.captures] == [0]
     assert [outcome.status for outcome in sim.outcomes] == ["wait"]

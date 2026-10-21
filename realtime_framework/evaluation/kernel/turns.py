@@ -24,9 +24,9 @@ both rates (phase2.md, 帧率): B counts tokens per input frame, observations si
 grid at the first environment tick at or after each grid point, and the horizon is in environment
 ticks. With both rates equal to 1 every expression reduces to the runner's.
 
-Written from the runner's loop (runner.py run_stream, _decide) and the environment clock
-(sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute), not shared with
-them, so that the two can be compared.
+Written from the runner's loop (legacy_loop.py _run_stream_legacy, _decide) and the environment
+clock (sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute), not shared
+with them, so that the two can be compared.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ from realtime_framework.evaluation.kernel.events import (
 )
 
 # Status of an action that was not landed because the episode ended before it could, by the
-# end's cause (runner.py _land_action). The token horizon ends an episode only at the loop top.
+# end's cause (legacy_loop.py _land_action). The token horizon ends an episode only at the loop top.
 NOT_APPLIED = {
     "deadline": "not_applied_time_limit",
     "environment": "not_applied_terminal",
@@ -154,7 +154,8 @@ class _Decision:
 
 
 def _ceil(value: float) -> int:
-    """The next integer, or this one when ``value`` is within 1e-9 of it (runner.py _whole_up)."""
+    """The next integer, or this one when ``value`` is within 1e-9 of it (legacy_loop.py
+    _whole_up)."""
     rounded = round(value)
     return int(rounded) if abs(value - rounded) < 1e-9 else math.ceil(value)
 
@@ -165,7 +166,7 @@ def _floor(value: float) -> int:
 
 class _FrozenStream:
     """The same producer identity ``threshold`` times while operational time moves on: the stream
-    is replaying one frame instead of advancing (runner.py ObservationStreamWatchdog)."""
+    is replaying one frame instead of advancing (legacy_loop.py ObservationStreamWatchdog)."""
 
     def __init__(self, threshold: int) -> None:
         self.threshold = max(2, int(threshold))
@@ -264,7 +265,7 @@ class TurnPolicy:
                 "provider", "generation_watchdog_timeout", f"generation exceeded {seconds:g}s"
             )
         elif timer.kind == "per_move_cap":
-            # A slower move places no action this turn and costs the cap (runner.py _charge).
+            # A slower move places no action this turn and costs the cap (legacy_loop.py _charge).
             self.decision.timeout = None
             kernel.abandon_generation("per_move_cap")
             self._accept(GenerationResult(latency=timer.data["bound"]), timed_out=True)
@@ -315,7 +316,7 @@ class TurnPolicy:
     def _guarded(self) -> None:
         if self._past_deadline():
             return
-        # The horizon is tested after the end check (runner.py run_stream).
+        # The horizon is tested after the end check (legacy_loop.py _run_stream_legacy).
         if self.token and self._horizon_reached():
             self.phase = _Phase.SETTLED
             return self.kernel.end("horizon", self.config.max_ticks)
@@ -325,7 +326,7 @@ class TurnPolicy:
     def _captured(self, event: FrameCaptured) -> None:
         kernel, config = self.kernel, self.config
         # Also once the episode is over: the capture was under way at the end, and today's loop
-        # judges every frame it captures, failed or frozen (runner.py _decide).
+        # judges every frame it captures, failed or frozen (legacy_loop.py _decide).
         if event.error is not None:
             self.phase = _Phase.SETTLED
             return kernel.invalidate("environment", "observation_capture_failed", event.error)
@@ -343,7 +344,7 @@ class TurnPolicy:
         )
         if self.token and config.tokens_per_frame is not None:
             # The allowance left before the horizon is the input frames left times B, rounded
-            # down within float noise, which grows with it (runner.py _decide).
+            # down within float noise, which grows with it (legacy_loop.py _decide).
             allowance = self._frames(config.max_ticks - d.t_k) * config.tokens_per_frame
             d.remaining = max(0, math.floor(allowance + max(1e-9, allowance * 1e-12)))
             if d.remaining <= 0:
@@ -351,8 +352,8 @@ class TurnPolicy:
                 return self._move(config.max_ticks, self._at_horizon)
         kernel.start_generation(d.index, d.observation_id, d.t_k, d.remaining)
         self.phase = _Phase.GENERATE
-        # The bound on one call: an operational watchdog on the token clock, the legacy per-move
-        # cap on the wall clock, whose deadline is a timer of its own (runner.py _move_timeout).
+        # The bound on one call: an operational watchdog on the token clock, the legacy per-move cap
+        # on the wall clock, whose deadline is a timer of its own (legacy_loop.py _move_timeout).
         watchdog = config.timing.provider_watchdog_s
         if self.token and watchdog > 0:
             d.timeout = kernel.set_timer(
@@ -376,7 +377,7 @@ class TurnPolicy:
         kernel, config, d = self.kernel, self.config, self.decision
         tokens_per_frame = config.tokens_per_frame
         action, protocol_failure = result.action, result.protocol_failure
-        # The loop has no terminal actions (runner.py _decide).
+        # The loop has no terminal actions (legacy_loop.py _decide).
         if action is not None and action.action_type in (ActionType.DONE, ActionType.FAIL):
             action, protocol_failure = Action.wait(), "unsupported_terminal_action"
         tokens = result.output_tokens
@@ -408,16 +409,16 @@ class TurnPolicy:
                 "missing_output_token_usage",
                 "finite token-clock decisions require provider or deterministic local usage",
             )
-        # The action time (runner.py _apply): n tokens are n / B input frames on the token clock;
-        # paused, the action lands on the observed tick; on the wall clock it lands at the clock
-        # position when the result is handled.
+        # The action time (legacy_loop.py _apply): n tokens are n / B input frames on the token
+        # clock; paused, the action lands on the observed tick; on the wall clock it lands at the
+        # clock position when the result is handled.
         if self.token and tokens_per_frame is not None:
             d.d_frames = tokens / tokens_per_frame
             d.d_ticks = tokens * config.env_fps / (tokens_per_frame * config.input_fps)
             if d.post_horizon:
                 # The whole response ends past the horizon, so the action lands there, though the
                 # allowance, whole tokens, can fall short of it: an action whose completed response
-                # lands beyond the horizon is not applied (runner.py module docstring).
+                # lands beyond the horizon is not applied (legacy_loop.py module docstring).
                 d.d_ticks = config.max_ticks - d.t_k
                 d.d_frames = self._frames(d.d_ticks)
             deliberation = d.d_ticks / config.env_fps
@@ -445,14 +446,14 @@ class TurnPolicy:
             return self._move(d.target, self._approached)
         # The shell accepts the result first, in this step's commands, and that takes time: the
         # action lands at the reading after it, where the deadline and the end are judged
-        # (runner.py _land_action reads the clock right before it executes).
+        # (legacy_loop.py _land_action reads the clock right before it executes).
         self._then = self._approached
         self.kernel.set_timer("landing", Clock.SEMANTIC, self.kernel.semantic, Priority.COMPLETION)
 
     def _unusable(self, proposed: bool, action, category, reason, detail) -> None:
-        """An unusable result invalidates the run before anything is paced or reported to the
-        agent (runner.py _apply; episode_records.py result_invalid). A proposed action still gets
-        its outcome, where today's loop writes none: every proposed action has one here."""
+        """An unusable result invalidates the run before anything is paced or reported to the agent
+        (legacy_loop.py _apply; episode_records.py result_invalid). A proposed action still gets its
+        outcome, where today's loop writes none: every proposed action has one here."""
         d = self.decision
         self.phase = _Phase.SETTLED
         self.kernel.invalidate(category, reason, detail)
@@ -489,7 +490,7 @@ class TurnPolicy:
         self._check_end(self._pre_checked, before_landing=True)
 
     def _skipped(self) -> str | None:
-        """The skip order before execution (runner.py _land_action), or None to go on."""
+        """The skip order before execution (legacy_loop.py _land_action), or None to go on."""
         d, kernel = self.decision, self.kernel
         if kernel.invalid is not None:
             return "invalid_run"
@@ -504,7 +505,7 @@ class TurnPolicy:
     def _pre_checked(self) -> None:
         if self._past_deadline():
             return
-        # The horizon ends the episode at the next loop top, as today (runner.py _land_action,
+        # The horizon ends the episode at the next loop top, as today (legacy_loop.py _land_action,
         # run_stream).
         if self.token and self._horizon_reached():
             return self._resolve("not_applied_tick_limit")
@@ -546,7 +547,7 @@ class TurnPolicy:
             kernel.invalidate("environment", "action_execution_failed", event.error)
             return self._resolve("invalid_run")
         if event.rejection is not None:
-            # A refused action skips the check after execution (runner.py _land_action).
+            # A refused action skips the check after execution (legacy_loop.py _land_action).
             d.detail = event.rejection
             return self._resolve("rejected")
         if self.token and event.held_keys:
@@ -555,7 +556,7 @@ class TurnPolicy:
 
     def _after_execution(self, status: str) -> None:
         # An executed action can end the task at once: check before any time passes
-        # (runner.py _land_action).
+        # (legacy_loop.py _land_action).
         self.decision.status = status
         if self.kernel.ending is not None:
             return self._resolve(status, terminal_after_action=True)
@@ -590,7 +591,7 @@ class TurnPolicy:
         d, config = self.decision, self.config
         if d.failed is not None:
             # The environment reports a wait whose step failed as a failed action
-            # (sandbox/actions.py GuestEnvironment.execute; runner.py _land_action).
+            # (sandbox/actions.py GuestEnvironment.execute; legacy_loop.py _land_action).
             d.execution_result = {"error": d.failed}
             return self._resolve("invalid_run")
         started, duration = d.wait
@@ -644,7 +645,7 @@ class TurnPolicy:
         d.next_tick = self._tick()
         # Pace whether or not an action landed, so an empty decision cannot repeat within one
         # frame; never after the end, nor from the horizon on, on either clock: on the wall clock
-        # an answer filed before the deadline can be handled after it (runner.py _apply).
+        # an answer filed before the deadline can be handled after it (legacy_loop.py _apply).
         if (
             not terminal_after_action
             and status not in {"not_applied_terminal", "invalid_run"}
@@ -661,7 +662,7 @@ class TurnPolicy:
     def _paced(self) -> None:
         d = self.decision
         # At an exact boundary the move was empty, so commit the action's pixels at the same tick
-        # before the next capture (runner.py _apply).
+        # before the next capture (legacy_loop.py _apply).
         if (
             self.token
             and d.action is not None
@@ -685,7 +686,7 @@ class TurnPolicy:
     def _boundary_reached(self) -> None:
         d = self.decision
         post_after = self._tick()
-        # Every input frame the decision crossed but one was dropped (runner.py _apply).
+        # Every input frame the decision crossed but one was dropped (legacy_loop.py _apply).
         crossed = max(0, int(_floor(self._frames(post_after)) - _floor(self._frames(d.t_k))))
         d.dropped = max(0, crossed - 1)
         self.kernel.record(
@@ -707,7 +708,7 @@ class TurnPolicy:
     def _commit(self) -> None:
         d, config = self.decision, self.config
         # The frame age: simulated time on the token clock, wall time on the wall clock
-        # (runner.py _apply).
+        # (legacy_loop.py _apply).
         if d.timestamp is None:
             frame_age = None
         elif self.token:
@@ -744,7 +745,7 @@ class TurnPolicy:
             kernel.invalidate("provider", "action_commit_feedback_failed", event.error)
         if kernel.ending is not None:
             return
-        # The legacy budget ends the episode once the decision is reported (runner.py _decide).
+        # The legacy budget ends the episode once the decision is reported (legacy_loop.py _decide).
         if d.over_budget:
             return kernel.end("think_budget", kernel.semantic)
         self._loop_top()
@@ -884,7 +885,7 @@ class TurnPolicy:
         the same position, which every step of a move makes new. On the wall clock it is the same
         environment frame, except right before landing, where it must be the same reading: real
         time moves on within a frame, and an end since keeps the action from landing, as the
-        runner reads right before it executes (runner.py _land_action). Without ``or
+        runner reads right before it executes (legacy_loop.py _land_action). Without ``or
         before_landing`` the check before landing too reads once a frame."""
         last = self._read_at
         if last is None:
@@ -923,7 +924,7 @@ class TurnPolicy:
         return frames * self.config.env_fps / self.config.input_fps
 
     def _next_observation_tick(self, t_k: float, action_end: float) -> float:
-        """The first input frame after the observed one and not before the action ends, at the
-        first environment tick at or after it, and never past the horizon (runner.py _apply)."""
+        """The first input frame after the observed one and not before the action ends, at the first
+        environment tick at or after it, and never past the horizon (legacy_loop.py _apply)."""
         frame = max(_floor(self._frames(t_k)) + 1, _ceil(self._frames(action_end)))
         return min(_ceil(self._ticks(frame)), self.config.max_ticks)

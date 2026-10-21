@@ -132,7 +132,7 @@ class _FirstRowFails(Agent):
 
 def test_a_failed_trajectory_row_of_a_move_over_the_cap_invalidates_the_run():
     """The record of the call given up on at the cap is written like any result's: a failed
-    write is a harness failure (runner.py _decide)."""
+    write is a harness failure (legacy_loop.py _decide)."""
     episode = run(
         "wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.0, agent_type=_FirstRowFails
     )
@@ -145,7 +145,7 @@ def test_a_failed_trajectory_row_of_a_move_over_the_cap_invalidates_the_run():
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_a_generation_that_raises_comes_back_failed_though_logging_it_fails():
     """The worker hands its result back whatever happens on the way: here the log line about the
-    failure raises (runner.py _bounded_call hands back in a finally)."""
+    failure raises (legacy_loop.py _bounded_call hands back in a finally)."""
     lines = []
 
     def log(line: str) -> None:
@@ -180,7 +180,7 @@ def test_the_shell_stops_at_the_finish_though_writing_the_termination_raises():
 
 def test_a_failed_trajectory_row_of_a_call_the_deadline_cut_invalidates_the_run():
     """The record of the call the deadline gave up on is written like any result's (decision
-    48): a failed write is a harness failure, after the end too (runner.py _decide)."""
+    48): a failed write is a harness failure, after the end too (legacy_loop.py _decide)."""
     episode = run("wall", 2.0, [Reply(hang=True)], agent_type=_FirstRowFails)
     assert episode.invalid["reason"] == "trajectory_write_failed"
     assert episode.env._stop_reason == "invalid_run"
@@ -332,7 +332,7 @@ def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monke
 
 def test_a_kernel_that_raises_after_an_invalidation_keeps_the_first_failure(monkeypatch):
     """The generation fails at 0.5 s, and the kernel raises at its next step: the run stays
-    invalid for the first failure, as under the runner (runner.py _invalidate)."""
+    invalid for the first failure, as under the runner (legacy_loop.py _invalidate)."""
     _breaks(monkeypatch, Kernel, "step", lambda kernel, *_: kernel.invalid is not None)
     episode = run("wall", 3.0, [Reply(0.5, raises="provider down")])
     _wrapped_up(episode, 0.5)
@@ -452,7 +452,7 @@ def test_an_advance_to_the_next_frame_or_the_horizon_that_raises_is_the_summarys
 ):
     """Paused, the advance to the next frame after the action raises; or, at B = 100 with
     0.005 tick left after two decisions, the advance to the horizon does. The runner made both
-    outside execute(), and the exception escaped its loop (runner.py _run_stream_legacy)."""
+    outside execute(), and the exception escaped its loop (legacy_loop.py _run_stream_legacy)."""
     world = World(advance_errors={failing: "advance failed"})
     episode = run("token", duration, replies, world, tokens_per_frame=tokens_per_frame)
     assert episode.invalid["reason"] == "clock_advance_failed"
@@ -472,7 +472,7 @@ def test_the_summarys_error_is_the_first_traceback(monkeypatch):
 def test_the_first_run_exception_is_the_runs_though_the_kernel_raised_before_taking_it(monkeypatch):
     """The agent's accept raises at 0.5 s, and the kernel raises at the step that would take that
     run_exception: the first failure is the summary's error and the run's detail, as the runner
-    kept the exception that escaped its loop (runner.py _run_stream_legacy)."""
+    kept the exception that escaped its loop (legacy_loop.py _run_stream_legacy)."""
     posted = []
     post = Kernel.post
 
@@ -496,7 +496,7 @@ def test_the_first_run_exception_is_the_runs_though_the_kernel_raised_before_tak
 
 def test_a_run_exception_keeps_the_end_of_its_traceback(monkeypatch):
     """The detail of an invalid run keeps the last 2000 characters, which name the exception
-    (runner.py _invalidate)."""
+    (legacy_loop.py _invalidate)."""
 
     def step(kernel, semantic, ops=None):
         raise RuntimeError("x" * 3000)
@@ -558,7 +558,7 @@ class _CancelledGeneration(Agent):
 
 def test_a_generation_that_raises_any_exception_comes_back_failed():
     """Not only an Exception: the kernel waits for the result, so the worker always hands one
-    back, as the runner's bounded call did (runner.py _bounded_call)."""
+    back, as the runner's bounded call did (legacy_loop.py _bounded_call)."""
     episode = run("wall", 3.0, [Reply(0.5)], agent_type=_CancelledGeneration)
     _finalized(episode, 0.5)
     assert episode.invalid["reason"] == "generation_error"
@@ -601,7 +601,7 @@ def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
 def test_the_first_failure_is_the_record_though_the_environment_latched_another_after_it():
     """The lifecycle write of decision 0 fails at 1 s and the snapshot read takes until 2 s; the
     key held from 0.25 s fails to come up at 1.25 s, meanwhile, and the environment latches
-    that. The run is invalid for the first failure, on env too (runner.py _invalidate)."""
+    that. The run is invalid for the first failure, on env too (legacy_loop.py _invalidate)."""
     world = World(release_failures={0}, lifecycle_errors={0}, snapshot_s=1.0)
     episode = run("wall", 4.0, [Reply(0.25, Action.hold_key("a", 1.0)), Reply(0.5)], world)
     assert [call for call, _, _ in episode.env.calls if call != "check_end"][-3:] == [
@@ -614,7 +614,7 @@ def test_the_first_failure_is_the_record_though_the_environment_latched_another_
 
 def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
     """The kernel keeps the end of a long detail (kernel/core.py invalidate); the record main()
-    reads stays the environment's, whole, as under the runner (runner.py _invalidate)."""
+    reads stays the environment's, whole, as under the runner (legacy_loop.py _invalidate)."""
     detail = "x" * 3000
     latched = {"category": "environment", "reason": "clock_advance_failed", "detail": detail}
     episode = run("token", 3.0, [Reply(0.0, TAP)], World(latches={0: latched}))
@@ -770,7 +770,7 @@ def test_a_failed_action_the_environment_latched_settles_before_the_snapshot_rea
     """Decision 1's click fails at 1.5 s and the environment latches action_execution_failed, as
     GuestEnvironment._execution_failed does (sandbox/actions.py); reading the snapshot takes 1.5
     s. The answer carries the same failure and comes first, so the click settles at tick 1, where
-    it ran, as under the runner (runner.py _land_action); the record of the invalid run is the
+    it ran, as under the runner (legacy_loop.py _land_action); the record of the invalid run is the
     environment's."""
     latched = {
         "category": "environment",
