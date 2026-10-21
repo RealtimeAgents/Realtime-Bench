@@ -6,7 +6,7 @@ policy the run resolves. Every entry point keeps the rules it applied before the
 collected here:
 
 - runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
-  check_token_budget;
+  check_token_budget and check_streaming_options, which effective_run_config applies too;
 - run plans, effective_run_config and the Harbor trial worker: validate_model_interaction
   (check_frame_rates, check_wall_clock, check_interaction_mode);
 - Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions): check_frame_rates;
@@ -83,6 +83,25 @@ def check_interaction_mode(
             f"{capabilities.protocol_family} streams at most {cap:g} fps; "
             f"requested {model_input_fps:g}"
         )
+
+
+def check_streaming_options(interaction_mode, *, think_budget_s, per_move_cap_s) -> None:
+    """The turn-based deliberation caps bound a model's turns, and a streaming episode has none
+    (evaluation/runner.py run_stream), so a streaming run refuses them rather than run without
+    them. No other run option is turn-based only: the token clock's, tokens_per_frame and the
+    time-aware protocol, go with the token clock, which streaming refuses."""
+    if interaction_mode == "turn_based":
+        return
+    given = [
+        option
+        for option, value in (
+            ("--think-budget-s", think_budget_s),
+            ("--per-move-cap-s", per_move_cap_s),
+        )
+        if value is not None
+    ]
+    if given:
+        raise ValueError(f"Streaming does not support {' or '.join(given)}")
 
 
 def check_frame_rates(fps, model_input_fps) -> None:

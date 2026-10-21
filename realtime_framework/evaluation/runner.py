@@ -116,6 +116,7 @@ from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import UnsupportedTokenBudget
 from realtime_framework.providers.preflight import check_episode
+from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import check_token_budget
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
@@ -293,7 +294,7 @@ def main():
         default=None,
         help="Deliberation clock: cumulative token-derived simulated seconds in token "
         "mode, wall seconds in wall mode. Legacy diagnostic only; the maintained "
-        "protocol leaves this unset and terminates at T.",
+        "protocol leaves this unset and terminates at T. Turn-based only.",
     )
     p.add_argument(
         "--per-move-cap-s",
@@ -302,7 +303,7 @@ def main():
         help="Per-move deliberation cap in the active clock's seconds. A move over it "
         "times out (no action that turn; costs exactly the cap from the "
         "deliberation clock). Legacy diagnostic only; the maintained protocol "
-        "leaves this unset.",
+        "leaves this unset. Turn-based only.",
     )
     p.add_argument(
         "--protocol", default=None, help="Identity label for the executable evaluation protocol."
@@ -355,6 +356,12 @@ def main():
                 "time-aware-token-v1 uses only the task horizon T; deliberation caps are "
                 "legacy diagnostics"
             )
+    try:
+        check_streaming_options(
+            a.interaction_mode, think_budget_s=a.think_budget_s, per_move_cap_s=a.per_move_cap_s
+        )
+    except ValueError as exc:
+        p.error(str(exc))
     requested_model_identity = _model_identity(a.model, a.adapter)
     catalog_entry = catalog.get(a.model) if catalog.has(a.model) else None
     if catalog_entry is not None:
