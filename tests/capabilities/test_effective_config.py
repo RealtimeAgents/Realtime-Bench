@@ -16,6 +16,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   a context-policy value or version re-exports it; only the keys it changes differ.
 - Every run configuration records its interaction_mode (turn_based here), so every run hash
   changed.
+- Every ModelConfig records its context_preset (kimi_k3 for kimi-k3, which its YAML names, and in
+  its catalog defaults; None elsewhere), so every run hash changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the
