@@ -350,10 +350,14 @@ class _Shell:
         return self.clocks.semantic.time() - self.env.t0, None
 
     def _step(self):
-        self._settle_returned()
+        # The results back before the reading are filed at it: the time it takes to settle them
+        # is not theirs, and one back later waits for the next step.
+        returned = len(self._returned)
+        now = self._read()
+        self._settle_returned(returned)
         with self._inbox:
-            self._now = self._read()
-            commands = self.kernel.step(*self._now)
+            self._now = now
+            commands = self.kernel.step(*now)
             taken, self._posted = self._posted, []
         if commands is not None:  # a step that took an event always handles something
             self._record_inputs("step", taken)
@@ -551,11 +555,11 @@ class _Shell:
         held.done.set()
         self._wake.set()
 
-    def _settle_returned(self) -> None:
-        """Settle the results the workers handed back, on this thread, and hand them to the
-        kernel: the next step files them. The late result of a generation the kernel gave up on
-        goes back as it came, to be discarded: the runner never handled one either."""
-        while self._returned:
+    def _settle_returned(self, count: int) -> None:
+        """Settle the first ``count`` results the workers handed back, on this thread, and hand
+        them to the kernel. The late result of a generation the kernel gave up on goes back as it
+        came, to be discarded: the runner never handled one either."""
+        for _ in range(count):
             held = self._returned.popleft()
             if self.kernel.generation != held.generation:
                 self.post(GenerationFinished(held.generation, GenerationResult()))
