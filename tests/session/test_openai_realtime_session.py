@@ -488,243 +488,6 @@ def test_delivery_is_unknown_while_written_then_sent_then_acknowledged():
 # ---- native streaming ------------------------------------------------------------------------
 
 
-def test_a_push_names_its_client_event():
-    """A pushed frame is appended like an observed one, but its create names a client event."""
-    core = opened([turn(0, "a0")])
-    user = core.push(view([turn(0, "a0"), turn(1, feedback="EXECUTION RESULT: y")]))
-    assert (user.role, user.text, user.image.data) == (
-        "user",
-        "EXECUTION RESULT: y\nframe 1",
-        b"png-1",
-    )
-    assert user.previous_item_id is None and user.event_id.startswith("rtb_push_")
-    assert core.frames["d1.frame"].user_item_id == user.item_id
-    assert core.pushes == {user.event_id: Push("d1.frame", user.item_id)}
-    sent(core, [user])
-    assert core.receive(done(user.item_id))
-    assert core.delivery[user.key] == Delivery.ACKNOWLEDGED
-    assert core.pushes[user.event_id].error is None
-
-
-def test_an_error_about_a_push_refuses_that_frame_alone():
-    """With a response in progress and an edit waiting, an error naming a push's client event
-    refuses that frame: it leaves the mirror, and the response and the edit go on. The edit was
-    planned after the push from a view that holds the frame, and leaves it as it was."""
-    turns = [turn(0, "a0"), turn(1, "a1")]
-    core = opened(turns)
-    generation = core.start_generation("d1.frame")
-    turns.append(turn(2))
-    push = core.push(view(turns))
-    sent(core, [push])
-    turns[0].fold_visual()
-    batch = core.begin_edit(view(turns))
-    delete0, create0 = sent(core, batch.operations)
-
-    refusal = error(push.event_id)
-    assert core.receive(refusal)
-    assert core.pushes[push.event_id].error is refusal.error
-    assert core.delivery[push.key] == Delivery.SENT
-    assert list(core.frames) == ["d0.frame", "d1.frame"]
-    assert list(generation.events) == []
-    assert not core.edit_answered
-
-    core.receive(deleted(delete0.item_id))
-    core.receive(done(create0.item_id))
-    assert core.finish_edit() is batch
-    assert list(core.frames) == ["d0.frame", "d1.frame"]
-    assert (core.frames["d0.frame"].user_item_id, core.frames["d0.frame"].folded) == (
-        create0.item_id,
-        True,
-    )
-    # An error that names no client event still reaches the response.
-    unnamed = error(None)
-    assert core.receive(unnamed)
-    assert list(generation.events) == [unnamed]
-
-
-@pytest.mark.parametrize("pushing", [True, False])
-def test_a_pushing_edit_leaves_out_frames_pushed_after_the_view(pushing):
-    """A view made before the newest push archives decision 0 and folds decision 1. Pushing, the
-    edit leaves the newer frame where it is; the turn-based edit deletes it, as it was never
-    meant to meet one."""
-    turns = [turn(k, f"a{k}") for k in range(3)]
-    core = opened(turns)
-    pushed = core.push(view([*turns, turn(3)]))
-    sent(core, [pushed])
-    archived = [core.frames["d0.frame"].user_item_id, *core.frames["d0.frame"].assistant_item_ids]
-    folded = core.frames["d1.frame"].user_item_id
-    turns[1].fold_visual()
-    history = view(turns[1:], ledger="L")
-    assert core.in_place_problem(history, pushing=pushing) is None
-
-    batch = core.begin_edit(history, pushing=pushing)
-    newer = [] if pushing else [pushed.item_id]
-    assert batch.deleted == {*archived, *newer, folded}
-    assert batch.removed == (("d0.frame",) if pushing else ("d0.frame", "d3.frame"))
-    assert list(batch.frames) == ["d1.frame", "d2.frame"]
-    for op in sent(core, batch.operations):
-        core.receive(deleted(op.item_id) if isinstance(op, Delete) else done(op.item_id))
-    core.finish_edit()
-    expected = ["d1.frame", "d2.frame", "d3.frame"] if pushing else ["d1.frame", "d2.frame"]
-    assert list(core.frames) == expected
-    if pushing:
-        assert core.frames["d3.frame"].user_item_id == pushed.item_id
-
-
-def test_a_pushing_edit_leaves_out_frames_not_pushed_yet():
-    """A view that already holds a frame the core has not pushed: the turn-based check refuses
-    it, the pushing one leaves the frame to its push. A frame missing before the newest one the
-    mirror holds is still refused."""
-    turns = [turn(0, "a0"), turn(1, "a1"), turn(2)]
-    core = opened(turns[:2])
-    first = core.frames["d0.frame"].user_item_id
-    turns[0].fold_visual()
-    history = view(turns)
-    assert core.in_place_problem(history) == "retained turn is missing its provider user item ID"
-    assert core.in_place_problem(history, pushing=True) is None
-    batch = core.begin_edit(history, pushing=True)
-    assert shape(batch.operations) == [
-        ("delete", first, None, True),
-        ("create", "user", "root", True),
-    ]
-    assert list(batch.frames) == ["d0.frame", "d1.frame"]
-
-    gap = opened([turn(0, "a0"), turn(2, "a2")])
-    assert (
-        gap.in_place_problem(view([turn(0, "a0"), turn(1, "a1"), turn(2, "a2")]), pushing=True)
-        == "retained turn is missing its provider user item ID"
-    )
-
-
-def test_a_pushing_view_with_no_frame_in_common_keeps_every_sent_frame():
-    """Such a view cannot tell the frames it dropped from those pushed after it, so the edit
-    keeps them all; the next view that shares a frame with the session drops the old ones."""
-    core = opened([turn(0, "a0")])
-    items = [core.frames["d0.frame"].user_item_id, *core.frames["d0.frame"].assistant_item_ids]
-    history = view([turn(1)], ledger="L")
-    assert core.in_place_problem(history, pushing=True) is None
-    batch = core.begin_edit(history, pushing=True)
-    assert shape(batch.operations) == [("create", ROLES[POLICY.ledger_role], "root", True)]
-    assert (batch.removed, batch.frames) == ((), {})
-    for op in sent(core, batch.operations):
-        core.receive(done(op.item_id))
-    core.finish_edit()
-
-    sent(core, [core.push(history)])
-    batch = core.begin_edit(history, pushing=True)
-    assert shape(batch.operations) == [("delete", item_id, None, True) for item_id in items]
-    assert batch.removed == ("d0.frame",)
-
-
-def acknowledge(core: RealtimeSessionCore, operations) -> None:
-    for op in operations:
-        core.receive(deleted(op.item_id) if isinstance(op, Delete) else done(op.item_id))
-
-
-def test_a_queued_edit_waits_for_the_one_before_it():
-    """Views that arrive while an edit waits are kept, the newest replacing the older; once the
-    edit is finished, the newest is planned against the session it left."""
-    turns = [turn(k, f"a{k}") for k in range(4)]
-    core = opened(turns)
-    assistant = {k: f.assistant_item_ids[-1] for k, f in core.frames.items()}
-    users = {k: f.user_item_id for k, f in core.frames.items()}
-    turns[0].fold_visual()
-    first = core.queue_edit(view(turns))
-    assert shape(first.operations) == [
-        ("delete", users["d0.frame"], None, True),
-        ("create", "user", "root", True),
-    ]
-    sent(core, first.operations)
-    turns[1].fold_visual()
-    assert core.queue_edit(view(turns)) is None
-    turns[2].fold_visual()
-    assert core.queue_edit(view(turns)) is None
-    assert core.next_edit() is None
-
-    acknowledge(core, first.operations)
-    assert core.edit_answered and core.next_edit() is None
-    assert core.finish_edit() is first
-    second = core.next_edit()
-    assert shape(second.operations) == [
-        ("delete", users["d1.frame"], None, True),
-        ("create", "user", assistant["d0.frame"], True),
-        ("delete", users["d2.frame"], None, True),
-        ("create", "user", assistant["d1.frame"], True),
-    ]
-    assert core.next_edit() is None
-    sent(core, second.operations)
-    acknowledge(core, second.operations)
-    assert core.finish_edit() is second
-    assert [f.folded for f in core.frames.values()] == [True, True, True, False]
-
-
-def test_a_queued_view_the_session_cannot_reach_is_refused_before_any_plan():
-    turns = [turn(0, "a0"), turn(1, "a1")]
-    core = opened(turns)
-    turns[0].fold_visual()
-    batch = core.queue_edit(view(turns))
-    sent(core, batch.operations)
-    assert core.queue_edit(view([turn(0, "a0"), turn(1, "a1")])) is None
-    acknowledge(core, batch.operations)
-    core.finish_edit()
-    with pytest.raises(
-        RuntimeError,
-        match=r"^Realtime history edit refused: provider visual state cannot be unfolded in place$",
-    ):
-        core.next_edit()
-    assert core.next_edit() is None
-    # Nothing was planned, so the next view is planned at once.
-    assert core.queue_edit(view(turns)) is not None
-
-
-def test_frames_dropped_while_a_response_streams_lose_no_event():
-    """Native streaming in small: while a response streams, a frame is pushed and queued edits
-    archive the two oldest frames, assistant items included, then fold the next one. The view
-    was made before the push. The response's events and the acknowledgements of the edit and of
-    the push arrive interleaved, and each reaches its state; the pushed frame stays, and the
-    response's output joins the frame it answered."""
-    turns = [turn(0, "a0"), turn(1, "a1"), turn(2, "a2"), turn(3)]
-    core = opened(turns[:3])
-    pushed = core.push(view(turns))
-    sent(core, [pushed])
-    generation = core.start_generation("d3.frame")
-    archive = core.queue_edit(view(turns[2:3], ledger="L"))
-    sent(core, archive.operations)
-    turns[2].fold_visual()
-    assert core.queue_edit(view(turns[2:3], ledger="L")) is None
-
-    created, added, text, finished = response_events()
-    *deletes, ledger = archive.operations
-    assert len(deletes) == 4 and isinstance(ledger, Create)
-    acks = [deleted(op.item_id) for op in deletes]
-    for event in (
-        created,
-        acks[0],
-        done(pushed.item_id),
-        acks[1],
-        added,
-        acks[2],
-        text,
-        done(ledger.item_id),
-        acks[3],
-        finished,
-    ):
-        assert core.receive(event)
-    assert list(generation.events) == [created, added, text, finished]
-    assert core.edit_answered
-    assert core.finish_edit() is archive
-    assert core.delivery[pushed.key] == Delivery.ACKNOWLEDGED
-    assert all(core.delivery[op.key] == Delivery.ACKNOWLEDGED for op in archive.operations)
-    assert list(core.frames) == ["d2.frame", "d3.frame"]
-    assert core.frames["d3.frame"].assistant_item_ids == ["srv_1"]
-
-    fold = core.next_edit()
-    assert shape(fold.operations) == [
-        ("delete", core.frames["d2.frame"].user_item_id, None, True),
-        ("create", "user", ledger.item_id, True),
-    ]
-
-
 @pytest.mark.parametrize("status", ["completed", "failed"])
 def test_a_streaming_reply_keeps_its_items_under_its_output_block(status):
     """A native-streaming reply answers no frame: its events join it as a turn's do, and at its
@@ -801,3 +564,273 @@ def test_a_new_connection_replays_the_streaming_view():
     }
     assert core.outputs == {"g1.output": [r1], "g2.output": []}
     assert new_core().replay_streaming(None) == []
+
+
+def streamed(blocks, frames: int = 2) -> RealtimeSessionCore:
+    """A core that replayed the streaming view of these blocks, every item confirmed."""
+    core = new_core()
+    for operation in sent(core, core.replay_streaming(streaming_view(blocks, frames))):
+        core.receive(done(operation.item_id))
+    return core
+
+
+def acknowledge(core: RealtimeSessionCore, operations) -> None:
+    for op in operations:
+        core.receive(deleted(op.item_id) if isinstance(op, Delete) else done(op.item_id))
+
+
+def items_of(core: RealtimeSessionCore) -> dict[str, str]:
+    """Each streaming block's item in the session: a frame's or feedback's, a reply's last."""
+    items = {block_id: sent.user_item_id for block_id, sent in core.frames.items()}
+    return items | {block_id: ids[-1] for block_id, ids in core.outputs.items()}
+
+
+def test_a_push_names_its_client_event():
+    """A pushed block, a frame with its screenshot or an execution feedback, is appended like an
+    observed frame, but its create names a client event."""
+    core = streamed(stream("FR"))
+    frame = core.push(streaming_view(stream("FRF")))
+    feedback = core.push(streaming_view(stream("FRFB")))
+    assert [(op.role, op.text, op.image is not None) for op in (frame, feedback)] == [
+        ("user", "frame 2", True),
+        ("user", "fb1", False),
+    ]
+    assert all(
+        op.previous_item_id is None and op.event_id.startswith("rtb_push_")
+        for op in (frame, feedback)
+    )
+    assert core.pushes == {
+        frame.event_id: Push("f2.frame", frame.item_id),
+        feedback.event_id: Push("g1.feedback", feedback.item_id),
+    }
+    assert core.frames["f2.frame"].user_item_id == frame.item_id
+    assert core.frames["g1.feedback"].user_item_id == feedback.item_id
+    sent(core, [frame, feedback])
+    assert core.receive(done(frame.item_id))
+    assert (core.delivery[frame.key], core.delivery[feedback.key]) == (
+        Delivery.ACKNOWLEDGED,
+        Delivery.SENT,
+    )
+
+
+@pytest.mark.parametrize("frames", [1, 2, 3])
+def test_a_streaming_edit_folds_the_frames_older_than_the_newest_k_where_they_were(frames):
+    """Decision 23: each frame the view folds, those older than the newest K, gives way to the
+    turn-based placeholder where it was: its item is deleted, and the placeholder is created
+    after the item of the block accepted before it (here a reply or a feedback), or at the root.
+    Replies and feedback stay as they are."""
+    blocks = stream("FRFBFRF")
+    core = streamed(blocks, frames=4)
+    item = items_of(core)
+    anchors = {"f1.frame": "root", "f2.frame": item["g1.output"], "f3.frame": item["g1.feedback"]}
+    folded = list(anchors)[: 4 - frames]
+
+    batch = core.queue_edit(streaming_view(blocks, frames))
+    assert shape(batch.operations) == [
+        step
+        for block_id in folded
+        for step in (
+            ("delete", item[block_id], None, True),
+            ("create", "user", anchors[block_id], True),
+        )
+    ]
+    assert all(
+        (op.text, op.image) == (TEXTS.folded_visual, None)
+        for op in batch.operations
+        if isinstance(op, Create)
+    )
+    assert (batch.removed, batch.visuals_folded, batch.prompts_edited) == (
+        (),
+        len(folded),
+        len(folded),
+    )
+    acknowledge(core, sent(core, batch.operations))
+    assert core.finish_edit() is batch
+    after = items_of(core)
+    assert [k for k in item if after[k] != item[k]] == folded
+    assert [k for k, f in core.frames.items() if f.folded] == folded
+
+
+@pytest.mark.parametrize("output", [True, False])
+def test_a_fold_anchors_on_the_items_the_server_made_for_a_reply(output):
+    """A reply made in this session: the frame accepted after it goes after the reply's last
+    output item. A reply with no output item leaves it after the block before the reply."""
+    core = streamed(stream("F"), frames=5)
+    core.start_reply("g1.output")
+    items = [{"id": "srv_1"}] if output else []
+    core.receive(server(type="response.created", response={"id": "resp_1"}))
+    core.receive(
+        server(
+            type="response.done", response={"id": "resp_1", "status": "completed", "output": items}
+        )
+    )
+    blocks = stream("FRFF")
+    for n in (3, 4):
+        acknowledge(core, sent(core, [core.push(streaming_view(blocks[:n], frames=5))]))
+    first = core.frames["f1.frame"].user_item_id
+    second = core.frames["f2.frame"].user_item_id
+
+    batch = core.queue_edit(streaming_view(blocks, frames=1))
+    placeholder = batch.operations[1].item_id
+    assert shape(batch.operations) == [
+        ("delete", first, None, True),
+        ("create", "user", "root", True),
+        ("delete", second, None, True),
+        ("create", "user", "srv_1" if output else placeholder, True),
+    ]
+
+
+def test_a_streaming_edit_leaves_the_blocks_not_pushed_yet():
+    """A view made as a frame is pushed may already hold it: the edit covers the view up to the
+    newest block the session holds, and leaves the frame to its push."""
+    blocks = stream("FFF")
+    core = streamed(blocks[:2], frames=5)
+    first = core.frames["f1.frame"].user_item_id
+    view = streaming_view(blocks, frames=2)
+    batch = core.queue_edit(view)
+    assert shape(batch.operations) == [
+        ("delete", first, None, True),
+        ("create", "user", "root", True),
+    ]
+    assert list(batch.frames) == ["f1.frame"]
+    acknowledge(core, sent(core, batch.operations))
+    core.finish_edit()
+    assert core.push(view).text == "frame 3"
+    assert list(core.frames) == ["f1.frame", "f2.frame", "f3.frame"]
+
+
+def test_a_streaming_edit_leaves_the_blocks_pushed_after_the_view():
+    """A view made before the newest push lacks the frame. A view keeps every block it once had
+    (decision 4.6), so the frame was pushed after it, and the edit leaves it where it is."""
+    blocks = stream("FFF")
+    core = streamed(blocks[:2], frames=5)
+    first = core.frames["f1.frame"].user_item_id
+    pushed = core.push(streaming_view(blocks, frames=5))
+    acknowledge(core, sent(core, [pushed]))
+    batch = core.queue_edit(streaming_view(blocks[:2], frames=1))
+    assert shape(batch.operations) == [
+        ("delete", first, None, True),
+        ("create", "user", "root", True),
+    ]
+    acknowledge(core, sent(core, batch.operations))
+    core.finish_edit()
+    assert (core.frames["f3.frame"].user_item_id, core.frames["f3.frame"].folded) == (
+        pushed.item_id,
+        False,
+    )
+
+
+def test_an_error_about_a_push_refuses_that_block_alone():
+    """With a reply in progress and an edit waiting, an error naming a push's client event
+    refuses that block: it leaves the mirror, and the reply and the edit go on. A later view
+    that still holds the block cannot be reached in place, and nothing is planned; one that
+    leaves it out can."""
+    blocks = stream("FFFF")
+    core = streamed(blocks[:2], frames=5)
+    reply = core.start_reply("g1.output")
+    refused = core.push(streaming_view(blocks[:3], frames=5))
+    sent(core, [refused])
+    fold = core.queue_edit(streaming_view(blocks[:3], frames=2))
+    sent(core, fold.operations)
+
+    refusal = error(refused.event_id)
+    assert core.receive(refusal)
+    assert core.pushes[refused.event_id].error is refusal.error
+    assert core.delivery[refused.key] == Delivery.SENT
+    assert list(core.frames) == ["f1.frame", "f2.frame"]
+    assert list(reply.events) == []
+    assert not core.edit_answered
+    acknowledge(core, fold.operations)
+    assert core.finish_edit() is fold
+    # An error that names no client event still reaches the reply.
+    unnamed = error(None)
+    assert core.receive(unnamed)
+    assert list(reply.events) == [unnamed]
+
+    sent(core, [core.push(streaming_view(blocks, frames=5))])
+    with pytest.raises(
+        RuntimeError,
+        match=r"^Realtime history edit refused: retained block is missing its provider item ID$",
+    ):
+        core.queue_edit(streaming_view(blocks, frames=2))
+    assert core.next_edit() is None
+    without = [block for block in blocks if block.id != "f3.frame"]
+    batch = core.queue_edit(streaming_view(without, frames=1))
+    assert shape(batch.operations) == [
+        ("delete", core.frames["f2.frame"].user_item_id, None, True),
+        ("create", "user", fold.operations[1].item_id, True),
+    ]
+
+
+def test_a_queued_edit_waits_for_the_one_before_it():
+    """Each push brings a view that folds one more frame. Views that arrive while an edit waits
+    are kept, the newest replacing the older; once the edit is finished, the newest is planned
+    against the session it left."""
+    blocks = stream("FFFFFF")
+    core = streamed(blocks[:3], frames=3)
+    users = {k: f.user_item_id for k, f in core.frames.items()}
+
+    def pushed(n: int):
+        view = streaming_view(blocks[:n], frames=3)
+        acknowledge(core, sent(core, [core.push(view)]))
+        return view
+
+    first = core.queue_edit(pushed(4))
+    assert shape(first.operations) == [
+        ("delete", users["f1.frame"], None, True),
+        ("create", "user", "root", True),
+    ]
+    sent(core, first.operations)
+    assert core.queue_edit(pushed(5)) is None
+    assert core.queue_edit(pushed(6)) is None
+    assert core.next_edit() is None
+
+    acknowledge(core, first.operations)
+    assert core.edit_answered and core.next_edit() is None
+    assert core.finish_edit() is first
+    second = core.next_edit()
+    assert shape(second.operations) == [
+        ("delete", users["f2.frame"], None, True),
+        ("create", "user", first.operations[1].item_id, True),
+        ("delete", users["f3.frame"], None, True),
+        ("create", "user", second.operations[1].item_id, True),
+    ]
+    assert core.next_edit() is None
+    acknowledge(core, sent(core, second.operations))
+    assert core.finish_edit() is second
+    assert [f.folded for f in core.frames.values()] == [True, True, True, False, False, False]
+
+
+def test_a_fold_while_a_reply_streams_loses_no_event():
+    """Native streaming in small: while a reply streams, a frame is pushed and the view it brings
+    folds the oldest frame. The reply's events and the acknowledgements of the edit and of the
+    push arrive interleaved, and each reaches its state."""
+    blocks = stream("FFF")
+    core = streamed(blocks[:2], frames=5)
+    reply = core.start_reply("g1.output")
+    view = streaming_view(blocks, frames=2)
+    pushed = core.push(view)
+    sent(core, [pushed])
+    fold = core.queue_edit(view)
+    delete, placeholder = sent(core, fold.operations)
+
+    created, added, text, finished = response_events()
+    for event in (
+        created,
+        deleted(delete.item_id),
+        done(pushed.item_id),
+        added,
+        done(placeholder.item_id),
+        text,
+        finished,
+    ):
+        assert core.receive(event)
+    assert list(reply.events) == [created, added, text, finished]
+    assert core.edit_answered and core.finish_edit() is fold
+    assert core.delivery[pushed.key] == Delivery.ACKNOWLEDGED
+    assert all(core.delivery[op.key] == Delivery.ACKNOWLEDGED for op in fold.operations)
+    assert (core.frames["f1.frame"].user_item_id, core.frames["f1.frame"].folded) == (
+        placeholder.item_id,
+        True,
+    )
+    assert core.outputs == {"g1.output": ["srv_1"]}
