@@ -109,15 +109,8 @@ class TokenEnvironment(GuestEnvironment):
         )
         return status
 
-    def done(self) -> bool:
-        """Only a true answer is logged."""
-        over = super().done()
-        if over:
-            self.log("env.done")
-        return over
-
     def check_end(self) -> tuple[bool, str | None]:
-        """Only an end is logged, as by done()."""
+        """Only an end is logged."""
         ended, reason = super().check_end()
         if ended:
             self.log("env.check_end", reason=reason)

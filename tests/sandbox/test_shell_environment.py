@@ -73,26 +73,23 @@ def _on(clock_mode, clock, **kwargs):
 
 
 def test_an_end_check_asks_the_task_in_an_invalid_run():
-    """done() answers it without asking the task (sandbox/actions.py done). The deadline is the
-    kernel's; the legacy loop's environment compared it too (tests/differential)."""
+    """The legacy loop's done() answered it without asking the task, and compared the deadline
+    too (tests/differential/legacy_environment.py); the kernel's check does neither."""
     clock = FakeClock(wall_origin=ORIGIN)
     asked = []
     env = _wall(clock, stop_check=lambda: asked.append(clock.monotonic()))
     env._invalid_run = {"category": "environment", "reason": "action_execution_failed"}
     with clock.participant():
         clock.sleep(2.0)
-        assert env.done()
         assert env.check_end() == (False, None)
     assert asked == [2.0]
     assert env._invalid_run == {"category": "environment", "reason": "action_execution_failed"}
 
 
 def test_a_token_end_check_asks_the_task_in_an_invalid_run():
-    """The token clock has no deadline to pass; done() answers an invalid run alone."""
     asked = []
     env, _ = _token(stop_check=lambda: asked.append(True))
     env._invalid_run = {"category": "environment", "reason": "clock_advance_failed"}
-    assert env.done()
     assert env.check_end() == (False, None)
     assert asked == [True]
     assert env._invalid_run == {"category": "environment", "reason": "clock_advance_failed"}
@@ -144,14 +141,6 @@ def test_one_end_check_is_bounded_by_the_budget_of_its_clock(clock_mode, budget_
         assert env.check_end() == (False, None)
         with pytest.raises(BudgetExceeded, match=f"state read took longer than {budget_s:g} s"):
             env.check_end()
-    assert getattr(env, "_invalid_run", None) is None
-
-
-def test_the_legacy_loop_s_end_check_keeps_its_budget_on_the_wall_clock():
-    clock = FakeClock(wall_origin=ORIGIN)
-    env = _wall(clock, stop_check=lambda: clock.sleep(11.0))
-    with clock.participant():
-        assert env.done() is False
     assert getattr(env, "_invalid_run", None) is None
 
 
@@ -529,16 +518,11 @@ def _answers(*answers):
     return stop_check
 
 
-def _kernel_counting(env):
-    env.kernel_counts_reads = True
-    return env
-
-
 def test_a_tap_s_failed_reads_go_to_the_kernel_and_the_tap_goes_on():
     """At 120 fps a tap holds its key two ticks, with an end check after each (sandbox/actions.py
     TAP_HOLD_S); while the kernel counts, no failed read stops the tap or invalidates the run."""
     env, task = _token(120.0, stop_check=_answers(RuntimeError("no state"), False))
-    assert _kernel_counting(env).execute(TAP) == "applied"
+    assert env.execute(TAP) == "applied"
     (failed, _, error), answered = env.last_end_checks
     assert not failed and error.rstrip().endswith("RuntimeError: no state")
     assert answered == (False, None, None)
@@ -557,7 +541,7 @@ def test_a_tap_s_reads_that_run_past_their_budget_go_to_the_kernel_too():
 
     env, _ = _token(120.0, stop_check=stop_check, clocks=Clocks(FrameClock(120.0), clock))
     with clock.participant():
-        assert _kernel_counting(env).execute(TAP) == "applied"
+        assert env.execute(TAP) == "applied"
     assert len(env.last_end_checks) == 2
     for ended, reason, error in env.last_end_checks:
         assert (ended, reason) == (False, None)
@@ -568,7 +552,7 @@ def test_a_tap_s_reads_that_run_past_their_budget_go_to_the_kernel_too():
 def test_the_end_checks_of_a_repeated_tap_are_kept_in_order():
     no_state = RuntimeError("no state")
     env, _ = _token(stop_check=_answers(no_state, False, no_state))
-    _kernel_counting(env).execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
+    env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
     first, second, third = env.last_end_checks
     assert first[:2] == (False, None) and first[2].rstrip().endswith("RuntimeError: no state")
     assert second == (False, None, None)
@@ -578,7 +562,7 @@ def test_the_end_checks_of_a_repeated_tap_are_kept_in_order():
 
 def test_a_tap_whose_read_sees_the_end_stops_there():
     env, task = _token(120.0, stop_check=_answers("task_success"))
-    assert _kernel_counting(env).execute(TAP) == "applied"
+    assert env.execute(TAP) == "applied"
     assert env.last_end_checks == ((True, "task_success", None),)
     assert env.tick_index() == 1
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
@@ -588,7 +572,7 @@ def test_a_tap_whose_read_sees_the_end_stops_there():
 def test_a_repeated_tap_whose_first_read_sees_the_end_keeps_it():
     """The reads after it, in the tap's other repeats, find the episode still going."""
     env, _ = _token(stop_check=_answers("task_success", False, False))
-    _kernel_counting(env).execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
+    env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
     assert env.last_end_checks == (
         (True, "task_success", None),
         (False, None, None),
@@ -597,18 +581,8 @@ def test_a_repeated_tap_whose_first_read_sees_the_end_keeps_it():
     assert env._episode_over and env._terminal_reason == "task_success"
 
 
-def test_the_legacy_loop_s_tap_invalidates_the_run_at_its_first_failed_read():
-    env, _ = _token(120.0, stop_check=_answers(RuntimeError("no state")))
-    assert env.kernel_counts_reads is False
-    assert env.execute(TAP) == "applied"
-    assert env.last_end_checks == ()
-    assert env.tick_index() == 1
-    assert env._invalid_run["reason"] == "terminal_state_check_failed"
-
-
 def test_each_execution_starts_its_end_checks_over():
     env, _ = _token(stop_check=_answers(RuntimeError("no state"), False))
-    _kernel_counting(env)
     env.execute(TAP)
     ((_, _, error),) = env.last_end_checks
     assert error is not None
@@ -618,8 +592,7 @@ def test_each_execution_starts_its_end_checks_over():
     assert env.last_end_checks == ()
 
 
-@pytest.mark.parametrize("kernel_counts_reads", [False, True])
-def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(kernel_counts_reads, monkeypatch):
+def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(monkeypatch):
     """A game's episode_over is also its score sampler (realtime_tasks/game/runtime.py)."""
     task = tasks.get("gh_javascript_pong")
     state = {"game_state": {"player_returns": 3}, "terminal": {"isTerminal": False}}
@@ -633,9 +606,8 @@ def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(kernel_counts_re
     monkeypatch.setattr(task, "clock_key_event", lambda *args, **kwargs: None)
     task.configure_clock("token", 1.0)
     env = GuestEnvironment(None, task, clock_mode="token", stop_check=task.episode_over)
-    env.kernel_counts_reads = kernel_counts_reads
     assert env.execute(TAP) == "applied"
     assert len(reads) == 1
     assert task._score_start == task._score_best == 3.0
-    assert env.last_end_checks == (((False, None, None),) if kernel_counts_reads else ())
+    assert env.last_end_checks == ((False, None, None),)
     assert getattr(env, "_invalid_run", None) is None
