@@ -62,6 +62,9 @@ def _event(record: dict):
                 None if invalid is None else events.Invalidated(**invalid),
             ),
         )
+    if kind == "ActionExecuted":
+        # Each of a tap's end checks is an (ended, reason, error) list in the line.
+        fields["end_checks"] = [tuple(read) for read in fields["end_checks"]]
     return getattr(events, kind)(
         **{name: tuple(value) if name in TUPLES else value for name, value in fields.items()}
     )
@@ -106,7 +109,7 @@ def _replay(config, lines: list[dict]) -> tuple[Kernel, list]:
                 Reply(0.25, CLICK, output_tokens=150),
                 Reply(0.25, CLICK, output_tokens=100),
             ],
-            World(tap_checks={1: ("tap read",)}),
+            World(tap_checks={1: ((False, None, "tap read"),)}),
             {"fps": 2.0, "tokens_per_frame": 100},
         ),
     ],

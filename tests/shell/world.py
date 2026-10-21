@@ -81,7 +81,7 @@ class Environment:
         )
         self.observations: list = []  # weak references to every frame captured
         self.last_held_keys: tuple[str, ...] = ()
-        self.last_end_checks: tuple[str | None, ...] = ()
+        self.last_end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
         self.kernel_counts_reads = False
         self.on_invalid = None
         self.frame_ages: list[float] = []

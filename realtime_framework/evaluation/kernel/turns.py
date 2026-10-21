@@ -506,7 +506,7 @@ class TurnPolicy:
             return
         d, kernel = self.decision, self.kernel
         # A tap's end checks were made before the action finished.
-        for error in event.end_checks:
+        for _, _, error in event.end_checks:
             if self._count_read(error):
                 break
         # A refusal or a failure leaves its own execution record (sandbox/actions.py
