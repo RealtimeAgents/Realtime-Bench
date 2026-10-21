@@ -1074,7 +1074,8 @@ class _Staged:
 @dataclass
 class _Generation:
     """One generation's own state. An abandoned generation can still be running when the next
-    one starts, so none of it is kept on the agent."""
+    one starts, so it works on this alone; what the agent keeps of a generation is set when it
+    starts (DefaultHarness._open)."""
 
     number: int | None  # the kernel's generation number; None when the legacy loop drives
     decision: int
@@ -1312,7 +1313,9 @@ class DefaultHarness(VisionAgentBase):
     def _open(
         self, number, decision, provider_output_tokens, transport_output_tokens, clock_mode
     ) -> _Generation:
-        """Start a generation's state; abort() reaches it until the generation ends."""
+        """Start a generation's state; abort() reaches it until the generation ends. The agent
+        keeps the newest generation's decision, for abort()'s trace, and its action cap, which
+        the runner audits against the decision's allowance once the result is back."""
         generation = _Generation(
             number,
             decision,
@@ -1327,6 +1330,9 @@ class DefaultHarness(VisionAgentBase):
                 generation.cancel.set()
             self._generations.append(generation)
         self._trace_decision = decision
+        self._frame_action_max_tokens = native_output_limit(
+            self.config.native_output_limit, provider_output_tokens
+        )
         return generation
 
     def _close(self, generation: _Generation) -> None:
@@ -1522,11 +1528,6 @@ class DefaultHarness(VisionAgentBase):
             }
             return result, False
 
-        action_limit = native_output_limit(
-            self.config.native_output_limit, generation.provider_output_tokens
-        )
-        # The runner audits it against the decision's allowance once the result is back.
-        self._frame_action_max_tokens = action_limit
         configured_provider_cap = generation.provider_output_tokens
         provider_cap = None if configured_provider_cap is None else int(configured_provider_cap)
         configured_transport_cap = generation.transport_output_tokens
