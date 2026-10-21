@@ -370,9 +370,9 @@ def test_two_responses_in_flight_each_get_their_own_answer():
 
     The runtime reached this when a decision abandoned by abort() rebuilt the session, marked the
     runtime ready and asked for its response on the connection the next decision then reused.
-    That can no longer happen. abort() sets the abandoned epoch's retry cancellation, which stops
-    the rebuild before it connects (RequestRetry, entity/model.py), and _run_turn checks the epoch
-    before it sends the observation (harnesses/default/context.py). A decision abandoned after
+    That can no longer happen. abort() sets the abandoned generation's cancel event, which stops
+    the rebuild before it connects (RequestRetry, entity/model.py), and _run_turn checks it before
+    it sends the observation (harnesses/default/context.py). A decision abandoned after
     that check can still start its response, but only on the connection abort() closes: the next
     decision waits for that cleanup and opens a new connection (_ensure_ready), whose core never
     observed the abandoned frame, so start_generation there fails on it. Hence the core test.

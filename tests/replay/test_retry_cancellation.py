@@ -9,7 +9,8 @@ attempt with its own event (RealtimeRuntime.run_turn's ``cancel``) and its retri
 retry_cancellation. Once the event is set the backoff ends, no attempt starts (entity/model.py
 RequestRetry), and an attempt already under way sends neither its observation nor its request
 (RealtimeRuntime._run_turn). RetryCancelled unwinds to generate, which hands back a cancelled
-result without an action. The kernel discards it, and nothing joins the history.
+result without an action. The kernel discards it, or stream_generate drops it for the legacy
+loop, and nothing joins the history.
 
 Before this, the next attempt read the epoch afresh, reconnected and kept its reply: a request
 after the abort, and a turn and an action that nobody committed.

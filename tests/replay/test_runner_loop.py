@@ -232,8 +232,8 @@ CASES = [
     ),
     # Decision 3's reply never comes. The bounded wait expires, the agent is aborted and the
     # decision is skipped (runner.py:337-345, 395-411, 523). The abort closes the held request
-    # and ends the decision's epoch, so the abandoned worker does not send it again
-    # (harnesses/default/harness.py:1159, 1350; entity/model.py:479-491).
+    # and cancels the decision's generation, so the abandoned worker does not send it again
+    # (DefaultHarness.abort; entity/model.py RequestRetry).
     Case(
         "bounded_call_timeout",
         [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT)],
