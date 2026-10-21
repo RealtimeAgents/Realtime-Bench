@@ -37,7 +37,7 @@ from realtime_framework.entity.model import (
 from realtime_framework.entity.records import UNTRACED
 from realtime_framework.harnesses.streaming import agent as agent_module
 from realtime_framework.harnesses.streaming.agent import NativeStreamingAgent
-from realtime_framework.providers.session_lifecycle import SessionLifecycle
+from realtime_framework.providers.session_lifecycle import RenewalRequired, SessionLifecycle
 
 LIVE = "gemini-3.8-live"  # configs/models/gemini-3.8-live.yaml; its policy row gemini_live
 REALTIME = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml; openai_realtime, actions in text
@@ -161,6 +161,9 @@ class FakeLiveDriver(SessionLifecycle):
         self.connect_s = 0.0  # how long opening a connection takes
         self.connect_failures: list[Exception] = []  # what the next connects raise, in turn
         self.connect_attempts = 0
+        # The next push or reply ("push", "reply") of each listed reads a goAway before it
+        # writes, as one waiting for the session's lock may (Gemini Live's reader).
+        self.go_away_on: list[str] = []
         self.resumes = False  # a goAway renewal resumes the session instead of rebuilding it
         self._pushes: dict[str, asyncio.Event] = {}  # set once that observation's push went out
 
@@ -221,14 +224,17 @@ class FakeLiveDriver(SessionLifecycle):
         asyncio.get_running_loop()
         return "go_away" if self.renewal_required else None
 
-    def _take_input(self) -> None:
+    def _take_input(self, operation: str) -> None:
+        if operation in self.go_away_on:
+            self.go_away_on.remove(operation)
+            self.renewal_required = True
         if self.renewal_required:
-            raise RuntimeError("the session requires a renewal before input")
+            raise RenewalRequired("the session requires a renewal before input")
 
     async def push_frame(self, observation, history) -> PushReceipt:
         self.calls.append(("push", observation.observation_id, _ids(history)))
         self.views.append(history)
-        self._take_input()
+        self._take_input("push")
         if observation.observation_id in self.failing:
             raise RuntimeError("push failed")
         self._pushes.setdefault(observation.observation_id, asyncio.Event()).set()
@@ -240,7 +246,7 @@ class FakeLiveDriver(SessionLifecycle):
 
     async def request_reply(self, request) -> GenerationHandle:
         self.calls.append(("reply", request.generation, _ids(request.canonical)))
-        self._take_input()
+        self._take_input("reply")
         return GenerationHandle(request.generation_id, opaque=self.replies.pop(0))
 
     async def events(self, generation: GenerationHandle):
