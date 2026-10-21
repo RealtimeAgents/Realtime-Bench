@@ -27,12 +27,16 @@ ended the task or not, before anything else runs, so nothing executes once the t
 failed read counts as the frame's. Three failed reads in a row invalidate the run. Every outcome,
 the refusals included, is committed to the agent as its feedback.
 
-Captures, reads and actions run on lanes of their own, but the shell lets only one of them at a
-time into the environment (evaluation/env_lanes.py EnvGate). The policy keeps one out at a time
-itself: what comes due meanwhile, a grid point's read or capture or an action arriving, waits, and
-once the operation out is answered the one that came due first goes, as the gate would take them.
-So each takes the environment when it is sent: a read samples the task, and an action presses its
-keys, at the time the policy sent it, which is the time the policy judges it by.
+Captures, reads and actions run on lanes of their own. A capture and an action may run at once,
+so that frames keep coming during a long action (phase2.md, native streaming); a read runs only
+while neither does (decision 21, 4.9), as the shell's lock by resource lets them (decision 50).
+The policy keeps to that itself: what comes due while it cannot run, a grid point's read or
+capture or an action arriving, waits, and goes in the order it came due once what it waits for is
+answered. A read that waits for an action executing holds nothing back, as the read after that
+action stands for it; a read that waits for a capture holds back what came due after it. So each
+operation takes the environment when it is sent: a read samples the task, and an action presses
+its keys, at the time the policy sent it, which is the time the policy judges it by; the shell
+reports when an action really held the environment, and the records keep that.
 
 The kernel freezes the snapshot at the first end signal. An action executing then finishes first:
 the shell takes the snapshot next after it, bounded by the action's budget, as the turn-based shell
@@ -218,8 +222,8 @@ class StreamingPolicy:
         self._failed_pushes = 0  # in a row
         self._rebuilt = False  # the session was given up for its frames, and none went in since
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
-        # The reads, captures and the action waiting that came due while another operation was
-        # out, in the order they came due.
+        # The reads, captures and the action waiting that came due while they could not run,
+        # in the order they came due.
         self._line: list[str] = []
         self._read_frame: int | None = None  # the environment frame read last
         self._deadline_due = False  # the deadline passed while a read asked before it was out
@@ -237,11 +241,6 @@ class StreamingPolicy:
         return (
             self.current is None and not self._capturing and not self._asked and not self._commits
         )
-
-    @property
-    def _busy(self) -> bool:
-        """An environment operation is out."""
-        return self._executing or self._capturing or bool(self._asked)
 
     # ---- kernel callbacks -------------------------------------------------------------------
 
@@ -367,19 +366,31 @@ class StreamingPolicy:
             self._line.append(operation)
 
     def _proceed(self) -> None:
-        """Start the operation that came due first once none is out, as the shell's gate takes
-        them first come first served, so that reads due on a fast grid cannot keep a capture out.
-        The action waiting may have gone meanwhile, withdrawn or given up."""
-        while self._line and not self._busy and not self._stopped():
-            operation = self._line.pop(0)
+        """Start what came due, in that order, as far as what is out lets it: a read waits for
+        the capture and the action out, and a capture and an action for the read out. A read
+        that waits for a capture holds back what came due after it, so that reads on a fast grid
+        and captures take turns; one that waits for an action does not, so that frames keep
+        coming during it. The action waiting may have gone meanwhile, withdrawn or given up."""
+        if self._stopped():
+            return
+        for operation in list(self._line):
+            if self._asked:
+                return
             if operation == "read":
-                self._ask()
-            elif operation == "capture":
+                if self._executing:
+                    continue
+                if not self._capturing:
+                    self._ask()
+                return
+            if operation == "capture":
+                self._line.remove(operation)
                 self._capturing = True
                 self.kernel.emit(Capture())
-            elif self.waiting is not None:
-                waiting, self.waiting = self.waiting, None
-                self._execute(waiting)
+            elif self.current is None:
+                self._line.remove(operation)
+                if self.waiting is not None:
+                    waiting, self.waiting = self.waiting, None
+                    self._execute(waiting)
 
     # ---- frames -----------------------------------------------------------------------------
 
@@ -531,18 +542,17 @@ class StreamingPolicy:
                 ),
             }
             return self._resolve(a, "wait")
-        if not self._busy:
-            return self._execute(a)
         if self.waiting is not None:
             self.waiting.superseded_by = a.index
             self._resolve(self.waiting, SUPERSEDED)
         else:
             self._due("action")
         self.waiting = a
+        self._proceed()
 
     def _execute(self, a: _Action) -> None:
-        """Run the action now: no other operation is out, so it takes the environment at once,
-        and its keys are held from now."""
+        """Run the action now: no read is out, so it takes the environment at once, and its keys
+        are held from now."""
         kernel, action = self.kernel, a.action
         a.started_at = kernel.semantic
         release_at = None
@@ -587,8 +597,12 @@ class StreamingPolicy:
             self.current = None
             self._resolve(a, "applied", terminal_after_action=True)
             return self._apply_deadline()
-        # An action can end the task at once: the read after it settles it (decision 31).
-        self._ask()
+        # An action can end the task at once: the read after it settles it before anything else
+        # starts, once a capture out is answered (decision 31).
+        if "read" in self._line:
+            self._line.remove("read")
+        self._line.insert(0, "read")
+        self._proceed()
 
     def _calls_cancelled(self, event: CallsCancelled) -> None:
         # Past the deadline the end settles the action waiting.
@@ -734,7 +748,7 @@ class StreamingPolicy:
         return self.kernel.ending is not None or self._deadline_due
 
     def _ask(self) -> None:
-        """Read the state now: no other operation is out, so the read samples the task now, the
+        """Read the state now: no capture or action is out, so the read samples the task now, the
         time its end is dated by. It is this frame's read, and whichever came due meanwhile."""
         if "read" in self._line:
             self._line.remove("read")

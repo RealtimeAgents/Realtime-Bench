@@ -146,15 +146,15 @@ def test_an_end_the_task_reports_during_an_execution_settles_the_waiting_action(
 def test_a_reply_the_watchdog_gave_up_hands_over_late_and_is_refused():
     """The first reply would run 4 s; its watchdog gives it up at 2 and the next reply starts.
     Its click, executing since 1, runs to its end; its typing, handed over at 3, is refused, and
-    its result at 4 is discarded. The capture due at 1 waits for the click, so the next reply
-    starts on the first frame."""
+    its result at 4 is discarded. The captures go on during the clicks, so the next reply starts
+    on the frame captured at 1."""
     first = Reply(4.0, calls=(Call(1.0, CLICK, "a"), Call(3.0, TYPE, "b")), interruptible=False)
     second = Reply(1.0, calls=(Call(0.5, SCROLL, "c"),))
     sim = _run(World(replies=[first, second], execute_s=1.5), 4.5, reply_watchdog_s=2.0)
     assert sim.started == [(1, 0.0), (2, 2.0), (3, 3.0)]
     assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "reply_watchdog"}
-    assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-0"
-    assert sim.captures == [0.0, 2.5, 4.0]
+    assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-1"
+    assert sim.captures == [0.0, 1.0, 2.0, 3.0, 4.0]
     assert (sim.accepted, sim.discarded) == ([2], [1])
     assert sim.executed == [(1.0, CLICK), (2.5, SCROLL)]
     assert sim.statuses() == ["applied", "applied", "cancelled_generation"]
@@ -388,6 +388,7 @@ def test_the_random_scripts_reach_the_states_that_matter():
         "an end handled past the deadline": 25,
         "an action that ended the task": 12,
         "an action the end kept from executing": 30,
+        "a capture during an action": 85,
     }
     assert {state: reached[state] >= floor for state, floor in floors.items()} == dict.fromkeys(
         floors, True
@@ -423,5 +424,12 @@ COVERAGE = {
     ),
     "an action the end kept from executing": lambda sim: any(
         status.startswith("not_applied") for status in sim.statuses()
+    ),
+    "a capture during an action": lambda sim: any(
+        execution[2] < capture[2] < execution[3]
+        for execution in sim.operations
+        if execution[0] == "execute"
+        for capture in sim.operations
+        if capture[0] == "capture"
     ),
 }

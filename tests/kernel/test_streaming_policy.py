@@ -70,8 +70,8 @@ def _outcome(decision: int, status: str, at: float, **fields) -> Outcome:
 
 def test_the_episode_asks_and_captures_at_once_then_on_both_grids():
     """The end checks follow the environment grid, the captures the input-frame grid; the deadline
-    beats the check due with it. One operation is out at a time: the first capture follows the
-    first read's answer."""
+    beats the check due with it. A read runs alone: the first capture follows the first read's
+    answer."""
     sim = _run(World(), 3.0, env_fps=2.0)
     commands = [c for c in sim.commands[:8] if not isinstance(c, Record)]
     assert commands == [
@@ -372,19 +372,13 @@ def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_ans
 
 
 def test_the_deadline_beats_an_arrival_filed_before_it():
-    """The click ends at 4.75 as the typing arrives; its feedback holds the shell until 5.75, and
-    then the typing, filed at 4.75, is handled before the deadline timer. The deadline ends the
-    episode first, and the typing is not applied."""
-    world = World(
-        replies=[
-            Reply(1.0, calls=(Call(0.5, CLICK, execute_s=4.25),)),
-            Reply(10.0, calls=(Call(3.75, TYPE),)),
-        ],
-        commit_s=1.0,
-    )
-    sim = _run(world)
-    assert sim.statuses() == ["applied", "not_applied_time_limit"]
-    assert sim.executed == [(0.5, CLICK)]
+    """A refused action and the typing arrive at 4.75; the refusal's feedback holds the shell
+    until 5.75, and then the typing, filed at 4.75, is handled before the deadline timer. The
+    deadline ends the episode first, and the typing is not applied."""
+    calls = (Call(4.75, CLICK, "c", grounding=MISSING_FRAME), Call(4.75, TYPE))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=1.0))
+    assert sim.statuses() == [INVALID_GROUNDING_FRAME, "not_applied_time_limit"]
+    assert sim.executed == []
     ended = sim.entries("EpisodeEnded")[0]
     assert (ended.semantic, ended.data) == (5.75, {"cause": "deadline", "reason": None, "at": 5.0})
     assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.75)
@@ -766,3 +760,44 @@ def test_reads_due_on_a_fast_grid_do_not_keep_the_captures_out():
     sim = _run(World(check_s=0.5), 3.0, env_fps=30.0)
     assert sim.captures == [0.5, 1.5, 2.5]
     assert sim.started == [(1, 0.5)]
+
+
+# ---- captures during an action (decision 50) ---------------------------------------------------
+
+
+def test_frames_keep_coming_while_a_long_action_executes():
+    """The click executes from 1 to 6. A capture and an action share the environment, so every
+    grid point captures meanwhile; the reads due wait for the click, and the read right after it
+    stands for them."""
+    sim = _run(World(replies=[Reply(10.0, calls=(Call(1.0, CLICK, execute_s=5.0),))]), 8.0)
+    assert sim.captures == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+    assert sim.data("FrameDropped") == []
+    assert sim.checks == [0.0, 6.0, 7.0]
+
+
+def test_an_action_starts_while_a_capture_runs():
+    """The capture at 1 takes until 1.75; the click arriving at 1.25 executes at once. The read
+    after it waits for the capture."""
+    world = World(replies=[Reply(10.0, calls=(Call(1.25, CLICK),))], capture_times={2: 0.75})
+    sim = _run(world, 3.0)
+    assert sim.executed == [(1.25, CLICK)]
+    assert sim.checks == [0.0, 1.0, 1.75, 2.0]
+
+
+def test_a_read_that_waits_for_a_capture_holds_back_an_action_due_after_it():
+    """At 2 environment frames a second the reads due at 1 and 1.5 wait for the capture running
+    from 1 to 1.75, which came due first; the click arriving at 1.625 waits behind them, so reads
+    cannot be starved. The read after the click follows it."""
+    world = World(replies=[Reply(10.0, calls=(Call(1.625, CLICK),))], capture_times={2: 0.75})
+    sim = _run(world, 3.0, env_fps=2.0)
+    assert sim.executed == [(1.75, CLICK)]
+    assert sim.checks == [0.0, 0.5, 1.75, 1.75, 2.0, 2.5]
+
+
+def test_the_snapshot_waits_for_the_capture_and_the_action_out():
+    """The click executes from 2 to 3.5 and the capture at 3 takes until 3.75; the deadline at
+    3.25 freezes the snapshot once both have let the environment go."""
+    calls = (Call(2.0, CLICK, execute_s=1.5),)
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], capture_times={4: 0.75}), 3.25)
+    assert sim.snapshots == [3.75]
+    assert sim.resolved()[0]["terminal_after_action"] is True
