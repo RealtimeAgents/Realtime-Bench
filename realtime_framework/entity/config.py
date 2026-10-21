@@ -128,6 +128,9 @@ class EnvironmentBudgetConfig:
     # Execute one action; extended for text input and holds as the guest's request timeout is
     # (sandbox/guest.py action_timeout).
     action_s: float = 10.0
+    # Send one key event, a press or a release, under the token clock; a tap's frame between its
+    # press and its release is a clock advance. The guest's request timeout for a key.
+    key_event_s: float = 10.0
     capture_s: float = 120.0  # capture one observation; the CDP call default
     state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
     # The same read when the kernel's shell asks on the wall clock, at the environment rate. Three

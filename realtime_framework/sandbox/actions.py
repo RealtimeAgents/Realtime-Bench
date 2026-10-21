@@ -392,13 +392,19 @@ class GuestEnvironment:
             if identity in self._held_keys and identity not in exclude
         ]
 
+    def _clock_key_event(self, event_type, chord, held_modifiers):
+        """Send one token-clock key event within its own budget."""
+        with operation_budget(
+            "key press" if event_type == "keyDown" else "key release",
+            ENVIRONMENT_BUDGET.key_event_s,
+            clock=self.clocks.operational,
+        ):
+            self.task.clock_key_event(event_type, chord, held_modifiers=held_modifiers)
+
     def release_keys(self, keys):
         """Token clock, for the kernel's shell: release these held keys, by identity, whose lease
         ended; a key that is not held is skipped."""
-        with operation_budget(
-            "key release", ENVIRONMENT_BUDGET.action_s, clock=self.clocks.operational
-        ):
-            self._release_clock_keys(keys)
+        self._release_clock_keys(keys)
 
     def _release_clock_keys(self, identities=None):
         selected = (
@@ -410,10 +416,8 @@ class GuestEnvironment:
             return
         try:
             chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
-            self.task.clock_key_event(
-                "keyUp",
-                chord,
-                held_modifiers=self._held_modifiers(exclude=selected),
+            self._clock_key_event(
+                "keyUp", chord, held_modifiers=self._held_modifiers(exclude=selected)
             )
             for identity in selected:
                 self._held_keys.pop(identity, None)
@@ -582,7 +586,7 @@ class GuestEnvironment:
             # Modifiers held by an earlier hold_key stay down: they only flag the tap's events.
             inherited_modifiers = self._held_modifiers(exclude=requested_identities)
             for _ in range(repeat):
-                self.task.clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
+                self._clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
                 # A new press of a repeatable key takes over auto-repeat on a real keyboard; the
                 # tap is released before its first repeat could fire, so nothing repeats
                 # afterwards. Modifier keys do not repeat and leave the repeating key alone.
@@ -592,14 +596,14 @@ class GuestEnvironment:
                 # never see a keyDown+keyUp delivered inside one frozen instant. Render
                 # one frame with the key down before releasing it (~17 ms of virtual time).
                 self.wait_until_tick(self._logical_tick + TAP_HOLD_S / self.d)
-                self.task.clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
+                self._clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
             # A tap of an already-held key must not terminate its outstanding lease. The lease may
             # have expired during the rendered frame above, so only keys still held are pressed
             # again.
             restore_identities = [item for item in overlapping if item in self._held_keys]
             if restore_identities:
                 restore = "+".join(self._held_keys[item]["wire"] for item in restore_identities)
-                self.task.clock_key_event(
+                self._clock_key_event(
                     "keyDown",
                     restore,
                     held_modifiers=self._held_modifiers(exclude=restore_identities),
@@ -635,10 +639,10 @@ class GuestEnvironment:
         extended = [identity for identity, _ in parts if identity in self._held_keys]
         new_chord = "+".join(wire for _, wire in new_parts)
         if new_parts:
-            self.task.clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+            self._clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
         if duration <= 1e-9:
             if new_parts:
-                self.task.clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
+                self._clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
                 # The transient press took over auto-repeat and was released at once.
                 self._repeat_key = None
         else:
