@@ -166,6 +166,21 @@ def test_a_streaming_run_keeps_the_hash_it_expected(streaming_gemini, tmp_path, 
     assert summary["runtime_config_hash"] == run_config["runtime_config_hash"]
 
 
+def test_a_setup_failure_records_the_mode(tmp_path, monkeypatch):
+    """A failure before main() enters its episode leaves the summary runner.py's entry point
+    writes from the arguments (_write_emergency_setup_summary)."""
+    import sys
+
+    from realtime_framework.evaluation import runner
+
+    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--interaction-mode", "streaming"]
+    argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
+    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    runner._write_emergency_setup_summary("setup failed")
+    summary = json.loads((tmp_path / "run" / "run_summary.json").read_text())
+    assert (summary["stop_reason"], summary["interaction_mode"]) == ("setup_error", "streaming")
+
+
 def test_the_report_compares_the_mode(tmp_path):
     """reporting.report checks each run summary against the identity expected before the run."""
     from realtime_framework.evaluation.reporting import summary_ok
@@ -397,6 +412,60 @@ def test_a_streaming_run_summary_without_its_section_is_not_scored(
     assert (task["status"], task["error_reason"]) == ("invalid", "result_validation_failed")
     assert "streaming" not in task
     assert group["streaming"]["context_control"] is None
+
+
+@pytest.mark.parametrize("interaction_mode", ["turn_based", "streaming"])
+def test_a_trial_verifies_its_mode_from_its_run_to_its_reward(
+    streaming_gemini, environment, tmp_path, monkeypatch, capsys, interaction_mode
+):
+    """A Harbor trial after its run: the request's options become the trial worker's command and
+    settings, which the report's integration reads (wall_clock_launch.json); the runner's expected
+    identity (reporting.prepare_episode_report) and the report over the run summary
+    (reporting.report) carry the mode to Harbor's verifier, which compares it with task.json."""
+    from realtime_framework.evaluation import _trial
+    from realtime_framework.evaluation.config import configuration_sha256
+    from realtime_framework.evaluation.harbor import (
+        ApptainerEnvironment,
+        RealtimeBenchOptions,
+        verify,
+    )
+    from realtime_framework.evaluation.reporting import report
+
+    streaming = SECTION if interaction_mode == "streaming" else None
+    root = _report_root(tmp_path, monkeypatch, interaction_mode, streaming)
+    (expected,) = json.loads((root / "cell" / "summary.json").read_text())["runs"]
+    options = RealtimeBenchOptions(interaction_mode=interaction_mode)
+    request = {"model": GEMINI, "mode": "default", **options.model_dump(), "catalog_model": GEMINI}
+    # What harbor.py resolve writes as the trial's task.json.
+    task = {
+        **{field: expected[field] for field in ("suite_id", "suite_version", "suite_hash")},
+        "harness_version": expected["harness_version"], "harness_hash": expected["harness_hash"],
+        "task_id": WEB, "category": expected["public_category"], "fps": request["fps"],
+        "model_input_fps": request["model_input_fps"],
+        "interaction_mode": request["interaction_mode"],
+        "duration_minutes": request["duration_minutes"], "seed": request["seed"],
+    }
+    environment_ = types.SimpleNamespace(python="python", lane=1, task=task)
+    command = ApptainerEnvironment._runner_command(environment_, {**request, "task": task})
+    assert _trial.main([*command[3:], "--dry-run"]) == 0
+    settings = json.loads(capsys.readouterr().out)
+    (root / "wall_clock_launch.json").write_text(json.dumps(settings))
+    request.update(task=task, configuration_sha256=configuration_sha256(settings))
+
+    result = report(root)
+    (group,) = result["groups"]
+    assert (group["interaction_mode"], group["scored"]) == (interaction_mode, 1)
+    assert verify(result, task, request) == {"reward": 1.0}
+    other = "turn_based" if interaction_mode == "streaming" else "streaming"
+    with pytest.raises(ValueError, match="Report interaction_mode mismatch"):
+        verify(result, {**task, "interaction_mode": other}, {**request, "task": {
+            **task, "interaction_mode": other,
+        }})
+    # A run summary of the other mode is not the result the trial expected (reporting.summary_ok).
+    path = root / "cell" / WEB / "run_summary.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "interaction_mode": other}))
+    (group,) = report(root)["groups"]
+    assert (group["scored"], group["invalid"]) == (0, 1)
 
 
 def test_harbor_verify_compares_the_mode():
