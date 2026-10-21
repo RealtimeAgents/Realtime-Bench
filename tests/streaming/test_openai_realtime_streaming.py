@@ -285,10 +285,10 @@ async def answering(server: Server, blocks):
     driver, connection = _offline_driver(), _FakeConnection()
     session = _Session(1, connection, new_core())
     session.read_continuously(Ticks())
-    driver._session, driver._conn = session, object()
-    driver._send = lambda operation: connection.queue.put(server.answer(operation))
+    driver._session, driver._conn = session, connection
+    driver._send = lambda conn, operation: conn.queue.put(server.answer(operation))
     replay = session.core.replay_streaming(streaming_view(list(blocks), frames=5))
-    await driver._send_all(replay)
+    await driver._send_all(session, replay)
     await session.receive_until(lambda: all(map(session.core.settled, replay)))
     return driver, connection
 
@@ -332,7 +332,7 @@ def test_a_push_of_a_frame_the_session_holds_waits_for_its_confirmation():
         connection.queue.put(_clean_close())
         driver, connection = await answering(_Answers({"f2.frame"}), stream("F"))
         view = streaming_view(stream("FF"), frames=5)
-        await driver._send_all(driver._session.core.push(view))
+        await driver._send_all(driver._session, driver._session.core.push(view))
         with pytest.raises(RuntimeError, match="^OpenAI Realtime refused f2.frame: "):
             await driver.push_frame(_observation(2), view)
         connection.queue.put(_clean_close())
@@ -342,8 +342,8 @@ def test_a_push_of_a_frame_the_session_holds_waits_for_its_confirmation():
 
 def test_a_connection_that_closes_before_the_frame_is_confirmed_fails_the_push():
     async def scenario():
-        driver, connection = await answering(Server(), stream("F"))
-        driver._send = lambda operation: connection.queue.put(_clean_close())
+        driver, _ = await answering(Server(), stream("F"))
+        driver._send = lambda conn, operation: conn.queue.put(_clean_close())
         with pytest.raises(ConnectionClosedOK):
             await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=5))
 
@@ -605,6 +605,77 @@ def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed()
     }
 
 
+def test_a_push_during_a_rebuild_goes_out_once_the_rebuilt_session_took_its_replay():
+    """push_frame holds the session as a connection operation does: called at 0.1 s, while
+    ensure_ready opens a session and waits for its replay's confirmations, it plans and writes on
+    that session once they came at 0.3 s, as REBUILT records."""
+    clock, table, blocks = FakeClock(), FrameTable(), []
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+
+    def frame(k: int):
+        observation = _observation(k)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        blocks.append(frame_block(record, observation))
+        return observation, streaming_view(blocks, frames=2)
+
+    async def scenario(driver):
+        frame(1)
+        _, history = frame(2)
+        ready = asyncio.create_task(
+            driver.ensure_ready(seed, history, lambda *args, **kwargs: None)
+        )
+        await asyncio.sleep(0.1)
+        await driver.push_frame(*frame(3))
+        pushed = clock.monotonic()
+        await ready
+        session = driver._session
+        await driver.close()
+        return pushed, session
+
+    with CassetteServer(REBUILT, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        pushed, session = run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+    assert pushed == 0.3
+    assert {k: f.folded for k, f in session.core.frames.items()} == {
+        "f1.frame": True,
+        "f2.frame": False,
+        "f3.frame": False,
+    }
+
+
+def test_a_reply_asked_for_during_a_rebuild_goes_to_the_rebuilt_session():
+    """request_reply holds the session as a connection operation does: called while a rebuild
+    holds it, it pushes, registers its reply and writes response.create on the session the
+    rebuild leaves, whose events its handle reads."""
+
+    async def scenario():
+        driver, old, new = _offline_driver(), _Wire(), _Wire()
+        driver._session, driver._conn = _Session(1, old, new_core()), old
+        lock = driver._session_lock()
+        await lock.acquire()
+        view = streaming_view(stream("FRB"))
+        reply = asyncio.create_task(
+            driver.request_reply(GenerationRequest("reply-1", None, "inf", "wall", canonical=view))
+        )
+        await asyncio.sleep(0)
+        rebuilt = _Session(2, new, new_core())
+        sent(rebuilt.core, rebuilt.core.replay_streaming(streaming_view(stream("FR"))))
+        driver._session, driver._conn = rebuilt, new
+        lock.release()
+        return old, new, rebuilt, await reply
+
+    old, new, rebuilt, handle = _within(scenario())
+    assert old.written == []
+    assert [(kind, kwargs.get("item", {}).get("content")) for kind, kwargs in new.written] == [
+        ("item.create", [{"type": "input_text", "text": "fb1"}]),
+        ("response.create", None),
+    ]
+    assert handle.opaque[0] is rebuilt
+
+
 class _Wire:
     """Stands in for the SDK connection's writes: keeps each item create and delete and each
     response create and cancel, in the order they were written."""
@@ -644,33 +715,21 @@ def test_an_interrupt_cancels_a_reply_on_its_own_session_only():
     assert result.history_state == ProviderHistoryState.CONTAMINATED
 
 
-class _Responses:
-    """Stands in for the SDK connection's response resource: keeps each response.create."""
-
-    def __init__(self) -> None:
-        self.created: list[dict] = []
-        self.response = self
-
-    def create(self, **kwargs) -> None:
-        self.created.append(kwargs)
-
-
 def test_a_reply_goes_out_after_the_feedback_the_session_lacks():
     """Feedback accepted after the newest frame, an item of its own under separate_message, is
     pushed before the reply's response.create, so the reply sees it; the reply answers no frame."""
-    driver, core = _offline_driver(), new_core()
+    driver, core, wire = _offline_driver(), new_core(), _Wire()
     sent(core, core.push(streaming_view(stream("FR"))))
-    driver._session = _Session(1, _FakeConnection(), core)
-    driver._conn = responses = _Responses()
-    pushed = []
-    driver._send = pushed.append
+    driver._session, driver._conn = _Session(1, wire, core), wire
     request = GenerationRequest(
         "reply-2", None, "inf", "wall", canonical=streaming_view(stream("FRB"))
     )
     handle = _within(driver.request_reply(request))
-    assert [(op.block, op.text) for op in pushed] == [("d1.feedback", "fb1")]
-    assert responses.created == [
-        {"response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}}}
-    ]
+    (_, feedback), reply_create = wire.written
+    assert feedback["item"]["content"] == [{"type": "input_text", "text": "fb1"}]
+    assert reply_create == (
+        "response.create",
+        {"response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}}},
+    )
     _, reply = handle.opaque
     assert reply.answered is None

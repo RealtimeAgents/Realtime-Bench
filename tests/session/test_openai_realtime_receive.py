@@ -487,14 +487,14 @@ def test_an_operation_whose_send_fails_is_unknown():
     driver = _offline_driver()
     core = opened([turn(0, "a0")])
     observation = core.observe(view([turn(0, "a0"), turn(1)]))
-    driver._session = _Session(1, _FakeConnection(), core)
+    session = _Session(1, _FakeConnection(), core)
 
-    def send(operation):
+    def send(conn, operation):
         raise ConnectionError("send failed")
 
     driver._send = send
     with pytest.raises(ConnectionError):
-        _within(driver._send_all([observation]))
+        _within(driver._send_all(session, [observation]))
     assert core.delivery[observation.key] == Delivery.UNKNOWN
 
 
