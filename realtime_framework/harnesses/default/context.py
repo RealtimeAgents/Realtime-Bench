@@ -651,16 +651,20 @@ class RealtimeRuntime:
             terminal_history != ProviderHistoryState.EXACT or reconnect_required
         )
         if needs_sync:
-            sync = await self._synchronize(
-                reason=provider_metadata.get("reconnect_reason", "provider_history_changed"),
-                ledger=executed_action_ledger,
-                request_builder=request_builder,
-                cancel=cancel,
-                current_generation=generation,
-                force_rebuild=False,
-                incoming=(turn,),
-            )
-        elif cancelled:
+            try:
+                sync = await self._synchronize(
+                    reason=provider_metadata.get("reconnect_reason", "provider_history_changed"),
+                    ledger=executed_action_ledger,
+                    request_builder=request_builder,
+                    cancel=cancel,
+                    current_generation=generation,
+                    force_rebuild=False,
+                    incoming=(turn,),
+                )
+            except RetryCancelled:
+                # Aborted during the sync: the generation itself came back, usage and all.
+                cancelled = True
+        if cancelled:
             # abort() already dirtied and scheduled cleanup for this generation. A newer turn may
             # have recovered by the time this abandoned worker drains its last event, so it must
             # not overwrite the newer lifecycle state.
@@ -669,7 +673,7 @@ class RealtimeRuntime:
                 ProviderHistoryState.UNKNOWN,
                 detail="generation superseded by harness timeout",
             )
-        else:
+        elif not needs_sync:
             self._set_state(RuntimeState.READY)
 
         finished_monotonic_ns = self.clock.monotonic_ns()
