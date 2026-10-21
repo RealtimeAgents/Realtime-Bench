@@ -1,11 +1,11 @@
-"""Drive scripted Choice Decisions into an agent, in the order run_stream calls it.
+"""Drive scripted Choice Decisions into an agent, in the order the legacy turn loop calls it.
 
-As in steps.py: per decision run_stream captures a frame (runner.py:846), binds the budget
-(runner.py:908-915), prefills and generates (runner.py:917-919), hands the result to the
-trajectory writer (runner.py:1128-1131) and reports the execution result (runner.py:674). In
+As in steps.py: per decision the loop (runner.py _run_stream_legacy) captures a frame, binds the
+budget, prefills and generates (its _decide), hands the result to the trajectory writer
+(episode_records.py finalize_decision_audit) and reports the execution result (its _apply). In
 addition each decision loads its own script into the stub, every question attempt is recorded
 with an allow-list of headers, and an invalid decision ends the episode: run_stream invalidates
-the run without committing an action (runner.py:455-461) and stops deciding (runner.py:842-843).
+the run without committing an action and stops deciding (kernel/turns.py _unusable).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def run_decisions(
         first_request = len(stub.requests)
         history_length = len(agent.action_history)
         stub.load(step.script)
-        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py:853
+        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py _decide
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)
         agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry

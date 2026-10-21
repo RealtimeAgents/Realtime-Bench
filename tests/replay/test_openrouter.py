@@ -42,10 +42,10 @@ NATIVE_OUTPUT_LIMIT = 128000
 ROUTE = route_metadata("anthropic/claude-opus-5", "Anthropic")
 
 # The finite token clock: B charged tokens per frame over an N-tick episode (N is two minutes at
-# 1 fps, runner.py:1714). Decision k observes tick k (steps.py), and its cap
-# min(128000, (N - k) * B) (runner.py:866-881) is the native limit through k = 40 (exactly 128000
-# at k = 40) and the remaining clock from k = 41 on (126400, down to 97600 at k = 59), never zero
-# in the scenario.
+# 1 fps, runner.py main and kernel/turns.py TurnConfig.max_ticks). Decision k observes tick k
+# (steps.py), and its cap min(128000, (N - k) * B) (kernel/turns.py _captured, episode_records.py
+# decision_budget) is the native limit through k = 40 (exactly 128000 at k = 40) and the remaining
+# clock from k = 41 on (126400, down to 97600 at k = 59), never zero in the scenario.
 TOKEN_CLOCK = {"clock_mode": "token", "tokens_per_frame": 1600, "max_ticks": 120}
 
 # Request headers that change how OpenRouter serves or attributes the request: the auth scheme,
@@ -68,8 +68,7 @@ def openrouter_env(monkeypatch):
 
 
 def openrouter_config():
-    """The ModelConfig runner.main() builds for ``--model claude-opus-5`` (runner.py:1431-1437,
-    1548-1553)."""
+    """The ModelConfig runner.main() builds for ``--model claude-opus-5`` (runner.py main)."""
     entry = catalog.get(MODEL_KEY)
     return catalog.to_model_config(
         MODEL_KEY, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]
@@ -81,7 +80,7 @@ def openrouter_episode(monkeypatch, tmp_path, script, **clock):
     with OpenRouterStub(script, route=ROUTE) as stub:
         monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
         config = openrouter_config()
-        if clock.get("tokens_per_frame") is not None:  # runner.py:1453-1460
+        if clock.get("tokens_per_frame") is not None:  # runner.py main
             assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
         episode = build_episode(
             config,
@@ -171,7 +170,8 @@ def test_long_scenario(openrouter_env, tmp_path):
     fall on the same decisions as for chat_completions: both APIs are stateless and share the
     history policies (harnesses/default/context.py:284-333). The scripted statuses are the
     wall-clock ones; the last, not_applied_time_limit, cannot occur on the token clock
-    (runner.py:526-527; sandbox/actions.py:274-275), but it reaches no request."""
+    (kernel/turns.py start, _past_deadline; sandbox/actions.py:274-275), but it reaches no
+    request."""
     with openrouter_episode(openrouter_env, tmp_path, replies(LONG_SCENARIO), **TOKEN_CLOCK) as (
         stub,
         config,
@@ -201,7 +201,7 @@ def test_long_scenario(openrouter_env, tmp_path):
 
 
 def test_pause_mode_snapshot(openrouter_env, tmp_path):
-    """The token clock in pause mode (tokens_per_frame=None, runner.py:1407-1408). Nothing bounds
+    """The token clock in pause mode (tokens_per_frame=None, runner.py main). Nothing bounds
     a decision but the native limit, which the driver sends because the harness asks for no
     provider cap (harnesses/default/harness.py:983; providers/litellm.py:528-537), and the clock
     prompt says that B is unlimited (harnesses/default/prompts.py:182-187)."""
@@ -421,10 +421,10 @@ def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
     non-streaming litellm gateway's check that did is now the pre-run check_wall_clock,
     providers/preflight.py:48-50). On either clock the runtime reads every event before the decision
     returns (harnesses/default/context.py:558-572), and the collector keeps the last usage
-    (harnesses/default/harness.py:866-868). The usage matters to the runner: on the finite token
-    clock the output count places the action (runner.py:488-492) and its absence invalidates the run
-    (runner.py:479-487); on the wall clock the action lands where the clock is when the decision
-    returns (runner.py:509-512), so the wait delays it.
+    (harnesses/default/harness.py:866-868). The usage matters to the runner (kernel/turns.py
+    _accept): on the finite token clock the output count places the action and its absence
+    invalidates the run; on the wall clock the action lands where the clock is when the decision
+    returns, so the wait delays it.
 
     Decision 0: the stub holds the usage chunk until the runtime has read the complete action
     text; the decision returns only after it, with that usage. Decision 1: the stream ends without

@@ -12,7 +12,7 @@ arrival order, plus each decision's parsed action, usage and commit.
 Scripts:
 - the long scenario for the two maintained presets (live.py:70-76, 162-177), which differ in
   the completion signal and the tool acknowledgement;
-- the driver defaults, reached by a model id without a preset (evaluation/runner.py:1555-1562):
+- the driver defaults, reached by a model id without a preset (evaluation/runner.py main):
   realtime_input observations and native_tools history (live.py:55-67);
 - a resume that the server rejects, which falls back to replaying the history
   (live.py:1252-1284);
@@ -57,10 +57,11 @@ API_KEY = "replay-dummy-key"
 
 # The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py:146-154,
 # providers/preflight.py:139-144): B is --tokens-per-frame (entity/config.py:33,
-# evaluation/runner.py:1352-1357) and the episode has --max-minutes 5 * 60 * fps ticks
-# (runner.py:1365, 1714). The catalog's native limit for these models is LiteLLM's 65536
-# (providers/registry.py:140-166), so the runtime cap min(65536, (N - t_k) * B) (runner.py:863-889)
-# falls below it from t_k = 45 on and is 61696 at the last decision.
+# evaluation/runner.py main) and the episode has --max-minutes 5 * 60 * fps ticks (runner.py main,
+# kernel/turns.py TurnConfig.max_ticks). The catalog's native limit for these models is LiteLLM's
+# 65536 (providers/registry.py:140-166), so the runtime cap min(65536, (N - t_k) * B)
+# (kernel/turns.py _captured, episode_records.py decision_budget) falls below it from t_k = 45 on
+# and is 61696 at the last decision.
 FPS = 1.0
 TOKENS_PER_FRAME = DEFAULT_TOKENS_PER_FRAME
 MAX_TICKS = 300
@@ -233,7 +234,7 @@ def live_env(monkeypatch):
 
 
 def catalog_config(key: str) -> ModelConfig:
-    """What the runner builds for a catalog key (runner.py:1433-1440, 1548-1553). Its
+    """What the runner builds for a catalog key (runner.py main). Its
     api_base_url stays None; the stub is reached through GOOGLE_GEMINI_BASE_URL."""
     effort = catalog.get(key).defaults["reasoning_effort"]
     return catalog.to_model_config(key, fps=FPS, reasoning_effort=effort)
@@ -254,7 +255,7 @@ def run_live_steps(
     records, results = [], []
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
-        budget = episode.budget(observation.tick_number)  # t_k: runner.py:853
+        budget = episode.budget(observation.tick_number)  # t_k: runner.py _decide
         first = len(stub.events)
         agent.configure_decision(budget)
         agent.stream_prefill(observation)
@@ -279,7 +280,7 @@ def run_live_steps(
             # A failed decision has no action protocol (harnesses/default/harness.py:1385-1397).
             "action_protocol": result.get("action_protocol"),
             "usage": result["usage"],
-            # What the runner charges the token clock with (runner.py:209-231).
+            # What the runner charges the token clock with (episode_records.py clock_output_tokens).
             "clock_usage": {
                 name: result.get(name)
                 for name in (
@@ -292,7 +293,7 @@ def run_live_steps(
         }
         if result.get("invalid_reason"):
             # run_stream invalidates the episode and stops without committing
-            # (runner.py:455-461, 1168-1169).
+            # (kernel/turns.py _unusable).
             stub.wait_until_idle()
             invalid = {name: result.get(name) for name in ("invalid_reason", "invalid_detail")}
             records.append({**record, "frames": step_frames(stub, first), **invalid})
@@ -522,7 +523,7 @@ def test_driver_default_short(live_env, tmp_path):
     (live.py:1242-1284), in the native_tools format with the thought-signature sentinel
     (live.py:37-41, 485-490)."""
     preset = DRIVER_DEFAULT
-    config = ModelConfig(  # runner.py:1443, 1555-1562 for --adapter gemini_live --model <id>
+    config = ModelConfig(  # runner.py main for --adapter gemini_live --model <id>
         adapter_type="gemini_live", model_name=preset.model, fps=FPS, reasoning_effort="low"
     )
     turns = [

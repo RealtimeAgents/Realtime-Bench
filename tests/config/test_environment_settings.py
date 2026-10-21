@@ -9,7 +9,7 @@ from realtime_framework.entity.config import FrameEncodingConfig, RunnerTimingCo
 
 def replaced_reads(environ):
     """The reads the config fields replaced (sandbox/observation/capture.py:317-319 and
-    evaluation/runner.py:49-60 at 8319a10)."""
+    evaluation/runner.py DEADLINE_GRACE_S through PROVIDER_WATCHDOG_S at 8319a10)."""
     return {
         "max_dimension": int(environ.get("FRAME_MAX_DIM", "768")),
         "jpeg_quality": int(environ.get("FRAME_JPEG_QUALITY", "85")),

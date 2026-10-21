@@ -11,8 +11,9 @@ providers/litellm.py chat_messages), the role the wire item has had since contex
 request is not recorded; the trajectory rows are, with input_prompt as a digest (baseline.py).
 
 All scripts run on the finite token clock with B=1024 and 61 ticks: decision k may emit
-min(32000, (61 - k) * 1024) tokens (evaluation/runner.py:866-881). That is the native limit up
-to decision 29 and less from decision 30 on. The driver sends any cap above 4096 as "inf"
+min(32000, (61 - k) * 1024) tokens (evaluation/kernel/turns.py _captured,
+evaluation/episode_records.py decision_budget). That is the native limit up to decision 29 and
+less from decision 30 on. The driver sends any cap above 4096 as "inf"
 (openai_realtime.py:214-220), so the last three response.create calls carry 4096, 3072, 2048.
 
 Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it
@@ -67,7 +68,7 @@ ARCHIVE, ARCHIVED = 50, range(0, 10)
 
 
 def realtime_config(base_url: str) -> ModelConfig:
-    """The runner's ModelConfig for the catalog key (evaluation/runner.py:1549-1553), pointed at
+    """The runner's ModelConfig for the catalog key (evaluation/runner.py main), pointed at
     the stub. The placeholder key keeps any OPENAI_API_KEY in the environment or the .env from
     being used (providers/openai_realtime.py:161-162)."""
     config = catalog.to_model_config(
@@ -123,7 +124,7 @@ def _run(stub: RealtimeStub, steps, tmp_path: Path, scenario: str) -> list[dict]
         assert result.get("invalid_reason") is None, result.get("invalid_detail")
         assert result["inspection"]["valid"]
         # Each decision ends with response.create; its cap is the transport cap the runner
-        # bound (openai_realtime.py:364-371; runner.py:890-915).
+        # bound (openai_realtime.py:364-371; episode_records.py decision_budget).
         response = record["client_events"][-1]["events"][-1]
         assert response["type"] == "response.create"
         assert response["response"] == {

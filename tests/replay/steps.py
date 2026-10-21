@@ -1,9 +1,10 @@
-"""Drive scripted decisions straight into an agent, in the order run_stream calls it.
+"""Drive scripted decisions straight into an agent, in the order the legacy turn loop calls it.
 
-Per decision run_stream captures a frame (runner.py:846), binds the budget (runner.py:908-915),
-prefills and generates (runner.py:917-919), hands the result to the agent's trajectory writer
-(runner.py:1128-1131) and reports the execution result (runner.py:434-443, 674). Its own clock,
-deadline and action execution are not reproduced: each step's status and detail are scripted.
+Per decision the loop (runner.py _run_stream_legacy) captures a frame, binds the budget, prefills
+and generates (its _decide), hands the result to the agent's trajectory writer
+(episode_records.py finalize_decision_audit) and reports the execution result (its _apply and
+_commit). Its own clock, deadline and action execution are not reproduced: each step's status and
+detail are scripted.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def run_steps(episode: Episode, steps: list[Step], stub: ChatCompletionsStub) ->
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
         first_request = len(stub.requests)
-        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py:853
+        agent.configure_decision(episode.budget(observation.tick_number))  # t_k: runner.py _decide
         agent.stream_prefill(observation)
         result = agent.stream_generate(tick=k)
         agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry

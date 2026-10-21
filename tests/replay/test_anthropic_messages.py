@@ -64,15 +64,16 @@ FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 
 # --tokens-per-frame 256 (the default B, entity/config.py:33) and --max-minutes 9 at 1 fps:
-# run_stream gets max_ticks 9 * 60 * 1 = 540 (runner.py:1714). Decision k observes tick k, so it
-# has (540 - k) * 256 clock tokens left (runner.py:866-873). That stays at or above the native
-# limit of 128000 up to k = 40; from k = 41 the remaining clock is the cap (runner.py:875-886),
-# down to 123136 at k = 59, never 0.
+# run_stream gets duration_s 9 * 60 and env_fps 1 (runner.py main), a horizon of 9 * 60 * 1 = 540
+# ticks (kernel/turns.py TurnConfig.max_ticks). Decision k observes tick k, so it has
+# (540 - k) * 256 clock tokens left (kernel/turns.py _captured). That stays at or above the native
+# limit of 128000 up to k = 40; from k = 41 the remaining clock is the cap (episode_records.py
+# decision_budget), down to 123136 at k = 59, never 0.
 TOKENS_PER_FRAME = 256
 MAX_TICKS = 540
 FIRST_CAPPED = 41
 
-# Pause mode (--tokens-per-frame unlimited, runner.py:1407-1408): nothing bounds a decision, the
+# Pause mode (--tokens-per-frame unlimited, runner.py main): nothing bounds a decision, the
 # harness accepts unbounded output (harness.py:983), and the driver then sends the native limit
 # (providers/litellm.py:528-537). The first four decisions of the long scenario, two of them with a
 # thinking block.
@@ -80,8 +81,8 @@ PAUSE_STEPS = LONG_SCENARIO[:4]
 
 
 def anthropic_config(base_url: str) -> ModelConfig:
-    """What the runner builds for --model claude-opus-5-anthropic (runner.py:1433-1437, 1548-1553),
-    with the base URL moved to the stub before create_agent (runner.py:2245).
+    """What the runner builds for --model claude-opus-5-anthropic (runner.py main), with the base
+    URL moved to the stub before create_agent (runner.py set_up_agent).
 
     This is the only redirect: the deployment reads no base-URL variable
     (providers/litellm.py:1164-1172, 471-475), the driver always passes api_base, which LiteLLM
@@ -193,7 +194,7 @@ def _check_usage(records: list[dict], scripted: list[Reply]) -> None:
         cached = start["cache_read_input_tokens"] + start["cache_creation_input_tokens"]
         assert result["usage"]["input_tokens"] == start["input_tokens"] + cached
         assert result["provider_output_tokens"] == reply.delta_usage["output_tokens"]
-        # Complete, as a finite token clock requires (runner.py:479-487).
+        # Complete, as a finite token clock requires (kernel/turns.py _accept).
         assert result["provider_usage_missing_reason"] is None
 
 
@@ -271,7 +272,7 @@ def _header(config: ModelConfig, scenario: str, tokens_per_frame, max_ticks) -> 
 
 
 def test_long_scenario_token_clock(tmp_path, monkeypatch):
-    # runner.py:1453-1460
+    # runner.py main
     assert catalog.adapter_class("anthropic_messages").capabilities.finite_frame_budget
     config, scripted, records = _run(
         tmp_path,

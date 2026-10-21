@@ -3,7 +3,7 @@
 Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it the
 run is compared with tests/replay/baselines/.
 
-The ModelConfig is the catalog's (runner.py:1431-1437, 1548-1553) and keeps the official base URL
+The ModelConfig is the catalog's (runner.py main) and keeps the official base URL
 (configs/models/kimi-k3.yaml:5), so the driver normalizes Kimi usage (providers/litellm.py:122-152,
 906-908); stub_moonshot.redirect_to_stub sends the requests to the local stub. The long scenario
 runs on a finite frame budget B, the short snapshot in pause mode (B unlimited).
@@ -36,13 +36,15 @@ FPS = 1.0
 DUMMY_KEY = "sk-replay-moonshot-dummy"
 ENDPOINT = DEFAULT_MOONSHOT_BASE_URL + "/chat/completions"
 
-# run_stream receives max_ticks = max_minutes * 60 * fps (runner.py:1714): a one-minute episode.
+# run_stream receives duration_s = max_minutes * 60 and env_fps = fps (runner.py main), so the
+# horizon is max_minutes * 60 * fps ticks (kernel/turns.py TurnConfig.max_ticks): a one-minute
+# episode.
 MAX_TICKS = 60
 # Decision k observes tick k (steps.py). On the finite clock its cap is
-# min(native, floor((MAX_TICKS - k) * B)) (runner.py:863-886). kimi-k3's native limit is 1048576
-# (LiteLLM's bundled moonshot/kimi-k3, providers/registry.py:140-154), so with this B the native
-# limit applies through decision 28 and the remaining clock from decision 29 (1015808) down to
-# decision 59 (32768).
+# min(native, floor((MAX_TICKS - k) * B)) (kernel/turns.py _captured, episode_records.py
+# decision_budget). kimi-k3's native limit is 1048576 (LiteLLM's bundled moonshot/kimi-k3,
+# providers/registry.py:140-154), so with this B the native limit applies through decision 28 and
+# the remaining clock from decision 29 (1015808) down to decision 59 (32768).
 TOKENS_PER_FRAME = 32768
 # As for chat_completions: the default policies (entity/config.py:35-38) fold the oldest 10
 # screenshots of a request holding 21 (harnesses/default/context.py:24-32) and archive the oldest
@@ -56,12 +58,12 @@ PAUSE_SCENARIO = LONG_SCENARIO[:5]
 def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, **changes):
     monkeypatch.setenv("MOONSHOT_API_KEY", DUMMY_KEY)
     entry = catalog.get(MODEL_KEY)
-    config = catalog.to_model_config(  # runner.py:1431-1437, 1548-1553
+    config = catalog.to_model_config(  # runner.py main
         MODEL_KEY, fps=FPS, reasoning_effort=entry.defaults["reasoning_effort"]
     ).model_copy(update=changes)
     assert config.api_base_url == DEFAULT_MOONSHOT_BASE_URL
     if tokens_per_frame is not None:
-        # runner.py:1453-1460
+        # runner.py main
         assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
     with KimiStub(kimi_replies(steps)) as stub:
         episode = build_episode(
@@ -208,8 +210,8 @@ def test_long_scenario_finite_token_clock(tmp_path, monkeypatch):
 def test_pause_mode_snapshot(tmp_path, monkeypatch):
     config, records = _run(tmp_path, monkeypatch, PAUSE_SCENARIO, tokens_per_frame=None)
     # Without a finite B no clock remainder caps a decision, the harness asks for no provider cap
-    # (runner.py:885-889; harnesses/default/harness.py:983) and the driver sends the declared
-    # native limit (providers/litellm.py:528-537).
+    # (episode_records.py decision_budget; harnesses/default/harness.py:983) and the driver sends
+    # the declared native limit (providers/litellm.py:528-537).
     assert [_body(r)["max_tokens"] for r in records] == [config.native_output_limit] * len(records)
     _check_reasoning_replay(records, PAUSE_SCENARIO)
     _check_kimi_usage(records)

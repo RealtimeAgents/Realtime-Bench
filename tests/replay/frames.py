@@ -1,7 +1,7 @@
 """Deterministic synthetic frames, captured through the runner's own BrowserSceneCapture.
 
-The runner builds every observation with BrowserSceneCapture.capture (evaluation/runner.py:1576,
-2297; sandbox/actions.py:190-203). Here that class runs unchanged with its probe override
+The runner builds every observation with BrowserSceneCapture.capture (evaluation/runner.py main,
+set_up_agent; sandbox/actions.py:190-203). Here that class runs unchanged with its probe override
 (sandbox/observation/capture.py:100, 144-145), a guest that returns synthetic PNGs, and a clock
 that reads a fixed stamp for each capture (capture.py:272). Observation ids, screenshot hashes,
 frame geometry and the canonical interactables therefore come from production code, built from
