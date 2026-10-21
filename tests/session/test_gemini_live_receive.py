@@ -626,6 +626,24 @@ def test_the_go_away_deadline_bounds_the_reply(script, stall):
     assert rig.driver._session is None and rig.driver._core.connection is None
 
 
+def test_an_acknowledgement_the_go_away_deadline_cut_short_is_unknown():
+    """The goAway deadline ends a tool acknowledgement that never got out and closes the
+    connection: what the acknowledgement answered is unknown on that connection."""
+    rig = Rig("gemini-3.8-live", [[GO_AWAY_SOON, CALL]])
+    socket = rig.live.sockets[0]
+    socket.stall = lambda message: "tool_response" in message
+    log = DeliveryLog(lambda: socket.sent)
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        with pytest.raises(live.GoAwayDeadlineExceeded):
+            await drain(rig.driver.events(await rig.start("turn-0")))
+
+    asyncio.run(asyncio.wait_for(run(), 5))
+    assert log.events[-1] == ("unknown", [None], "gemini_live.ws-1", 0)
+
+
 def test_an_interrupted_reply_is_contaminated():
     rig = Rig(
         "gemini-3.8-live",

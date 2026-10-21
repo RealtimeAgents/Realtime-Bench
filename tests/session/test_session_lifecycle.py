@@ -523,6 +523,30 @@ def test_one_session_operation_runs_at_a_time():
     ]
 
 
+@pytest.mark.parametrize("operation", ["renew", "repair"])
+def test_a_renewal_or_a_repair_waits_for_the_session_operation_under_way(operation):
+    """A reopen that takes 1 s holds a renewal or a repair submitted while it runs until it is
+    done, as it holds a sync: a generation repaired after it was abandoned holds the next one's
+    session operations the same way."""
+    with _rig(connected=False) as rig:
+        rig.encoder.connect_s, rig.encoder.syncs, rig.encoder.renewal = 1.0, [EXACT], "go_away"
+        reopening = rig.thread.submit(rig.ensure_ready())
+        if operation == "renew":
+            rig.run(rig.encoder.renew(SEED, HISTORY, rig.records))
+        else:
+            request = HistorySyncRequest(SEED, "provider_history_changed", HISTORY)
+            unknown = ProviderHistoryState.UNKNOWN
+            rig.run(rig.encoder.repair(request, unknown, False, rig.records))
+        assert reopening.done()
+        rig.encoder.log.append(("synced", rig.clock.monotonic()))
+    reason = "go_away" if operation == "renew" else "provider_history_changed"
+    assert rig.encoder.log == [
+        ("connect", HISTORY, 0.0),
+        ("sync", reason, False, HISTORY),
+        ("synced", 1.0),
+    ]
+
+
 def test_the_state_says_whether_the_session_can_take_the_next_generation():
     with _rig(connected=False) as rig:
         states = [rig.encoder.state]
@@ -626,29 +650,36 @@ def test_a_persistent_session_must_manage_itself():
 class _FakeRealtime:
     """client.realtime of the OpenAI SDK: each connect opens a connection, numbered from 1, that
     logs each client event the driver sends as (connection, type, arguments), and its close. The
-    first ``refuse`` connects fail as a dropped connection does."""
+    first ``refuse`` connects fail as a dropped connection does; a client event of a type in
+    ``fail`` fails as a write on a dropped connection does."""
 
-    def __init__(self, refuse: int = 0):
+    def __init__(self, refuse: int = 0, fail: frozenset = frozenset()):
         self.log: list[tuple] = []
         self._numbers = itertools.count(1)
         self._refuse = refuse
+        self._fail = fail
 
     def connect(self, *, model, websocket_connection_options):
         if self._refuse:
             self._refuse -= 1
             raise ConnectionError("connection refused")
-        return _FakeConnectionManager(next(self._numbers), self.log)
+        return _FakeConnectionManager(next(self._numbers), self.log, self._fail)
 
 
 class _FakeConnectionManager:
-    def __init__(self, number: int, log: list):
-        self.number, self.log = number, log
+    def __init__(self, number: int, log: list, fail: frozenset = frozenset()):
+        self.number, self.log, self.fail = number, log, fail
 
     def __enter__(self):
-        number, log = self.number, self.log
+        number, log, fail = self.number, self.log, self.fail
 
         def client_event(kind):
-            return lambda **arguments: log.append((number, kind, arguments))
+            def send(**arguments):
+                if kind in fail:
+                    raise ConnectionError("connection dropped")
+                log.append((number, kind, arguments))
+
+            return send
 
         return SimpleNamespace(
             _connection=SimpleNamespace(
@@ -670,7 +701,7 @@ class _FakeConnectionManager:
         self.log.append((self.number, "close", {}))
 
 
-def _openai(refuse: int = 0) -> tuple[OpenAIRealtimeDriver, list]:
+def _openai(refuse: int = 0, fail: frozenset = frozenset()) -> tuple[OpenAIRealtimeDriver, list]:
     driver = OpenAIRealtimeDriver(
         ModelConfig(
             adapter_type="openai_realtime",
@@ -680,7 +711,7 @@ def _openai(refuse: int = 0) -> tuple[OpenAIRealtimeDriver, list]:
         )
     )
     driver.bind_trace(UNTRACED)
-    realtime = _FakeRealtime(refuse)
+    realtime = _FakeRealtime(refuse, fail)
     driver.client = SimpleNamespace(realtime=realtime)
     return driver, realtime.log
 
@@ -716,6 +747,26 @@ def test_openai_realtime_abort_cancels_the_response_and_the_next_use_replays():
     assert log[3][2]["event_id"].startswith("rtb_cancel_")
     assert [entry[2]["item"]["role"] for entry in log[-2:]] == ["user", "assistant"]
     assert records.calls == [(None, None, None)]
+
+
+def test_openai_realtime_records_a_write_that_failed_as_unknown():
+    """A client event whose write raised leaves the item it carried unknown in the event log, on
+    the connection it was written on: the server may or may not have it."""
+    driver, _ = _openai(fail=frozenset({"conversation.item.create"}))
+    trace = _Trace()
+    driver.bind_trace(trace)
+    turns = [turn(0)]
+
+    async def run():
+        await driver.connect(ConnectRequest(seed=SEED))
+        with pytest.raises(ConnectionError, match="^connection dropped$"):
+            await driver.send_observation(turns[0].observation, view(turns))
+
+    asyncio.run(run())
+    deliveries = [p for event, p, _ in trace.events if event == TraceEvent.SESSION_DELIVERY]
+    assert [
+        (d["state"], d["connection_id"], [c["block"] for c in d["contents"]]) for d in deliveries
+    ] == [("unknown", "openai_realtime.ws-1", ["d0.frame"])]
 
 
 def test_openai_realtime_rebuilds_a_dirty_session():
