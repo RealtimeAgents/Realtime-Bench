@@ -36,7 +36,7 @@ CLICK = Action(ActionType.CLICK, {"x": 1, "y": 2})
 ONE_CLICK = [Reply(1.6, (Call(0.9, CLICK, "c0"),))]
 
 
-def _episode(duration_s, replies, *, tmp_path=None, env_setup=None, logs=None):
+def _episode(duration_s, replies, *, tmp_path=None, env_setup=None, log=None, logs=None):
     clock = FakeClock()
     env, agent = FakeEnv(clock), FakeAgent(clock, replies)
     if env_setup is not None:
@@ -53,7 +53,7 @@ def _episode(duration_s, replies, *, tmp_path=None, env_setup=None, logs=None):
             env,
             StreamingConfig(duration_s=duration_s),
             clocks=Clocks(clock, clock),
-            log=logs.append,
+            log=log or logs.append,
             trace=trace,
         )
     if trace is not None:
@@ -381,6 +381,66 @@ def test_an_episode_whose_termination_record_raises_still_ends(monkeypatch, kern
     if kernel_breaks:
         assert env._invalid_run["reason"] == "run_exception"
         assert any(line.startswith("[streaming] wrapping up the episode failed") for line in logs)
+
+
+def _log_raising_on(prefix: str):
+    """A log whose stdout is gone for the lines that start with ``prefix``."""
+
+    def log(message: str) -> None:
+        if message.startswith(prefix):
+            raise BrokenPipeError("stdout gone")
+
+    return log
+
+
+def test_a_log_that_raises_on_a_lane_loses_the_line_only(monkeypatch):
+    """L3(a): the shell's frame handling raises on the capture lane, and so does the log of it.
+    The run is still invalid for the shell's exception, and the capture is still answered."""
+
+    def fingerprint(observation):
+        raise RuntimeError("fingerprint failed")
+
+    monkeypatch.setattr(episode_records, "observation_fingerprint", fingerprint)
+    termination, env, _ = _episode(6.0, ONE_CLICK, log=_log_raising_on("[streaming] shell raised"))
+    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
+    assert "fingerprint failed" in env._loop_error
+
+
+def test_a_log_that_raises_on_a_reply_worker_loses_the_line_only():
+    """A reply that fails, logged on its worker; the log raises, and the reply still finishes."""
+
+    def generate(generation, decision, observation, budget):
+        raise RuntimeError("the session broke")
+
+    clock = FakeClock()
+    env, agent = FakeEnv(clock), FakeAgent(clock, [])
+    agent.generate = generate
+    with clock.participant():
+        termination = run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=6.0),
+            clocks=Clocks(clock, clock),
+            log=_log_raising_on("[streaming] reply"),
+        )
+    assert termination.stop_reason == "invalid_run"
+    assert "the session broke" in termination.invalid.detail
+
+
+def test_a_snapshot_read_that_raises_any_exception_fails_the_snapshot():
+    """L3(b): a cancellation is a BaseException (entity/model.py RetryCancelled); the snapshot
+    thread must answer all the same, or the kernel would wait for it."""
+
+    def cancelled(env, clock):
+        def snapshot():
+            raise RetryCancelled("abandoned inside the snapshot read")
+
+        env.task.evaluation_snapshot = snapshot
+
+    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=cancelled)
+    assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
+    assert termination.invalid.reason == "evaluation_snapshot_failed"
+    assert "RetryCancelled" in env._termination_snapshot_error
 
 
 def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch, tmp_path):
