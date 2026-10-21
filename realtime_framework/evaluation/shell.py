@@ -112,11 +112,12 @@ class ShellEnvironment(Protocol):
     # Token clock: the key identities, as the environment names them, that the last execute()
     # holds with a hold_key; () otherwise. The shell passes them as ActionExecuted.held_keys.
     last_held_keys: tuple[str, ...]
-    # The state reads of the end checks the last execute() made inside the action, in order: None
-    # for one that answered, the error of one that failed; () when it made none. Only a token-clock
-    # key tap makes them, after each step of its advance; one that sees the end stops the tap, a
-    # failed one does not. The shell passes them as ActionExecuted.end_checks.
-    last_end_checks: tuple[str | None, ...]
+    # The state reads of the end checks the last execute() made inside the action, in order, each
+    # (ended, reason, error): what check_end() answered with no error, or (False, None, the error)
+    # for one that failed; () when it made none. Only a token-clock key tap makes them, after each
+    # step of its advance; one that sees the end stops that advance, a failed one does not. The
+    # shell passes them as ActionExecuted.end_checks.
+    last_end_checks: tuple[tuple[bool, str | None, str | None], ...]
     # Set by the shell before the episode: the kernel counts failed state reads, so a failed read
     # inside execute() goes to last_end_checks instead of latching the run invalid. The legacy
     # loop leaves it False.

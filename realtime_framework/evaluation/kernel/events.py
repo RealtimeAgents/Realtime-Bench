@@ -135,10 +135,12 @@ class ActionExecuted:
     held_keys: tuple[str, ...] = ()  # token clock: key identities a hold_key now holds
     rejection: str | None = None  # the guest refused the action; the run stays valid
     error: str | None = None  # the environment failed; the run is invalid
-    # The state reads of a tap's end checks, in order: None for one that answered, the error of one
-    # that failed. They count toward the failed reads in a row like the kernel's own checks. One
-    # that saw the end stopped the tap; the check right after execution asks again.
-    end_checks: tuple[str | None, ...] = ()
+    # The state reads of a tap's end checks, in order, each (ended, reason, error): an answer and
+    # the task's reason when it names one, or (False, None, the error) for one that failed. They
+    # count toward the failed reads in a row like the kernel's own checks. One that saw the end
+    # stopped the tap's advance, and the episode ends at the tick the action finished, by the
+    # task's reason.
+    end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
 
     @property
     def priority(self) -> Priority:
@@ -159,9 +161,10 @@ class ClockStepped:
 
 @dataclass(frozen=True)
 class KeysReleased:
-    """Keys whose lease ended were released: by ReleaseKeys on the token clock, or by the shell's
-    release timer on the wall clock. A release that failed for good, after the timer's retries on
-    the wall clock, carries its error and invalidates the run on either clock."""
+    """The answer to ReleaseKeys, on the token clock; a release that failed carries its error
+    and invalidates the run. On the wall clock the environment's own timer releases a hold's keys
+    and reports only one that failed for good, after its retries, as an Invalidated
+    (sandbox/actions.py GuestEnvironment._wall_release_due)."""
 
     keys: tuple[str, ...]
     error: str | None = None

@@ -9,6 +9,11 @@ stay inside the generation, as today: a Decision call asks all its questions the
 interrupted between them, and Gemini Live acknowledges tool calls there; the kernel only numbers
 their records and discards a result that comes back after an abort.
 
+The state is read at most once a frame, and once more after every action: the token clock reads
+the frame each step of a move comes to, the wall clock each environment frame when it begins;
+the loop top and the check before landing read only a frame not read yet. A tap's own reads, in
+the environment, are the reads of the frames it steps to.
+
 The three clocks differ in five places: the bound on one call, the action time, whether the clock
 moves to the action time before landing, the finite-B allowance, and the frame age. Frame times use
 both rates (phase2.md, 帧率): B counts tokens per input frame, observations sit on the input-frame
@@ -191,12 +196,13 @@ class TurnPolicy:
         # Token-clock key leases in press order: key -> release tick.
         self.leases: dict[str, float] = {}
         self._frozen = _FrozenStream(config.timing.observation_freeze_n)
-        self._asked: dict[int, float] = {}  # end checks out: request -> semantic time asked
         self._failed_reads = 0  # state reads failed in a row
+        self._read_frame: float | None = None  # the frame of the last state read (_frame)
         self._awaited: tuple[int, Callable] | None = None  # the end check the loop waits on
         self._then: Callable | None = None  # what follows the clock move in progress
         self._target = 0.0
         self._released: Callable | None = None  # what follows the key release in progress
+        self._stepping = False  # an AdvanceClock or ReleaseKeys not answered yet
 
     @property
     def settled(self) -> bool:
@@ -260,10 +266,16 @@ class TurnPolicy:
             self._moved()
 
     def on_end(self) -> None:
-        """Settle the decision in hand once the episode is over; nothing lands after the end."""
+        """Settle the decision in hand once the episode is over; nothing lands after the end. A
+        clock step or key release out settles it on its answer, as an execution does: another end
+        can come before that answer, and a wait whose own step failed is still a failed action."""
         self._awaited = None
         self._then = None
         self._released = None
+        if not self._stepping:
+            self._settle()
+
+    def _settle(self) -> None:
         phase = self.phase
         if phase in (_Phase.GUARD, _Phase.CAPTURE, _Phase.GENERATE, _Phase.HORIZON):
             self.phase = _Phase.SETTLED
@@ -298,7 +310,7 @@ class TurnPolicy:
         if self._past_deadline():
             return
         # The horizon is tested after the end check (runner.py run_stream).
-        if self.token and self._tick() >= self.config.max_ticks:
+        if self.token and self._horizon_reached():
             self.phase = _Phase.SETTLED
             return self.kernel.end("horizon", self.config.max_ticks)
         self.phase = _Phase.CAPTURE
@@ -306,18 +318,18 @@ class TurnPolicy:
 
     def _captured(self, event: FrameCaptured) -> None:
         kernel, config = self.kernel, self.config
+        # Also once the episode is over: the capture was under way at the end, and today's loop
+        # judges every frame it captures, failed or frozen (runner.py _decide).
         if event.error is not None:
-            # Also once the episode is over: the capture was under way at the end, and today's
-            # loop judges every failed capture (runner.py _decide).
             self.phase = _Phase.SETTLED
             return kernel.invalidate("environment", "observation_capture_failed", event.error)
-        if self.phase is not _Phase.CAPTURE:
-            return
         if self._frozen.observe(event.fingerprint, kernel.ops):
             self.phase = _Phase.SETTLED
             return kernel.invalidate(
                 "environment", "observation_stream_frozen", repr(event.fingerprint)
             )
+        if self.phase is not _Phase.CAPTURE:
+            return
         if self._past_deadline():
             return
         d = self.decision = _Decision(
@@ -484,7 +496,7 @@ class TurnPolicy:
             return
         # The horizon ends the episode at the next loop top, as today (runner.py _land_action,
         # run_stream).
-        if self.token and self._tick() >= self.config.max_ticks:
+        if self.token and self._horizon_reached():
             return self._resolve("not_applied_tick_limit")
         d, kernel = self.decision, self.kernel
         d.execute_at = kernel.semantic
@@ -505,9 +517,16 @@ class TurnPolicy:
         if self.phase is not _Phase.EXECUTE:
             return
         d, kernel = self.decision, self.kernel
-        # A tap's end checks were made before the action finished.
-        for error in event.end_checks:
+        # A tap's end checks were made before the action finished, the last on the frame it
+        # stopped at. One that saw the end ends the episode there, by the task's reason; no
+        # check follows.
+        if event.end_checks:
+            self._read_frame = self._frame()
+        for ended, reason, error in event.end_checks:
             if self._count_read(error):
+                break
+            if ended:
+                kernel.end("environment", kernel.semantic, reason=reason)
                 break
         # A refusal or a failure leaves its own execution record (sandbox/actions.py
         # GuestEnvironment._execution_failed).
@@ -530,7 +549,7 @@ class TurnPolicy:
         if self.kernel.ending is not None:
             return self._resolve(status, terminal_after_action=True)
         self.phase = _Phase.POST_CHECK
-        self._check_end(lambda: self._resolve(status))
+        self._check_end(lambda: self._resolve(status), after_action=True)
 
     def _lease(self, keys: tuple[str, ...]) -> None:
         """Token clock: a hold keeps each key down until its lease ends, and a held key is only
@@ -564,15 +583,19 @@ class TurnPolicy:
             d.execution_result = {"error": d.failed}
             return self._resolve("invalid_run")
         started, duration = d.wait
-        elapsed = round(max(0.0, (self._position() - started) / config.env_fps), 9)
+        # The wait lasts until the end, though the end can be handled later, behind a synchronous
+        # command: today's sleep(min(duration, remaining)) stops at the deadline.
+        ending = self.kernel.ending
+        until = self.kernel.semantic if ending is None else min(self.kernel.semantic, ending.at)
+        position = until if self.token else until * config.env_fps
+        elapsed = round(max(0.0, (position - started) / config.env_fps), 9)
         horizon_truncates = self.token and started + duration * config.env_fps > (
             config.max_ticks + 1e-9
         )
-        by_horizon = horizon_truncates and self._tick() >= config.max_ticks - 1e-9
+        by_horizon = horizon_truncates and self._horizon_reached()
         # The wall deadline cuts a wait as today's sleep does, which flags neither truncation
         # (sandbox/actions.py GuestEnvironment.execute); the task's end or an invalidation cuts it
         # on either clock.
-        ending = self.kernel.ending
         by_deadline = ending is not None and ending.cause == "deadline"
         d.execution_result = {
             "duration_simulated_seconds": elapsed,
@@ -585,7 +608,7 @@ class TurnPolicy:
         self._after_execution("wait")
 
     def _resolve(self, status: str, terminal_after_action: bool = False) -> None:
-        d, kernel, config = self.decision, self.kernel, self.config
+        d, kernel = self.decision, self.kernel
         d.status, d.terminal_after_action = status, terminal_after_action
         record = {
             "decision": d.index,
@@ -602,12 +625,13 @@ class TurnPolicy:
             kernel.record(TraceEvent.ACTION_APPLIED.value, **record)
         d.next_tick = self._tick()
         # Pace whether or not an action landed, so an empty decision cannot repeat within one
-        # frame; never after the end (runner.py _apply).
+        # frame; never after the end, nor from the horizon on, on either clock: on the wall clock
+        # an answer filed before the deadline can be handled after it (runner.py _apply).
         if (
             not terminal_after_action
             and status not in {"not_applied_terminal", "invalid_run"}
             and kernel.ending is None
-            and (not self.token or self._tick() < config.max_ticks)
+            and not self._horizon_reached()
         ):
             action_end = max(float(d.tau), float(self._tick()))
             d.next_tick = self._next_observation_tick(d.t_k, action_end)
@@ -709,25 +733,30 @@ class TurnPolicy:
 
     # ---- end checks -------------------------------------------------------------------------
 
-    def _check_end(self, then: Callable | None) -> None:
-        """Ask whether the episode is over; ``then`` runs when it is not."""
+    def _check_end(self, then: Callable | None, *, after_action: bool = False) -> None:
+        """Ask whether the episode is over; ``then`` runs when it is not. The state is read at
+        most once a frame, besides once after every action: a frame read already is not asked
+        again, and ``then`` runs at once."""
         if then is not None and self._past_deadline():
             return
+        if not after_action and self._read_frame == self._frame():
+            return None if then is None else then()
+        self._read_frame = self._frame()
         request = self.kernel.request()
-        self._asked[request] = self.kernel.semantic
         if then is not None:
             self._awaited = (request, then)
         self.kernel.emit(CheckEnd(request))
 
     def _schedule_end_check(self) -> None:
-        # The wall clock is checked at the environment frame rate, during generations too.
+        # The wall clock's world comes to a new environment frame at each of these; the state is
+        # read then, during generations too, unless that frame was read already.
         fps = self.config.env_fps
         at = (_floor(self.kernel.semantic * fps) + 1) / fps
         self.kernel.set_timer("end_check", Clock.SEMANTIC, at, Priority.START)
 
     def _end_checked(self, event: EndChecked) -> None:
-        asked_at = self._asked.pop(event.request)
         kernel = self.kernel
+        asked_at = kernel.asked_at(event.request)
         if kernel.ending is not None:
             return
         if self._count_read(event.error):
@@ -777,13 +806,17 @@ class TurnPolicy:
             if step <= 1e-9:
                 # A lease ending at this tick is released without an end check.
                 return self._release(self._advance)
+        self._stepping = True
         self.kernel.emit(AdvanceClock(step))
 
     def _clock_stepped(self, event: ClockStepped) -> None:
-        if self._then is None:
+        if not self._stepping:
             return
+        self._stepping = False
         if event.error is not None:
             return self._step_failed("clock_advance_failed", event.error)
+        if self.kernel.ending is not None:
+            return self._settle()
         self._release(lambda: self._check_end(self._advance))
 
     def _step_failed(self, reason: str, error: str) -> None:
@@ -792,7 +825,10 @@ class TurnPolicy:
         GuestEnvironment._release_clock_keys). A wait whose own step failed is a failed action."""
         if self.phase is _Phase.WAIT:
             self.decision.failed = error
+        ended = self.kernel.ending is not None
         self.kernel.invalidate("environment", reason, error)
+        if ended:
+            self._settle()
 
     def _release(self, then: Callable) -> None:
         tick = self._tick()
@@ -802,21 +838,31 @@ class TurnPolicy:
         for key in keys:
             del self.leases[key]
         self._released = then
+        self._stepping = True
         self.kernel.emit(ReleaseKeys(keys))
 
     def _keys_released(self, event: KeysReleased) -> None:
-        if event.error is not None:
-            if self.token:
-                return self._step_failed("clock_key_release_failed", event.error)
-            # The environment's reason (sandbox/actions.py GuestEnvironment._wall_release_due).
-            return self.kernel.invalidate("environment", "wall_key_release_failed", event.error)
-        # Wall-clock releases come from the shell's own timer and need no answer.
-        if self._released is None:
+        if not self._stepping:
             return
+        self._stepping = False
+        if event.error is not None:
+            return self._step_failed("clock_key_release_failed", event.error)
+        if self.kernel.ending is not None:
+            return self._settle()
         then, self._released = self._released, None
         then()
 
     # ---- clock arithmetic -------------------------------------------------------------------
+
+    def _horizon_reached(self) -> bool:
+        """The tick is at the horizon, within 1e-9 as a move is at its target (_advance): a move
+        cut at a horizon off the tick grid stops a float short of it."""
+        return self._tick() >= self.config.max_ticks - 1e-9
+
+    def _frame(self) -> float:
+        """The frame a state read reads: on the token clock the position, which every step of a
+        move makes a new frame; on the wall clock the environment frame."""
+        return self.kernel.semantic if self.token else self._tick()
 
     def _tick(self) -> float:
         """The environment tick: the token clock itself, or whole wall frames since the origin."""
@@ -831,7 +877,13 @@ class TurnPolicy:
         return self.kernel.semantic * self.config.env_fps
 
     def _semantic_of(self, tick: float) -> float:
-        return tick if self.token else tick / self.config.env_fps
+        """The semantic time of a tick. On the wall clock the horizon's is the deadline, a few ulp
+        past horizon / env_fps once the horizon snapped to a whole tick."""
+        if self.token:
+            return tick
+        if tick >= self.config.max_ticks - 1e-9:
+            return self.config.duration_s
+        return tick / self.config.env_fps
 
     def _frames(self, ticks: float) -> float:
         """Environment ticks as input frames."""
