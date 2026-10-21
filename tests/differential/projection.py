@@ -49,6 +49,9 @@ class Projection:
     compared: dict
     facts: dict = field(default_factory=dict)
     beyond: dict | None = None
+    # What the shell and the simulation compare and today's loop does not: on the wall clock
+    # every state read before the snapshot, {"at", "answer"} (decision 31; N29).
+    kernel: dict | None = None
 
     @property
     def decisions(self) -> dict[int, dict]:
@@ -60,8 +63,31 @@ class Projection:
 
     def copy(self) -> Projection:
         return Projection(
-            self.side, copy.deepcopy(self.compared), self.facts, copy.deepcopy(self.beyond)
+            self.side,
+            copy.deepcopy(self.compared),
+            self.facts,
+            copy.deepcopy(self.beyond),
+            copy.deepcopy(self.kernel),
         )
+
+
+# A decision's trace records, each written once (Once).
+ONCE = ("InferenceStarted", "ActionProposed", "ClockAdvanced", "ActionResolved", "ActionApplied")
+
+
+class Once:
+    """Each decision writes each of its records once, a ClockAdvanced once a phase: one written
+    again would go unseen where the projection keeps the last."""
+
+    def __init__(self) -> None:
+        self.seen: set[tuple] = set()
+        self.again: list[str] = []
+
+    def __call__(self, kind: str, k: int, phase: str | None = None) -> None:
+        key = (kind, k, phase)
+        if key in self.seen:
+            self.again.append(f"{kind}[{k}]" + (f".{phase}" if phase else ""))
+        self.seen.add(key)
 
 
 def earlier(a: float, b: float) -> bool:

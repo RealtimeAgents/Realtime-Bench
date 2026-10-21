@@ -40,7 +40,16 @@ from tests.replay.test_openrouter import MODEL_KEY as OPENROUTER_MODEL_KEY
 from tests.replay.token_env import TokenEnvironment
 
 from . import drivers
-from .projection import Projection, decision, earlier, ends_the_run, key_releases, wait_record
+from .projection import (
+    ONCE,
+    Once,
+    Projection,
+    decision,
+    earlier,
+    ends_the_run,
+    key_releases,
+    wait_record,
+)
 from .script import Script, action_key, reply_text
 from .simulated import STATE_READ_FAILED, turn_config
 
@@ -711,6 +720,7 @@ def project(script: Script, env, side: str) -> Projection:
     started_at, finished_at, resolved_at, committed_at, timeout_reasons = {}, {}, {}, {}, {}
     executed_at = {}
     taps, reads, records, aborts, requested, extras = [], [], 0, 0, [], []
+    kernel_reads, once = [], Once()
     commits, snapshot_after, aborted_at, output_tokens = 0, None, [], {}
     first_end, ended_before_commit = None, {}
     trace = {kind: {} for kind in TRACED}
@@ -723,6 +733,8 @@ def project(script: Script, env, side: str) -> Projection:
             event, payload, at = call["event"], call["payload"], call["at"]
             if event in TRACED:
                 trace[event].setdefault(payload.get("decision"), []).append(normalize(payload))
+            if event in ONCE:
+                once(event, payload["decision"], payload.get("phase"))
             if event == "InferenceStarted":
                 of(payload["decision"])["observed"] = payload["observation_tick"]
                 started_at[payload["decision"]] = at
@@ -773,12 +785,14 @@ def project(script: Script, env, side: str) -> Projection:
         elif name == "agent.commit_action":
             # The environment numbers its calls by capture, and each decision captures once.
             k = call["decision"]
+            once("commit", k)
             of(k)["commit"] = {"status": call["status"], "detail": call["detail"]}
             committed_at[k] = call["at"]
             ended_before_commit[k] = first_end is not None
             commits += 1
         elif name == "env.record_lifecycle":
             record = call["record"]
+            once("lifecycle", record["decision"])
             d = of(record["decision"])
             d["outcome"] = {field: record[field] for field in OUTCOME_FIELDS} | {
                 "frame_age_s": record["frame_age_at_action_s"]
@@ -809,6 +823,8 @@ def project(script: Script, env, side: str) -> Projection:
                 extras.append(call["extra"])
         elif name == "diff.check" and call["answer"] not in ("invalid_run", "deadline"):
             reads.append((call["at"], call["answer"], call.get("kernels", True)))
+            if side == "shell" and not call["finalizing"]:
+                kernel_reads.append({"at": call["at"], "answer": call["answer"]})
         elif name == "diff.release_keys" and side == "shell":
             key_ups.append({"at": call["tick"] * seconds, "keys": call["keys"], "in_tap": False})
         elif name == "diff.key_up" and not call["finalizing"] and not (token and side == "shell"):
@@ -845,6 +861,7 @@ def project(script: Script, env, side: str) -> Projection:
         },
         "snapshot_after": snapshot_after,
         "invalidation_records": records,
+        "duplicates": once.again,
     }
     facts = {
         "started_at": started_at,
@@ -880,4 +897,5 @@ def project(script: Script, env, side: str) -> Projection:
     # "synthesized": what the records of a call the shell gave up on say, by decision
     # (rules._abandoned).
     beyond = {"requests": env.requests, "usage": env.usage, "trace": trace, "synthesized": {}}
-    return Projection(side, {"decisions": decisions, "episode": episode}, facts, beyond)
+    kernel = None if token or side != "shell" else {"reads": kernel_reads}
+    return Projection(side, {"decisions": decisions, "episode": episode}, facts, beyond, kernel)

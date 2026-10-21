@@ -26,7 +26,9 @@ class ExpectationNotShown(UserWarning):
 def compare(script: Script, run_dir: Path) -> Verdict:
     shell = replay(script, _subdir(run_dir, "shell"), drivers.shell)
     verdict = check(script, _legacy(script, run_dir), shell)
-    verdict.apart, _ = differences(shell.compared, simulate(script).compared)
+    simulated = simulate(script)
+    verdict.apart, _ = differences(shell.compared, simulated.compared)
+    verdict.apart += differences(shell.kernel, simulated.kernel, "kernel")[0]
     return verdict
 
 

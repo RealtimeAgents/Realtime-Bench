@@ -20,7 +20,7 @@ from realtime_framework.evaluation.kernel.events import (
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from tests.kernel.simulation import Reply, Simulation, World
 
-from .projection import Projection, decision, key_releases, wait_record
+from .projection import ONCE, Once, Projection, decision, key_releases, wait_record
 from .script import Script, action_key, sim_action
 
 NEVER_S = 1e9  # a call that is never answered
@@ -86,6 +86,7 @@ class ScriptedSimulation(Simulation):
         super().__init__(config, world)
         self.script = script
         self.applied = 0
+        self.reads: list[dict] = []  # every end check, with its answer
 
     def _execute(self, decision: int, action, release_at) -> None:
         world = self.world
@@ -101,9 +102,21 @@ class ScriptedSimulation(Simulation):
             world.ends_at = now if world.ends_at is None else min(world.ends_at, now)
 
     def _run(self, command) -> None:
-        if isinstance(command, CheckEnd) and self.script.read_fails_at(self.semantic()):
-            self.world.check_errors[len(self.checks) + 1] = STATE_READ_FAILED
+        if not isinstance(command, CheckEnd):
+            return super()._run(command)
+        world, asked = self.world, self.semantic()
+        if self.script.read_fails_at(asked):
+            world.check_errors[len(self.checks) + 1] = STATE_READ_FAILED
         super()._run(command)
+        # Its answer, as Simulation._run gives it.
+        failed = len(self.checks) in world.check_errors
+        ended = not failed and (
+            (world.ends_at is not None and asked >= world.ends_at)
+            or (world.ends_from_check is not None and len(self.checks) >= world.ends_from_check)
+        )
+        self.reads.append(
+            {"at": asked, "answer": "failed" if failed else "task" if ended else None}
+        )
 
 
 def simulate(script: Script) -> Projection:
@@ -172,8 +185,11 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
     def of(k: int) -> dict:
         return decisions.setdefault(k, decision())
 
+    once = Once()
     for entry in sim.records:
         data = entry.data
+        if entry.kind in ONCE:
+            once(entry.kind, data["decision"], data.get("phase"))
         if entry.kind == "InferenceStarted":
             d = of(data["decision"])
             d["observed"] = data["observation_tick"]
@@ -226,6 +242,8 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
     for command in sim.commands:
         if isinstance(command, Commit):
             outcome = command.outcome
+            once("commit", outcome.decision)
+            once("lifecycle", outcome.decision)
             d = of(outcome.decision)
             d["commit"] = {"status": outcome.status, "detail": outcome.detail}
             d["outcome"] = {
@@ -270,5 +288,11 @@ def project(script: Script, sim: ScriptedSimulation) -> Projection:
         },
         "snapshot_after": snapshot_after,
         "invalidation_records": sim.kinds().count("RunInvalidated"),
+        "duplicates": once.again,
     }
-    return Projection("simulation", {"decisions": decisions, "episode": episode})
+    kernel = (
+        None
+        if token
+        else {"reads": [read for read in sim.reads if read["at"] <= termination.ended_at]}
+    )
+    return Projection("simulation", {"decisions": decisions, "episode": episode}, kernel=kernel)
