@@ -15,7 +15,9 @@ wrote: ``annotate_result`` (the observation id the inspection proof is checked a
 ``frame_usage`` between two ``usage_snapshot`` readings, ``account_tokens``, the
 ``output_chunks`` and ``inference_completed`` payloads, ``audit_output_caps``,
 ``finalize_decision_audit`` and last ``result_invalid``. A failed trajectory write is recorded on
-``r`` over any failure already there, so it takes precedence.
+``r`` over any failure already there, so it takes precedence. The kernel's shell measures
+``frame_usage`` after ``account_tokens``: an agent that holds its result adds its usage only as it
+accepts it, after the clock's count is needed, and the shell measures the frame's usage again then.
 
 What the kernel's GenerationResult takes from a settled ``r``: ``action`` is ``r["action"]``, a
 DONE or FAIL as it came; ``output_tokens`` the count before the allowance clamped it, which the
