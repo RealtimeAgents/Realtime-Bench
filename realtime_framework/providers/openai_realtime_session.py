@@ -2,18 +2,19 @@
 
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it and the execution-feedback item after those, and the archived-action
-ledger item; in native streaming, an item for each block of the streaming history view, a frame,
-a reply's output or an execution feedback, in the order the agent accepted them, feedback placed
-in front of a frame going into the frame's item. From a history view it plans the item creates
-and deletes that bring the server there, and it records what became of each one, which the
-driver writes to the event log: unknown while it is written, sent once the write returned,
+ledger item; in native streaming, the item of each frame and each execution feedback the driver
+pushed (feedback placed in front of a frame goes into the frame's item), each after the item the
+server put it after, a reply's items being the server's. From a history view it plans the item
+creates and deletes that bring the server there, and it records what became of each one, which
+the driver writes to the event log: unknown while it is written, sent once the write returned,
 acknowledged once the server confirmed it, refused if the server answered a native-streaming
 push with an error. Each server event the driver reads is handed to ``receive``, in the order the
 connection delivered it, which passes it to the state it belongs to: an acknowledgement or error
 settles the in-place edit waiting for it, an error about a block native streaming pushed refuses
-that block alone, a response event joins its generation. Sending and receiving are the driver's;
-it reads only while something waits for an event, so what arrives after the last wait reaches the
-core with the next read.
+that block alone, a response event joins its generation. Sending and receiving are the driver's.
+On a turn-based session it reads only while something waits for an event, so what arrives after
+the last wait reaches the core with the next read; native streaming's reader reads every event as
+it arrives and hands it to ``arrived``.
 """
 
 from __future__ import annotations
@@ -89,7 +90,8 @@ def _unrecorded(state: str, contents: list[tuple]) -> None:
 
 @dataclass
 class SentFrame:
-    """A frame as the driver last wrote it into the conversation."""
+    """A frame as the driver last wrote it into the conversation; in native streaming, an
+    execution feedback the driver pushed as well."""
 
     user_item_id: str
     text: str
@@ -138,8 +140,8 @@ class EditBatch:
 @dataclass(frozen=True)
 class ViewFrame:
     """One frame of a history view, with the frame prefix before it, and the output and the
-    execution feedback after it; of a native-streaming view, one block, a frame with the prefix
-    before it."""
+    execution feedback after it; of a native-streaming view, one block of any kind, a frame with
+    the prefix before it."""
 
     item: RequestItem
     prefix: str = ""
@@ -178,10 +180,9 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
 
 def streaming_blocks(items) -> list[ViewFrame]:
     """Read a native-streaming history view (harnesses/streaming/history.py): its blocks in the
-    order the agent accepted them, frames, replies' outputs and execution feedback, each one item
-    of the session. Feedback the policy places in front of a frame is that frame's prefix, as a
-    turn-based frame's is; the feedback waiting at the end for the next frame is not yet any
-    item's."""
+    order the agent accepted them, frames, replies' outputs and execution feedback. Feedback the
+    policy places in front of a frame is that frame's prefix, as a turn-based frame's is; the
+    feedback waiting at the end for the next frame is not yet any block's."""
     blocks, prefix = [], ""
     for item in items:
         if item.intent.position == "frame_prefix":
