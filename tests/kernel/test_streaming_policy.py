@@ -711,6 +711,44 @@ def test_a_push_stuck_after_the_rebuild_with_the_end_before_its_watchdog_leaves_
     assert sim.termination == Termination("time_limit", "deadline", 5.0, 5.0, 5.0, 5.0, None)
 
 
+@pytest.mark.parametrize(
+    "errors",
+    [{2: "item rejected", 4: "item rejected"}, {4: "item rejected", 5: "item rejected"}],
+)
+def test_a_session_rebuilt_for_a_stuck_push_counts_its_own_failed_pushes_only(errors):
+    """The third push hangs; its watchdog gives the reply up at 4, and the abort fails that push.
+    It was the old session's, as was a failure before it: the rebuilt session has failed one or
+    two pushes, not three in a row, and the run goes on."""
+    sim = _run(World(push_errors=errors, stuck_pushes={3}), 12.0, push_watchdog_s=2.0)
+    assert [data["reason"] for data in sim.data("GenerationAbandoned")] == [
+        "push_watchdog",
+        "deadline",
+    ]
+    assert sim.termination.invalid is None
+
+
+def test_the_watchdogs_after_a_slow_abort_count_from_when_it_returned():
+    """The second push hangs and its watchdog gives the reply up at 11; the abort holds the shell
+    until 21.5 and fails that push as it closes the session. The rebuilt session and its reply
+    have their whole watchdogs from then, so the next frame goes in and the run goes on."""
+    sim = _run(World(stuck_pushes={2}, abort_s=10.5), 30.0)
+    assert sim.data("GenerationAbandoned") == [
+        {"generation": 1, "reason": "push_watchdog"},
+        {"generation": 2, "reason": "deadline"},
+    ]
+    assert sim.started == [(1, 0.0), (2, 21.5)]
+    assert sim.termination.invalid is None
+
+
+def test_the_reply_after_a_slow_abort_has_its_whole_watchdog():
+    """No reply ends. The first is given up at 4 and the abort holds the shell until 7, when the
+    next one starts: its watchdog gives it up at 11, not 8. That abort runs past the deadline at
+    12, so no reply starts after it."""
+    sim = _run(World(abort_s=3.0), 12.0, reply_watchdog_s=4.0)
+    assert sim.aborted == [(1, 4.0), (2, 11.0)]
+    assert sim.started == [(1, 0.0), (2, 7.0)]
+
+
 def test_a_push_stuck_before_the_first_reply_invalidates_the_run():
     """There is no reply to give up, so no session to rebuild."""
     sim = _run(World(push_times={1: 12.0}), 5.0, push_watchdog_s=2.0)

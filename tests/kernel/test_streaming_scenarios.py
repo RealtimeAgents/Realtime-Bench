@@ -351,6 +351,7 @@ def _random_world(rng: random.Random, config: StreamingConfig) -> World:
         release_errors={"a": "xdotool failed"} if rng.random() < 0.03 else {},
         snapshot_error=rare("snapshot failed", 0.03),
         frozen_from=rare(rng.randrange(0, 6), 0.03),
+        abort_s=rng.choice((0.0, 0.0, 0.0, 1.0, 12.0)),
     )
 
 
@@ -390,6 +391,7 @@ def test_the_random_scripts_reach_the_states_that_matter():
         "an action the end kept from executing": 30,
         "a capture during an action": 85,
         "the deadline waits for the read after an action": 2,
+        "a reply started after a slow abort": 13,
     }
     assert {state: reached[state] >= floor for state, floor in floors.items()} == dict.fromkeys(
         floors, True
@@ -435,5 +437,9 @@ COVERAGE = {
     ),
     "the deadline waits for the read after an action": lambda sim: any(
         op[0] == "check" and op[2] >= sim.config.duration_s for op in sim.operations
+    ),
+    "a reply started after a slow abort": lambda sim: (
+        sim.world.abort_s > 0
+        and any(start > at for _, at in sim.aborted for _, start in sim.started)
     ),
 }
