@@ -28,6 +28,7 @@ commits joins it as its execution feedback (feedback.py), where the policy place
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
@@ -55,6 +56,7 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     PendingDecision,
     ProviderObservation,
+    RetryCancelled,
     SessionSeed,
     retry_cancellation,
 )
@@ -139,6 +141,9 @@ class NativeStreamingAgent(VisionAgentBase):
         # The episode's operational clock; on the wall clock it is the semantic one as well.
         self.clock = clock or SystemClock()
         self._lock = threading.Lock()  # the blocks and the replies; the shell's threads share them
+        # Held, on the execution thread, while a push readies the session and while a reply
+        # readies it and is asked for: no push reopens the session between the two.
+        self._readying = asyncio.Lock()
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
@@ -265,13 +270,14 @@ class NativeStreamingAgent(VisionAgentBase):
         )
 
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
-        with self._lock:
-            view = self._view()
-            # Renewing the connection would end a reply on it, and one that ended is renewed
-            # from once its output is accepted: meanwhile a session that asked to be renewed
-            # refuses the frame.
-            replying = bool(self._replies)
-        await self._ready(view, renew=not replying)
+        async with self._readying:
+            with self._lock:
+                view = self._view()
+                # Renewing the connection would end a reply on it, and one that ended is renewed
+                # from once its output is accepted: meanwhile a session that asked to be renewed
+                # refuses the frame.
+                replying = bool(self._replies)
+            await self._ready(view, renew=not replying)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
@@ -325,19 +331,25 @@ class NativeStreamingAgent(VisionAgentBase):
             await self.driver.renew(self._seed, view, self._record_session)
 
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
-        with self._lock:
-            view = self._view()
-        await self._ready(view, renew=True)
-        request = GenerationRequest(
-            generation_id=f"streaming-{reply.generation}",
-            provider_output_token_cap=budget.provider_output_tokens,
-            transport_output_token_cap=budget.transport_output_tokens,
-            clock_mode="wall",
-            canonical=view,
-            generation=reply.generation,
-        )
         try:
-            reply.handle = await self.driver.request_reply(request)
+            async with self._readying:
+                with self._lock:
+                    view = self._view()
+                await self._ready(view, renew=True)
+                # A push may have reopened the session for the reply after it was given up:
+                # asked for then, it would run beside the next one (context.py _run_turn).
+                if reply.cancel.is_set():
+                    raise RetryCancelled("generation abandoned before its reply")
+                reply.handle = await self.driver.request_reply(
+                    GenerationRequest(
+                        generation_id=f"streaming-{reply.generation}",
+                        provider_output_token_cap=budget.provider_output_tokens,
+                        transport_output_token_cap=budget.transport_output_tokens,
+                        clock_mode="wall",
+                        canonical=view,
+                        generation=reply.generation,
+                    )
+                )
             async for event in self.driver.events(reply.handle):
                 self._take(reply, event)
             if not reply.cancel.is_set():
