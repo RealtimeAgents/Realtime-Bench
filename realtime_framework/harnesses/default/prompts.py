@@ -253,6 +253,12 @@ UNSUPPORTED_TERMINAL_ACTION_FEEDBACK = (
     "executed. The environment determines when the episode ends."
 )
 
+# Notes on a decision of which no answer was accepted: the model never saw its frame.
+UNANSWERED_STEP_NOTES = {
+    "skipped_timeout": "NOTE: a step timed out at the per-move cap before your answer arrived; no action was executed.",
+}
+UNANSWERED_STEP_NOTE = "NOTE: no answer was accepted for a step; no action was executed."
+
 ACTION_RESULT_NOTES = {
     "none": INVALID_ACTION_FEEDBACK,
     "skipped_timeout": "NOTE: your previous action was SKIPPED because it exceeded the per-move cap; nothing was applied.",
