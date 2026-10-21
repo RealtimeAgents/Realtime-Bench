@@ -39,13 +39,10 @@ def test_the_shell_steps_only_when_something_is_due(steps):
     episode = run("wall", 3.0, [Reply(2.5)])
     assert episode.statuses() == ["applied"]
     assert sorted({semantic for semantic, _, _ in steps}) == [0.0, 1.0, 2.0, 2.5, 3.0]
-    # Each sleep ended on something due: the step right after it handled it, or, woken by a
-    # returned result, it found nothing else due and the step that took the result came next.
+    # Each sleep ended on something due, a returned result too: the step right after it handled
+    # it.
     idle = [index for index, (_, _, due) in enumerate(steps) if not due]
-    for index in idle[:-1]:
-        _, _, due = steps[index + 1]
-        if not due:
-            assert steps[index + 2][2] and steps[index + 2][0] == steps[index + 1][0]
+    assert all(steps[index + 1][2] for index in idle)
 
 
 @pytest.mark.parametrize(
@@ -67,6 +64,15 @@ def test_a_result_just_before_the_deadline_is_handled_before_it(seconds, statuse
         assert episode.agent.calls[0] == ("abort", 1)
     assert episode.env._termination["stop_reason"] == "time_limit"
     assert episode.env._termination["end_s"] == 3.0
+
+
+def test_a_result_is_settled_though_every_end_check_takes_a_frame():
+    """At 1 fps every end check takes 1 s, so one falls due at every reading the shell takes.
+    Only a bound on the generation (the deadline, the cap, the watchdog) holds a result back:
+    the one back at 2.5 s is taken when the check that took it in is over."""
+    episode = run("wall", 5.0, [Reply(1.5), Reply(1.5)], World(check_s=1.0))
+    assert episode.statuses()[0] == "applied"
+    assert episode.agent.calls[0] == ("accept", 1)
 
 
 class _SlowTrajectory(Agent):
