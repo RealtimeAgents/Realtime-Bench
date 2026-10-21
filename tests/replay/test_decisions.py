@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
@@ -35,7 +36,7 @@ from .build import build_episode
 from .frames import ReplayTask
 from .scenario import OUTSIDE_PAGE, TASK_INSTRUCTION
 from .steps_decisions import run_decisions
-from .stub_decisions import DecisionsStub
+from .stub_decisions import DecisionsStub, Failure
 
 BASELINES = Path(__file__).parent / "baselines"
 DUMMY_KEY = "replay-dummy-key"
@@ -293,6 +294,27 @@ def test_luna_question_retry(tmp_path):
     assert retried["result"]["raw"] == '{"action": "type", "text": "Ada Lovelace"}'
     assert "transport_reconnect_attempts" not in _runtime(retried)
     _settle("retry", header, records, tmp_path)
+
+
+def test_luna_question_retries_spent(tmp_path, monkeypatch):
+    """A question that fails four times (HTTP 503) spends the shared policy's three retries
+    (selection.py _decide_with_retries), and the decision fails with an error that names the
+    question and the retries spent."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    unavailable = Failure(503, "Provider returned error")
+    _, (failed,) = _play(
+        "openai_decisions",
+        [script.decision(*[unavailable] * 4)],
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+    )
+    assert len(failed["requests"]) == 4
+    assert failed["commit"] is None and failed["action_history_entry"] is None
+    assert failed["result"]["invalid_reason"] == "provider_unavailable"
+    detail = failed["result"]["invalid_detail"]
+    assert detail.startswith("TransportFailureError('transient after 3 transport retries: ")
+    assert 'RuntimeError("gui_action question 0: DecisionsHTTPError(' in detail
 
 
 @pytest.mark.parametrize("api", list(APIS))
