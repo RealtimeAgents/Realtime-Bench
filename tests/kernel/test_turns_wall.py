@@ -899,6 +899,21 @@ def test_failed_reads_at_one_instant_count_in_the_order_they_were_made(world, as
     assert _ended(sim)[:2] == ("time_limit", "deadline")
 
 
+def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_answers_after():
+    # Reads take 1.25 s and all fail: the loop top at 0, the periodic checks asked at 1.25 s and
+    # 2.5 s. The third is asked before the deadline and answers at 3.75 s; dated by its asking, it
+    # is handled before the deadline, and three reads in a row have failed.
+    world = World(replies=[Reply(10.0, CLICK)], check_s=1.25, check_errors=_failing(1, 2, 3))
+    sim = _episode(_wall(3.0), world)
+    assert _asked(sim) == [0.0, 1.25, 2.5]
+    assert _fired(sim, "deadline") == []
+    assert sim.outcomes == []
+    assert _ended(sim) == ("invalid_run", "invalid", 3.75, 3.75)
+    assert sim.termination.invalid == Invalidated(
+        "environment", "terminal_state_check_failed", "state read 3 failed"
+    )
+
+
 def test_an_invalidation_posted_during_a_generation_ends_the_episode_at_once():
     # Another thread's failure, such as the wall key-release timer's, arrives through the inbox.
     invalid = Invalidated("environment", "wall_key_release_failed", "keyup failed")
