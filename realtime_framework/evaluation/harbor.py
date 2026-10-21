@@ -703,7 +703,8 @@ def official_suite(identity, suite_tasks):
     if harness.endswith(HARNESS_UNRELEASED):
         raise ValueError(
             f"Official evaluation requires a released harness, not harness@{harness}, whose "
-            "sources differ from the hash pyproject.toml locks"
+            "framework sources or runtime dependencies differ from the release pyproject.toml "
+            "locks"
         )
 
 

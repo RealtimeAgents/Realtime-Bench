@@ -50,8 +50,8 @@ def test_an_official_report_refuses_an_unreleased_harness(tmp_path, monkeypatch)
     with pytest.raises(ValueError) as refused:
         harbor.aggregate(job, official=True)
     assert str(refused.value) == (
-        "Official evaluation requires a released harness, not harness@1.0+dev, whose sources "
-        "differ from the hash pyproject.toml locks"
+        "Official evaluation requires a released harness, not harness@1.0+dev, whose framework "
+        "sources or runtime dependencies differ from the release pyproject.toml locks"
     )
 
 
