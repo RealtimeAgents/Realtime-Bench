@@ -1087,7 +1087,7 @@ class DefaultHarness(VisionAgentBase):
         self.driver = adapter_class(self.config.adapter_type)(self.config, clock=self.clock)
         self.driver.bind_trace(self._trace)
         self._context_policy = current_context_policy().for_path(
-            self.config.adapter_type, self.config.provider_options
+            self.config.adapter_type, self.config.provider_options, self.config.context_preset
         )
         self._runtime = RealtimeRuntime(
             self.driver, self._context_policy, trace=self._trace, clock=self.clock

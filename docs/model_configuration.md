@@ -75,6 +75,14 @@ models gained, lost or changed a limit and 54 limits went down, for example
 upgrades, declare it in a preset, as `configs/models/deepseek-v4.1-flash.yaml` does. The run
 records the resolved preset, limit included, so results with different settings are never mixed.
 
+### Context preset
+
+`context_preset` (top level, optional) names a set of context-policy values the model takes in
+place of the standard ones (`PRESETS` in `realtime_framework/entity/context_policy.py`).
+`configs/models/kimi-k3.yaml` sets `kimi_k3`, which sends K3's past reasoning back, as Kimi
+requires for K3; other moonshot models leave it out and send none. A preset the API cannot render
+is refused before the run, and the run records the preset with its configuration.
+
 ## Add a model API
 
 A model that needs a new wire protocol gets a driver:

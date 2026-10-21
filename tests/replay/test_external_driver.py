@@ -439,7 +439,7 @@ def test_registered_drivers_meet_the_contract():
 def test_context_policy_of_an_external_driver():
     """An external driver gets the chat_completions row, the plain stateless chat values."""
     policy = current_context_policy()
-    assert policy.for_path(TARGET, {}) is policy.paths["chat_completions"]
+    assert policy.for_path(TARGET, {}, None) is policy.paths["chat_completions"]
 
 
 def test_registered_api_needs_its_own_row(monkeypatch):
@@ -457,7 +457,7 @@ def test_registered_api_needs_its_own_row(monkeypatch):
         "API 'my_api' has no context-policy row; add one in current_context_policy() "
         "(realtime_framework/entity/context_policy.py)"
     )
-    fails(lambda: policy.for_path("my_api", {}), message)
+    fails(lambda: policy.for_path("my_api", {}, None), message)
     config = ModelConfig(
         adapter_type="my_api",
         model_name="replay-vlm",

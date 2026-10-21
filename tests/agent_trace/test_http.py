@@ -302,7 +302,9 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     driver = ChatCompletionsDriver(config)
     driver.bind_trace(sink)
     canonical = build_request(
-        current_context_policy().for_path(config.adapter_type, config.provider_options),
+        current_context_policy().for_path(
+            config.adapter_type, config.provider_options, config.context_preset
+        ),
         system_block("count me", None),
         (),
         None,
@@ -431,7 +433,9 @@ def _request(config):
         "replay_candidates",
     )
     return build_request(
-        current_context_policy().for_path(config.adapter_type, config.provider_options),
+        current_context_policy().for_path(
+            config.adapter_type, config.provider_options, config.context_preset
+        ),
         system_block("system", None),
         turns,
         ledger_block('{"decision": 0}', 1, None),

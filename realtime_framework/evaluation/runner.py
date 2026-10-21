@@ -1999,7 +1999,9 @@ def set_up_agent(
     setup.stage = "tool_setup"
     # Choice models need focused fields and control state to enumerate actions,
     # including when they also receive screenshots (context policy item 12).
-    context_policy = current_context_policy().for_path(cfg.adapter_type, cfg.provider_options)
+    context_policy = current_context_policy().for_path(
+        cfg.adapter_type, cfg.provider_options, cfg.context_preset
+    )
     text_observation = context_policy.observation != "som_screenshot"
     scene_capture = setup.scene_capture = open_capture(text_observation)
     setup.tool_runtime = ToolRuntime(

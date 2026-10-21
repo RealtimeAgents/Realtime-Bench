@@ -7,6 +7,8 @@ Line numbers cite those code paths as they were on 7912231.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 import realtime_framework.providers.registry as catalog
@@ -82,20 +84,41 @@ def test_presets():
     assert {api: path.preset for api, path in POLICY.paths.items() if path.preset} == {
         "openai_decisions": "luna",
         "jev_decisions": "jev",
-        "moonshot": "kimi_k3",
     }
     for path in POLICY.paths.values():
         for item, value in PRESETS[path.preset].items() if path.preset else ():
             assert getattr(path, item) == value, (path.api, item)
+    models = {key: catalog.get(key).defaults.get("context_preset") for key in catalog.CATALOG}
+    assert {key: preset for key, preset in models.items() if preset} == {"kimi-k3": "kimi_k3"}
+
+
+def test_model_preset():
+    """A model config's preset takes the place of its row's: the standard values, then the
+    preset's items, then the row's own."""
+    k3 = POLICY.for_path("moonshot", {}, "kimi_k3")
+    assert k3 == replace(POLICY.paths["moonshot"], preset="kimi_k3", reasoning_replay=True)
+    # The row's own feedback placement wins over JEV's digest.
+    jev = POLICY.for_path("openai_realtime", {}, "jev")
+    assert (jev.preset, jev.feedback, jev.observation) == (
+        "jev",
+        "frame_prefix",
+        "observation_json_text",
+    )
+    # Luna's observation form leaves with Luna's preset; the row's own prompts stay.
+    luna_row = POLICY.paths["openai_decisions"]
+    k3_row = POLICY.for_path("openai_decisions", {}, "kimi_k3")
+    assert k3_row == replace(
+        luna_row, preset="kimi_k3", reasoning_replay=True, observation="som_screenshot"
+    )
 
 
 def test_replay_and_pressure_sets():
     paths = POLICY.paths
-    # Version 2: reasoning goes back only where the provider requires it (the Kimi K3 preset),
-    # and every reply is rebuilt from the model output.
-    assert {api for api, path in paths.items() if path.reasoning_replay} == {
-        api for api in APIS if capabilities(api).reasoning_replay == "required"
-    } == {"moonshot"}
+    # Version 2: reasoning goes back only where the provider requires it, Kimi K3, whose YAML
+    # names the kimi_k3 preset (test_model_preset); no row and no API requires it. Every reply
+    # is rebuilt from the model output.
+    assert not any(path.reasoning_replay for path in paths.values())
+    assert not any(capabilities(api).reasoning_replay == "required" for api in APIS)
     assert not any(path.verbatim_replay for path in paths.values())
     # Version 5: one pressure-archive rule, which the runtime applies where the API estimates its
     # requests (harnesses/default/context.py _run_turn). That is where version 4 had it on, plus
@@ -129,7 +152,7 @@ def test_gemini_tool_history_format():
     from realtime_framework.providers.gemini.live import LIVE_OPTIONS, live_options
 
     assert POLICY.paths["gemini_live"].tool_call_replay == LIVE_OPTIONS["history_format"][0]
-    assert POLICY.for_path("gemini_live", {}).tool_call_replay == "native_tools"
+    assert POLICY.for_path("gemini_live", {}, None).tool_call_replay == "native_tools"
     keys = [
         key
         for key in catalog.keys(provider="gemini")
@@ -138,7 +161,9 @@ def test_gemini_tool_history_format():
     assert keys
     for key in keys:
         config = catalog.to_model_config(key, fps=1.0)
-        resolved = POLICY.for_path(config.adapter_type, config.provider_options)
+        resolved = POLICY.for_path(
+            config.adapter_type, config.provider_options, config.context_preset
+        )
         assert resolved.tool_call_replay == live_options(config)["history_format"]
     assert all(
         path.tool_call_replay is None for api, path in POLICY.paths.items() if api != "gemini_live"

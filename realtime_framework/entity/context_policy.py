@@ -9,11 +9,15 @@ bumps the version. The values count in the effective run config and therefore in
 item is read from here: retention, feedback placement, the ledger role, reasoning and verbatim
 replay, pressure archiving, the Decision history form, the tool-call replay format, the prompts
 (item 11) and the observation form (item 12); the encoders take their fixed texts (item 5) from
-here, and ContextPolicy.for_path takes Gemini's tool-call replay format from its model preset.
+here, and ContextPolicy.for_path takes Gemini's tool-call replay format from the model's
+provider_options.
 
 An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
-then its own. The pre-run checks hold each row against what the API declares
-(providers/preflight.py check_context_policy).
+then its own. A preset comes from one of two places. A row's applies to every model of its API:
+Luna's (openai_decisions) and JEV's (jev_decisions). A model config's (ModelConfig.context_preset,
+from its YAML) applies to that model alone and takes the place of its row's: Kimi K3's, so other
+moonshot models keep the standard values. The pre-run checks hold each resolved policy against
+what the API declares (providers/preflight.py check_context_policy).
 """
 
 from collections.abc import Mapping
@@ -104,7 +108,7 @@ class PathPolicy:
 
     version: int
     api: str
-    preset: str | None  # the PRESETS entry this row takes; None: none
+    preset: str | None  # the PRESETS entry in effect: the model config's, else the row's
     visuals: Retention  # 1 screenshot retention
     turns: Retention  # 2 turn retention; archived actions form the ledger
     feedback: Literal["separate_message", "frame_prefix", "digest"]  # 3 execution feedback
@@ -139,14 +143,18 @@ EXTERNAL_DRIVER_ROW = "chat_completions"
 class ContextPolicy:
     version: int
     paths: Mapping[str, PathPolicy]  # one per registered API
+    own_values: Mapping[str, Mapping]  # each row's own values, which win over any preset
 
-    def for_path(self, adapter_type: str, provider_options: Mapping) -> PathPolicy:
+    def for_path(
+        self, adapter_type: str, provider_options: Mapping, context_preset: str | None
+    ) -> PathPolicy:
         """Resolve one API's policy for a model config, before any driver exists.
 
         A registered API has its own row; an external driver gets EXTERNAL_DRIVER_ROW. Registered
         names contain no colon and external ones are "package.module:Class"
         (providers/registry.py), so a name with no row and no colon is a registered API whose row
-        is missing.
+        is missing. The model config's preset (ModelConfig.context_preset) takes the place of the
+        row's: the standard values, then the preset's items, then the row's own.
         """
         if adapter_type in self.paths:
             path = self.paths[adapter_type]
@@ -156,6 +164,12 @@ class ContextPolicy:
             raise ValueError(
                 f"API {adapter_type!r} has no context-policy row; add one in "
                 "current_context_policy() (realtime_framework/entity/context_policy.py)"
+            )
+        if context_preset is not None:
+            path = replace(
+                path,
+                preset=context_preset,
+                **{**STANDARD, **PRESETS[context_preset], **self.own_values[path.api]},
             )
         if path.tool_call_replay is None:
             return path
@@ -181,7 +195,8 @@ STANDARD = {
     "prompts": _TEXT_JSON_PROMPTS,
     "observation": "som_screenshot",
 }
-# What a model takes instead of the standard values, by preset name.
+# What a model takes instead of the standard values, by preset name: through its API row (Luna,
+# JEV) or through its model config (Kimi K3).
 PRESETS = {
     # Luna's candidates are listed by the harness, so it is not compared with the chat models:
     # it keeps the observation JSON beside the screenshot.
@@ -194,7 +209,8 @@ PRESETS = {
         "observation": "observation_json_text",
     },
     # Kimi's thinking-model guide requires K3's past reasoning_content in multi-turn
-    # conversations; K3 is the moonshot API's model.
+    # conversations. The requirement is K3's, so K3's YAML names this preset
+    # (configs/models/kimi-k3.yaml) and other moonshot models send no reasoning back.
     "kimi_k3": {"reasoning_replay": True},
 }
 
@@ -204,8 +220,10 @@ def current_context_policy() -> ContextPolicy:
     overrides."""
     visuals = Retention(*effective_visual_fold_policy())
     turns = Retention(*effective_detailed_history_policy())
+    own_values = {}
 
     def path(api, preset=None, **values) -> PathPolicy:
+        own_values[api] = values
         return PathPolicy(
             version=CONTEXT_POLICY_VERSION,
             api=api,
@@ -221,7 +239,7 @@ def current_context_policy() -> ContextPolicy:
         path("chat_completions"),
         path("openrouter"),
         path("anthropic_messages"),
-        path("moonshot", "kimi_k3"),
+        path("moonshot"),
         path("openai_realtime", feedback="frame_prefix"),
         path(
             "gemini_live",
@@ -244,4 +262,4 @@ def current_context_policy() -> ContextPolicy:
             prompts={"realtime": "jev_decisions", "browser_game": None},
         ),
     )
-    return ContextPolicy(CONTEXT_POLICY_VERSION, {value.api: value for value in paths})
+    return ContextPolicy(CONTEXT_POLICY_VERSION, {value.api: value for value in paths}, own_values)

@@ -74,7 +74,9 @@ def _run(driver, run_dir: Path, turns: int):
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
     driver.bind_trace(sink)
     config = driver.config
-    policy = current_context_policy().for_path(config.adapter_type, config.provider_options)
+    policy = current_context_policy().for_path(
+        config.adapter_type, config.provider_options, config.context_preset
+    )
     runtime = RealtimeRuntime(driver, policy, trace=sink)
     history: list[dict] = []
     channel = driver.capabilities.action_channel

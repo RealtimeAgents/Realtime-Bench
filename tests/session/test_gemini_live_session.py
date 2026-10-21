@@ -68,7 +68,9 @@ def turn(k: int, *, calls=("click",), feedback: str = "", text_after: str = "") 
 
 def view(turns, *, ledger: str = "", history_format: str = "native_tools"):
     """The history view the runtime builds for gemini_live from these turns."""
-    policy = current_context_policy().for_path("gemini_live", {"history_format": history_format})
+    policy = current_context_policy().for_path(
+        "gemini_live", {"history_format": history_format}, None
+    )
     return build_request(
         policy,
         system_block("system instruction", None),
@@ -178,7 +180,7 @@ def test_seed_replays_the_history_view():
     connect = plan(core, view(turns, ledger='{"decision": 0}'))
     (contents,) = connect.seed
     ledger, frame_0, calls_0, receipts_0, frame_1, calls_1, receipts_1, after_1 = contents
-    texts = current_context_policy().for_path("gemini_live", {}).texts
+    texts = current_context_policy().for_path("gemini_live", {}, None).texts
     assert ledger == Content("user", (Part(text=texts.ledger_header + '\n{"decision": 0}'),))
     assert frame_0 == frame_content(0)
     assert frame_1 == frame_content(1, "EXECUTION RESULT: ok\nframe 1")
