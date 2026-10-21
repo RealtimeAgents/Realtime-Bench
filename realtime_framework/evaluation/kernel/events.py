@@ -158,7 +158,8 @@ class ClockStepped:
 @dataclass(frozen=True)
 class KeysReleased:
     """Keys whose lease ended were released: by ReleaseKeys on the token clock, or by the shell's
-    release timer on the wall clock."""
+    release timer on the wall clock. A release that failed for good, after the timer's retries on
+    the wall clock, carries its error and invalidates the run on either clock."""
 
     keys: tuple[str, ...]
     error: str | None = None

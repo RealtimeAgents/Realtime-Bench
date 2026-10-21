@@ -465,6 +465,26 @@ def test_a_lease_ending_inside_a_move_splits_the_step_and_releases_before_the_ch
     ]
 
 
+def test_a_failed_key_release_invalidates_the_run():
+    # Decision 0 holds "a" for 0.5 s at tick 0; its pace move is cut at 0.5, where the release
+    # fails (sandbox/actions.py GuestEnvironment._release_clock_keys). The move stops there and the
+    # decision is still reported.
+    sim = _run(
+        _token(10),
+        Reply(action=Action.hold_key("a", 0.5), output_tokens=0),
+        release_errors={1: "keyUp failed"},
+    )
+    assert sim.key_events == []
+    assert sim.advances == [0.5]
+    assert _pace(sim, 0)["to_tick"] == 0.5
+    assert [outcome.status for outcome in sim.outcomes] == ["applied"]
+    termination = sim.termination
+    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", 0.5)
+    assert termination.invalid == Invalidated(
+        "environment", "clock_key_release_failed", "keyUp failed"
+    )
+
+
 @pytest.mark.parametrize(("again", "released_at"), [(0.5, 2), (3.0, 4)], ids=["shorter", "longer"])
 def test_holding_a_held_key_again_only_extends_its_lease(again, released_at):
     # A 2 s hold from tick 0 ends at 2; holding "a" again at tick 1 for ``again`` seconds leaves

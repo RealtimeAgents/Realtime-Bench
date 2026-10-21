@@ -762,11 +762,14 @@ class TurnPolicy:
         self.kernel.emit(ReleaseKeys(keys))
 
     def _keys_released(self, event: KeysReleased) -> None:
+        if event.error is not None:
+            # The environment's reasons (sandbox/actions.py GuestEnvironment._release_clock_keys,
+            # GuestEnvironment._wall_release_due).
+            reason = "clock_key_release_failed" if self.token else "wall_key_release_failed"
+            return self.kernel.invalidate("environment", reason, event.error)
         # Wall-clock releases come from the shell's own timer and need no answer.
         if self._released is None:
             return
-        if event.error is not None:
-            return self.kernel.invalidate("environment", "clock_key_release_failed", event.error)
         then, self._released = self._released, None
         then()
 
