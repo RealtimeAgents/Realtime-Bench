@@ -24,6 +24,18 @@ def _calls(episode) -> list[tuple]:
     return [(call, time) for call, time, _ in episode.env.calls]
 
 
+def test_a_token_delay_is_recorded_in_input_frames_and_timed_in_environment_ticks():
+    """At 4 fps with the model fed at 1 fps and B = 100, 50 tokens are half an input frame, two
+    environment ticks. The lifecycle records the delay in input frames and the timeline main()
+    reads keeps it in ticks, as the runner does (runner.py _apply); the second decision's 100
+    tokens are the whole allowance and land on the horizon."""
+    replies = [Reply(0.0, CLICK, output_tokens=50), Reply(0.0, CLICK, output_tokens=100)]
+    episode = run("token", 2.0, replies, fps=4.0, input_fps=1.0, tokens_per_frame=100)
+    assert [entry[1:4] for entry in episode.timeline] == [(0, 2.0, 2.0), (4, 4.0, 8.0)]
+    assert [record["token_delay_frames"] for record in episode.env.lifecycle] == [0.5, 1.0]
+    assert episode.statuses() == ["applied", "not_applied_tick_limit"]
+
+
 def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     """Three decisions of 0.5 s each at 1 fps, then the 3 s deadline. Between decisions the
     environment is asked whether the episode ended on the frame grid, besides the loop top and
