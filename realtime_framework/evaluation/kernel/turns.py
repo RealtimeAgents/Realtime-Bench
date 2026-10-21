@@ -277,7 +277,18 @@ class TurnPolicy:
         self.phase = _Phase.GUARD
         self._check_end(self._guarded)
 
+    def _past_deadline(self) -> bool:
+        """Wall clock: an answer filed before the deadline can be handled after it, behind a
+        synchronous command that ran across it. Then the deadline ends the episode before the
+        answer leads to anything in the world; nothing lands after the end."""
+        if self.token or self.kernel.semantic < self.config.duration_s:
+            return False
+        self.kernel.end("deadline", self.config.duration_s)
+        return True
+
     def _guarded(self) -> None:
+        if self._past_deadline():
+            return
         # The horizon is tested after the end check (runner.py:842).
         if self.token and self._tick() >= self.config.max_ticks:
             self.phase = _Phase.SETTLED
@@ -297,6 +308,8 @@ class TurnPolicy:
             return kernel.invalidate(
                 "environment", "observation_stream_frozen", repr(event.fingerprint)
             )
+        if self._past_deadline():
+            return
         d = self.decision = _Decision(
             self.decisions, event.observation_id, event.tick, event.timestamp
         )
@@ -447,6 +460,8 @@ class TurnPolicy:
         return None
 
     def _pre_checked(self) -> None:
+        if self._past_deadline():
+            return
         # The horizon ends the episode at the next loop top, as today (runner.py:530-531, 842).
         if self.token and self._tick() >= self.config.max_ticks:
             return self._resolve("not_applied_tick_limit")
@@ -662,6 +677,8 @@ class TurnPolicy:
 
     def _check_end(self, then: Callable | None) -> None:
         """Ask whether the episode is over; ``then`` runs when it is not."""
+        if then is not None and self._past_deadline():
+            return
         request = self.kernel.request()
         self._asked[request] = self.kernel.semantic
         if then is not None:

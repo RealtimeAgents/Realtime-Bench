@@ -32,6 +32,7 @@ from realtime_framework.evaluation.kernel.events import (
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from tests.kernel.simulation import Reply, Simulation, World
+from tests.kernel.test_scenarios import _past_the_deadline
 
 CLICK = Action.click(10, 20)
 
@@ -41,12 +42,14 @@ def _wall(duration_s: float, **fields) -> TurnConfig:
 
 
 def _run(sim: Simulation) -> Simulation:
-    """Run the episode. Every record is numbered from 1 without a gap, and the termination record
-    is the last one, followed only by the input release and the finish."""
+    """Run the episode. Every record is numbered from 1 without a gap, the termination record is
+    the last one, followed only by the input release and the finish, and nothing is captured,
+    started, executed or asked from the deadline on."""
     sim.run()
     assert [entry.seq for entry in sim.records] == list(range(1, len(sim.records) + 1))
     assert sim.records[-1].kind == "Termination"
     assert sim.commands[-3:] == [Record(sim.records[-1]), ReleaseInputs(), Finish(sim.termination)]
+    assert _past_the_deadline(sim) == []
     return sim
 
 
@@ -259,6 +262,72 @@ def test_a_deadline_during_a_long_execution_keeps_it_applied_and_snapshots_after
     assert [d["status"] for d in _data(sim, "ActionApplied")] == ["applied"]
     assert _boundaries(sim) == []
     assert _ended(sim) == ("time_limit", "deadline", 6.0, 6.75)
+    _assert_nothing_after_the_end(sim)
+
+
+@pytest.mark.parametrize(
+    ("world", "asked", "captures", "started", "executed", "outcomes", "ended"),
+    [
+        # The loop starts at 1.5 s and its check answers at 2.25 s; the periodic check due at 2 s
+        # runs first, until 3 s. The answer is handled after it: nothing is captured.
+        (
+            World(replies=[Reply(9.0, CLICK)], start_s=1.5, check_s=0.75),
+            [1.5, 2.25],
+            [],
+            [],
+            [],
+            [],
+            ("time_limit", "deadline", 3.0, 3.0),
+        ),
+        # The frame at 2 s is captured until 2.5 s; the periodic check due at 2 s runs first,
+        # until 3.25 s. No generation is started on the frame.
+        (
+            World(replies=[Reply(9.0, CLICK)], start_s=1.25, check_s=0.75, capture_s=0.5),
+            [1.25, 2.5],
+            [(2, 2.5)],
+            [],
+            [],
+            [],
+            ("time_limit", "deadline", 3.0, 3.25),
+        ),
+        # The reply at 2 s is checked until 2.75 s; the periodic check due at 2 s runs first,
+        # until 3.5 s. The click is not executed.
+        (
+            World(replies=[Reply(1.25, CLICK), Reply(9.0)], check_s=0.75),
+            [0.0, 1.0, 2.0, 2.75],
+            [(0, 0.75)],
+            [0.75],
+            [],
+            [_outcome(0, "not_applied_time_limit", 2.0, 3, 1.25)],
+            ("time_limit", "deadline", 3.0, 3.5),
+        ),
+        # The click at 2 s is executed until 2.75 s; the periodic check due at 2 s runs first,
+        # until 3.25 s. The click stays applied and no check follows it.
+        (
+            World(replies=[Reply(1.0, CLICK), Reply(9.0)], check_s=0.5, execute_s=0.75),
+            [0.0, 1.0, 1.5, 2.75],
+            [(0, 0.5)],
+            [0.5],
+            [(0, 2.0, CLICK)],
+            [_outcome(0, "applied", 1.5, 3, 1.0, terminal=True)],
+            ("time_limit", "deadline", 3.0, 3.25),
+        ),
+    ],
+    ids=["loop-top", "capture", "before-landing", "after-execution"],
+)
+def test_an_answer_handled_after_the_deadline_is_not_acted_on(
+    world, asked, captures, started, executed, outcomes, ended
+):
+    # A synchronous periodic check runs across the deadline at 3 s while an answer filed before
+    # it waits; that answer is handled first, after 3 s, and the deadline then ends the episode
+    # instead of what the answer would lead to (phase2.md, 时间和结束判定).
+    sim = _episode(_wall(3.0), world)
+    assert _asked(sim) == asked
+    assert sim.captures == captures
+    assert [entry.semantic for entry in sim.entries("InferenceStarted")] == started
+    assert sim.executed == executed
+    assert sim.outcomes == outcomes
+    assert _ended(sim) == ended
     _assert_nothing_after_the_end(sim)
 
 
