@@ -836,7 +836,8 @@ def test_a_key_whose_release_failed_stays_held_and_the_cleanup_releases_it_again
 @pytest.mark.parametrize("delivered", [True, False], ids=["delivered-late", "lost"])
 def test_the_cleanup_releases_the_keys_of_a_hold_whose_press_failed(delivered):
     """Coordinator's decision N20: the press may have reached the page, so its keys count as
-    maybe down; releasing a key that is up does nothing."""
+    maybe down. When it did not, the page still gets the cleanup's keyUp as an event, but only
+    after the scored snapshot is frozen."""
     clock = FakeClock()
     env, task = _timed(clock)
     _slow_key_event(clock, task, 0, 60.0, delivered=delivered)
