@@ -91,6 +91,15 @@ class StreamingConfig:
     push_failure_limit: int = 3
     timing: RunnerTimingConfig = field(default_factory=RunnerTimingConfig)  # the frozen stream
 
+    def __post_init__(self) -> None:
+        # A grid of no rate divides by zero; a watchdog of no time gives replies up at one
+        # instant forever. None of them can be switched off.
+        for name in ("duration_s", "env_fps", "input_fps", "reply_watchdog_s", "push_watchdog_s"):
+            if not getattr(self, name) > 0:
+                raise ValueError(f"{name} must be positive, not {getattr(self, name)!r}")
+        if self.push_failure_limit < 1:
+            raise ValueError("push_failure_limit must be at least 1")
+
 
 class _FrozenStream:
     """The same producer identity ``threshold`` times while time moves on: the stream is replaying

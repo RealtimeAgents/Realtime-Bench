@@ -9,6 +9,8 @@ every operation takes no time unless a test says otherwise.
 
 from __future__ import annotations
 
+import pytest
+
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.evaluation.kernel.events import (
     CheckEnd,
@@ -675,3 +677,20 @@ def test_an_action_answered_past_the_deadline_is_settled_before_the_one_waiting(
         ("b", "not_applied_time_limit"),
     ]
     assert sim.resolved()[0]["finished_at"] == 4.75
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"duration_s": 0.0},
+        {"env_fps": 0.0},
+        {"input_fps": -1.0},
+        {"reply_watchdog_s": 0.0},
+        {"push_watchdog_s": 0.0},
+        {"push_failure_limit": 0},
+    ],
+)
+def test_a_config_that_would_divide_by_zero_or_never_let_time_pass_is_refused(fields):
+    """A watchdog of no time gives replies up at one instant forever; a rate of 0 divides by 0."""
+    with pytest.raises(ValueError):
+        StreamingConfig(**({"duration_s": 5.0} | fields))
