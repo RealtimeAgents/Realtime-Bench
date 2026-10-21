@@ -1,11 +1,11 @@
 """Drive scripted Choice Decisions into an agent, in the order the legacy turn loop calls it.
 
-As in steps.py: per decision the loop (runner.py _run_stream_legacy) captures a frame, binds the
-budget, prefills and generates (its _decide), hands the result to the trajectory writer
-(episode_records.py finalize_decision_audit) and reports the execution result (its _apply). In
-addition each decision loads its own script into the stub, every question attempt is recorded
-with an allow-list of headers, and an invalid decision ends the episode: run_stream invalidates
-the run without committing an action and stops deciding (kernel/turns.py _unusable).
+As in steps.py: per decision the loop (tests/differential/legacy_loop.py _run_stream_legacy)
+captures a frame, binds the budget, prefills and generates (its _decide), hands the result to the
+trajectory writer (episode_records.py finalize_decision_audit) and reports the execution result (its
+_apply). In addition each decision loads its own script into the stub, every question attempt is
+recorded with an allow-list of headers, and an invalid decision ends the episode: run_stream
+invalidates the run without committing an action and stops deciding (kernel/turns.py _unusable).
 """
 
 from __future__ import annotations
