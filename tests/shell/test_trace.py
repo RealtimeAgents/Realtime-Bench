@@ -236,3 +236,35 @@ def test_a_result_s_usage_is_measured_once_the_agent_has_accepted_it():
     assert [events[i + 1] for i in completed] == ["ActionProposed"] * 2
     numbers = [record["kernel_seq"] for record in trace.records]
     assert numbers == sorted(numbers)
+
+
+class GrowingAgent(Agent):
+    """Adds a generation's usage to its own as it generates, as an adapter running the legacy turn
+    (entity/harness.py StreamingAgent.generate) does, and returns results that name none."""
+
+    def __init__(self, clock, replies):
+        super().__init__(clock, replies)
+        self.token_usage = {"output_tokens": 0, "responses": 0}
+
+    def generate(self, generation, decision, observation, budget):
+        usage = self.token_usage
+        self.token_usage = {
+            "output_tokens": usage["output_tokens"] + 7,
+            "responses": usage["responses"] + 1,
+        }
+        return super().generate(generation, decision, observation, budget)
+
+
+def test_a_result_that_names_no_count_has_none_whatever_the_usage_grew_by():
+    """Token clock, B = 100: the agent's usage grows by 7 during the generation and its result
+    names no count. The clock's count is the result's own, so there is none and the run is
+    invalid, where the legacy loop counted what the usage grew by. The agents create_agent makes
+    (harnesses/registry.py) all name theirs."""
+    episode = run("token", 10.0, [Reply(0.5, CLICK)], tokens_per_frame=100, agent_type=GrowingAgent)
+    (completed,) = episode.trace.payloads("InferenceCompleted")
+    assert completed["frame_usage"] == {"output_tokens": 7, "responses": 1}
+    assert completed["clock_output_tokens"] is None
+    assert (episode.invalid["category"], episode.invalid["reason"]) == (
+        "provider",
+        "missing_output_token_usage",
+    )
