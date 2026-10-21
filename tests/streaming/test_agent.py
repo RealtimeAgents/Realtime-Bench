@@ -1145,3 +1145,20 @@ def test_a_push_held_for_a_renewal_tells_the_kernel_when_it_waits_and_when_it_go
     ]
     assert holds == [("PushHeld", "obs-3", 2.0), ("PushResumed", "obs-3", 3.5)]
     agent.close()
+
+
+def test_a_close_that_outlasts_its_bound_is_logged_not_raised(monkeypatch, clock, caplog):
+    """A push reopening the session takes longer than close() waits (review-final-drivers 中 3):
+    as a turn's close (RealtimeRuntime.close), the timeout is logged and the episode's outcome
+    stands; stopping the execution thread ends the push."""
+    agent = make_agent(monkeypatch, clock)
+    _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_s = 20.0
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    clock.sleep(0.5)
+    with caplog.at_level("WARNING"):
+        agent.close()
+    assert "close" in caplog.text
+    assert clock.wait(pushed, 1.0)
+    assert "error" in pushing
