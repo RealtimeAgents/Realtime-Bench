@@ -38,7 +38,10 @@ def compact_repeated_records(records: list[dict], varying: tuple[str, ...]) -> l
     return output
 
 
-# JEV message roles of the neutral item roles.
+# JEV has no roles (RealtimeCapabilities.labels_instead_of_roles): its digest is Decisions state,
+# and these strings are fixed labels its entries carry, not protocol roles or context-policy
+# values. An entry is labelled by its neutral item role; the ledger's is the policy's ledger role
+# (item 4), "input" on JEV's row.
 JEV_ROLES = {"instruction": "system", "input": "user"}
 
 
