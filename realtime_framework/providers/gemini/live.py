@@ -122,12 +122,13 @@ class GoAwayDeadlineExceeded(RuntimeError):
 @dataclass
 class _StreamedReply:
     """Streaming: a reply the reader reads for, until its events() is done, on the connection
-    it started on (``session`` and its reader). ``messages`` holds what the reader read and
-    events() has not taken yet, or the reader's failure; ``ended``, whether it read the reply's
-    end."""
+    it started on (``session`` and its reader). ``held`` are the cancellations read between
+    replies before it started; ``messages`` holds what the reader read and events() has not
+    taken yet, or the reader's failure; ``ended``, whether it read the reply's end."""
 
     session: Any
     receiver: _Receiver
+    held: list[Orphan]
     messages: asyncio.Queue = field(default_factory=asyncio.Queue)
     ended: bool = False
 
@@ -646,9 +647,9 @@ class GeminiLiveDriver(SessionLifecycle):
         """Streaming: read every message of the connection as it arrives. A reply's messages go
         to its events(); an orphan's goAway and resumption update are the core's to keep, and
         nothing else of it is taken but its cancellations. Those are held, also past this
-        connection's close, for the next reply's events(), on this connection or a later one: it
-        hands them over first, in its own generation, telling the connection they were read on;
-        their calls, of any earlier reply, are told by id only. A read that fails or is
+        connection's close, for the next reply to start, on this connection or a later one: its
+        events() hands them over first, in its own generation, telling the connection they were
+        read on; their calls, of any earlier reply, are told by id only. A read that fails or is
         cancelled ends every reply waiting with the receiver's failure."""
         try:
             while True:
@@ -814,7 +815,8 @@ class GeminiLiveDriver(SessionLifecycle):
                     self._core.send_failed(trigger.keys)
                 self._core.reply_abandoned()
                 self._core.unresumable()
-                self._replies.pop(request.generation_id, None)
+                abandoned = self._replies.pop(request.generation_id)
+                self._cancelled_between[:0] = abandoned.held
                 raise
             self._activity_open = False
         self._core.sent(trigger.keys)
@@ -888,7 +890,10 @@ class GeminiLiveDriver(SessionLifecycle):
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
         if self.streaming:
-            self._replies[request.generation_id] = _StreamedReply(self._session, self._receiver)
+            held, self._cancelled_between = self._cancelled_between, []
+            self._replies[request.generation_id] = _StreamedReply(
+                self._session, self._receiver, held
+            )
             # What the reader reads from here is this reply's, as for a turn-based reply's read.
             self._reading_context.run(enter_trace_scope, current_trace_scope())
         self._core.start_generation(request.generation_id)
@@ -1091,7 +1096,7 @@ class GeminiLiveDriver(SessionLifecycle):
         try:
             if self.streaming:
                 reply = self._replies[generation.generation_id]
-                session, receiver = reply.session, reply.receiver
+                session, receiver, held = reply.session, reply.receiver, reply.held
 
                 def take():
                     return self._streamed(reply, receiver)
@@ -1101,7 +1106,7 @@ class GeminiLiveDriver(SessionLifecycle):
                     return operation if reply.ended else self._before_go_away_deadline(operation)
 
             else:
-                session, receiver = self._session, self._receiver
+                session, receiver, held = self._session, self._receiver, []
                 if session is None:
                     raise RuntimeError("Gemini Live session is not connected")
 
@@ -1110,7 +1115,7 @@ class GeminiLiveDriver(SessionLifecycle):
 
                 bound = self._before_go_away_deadline
             try:
-                async for event in self._events(generation, session, take, bound):
+                async for event in self._events(generation, session, take, bound, held):
                     yield event
             except Exception:
                 # The core applied each message as it was read; a reply that then failed here is
@@ -1120,13 +1125,13 @@ class GeminiLiveDriver(SessionLifecycle):
         finally:
             self._replies.pop(generation.generation_id, None)
 
-    async def _events(self, generation: GenerationHandle, session, take, bound):
-        """The reply's events: ``take()`` gives its next message, ``bound(write)`` bounds a tool
-        acknowledgement by the goAway deadline where it applies."""
+    async def _events(self, generation: GenerationHandle, session, take, bound, held):
+        """The reply's events: the cancellations ``held`` for it first, then its messages, which
+        ``take()`` gives one by one; ``bound(write)`` bounds a tool acknowledgement by the goAway
+        deadline where it applies."""
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0
-        held, self._cancelled_between = self._cancelled_between, []
         for orphan in held:
             sequence += 1
             yield FunctionCallsCancelled(

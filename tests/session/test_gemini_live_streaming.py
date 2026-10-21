@@ -490,6 +490,32 @@ def test_a_cancellation_between_replies_is_held_across_a_reconnect():
     assert (first_event.connection, rest[-1].connection) == (1, 2)
 
 
+def test_a_cancellation_read_after_a_reply_ended_is_no_event_of_that_reply():
+    """A cancellation read once a reply ended, before its events() began, comes with the next
+    reply, not first thing in that one, ahead of the call it names."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        first = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), TURN_COMPLETE, cancelled("call-0"))
+        await settle()
+        events = await drain(rig.driver.events(first))
+        second = await rig.start("turn-1")
+        rig.socket.feed(TURN_COMPLETE)
+        later = await drain(rig.driver.events(second))
+        await rig.driver.close()
+        return events, later
+
+    events, later = asyncio.run(run())
+    assert [type(e).__name__ for e in events] == [
+        "FunctionCall",
+        "UsageSnapshot",
+        "GenerationBoundary",
+    ]
+    assert isinstance(later[0], FunctionCallsCancelled) and later[0].call_ids == ("call-0",)
+
+
 def test_a_cancellation_is_stamped_when_read_and_handed_over_once():
     """A cancellation's arrival is when the reader read it, held between replies or in one;
     one held is the first of the next reply's events, numbered as they are, and of no later
@@ -925,8 +951,8 @@ def test_a_reply_is_refused_while_one_is_in_flight():
 
 def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
     """A trigger whose write failed is no reply: its feedback is unknown, no generation takes
-    the connection's messages, so a cancellation read later waits for the next reply; and the
-    activity left open refuses a push as well as a reply."""
+    the connection's messages, so a cancellation read later waits for the next reply, as one
+    held for this reply does; and the activity left open refuses a push as well as a reply."""
     rig = Rig()
     blocks = [
         pushed(1),
@@ -938,6 +964,8 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
 
     async def run():
         await rig.connect()
+        rig.socket.feed(cancelled("call-0"))
+        await settle()
         rig.socket.fail = lambda message: wire(message) == "activityEnd"
         request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
         try:
@@ -945,7 +973,7 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
         except RuntimeError:
             pass
         state = (dict(rig.driver._core.replies), dict(rig.driver._replies))
-        rig.socket.feed(cancelled("call-0"))
+        rig.socket.feed(cancelled("call-1"))
         await settle()
         held = [orphan.cancelled for orphan in rig.driver._cancelled_between]
         try:
@@ -957,7 +985,7 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
 
     state, held, refused = asyncio.run(run())
     assert state == ({}, {})
-    assert held == [("call-0",)]
+    assert held == [("call-0",), ("call-1",)]
     assert refused == "Gemini Live input activity is already open"
     # Its start, feedback and audio went out before its end failed.
     assert ("unknown", ["d1.feedback"], "gemini_live.ws-1", 3) in log.events
