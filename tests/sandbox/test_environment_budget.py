@@ -12,6 +12,7 @@ virtual time: which budget times which part is exact there, and nothing waits in
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import replace
@@ -606,10 +607,26 @@ def test_a_call_s_own_shorter_timeout_applies_inside_an_operation():
     assert getattr(env, "_invalid_run", None) is None
 
 
+def test_the_guest_s_refusal_reaches_the_environment_as_a_rejection():
+    """From the guest's 400 on /action to the environment: GuestClient raises it as a
+    GuestRefused with the guest's message (sandbox/guest.py execute_action), and the run stays
+    valid."""
+    refusal = "unsupported key for pyautogui: 'hyper' (normalized: 'hyper')"
+    hyper = Action(ActionType.KEY, {"key": "hyper"})
+    with FakeGuest(refusal=refusal) as guest:
+        client = GuestClient(host="127.0.0.1", port=guest.port)
+        with pytest.raises(GuestRefused, match=re.escape(refusal)):
+            client.execute_action(hyper)
+        env = _environment(guest)
+        assert env.execute(hyper) == "failed"
+    assert env._last_rejected_by_guest is True
+    assert getattr(env, "_invalid_run", None) is None
+    assert env._last_exec_error == f"400 guest rejected the action: {refusal}"
+
+
 def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refusal():
     """The guest answered, so the environment works and was only slow (user decision 35). The
-    refusal is raised as GuestClient raises a 4xx from /action (sandbox/guest.py
-    execute_action)."""
+    double raises the refusal the way GuestClient raises it, which the test above checks."""
     clock = FakeClock()
     response = requests.Response()
     response.status_code = 400

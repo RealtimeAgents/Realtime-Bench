@@ -150,7 +150,9 @@ class FakeCDP:
 
 
 class FakeGuest:
-    """The guest agent's HTTP API on 127.0.0.1, with optional per-endpoint delays."""
+    """The guest agent's HTTP API on 127.0.0.1, with optional per-endpoint delays. With
+    ``refusal`` set, /action refuses every action as the guest server refuses one it validates
+    and rejects (sandbox/guest_server/server.py): 400 with the refusal as its message."""
 
     def __init__(
         self,
@@ -158,10 +160,12 @@ class FakeGuest:
         screenshot_delay: float = 0.0,
         action_delay: float = 0.0,
         command_delay: float = 0.0,
+        refusal: str | None = None,
     ):
         self.screenshot_delay = screenshot_delay
         self.action_delay = action_delay
         self.command_delay = command_delay
+        self.refusal = refusal
         self.actions: list[dict] = []
         self.commands: list[dict] = []
         self._stop = threading.Event()
@@ -202,7 +206,10 @@ class FakeGuest:
                 if self.path == "/action":
                     guest.actions.append(body)
                     guest._stop.wait(guest.action_delay)
-                    self._send({"status": "ok", "timestamp": time.time()})
+                    if guest.refusal is not None:
+                        self._send({"status": "error", "message": guest.refusal}, 400)
+                    else:
+                        self._send({"status": "ok", "timestamp": time.time()})
                 elif self.path == "/execute":
                     guest.commands.append(body)
                     guest._stop.wait(guest.command_delay)
@@ -210,10 +217,10 @@ class FakeGuest:
                 else:
                     self.send_error(404)
 
-            def _send(self, payload: dict):
+            def _send(self, payload: dict, status: int = 200):
                 body = json.dumps(payload).encode()
                 try:
-                    self.send_response(200)
+                    self.send_response(status)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
