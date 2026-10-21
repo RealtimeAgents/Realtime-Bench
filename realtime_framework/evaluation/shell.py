@@ -296,8 +296,9 @@ def _escaped_termination(
 ) -> Termination:
     """How an episode ended whose kernel, or its shell's reading of the clocks, raised (N11), as
     a shell tells it without the kernel. The run is invalid for the first failure: the kernel's
-    or the environment's when one was latched, run_exception otherwise. It ended at the first end
-    signal: the kernel's when it had one, else the reading the failure came at."""
+    or the environment's when one was latched, run_exception otherwise, ``failure`` being the
+    first traceback the shell latched, the summary's error. It ended at the first end signal:
+    the kernel's when it had one, else the reading the failure came at."""
     ending = kernel.ending
     invalid = kernel.invalid or (
         _invalidated(latched)
@@ -1023,7 +1024,7 @@ class _Shell:
                 semantic,
                 semantic if ops is None else ops,
                 self._frozen_at,
-                failure,
+                self._loop_error,  # this one's, unless a failure the kernel never took came first
                 latched,
             )
             self._terminate(termination)

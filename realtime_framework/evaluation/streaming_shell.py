@@ -454,7 +454,7 @@ class _StreamingShell:
                 self.clocks.operational.wait(self._frozen, None)
             self._handle(ReleaseInputs())
             termination = _escaped_termination(
-                self.kernel, self._now, self._now, self._frozen_at, failure, latched
+                self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
             )
             self._finish(termination)
             # The run_exception is the first failure: recorded as the turn-based shell does.
@@ -473,7 +473,7 @@ class _StreamingShell:
             self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
         if self._termination is None:  # how it ended, as far as the wrap-up got
             self._termination = _escaped_termination(
-                self.kernel, self._now, self._now, self._frozen_at, failure, latched
+                self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
             )
 
     # ---- the episode trace --------------------------------------------------------------------

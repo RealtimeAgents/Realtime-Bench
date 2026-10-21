@@ -19,6 +19,7 @@ import pytest
 from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.core import Kernel
+from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.evaluation.kernel.turns import TurnPolicy
 
 from .world import CLICK, Agent, Environment, Reply, World, run
@@ -465,6 +466,31 @@ def test_the_summarys_error_is_the_first_traceback(monkeypatch):
     episode = run("token", 3.0, [Reply(0.0, CLICK, output_tokens=100)], world, tokens_per_frame=100)
     assert "RuntimeError: advance failed" in episode.env._loop_error
     assert "step broke" not in episode.env._loop_error
+
+
+def test_the_first_run_exception_is_the_runs_though_the_kernel_raised_before_taking_it(monkeypatch):
+    """The agent's accept raises at 0.5 s, and the kernel raises at the step that would take that
+    run_exception: the first failure is the summary's error and the run's detail, as the runner
+    kept the exception that escaped its loop (runner.py _run_stream_legacy)."""
+    posted = []
+    post = Kernel.post
+
+    def recording(kernel, event):
+        posted.append(event)
+        post(kernel, event)
+
+    monkeypatch.setattr(Kernel, "post", recording)
+    _breaks(
+        monkeypatch,
+        Kernel,
+        "step",
+        lambda kernel, *_: any(isinstance(event, Invalidated) for event in posted),
+    )
+    episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], agent_type=_RaisingAccept)
+    assert episode.invalid["reason"] == "run_exception"
+    assert "RuntimeError: accept broke" in episode.env._loop_error
+    assert "RuntimeError: accept broke" in episode.invalid["detail"]
+    assert "step broke" not in episode.invalid["detail"]
 
 
 def test_a_run_exception_keeps_the_end_of_its_traceback(monkeypatch):
