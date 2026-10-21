@@ -228,3 +228,37 @@ def test_a_pushed_frames_and_a_cancels_event_ids_are_our_random_ids(message, kin
     cursor.open(0.0)
     cursor.receive(1, {**message, "event_id": f"rtb_{kind}_9f8e7d"}, 0.0)
     assert cursor.finish() == []
+
+
+def test_in_a_converted_recording_the_client_may_go_ahead_of_the_servers_times():
+    """M4: a converted recording compares the order only. A frame the client pushes on its own beat
+    may come before a server message the recording read just ahead of it: that message is released
+    then, ahead of its time, and the frame is compared as usual."""
+    delta = {"type": "response.output_text.delta", "delta": "{"}
+    records = [
+        _record("open"),
+        _record("c2s", RESPONSE_CREATE),
+        _record("s2c", delta, 1.0002),
+        _record("c2s", _create("<rtb_user-1>")),
+        _record("s2c", _added("<rtb_user-1>")),
+    ]
+    cursor = _cursor(records)
+    cursor.open(0.0)
+    cursor.receive(1, RESPONSE_CREATE, 0.0)
+    assert cursor.release(1, 1.0) == []
+    cursor.receive(1, _create("rtb_user_77"), 1.0)
+    assert [r["msg"] for r in cursor.release(1, 1.0)] == [delta, _added("rtb_user_77")]
+    assert cursor.finish() == []
+
+
+def test_nothing_gone_ahead_of_is_released_once_the_message_differs():
+    records = [
+        _record("open"),
+        _record("s2c", {"type": "response.output_text.delta"}, 1.0),
+        _record("c2s", RESPONSE_CREATE),
+    ]
+    cursor = _cursor(records)
+    cursor.open(0.0)
+    cursor.receive(1, {"type": "response.cancel"}, 0.5)
+    assert cursor.failed
+    assert cursor.release(1, 2.0) == []
