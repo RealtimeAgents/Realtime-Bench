@@ -842,6 +842,14 @@ def test_reads_due_on_a_fast_grid_do_not_keep_the_captures_out():
     assert sim.started == [(1, 0.5)]
 
 
+def test_reads_slower_than_the_frames_take_turns_with_the_captures():
+    """Each read takes 1.5 s, longer than a frame. Once a read answers, the capture waiting goes
+    before the read due next, so that a frame is captured after every read."""
+    sim = _run(World(check_s=1.5), 12.0)
+    assert sim.checks == [0.0, 1.5, 3.0, 4.5, 6.0, 7.5, 9.0, 10.5]
+    assert sim.captures == [1.5, 3.0, 4.5, 6.0, 7.5, 9.0, 10.5]
+
+
 # ---- captures during an action (decision 50) ---------------------------------------------------
 
 
