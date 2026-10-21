@@ -293,7 +293,14 @@ def test_each_step_passes_streaming_on(
 
 def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
     """A trial's task.json (evaluation/harbor.py resolve), its request, and the one-task local
-    report whose group carries the identity reporting.report found in the run summary."""
+    report whose group carries the identity reporting.report found in the run summary. The request
+    holds the Harbor agent's options as RealtimeBenchAgent.run records them, which a job recorded
+    before the interaction mode existed has no interaction_mode among."""
+    from realtime_framework.evaluation.harbor import RealtimeBenchOptions
+
+    options = RealtimeBenchOptions(interaction_mode=interaction_mode or "turn_based").model_dump()
+    if interaction_mode is None:
+        del options["interaction_mode"]
     task = {
         "suite_id": "public", "suite_version": "1.0", "suite_hash": "0" * 64,
         "harness_version": "1.0", "harness_hash": "1" * 64, "task_id": WEB,
@@ -303,8 +310,7 @@ def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
     if interaction_mode is not None:
         task["interaction_mode"] = interaction_mode
     request = {
-        "model": GEMINI, "mode": "default", "model_revision": None, "clock": "wall",
-        "task": task, "suite_tasks": {WEB: "web"},
+        "model": GEMINI, "mode": "default", **options, "task": task, "suite_tasks": {WEB: "web"},
     }
     group = {
         **{field: task[field] for field in ("suite_id", "suite_version", "suite_hash")},
@@ -577,6 +583,11 @@ def test_a_leaderboard_submission_is_turn_based(tmp_path):
 
     assert len(check_runs(jobs("turn_based", "turn_based"))) == 3
     assert len(check_runs(jobs("before-the-mode", None))) == 3
+    # The mode is one of the agent options every request records, so a job from before it existed
+    # has another integration hash (evaluation/harbor.py aggregate) and is submitted on its own.
+    mixed = [*jobs("old", None)[:1], *jobs("new", "turn_based")[1:]]
+    with pytest.raises(SubmissionError, match="The runs differ in integration_hash"):
+        check_runs(mixed)
     with pytest.raises(SubmissionError) as caught:
         check_runs(jobs("streaming", "streaming"))
     assert str(caught.value) == (
