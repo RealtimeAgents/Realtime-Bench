@@ -9,6 +9,18 @@ hand the kernel writes the termination record (phase2.md, 事件内核; 时间�
 
 A policy provides ``merged_clocks``, ``settled``, ``start(kernel)``, ``on_event(event)``,
 ``on_result(result)``, ``on_timer(handle, timer)`` and ``on_end()``.
+
+The shell answers every command that names its answer (events.py) with exactly one event, posted
+before it steps again: CheckEnd, Capture, Execute, AdvanceClock, ReleaseKeys, RenderFrame, Commit
+and FreezeSnapshot. A command that fails, the shell's own exception included, is answered with the
+error, never left unanswered: the decision in hand settles only on its answer, and the episode
+cannot finish before. StartGeneration is answered by GenerationFinished whenever the worker is
+done; the kernel does not wait for one it aborted. Record, SetTimer, AbortGeneration,
+AcceptResult, DiscardResult and ReleaseInputs want no answer; SetTimer asks to be stepped once its
+clock reads ``at``. After Finish the shell steps no more, so nothing posted later is handled or
+numbered. A log entry's kind is the class name of the event handled, an AgentRecord's own kind, or
+the name of a record the kernel writes, a TraceEvent value for the trace's; shell.py says how the
+episode trace names each.
 """
 
 from __future__ import annotations
