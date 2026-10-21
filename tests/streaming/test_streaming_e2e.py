@@ -7,7 +7,8 @@ frame 1, comes off the wire at 0.4 s and takes 0.1 s to execute. Reply 2 starts 
 ends and never ends: the deadline at 3 s gives it up, and the snapshot takes 0.5 s.
 
 The opening message's system instruction, and Gemini's function declarations, are placeholders
-in the cassettes; each test checks the values they stand for against the agent's seed.
+in the cassettes. Each test checks the values they stand for: the instruction against the agent's
+seed, and the declarations against the GUI functions that take the frame an action is based on.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import ClassVar
 
 import pytest
 
-from realtime_framework.entity.actions import Observation
+from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Termination
 from realtime_framework.evaluation.reporting import summarize_streaming
@@ -356,10 +357,15 @@ def test_the_agent_on_gemini_live_over_a_replayed_session(tmp_path):
     summary = _the_episode(episode, "call_1")
     agent = episode.agent
     assert wire.hidden["systemInstruction"] == {"parts": [{"text": agent._seed.system_instruction}]}
+    # Each GUI function takes the frame its action is based on, as an integer it must give
+    # (phase2.md, 动作的定位依据); the session sets how a call runs.
     (tools,) = wire.hidden["tools"]
-    assert [tool["name"] for tool in tools["functionDeclarations"]] == [
-        declaration["name"] for declaration in agent._answer.function_declarations
+    declarations = [
+        {key: value for key, value in tool.items() if key != "behavior"}
+        for tool in tools["functionDeclarations"]
     ]
+    assert declarations == list(gui_function_declarations(frame_reference=True))
+    assert all("frame" in d["parameters_json_schema"]["required"] for d in declarations)
     # Gemini Live confirms nothing but the setup.
     assert _delivered(episode, "sent") == [
         "f1.frame", None, "d0.call_1.feedback", "f2.frame", "f3.frame",
