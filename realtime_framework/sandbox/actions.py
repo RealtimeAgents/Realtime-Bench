@@ -151,12 +151,23 @@ class GuestEnvironment:
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
+        # The identities of the keys the last execute() leased with a hold_key, for the kernel's
+        # shell, which ends the leases itself.
+        self.last_held_keys = ()
+        # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
+        # makes go to last_end_checks (None for a read that answered, the error of one that
+        # failed) instead of done(), which invalidates the run at the first failure.
+        self.kernel_counts_reads = False
+        self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
         self._wall_holds = {}
         self._wall_lock = threading.RLock()
         self._wall_timer = None
         self._wall_closed = False
         self._wall_release_failures = 0
+        # Set by the kernel's shell: called with the invalid-run record when the release timer
+        # invalidates the run.
+        self.on_invalid = None
         # Result of pinning the wall display's auto-repeat to AUTOREPEAT_* (set on first use).
         self._wall_autorepeat = None
         self._held_mouse_buttons = set()
@@ -252,36 +263,63 @@ class GuestEnvironment:
                     if step <= 1e-9:
                         self._release_expired_clock_keys()
                         continue
-                repeat_events, repeats_sent = self._pending_repeat_events(step)
-                try:
-                    with operation_budget(
-                        "clock advance",
-                        ENVIRONMENT_BUDGET.clock_advance_s,
-                        clock=self.clocks.operational,
-                    ):
-                        if repeat_events:
-                            self.task.advance_clock(step, key_events=repeat_events)
-                        else:
-                            self.task.advance_clock(step)
-                except Exception as exc:
-                    self._invalid_run = {
-                        "category": "environment",
-                        "reason": "clock_advance_failed",
-                        "detail": str(exc),
-                    }
-                    raise
-                if repeat_events and self._repeat_key in self._held_keys:
-                    self._held_keys[self._repeat_key]["repeats_sent"] = repeats_sent
-                self._logical_tick += step
-                if abs(self._logical_tick - round(self._logical_tick)) < 1e-9:
-                    self._logical_tick = int(round(self._logical_tick))
+                self._advance_clock(step)
                 self._release_expired_clock_keys()
-                if self.done():
+                if self._ended_after_step():
                     break
             return
         clock = self.clocks.semantic
         while self.tick_index() < target and clock.time() < self.deadline:
             clock.sleep(0.03)
+
+    def _ended_after_step(self):
+        """The end check after each token step of wait_until_tick. When the kernel counts failed
+        reads, a failed one goes to last_end_checks and the advance goes on."""
+        if not self.kernel_counts_reads:
+            return self.done()
+        try:
+            ended, _ = self.check_end()
+        except Exception:  # noqa: BLE001 - the kernel counts the failed read
+            self.last_end_checks += (traceback.format_exc(),)
+            return False
+        self.last_end_checks += (None,)
+        return ended
+
+    def step_clock(self, step):
+        """Token clock, for the kernel's shell: advance ``step`` ticks, never past the episode
+        horizon. Leases are not cut, no key is released and the end is not checked: the kernel
+        does each (evaluation/shell.py)."""
+        step = float(step)
+        if self._episode_horizon_tick is not None:
+            step = min(step, self._episode_horizon_tick - self._logical_tick)
+        if step > 0:
+            self._advance_clock(step)
+
+    def _advance_clock(self, step):
+        """Advance the task clock ``step`` ticks, with the repeating key's presses due meanwhile."""
+        repeat_events, repeats_sent = self._pending_repeat_events(step)
+        try:
+            with operation_budget(
+                "clock advance",
+                ENVIRONMENT_BUDGET.clock_advance_s,
+                clock=self.clocks.operational,
+            ):
+                if repeat_events:
+                    self.task.advance_clock(step, key_events=repeat_events)
+                else:
+                    self.task.advance_clock(step)
+        except Exception as exc:
+            self._invalid_run = {
+                "category": "environment",
+                "reason": "clock_advance_failed",
+                "detail": str(exc),
+            }
+            raise
+        if repeat_events and self._repeat_key in self._held_keys:
+            self._held_keys[self._repeat_key]["repeats_sent"] = repeats_sent
+        self._logical_tick += step
+        if abs(self._logical_tick - round(self._logical_tick)) < 1e-9:
+            self._logical_tick = int(round(self._logical_tick))
 
     def render_current_frame(self):
         """Publish action-visible pixels without advancing the token clock."""
@@ -353,6 +391,14 @@ class GuestEnvironment:
             for identity in MODIFIER_KEYS
             if identity in self._held_keys and identity not in exclude
         ]
+
+    def release_keys(self, keys):
+        """Token clock, for the kernel's shell: release these held keys, by identity, whose lease
+        ended; a key that is not held is skipped."""
+        with operation_budget(
+            "key release", ENVIRONMENT_BUDGET.action_s, clock=self.clocks.operational
+        ):
+            self._release_clock_keys(keys)
 
     def _release_clock_keys(self, identities=None):
         selected = (
@@ -609,6 +655,7 @@ class GuestEnvironment:
             for identity, _ in new_parts:
                 if identity not in MODIFIER_KEYS:
                     self._start_autorepeat(identity)
+            self.last_held_keys = tuple(identity for identity, _ in parts)
         return {
             "logical_key": chord,
             "effective_chord": "+".join(
@@ -665,6 +712,7 @@ class GuestEnvironment:
             self._wall_holds.pop(identity, None)
 
     def _wall_release_due(self):
+        invalid = None
         with self._wall_lock:
             self._wall_timer = None
             if self._wall_closed:
@@ -687,7 +735,7 @@ class GuestEnvironment:
                     for identity in expired:
                         self._wall_holds.pop(identity, None)
                     if not getattr(self, "_invalid_run", None):
-                        self._invalid_run = {
+                        self._invalid_run = invalid = {
                             "category": "environment",
                             "reason": "wall_key_release_failed",
                             "detail": str(exc),
@@ -696,6 +744,9 @@ class GuestEnvironment:
                     self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
                     return
             self._schedule_wall_release()
+        # On this timer's thread and outside the lock: the callback is the shell's.
+        if invalid is not None and self.on_invalid is not None:
+            self.on_invalid(invalid)
 
     def _schedule_wall_release(self, min_delay=0.0):
         """Arm one timer for the earliest outstanding wall lease (caller holds ``_wall_lock``)."""
@@ -732,8 +783,12 @@ class GuestEnvironment:
             }
         return self._wall_autorepeat
 
-    def _execute_wall_hold(self, action):
-        """Press the chord now and release it when the lease expires; never block the loop."""
+    def _execute_wall_hold(self, action, release_at=None):
+        """Press the chord now and release it when the lease expires; never block the loop.
+
+        The lease lasts ``duration`` from the press, or to ``release_at`` (semantic seconds since
+        the origin) when the kernel's shell gives it.
+        """
         parts, chord = self._key_chord(action)
         duration = float(action.parameters.get("duration", 1.0))
         if not math.isfinite(duration) or duration <= 0:
@@ -744,6 +799,7 @@ class GuestEnvironment:
         with self._wall_lock:
             autorepeat = self._ensure_wall_autorepeat()
             now = self.clocks.semantic.time()
+            expires_at = now + duration if release_at is None else self.t0 + release_at
             new_parts = [
                 (identity, wire) for identity, wire in parts if identity not in self._wall_holds
             ]
@@ -756,7 +812,7 @@ class GuestEnvironment:
                 self._wall_holds[identity] = {
                     "wire": current["wire"] if current else wire,
                     "keysym": keysyms[identity],
-                    "expires_at": max(current["expires_at"] if current else now, now + duration),
+                    "expires_at": max(current["expires_at"] if current else now, expires_at),
                 }
             self._schedule_wall_release()
             return {
@@ -851,8 +907,11 @@ class GuestEnvironment:
         self._last_coordinate_trace = None
         return "failed"
 
-    def execute(self, action):
-        """Apply one action and return its lifecycle status to the scheduler."""
+    def execute(self, action, *, release_at=None):
+        """Apply one action and return its lifecycle status to the scheduler. The kernel's shell
+        gives a wall-clock hold_key the time to release its keys, ``release_at``."""
+        self.last_held_keys = ()
+        self.last_end_checks = ()
         action_type = action.action_type
         if action_type in (ActionType.DONE, ActionType.FAIL):
             if self.honor_fail:
@@ -939,7 +998,7 @@ class GuestEnvironment:
                 if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
                     # Keys xdotool cannot name and zero-length holds fall through to the guest,
                     # which validates them (HTTP 400 for unsupported names).
-                    result = self._execute_wall_hold(action)
+                    result = self._execute_wall_hold(action, release_at)
                 if result is None:
                     result = self.g.execute_action(action)
                     if self.clock_mode != "token" and action_type in (
@@ -1009,6 +1068,31 @@ class GuestEnvironment:
                 }
                 return True
         return False
+
+    def check_end(self):
+        """Ask the task whether the episode is over, for the kernel's shell: ``(ended, reason)``.
+
+        Unlike done(), no deadline is compared and ``_invalid_run`` is neither read nor written: a
+        failed read raises, and the kernel counts it (evaluation/shell.py). An end is latched in
+        ``_episode_over`` and ``_terminal_reason`` as done() latches it. On the wall clock one
+        read has its own, shorter budget.
+        """
+        if self.stop_check is None:
+            return False, None
+        budget = (
+            ENVIRONMENT_BUDGET.state_read_s
+            if self.clock_mode == "token"
+            else ENVIRONMENT_BUDGET.wall_state_read_s
+        )
+        with operation_budget("state read", budget, clock=self.clocks.operational):
+            terminal = self.stop_check()
+        if not terminal:
+            return False, None
+        self._episode_over = True
+        reason = terminal if isinstance(terminal, str) else None
+        if reason is not None:
+            self._terminal_reason = reason
+        return True, reason
 
 
 # Ports

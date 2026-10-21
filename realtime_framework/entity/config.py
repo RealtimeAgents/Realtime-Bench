@@ -130,6 +130,9 @@ class EnvironmentBudgetConfig:
     action_s: float = 10.0
     capture_s: float = 120.0  # capture one observation; the CDP call default
     state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
+    # The same read when the kernel's shell asks on the wall clock, at the environment rate. Three
+    # failed reads in a row invalidate the run, so a wedged environment ends it in about 30 s.
+    wall_state_read_s: float = 10.0
     clock_advance_s: float = 120.0  # advance or render one token-clock step; the CDP call default
     # Read the scored snapshot at the freeze. Other single state reads time out at 8 s; a web task's
     # snapshot is two such reads (state and evaluation), so the freeze allows both.
