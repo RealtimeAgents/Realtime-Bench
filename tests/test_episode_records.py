@@ -21,8 +21,9 @@ BATCH = [{"observation_id": "o3", "tick": 3.0, "timestamp": 1_000.5}]
 
 
 def _exactly(record: dict, expected: dict) -> None:
-    """Equal, and in the same key order, which the trace and lifecycle files keep (the replay
-    baselines compare them with sorted keys)."""
+    """Equal, and in the same key order, which the lifecycle file keeps
+    (GuestEnvironment.record_lifecycle writes each record as built). The episode trace writes
+    its payloads with sorted keys, and the replay baselines compare them so."""
     assert record == expected
     assert list(record) == list(expected)
 
@@ -361,6 +362,9 @@ def test_an_adapter_with_tools_must_prove_it_inspected_the_observation():
     assert episode_records.result_invalid(r, _Tools(), "token") is None
     r["inspection"] = {**PROOF, "requested_observation_id": "o0"}
     assert episode_records.result_invalid(r, object(), "token") is None
+    assert episode_records.result_invalid(r, _Tools(), "token") == Invalidated(
+        "tool", "inspection_protocol_error", None
+    )
     r["inspection"] = {"valid": False, "status": "stale", "protocol_error": "wrong frame"}
     assert episode_records.result_invalid(r, _Tools(), "token") == Invalidated(
         "tool", "inspection_protocol_error", "wrong frame"
@@ -448,7 +452,7 @@ def test_observation_captured_names_the_frame_and_its_screenshot():
 
 
 def test_inference_started_carries_the_frame_the_usage_before_and_the_caps():
-    budget = DecisionBudget(2_560, 2_560, "inf", "token")
+    budget = DecisionBudget(2_560, 2_048, "inf", "token")
     _exactly(
         episode_records.inference_started(OBSERVATION, 3, {"output_tokens": 9}, 128_000, budget),
         {
@@ -458,7 +462,7 @@ def test_inference_started_carries_the_frame_the_usage_before_and_the_caps():
             "observation_batch": BATCH,
             "usage_before": {"output_tokens": 9},
             "runtime_output_token_cap": 2_560,
-            "provider_output_token_cap": 2_560,
+            "provider_output_token_cap": 2_048,
             "transport_output_token_cap": "inf",
             "native_output_limit": 128_000,
         },
@@ -534,9 +538,12 @@ def test_inference_completed_reports_the_result_and_its_flags():
         "post_horizon_output_tokens": 44,
         "provider_output_token_cap": 256,
         "stale": 1,
+        "timed_out": 1,
+        "error": 0,
     }
+    payload = episode_records.inference_completed(r, 3, "o3")
     _exactly(
-        episode_records.inference_completed(r, 3, "o3"),
+        payload,
         {
             "decision": 3,
             "observation_id": "o3",
@@ -570,11 +577,13 @@ def test_inference_completed_reports_the_result_and_its_flags():
             "provider_response_status": None,
             "provider_response_status_reason": None,
             "stale": True,
-            "timed_out": False,
+            "timed_out": True,
             "error": False,
             "invalid_reason": None,
         },
     )
+    assert (payload["stale"], payload["timed_out"], payload["error"]) == (True, True, False)
+    assert all(type(payload[flag]) is bool for flag in ("stale", "timed_out", "error"))
     assert episode_records.inference_completed({}, 0, None)["post_horizon_output_tokens"] == 0
 
 
@@ -610,7 +619,7 @@ def test_action_resolved_records_what_became_of_the_action():
             terminal_after_action=False,
             action_clock_position=4.5,
             action_resolved_unix_s=1_004.5,
-            environment_tick=4.5,
+            environment_tick=4,
             execution_result={"dispatched": True},
             coordinate_trace={"space": "screen"},
         ),
@@ -622,7 +631,7 @@ def test_action_resolved_records_what_became_of_the_action():
             "terminal_after_action": False,
             "action_clock_position": 4.5,
             "action_resolved_unix_s": 1_004.5,
-            "environment_tick": 4.5,
+            "environment_tick": 4,
             "execution_result": {"dispatched": True},
             "coordinate_trace": {"space": "screen"},
         },
@@ -644,6 +653,8 @@ def test_action_resolved_records_what_became_of_the_action():
 
 # ---- the action lifecycle record --------------------------------------------------------------
 
+CLAMPED = "episode_horizon_clamped:provider_reported_output_usage"
+
 
 def _lifecycle(r, clock_mode="token", **outcome):
     fields = {
@@ -652,8 +663,8 @@ def _lifecycle(r, clock_mode="token", **outcome):
         "frame_age_s": 1.23456789,
         "action_clock_position": 4.5,
         "action_resolved_unix_s": 1_004.5,
-        "frame_output_tokens": 384,
-        "action_output_tokens": 384,
+        "frame_output_tokens": 383,
+        "action_output_tokens": 382,
         "token_delay_frames": 1.5,
         "next_observation_tick": 5.0,
         "post_action_rendered": False,
@@ -679,20 +690,20 @@ def test_the_lifecycle_record_joins_the_settled_result_and_the_outcome():
         "latency": 2.5,
         "provider_ttft_s": 0.25,
         "token_accounting": {"schema": "realtime_bench.token_accounting.v2"},
-        "provider_output_tokens": 384,
+        "provider_output_tokens": 400,
         "clock_output_tokens": 384,
-        "clock_output_tokens_source": "provider_reported_output_usage",
-        "remaining_clock_tokens": 2_560,
-        "unclamped_clock_output_tokens": None,
-        "post_horizon_output_tokens": 0,
+        "clock_output_tokens_source": CLAMPED,
+        "remaining_clock_tokens": 384,
+        "unclamped_clock_output_tokens": 400,
+        "post_horizon_output_tokens": 16,
         "action_protocol": {"source": "tool_call"},
-        "decision_output_cap": 2_560,
+        "decision_output_cap": 2_816,
         "native_output_limit": 128_000,
         "runtime_output_token_cap": 2_560,
-        "provider_output_token_cap": 2_560,
-        "transport_output_token_cap": 2_560,
-        "handoff_token_cap": 0,
-        "action_token_cap": 2_560,
+        "provider_output_token_cap": 2_048,
+        "transport_output_token_cap": 2_304,
+        "handoff_token_cap": 256,
+        "action_token_cap": 1_792,
     }
     _exactly(
         _lifecycle(r),
@@ -718,35 +729,35 @@ def test_the_lifecycle_record_joins_the_settled_result_and_the_outcome():
             "latency_clock": "wall_monotonic",
             "action_clock_position": 4.5,
             "action_resolved_unix_s": 1_004.5,
-            "frame_output_tokens": 384,
+            "frame_output_tokens": 383,
             "token_accounting": {"schema": "realtime_bench.token_accounting.v2"},
-            "action_output_tokens": 384,
-            "provider_output_tokens": 384,
+            "action_output_tokens": 382,
+            "provider_output_tokens": 400,
             "provider_reasoning_output_tokens": None,
             "provider_visible_output_tokens": None,
             "provider_audio_output_tokens": None,
             "provider_token_normalization_schema": None,
             "provider_token_semantics": None,
             "clock_output_tokens": 384,
-            "clock_output_tokens_source": "provider_reported_output_usage",
-            "remaining_clock_tokens": 2_560,
-            "unclamped_clock_output_tokens": None,
-            "post_horizon_output_tokens": 0,
+            "clock_output_tokens_source": CLAMPED,
+            "remaining_clock_tokens": 384,
+            "unclamped_clock_output_tokens": 400,
+            "post_horizon_output_tokens": 16,
             "provider_response_status": None,
             "provider_response_status_reason": None,
             "action_protocol": {"source": "tool_call"},
-            "token_accounting_source": "provider_reported_output_usage",
+            "token_accounting_source": CLAMPED,
             "token_delay_frames": 1.5,
             "next_observation_tick": 5.0,
             "post_action_rendered": False,
             "dropped_intermediate_frames": 0,
-            "decision_output_cap": 2_560,
+            "decision_output_cap": 2_816,
             "native_output_limit": 128_000,
             "runtime_output_token_cap": 2_560,
-            "provider_output_token_cap": 2_560,
-            "transport_output_token_cap": 2_560,
-            "handoff_token_cap": 0,
-            "action_token_cap": 2_560,
+            "provider_output_token_cap": 2_048,
+            "transport_output_token_cap": 2_304,
+            "handoff_token_cap": 256,
+            "action_token_cap": 1_792,
             "status": "applied",
             "terminal_after_action": False,
             "action": episode_records.action_record(CLICK),
@@ -758,12 +769,15 @@ def test_the_lifecycle_record_joins_the_settled_result_and_the_outcome():
     )
 
 
-def test_the_wall_clock_lifecycle_record_measures_the_frame_age_in_wall_time():
+def test_the_wall_clock_lifecycle_record_keeps_the_frame_age_in_wall_time():
+    """On the wall clock the frame age is wall time, kept to the microsecond, and no output
+    tokens place the action: only the frame's count is recorded."""
     record = _lifecycle(
-        {"observation_tick": 3.0},
+        {"observation_tick": 3.0, "observation_timestamp": 1_000.0},
         "wall",
-        frame_age_s=None,
+        frame_age_s=0.43750049,
         action=None,
+        frame_output_tokens=12,
         action_output_tokens=None,
         token_delay_frames=None,
         clock_advance=None,
@@ -773,5 +787,7 @@ def test_the_wall_clock_lifecycle_record_measures_the_frame_age_in_wall_time():
         "wall_clock",
         "action_resolution_wall_time_minus_observation_wall_time",
     )
-    assert record["frame_age_at_action_s"] is None and record["action"] is None
+    assert record["frame_age_at_action_s"] == 0.4375
+    assert (record["frame_output_tokens"], record["action_output_tokens"]) == (12, None)
+    assert record["action"] is None and record["token_delay_frames"] is None
     assert record["generation_id"] is None and record["post_horizon_output_tokens"] == 0
