@@ -30,6 +30,8 @@ from realtime_framework.harnesses.default.request import build_request, system_b
 from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 
+from .clocked_ws import REAL_LIMIT_S, real_time_limit
+
 MODEL_KEY = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml
 STUB_API_KEY = "sk-replay-stub"  # a placeholder, as tests/replay/test_openai_realtime.py uses
 SYSTEM_INSTRUCTION = "system instruction"
@@ -96,17 +98,20 @@ async def run_turns(driver: OpenAIRealtimeDriver, turns: int) -> list[tuple[str,
     return deltas
 
 
-def run_on_fake_clock(clock, coroutine, timeout: float = 60.0):
+def run_on_fake_clock(
+    clock, coroutine, timeout: float = 60.0, *, real_limit_s: float = REAL_LIMIT_S
+):
     """Run ``coroutine`` on a loop the fake clock made, the way RealtimeRuntime runs its loop
-    (harnesses/default/context.py:192-223), while this thread takes part in the clock."""
+    (harnesses/default/context.py:192-223), while this thread takes part in the clock: at most
+    ``timeout`` fake seconds and ``real_limit_s`` real ones."""
     loop = clock.new_event_loop()
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
     try:
         future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-        with clock.participant():
+        with real_time_limit(real_limit_s, future.cancel), clock.participant():
             assert clock.wait(future, timeout), "the coroutine did not finish"
-        return future.result()
+            return future.result()
     finally:
         loop.call_soon_threadsafe(loop.stop)
         thread.join()

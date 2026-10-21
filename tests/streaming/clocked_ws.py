@@ -25,11 +25,14 @@ waits until what it sent is delivered before it goes on.
 
 from __future__ import annotations
 
+import faulthandler
 import json
 import socket
 import threading
 import time
 import traceback
+from collections.abc import Callable
+from contextlib import contextmanager
 
 from websockets.frames import Opcode
 from websockets.protocol import CLOSED, OPEN
@@ -42,6 +45,36 @@ from .ws_cassette import Cursor
 
 RECV_BYTES = 65536
 CLIENT_END_WAIT_S = 10.0  # real seconds, like websockets' close timeout
+REAL_LIMIT_S = 60.0  # real seconds a replay may take
+
+
+@contextmanager
+def real_time_limit(seconds: float, expired: Callable[[], None]):
+    """Fail a replay that is stuck in real time. A participant busy in real I/O keeps the fake
+    clock from moving and from finding the stall, so the run would hang. Past ``seconds`` real
+    seconds every thread's stack goes to stderr, ``expired()`` breaks the replay up, and the block
+    fails."""
+    hit = threading.Event()
+
+    def expire():
+        hit.set()
+        faulthandler.dump_traceback(all_threads=True)
+        expired()
+
+    timer = threading.Timer(seconds, expire)
+    timer.daemon = True
+    timer.start()
+    failure = AssertionError(f"the replay did not finish within {seconds:g} real second(s)")
+    try:
+        yield
+    except BaseException as exc:
+        if hit.is_set():
+            raise failure from exc
+        raise
+    finally:
+        timer.cancel()
+    if hit.is_set():
+        raise failure
 
 
 def wait_delivered(sock) -> None:
@@ -88,14 +121,18 @@ class CassetteServer:
     def __exit__(self, *exc_info):
         self._closing = True
         socket.create_connection(("127.0.0.1", self.port)).close()  # wakes the accept thread
-        for sock in self._sockets:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)  # ends a connection the client left open
-            except OSError:
-                pass
+        self.drop()  # ends a connection the client left open
         for thread in self._threads:
             thread.join(5.0)
         self._listener.close()
+
+    def drop(self) -> None:
+        """End every connection at once, without a closing handshake."""
+        for sock in self._sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def finish(self) -> list[str]:
         """The cursor's problems, with the records left unused, and any error a connection thread
@@ -256,7 +293,10 @@ def clocked_connection(base, clock):
     ``create_connection`` to websockets.sync.client.connect."""
 
     class ClockedConnection(base):
+        opened = 0  # connections made with this class, so a test can tell it was used
+
         def __init__(self, sock, protocol, **kwargs):
+            ClockedConnection.opened += 1
             self._arrived = clock.event()
             super().__init__(_ClockedSocket(sock, clock), protocol, **{**kwargs, "max_queue": None})
 

@@ -19,23 +19,24 @@ from tests import fake_clock
 from tests.fake_clock import FakeClock
 
 from . import clocked_ws
-from .clocked_ws import CassetteServer, clocked_connection
+from .clocked_ws import REAL_LIMIT_S, CassetteServer, clocked_connection, real_time_limit
 
 
 def _record(direction, msg=None, at=None, conn=1):
     return {"conn": conn, "dir": direction, "at": at, "msg": msg}
 
 
-def _replay(records, client) -> list[str]:
-    """Run ``client(connect, clock)`` against the cassette; return the server's problems."""
+def _replay(records, client, *, connection=None, real_limit_s=REAL_LIMIT_S) -> list[str]:
+    """Run ``client(connect, clock)`` against the cassette, on the clocked connection class unless
+    ``connection`` is given; return the server's problems."""
     clock = FakeClock()
     with CassetteServer(records, clock) as server:
-        connection = clocked_connection(ClientConnection, clock)
+        connection = connection or clocked_connection(ClientConnection, clock)
 
         def open_connection():
             return connect(f"ws://127.0.0.1:{server.port}/session", create_connection=connection)
 
-        with clock.participant():
+        with real_time_limit(real_limit_s, server.drop), clock.participant():
             client(open_connection, clock)
     return server.finish()
 
@@ -185,3 +186,15 @@ def test_waiting_for_delivery_never_blocks_on_a_read(monkeypatch):
     peer.close()  # ends a peek that blocked
     sock.close()
     assert returned, "the wait blocked on a read"
+
+
+def test_a_client_stuck_in_real_time_fails_instead_of_hanging():
+    """websockets' own connection class waits for the timed message in real time, so the fake
+    clock never reaches it; the real-time limit breaks the connections up and fails the replay."""
+    records = [_record("open", at=0.0), _record("s2c", {"type": "later"}, 1.0)]
+
+    def client(open_connection, clock):
+        open_connection().recv()
+
+    with pytest.raises(AssertionError, match="did not finish within 1 real second"):
+        _replay(records, client, connection=ClientConnection, real_limit_s=1.0)
