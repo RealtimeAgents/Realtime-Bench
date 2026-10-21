@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import os
 import socket
@@ -582,18 +583,29 @@ def _while_handling(error: Exception, handled: Exception) -> Exception:
         (ssl.SSLError("tls"), TRANSIENT),
         (TimeoutError("timed out"), TRANSIENT),
         (EOFError("ended before the upgrade response"), TRANSIENT),
+        (OSError(errno.ENETUNREACH, "network unreachable"), TRANSIENT),
+        (OSError(errno.EHOSTUNREACH, "host unreachable"), TRANSIENT),
+        (OSError(errno.ENETDOWN, "network down"), TRANSIENT),
+        (OSError(errno.EHOSTDOWN, "host down"), TRANSIENT),
+        (OSError(errno.ENETRESET, "network reset"), TRANSIENT),
+        (OSError(errno.EADDRNOTAVAIL, "address not available"), FATAL),
         (PermissionError("permission"), FATAL),
         (FileNotFoundError("missing"), FATAL),
         (_while_handling(ValueError("bug"), FileNotFoundError("missing")), FATAL),
         (_while_handling(KeyError("bug"), OSError("local")), FATAL),
     ],
-    ids=lambda value: type(value).__name__ if isinstance(value, BaseException) else value,
+    ids=lambda value: (
+        errno.errorcode.get(getattr(value, "errno", None)) or type(value).__name__
+        if isinstance(value, BaseException)
+        else value
+    ),
 )
 def test_only_a_network_failure_below_http_is_transient(error, kind):
     """classify_transport_error takes a connection that failed below HTTP as transient: refused
-    or reset (ConnectionError), a failed name lookup, TLS, a timeout, and one that ended before
-    the upgrade response (EOFError). A local OSError, and an error raised while handling one,
-    is fatal, as it was before any OSError was taken as transient."""
+    or reset (ConnectionError), a network or host that is down or unreachable, a failed name
+    lookup, TLS, a timeout, and one that ended before the upgrade response (EOFError). A local
+    OSError, and an error raised while handling one, is fatal, as it was before any OSError was
+    taken as transient."""
     assert OpenAIRealtimeDriver.classify_transport_error(error).kind == kind
 
 
