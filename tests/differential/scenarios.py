@@ -592,6 +592,22 @@ LATCHED = [
     ),
 ]
 
+# KF2: at 5 fps the horizon main() computes from 0.17 minutes is 51.00000000000001 ticks, which
+# the kernel takes as 51. 1000-token replies at B = 100 move ten frames each; decision 5's lands
+# on tick 51.
+HORIZON = [
+    Script(
+        "token",
+        0.17 * 60,
+        tuple(Turn("click", output_tokens=1000) for _ in range(7)),
+        env_fps=5.0,
+        input_fps=5.0,
+        tokens_per_frame=100,
+        expect=frozenset({"KF2", "X4"}),
+        name="token-horizon-a-few-ulps-past-a-tick",
+    ),
+]
+
 # ---- 5. phase2.md:283 --------------------------------------------------------------------------
 
 EARLY_END = [
@@ -608,4 +624,6 @@ EARLY_END = [
     ),
 ]
 
-NAMED = FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + X12 + LATCHED + EARLY_END
+NAMED = (
+    FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + X12 + LATCHED + HORIZON + EARLY_END
+)

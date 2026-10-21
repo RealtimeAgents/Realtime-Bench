@@ -16,13 +16,15 @@ from realtime_framework.evaluation.shell import run_episode
 
 
 def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
-    """run_stream with the arguments main() passes it (evaluation/runner.py main)."""
+    """run_stream with the arguments main() passes it (evaluation/runner.py main), the horizon
+    from the episode's minutes as there; the kernel takes it within 1e-9 of a whole tick as that
+    tick (kernel/turns.py TurnConfig)."""
     return run_stream(
         agent,
         env,
         delta_s=1.0 / config.env_fps,
         frame_ticks=config.env_fps / config.input_fps,
-        max_ticks=config.max_ticks,
+        max_ticks=config.duration_s / 60 * 60 * config.env_fps,
         log=log,
         think_budget_s=config.think_budget_s,
         per_move_cap_s=config.per_move_cap_s,
