@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 # A streaming action whose frame cannot be found is rejected, not executed (phase2.md, 动作的定位依据).
 INVALID_GROUNDING_FRAME = "invalid_grounding_frame"
-# Why: the action names no frame, names it with something other than an integer, or names a
-# frame that was never sent.
+# The frame cannot be found because the action names no frame, names it with something other
+# than an integer, or names a frame that was never sent.
 MISSING_FRAME = "missing_frame"
 INVALID_FRAME_SYNTAX = "invalid_frame_syntax"
 FRAME_NOT_IN_TABLE = "frame_not_in_table"
@@ -52,7 +52,8 @@ class FrameTable:
         self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None
     ) -> FrameRecord:
         with self._lock:
-            record = FrameRecord(len(self._frames) + 1, observation_id, captured_at, geometry, marks)
+            frame = len(self._frames) + 1
+            record = FrameRecord(frame, observation_id, captured_at, geometry, marks)
             self._frames[record.frame] = record
             return record
 
@@ -91,7 +92,11 @@ class FrameTable:
     def age(self, record: FrameRecord, at_unix_s: float) -> dict:
         """How old a frame is when an action based on it arrives: the frames sent after it by
         then (not those still unsent), and the seconds since its capture. Streaming runs on the
-        wall clock only, so its frames' capture times are wall time as well."""
+        wall clock only, so its frames' capture times are wall time as well.
+
+        ``at_unix_s`` must be read as the send times were, with Clock.time(): a frame sent at the
+        arrival instant counts, but the same instant read another way, as Clock.time_ns() / 1e9,
+        can round to just after it."""
         with self._lock:
             newer = (self._frames[n] for n in range(record.frame + 1, len(self._frames) + 1))
             return {
