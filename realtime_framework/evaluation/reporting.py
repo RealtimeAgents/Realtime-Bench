@@ -267,16 +267,21 @@ def _unavailable(summary: dict, reason: str, *, rate_card=None, status="unavaila
 
 
 def summarize_cost(
-    token_accounting: dict | None, *, pricing: dict | None = None, provider: str | None = None
+    token_accounting: dict | None,
+    *,
+    pricing: dict | None = None,
+    provider: str | None = None,
+    unaccounted: str | None = None,
 ) -> dict:
     """Prefer a complete provider invoice amount, otherwise apply a versioned rate card.
 
     A complete rate-card result requires complete provider totals and cache splits. Modality
     details must reconcile unless the catalog explicitly declares a billing modality for the
     unclassified positive remainder; missing data is never silently priced as text.
+    ``unaccounted`` is why a run accounts no response though it made some.
     """
     if not isinstance(token_accounting, dict) or not token_accounting.get("responses"):
-        return _unavailable(token_accounting or {}, "no_inference_responses")
+        return _unavailable(token_accounting or {}, unaccounted or "no_inference_responses")
 
     reported = token_accounting.get("provider_reported_cost") or {}
     reported_total = _amount(reported.get("known_total_usd"))

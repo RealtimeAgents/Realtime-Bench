@@ -178,6 +178,20 @@ def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
     assert summary["streaming"] is None
 
 
+@pytest.mark.parametrize(
+    "interaction_mode, reason",
+    [("turn_based", "no_inference_responses"), ("streaming", "not_accounted_streaming")],
+)
+def test_a_run_summary_says_why_its_cost_is_unknown(
+    tmp_path, monkeypatch, interaction_mode, reason
+):
+    """The streaming shell accounts no reply's tokens (episode_records.account_tokens runs on the
+    turn-based shell's), so a streaming run's cost is unknown for that, not for a lack of replies
+    (low 2)."""
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", interaction_mode)
+    assert (summary["cost_usd"], summary["cost_accounting"]["reason"]) == (None, reason)
+
+
 def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch):
     """Without --clock the runner runs the token clock (runner.py main), on which streaming is
     refused. Without --report-root, which refuses it earlier (reporting.prepare_episode_report),

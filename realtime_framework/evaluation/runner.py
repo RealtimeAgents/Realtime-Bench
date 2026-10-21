@@ -925,6 +925,8 @@ def main():
         token_accounting,
         pricing=(catalog_entry.pricing if catalog_entry is not None else None),
         provider=(catalog_entry.provider if catalog_entry is not None else None),
+        # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
+        unaccounted="not_accounted_streaming" if a.interaction_mode == "streaming" else None,
     )
     from realtime_framework.evaluation.clock import summarize_model_timing
 

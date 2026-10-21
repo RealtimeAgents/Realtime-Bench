@@ -93,15 +93,18 @@ A streaming trial's `run_summary.json`, and each streaming group of the job's re
 `streaming` section: the frames captured, pushed into the live session, dropped (and why) and
 confirmed by the provider; the actions that arrived, the age of the frame each one named and what
 became of each; and the replies started and given up. The episode trace records each frame and
-action on its own: a frame's capture and push under its observation id, the number it went into
-the session under (`FrameSent`), and the provider's confirmation of that number's block.
+action on its own: a frame's capture and push under its observation id, and the number it went
+into the session under, with when it was captured, written and confirmed (`FrameSent`).
 
 A streaming episode has no turns, so the fields of `run_summary.json` that count them stay 0 or
 empty: `decisions`, `avg_delta_ticks`, `dropped_intermediate_frames`,
 `avg_frame_age_at_action_s` and `max_frame_age_at_action_s`, `token_usage` and the metrics drawn
 from the decision lifecycle, which it does not write. Read the `streaming` section instead; the
-accepted replies' tokens are in `adapter_token_usage`. The report scores a streaming run
-only where that section is the one its episode trace gives.
+accepted replies' tokens are in `adapter_token_usage`. Its cost is not accounted either
+(`cost_accounting.reason` is `not_accounted_streaming`): sum the usage the provider reported
+for every reply, those given up included, from the episode trace's session messages; the
+accepted replies' tokens are a lower bound. The report scores a streaming run only where its
+streaming section is the one its episode trace gives.
 
 The two live APIs keep a session's context differently, and `context_control` says which way a
 run went. OpenAI Realtime's is exact: the harness keeps the newest `retained_frames` screenshots
