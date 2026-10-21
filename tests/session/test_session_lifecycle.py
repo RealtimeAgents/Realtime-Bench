@@ -33,7 +33,7 @@ from realtime_framework.entity.model import (
     SyncDisposition,
     TransportFailure,
 )
-from realtime_framework.entity.records import UNTRACED, TraceEvent
+from realtime_framework.entity.records import UNTRACED, TraceEvent, current_trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
@@ -466,19 +466,19 @@ S = 1_000_000_000  # nanoseconds
 
 
 class _Trace:
-    """An agent trace that keeps what it is given: (event, payload)."""
+    """An agent trace that keeps what it is given, and the scope: (event, payload, scope)."""
 
     def __init__(self):
         self.events: list[tuple] = []
 
     def capture(self, event, payload, *, body=None, classify=None):
-        self.events.append((event, payload))
+        self.events.append((event, payload, current_trace_scope()))
 
     @property
     def waits(self) -> list[tuple]:
         return [
             (payload["wait"], payload["seconds"], payload["until_monotonic_ns"])
-            for event, payload in self.events
+            for event, payload, _ in self.events
             if event == TraceEvent.SESSION_WAIT
         ]
 
@@ -548,10 +548,10 @@ def test_openai_realtime_records_the_connect_backoff():
     driver.bind_trace(trace)
     asyncio.run(driver.connect(ConnectRequest(seed=SEED)))
     delay = TRANSPORT_RETRY.delay_s(1, "empty:connect", TransportFailure(TRANSIENT))
-    assert [(event, payload.get("outcome")) for event, payload in trace.events] == [
-        (TraceEvent.MODEL_ATTEMPT_FINISHED, "retry"),
-        (TraceEvent.SESSION_WAIT, None),
-        (TraceEvent.MODEL_ATTEMPT_FINISHED, "ok"),
+    assert [(event, payload.get("outcome"), scope) for event, payload, scope in trace.events] == [
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "retry", {"connect_attempt": 1}),
+        (TraceEvent.SESSION_WAIT, None, {"connect_attempt": 1}),
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "ok", {"connect_attempt": 2}),
     ]
     assert trace.waits == [("connect_backoff", delay, 100 * S + round(delay * S))]
     assert log == [("sleep", delay)]
