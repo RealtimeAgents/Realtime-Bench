@@ -52,7 +52,8 @@ class FrameTable:
         self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None
     ) -> FrameRecord:
         with self._lock:
-            record = FrameRecord(len(self._frames) + 1, observation_id, captured_at, geometry, marks)
+            frame = len(self._frames) + 1
+            record = FrameRecord(frame, observation_id, captured_at, geometry, marks)
             self._frames[record.frame] = record
             return record
 
