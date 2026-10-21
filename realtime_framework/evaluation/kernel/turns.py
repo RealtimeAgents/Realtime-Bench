@@ -125,6 +125,7 @@ class _Decision:
     over_budget: bool = False
     output_tokens: int | None = None
     post_horizon: int = 0
+    d_frames: float | None = None  # token clock: the action's delay in input frames
     d_ticks: float = 0.0
     tau: float = 0.0
     target: float = 0.0
@@ -393,14 +394,17 @@ class TurnPolicy:
         # paused, the action lands on the observed tick; on the wall clock it lands at the clock
         # position when the result is handled.
         if self.token and tokens_per_frame is not None:
+            d.d_frames = tokens / tokens_per_frame
             d.d_ticks = tokens * config.env_fps / (tokens_per_frame * config.input_fps)
             if d.post_horizon:
                 # The whole response ends past the horizon, so the action lands there, though the
                 # allowance, whole tokens, can fall short of it: an action whose completed response
                 # lands beyond the horizon is not applied (runner.py module docstring).
                 d.d_ticks = config.max_ticks - d.t_k
+                d.d_frames = self._frames(d.d_ticks)
             deliberation = d.d_ticks / config.env_fps
         elif self.token:
+            d.d_frames = 0.0
             deliberation = 0.0
         else:
             deliberation = max(0.0, result.latency or 0.0)
@@ -678,7 +682,7 @@ class TurnPolicy:
             dropped_intermediate_frames=d.dropped,
             post_action_rendered=d.rendered,
             frame_age_s=frame_age,
-            token_delay_frames=d.d_ticks if self.token else None,
+            token_delay_frames=d.d_frames,
             action_output_tokens=d.output_tokens,
             post_horizon_output_tokens=d.post_horizon,
             action=d.action,

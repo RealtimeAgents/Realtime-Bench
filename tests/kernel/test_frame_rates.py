@@ -150,7 +150,8 @@ def test_at_equal_rates_the_rules_are_todays_expressions(rates, duration_s):
 )
 def test_the_action_time_is_in_environment_ticks(rates, tokens_per_frame, tokens, tau):
     """N tokens are N * env_fps / (B * input_fps) environment ticks; the clock steps there, at
-    most one tick a step, before the action lands, and the frame age is that time in seconds."""
+    most one tick a step, before the action lands. The frame age is that time in seconds and the
+    token delay N / B input frames, as today's loop records it (runner.py _apply)."""
     env_fps, input_fps = rates
     replies = [Reply(latency=1.0, action=CLICK, output_tokens=tokens), NEVER]
     sim = _run(_config("token", rates, 10.0, tokens_per_frame), replies)
@@ -166,6 +167,7 @@ def test_the_action_time_is_in_environment_ticks(rates, tokens_per_frame, tokens
     assert outcome.action_clock_position == pytest.approx(tau, abs=1e-9)
     assert outcome.frame_age_s == pytest.approx(tokens / (tokens_per_frame * input_fps))
     assert outcome.frame_age_s == pytest.approx(tau / env_fps)
+    assert outcome.token_delay_frames == pytest.approx(tokens / tokens_per_frame)
     # Whole ticks, then the fraction left: 1, 1, 0.5; 60 ones; 1, 1, 1, 1, 2/7; 1.
     execute = next(i for i, command in enumerate(sim.commands) if isinstance(command, Execute))
     steps = [
@@ -235,8 +237,9 @@ def test_the_allowance_is_the_remaining_input_frames_times_b(
     rates, tokens_per_frame, duration_s, first, remaining, status, tau
 ):
     """The allowance is floor((T - t_k) * input / env * B); output past it is clamped to it and
-    billed past the horizon, and the horizon, in environment ticks, ends the episode."""
-    env_fps, _ = rates
+    billed past the horizon, the action lands at T, its delay the input frames left, and the
+    horizon, in environment ticks, ends the episode."""
+    env_fps, input_fps = rates
     max_ticks = duration_s * env_fps
     replies = [
         Reply(latency=1.0, action=CLICK, output_tokens=first),
@@ -249,6 +252,8 @@ def test_the_allowance_is_the_remaining_input_frames_times_b(
     assert (second.action_output_tokens, second.post_horizon_output_tokens) == (remaining[1], 10)
     assert second.status == status
     assert second.action_clock_position == pytest.approx(tau, abs=1e-9)
+    t_k = sim.captures[1][0]
+    assert second.token_delay_frames == pytest.approx((max_ticks - t_k) * input_fps / env_fps)
     assert second.next_observation_tick == max_ticks
     assert max(sim.advances) <= 1.0
     assert sim.termination == Termination(
