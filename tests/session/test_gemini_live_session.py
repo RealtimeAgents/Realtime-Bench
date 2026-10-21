@@ -32,6 +32,7 @@ from realtime_framework.providers.gemini.session import (
     RealtimeInput,
     Received,
     SessionCore,
+    Trigger,
 )
 
 GO_AWAY_RECONNECT = {
@@ -40,6 +41,7 @@ GO_AWAY_RECONNECT = {
     "go_away_time_left": "30s",
 }
 QUEUED = {"status": "queued"}
+ACTIVITY = ("activity_start", "audio_carrier", "activity_end")  # a trigger without feedback
 
 
 def session_core(
@@ -300,6 +302,42 @@ def test_a_streaming_frame_is_pushed_as_video_then_its_text():
     assert core.delivery[("block", "f2.frame")] == Delivery.SENT
     core.send_failed(push.keys)
     assert core.delivery[("block", "f2.frame")] == Delivery.UNKNOWN
+
+
+def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
+    """A trigger is one activity holding the feedback no seed or trigger has carried into the
+    session yet, then the silent audio an activity must hold. A rebuild's seed carries the
+    feedback it replays; a resume keeps what the session held."""
+    start, carrier, end = (RealtimeInput(kind) for kind in ACTIVITY)
+    core = session_core(streaming=True)
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, "EXECUTION RESULT: ok", None),
+        pushed(2),
+    ]
+    connected(core, streaming_view(blocks))
+    assert core.trigger(streaming_view(blocks)) == Trigger((start, carrier, end), ())
+
+    for generation, feedback in ((2, "EXECUTION RESULT: missed"), (3, "SUPERSEDED")):
+        blocks += [
+            output_block(generation, "click P1", "obs-2", None),
+            feedback_block(generation, feedback, None),
+        ]
+    trigger = core.trigger(streaming_view(blocks))
+    text = RealtimeInput("text", text="EXECUTION RESULT: missed\nSUPERSEDED")
+    assert trigger == Trigger(
+        (start, text, carrier, end), (("block", "g2.feedback"), ("block", "g3.feedback"))
+    )
+    assert core.delivery[("block", "g3.feedback")] == Delivery.SENT
+    assert core.trigger(streaming_view(blocks)).keys == ()
+
+    connected(core, resume_handle="handle-0")
+    blocks += [
+        output_block(4, "click P1", "obs-2", None),
+        feedback_block(4, "EXECUTION RESULT: ok", None),
+    ]
+    assert core.trigger(streaming_view(blocks)).keys == (("block", "g4.feedback"),)
 
 
 def test_observation_and_acknowledgement_delivery():
