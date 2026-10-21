@@ -529,18 +529,18 @@ def run_stream(
         # extra model deliberation, so it must not move the committed action's recorded position.
         action_resolved_at = clock.time()
         status = _land_action()
-        action_result = {
-            "decision": k,
-            "observation_id": r.get("observation_id"),
-            "action": episode_records.action_record(action),
-            "status": status,
-            "terminal_after_action": terminal_after_action,
-            "action_clock_position": round(tau_k, 9),
-            "action_resolved_unix_s": action_resolved_at,
-            "environment_tick": env.tick_index(),
-            "execution_result": getattr(env, "_last_execution_result", None),
-            "coordinate_trace": getattr(env, "_last_coordinate_trace", None),
-        }
+        action_result = episode_records.action_resolved(
+            decision=k,
+            observation_id=r.get("observation_id"),
+            action=action,
+            status=status,
+            terminal_after_action=terminal_after_action,
+            action_clock_position=round(tau_k, 9),
+            action_resolved_unix_s=action_resolved_at,
+            environment_tick=env.tick_index(),
+            execution_result=getattr(env, "_last_execution_result", None),
+            coordinate_trace=getattr(env, "_last_coordinate_trace", None),
+        )
         _emit(TraceEvent.ACTION_RESOLVED, action_result)
         if action is not None and status in {"applied", "wait", "terminal", "terminal_ignored"}:
             _emit(TraceEvent.ACTION_APPLIED, action_result)
@@ -800,24 +800,6 @@ def run_stream(
             f"[think] deliberation budget exhausted: {spent:.1f}s >= {think_budget_s:g}s -> forfeit"
         )
 
-    def _record_observation(obs, decision=None):
-        metadata = getattr(obs, "metadata", {}) or {}
-        _emit(
-            TraceEvent.OBSERVATION_CAPTURED,
-            {
-                "decision": decision,
-                "observation_id": metadata.get("observation_id"),
-                "tick": obs.tick_number,
-                "timestamp": obs.timestamp,
-                "screenshot_sha256": metadata.get("screenshot_sha256")
-                or hashlib.sha256(obs.screenshot or b"").hexdigest(),
-                "capture_latency_s": metadata.get("capture_latency_s"),
-                "interactables_status": (metadata.get("interactables") or {})
-                .get("scene", {})
-                .get("status"),
-            },
-        )
-
     def _environment_done():
         queried_at = _world_s()
         return _end_reported(env.done(), queried_at)
@@ -836,16 +818,9 @@ def run_stream(
             return False
         if not _accept_observation(obs):
             return False
-        _record_observation(obs, decision=k)
+        _emit(TraceEvent.OBSERVATION_CAPTURED, episode_records.observation_captured(obs, k))
         t_k = obs.tick_number
         metadata = getattr(obs, "metadata", {}) or {}
-        observation_batch = [
-            {
-                "observation_id": metadata.get("observation_id"),
-                "tick": obs.tick_number,
-                "timestamp": obs.timestamp,
-            }
-        ]
 
         remaining_clock_tokens = None
         if clock_mode == "token" and tokens_per_frame is not None:
@@ -870,24 +845,13 @@ def run_stream(
         usage_before = episode_records.usage_snapshot(adapter)
         _emit(
             TraceEvent.INFERENCE_STARTED,
-            {
-                "decision": k,
-                "observation_id": metadata.get("observation_id"),
-                "observation_tick": getattr(obs, "tick_number", t_k),
-                "observation_batch": observation_batch,
-                "usage_before": usage_before,
-                "runtime_output_token_cap": budget.runtime_output_tokens,
-                "provider_output_token_cap": budget.provider_output_tokens,
-                "transport_output_token_cap": budget.transport_output_tokens,
-                "native_output_limit": native_output_limit,
-            },
+            episode_records.inference_started(obs, k, usage_before, native_output_limit, budget),
         )
         r = _run_step(_step, k)
         episode_records.annotate_result(
             r,
             decision=k,
             observation=obs,
-            observation_batch=observation_batch,
             native_output_limit=native_output_limit,
             budget=budget,
             remaining_clock_tokens=remaining_clock_tokens,
@@ -898,79 +862,12 @@ def run_stream(
         if usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
         episode_records.account_tokens(r, remaining_clock_tokens, env)
-        chunks = r.get("output_chunks")
-        if not isinstance(chunks, list):
-            chunks = (
-                [{"content": r.get("raw"), "final": True}]
-                if r.get("raw") not in {None, ""}
-                else []
-            )
-        for chunk_index, chunk in enumerate(chunks):
-            chunk_record = chunk if isinstance(chunk, dict) else {"content": str(chunk)}
-            _emit(
-                TraceEvent.OUTPUT_CHUNK_RECEIVED,
-                {
-                    "decision": k,
-                    "observation_id": metadata.get("observation_id"),
-                    "chunk_index": chunk_index,
-                    "final": bool(chunk_record.get("final", chunk_index == len(chunks) - 1)),
-                    "content": chunk_record.get("content", ""),
-                    "channel": chunk_record.get("channel"),
-                    "output_tokens": chunk_record.get("output_tokens"),
-                    "native_token_count": chunk_record.get("native_token_count"),
-                    "function_call": chunk_record.get("function_call"),
-                    "transport_event": chunk_record.get("transport_event"),
-                    # The trace event itself is appended after inference completes. These fields are
-                    # captured synchronously when the collector receives the provider event.
-                    "received_wall_time_ns": chunk_record.get("received_wall_time_ns"),
-                    "received_monotonic_ns": chunk_record.get("received_monotonic_ns"),
-                    "receive_timestamp_source": chunk_record.get(
-                        "receive_timestamp_source", "unavailable"
-                    ),
-                    "trace_recorded_after_inference": True,
-                },
-            )
+        observation_id = metadata.get("observation_id")
+        for chunk in episode_records.output_chunks(r, k, observation_id):
+            _emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk)
         _emit(
             TraceEvent.INFERENCE_COMPLETED,
-            {
-                "decision": k,
-                "observation_id": metadata.get("observation_id"),
-                "latency_s": r.get("latency"),
-                "latency_compatibility_scope": (
-                    "observation_preparation_through_complete_response_processing"
-                ),
-                "decision_wall_latency_s": r.get("decision_wall_latency_s"),
-                "provider_call_wall_latency_s": r.get("provider_call_wall_latency_s"),
-                "runtime_turn_wall_latency_s": r.get("runtime_turn_wall_latency_s"),
-                "provider_ttft_s": r.get("provider_ttft_s"),
-                "provider_ttft_source": r.get("provider_ttft_source"),
-                "provider_ttft_missing_reason": r.get("provider_ttft_missing_reason"),
-                "latency_clock": "wall_monotonic",
-                "usage": r.get("usage"),
-                "frame_usage": r.get("frame_usage"),
-                "token_accounting": r.get("token_accounting"),
-                "provider_output_tokens": r.get("provider_output_tokens"),
-                "provider_reasoning_output_tokens": r.get("provider_reasoning_output_tokens"),
-                "provider_visible_output_tokens": r.get("provider_visible_output_tokens"),
-                "provider_audio_output_tokens": r.get("provider_audio_output_tokens"),
-                "provider_token_normalization_schema": r.get(
-                    "provider_token_normalization_schema"
-                ),
-                "provider_token_semantics": r.get("provider_token_semantics"),
-                "clock_output_tokens": r.get("clock_output_tokens"),
-                "clock_output_tokens_source": r.get("clock_output_tokens_source"),
-                "remaining_clock_tokens": r.get("remaining_clock_tokens"),
-                "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
-                "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
-                "provider_output_token_cap": r.get("provider_output_token_cap"),
-                "transport_output_token_cap": r.get("transport_output_token_cap"),
-                "provider_response_status": r.get("provider_response_status"),
-                "provider_response_status_reason": r.get("provider_response_status_reason"),
-                "stale": bool(r.get("stale")),
-                "timed_out": bool(r.get("timed_out")),
-                "error": bool(r.get("error")),
-                "invalid_reason": r.get("invalid_reason"),
-            },
+            episode_records.inference_completed(r, k, observation_id),
         )
         episode_records.audit_output_caps(adapter, r, budget)
         failure = episode_records.finalize_decision_audit(adapter, r)
@@ -991,14 +888,7 @@ def run_stream(
         if r.get("action") is not None and not action_protocol.get("protocol_failure"):
             _emit(
                 TraceEvent.ACTION_PROPOSED,
-                {
-                    "decision": k,
-                    "observation_id": metadata.get("observation_id"),
-                    "action": episode_records.action_record(r.get("action")),
-                    "thinking": r.get("thinking"),
-                    "protocol": action_protocol,
-                    "action_output_tokens": r.get("action_output_tokens"),
-                },
+                episode_records.action_proposed(r, k, observation_id),
             )
         status, over_budget, terminal_after_action = _apply(k, t_k, r)
         k += 1

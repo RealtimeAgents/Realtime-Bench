@@ -1,10 +1,11 @@
 """The records one decision leaves (evaluation/episode_records.py), called directly rather than
 through run_stream: the output caps and their audit, what a result is annotated with, the
 output-token source the clock is charged with and the token accounting, whether a result is usable
-and the action as the trace keeps it."""
+and the payloads of its trace events."""
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,16 @@ from realtime_framework.evaluation.kernel.events import Invalidated
 
 OBSERVATION = Observation(b"png", 1_000.5, 3.0, {"observation_id": "o3"})
 BATCH = [{"observation_id": "o3", "tick": 3.0, "timestamp": 1_000.5}]
+
+
+def _exactly(record: dict, expected: dict) -> None:
+    """Equal, and in the same key order, which the trace and lifecycle files keep (the replay
+    baselines compare them with sorted keys)."""
+    assert record == expected
+    assert list(record) == list(expected)
+
+
+# ---- output caps ------------------------------------------------------------------------------
 
 
 def _adapter(native_output_limit=None, **attributes):
@@ -60,12 +71,35 @@ def test_a_transport_cap_that_is_not_a_positive_integer_or_inf_is_refused(mapped
         episode_records.decision_budget(adapter, None, "wall")
 
 
+# ---- usage and the result's annotations -------------------------------------------------------
+
+
+class _Usage:
+    def __init__(self, token_usage):
+        self.token_usage = token_usage
+
+
+def test_usage_snapshot_copies_a_mapping_or_reports_none():
+    usage = {"output_tokens": 5}
+    snapshot = episode_records.usage_snapshot(_Usage(usage))
+    assert snapshot == usage and snapshot is not usage
+    assert episode_records.usage_snapshot(_Usage(lambda: {"output_tokens": 7})) == {
+        "output_tokens": 7
+    }
+    assert episode_records.usage_snapshot(_Usage([("output_tokens", 5)])) is None
+    assert episode_records.usage_snapshot(object()) is None
+
+    def broken():
+        raise RuntimeError("usage unavailable")
+
+    assert episode_records.usage_snapshot(_Usage(broken)) is None
+
+
 def _annotate(r, budget, remaining, clock_mode, tokens_per_frame):
     episode_records.annotate_result(
         r,
         decision=3,
         observation=OBSERVATION,
-        observation_batch=BATCH,
         native_output_limit=128_000,
         budget=budget,
         remaining_clock_tokens=remaining,
@@ -78,23 +112,26 @@ def _annotate(r, budget, remaining, clock_mode, tokens_per_frame):
 def test_a_result_is_annotated_with_its_observation_caps_and_clock():
     budget = DecisionBudget(2_560, 2_560, "inf", "token")
     r = _annotate({"action": None, "latency": 1.25}, budget, 2_560, "token", 256)
-    assert r == {
-        "action": None,
-        "latency": 1.25,
-        "decision": 3,
-        "observation_id": "o3",
-        "observation_tick": 3.0,
-        "observation_batch": BATCH,
-        "observation_timestamp": 1_000.5,
-        "decision_output_cap": 2_560,
-        "native_output_limit": 128_000,
-        "runtime_output_token_cap": 2_560,
-        "provider_output_token_cap": 2_560,
-        "transport_output_token_cap": "inf",
-        "remaining_clock_tokens": 2_560,
-        "clock_delay_clock": "simulated_token_clock",
-        "clock_delay_definition": "complete_clock_output_tokens_divided_by_tokens_per_frame",
-    }
+    _exactly(
+        r,
+        {
+            "action": None,
+            "latency": 1.25,
+            "decision": 3,
+            "observation_id": "o3",
+            "observation_tick": 3.0,
+            "observation_batch": BATCH,
+            "observation_timestamp": 1_000.5,
+            "decision_output_cap": 2_560,
+            "native_output_limit": 128_000,
+            "runtime_output_token_cap": 2_560,
+            "provider_output_token_cap": 2_560,
+            "transport_output_token_cap": "inf",
+            "remaining_clock_tokens": 2_560,
+            "clock_delay_clock": "simulated_token_clock",
+            "clock_delay_definition": "complete_clock_output_tokens_divided_by_tokens_per_frame",
+        },
+    )
 
 
 def test_the_clock_definitions_follow_the_clock_mode():
@@ -135,6 +172,52 @@ def test_frame_usage_is_the_growth_of_each_numeric_counter():
         "cached_tokens": 0,
         "reasoning_tokens": 7,
     }
+
+
+# ---- the clock's output tokens and the token accounting ----------------------------------------
+
+
+def test_clock_output_tokens_prefers_the_response_usage():
+    r = {
+        "provider_output_tokens": 40,
+        "usage": {"output_tokens": 30},
+        "frame_usage": {"output_tokens": 20},
+        "native_received_output_tokens": 10,
+    }
+    assert episode_records.clock_output_tokens(r) == (40, "provider_reported_output_usage")
+    del r["provider_output_tokens"]
+    assert episode_records.clock_output_tokens(r) == (30, "provider_reported_output_usage")
+    r["usage"] = {"completion_tokens": 31}
+    assert episode_records.clock_output_tokens(r) == (31, "provider_reported_output_usage")
+    del r["usage"]
+    assert episode_records.clock_output_tokens(r) == (20, "provider_reported_output_usage_delta")
+    del r["frame_usage"]
+    assert episode_records.clock_output_tokens(r) == (10, "native_runtime_output_tokens")
+    r["native_received_output_tokens_source"] = "local_token_ids"
+    assert episode_records.clock_output_tokens(r) == (10, "local_token_ids")
+    del r["native_received_output_tokens"]
+    assert episode_records.clock_output_tokens(r) == (None, None)
+
+
+def test_clock_output_tokens_skips_provider_counts_the_provider_disowns():
+    r = {
+        "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
+        "provider_output_tokens": 40,
+        "usage": {"output_tokens": 30},
+        "native_received_output_tokens": 10,
+    }
+    assert episode_records.clock_output_tokens(r) == (10, "native_runtime_output_tokens")
+    del r["native_received_output_tokens"]
+    assert episode_records.clock_output_tokens(r) == (None, None)
+
+
+def test_clock_output_tokens_takes_only_non_negative_numbers():
+    r = {
+        "provider_output_tokens": True,
+        "usage": {"output_tokens": -1, "completion_tokens": "12"},
+        "frame_usage": {"output_tokens": 7.0},
+    }
+    assert episode_records.clock_output_tokens(r) == (7, "provider_reported_output_usage_delta")
 
 
 class _Env:
@@ -183,6 +266,16 @@ def test_a_result_without_a_count_charges_nothing():
     assert r["clock_output_tokens"] == 40 and r["post_horizon_output_tokens"] == 0
 
 
+def test_frame_output_tokens_takes_the_settled_clock_count_first():
+    r = {"clock_output_tokens": 256, "provider_output_tokens": 300}
+    assert episode_records.frame_output_tokens(r) == 256
+    r["clock_output_tokens"] = None
+    assert episode_records.frame_output_tokens(r) == 300
+
+
+# ---- audits and whether the result is usable --------------------------------------------------
+
+
 def test_the_cap_audit_records_the_handoff_and_action_caps():
     budget = DecisionBudget(1_000, 1_000, 1_000, "token")
     adapter = SimpleNamespace(_frame_handoff_max_tokens=200, _frame_action_max_tokens=800)
@@ -213,88 +306,6 @@ def test_caps_past_the_provider_allowance_fail_the_audit_of_a_usable_result():
     episode_records.audit_output_caps(adapter, r, budget)
     assert (r["handoff_token_cap"], r["action_token_cap"]) == (201, 800)
     episode_records.audit_output_caps(adapter, {}, DecisionBudget(1_000, None, None, "wall"))
-
-
-def test_action_record_keeps_the_type_parameters_and_coordinates():
-    action = Action.click(10, 20)
-    assert episode_records.action_record(action) == {
-        "action_type": "click",
-        "parameters": action.parameters,
-        "coordinate_space": action.coordinate_space,
-        "coordinate_transform": action.coordinate_transform,
-    }
-    assert episode_records.action_record(None) is None
-
-
-class _Usage:
-    def __init__(self, token_usage):
-        self.token_usage = token_usage
-
-
-def test_usage_snapshot_copies_a_mapping_or_reports_none():
-    usage = {"output_tokens": 5}
-    snapshot = episode_records.usage_snapshot(_Usage(usage))
-    assert snapshot == usage and snapshot is not usage
-    assert episode_records.usage_snapshot(_Usage(lambda: {"output_tokens": 7})) == {
-        "output_tokens": 7
-    }
-    assert episode_records.usage_snapshot(_Usage([("output_tokens", 5)])) is None
-    assert episode_records.usage_snapshot(object()) is None
-
-    def broken():
-        raise RuntimeError("usage unavailable")
-
-    assert episode_records.usage_snapshot(_Usage(broken)) is None
-
-
-def test_clock_output_tokens_prefers_the_response_usage():
-    r = {
-        "provider_output_tokens": 40,
-        "usage": {"output_tokens": 30},
-        "frame_usage": {"output_tokens": 20},
-        "native_received_output_tokens": 10,
-    }
-    assert episode_records.clock_output_tokens(r) == (40, "provider_reported_output_usage")
-    del r["provider_output_tokens"]
-    assert episode_records.clock_output_tokens(r) == (30, "provider_reported_output_usage")
-    r["usage"] = {"completion_tokens": 31}
-    assert episode_records.clock_output_tokens(r) == (31, "provider_reported_output_usage")
-    del r["usage"]
-    assert episode_records.clock_output_tokens(r) == (20, "provider_reported_output_usage_delta")
-    del r["frame_usage"]
-    assert episode_records.clock_output_tokens(r) == (10, "native_runtime_output_tokens")
-    r["native_received_output_tokens_source"] = "local_token_ids"
-    assert episode_records.clock_output_tokens(r) == (10, "local_token_ids")
-    del r["native_received_output_tokens"]
-    assert episode_records.clock_output_tokens(r) == (None, None)
-
-
-def test_clock_output_tokens_skips_provider_counts_the_provider_disowns():
-    r = {
-        "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
-        "provider_output_tokens": 40,
-        "usage": {"output_tokens": 30},
-        "native_received_output_tokens": 10,
-    }
-    assert episode_records.clock_output_tokens(r) == (10, "native_runtime_output_tokens")
-    del r["native_received_output_tokens"]
-    assert episode_records.clock_output_tokens(r) == (None, None)
-
-
-def test_clock_output_tokens_takes_only_non_negative_numbers():
-    r = {
-        "provider_output_tokens": True,
-        "usage": {"output_tokens": -1, "completion_tokens": "12"},
-        "frame_usage": {"output_tokens": 7.0},
-    }
-    assert episode_records.clock_output_tokens(r) == (7, "provider_reported_output_usage_delta")
-
-
-def test_frame_output_tokens_takes_the_settled_clock_count_first():
-    r = {"clock_output_tokens": 256, "provider_output_tokens": 300}
-    assert episode_records.frame_output_tokens(r) == 256
-    r["clock_output_tokens"] = None
-    assert episode_records.frame_output_tokens(r) == 300
 
 
 class _Audited:
@@ -376,3 +387,242 @@ def test_a_wall_call_the_harness_aborted_needs_no_proof(reason):
     )
     r["action"] = Action.wait()
     assert episode_records.result_invalid(r, _Tools(), "wall") is not None
+
+
+# ---- trace payloads ---------------------------------------------------------------------------
+
+CLICK = Action.click(10, 20)
+
+
+def test_action_record_keeps_the_type_parameters_and_coordinates():
+    _exactly(
+        episode_records.action_record(CLICK),
+        {
+            "action_type": "click",
+            "parameters": CLICK.parameters,
+            "coordinate_space": CLICK.coordinate_space,
+            "coordinate_transform": CLICK.coordinate_transform,
+        },
+    )
+    assert episode_records.action_record(None) is None
+
+
+def test_observation_captured_names_the_frame_and_its_screenshot():
+    metadata = {
+        "observation_id": "o3",
+        "capture_latency_s": 0.02,
+        "interactables": {"scene": {"status": "complete"}},
+    }
+    observation = Observation(b"png", 1_000.5, 3.0, metadata)
+    _exactly(
+        episode_records.observation_captured(observation, 3),
+        {
+            "decision": 3,
+            "observation_id": "o3",
+            "tick": 3.0,
+            "timestamp": 1_000.5,
+            "screenshot_sha256": hashlib.sha256(b"png").hexdigest(),
+            "capture_latency_s": 0.02,
+            "interactables_status": "complete",
+        },
+    )
+    metadata["screenshot_sha256"] = "digest"
+    assert episode_records.observation_captured(observation, 3)["screenshot_sha256"] == "digest"
+    payload = episode_records.observation_captured(Observation(b"", 0.0, 0.0), 0)
+    assert payload["observation_id"] is None and payload["interactables_status"] is None
+    assert payload["screenshot_sha256"] == hashlib.sha256(b"").hexdigest()
+
+
+def test_inference_started_carries_the_frame_the_usage_before_and_the_caps():
+    budget = DecisionBudget(2_560, 2_560, "inf", "token")
+    _exactly(
+        episode_records.inference_started(OBSERVATION, 3, {"output_tokens": 9}, 128_000, budget),
+        {
+            "decision": 3,
+            "observation_id": "o3",
+            "observation_tick": 3.0,
+            "observation_batch": BATCH,
+            "usage_before": {"output_tokens": 9},
+            "runtime_output_token_cap": 2_560,
+            "provider_output_token_cap": 2_560,
+            "transport_output_token_cap": "inf",
+            "native_output_limit": 128_000,
+        },
+    )
+
+
+def test_each_output_chunk_has_a_payload_and_the_last_is_final_unless_it_says_otherwise():
+    chunks = [
+        {
+            "content": "thinking",
+            "channel": "reasoning",
+            "final": True,
+            "output_tokens": 3,
+            "received_wall_time_ns": 5,
+            "received_monotonic_ns": 6,
+            "receive_timestamp_source": "collector",
+        },
+        "click(1, 2)",
+        {"native_token_count": 4},
+    ]
+    payloads = episode_records.output_chunks({"output_chunks": chunks, "raw": "x"}, 3, "o3")
+    _exactly(
+        payloads[0],
+        {
+            "decision": 3,
+            "observation_id": "o3",
+            "chunk_index": 0,
+            "final": True,
+            "content": "thinking",
+            "channel": "reasoning",
+            "output_tokens": 3,
+            "native_token_count": None,
+            "function_call": None,
+            "transport_event": None,
+            "received_wall_time_ns": 5,
+            "received_monotonic_ns": 6,
+            "receive_timestamp_source": "collector",
+            "trace_recorded_after_inference": True,
+        },
+    )
+    assert [(p["chunk_index"], p["content"], p["final"]) for p in payloads] == [
+        (0, "thinking", True),
+        (1, "click(1, 2)", False),
+        (2, "", True),
+    ]
+    assert payloads[1]["receive_timestamp_source"] == "unavailable"
+
+
+def test_a_raw_reply_without_chunks_is_one_final_chunk():
+    [payload] = episode_records.output_chunks({"raw": "click(1, 2)"}, 0, None)
+    assert (payload["chunk_index"], payload["content"], payload["final"]) == (
+        0,
+        "click(1, 2)",
+        True,
+    )
+    assert episode_records.output_chunks({"raw": ""}, 0, None) == []
+    assert episode_records.output_chunks({"output_chunks": None}, 0, None) == []
+    assert episode_records.output_chunks({"output_chunks": [], "raw": "x"}, 0, None) == []
+
+
+def test_inference_completed_reports_the_result_and_its_flags():
+    r = {
+        "latency": 1.5,
+        "provider_ttft_s": 0.25,
+        "usage": {"output_tokens": 300},
+        "frame_usage": {"output_tokens": 300},
+        "token_accounting": {"schema": "realtime_bench.token_accounting.v2"},
+        "provider_output_tokens": 300,
+        "clock_output_tokens": 256,
+        "clock_output_tokens_source": "episode_horizon_clamped:provider_reported_output_usage",
+        "remaining_clock_tokens": 256,
+        "unclamped_clock_output_tokens": 300,
+        "post_horizon_output_tokens": 44,
+        "provider_output_token_cap": 256,
+        "stale": 1,
+    }
+    _exactly(
+        episode_records.inference_completed(r, 3, "o3"),
+        {
+            "decision": 3,
+            "observation_id": "o3",
+            "latency_s": 1.5,
+            "latency_compatibility_scope": (
+                "observation_preparation_through_complete_response_processing"
+            ),
+            "decision_wall_latency_s": None,
+            "provider_call_wall_latency_s": None,
+            "runtime_turn_wall_latency_s": None,
+            "provider_ttft_s": 0.25,
+            "provider_ttft_source": None,
+            "provider_ttft_missing_reason": None,
+            "latency_clock": "wall_monotonic",
+            "usage": {"output_tokens": 300},
+            "frame_usage": {"output_tokens": 300},
+            "token_accounting": {"schema": "realtime_bench.token_accounting.v2"},
+            "provider_output_tokens": 300,
+            "provider_reasoning_output_tokens": None,
+            "provider_visible_output_tokens": None,
+            "provider_audio_output_tokens": None,
+            "provider_token_normalization_schema": None,
+            "provider_token_semantics": None,
+            "clock_output_tokens": 256,
+            "clock_output_tokens_source": "episode_horizon_clamped:provider_reported_output_usage",
+            "remaining_clock_tokens": 256,
+            "unclamped_clock_output_tokens": 300,
+            "post_horizon_output_tokens": 44,
+            "provider_output_token_cap": 256,
+            "transport_output_token_cap": None,
+            "provider_response_status": None,
+            "provider_response_status_reason": None,
+            "stale": True,
+            "timed_out": False,
+            "error": False,
+            "invalid_reason": None,
+        },
+    )
+    assert episode_records.inference_completed({}, 0, None)["post_horizon_output_tokens"] == 0
+
+
+def test_action_proposed_keeps_the_thinking_and_the_protocol():
+    r = {
+        "action": CLICK,
+        "thinking": "the button",
+        "action_protocol": {"source": "tool_call", "valid_action": True},
+        "action_output_tokens": 12,
+    }
+    _exactly(
+        episode_records.action_proposed(r, 3, "o3"),
+        {
+            "decision": 3,
+            "observation_id": "o3",
+            "action": episode_records.action_record(CLICK),
+            "thinking": "the button",
+            "protocol": {"source": "tool_call", "valid_action": True},
+            "action_output_tokens": 12,
+        },
+    )
+    r["action_protocol"] = None
+    assert episode_records.action_proposed(r, 3, "o3")["protocol"] == {}
+
+
+def test_action_resolved_records_what_became_of_the_action():
+    _exactly(
+        episode_records.action_resolved(
+            decision=3,
+            observation_id="o3",
+            action=CLICK,
+            status="applied",
+            terminal_after_action=False,
+            action_clock_position=4.5,
+            action_resolved_unix_s=1_004.5,
+            environment_tick=4.5,
+            execution_result={"dispatched": True},
+            coordinate_trace={"space": "screen"},
+        ),
+        {
+            "decision": 3,
+            "observation_id": "o3",
+            "action": episode_records.action_record(CLICK),
+            "status": "applied",
+            "terminal_after_action": False,
+            "action_clock_position": 4.5,
+            "action_resolved_unix_s": 1_004.5,
+            "environment_tick": 4.5,
+            "execution_result": {"dispatched": True},
+            "coordinate_trace": {"space": "screen"},
+        },
+    )
+    payload = episode_records.action_resolved(
+        decision=0,
+        observation_id=None,
+        action=None,
+        status="none",
+        terminal_after_action=False,
+        action_clock_position=1.0,
+        action_resolved_unix_s=1_001.0,
+        environment_tick=1.0,
+        execution_result=None,
+        coordinate_trace=None,
+    )
+    assert payload["action"] is None
