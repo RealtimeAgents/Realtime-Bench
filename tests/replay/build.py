@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import DecisionBudget, ModelConfig
 from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
@@ -149,8 +150,9 @@ def build_episode(
             before_initialize(agent)
         return agent
 
+    clock = clock or SystemClock()
     # runner.main() opens the episode trace before it sets up the agent.
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name)
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name, clock=clock)
     setup = runner.AgentSetup()
     with (
         mock.patch.object(runner, "create_agent", checked_create_agent),

@@ -2046,6 +2046,7 @@ def reevaluate_main():
 
 
 import threading
+from realtime_framework.clock import Clock
 from realtime_framework.entity.records import (
     GENESIS_HASH,
     _jsonable,
@@ -2059,18 +2060,21 @@ class EpisodeTrace:
 
     Opening an existing file validates it and resumes at the next sequence number.  This preserves
     append-only behavior when a crashed run is retried in the same run directory; a new ``attempt_id``
-    distinguishes the retry without rewriting prior evidence.
+    distinguishes the retry without rewriting prior evidence. Each record's wall and monotonic
+    times are read on ``clock``, the episode's operational clock.
     """
 
     def __init__(
         self,
         path: str | Path,
         *,
+        clock: Clock,
         run_id: str | None = None,
         attempt_id: str | None = None,
         durable: bool = False,
     ):
         self.path = Path(path)
+        self.clock = clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id
         self.attempt_id = attempt_id or uuid.uuid4().hex
@@ -2104,8 +2108,8 @@ class EpisodeTrace:
                 "event": event_name,
                 "run_id": self.run_id,
                 "attempt_id": self.attempt_id,
-                "wall_time_ns": time.time_ns(),
-                "monotonic_ns": time.monotonic_ns(),
+                "wall_time_ns": self.clock.time_ns(),
+                "monotonic_ns": self.clock.monotonic_ns(),
                 "previous_event_sha256": self._head_hash,
                 "payload": _jsonable(payload or {}),
                 **_jsonable(fields),

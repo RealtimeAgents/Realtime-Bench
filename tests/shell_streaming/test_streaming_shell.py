@@ -37,7 +37,9 @@ def _episode(duration_s, replies, *, tmp_path=None, env_setup=None):
     env, agent = FakeEnv(clock), FakeAgent(clock, replies)
     if env_setup is not None:
         env_setup(env, clock)
-    trace = None if tmp_path is None else EpisodeTrace(tmp_path / "trace.jsonl", run_id="s")
+    trace = (
+        None if tmp_path is None else EpisodeTrace(tmp_path / "trace.jsonl", run_id="s", clock=clock)
+    )
     logs: list[str] = []
     with clock.participant():
         termination = run_streaming_episode(

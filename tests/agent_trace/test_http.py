@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, current_context_policy
@@ -296,8 +297,9 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
         native_output_limit=4096,
         fps=1.0,
     )
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="tokenize")
-    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    clock = SystemClock()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="tokenize", clock=clock)
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     driver = ChatCompletionsDriver(config)
     driver.bind_trace(sink)
     canonical = build_request(
@@ -446,8 +448,9 @@ def _request(config):
 
 def _decide(client_type, model, provider, script, run_dir, monkeypatch, *, served_headers=()):
     monkeypatch.setenv("REPLAY_TRACE_KEY", KEY)
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="decisions")
-    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    clock = SystemClock()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="decisions", clock=clock)
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     with HttpStub(_serving(_decisions_answer(script, model, provider), served_headers)) as stub:
         config = ModelConfig(
             adapter_type="jev_decisions"

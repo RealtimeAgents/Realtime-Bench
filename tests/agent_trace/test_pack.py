@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.agent_trace import (
     SPAN_MIN_CHARS,
@@ -47,8 +48,9 @@ def _record(run_dir, bodies, *, session=()) -> tuple[list[dict], dict]:
 
     ``session`` holds Realtime client messages, captured as a live session would capture them.
     """
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="pack-test")
-    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    clock = SystemClock()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="pack-test", clock=clock)
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     for body in bodies:
         sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=body)
     for message in session:

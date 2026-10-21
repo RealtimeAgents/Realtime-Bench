@@ -1198,7 +1198,9 @@ def main():
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    episode_trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_id)
+    episode_trace = EpisodeTrace(
+        run_dir / "episode_trace.jsonl", run_id=run_id, clock=clocks.operational
+    )
     episode_trace.emit(
         TraceEvent.EPISODE_STARTED,
         {
@@ -2005,7 +2007,7 @@ def set_up_agent(
         cfg, clock_mode=clock_mode, task=ctask, env_fps=env_fps, interaction_mode=interaction_mode
     )
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
-    setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
+    setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack", clock=clock)
     agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace, clock=clock)
     configure_agent(
         agent,
