@@ -308,6 +308,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self.client = self._client_for_slot(self._api_key_index)
         self._cm = None
         self._session = None
+        self._opening: asyncio.Task | None = None  # a connect's _open, until it is done
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._reading: asyncio.Task | None = None  # streaming: the task reading it
         self._reading_context: contextvars.Context | None = None  # and the context it runs in
@@ -540,7 +541,12 @@ class GeminiLiveDriver(SessionLifecycle):
         return self.types.Part(text=part.text)
 
     async def _close_current(self) -> bool:
-        """Close the open connection, if any; returns whether there was one."""
+        """Close the open connection, if any, and end a connect still opening one, which holds
+        the session meanwhile; returns whether there was an open one."""
+        opening, self._opening = self._opening, None
+        if opening is not None:
+            opening.cancel()
+            await asyncio.wait({opening})
         cm, self._cm = self._cm, None
         reading, self._reading = self._reading, None
         session, self._session = self._session, None
@@ -583,32 +589,18 @@ class GeminiLiveDriver(SessionLifecycle):
             await self._wait("session_release", _SESSION_RELEASE_GRACE_S)
         config = self._live_config(request.seed, connect)
         cm = self.client.aio.live.connect(model=request.seed.model_name, config=config)
+        opening = self._opening = asyncio.ensure_future(self._open(cm, connect))
         try:
-            session = await cm.__aenter__()
-            if getattr(session, "setup_complete", None) is None:
-                raise RuntimeError("Gemini Live did not acknowledge session setup")
-            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
-            self._trace_connection = session._ws.trace_connection_id
-            # Seed history explicitly before either input transport. Merely leaving
-            # turn_complete=False can cause historical model content to be echoed as new
-            # output. HistoryConfig makes this a non-generating initialization boundary.
-            # Bound the messages so screenshots do not form one oversized WebSocket frame.
-            index = 0
-            try:
-                for index, batch in enumerate(connect.seed):
-                    await session.send_client_content(
-                        turns=[self._content(content) for content in batch],
-                        turn_complete=index == len(connect.seed) - 1,
-                    )
-            except BaseException:
-                self._core.seed_failed(connect, index)
+            session = await opening
+        except asyncio.CancelledError:
+            if self._opening is opening:
                 raise
-        except BaseException as exc:
-            try:
-                await cm.__aexit__(type(exc), exc, exc.__traceback__)
-            except Exception:  # noqa: BLE001, S110 - preserve the handshake failure
-                pass
-            raise
+            # A close ended it while it opened, as an abort's does (SessionLifecycle).
+            self._stop_if_abandoned("its session opened")
+            raise RuntimeError("Gemini Live session closed while it opened") from None
+        finally:
+            if self._opening is opening:
+                self._opening = None
         self._cm = cm
         self._session = session
         self._activity_open = False
@@ -643,6 +635,37 @@ class GeminiLiveDriver(SessionLifecycle):
                     "gemini_live_server_context": "unknown",
                 }
             )
+
+    async def _open(self, cm, connect: Connect):
+        """The session ``cm`` opens, once the server acknowledged its setup and it took
+        ``connect``'s seed; one that fails on the way is closed again."""
+        try:
+            session = await cm.__aenter__()
+            if getattr(session, "setup_complete", None) is None:
+                raise RuntimeError("Gemini Live did not acknowledge session setup")
+            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
+            self._trace_connection = session._ws.trace_connection_id
+            # Seed history explicitly before either input transport. Merely leaving
+            # turn_complete=False can cause historical model content to be echoed as new
+            # output. HistoryConfig makes this a non-generating initialization boundary.
+            # Bound the messages so screenshots do not form one oversized WebSocket frame.
+            index = 0
+            try:
+                for index, batch in enumerate(connect.seed):
+                    await session.send_client_content(
+                        turns=[self._content(content) for content in batch],
+                        turn_complete=index == len(connect.seed) - 1,
+                    )
+            except BaseException:
+                self._core.seed_failed(connect, index)
+                raise
+        except BaseException as exc:
+            try:
+                await cm.__aexit__(type(exc), exc, exc.__traceback__)
+            except Exception:  # noqa: BLE001, S110 - preserve the handshake failure
+                pass
+            raise
+        return session
 
     async def _read_on(self, receiver: _Receiver) -> None:
         """Streaming: read every message of the connection as it arrives. A reply's messages go
