@@ -1021,29 +1021,41 @@ def test_a_done_or_fail_proposal_becomes_a_wait_without_a_proposal_record(verb):
 
 
 @pytest.mark.parametrize(
-    ("reply", "status", "action", "protocol_failure"),
+    ("reply", "cap", "status", "action", "protocol_failure"),
     [
-        (Reply(action=CLICK, output_tokens=256), "applied", CLICK, None),
+        (Reply(action=CLICK, output_tokens=256), None, "applied", CLICK, None),
         (
             Reply(action=Action(ActionType.DONE), output_tokens=256),
+            None,
             "wait",
             Action.wait(),
             "unsupported_terminal_action",
         ),
         (
             Reply(action=Action.wait(), output_tokens=256, protocol_failure="empty_action_output"),
+            None,
             "wait",
             Action.wait(),
             "empty_action_output",
         ),
-        (_idle(1), "none", None, None),
+        (_idle(1), None, "none", None, None),
+        # 1.5 s over a 1 s cap: no action, so no protocol failure either.
+        (
+            Reply(action=Action(ActionType.DONE), output_tokens=384),
+            1.0,
+            "skipped_timeout",
+            None,
+            None,
+        ),
     ],
-    ids=["click", "done", "unparsed", "none"],
+    ids=["click", "done", "unparsed", "none", "done-over-the-cap"],
 )
-def test_the_outcome_names_the_action_the_decision_came_to(reply, status, action, protocol_failure):
+def test_the_outcome_names_the_action_the_decision_came_to(
+    reply, cap, status, action, protocol_failure
+):
     # The agent's feedback reports what was executed: a DONE is reported as the wait it became,
     # with the protocol failure that made it one (runner.py:1218-1228).
-    sim = _run(_token(10), reply, _idle(9))
+    sim = _run(_token(10, per_move_cap_s=cap), reply, _idle(9))
     outcome = sim.outcomes[0]
     assert (outcome.status, outcome.action, outcome.protocol_failure) == (
         status,

@@ -380,7 +380,7 @@ class TurnPolicy:
         cap = config.per_move_cap_s
         if cap is not None and deliberation > cap:
             self.spent += cap
-            action, timed_out = None, True
+            action, protocol_failure, timed_out = None, None, True
         else:
             self.spent += deliberation
         d.over_budget = config.think_budget_s is not None and self.spent >= config.think_budget_s
