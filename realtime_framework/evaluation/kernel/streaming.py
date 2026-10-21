@@ -191,6 +191,7 @@ class StreamingPolicy:
         self.actions: list[_Action] = []
         self.current: _Action | None = None  # the action executing, or the read after it out
         self.waiting: _Action | None = None  # the newest action that arrived meanwhile
+        self._late: list[_Action] = []  # arrived while the end waited for a read
         self._executing = False  # its Execute is out
         self.frames_pushed = 0
         self.dropped_frames = 0
@@ -205,6 +206,7 @@ class StreamingPolicy:
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
         self._check_due = False  # a read came due while another operation was out
         self._read_frame: int | None = None  # the environment frame read last
+        self._deadline_due = False  # the deadline passed while a read asked before it was out
         self._failed_reads = 0  # state reads failed in a row
         self._reply_watchdog: int | None = None
         self._push_watchdog: int | None = None
@@ -280,7 +282,7 @@ class StreamingPolicy:
     def on_timer(self, handle: int, timer) -> None:
         kernel, config = self.kernel, self.config
         if timer.kind == "deadline":
-            kernel.end("deadline", timer.at)
+            self._apply_deadline()
         elif timer.kind == "end_check":
             if not self._stopped():
                 if self._frame() != self._read_frame:
@@ -317,13 +319,16 @@ class StreamingPolicy:
             self.generation = None
         self._reply_watchdog = self._push_watchdog = None
         self._queued = None
-        self._check_due = self._capture_due = False
+        self._check_due = self._capture_due = self._deadline_due = False
         if self.current is not None and not self._executing:
             after, self.current = self.current, None
             self._resolve(after, "applied", terminal_after_action=True)
         if self.waiting is not None:
             waiting, self.waiting = self.waiting, None
             self._resolve(waiting, self._ended())
+        late, self._late = self._late, []
+        for a in late:
+            self._resolve(a, self._ended())
         self._report()
 
     # ---- the environment ----------------------------------------------------------------------
@@ -453,6 +458,9 @@ class StreamingPolicy:
         if action is not None and protocol_failure is None:
             self.kernel.record(TraceEvent.ACTION_PROPOSED.value, **self._fields(a))
         if self._stopped():
+            if self.kernel.ending is None:
+                # The end waits for a read; it settles this action.
+                return self._late.append(a)
             return self._resolve(a, self._ended())
         if generation in self.abandoned:
             return self._resolve(a, CANCELLED_GENERATION)
@@ -495,7 +503,7 @@ class StreamingPolicy:
     def _executed(self, event: ActionExecuted) -> None:
         kernel = self.kernel
         # Past the deadline the action ran across it: the end comes first.
-        self._stopped()
+        self._apply_deadline()
         a, self._executing = self.current, False
         # When the action took the environment and returned, as the lane read them; a run that
         # raised before it was read has neither.
@@ -522,13 +530,13 @@ class StreamingPolicy:
         self._ask()
 
     def _calls_cancelled(self, event: CallsCancelled) -> None:
-        # Past the deadline the end settles the action waiting first.
-        self._stopped()
+        # Past the deadline the end settles the action waiting.
+        stopped = self._stopped()
         for call_id in event.call_ids:
             a = self._calls.get((event.generation, call_id))
             if a is None:
                 continue  # no action arrived in this call
-            if a is self.waiting:
+            if a is self.waiting and not stopped:
                 self.waiting = None
                 self._resolve(a, CANCELLED_CALL)
             else:
@@ -642,17 +650,27 @@ class StreamingPolicy:
 
     # ---- end checks and the deadline --------------------------------------------------------
 
-    def _stopped(self) -> bool:
-        """Whether nothing more may be done in the world. An answer filed before the deadline can
+    def _apply_deadline(self) -> None:
+        """End the episode once the deadline has passed. An answer filed before the deadline can
         be handled after it, behind a command the shell ran across it; the deadline then ends the
-        episode before the answer leads to anything."""
+        episode before the answer leads to anything. But a read asked before the deadline that
+        is still out decides first: its answer dates a task's end it finds by when it was asked,
+        before the deadline, as the turn-based kernel files such an answer (core.py ``step``).
+        The end waits for that answer, which the read's budget bounds."""
         kernel = self.kernel
-        if kernel.ending is not None:
-            return True
+        if kernel.ending is not None or self._deadline_due:
+            return
         if kernel.semantic < self.config.duration_s:
-            return False
-        kernel.end("deadline", self.config.duration_s)
-        return True
+            return
+        if self._asked:
+            self._deadline_due = True
+        else:
+            kernel.end("deadline", self.config.duration_s)
+
+    def _stopped(self) -> bool:
+        """Whether nothing more may be done in the world, once the deadline is applied."""
+        self._apply_deadline()
+        return self.kernel.ending is not None or self._deadline_due
 
     def _ask(self) -> None:
         """Read the state now: no other operation is out, so the read samples the task now, the
@@ -672,6 +690,8 @@ class StreamingPolicy:
             return
         if event.ended:
             return kernel.end("environment", asked_at, reason=event.reason)
+        if self._deadline_due:
+            return kernel.end("deadline", self.config.duration_s)
         if kernel.ending is not None:
             return
         # No action executes while a read is out: ``current`` is the one this read follows.
