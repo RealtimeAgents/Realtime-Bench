@@ -62,6 +62,16 @@ def _token(fps=1.0, **kwargs):
 
 # ---- check_end ------------------------------------------------------------------------------
 
+CLOCK_MODES = pytest.mark.parametrize("clock_mode", ["wall", "token"])
+
+
+def _on(clock_mode, clock, **kwargs):
+    """A GuestEnvironment on ``clock_mode``, whose operations ``clock`` times."""
+    if clock_mode == "wall":
+        return _wall(clock, **kwargs)
+    env, _ = _token(clocks=Clocks(FrameClock(1.0), clock), **kwargs)
+    return env
+
 
 def test_an_end_check_asks_the_task_past_the_deadline_and_in_an_invalid_run():
     """done() answers both without asking the task (sandbox/actions.py done)."""
@@ -77,27 +87,41 @@ def test_an_end_check_asks_the_task_past_the_deadline_and_in_an_invalid_run():
     assert env._invalid_run == {"category": "environment", "reason": "action_execution_failed"}
 
 
+def test_a_token_end_check_asks_the_task_in_an_invalid_run():
+    """The token clock has no deadline to pass; done() answers an invalid run alone."""
+    asked = []
+    env, _ = _token(stop_check=lambda: asked.append(True))
+    env._invalid_run = {"category": "environment", "reason": "clock_advance_failed"}
+    assert env.done()
+    assert env.check_end() == (False, None)
+    assert asked == [True]
+    assert env._invalid_run == {"category": "environment", "reason": "clock_advance_failed"}
+
+
+@CLOCK_MODES
 @pytest.mark.parametrize(("answer", "reason"), [("task_success", "task_success"), (True, None)])
-def test_an_end_check_latches_the_end_and_the_reason_the_task_names(answer, reason):
-    env, _ = _token(stop_check=lambda: answer)
+def test_an_end_check_latches_the_end_and_the_reason_the_task_names(clock_mode, answer, reason):
+    env = _on(clock_mode, FakeClock(wall_origin=ORIGIN), stop_check=lambda: answer)
     assert env.check_end() == (True, reason)
     assert env._episode_over is True
     assert env._terminal_reason == reason
 
 
-def test_a_failed_end_check_raises_and_leaves_the_run_valid():
+@CLOCK_MODES
+def test_a_failed_end_check_raises_and_leaves_the_run_valid(clock_mode):
     def stop_check():
         raise RuntimeError("game state backend returned no state")
 
-    env, _ = _token(stop_check=stop_check)
+    env = _on(clock_mode, FakeClock(wall_origin=ORIGIN), stop_check=stop_check)
     with pytest.raises(RuntimeError, match="returned no state"):
         env.check_end()
     assert getattr(env, "_invalid_run", None) is None
     assert env._episode_over is False
 
 
-def test_an_end_check_without_a_task_check_never_ends():
-    env, _ = _token()
+@CLOCK_MODES
+def test_an_end_check_without_a_task_check_never_ends(clock_mode):
+    env = _on(clock_mode, FakeClock(wall_origin=ORIGIN))
     assert env.check_end() == (False, None)
 
 
@@ -403,6 +427,20 @@ def test_a_wall_release_that_keeps_failing_tells_the_shell_from_the_timer_s_thre
     assert env._invalid_run["reason"] == "wall_key_release_failed"
 
 
+def test_the_shell_is_told_outside_the_wall_lock():
+    """The shell's thread takes its own lock and then the environment's (sandbox/actions.py
+    _wall_release_due): told under the environment's lock, the two threads could deadlock."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _StuckGuest(clock)
+    owned = []
+    env.on_invalid = lambda record: owned.append(env._wall_lock._is_owned())
+    with clock.participant():
+        env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
+        clock.sleep(5.0)
+    assert owned == [False]
+
+
 def test_a_wall_release_failure_in_a_run_already_invalid_tells_the_shell_nothing():
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
@@ -486,6 +524,14 @@ def test_a_tap_whose_read_sees_the_end_stops_there():
     assert env.last_end_checks == (None,)
     assert env.tick_index() == 1
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
+    assert env._episode_over and env._terminal_reason == "task_success"
+
+
+def test_a_repeated_tap_whose_first_read_sees_the_end_keeps_it():
+    """The reads after it, in the tap's other repeats, find the episode still going."""
+    env, _ = _token(stop_check=_answers("task_success", False, False))
+    _kernel_counting(env).execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
+    assert set(env.last_end_checks) == {None}
     assert env._episode_over and env._terminal_reason == "task_success"
 
 
