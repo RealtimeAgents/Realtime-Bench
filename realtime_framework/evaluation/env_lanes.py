@@ -237,7 +237,8 @@ class Executed:
 
 class EnvLanes:
     """The capture, action and end-check lanes of one streaming episode, behind one gate.
-    ``clock`` is the operational clock; ``post`` hands an event to the kernel (Kernel.post)."""
+    ``clock`` is the operational clock; ``post`` is the shell's, which hands an event to the
+    kernel (Kernel.post) and wakes the shell."""
 
     def __init__(self, env, post: Callable[[object], None], clock):
         self.env = env

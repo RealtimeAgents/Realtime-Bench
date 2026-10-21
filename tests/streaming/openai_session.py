@@ -1,9 +1,9 @@
 """Drive the OpenAI Realtime driver through a few turns on one connection, on a given clock.
 
-The calls are the ones RealtimeRuntime.run_turn makes for a turn of the legacy loop
-(harnesses/default/context.py:225-241, 489-491, 533, 572-586): connect, then per turn
-send_observation with the history ending in the turn's frame, start_generation with the same
-history, and every event of the generation; then close. The history is the request builder's
+The calls are the ones RealtimeRuntime (harnesses/default/context.py) makes in start and in
+run_turn for a turn of the legacy loop: connect, then per turn send_observation with the history
+ending in the turn's frame, start_generation with the same history, and every event of the
+generation; then close. The history is the request builder's
 (harnesses/default/request.py:43), as tests/agent_trace/test_ws.py builds it.
 """
 
@@ -102,8 +102,8 @@ def run_on_fake_clock(
     clock, coroutine, timeout: float = 60.0, *, real_limit_s: float = REAL_LIMIT_S
 ):
     """Run ``coroutine`` on a loop the fake clock made, the way RealtimeRuntime runs its loop
-    (harnesses/default/context.py:192-223), while this thread takes part in the clock: at most
-    ``timeout`` fake seconds and ``real_limit_s`` real ones."""
+    (harnesses/default/context.py, _start_loop and _submit), while this thread takes part in the
+    clock: at most ``timeout`` fake seconds and ``real_limit_s`` real ones."""
     loop = clock.new_event_loop()
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()

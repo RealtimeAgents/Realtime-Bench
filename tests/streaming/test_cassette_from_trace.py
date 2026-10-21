@@ -69,7 +69,7 @@ def _record_session(run_dir, answer=_realtime):
     """Two turns in real time against a stub that answers with ``answer``, traced; the stub's one
     connection and the text deltas the driver read."""
     trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette")
-    # The runner records the episode origin before the agent's first frame (runner.py:1410-1419).
+    # The runner records the episode origin before the agent's first frame (runner.py:1417-1426).
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
     try:
