@@ -109,6 +109,13 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
         for k in sorted(started - set(old.beyond["racing"])):
             records = [_shared(kind, record) for record in other.get(k, [])]
             problems += differences(by_decision.get(k, []), records, f"trace.{kind}[{k}]")[0]
+    # A frame captured for a decision that never started is written or not; what is written of
+    # it is a frame's record, as for the others.
+    frames = old.beyond["trace"]["ObservationCaptured"], new.beyond["trace"]["ObservationCaptured"]
+    for k in range(len(old.episode["captures"])):
+        a, b = (len(by_decision.get(k, [])) for by_decision in frames)
+        if k not in started and a != b:
+            problems.append(f"trace.ObservationCaptured[{k}]: {a} record(s) -> {b}")
     return problems
 
 
@@ -834,6 +841,19 @@ def _u5(script: Script, p: Projection, notes: dict) -> None:
             d["outcome"]["next_observation_tick"] = tick
 
 
+def _u6(script: Script, p: Projection, notes: dict) -> None:
+    """The shell writes the frame the frozen-stream watchdog judged as ObservationCaptured
+    (evaluation/shell.py _Shell._record), before the kernel invalidates the run on it; today the
+    loop judges the frame first and writes none (runner.py _accept_observation)."""
+    invalid = p.episode["invalid"]
+    if invalid is None or invalid["reason"] != "observation_stream_frozen":
+        return
+    frames = p.beyond["trace"]["ObservationCaptured"]
+    k = len(p.episode["captures"]) - 1
+    if k not in frames:
+        frames[k] = [{"frozen": True}]  # counted only: its decision never started
+
+
 def _x2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot before it reports the decision in hand (core.py Kernel.end,
     turns.py TurnPolicy.on_end); today the decision is reported first and the snapshot read after
@@ -932,15 +952,43 @@ RULES = (
     Rule("U2", "an environment-latched failure is written as RunInvalidated", _u2),
     Rule("U4", "a token wait whose step fails is cut short as by the end", _u4),
     Rule("U5", "a failed wall action settles at the tick after the snapshot read", _u5),
+    Rule("U6", "the frame judged frozen is written as ObservationCaptured", _u6),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
     Rule("X3", "a generation the kernel gave up on writes no reply and no usage", _x3),
-    Rule("X5", "KernelRecord entries in the episode trace", seen="shell only"),
+    Rule(
+        "X5",
+        "KernelRecord entries in the episode trace",
+        seen="left out of the projection, as the plan's 投影 says",
+    ),
     Rule("X6", "a timed-out step's feedback does not rewrite the previous record", seen="P2"),
     Rule("X7", "DONE turned into a wait is reported as actual=wait", seen="P2"),
     Rule("X8", "generation numbers in the agent trace; Decision client rebuilt", seen="P2"),
     Rule("X9", "agent events numbered by the kernel", seen="P1d"),
     Rule("X10", "SessionReleaseWait agent records", seen="P3, live drivers only"),
-    Rule("X11", "token key events and releases bounded by the environment budget", seen="P5b"),
-    Rule("X13", "a periodic wall state read is bounded by 10 s", seen="shell and environment"),
+    Rule(
+        "X11",
+        "token key events and releases bounded by the environment budget",
+        seen="both loops run the same environment; replayed key events take no time",
+    ),
+    Rule(
+        "X13",
+        "a wall state read is bounded by 10 s",
+        seen="not scripted: replayed reads take the script's time, never 10 s",
+    ),
+    Rule(
+        "X14",
+        "an action's whole budget is 20 s",
+        seen="both loops run the same environment; replayed actions take the script's time",
+    ),
+    Rule(
+        "X15",
+        "waiting for the wall lock is spent from the action's budget",
+        seen="both loops run the same environment; no replayed lock is contended",
+    ),
+    Rule(
+        "X16",
+        "a failed key release at cleanup leaves the run as it was",
+        seen="both loops run the same environment; no replayed release fails",
+    ),
 )
 ORDER = [rule.id for rule in RULES]
