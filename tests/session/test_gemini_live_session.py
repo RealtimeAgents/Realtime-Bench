@@ -532,15 +532,15 @@ def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
 
 def test_each_change_in_delivery_is_heard_with_its_block():
     """on_delivery hears what the event log records: the setup confirmed and the seed sent once
-    the connection is up, the seed unknown when it failed before, each observation and
-    acknowledgement sent once written, nothing while it is written, and unknown once a write
-    failed."""
+    the connection is up; the setup confirmed and the seed unknown when its write failed before;
+    each observation and acknowledgement sent once written, nothing while it is written, and
+    unknown once a write failed."""
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
         on_delivery=lambda state, contents: heard.append((state, contents)),
     )
-    core.seed_failed(plan(core, view([turn(0)])))
+    core.seed_failed(plan(core, view([turn(0)])), 0)
     connected(core, view([turn(0)]))
     frame = core.observe(view([turn(0), turn(1)]))
     core.sent(frame.keys)
@@ -550,12 +550,33 @@ def test_each_change_in_delivery_is_heard_with_its_block():
     core.acknowledgement_sent(core.acknowledging())
     seed = [(("block", "d0.frame"), "d0.frame"), (("block", "d0.tools"), "d0.tools")]
     assert heard == [
+        ("confirmed", [(("setup",), "system")]),
         ("unknown", seed),
         ("confirmed", [(("setup",), "system")]),
         ("sent", seed),
         ("sent", [(("block", "d1.frame"), "d1.frame")]),
         ("unknown", [(("block", "d2.frame"), "d2.frame")]),
         ("sent", [(("tool_response", "call-1"), None)]),
+    ]
+
+
+def test_a_block_whose_seed_batch_failed_is_unknown_also_if_an_earlier_batch_carried_it():
+    """A tool block's rounds can fall in two batches: the failed second batch leaves it unknown,
+    and only what the first batch carried alone is sent."""
+    heard = []
+    core = SessionCore(
+        {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
+        on_delivery=lambda state, contents: heard.append((state, contents)),
+    )
+    connect = replace(
+        plan(core, view([turn(0), turn(1)])),
+        batched=(("d0.frame", "d0.tools"), ("d0.tools", "d1.frame"), ("d1.tools",)),
+    )
+    core.seed_failed(connect, 1)
+    assert heard == [
+        ("confirmed", [(("setup",), "system")]),
+        ("sent", [(("block", "d0.frame"), "d0.frame")]),
+        ("unknown", [(("block", "d0.tools"), "d0.tools"), (("block", "d1.frame"), "d1.frame")]),
     ]
 
 
