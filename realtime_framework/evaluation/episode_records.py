@@ -5,10 +5,10 @@ whether its result is usable, the protocol of a DONE or FAIL landed as a wait, i
 identity for the frozen-stream check, the payloads of its trace events and its action lifecycle
 record.
 
-The kernel's shell (shell.py) and the legacy turn loop (runner.py _run_stream_legacy) build their
-records with these. Nothing here paces the episode, orders the skips or waits: each function takes
-what its caller measured, so the pacing on the two sides stays separate code and running them side
-by side still compares it (phase2.md, 怎么验证).
+The kernel's shell (shell.py) and the legacy turn loop (tests/differential/legacy_loop.py
+_run_stream_legacy) build their records with these. Nothing here paces the episode, orders the skips
+or waits: each function takes what its caller measured, so the pacing on the two sides stays
+separate code and running them side by side still compares it (phase2.md, 怎么验证).
 
 A generation's result ``r`` is settled in this order, each step reading what the ones before it
 wrote: ``annotate_result`` (the observation id the inspection proof is checked against), the

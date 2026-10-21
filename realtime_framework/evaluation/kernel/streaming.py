@@ -119,7 +119,7 @@ class StreamingConfig:
 
 class _FrozenStream:
     """The same producer identity ``threshold`` times while time moves on: the stream is replaying
-    one frame instead of advancing (runner.py ObservationStreamWatchdog)."""
+    one frame instead of advancing (legacy_loop.py ObservationStreamWatchdog)."""
 
     def __init__(self, threshold: int) -> None:
         self.threshold = max(2, int(threshold))
@@ -539,7 +539,7 @@ class StreamingPolicy:
 
     def _arrived(self, event: ActionArrived) -> None:
         generation, action, protocol_failure = event.generation, event.action, None
-        # There are no terminal actions here either (runner.py _decide).
+        # There are no terminal actions here either (legacy_loop.py _decide).
         if action is not None and action.action_type in (ActionType.DONE, ActionType.FAIL):
             action, protocol_failure = Action.wait(), "unsupported_terminal_action"
         a = _Action(

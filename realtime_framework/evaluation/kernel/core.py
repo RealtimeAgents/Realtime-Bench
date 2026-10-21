@@ -52,7 +52,7 @@ from realtime_framework.evaluation.kernel.events import (
     Timer,
 )
 
-# Stop reasons of the end causes that are not the environment's own (runner.py _finalize).
+# Stop reasons of the end causes that are not the environment's own (legacy_loop.py _finalize).
 STOP_REASONS = {
     "invalid": "invalid_run",
     "think_budget": "think_budget",
@@ -194,7 +194,7 @@ class Kernel:
     def invalidate(self, category: str, reason: str, detail=None) -> None:
         """Latch the first non-model failure; it ends the episode and the run is never scored."""
         if self.invalid is None:
-            # The end of a traceback names the exception (runner.py _invalidate).
+            # The end of a traceback names the exception (legacy_loop.py _invalidate).
             self.invalid = Invalidated(
                 category, reason, None if detail is None else str(detail)[-2000:]
             )

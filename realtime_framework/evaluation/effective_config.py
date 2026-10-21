@@ -75,7 +75,6 @@ _IMPORT_SETTINGS = (
     ("frame_encoding", "max_dimension", "FRAME_MAX_DIM", int, 768),
     ("frame_encoding", "jpeg_quality", "FRAME_JPEG_QUALITY", int, 85),
     ("frame_encoding", "image_detail", "FRAME_IMAGE_DETAIL", str, "auto"),
-    ("runner_timing", "deadline_grace_s", "STREAM_DEADLINE_GRACE_S", float, 2.0),
     ("runner_timing", "abandoned_drain_s", "STREAM_ABANDONED_DRAIN_S", float, 30.0),
     ("runner_timing", "observation_freeze_n", "STREAM_OBSERVATION_FREEZE_N",
      lambda value: max(2, int(value)), 3),
@@ -95,10 +94,9 @@ def _import_values() -> dict:
             "image_detail": capture.FRAME_ENCODING.image_detail,
         },
         "runner_timing": {
-            "deadline_grace_s": runner.DEADLINE_GRACE_S,
-            "abandoned_drain_s": runner.ABANDONED_DRAIN_S,
-            "observation_freeze_n": runner.OBSERVATION_FREEZE_N,
-            "provider_watchdog_s": runner.PROVIDER_WATCHDOG_S,
+            "abandoned_drain_s": runner.RUNNER_TIMING.abandoned_drain_s,
+            "observation_freeze_n": runner.RUNNER_TIMING.observation_freeze_n,
+            "provider_watchdog_s": runner.RUNNER_TIMING.provider_watchdog_s,
         },
     }
 
