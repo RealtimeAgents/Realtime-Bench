@@ -25,7 +25,7 @@ shell to send it).
 | `--ak duration_minutes=5` | Scored time limit per task in minutes (default: 5). |
 | `--ak fps=1` / `--ak seed=42` | Environment frame rate and [task seed](#task-seed) (defaults shown). |
 | `--ak model_input_fps=1` | Frames per second fed to the model, at most `fps`; `tokens_per_frame` counts these frames (default: `fps`). |
-| `--ak interaction_mode=turn_based` | `turn_based` (default): one frame per model generation. `streaming` pushes frames into a live session (OpenAI Realtime, Gemini Live) on the wall clock and is reported separately; no model supports it yet. |
+| `--ak interaction_mode=turn_based` | `turn_based` (default): one frame per model generation. `streaming` pushes frames into a live session (OpenAI Realtime, Gemini Live) on the wall clock and is reported separately ([streaming runs](#streaming-runs)); no model supports it yet. |
 | `--ak clock=wall` | `wall` (default) or `token`; see [clocks](#clocks). |
 | `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else its API's default, `low` for most APIs; provider default for `-m provider/model-id` and `chat_completions` presets). |
 | `--ak api_base=https://HOST/v1` | Custom endpoint, e.g. with `-m openai/MODEL` for an OpenAI-compatible service. |
@@ -86,6 +86,21 @@ Open a job, then a trial. **Trajectory** shows screenshots, actions, and feedbac
 infrastructure failure, listed under **Errors**). All but `pass` score 0, and the success rate is
 passes over all tasks. If the port is taken, pass a
 range such as `--port 18081-18089`.
+
+## Streaming runs
+
+A streaming trial's `run_summary.json`, and each streaming group of the job's report, carry a
+`streaming` section: the frames captured, pushed into the live session, dropped (and why) and
+confirmed by the provider; the actions that arrived, the age of the frame each one named and what
+became of each; and the replies started and given up. The episode trace records each frame and
+action on its own.
+
+The two live APIs keep a session's context differently, and `context_control` says which way a
+run went. OpenAI Realtime's is exact: the harness keeps the newest `retained_frames` screenshots
+in the session and replaces older ones with a placeholder itself. Gemini Live's is approximate:
+once the session reaches `compression_trigger_tokens`, the server compresses it down to
+`compression_target_tokens` without saying what it removed, and Gemini confirms no frame it
+received. Both are [streaming settings](model_configuration.md#streaming-settings) of the model.
 
 ## Parallel runs
 
