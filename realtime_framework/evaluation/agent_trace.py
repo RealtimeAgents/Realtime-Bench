@@ -232,6 +232,11 @@ class AgentTraceSink:
         with self._emit_lock:
             self._post = post
 
+    def fail(self, error: str) -> None:
+        """A record handed over could not be written: the run is invalid as the sink closes
+        (close_agent_trace), and later records are counted, not written."""
+        self._error = self._error or error
+
     def take_back(self, write_handed) -> None:
         """Write the records again. ``write_handed`` writes those already handed over first; the
         writer waits for it."""

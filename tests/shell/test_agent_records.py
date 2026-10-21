@@ -11,6 +11,7 @@ from typing import ClassVar
 import pytest
 
 from realtime_framework.entity.records import TraceEvent, trace_scope
+from realtime_framework.evaluation.agent_trace import close_agent_trace
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import AgentRecord
 
@@ -416,3 +417,42 @@ def test_the_record_the_kernel_was_given_is_written_when_it_raises_taking_it(tmp
     assert (summary["captures"], summary["written"], summary["error"]) == (3, 3, None)
     records = _agent_records(episode.trace)
     assert [record["payload"]["index"] for record in records] == [0, 1, 2]
+
+
+class FailingOnceAfterTheEnd(Trace):
+    """Fails to write the first agent record numbered after the termination, once."""
+
+    def __init__(self):
+        super().__init__()
+        self._ended = self._failed = False
+
+    def emit(self, event, payload=None, **fields) -> None:
+        name = event.value if isinstance(event, TraceEvent) else event
+        if name == "KernelRecord" and payload["kind"] == "Termination":
+            self._ended = True
+        agent = payload is not None and payload.get("source") == "agent"
+        if self._ended and agent and "kernel_seq" in fields and not self._failed:
+            self._failed = True
+            raise OSError("trace disk full")
+        super().emit(event, payload, **fields)
+
+
+def test_a_record_that_fails_to_be_written_after_the_end_invalidates_the_run(tmp_path):
+    """As test_records_handed_over_as_the_episode_finishes_are_written_before_it_ends, but the
+    first of the burst written after the termination fails. The kernel handles nothing more, so
+    the sink invalidates the run as it closes."""
+    BurstAgent.made.clear()
+    world = World(ends_at=0.5, on_release=lambda: _handed(BurstAgent.made[0].sink, 200))
+    episode = run(
+        "wall",
+        1.0,
+        [Reply(0.5)],
+        world,
+        trace=FailingOnceAfterTheEnd(),
+        agent_type=BurstAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.invalid is None
+    invalid = close_agent_trace(episode.agent.sink, episode.invalid)
+    assert (invalid["category"], invalid["reason"]) == ("harness", "agent_trace_write_failed")
+    assert "OSError: trace disk full" in invalid["detail"]
