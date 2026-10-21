@@ -18,7 +18,6 @@ from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.harnesses.streaming.history import (
-    StreamingRetention,
     feedback_block,
     frame_block,
     history_view,
@@ -111,8 +110,7 @@ def streaming_view(blocks, *, frames: int = 2):
         blocks,
         policy=current_context_policy().for_path("gemini_live", {}, None),
         system=system_block("system instruction", None),
-        retention=StreamingRetention(frames, "placeholder", "all"),
-        actions={},
+        retained_frames=frames,
         answer=AnswerRequirements("function_call", "standard_vlm"),
         call=CallParameters("gemini-live", None, None),
     )
@@ -290,7 +288,7 @@ def test_a_streaming_rebuild_replays_the_streaming_view():
             pushed(1),
             output_block(1, action, "obs-1", None),
             pushed(2),
-            feedback_block(1, "EXECUTION RESULT: ok", None),
+            feedback_block(1, None, "EXECUTION RESULT: ok", None),
             pushed(3),
         ]
     )
@@ -330,7 +328,7 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
     blocks = [
         pushed(1),
         output_block(1, "click P1", "obs-1", None),
-        feedback_block(1, "EXECUTION RESULT: ok", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
         pushed(2),
     ]
     connected(core, streaming_view(blocks))
@@ -339,7 +337,7 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
     for generation, feedback in ((2, "EXECUTION RESULT: missed"), (3, "SUPERSEDED")):
         blocks += [
             output_block(generation, "click P1", "obs-2", None),
-            feedback_block(generation, feedback, None),
+            feedback_block(generation, None, feedback, None),
         ]
     trigger = core.trigger(streaming_view(blocks))
     text = RealtimeInput("text", text="EXECUTION RESULT: missed\nSUPERSEDED")
@@ -352,7 +350,7 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
     connected(core, resume_handle="handle-0")
     blocks += [
         output_block(4, "click P1", "obs-2", None),
-        feedback_block(4, "EXECUTION RESULT: ok", None),
+        feedback_block(4, None, "EXECUTION RESULT: ok", None),
     ]
     assert core.trigger(streaming_view(blocks)).keys == (("block", "g4.feedback"),)
 
