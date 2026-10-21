@@ -181,8 +181,9 @@ class WallEnvironment(_Latched, FakeEnvironment):
         kernels = self._kernels(asked)
         self._last_asked = asked
         if reads and kernels and self.script.read_fails_at(asked):
-            # GuestEnvironment latches a failed read and answers that the episode is over
-            # (sandbox/actions.py GuestEnvironment.done).
+            # GuestEnvironment latches a read that failed, once it has taken its time, and
+            # answers that the episode is over (sandbox/actions.py GuestEnvironment.done).
+            self.clock.sleep(self.script.check_s)
             self._invalid_run = {
                 "category": "environment",
                 "reason": "terminal_state_check_failed",
@@ -191,8 +192,8 @@ class WallEnvironment(_Latched, FakeEnvironment):
             cause, over = "failed", True
         else:
             over = super().done()
-        if reads:
-            self.clock.sleep(self.script.check_s)
+            if reads:
+                self.clock.sleep(self.script.check_s)
         # The read after an executed action is one the kernel makes too; it reads each frame
         # by its own timer instead of today's others (turns.py TurnPolicy._check_end).
         self.log("diff.check", at=asked, answer=cause, kernels=kernels)
@@ -708,6 +709,7 @@ def project(script: Script, env, side: str) -> Projection:
 
     captures, checks, key_ups = [], [], []
     started_at, finished_at, resolved_at, committed_at, timeout_reasons = {}, {}, {}, {}, {}
+    executed_at = {}
     taps, reads, records, aborts, requested, extras = [], [], 0, 0, [], []
     commits, snapshot_after, aborted_at, output_tokens = 0, None, [], {}
     first_end, ended_before_commit = None, {}
@@ -786,6 +788,7 @@ def project(script: Script, env, side: str) -> Projection:
             snapshot_after = commits
         elif name == "diff.execute":
             of(call["decision"])["executed"].append({"at": call["at"], "action": call["action"]})
+            executed_at.setdefault(call["decision"], call["at"])
         elif name == "env.execute" and token:
             action = call["action"]
             at = call["from_tick"] * seconds
@@ -847,6 +850,8 @@ def project(script: Script, env, side: str) -> Projection:
         "started_at": started_at,
         "finished_at": finished_at,
         "resolved_at": resolved_at,
+        # Wall clock: when the environment was handed each decision's action, a wait too.
+        "executed_at": executed_at,
         "committed_at": committed_at,
         "timeout_reasons": timeout_reasons,
         # The state reads before the snapshot, in order, with their answer (None, "task" or
