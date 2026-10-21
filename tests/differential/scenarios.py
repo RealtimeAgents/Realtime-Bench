@@ -665,6 +665,84 @@ EARLY_END = [
     ),
 ]
 
+# ---- 6. state reads and captures that take time (N29) --------------------------------------------
+
+TIMED = [
+    # At 1 fps each decision reads at k s, captures 0.01 s later and asks 0.02 s after that; its
+    # reply is back at k + 0.53 s. Today's loop reads again before landing and lands at k + 0.54
+    # s, the kernel at once (U13). The last reply misses the deadline (K-a).
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5, 0.5, 0.5, LATE_REPLY_S]),
+        check_s=0.01,
+        capture_s=0.02,
+        expect=frozenset({"K-a", "K-g", "U13", "X4"}),
+        name="wall-reads-and-captures-take-time",
+    ),
+    # At 4 fps a read takes 0.05 s. Decision 0's reply is back at 0.52 s, during the periodic read
+    # asked at 0.5 s: the kernel takes it at 0.55 s, when that read has returned (K-b), today's
+    # loop at once and lands it after its own read, at 0.57 s (U13). Decision 1's is back at
+    # 1.65 s, between reads.
+    Script(
+        "wall",
+        2.0,
+        _timed(["click", "click"], [0.47, 0.6]),
+        env_fps=4.0,
+        check_s=0.05,
+        expect=frozenset({"K-b", "U13", "X2", "X4"}),
+        name="wall-a-reply-back-during-a-periodic-read",
+    ),
+    # The deadline at 1.775 s falls during the periodic read asked at 1.75 s, which returns at
+    # 1.8 s; decision 1's reply came back at 1.76 s, during it. The shell files the reply after the
+    # read, past the deadline (D47), and reads the snapshot then (K-g); today's loop lands it.
+    Script(
+        "wall",
+        1.775,
+        _timed(["click", "click"], [0.5, 0.71]),
+        env_fps=4.0,
+        check_s=0.05,
+        expect=frozenset({"D47", "K-g", "U13", "X4"}),
+        name="wall-the-deadline-falls-during-a-read",
+    ),
+    # wall-third-failed-read-is-todays-first with reads of 0.01 s: the third failed read, the one
+    # after decision 1's click at 1.46 s, invalidates the run when it returns (U14).
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
+        env_fps=8.0,
+        check_s=0.01,
+        failing_reads_s=((1.2, 1.6),),
+        expect=frozenset({"K-g", "U13", "U14", "U2", "X2", "X4"}),
+        name="wall-a-failed-read-takes-time",
+    ),
+    # wall-hold-between-frames with reads and captures that take time: the hold's lease runs
+    # from the kernel's landing, a read's time before today's (U13).
+    Script(
+        "wall",
+        2.5,
+        _timed(["hold:shift:0.5", "click", "click"], [0.25, 0.25, 0.25]),
+        check_s=0.01,
+        capture_s=0.02,
+        expect=frozenset({"U13", "X2", "X4"}),
+        name="wall-a-hold-and-reads-that-take-time",
+    ),
+    # wall-ends-during-a-reply with reads and captures that take time: the periodic read asked at
+    # 2.25 s finds the end, dated then, and the snapshot is read when it has returned (K-b, K-g).
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5] * 4),
+        env_fps=4.0,
+        ends_at_s=2.25,
+        check_s=0.01,
+        capture_s=0.02,
+        expect=frozenset({"K-b", "K-g", "U10", "U13", "X4"}),
+        name="wall-ends-during-a-reply-and-reads-take-time",
+    ),
+]
+
 NAMED = (
     FRAME_RATES
     + RUNNER_LOOP
@@ -676,4 +754,5 @@ NAMED = (
     + LANDED
     + HORIZON
     + EARLY_END
+    + TIMED
 )
