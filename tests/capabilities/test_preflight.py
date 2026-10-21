@@ -58,9 +58,11 @@ def preset(key, **overrides):
 def episode(
     model_config, *, clock_mode="wall", task=WEB, interaction_mode="turn_based", env_fps=None
 ):
+    """check_episode with the environment at the model-input rate unless ``env_fps`` is given."""
     check_episode(
         model_config, clock_mode=clock_mode, task=tasks.get(task),
-        interaction_mode=interaction_mode, env_fps=env_fps,
+        interaction_mode=interaction_mode,
+        env_fps=model_config.fps if env_fps is None else env_fps,
     )
 
 

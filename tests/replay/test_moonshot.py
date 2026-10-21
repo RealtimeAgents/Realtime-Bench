@@ -237,7 +237,7 @@ def test_model_without_a_preset(tmp_path, monkeypatch):
         context_preset=None,
         reasoning_effort=None,
     )
-    check_episode(config, clock_mode="token", task=ReplayTask())
+    check_episode(config, clock_mode="token", task=ReplayTask(), env_fps=config.fps)
     assert all(_body(r)["model"] == "kimi-other" for r in records)
     assert not any("reasoning_content" in m for r in records for m in _messages(r))
     for k, step in enumerate(PAUSE_SCENARIO[:-1]):
