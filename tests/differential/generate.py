@@ -6,8 +6,9 @@ the points where the rules turn: whole input frames, half and quarter frames, th
 its multiples. On the token clock they fail runs of end checks and reads inside taps, which X12
 counts. They leave out what the rules do not compare one by one: retries, wall reads that fail
 (where the kernel's periodic reads and today's fall at one instant, the order is not today's to
-show; named scripts cover them), operations that take time on the wall clock (each named script
-that needs one says so), and wall replies near the deadline plus today's 2 s grace or the per-move
+show; named scripts cover them), wall operations that take time but reading the evaluation
+snapshot (scenarios.TIMED gives them time), and wall replies near the deadline plus today's 2 s
+grace or the per-move
 cap, where today's bounded wait and the reply would fall due at one instant (wave2-plan.md, R13);
 the cap and the think budget appear on the token clock only. Random scripts may show any expected
 difference; only what no rule explains fails them.
@@ -159,8 +160,8 @@ def _still_fails(fails: Callable[[Script], bool], script: Script) -> bool:
 
 
 def _smaller(script: Script):
-    if len(script.turns) > 1:
-        yield script.but(turns=script.turns[:-1])
+    for k in reversed(range(len(script.turns)) if len(script.turns) > 1 else ()):
+        yield script.but(turns=script.turns[:k] + script.turns[k + 1 :])
     for name, plain in (
         ("frozen_from", None),
         ("ends_after", None),
@@ -170,12 +171,21 @@ def _smaller(script: Script):
         ("advance_errors", ()),
         ("snapshot_error", None),
         ("snapshot_s", 0.0),
+        ("capture_s", 0.0),
+        ("check_s", 0.0),
+        ("execute_s", 0.0),
+        ("commit_s", 0.0),
     ):
         if getattr(script, name) != plain:
             yield script.but(**{name: plain})
     frame = 1.0 / script.input_fps
     if script.duration_s > 2 * frame:
         yield script.but(duration_s=script.duration_s - frame)
+    if script.ends_at_s is not None:
+        # Onto the environment's frames.
+        snapped = max(1, round(script.ends_at_s * script.env_fps)) / script.env_fps
+        if snapped != script.ends_at_s:
+            yield script.but(ends_at_s=snapped)
     for k, turn in enumerate(script.turns):
         for simpler in _simpler(turn, script):
             yield script.but(turns=script.turns[:k] + (simpler,) + script.turns[k + 1 :])
@@ -186,8 +196,16 @@ def _simpler(turn: Turn, script: Script):
         yield replace(turn, rejected=None, fault=None)
     if turn.action != "click":
         yield replace(turn, action="click")
-    if script.clock == "wall" and turn.attempts != (Attempt(),):
-        yield replace(turn, attempts=(Attempt(),))
+    frame = 1.0 / script.input_fps
+    if script.clock == "wall" and turn.attempts != (Attempt(frame / 2),):
+        yield replace(turn, attempts=(Attempt(frame / 2),))
+    word = parse(turn.action)
+    if word.seconds and word.kind in ("wait", "hold"):
+        # Onto half input frames.
+        seconds = max(1, round(word.seconds / frame * 2)) * frame / 2
+        if seconds != word.seconds:
+            action = f"wait:{seconds:g}" if word.kind == "wait" else f"hold:{word.key}:{seconds:g}"
+            yield replace(turn, action=action)
     if script.tokens_per_frame is not None and turn.output_tokens not in (None, 0):
         whole = turn.output_tokens - turn.output_tokens % script.tokens_per_frame
         if whole != turn.output_tokens:
