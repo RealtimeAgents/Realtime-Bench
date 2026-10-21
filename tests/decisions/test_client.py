@@ -66,7 +66,7 @@ class _Trace:
         return len(self.events)
 
 
-def _reply(api="luna", **changes) -> dict:
+def _reply(api, **changes) -> dict:
     _, model, upstream = APIS[api]
     reply = {
         "provider": upstream,
@@ -85,8 +85,13 @@ def _reply(api="luna", **changes) -> dict:
     return reply
 
 
-def _answer(**changes) -> dict:
-    return _reply(answers={"next_action": {**_reply()["answers"]["next_action"], **changes}})
+def _answer(api, **changes) -> dict:
+    answer = _reply(api)["answers"]["next_action"]
+    return _reply(api, answers={"next_action": {**answer, **changes}})
+
+
+def _without(reply: dict, key: str) -> dict:
+    return {name: value for name, value in reply.items() if name != key}
 
 
 def _serve(status, body, headers=(), content_type="application/json"):
@@ -180,6 +185,7 @@ def test_one_post_with_these_bytes(endpoint, api, body):
     ]
 
 
+@pytest.mark.parametrize("api", list(APIS))
 @pytest.mark.parametrize(
     "question",
     [
@@ -190,113 +196,104 @@ def test_one_post_with_these_bytes(endpoint, api, body):
     ],
     ids=["not_choice", "no_options", "options_not_a_mapping", "256_options"],
 )
-def test_a_question_the_api_cannot_take_is_not_sent(endpoint, question):
-    error, requests = _decide(endpoint, "luna", _serve(200, _reply()), question=question)
+def test_a_question_the_api_cannot_take_is_not_sent(endpoint, question, api):
+    error, requests = _decide(endpoint, api, _serve(200, _reply(api)), question=question)
     assert type(error) is ValueError
     assert requests == []
 
 
 # ---- The reply ---------------------------------------------------------------------------------
 
+VALID = {
+    "plain": lambda api: _reply(api),
+    "provider_in_other_case": lambda api: _reply(api, provider=APIS[api][2].upper()),
+    "dated_model": lambda api: _reply(api, model=APIS[api][1] + "-2026-10-01"),
+    "zero_usage_and_more_keys": lambda api: _reply(
+        api, usage={"input_tokens": 0, "output_tokens": 0, "cost": 0.5}
+    ),
+    "more_fields": lambda api: _reply(api, id="dec-1"),
+    "integer_numbers": lambda api: _answer(api, probabilities={"b": 0, "a": 1}, confidence=1),
+    "probabilities_need_not_sum_to_one": lambda api: _answer(
+        api, probabilities={"b": 0.9, "a": 0.9}
+    ),
+    "more_answer_fields": lambda api: _answer(
+        api, probabilities={"b": 0.0, "a": 0.0}, extra="kept"
+    ),
+}
 
-@pytest.mark.parametrize(
-    "reply",
-    [
-        _reply(),
-        _reply(provider="OpenAI"),
-        _reply(model="openai/gpt-6-luna-decisions-2026-10-01"),
-        _reply(usage={"input_tokens": 0, "output_tokens": 0, "cost": 0.5}),
-        _reply(id="dec-1"),
-        _answer(probabilities={"b": 0, "a": 1}, confidence=1),
-        _answer(probabilities={"b": 0.9, "a": 0.9}),
-        _answer(probabilities={"b": 0.0, "a": 0.0}, extra="kept"),
-    ],
-    ids=[
-        "plain",
-        "provider_in_other_case",
-        "dated_model",
-        "zero_usage_and_more_keys",
-        "more_fields",
-        "integer_numbers",
-        "probabilities_need_not_sum_to_one",
-        "more_answer_fields",
-    ],
-)
-def test_a_valid_reply_comes_back_as_received(endpoint, reply):
-    result, _ = _decide(endpoint, "luna", _serve(200, reply))
+
+@pytest.mark.parametrize("api", list(APIS))
+@pytest.mark.parametrize("case", list(VALID))
+def test_a_valid_reply_comes_back_as_received(endpoint, case, api):
+    reply = VALID[case](api)
+    result, _ = _decide(endpoint, api, _serve(200, reply))
     assert result.response == reply
     assert result.answer == reply["answers"]["next_action"]
     assert result.usage == reply["usage"]
 
 
-def test_a_reply_is_parsed_as_json_loads_parses_it(endpoint):
+@pytest.mark.parametrize("api", list(APIS))
+def test_a_reply_is_parsed_as_json_loads_parses_it(endpoint, api):
     """A UTF-8 byte order mark is skipped (json.loads detects the encoding of bytes)."""
-    reply = _reply()
-    result, _ = _decide(endpoint, "luna", _serve(200, b"\xef\xbb\xbf" + json.dumps(reply).encode()))
+    reply = _reply(api)
+    body = b"\xef\xbb\xbf" + json.dumps(reply).encode()
+    result, _ = _decide(endpoint, api, _serve(200, body))
     assert result.response == reply
 
 
-def test_jev_reply_names_its_upstream(endpoint):
-    result, _ = _decide(endpoint, "jev", _serve(200, _reply("jev")))
-    assert result.answer["choice"] == "a"
-    error, _ = _decide(endpoint, "jev", _serve(200, _reply("jev", provider="openai")))
-    assert type(error) is ValueError
-
-
 INVALID = {
-    "not_an_object": [],
-    "other_provider": _reply(provider="anthropic"),
-    "no_provider": {k: v for k, v in _reply().items() if k != "provider"},
-    "other_model": _reply(model="openai/gpt-6-luna"),
-    "no_model": {k: v for k, v in _reply().items() if k != "model"},
-    "no_usage": {k: v for k, v in _reply().items() if k != "usage"},
-    "usage_without_output": _reply(usage={"input_tokens": 1}),
-    "usage_as_float": _reply(usage={"input_tokens": 1.0, "output_tokens": 1}),
-    "usage_as_bool": _reply(usage={"input_tokens": 1, "output_tokens": True}),
-    "usage_as_text": _reply(usage={"input_tokens": "1", "output_tokens": 1}),
-    "negative_usage": _reply(usage={"input_tokens": -1, "output_tokens": 1}),
-    "no_answers": {k: v for k, v in _reply().items() if k != "answers"},
-    "no_answer": _reply(answers={}),
-    "answers_not_a_mapping": _reply(answers=[]),
-    "answer_not_asked": _reply(
-        answers={**_reply()["answers"], "other": _reply()["answers"]["next_action"]}
+    "not_an_object": lambda api: [],
+    "other_provider": lambda api: _reply(api, provider="anthropic"),
+    "no_provider": lambda api: _without(_reply(api), "provider"),
+    "shorter_model_name": lambda api: _reply(api, model=APIS[api][1].rpartition("-")[0]),
+    "no_model": lambda api: _without(_reply(api), "model"),
+    "no_usage": lambda api: _without(_reply(api), "usage"),
+    "usage_without_output": lambda api: _reply(api, usage={"input_tokens": 1}),
+    "usage_as_float": lambda api: _reply(api, usage={"input_tokens": 1.0, "output_tokens": 1}),
+    "usage_as_bool": lambda api: _reply(api, usage={"input_tokens": 1, "output_tokens": True}),
+    "usage_as_text": lambda api: _reply(api, usage={"input_tokens": "1", "output_tokens": 1}),
+    "negative_usage": lambda api: _reply(api, usage={"input_tokens": -1, "output_tokens": 1}),
+    "no_answers": lambda api: _without(_reply(api), "answers"),
+    "no_answer": lambda api: _reply(api, answers={}),
+    "answers_not_a_mapping": lambda api: _reply(api, answers=[]),
+    "answer_not_asked": lambda api: _reply(
+        api, answers={**_reply(api)["answers"], "other": _reply(api)["answers"]["next_action"]}
     ),
-    "refusal": _reply(answers={"next_action": {"type": "refusal", "refusal": "no"}}),
-    "choice_not_offered": _answer(choice="c"),
-    "choice_not_text": _answer(choice=1),
-    "probability_missing": _answer(probabilities={"a": 1.0}),
-    "probability_extra": _answer(probabilities={"a": 1.0, "b": 0.0, "c": 0.0}),
-    "probability_above_one": _answer(probabilities={"a": 1.5, "b": 0.0}),
-    "probability_below_zero": _answer(probabilities={"a": 1.0, "b": -0.1}),
-    "probability_nan": _answer(probabilities={"a": math.nan, "b": 0.0}),
-    "probability_as_bool": _answer(probabilities={"a": True, "b": 0.0}),
-    "probability_as_text": _answer(probabilities={"a": "1", "b": 0.0}),
-    "no_confidence": {
-        **_reply(),
-        "answers": {
-            "next_action": {
-                k: v for k, v in _reply()["answers"]["next_action"].items() if k != "confidence"
-            }
-        },
-    },
-    "confidence_infinite": _answer(confidence=math.inf),
-    "confidence_as_bool": _answer(confidence=True),
-    "confidence_null": _answer(confidence=None),
+    "refusal": lambda api: _reply(
+        api, answers={"next_action": {"type": "refusal", "refusal": "no"}}
+    ),
+    "choice_not_offered": lambda api: _answer(api, choice="c"),
+    "choice_not_text": lambda api: _answer(api, choice=1),
+    "probability_missing": lambda api: _answer(api, probabilities={"a": 1.0}),
+    "probability_extra": lambda api: _answer(api, probabilities={"a": 1.0, "b": 0.0, "c": 0.0}),
+    "probability_above_one": lambda api: _answer(api, probabilities={"a": 1.5, "b": 0.0}),
+    "probability_below_zero": lambda api: _answer(api, probabilities={"a": 1.0, "b": -0.1}),
+    "probability_nan": lambda api: _answer(api, probabilities={"a": math.nan, "b": 0.0}),
+    "probability_as_bool": lambda api: _answer(api, probabilities={"a": True, "b": 0.0}),
+    "probability_as_text": lambda api: _answer(api, probabilities={"a": "1", "b": 0.0}),
+    "no_confidence": lambda api: _reply(
+        api, answers={"next_action": _without(_reply(api)["answers"]["next_action"], "confidence")}
+    ),
+    "confidence_infinite": lambda api: _answer(api, confidence=math.inf),
+    "confidence_as_bool": lambda api: _answer(api, confidence=True),
+    "confidence_null": lambda api: _answer(api, confidence=None),
 }
 
 
-@pytest.mark.parametrize("reply", list(INVALID.values()), ids=list(INVALID))
-def test_an_invalid_reply_fails_the_question(endpoint, reply):
+@pytest.mark.parametrize("api", list(APIS))
+@pytest.mark.parametrize("case", list(INVALID))
+def test_an_invalid_reply_fails_the_question(endpoint, case, api):
     """Rejected before the selection flow reads it; a retry would not change it."""
-    error, _ = _decide(endpoint, "luna", _serve(200, reply))
+    error, _ = _decide(endpoint, api, _serve(200, INVALID[case](api)))
     assert isinstance(error, ValueError)
-    assert OpenAIDecisionsClient.classify_question_error(error) == TransportFailure(FATAL)
+    assert APIS[api][0].classify_question_error(error) == TransportFailure(FATAL)
 
 
-def test_a_body_that_is_not_json_fails_the_question(endpoint):
-    error, _ = _decide(endpoint, "luna", _serve(200, b"<html>", content_type="text/html"))
+@pytest.mark.parametrize("api", list(APIS))
+def test_a_body_that_is_not_json_fails_the_question(endpoint, api):
+    error, _ = _decide(endpoint, api, _serve(200, b"<html>", content_type="text/html"))
     assert isinstance(error, ValueError)
-    assert OpenAIDecisionsClient.classify_question_error(error) == TransportFailure(FATAL)
+    assert APIS[api][0].classify_question_error(error) == TransportFailure(FATAL)
 
 
 # ---- Errors ------------------------------------------------------------------------------------
@@ -348,16 +345,17 @@ ERRORS = {
     "500_list": ((500, [1, 2], ()), ("DecisionsHTTPError", INTERNAL, TRANSIENT)),
     "500_long": ((500, _error(LONG, 500), ()), ("DecisionsHTTPError", LONG[:500], TRANSIENT)),
     # httpx does not follow redirects; a redirect is an error even with a reply's body.
-    "307": ((307, _reply(), ()), ("DecisionsHTTPError", "Temporary Redirect", FATAL)),
+    "307": ((307, _reply("luna"), ()), ("DecisionsHTTPError", "Temporary Redirect", FATAL)),
 }
 
 
+@pytest.mark.parametrize("api", list(APIS))
 @pytest.mark.parametrize("served, expected", list(ERRORS.values()), ids=list(ERRORS))
-def test_an_error_status_is_classified(endpoint, served, expected):
+def test_an_error_status_is_classified(endpoint, served, expected, api):
     """The replay baselines hold these messages (jev_transport_retries detail, invalid_detail)."""
     error_type, message, failure = expected
     status = served[0]
-    error, _ = _decide(endpoint, "luna", _serve(*served))
+    error, _ = _decide(endpoint, api, _serve(*served))
     if error_type is ChoiceContextLimitError:
         assert type(error) is ChoiceContextLimitError
         assert str(error) == message
@@ -366,10 +364,11 @@ def test_an_error_status_is_classified(endpoint, served, expected):
     assert str(error) == f"Decisions HTTP {status}: {message}"
     if isinstance(failure, str):
         failure = TransportFailure(failure)
-    assert OpenAIDecisionsClient.classify_question_error(error) == failure
+    assert APIS[api][0].classify_question_error(error) == failure
 
 
-def test_a_dropped_connection_is_transient(endpoint):
-    error, _ = _decide(endpoint, "luna", lambda index, received: DROP)
+@pytest.mark.parametrize("api", list(APIS))
+def test_a_dropped_connection_is_transient(endpoint, api):
+    error, _ = _decide(endpoint, api, lambda index, received: DROP)
     assert isinstance(error, httpx.TransportError)
-    assert OpenAIDecisionsClient.classify_question_error(error) == TransportFailure(TRANSIENT)
+    assert APIS[api][0].classify_question_error(error) == TransportFailure(TRANSIENT)
