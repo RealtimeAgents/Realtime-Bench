@@ -396,8 +396,9 @@ class _SlowKeydownGuest(_Guest):
 
 
 def test_a_delayed_wall_hold_counts_its_short_while_from_the_press():
-    """The keydown's own request takes time as well: the short while, and the lease the
-    execution result gives, count from when it returned."""
+    """The keydown's own request takes time as well: the short while counts from when it
+    returned. The lease the execution result gives counts from when it was sent, as the keyup's
+    trip to the desktop will take about as long as the keydown's."""
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
     env.g = _SlowKeydownGuest(clock, 0.05)
@@ -407,7 +408,20 @@ def test_a_delayed_wall_hold_counts_its_short_while_from_the_press():
     times, commands = zip(*_xdotool(env))
     assert commands == ("xdotool keydown -- Left", "xdotool keyup -- Left")
     assert times == pytest.approx((0.55, 0.55 + TAP_HOLD_S))
-    assert env._last_execution_result["lease_seconds"] == round(TAP_HOLD_S, 3)
+    assert env._last_execution_result["lease_seconds"] == round(0.05 + TAP_HOLD_S, 3)
+
+
+def test_a_wall_hold_on_time_records_its_lease_from_its_keydown_request():
+    """The keydown's trip back is not taken off the lease (the keyup's trip there adds it)."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _SlowKeydownGuest(clock, 0.03)
+    with clock.participant():
+        assert env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0) == "applied"
+        clock.sleep(5.0)
+    times, _ = zip(*_xdotool(env))
+    assert times == pytest.approx((0.03, 1.0))
+    assert env._last_execution_result["lease_seconds"] == 1.0
 
 
 def test_a_legacy_wall_hold_records_no_lease():
