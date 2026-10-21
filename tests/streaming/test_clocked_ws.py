@@ -263,3 +263,43 @@ def test_a_problem_on_one_connection_ends_the_others_at_once(conn_1_next):
 
     assert _replay(records, client) == ["conn 2 record 3: c2s hello differs:\n  msg.n: 1 -> 2"]
     assert ended == [(1011, 1.0), (None, 1.0)]
+
+
+def test_messages_the_client_leaves_unread_never_stop_its_reader():
+    """A reader that paused at websockets' default queue of 16 messages would block on a lock,
+    which on the fake clock is busy, and time would never reach the client's next send."""
+    replies = [_record("s2c", {"type": "reply", "n": n}) for n in range(20)]
+    records = [_record("open", at=0.0), *replies, _record("c2s", {"type": "done"}, 1.0)]
+    read = []
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        clock.sleep(1.0)  # none read meanwhile
+        _send(ws, {"type": "done"})
+        read.extend(_recv(ws)["n"] for _ in replies)
+        ws.close()
+
+    assert _replay(records, client, real_limit_s=10.0) == []
+    assert read == list(range(20))
+
+
+def test_messages_that_arrive_together_each_follow_what_the_one_before_released():
+    """Two messages in one read: the reply the first one released goes before the second one is
+    compared, or the second would find that reply still next."""
+    records = [
+        _record("open", at=0.0),
+        _record("c2s", {"type": "a"}, 0.0),
+        _record("s2c", {"type": "ack"}),
+        _record("c2s", {"type": "b"}, 0.0),
+    ]
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        with ws.protocol_mutex:  # both frames go out in one write
+            for kind in ("a", "b"):
+                ws.protocol.send_text(json.dumps({"type": kind}).encode())
+            ws.send_data()
+        assert _recv(ws) == {"type": "ack"}
+        ws.close()
+
+    assert _replay(records, client) == []

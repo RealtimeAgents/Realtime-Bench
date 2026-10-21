@@ -249,3 +249,30 @@ def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path)
         with pytest.raises(AssertionError, match="the coroutine did not finish"):
             run_on_fake_clock(clock, run_turns(driver, 2), timeout=30.0)
     assert server.finish() == [ws_cassette.LEFT_OPEN.format(conn=1)]
+
+
+def test_a_retried_run_converts_its_last_attempt_only(tmp_path):
+    """A retried run appends its attempt to the same trace (evaluation/reporting.py EpisodeTrace);
+    the cassette is the last one's."""
+    _record_session(tmp_path)
+    _record_session(tmp_path)
+    records = ws_cassette.from_trace(tmp_path)
+    assert [r["dir"] for r in records].count("open") == 1
+    assert [r["dir"] for r in records].count("c2s") == 5
+
+
+def test_a_server_messages_time_counts_from_the_episode_origin(tmp_path):
+    _record_session(tmp_path)
+    events = [
+        json.loads(line) for line in (tmp_path / "episode_trace.jsonl").read_text().splitlines()
+    ]
+    (started,) = [e["payload"] for e in events if e["event"] == "ActiveLoopStarted"]
+    captured = [
+        e["payload"]["captured_wall_time_ns"]
+        for e in events
+        if e["event"] == "SessionMessage" and e["payload"]["direction"] == "server"
+    ]
+    origin_ns = round(started["start_unix_s"] * 1e9)
+    expected = [round((ns - origin_ns) / 1e9, 6) for ns in captured]
+    records = ws_cassette.from_trace(tmp_path)
+    assert [r["at"] for r in records if r["dir"] == "s2c"] == expected
