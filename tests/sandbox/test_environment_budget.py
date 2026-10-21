@@ -257,6 +257,27 @@ def test_a_wall_shortcut_refused_after_its_budget_went_on_the_lock_is_still_refu
     )
 
 
+def test_a_failed_wall_tap_counts_its_keys_as_held_only_while_its_budget_lasts(budgets):
+    # The guest's request for the tap times out with the action's budget while the release
+    # timer holds the wall lock for its keyup; the keys the guest may have left down go
+    # unrecorded rather than keep the action, and the freeze, waiting (the run is invalid).
+    budgets(action_s=1.0)
+    with FakeGuest() as guest:
+        env = _wall_environment(guest)
+        assert env.execute(Action.hold_key("a", 0.4)) == "applied"
+        guest.command_delay = 3.0
+        guest.action_delay = 5.0
+        started = time.monotonic()
+        status = env.execute(Action(ActionType.KEY, {"key": "b"}))
+        elapsed = time.monotonic() - started
+        recorded = "b" in env._wall_holds
+        env.release_inputs()
+    assert status == "failed"
+    _invalid(env, "action_execution_failed", "key action", 1.0)
+    assert 1.0 - 0.05 <= elapsed < 1.0 + SLACK, elapsed
+    assert not recorded
+
+
 def test_a_wall_action_waiting_for_the_lock_after_the_guest_answered_fails(budgets):
     # The release timer sends its keyup while the guest runs the click; the hold snapshot the
     # click's result carries then waits for the lock.

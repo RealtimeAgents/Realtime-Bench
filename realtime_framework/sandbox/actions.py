@@ -17,6 +17,8 @@ from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
 from realtime_framework.entity.config import EnvironmentBudgetConfig
+from realtime_framework.sandbox.budget import BudgetExceeded
+from realtime_framework.sandbox.budget import Deadline
 from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.guest import GuestRefused
 from realtime_framework.sandbox.guest import action_timeout
@@ -903,7 +905,15 @@ class GuestEnvironment:
             parts, _ = self._key_chord(action)
         except ValueError:
             return
-        with self._wall_lock:
+        # The release timer may hold the lock for its guest request: wait no longer than the
+        # action's budget lasts, and record nothing without it (the run is invalid already).
+        try:
+            left = Deadline(None, "wall lock").remaining()
+        except BudgetExceeded:
+            left = 0.0
+        if not self._wall_lock.acquire(timeout=-1 if left is None else left):
+            return
+        try:
             now = self.clocks.semantic.time()
             for identity, wire in parts:
                 keysym = _xdotool_keysym(identity)
@@ -911,6 +921,8 @@ class GuestEnvironment:
                     self._wall_holds.setdefault(
                         identity, {"wire": wire, "keysym": keysym, "expires_at": now}
                     )
+        finally:
+            self._wall_lock.release()
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
