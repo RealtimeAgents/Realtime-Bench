@@ -110,6 +110,10 @@ class Push:
     item_id: str
     error: object | None = None
 
+    @property
+    def key(self) -> tuple[str, str]:
+        return ("create", self.item_id)
+
 
 @dataclass(frozen=True)
 class EditBatch:
@@ -405,6 +409,17 @@ class RealtimeSessionCore:
             and frame.id not in refused
         ]
 
+    def frame_push(self, history: CanonicalRequest) -> Push:
+        """The push of the newest frame of a native-streaming history view on this connection,
+        once push or a rebuild's replay planned it: a block is pushed once per connection."""
+        frames = [
+            block.id
+            for block in streaming_blocks(history.items)
+            if block.item.block.kind == "frame"
+        ]
+        (push,) = (push for push in self.pushes.values() if push.block_id == frames[-1])
+        return push
+
     def _push(self, frame: ViewFrame) -> Create:
         user = self._frame_create(frame, event_id=self._new_id("push"))
         self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
@@ -538,8 +553,8 @@ class RealtimeSessionCore:
         if self.delivery[operation.key] is Delivery.UNKNOWN:
             self._on_delivery("unknown", [(operation.key, operation.block)])
 
-    def settled(self, operation: Operation) -> bool:
-        """Whether the server acknowledged an operation, or refused it."""
+    def settled(self, operation: Operation | Push) -> bool:
+        """Whether the server acknowledged an operation or a push's create, or refused it."""
         return self.delivery.get(operation.key) in (Delivery.ACKNOWLEDGED, Delivery.REFUSED)
 
     @property
