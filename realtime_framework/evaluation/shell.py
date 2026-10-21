@@ -1088,11 +1088,14 @@ class _Shell:
     # ---- the episode trace --------------------------------------------------------------------
 
     def _record(self, entry: Entry) -> None:
-        """Write one kernel record (D6). One under a TraceEvent name keeps it, with the payload
-        the runner writes; a frame's echo is ObservationCaptured and the echo of a settled
-        result OutputChunkReceived and InferenceCompleted; any other is a KernelRecord."""
+        """Write one kernel record (D6). An agent's record is the agent's, whatever its name. One
+        under a TraceEvent name keeps it, with the payload the runner writes; a frame's echo is
+        ObservationCaptured and the echo of a settled result OutputChunkReceived and
+        InferenceCompleted; any other is a KernelRecord."""
         kind, data, decision = entry.kind, entry.data, self._decision
-        if kind == TraceEvent.INFERENCE_STARTED.value:
+        if isinstance(data, AgentRecord):
+            self._emit(kind, data.data, entry)
+        elif kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
         elif kind == "FrameCaptured" and data.error is None and not self._froze():
             self._emit(
@@ -1147,8 +1150,6 @@ class _Shell:
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
                 )
             self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
-        elif isinstance(data, AgentRecord):
-            self._emit(kind, data.data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
             if invalid.reason == "observation_stream_frozen":
