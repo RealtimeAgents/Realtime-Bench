@@ -97,6 +97,10 @@ class FakeEnvironment:
         self.last_end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
         self.kernel_counts_reads = False
         self.on_invalid = None
+        # The streaming lanes point a browser task's page capture at a CDP session of its own
+        # (evaluation/env_lanes.py). Here the frames come from frames.py, with no page capture, as
+        # in a desktop task.
+        self.scene_capture = None
 
     def log(self, call: str, **fields) -> None:
         self.calls.append(
