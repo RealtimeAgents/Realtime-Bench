@@ -535,11 +535,10 @@ def test_driver_default_short(live_env, tmp_path):
         for parts in calls:
             assert parts[0]["thoughtSignature"] == "skip_thought_signature_validator"
             assert all("thoughtSignature" not in part for part in parts[1:])
-    # realtime_input waits after each video; a later video waits out the frame interval first,
-    # unless a new connection came between. The reads after the goAway wait for its deadline.
+    # realtime_input waits after each video. At 1 fps the 1 s ingestion wait already covers the
+    # frame interval, so no video waits for it. The reads after the goAway wait for its deadline.
     assert session_waits(tmp_path / "run") == [
         "video_ingestion",
-        "video_interval",
         "video_ingestion",
         "go_away_deadline",
         "connection_close",

@@ -41,8 +41,10 @@ class SessionLifecycle:
     (RetryCancelled, a cancelled task). A connection that an operation closes on its way (the one
     a connect replaces, one past its goAway deadline) changes neither.
 
-    Every timed wait of the encoder on the clock is written to the trace before it starts
-    (_record_wait): what it waits for, how long, and until which time on the operational clock.
+    Every timed wait the encoder takes on the clock is written to the trace before it starts
+    (_record_wait), once: what it waits for, how long, and until which time on the operational
+    clock. A wait that would last no time, or for a cleanup already done, is not recorded, and
+    _wait does not take one of no time.
     ensure_ready's wait for an abort's cleanup has no time bound and is not recorded.
     _wait ends early once the cancel event it is given is set; the encoders' own waits give none
     yet, so nothing ends them early. A bound on an operation (a goAway deadline, a close) ends
@@ -147,7 +149,7 @@ class SessionLifecycle:
         cleanup = self._cleanup
         if cleanup is None:
             return
-        if timeout is not None:
+        if timeout is not None and not cleanup.done():
             self._record_wait("abort_cleanup", timeout)
         try:
             await self.clock.wait_for(asyncio.wait({cleanup}), timeout)
@@ -162,7 +164,10 @@ class SessionLifecycle:
         """Wait ``seconds`` on the operational clock, on an executor thread as RequestRetry's
         backoff does. Once ``cancel`` is set the generation the wait belongs to is abandoned, and
         RetryCancelled ends the wait. Unlike RequestRetry, which takes the event of the enclosing
-        retry_cancellation, it waits only on the ``cancel`` it is given."""
+        retry_cancellation, it waits only on the ``cancel`` it is given. A wait of no time is
+        neither recorded nor taken."""
+        if seconds <= 0:
+            return
         self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
