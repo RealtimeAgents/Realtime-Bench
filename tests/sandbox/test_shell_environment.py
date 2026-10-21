@@ -311,10 +311,11 @@ def test_a_key_release_fails_past_its_budget():
     clock = FakeClock()
     env, task = _token(clocks=Clocks(FrameClock(1.0), clock))
     env.execute(Action.hold_key("a", 1.0))
-    task.clock_key_event = lambda *args, **kwargs: clock.sleep(11.0)
+    budget = ENVIRONMENT_BUDGET.key_event_s
+    task.clock_key_event = lambda *args, **kwargs: clock.sleep(budget + 1.0)
     with (
         clock.participant(),
-        pytest.raises(BudgetExceeded, match="key release took longer than 10 s"),
+        pytest.raises(BudgetExceeded, match=f"key release took longer than {budget:g} s"),
     ):
         env.release_keys(("a",))
 
