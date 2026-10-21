@@ -265,6 +265,27 @@ def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, mon
     assert (loop["delta_s"], loop["frame_ticks"], loop["max_ticks"]) == (1 / 30, 30 / 7, 9000.0)
 
 
+def test_main_refuses_a_model_input_rate_above_the_environment_rate(tmp_path, monkeypatch):
+    """The run's error is the pre-run check's (providers/preflight.py check_frame_rates), and the
+    decision loop never starts."""
+    from realtime_framework.evaluation import runner
+
+    loops = []
+
+    def run_stream(adapter, env, **loop):
+        loops.append(loop)
+        return []
+
+    argv = ["--model", "claude-opus-5", "--task", WEB, "--clock", "wall", "--fps", "1"]
+    _main_in_process(monkeypatch, tmp_path, [*argv, "--model-input-fps", "2"], run_stream)
+    with pytest.raises(SystemExit):  # an invalid run is not a scored result
+        runner.main()
+    assert _run_summary(tmp_path)["error"].strip().endswith(
+        "ValueError: The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
+    )
+    assert loops == []
+
+
 def test_a_setup_failure_summary_records_both_rates(tmp_path, monkeypatch):
     """A setup error main() raises reaches the entry point's emergency summary
     (runner._write_emergency_setup_summary), which reads the two rates off the command line."""

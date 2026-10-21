@@ -8,7 +8,8 @@ collected here:
 - runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
   check_token_budget;
 - run plans, effective_run_config and the Harbor trial worker: validate_model_interaction
-  (check_wall_clock, check_interaction_mode);
+  (check_frame_rates, check_wall_clock, check_interaction_mode);
+- Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions): check_frame_rates;
 - the runner, once, before it builds the agent: check_episode.
 
 Construction-time failures (credentials, SDK pin, endpoint URL, Decisions route) stay in the
@@ -78,16 +79,29 @@ def check_interaction_mode(
     check_fps(driver, model_input_fps)
 
 
+def check_frame_rates(fps, model_input_fps) -> None:
+    """The loop observes at most one frame per environment tick, so a model-input rate above the
+    environment rate (``fps``) would be stated to the model but never fed to it."""
+    if float(model_input_fps) > float(fps):
+        raise ValueError(
+            f"The model-input frame rate ({model_input_fps:g} fps) exceeds the environment frame "
+            f"rate ({fps:g} fps)"
+        )
+
+
 def validate_model_interaction(
     adapter_type,
     *,
     clock_mode,
+    fps,
     model_input_fps,
     interaction_mode="turn_based",
     tokens_per_frame=None,
 ):
-    """Validate API interaction requirements before starting an episode."""
+    """Validate API interaction requirements before starting an episode. ``fps`` is the
+    environment frame rate."""
     del tokens_per_frame
+    check_frame_rates(fps, model_input_fps)
     driver = adapter_class(adapter_type)
     check_wall_clock(driver, adapter_type, clock_mode)
     check_interaction_mode(
@@ -236,7 +250,9 @@ def check_context_policy(driver, policy, config) -> None:
         )
 
 
-def check_episode(model_config, *, clock_mode, task, interaction_mode="turn_based") -> None:
+def check_episode(
+    model_config, *, clock_mode, task, interaction_mode="turn_based", env_fps=None
+) -> None:
     """The runner's rules, applied once before it builds the agent.
 
     Among themselves the rules keep the order in which they fired before: the clock check, then
@@ -245,7 +261,12 @@ def check_episode(model_config, *, clock_mode, task, interaction_mode="turn_base
     connect rules are reported before a missing API key, which the constructor reports. The
     interaction-mode rules follow the clock check, as in validate_model_interaction. The context
     policy is checked last. ``task`` is the registered task (its category and task_id).
+    ``env_fps`` is the environment frame rate, checked first against the model-input rate
+    ``model_config.fps`` as in validate_model_interaction; without it that check is left to
+    effective_run_config.
     """
+    if env_fps is not None:
+        check_frame_rates(env_fps, model_config.fps)
     adapter_type = model_config.adapter_type
     driver = adapter_class(adapter_type)
     check_wall_clock(driver, adapter_type, clock_mode)

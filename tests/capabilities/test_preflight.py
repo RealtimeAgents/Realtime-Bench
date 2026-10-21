@@ -55,10 +55,12 @@ def preset(key, **overrides):
     )
 
 
-def episode(model_config, *, clock_mode="wall", task=WEB, interaction_mode="turn_based"):
+def episode(
+    model_config, *, clock_mode="wall", task=WEB, interaction_mode="turn_based", env_fps=None
+):
     check_episode(
         model_config, clock_mode=clock_mode, task=tasks.get(task),
-        interaction_mode=interaction_mode,
+        interaction_mode=interaction_mode, env_fps=env_fps,
     )
 
 
@@ -135,6 +137,71 @@ def test_wall_clock_only_trial(capsys):
         lambda: main(["--catalog-model", "my-model", "--task", WEB, "--clock", "token",
                       "--dry-run"]),
         "The chat_completions API requires a wall clock",
+    )
+
+
+# A model-input rate above the environment rate (runner, run plans, effective_run_config,
+# identity_main, Harbor agent options and trial worker)
+
+FASTER_MODEL_INPUT = "The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
+
+
+def test_faster_model_input_runner():
+    fails(lambda: episode(preset("my-model", fps=2.0), env_fps=1.0), FASTER_MODEL_INPUT)
+    episode(preset("my-model", fps=2.0), env_fps=2.0)
+
+
+def test_faster_model_input_plan(tmp_path):
+    fails(
+        plan(tmp_path, "models: [my-model]\nruntime: {clock_mode: wall, fps: 1, "
+                       "model_input_fps: 2}\n"),
+        FASTER_MODEL_INPUT,
+    )
+
+
+def test_faster_model_input_run_config():
+    fails(
+        lambda: effective_run_config(
+            model_config=preset("my-model", fps=2.0), fps=1.0, max_minutes=5.0,
+            protocol="wall-clock", think_budget_s=None, per_move_cap_s=None,
+        ),
+        FASTER_MODEL_INPUT,
+    )
+
+
+def test_faster_model_input_identity():
+    from realtime_framework.evaluation.config import identity_main
+
+    fails(
+        lambda: identity_main(["--model", "my-model", "--task", WEB, "--fps", "1",
+                               "--model-input-fps", "2", "--max-minutes", "5",
+                               "--protocol", "wall-clock", "--clock", "wall"]),
+        FASTER_MODEL_INPUT,
+    )
+
+
+def test_faster_model_input_harbor_options():
+    """Harbor checks the agent's options once --ak is merged in, so an --ak fps that takes a
+    plan's environment rate below its model-input rate is refused too."""
+    from pydantic import ValidationError
+
+    from realtime_framework.evaluation.harbor import RealtimeBenchOptions
+
+    with pytest.raises(ValidationError) as caught:
+        RealtimeBenchOptions(fps=1, model_input_fps=2)
+    (error,) = caught.value.errors()
+    assert error["msg"] == "Value error, " + FASTER_MODEL_INPUT
+    RealtimeBenchOptions(fps=2, model_input_fps=2)
+
+
+def test_faster_model_input_trial(capsys):
+    from realtime_framework.evaluation._trial import main
+
+    usage_error(
+        capsys,
+        lambda: main(["--catalog-model", "my-model", "--task", WEB, "--fps", "1",
+                      "--model-input-fps", "2", "--dry-run"]),
+        FASTER_MODEL_INPUT,
     )
 
 
@@ -556,11 +623,12 @@ def test_streaming_frame_rate_cap(streaming_gemini):
     cap = "gemini_live supports at most 1 fps; requested 2"
     fails(
         lambda: validate_model_interaction(
-            "gemini_live", clock_mode="wall", model_input_fps=2.0, interaction_mode="streaming"
+            "gemini_live", clock_mode="wall", fps=2.0, model_input_fps=2.0,
+            interaction_mode="streaming",
         ),
         cap,
     )
-    validate_model_interaction("gemini_live", clock_mode="wall", model_input_fps=2.0)
+    validate_model_interaction("gemini_live", clock_mode="wall", fps=2.0, model_input_fps=2.0)
     fails(lambda: episode(preset("gemini-live", fps=2.0), interaction_mode="streaming"), cap)
     episode(preset("gemini-live"), interaction_mode="streaming")
 
