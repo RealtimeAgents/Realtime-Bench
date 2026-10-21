@@ -667,6 +667,18 @@ def test_a_push_still_stuck_after_the_session_was_rebuilt_invalidates_the_run():
     assert sim.termination.invalid.reason == "frame_push_stuck"
 
 
+def test_a_push_stuck_after_the_rebuild_with_the_end_before_its_watchdog_leaves_the_run_valid():
+    """The third push hangs; its watchdog gives the reply up at 4, and the rebuilt session takes
+    the next frame no better. The end at 5 comes before that push's watchdog at 6, so no watchdog
+    has found the rebuilt session stuck, and the run stands."""
+    sim = _run(World(stuck_pushes={3, 4}), 5.0, push_watchdog_s=2.0)
+    assert sim.data("GenerationAbandoned") == [
+        {"generation": 1, "reason": "push_watchdog"},
+        {"generation": 2, "reason": "deadline"},
+    ]
+    assert sim.termination == Termination("time_limit", "deadline", 5.0, 5.0, 5.0, 5.0, None)
+
+
 def test_a_push_stuck_before_the_first_reply_invalidates_the_run():
     """There is no reply to give up, so no session to rebuild."""
     sim = _run(World(push_times={1: 12.0}), 5.0, push_watchdog_s=2.0)
