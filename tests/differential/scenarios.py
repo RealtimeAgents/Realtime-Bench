@@ -734,7 +734,8 @@ TIMED = [
         name="wall-the-deadline-falls-during-a-read",
     ),
     # wall-third-failed-read-is-todays-first with reads of 0.01 s: the third failed read, the one
-    # after decision 1's click at 1.46 s, invalidates the run when it returns (U14).
+    # after decision 1's click at 1.46 s, invalidates the run dated when it was asked, and the
+    # snapshot is read when it has returned, as today's loop dates and reads them (N44).
     Script(
         "wall",
         SHORT_S,
@@ -742,7 +743,7 @@ TIMED = [
         env_fps=8.0,
         check_s=0.01,
         failing_reads_s=((1.2, 1.6),),
-        expect=frozenset({"K-g", "K-n", "U14", "U2", "X2"}),
+        expect=frozenset({"K-n", "U2", "X2"}),
         name="wall-a-failed-read-takes-time",
     ),
     # wall-hold-between-frames with reads and captures that take time.

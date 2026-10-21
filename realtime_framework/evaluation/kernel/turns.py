@@ -797,7 +797,7 @@ class TurnPolicy:
             self._unanswered = None
         if kernel.ending is not None:
             return
-        if self._count_read(event.error):
+        if self._count_read(event.error, asked_at):
             return
         if event.ended:
             return kernel.end("environment", asked_at, reason=event.reason)
@@ -806,15 +806,16 @@ class TurnPolicy:
             self._awaited = None
             then()
 
-    def _count_read(self, error: str | None) -> bool:
-        """Count one state read; True when it is the failure that invalidates the run."""
+    def _count_read(self, error: str | None, asked_at: float | None = None) -> bool:
+        """Count one state read; True when it is the failure that invalidates the run, which ends
+        when that read was asked, as an end a read sees does (legacy_loop.py _end_reported)."""
         if error is None:
             self._failed_reads = 0
             return False
         self._failed_reads += 1
         if self._failed_reads < READ_FAILURE_LIMIT:
             return False
-        self.kernel.invalidate("environment", "terminal_state_check_failed", error)
+        self.kernel.invalidate("environment", "terminal_state_check_failed", error, at=asked_at)
         return True
 
     # ---- moving the semantic clock ----------------------------------------------------------
