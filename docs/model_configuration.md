@@ -88,11 +88,15 @@ The run records each context-policy value as the policy sets it, and two of them
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs
 only where the driver estimates its requests (`request_size_estimation`) and the model has a
 context window (`context_window_tokens`, from the driver's model defaults or
-`BENCHMARK_CONTEXT_WINDOW_TOKENS`). A driver without roles, as the Decisions APIs are, places the
-archived-action ledger by position and header, whatever ledger role the policy gives. Whether
-either takes effect is not recorded on its own: it follows from the driver code, which the harness
-fingerprint covers (an external driver's identity, for an external driver), and from the model
-configuration, which the run hash covers.
+`BENCHMARK_CONTEXT_WINDOW_TOKENS`). There, a request over the window archives the oldest turns,
+a block at a time. With no turn left, the earliest archived actions give way to a note in the
+ledger, a block at a time, and stay out for the rest of the episode, as archived turns do. A
+request that does not fit with every archived action left out is not sent, and the run is
+invalid (`context_exceeded_before_request`). A driver without roles, as the Decisions APIs are,
+places the archived-action ledger by position and header, whatever ledger role the policy gives.
+Whether either takes effect is not recorded on its own: it follows from the driver code, which the
+harness fingerprint covers (an external driver's identity, for an external driver), and from the
+model configuration, which the run hash covers.
 
 ## Add a model API
 
@@ -169,7 +173,7 @@ driver as a [model API](#add-a-model-api).
    before each request and archives the oldest turns while the request exceeds the context
    window. With no turn left, the earliest archived actions give way to a note in the ledger,
    and stay out for the rest of the episode, as archived turns do; a request that still does
-   not fit is not sent, and the decision is invalid (`context_exceeded_before_request`).
+   not fit is not sent, and the run is invalid (`context_exceeded_before_request`).
    Without a declared window the method returns
    `{"pressure": False, "counter": "unconfigured"}`. The flag, not the method, decides this: a
    driver that implements `request_context_status` without declaring `request_size_estimation`

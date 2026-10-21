@@ -485,6 +485,9 @@ class RealtimeRuntime:
             self._active_generation = generation
         started = self.clock.monotonic()
         terminal_history = ProviderHistoryState.UNKNOWN
+        # The totals and turn counts below are read from the history once the request has
+        # started: a generation aborted while it starts may find them as the next one has left
+        # them. Its GenerationPrepared holds them as its request went.
         provider_metadata: dict = {
             "provider_call_started_monotonic_ns": provider_call_started_monotonic_ns,
             "provider_call_started_wall_time_ns": provider_call_started_wall_time_ns,
@@ -857,7 +860,12 @@ class RealtimeRuntime:
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
                     "archived_actions_total": self._archived_action_count,
-                    "omitted_actions_total": self._omitted_action_count,
+                    # As history_omitted_actions_total in the step's provider metadata.
+                    **(
+                        {"omitted_actions_total": self._omitted_action_count}
+                        if self._omitted_action_count
+                        else {}
+                    ),
                     "detailed_turns": len(self._turns),
                     "current_observations": len(incoming),
                     "prompt_turns": len(turns),
