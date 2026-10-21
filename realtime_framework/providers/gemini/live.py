@@ -36,6 +36,7 @@ from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.providers.capture import async_ws_connection
 from realtime_framework.providers.gemini.session import Connect
 from realtime_framework.providers.gemini.session import Content
+from realtime_framework.providers.gemini.session import Orphan
 from realtime_framework.providers.gemini.session import Part
 from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
@@ -119,7 +120,9 @@ class _Receiver:
     google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
     IDLE, so the receiver opens the next one and spans every generation on the connection.
     Extended Thinking uses ``turn_complete`` for intermediate spoken fillers; the core decides
-    where a generation ends. It reads only when a generation asks for a message.
+    where a generation ends. Turn-based, it reads only when a generation asks for a message.
+    Streaming, the driver's reader asks for every message as it arrives, and gets the orphans
+    too (SessionCore.arrived).
 
     A read that fails or is cancelled leaves the connection unusable: every later read raises the
     failure again. A cancelled read is kept as a RuntimeError caused by the cancellation, so that
@@ -135,7 +138,7 @@ class _Receiver:
         self._messages = None  # the SDK's current receive() iterator
         self._opened_empty = False  # it has given no message yet
 
-    async def next(self) -> Received:
+    async def next(self) -> Received | Orphan:
         if self.failure is None:
             try:
                 return await self._read()
@@ -151,7 +154,7 @@ class _Receiver:
         self._core.reader_failed(self.number)
         raise self.failure
 
-    async def _read(self) -> Received:
+    async def _read(self) -> Received | Orphan:
         while True:
             if self._messages is None:
                 self._messages = self._session.receive().__aiter__()
@@ -166,6 +169,8 @@ class _Receiver:
                 self._messages = None
                 continue
             self._opened_empty = False
+            if self._core.streaming:
+                return self._core.arrived(self.number, message, self._clock.monotonic())
             received = self._core.received(self.number, message, self._clock.monotonic())
             if received is not None:
                 return received
@@ -276,6 +281,10 @@ class GeminiLiveDriver(SessionLifecycle):
         self._cm = None
         self._session = None
         self._receiver: _Receiver | None = None  # the open connection's reader
+        self._reading: asyncio.Task | None = None  # streaming: the task reading it
+        # Streaming: what the reader read for each reply its events() has not taken yet, by
+        # generation id, until events() is done.
+        self._replies: dict[str, asyncio.Queue] = {}
         self._trace_connection: str | None = None  # the trace's id of the last connection opened
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
@@ -502,12 +511,17 @@ class GeminiLiveDriver(SessionLifecycle):
     async def _close_current(self) -> bool:
         """Close the open connection, if any; returns whether there was one."""
         cm, self._cm = self._cm, None
+        reading, self._reading = self._reading, None
         self._session = None
         self._receiver = None
         self._activity_open = False
         self._last_video_sent_at = None
         self._go_away_wait_recorded = None
         self._core.closed()
+        if reading is not None:
+            # Its replies end with the cancelled read, not with whatever the close would raise.
+            reading.cancel()
+            await asyncio.wait({reading})
         if cm is not None:
             self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
             try:
@@ -562,6 +576,8 @@ class GeminiLiveDriver(SessionLifecycle):
         self._last_video_sent_at = None
         self._core.connected(connect)
         self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
+        if self.streaming:
+            self._reading = asyncio.ensure_future(self._read_on(self._receiver))
         self._connect_metadata = {
             "session_connect_mode": connect.mode,
             "session_resume_handle_used": connect.resume_handle is not None,
@@ -582,6 +598,48 @@ class GeminiLiveDriver(SessionLifecycle):
                     "gemini_live_server_context": "unknown",
                 }
             )
+
+    async def _read_on(self, receiver: _Receiver) -> None:
+        """Streaming: read every message of the connection as it arrives. A reply's messages go
+        to its events(); an orphan's goAway and resumption update are the core's to keep, and
+        nothing else of it is taken. A read that fails or is cancelled ends every reply waiting
+        with the receiver's failure."""
+        try:
+            while True:
+                arrived = await receiver.next()
+                replies = (
+                    self._replies.get(arrived.generation_id)
+                    if isinstance(arrived, Received)
+                    else None
+                )
+                if replies is not None:
+                    replies.put_nowait(arrived)
+                    continue
+                # An orphan, or the rest of a reply whose events() already failed.
+                logger.debug(
+                    "Gemini Live connection %d: no generation takes %s",
+                    receiver.number,
+                    type(arrived.message).__name__,
+                )
+        except asyncio.CancelledError:
+            self._end_replies(receiver.failure)
+            raise
+        except Exception:  # noqa: BLE001 - the receiver keeps it as its failure
+            self._end_replies(receiver.failure)
+
+    def _end_replies(self, failure: BaseException) -> None:
+        for replies in self._replies.values():
+            replies.put_nowait(failure)
+
+    async def _streamed(self, generation_id: str, receiver: _Receiver) -> Received:
+        """Streaming: the next message the reader read for this reply."""
+        replies = self._replies[generation_id]
+        if replies.empty() and receiver.failure is not None:
+            raise receiver.failure
+        received = await replies.get()
+        if isinstance(received, BaseException):
+            raise received
+        return received
 
     def connection_renewal_reason(self) -> str | None:
         # Let the provider-defined connection lifetime be observable. Reconnect only when Gemini
@@ -687,6 +745,8 @@ class GeminiLiveDriver(SessionLifecycle):
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        if self.streaming:
+            self._replies[request.generation_id] = asyncio.Queue()
         self._core.start_generation(request.generation_id)
         return GenerationHandle(
             request.generation_id,
@@ -885,21 +945,30 @@ class GeminiLiveDriver(SessionLifecycle):
         session, receiver = self._session, self._receiver
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        if self.streaming:
+
+            def take():
+                return self._streamed(generation.generation_id, receiver)
+
+        else:
+            take = receiver.next
         try:
-            async for event in self._events(generation, session, receiver):
+            async for event in self._events(generation, session, take):
                 yield event
         except Exception:
             # The core applied each message as it was read; a reply that then failed here is not
             # a clean boundary to resume from.
             self._core.generation_failed(receiver.number)
             raise
+        finally:
+            self._replies.pop(generation.generation_id, None)
 
-    async def _events(self, generation: GenerationHandle, session, receiver: _Receiver):
+    async def _events(self, generation: GenerationHandle, session, take):
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0
         while True:
-            received = await self._before_go_away_deadline(receiver.next())
+            received = await self._before_go_away_deadline(take())
             message = received.message
             numbers = {"connection": received.connection, "generation": received.generation}
             raw_type = type(message).__name__

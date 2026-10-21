@@ -14,19 +14,26 @@ import contextlib
 import json
 from types import SimpleNamespace
 
+from google.genai import errors as genai_errors
 from google.genai import live as genai_live
 from google.genai import types
 
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.entity.model import ConnectRequest, SessionSeed
+from realtime_framework.entity.model import (
+    ConnectRequest,
+    GenerationRequest,
+    HistorySyncRequest,
+    SessionSeed,
+    SyncDisposition,
+)
 from realtime_framework.entity.records import UNTRACED
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.streaming.history import history_view
 from realtime_framework.providers.gemini import live
-from tests.session.test_gemini_live_receive import RecordingClock
+from tests.session.test_gemini_live_receive import RecordingClock, server_closed
 
 MODEL = (
     "gemini-3.8-live"  # the client_content preset: streaming goes on realtime_input all the same
@@ -127,6 +134,37 @@ class Rig:
     async def connect(self, history=None) -> None:
         await self.driver.connect(ConnectRequest(seed=self.seed, history=history))
 
+    async def start(self, generation_id: str, history=None):
+        """A generation registered on the session, without its trigger."""
+        canonical = history if history is not None else self.view([])
+        request = GenerationRequest(generation_id, None, "inf", "wall", canonical=canonical)
+        return await self.driver.start_generation(request)
+
+
+async def settle() -> None:
+    """Let the reader take everything fed so far."""
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+async def drain(events) -> list:
+    return [event async for event in events]
+
+
+def update(handle: str | None) -> dict:
+    if handle is None:
+        return {"sessionResumptionUpdate": {"resumable": False}}
+    return {"sessionResumptionUpdate": {"newHandle": handle, "resumable": True}}
+
+
+GO_AWAY = {"goAway": {"timeLeft": "30s"}}
+USAGE = {"usageMetadata": {"promptTokenCount": 20, "responseTokenCount": 3, "totalTokenCount": 23}}
+TURN_COMPLETE = {"serverContent": {"turnComplete": True}, **USAGE}
+
+
+def call(call_id: str, name: str = "wait") -> dict:
+    return {"toolCall": {"functionCalls": [{"id": call_id, "name": name, "args": {}}]}}
+
 
 def test_a_streaming_setup_compresses_the_context_and_lets_a_trigger_not_interrupt():
     """A streaming session's setup turns on the server's sliding-window compression at the
@@ -161,3 +199,95 @@ def test_a_streaming_setup_compresses_the_context_and_lets_a_trigger_not_interru
     assert turn_based_config.realtime_input_config is None  # the preset's client_content
     assert not turn_based_config.session_resumption.transparent
     assert "gemini_live_context_window_compression" not in turn_based.driver._connect_metadata
+
+
+def test_a_go_away_and_a_handle_with_no_reply_in_flight_renew_by_resuming_the_latest():
+    """Between replies the reader still takes the session's control: a goAway asks for a new
+    connection, and the renewal resumes with the latest handle the server called resumable,
+    though no reply came to a clean end."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        rig.socket.feed(update("handle-1"), update(None), GO_AWAY)
+        await settle()
+        reason = rig.driver.connection_renewal_reason()
+        request = HistorySyncRequest(rig.seed, "go_away", rig.view([]))
+        result = await rig.driver.sync_history(request)
+        await rig.driver.close()
+        return reason, result
+
+    reason, result = asyncio.run(run())
+    assert reason == "go_away"
+    assert result.disposition == SyncDisposition.EXACT
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
+
+
+def test_a_reply_s_messages_reach_its_events_as_they_arrive():
+    """The reader takes a reply's messages as they come, whether its events() is read yet or
+    not, and hands them to it in order: its text, its call, acknowledged as queued, and its end,
+    each with the connection and the generation."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        rig.socket.feed(
+            {"serverContent": {"outputTranscription": {"text": "on it"}}},
+            call("call-0"),
+            TURN_COMPLETE,
+        )
+        await settle()
+        read_ahead = rig.socket._frames.empty()
+        received = await drain(rig.driver.events(generation))
+        await rig.driver.close()
+        return read_ahead, received
+
+    read_ahead, received = asyncio.run(run())
+    assert read_ahead
+    assert [(type(e).__name__, e.connection, e.generation, e.generation_id) for e in received] == [
+        ("TextDelta", 1, 1, "turn-0"),
+        ("FunctionCall", 1, 1, "turn-0"),
+        ("UsageSnapshot", 1, 1, "turn-0"),
+        ("GenerationBoundary", 1, 1, "turn-0"),
+    ]
+    assert [next(iter(message)) for message in rig.socket.sent] == ["tool_response"]
+
+
+def test_a_failed_read_ends_every_reply_on_the_connection():
+    """A read that fails ends the reader: the reply waiting raises the failure, and so does
+    every later reply on that connection."""
+    rig = Rig()
+
+    async def run():
+        failures = []
+        await rig.connect()
+        rig.socket.feed(server_closed(1011, "Internal error."))
+        for k in range(2):
+            generation = await rig.start(f"turn-{k}")
+            try:
+                await drain(rig.driver.events(generation))
+            except genai_errors.APIError as exc:
+                failures.append(exc)
+        await rig.driver.close()
+        return failures
+
+    first, second = asyncio.run(run())
+    assert first.code == 1011 and second is first
+
+
+def test_closing_the_connection_ends_the_reply_waiting_on_it():
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        reading = asyncio.ensure_future(drain(rig.driver.events(generation)))
+        await settle()
+        await rig.driver.close()
+        try:
+            await reading
+        except RuntimeError as exc:
+            return exc
+
+    assert str(asyncio.run(run())) == "Gemini Live connection 1: a read was cancelled"
