@@ -9,6 +9,7 @@ sequence number and readings.
 
 from __future__ import annotations
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
@@ -159,7 +160,7 @@ def test_the_records_go_into_an_episode_trace_file(tmp_path):
     """Every payload, the kernel's own records and echoes included, is written as JSON and the
     trace's hash chain holds."""
     path = tmp_path / "episode_trace.jsonl"
-    with EpisodeTrace(path, run_id="shell") as trace:
+    with EpisodeTrace(path, run_id="shell", clock=SystemClock()) as trace:
         replies = [Reply(0.5, Action.hold_key("a", 0.25)), Reply(0.5, Action.wait(0.25))]
         episode = run("wall", 2.0, replies, World(), trace=trace)
     verified = validate_episode_trace(path)

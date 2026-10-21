@@ -12,23 +12,49 @@ import json
 import threading
 import types
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import agent_trace
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace, _episode_trace_ok
 
+from ..fake_clock import FakeClock
+
+S = 1_000_000_000  # nanoseconds
 SCREENSHOT = b"iVBORw0KGgoAAAANSUhEUgAA" * 400  # long enough to be stored as a span
 BODY = b'{"image_url":{"url":"data:image/png;base64,' + SCREENSHOT + b'"}}'
 
 
 def _open(tmp_path):
-    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="sink-test")
-    return trace, AgentTraceSink(trace, tmp_path / "episode_blobs.pack")
+    clock = SystemClock()
+    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="sink-test", clock=clock)
+    return trace, AgentTraceSink(trace, tmp_path / "episode_blobs.pack", clock=clock)
 
 
 def _events(tmp_path) -> list[dict]:
     lines = (tmp_path / "episode_trace.jsonl").read_text().splitlines()
     return [json.loads(line) for line in lines]
+
+
+def test_records_are_stamped_on_the_operational_clock(tmp_path):
+    """The trace stamps each record, and the sink each capture, with the times of the clock they
+    were built with: the episode's operational clock."""
+    clock = FakeClock(wall_origin=1_000.0)
+    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="clock", clock=clock)
+    sink = AgentTraceSink(trace, tmp_path / "episode_blobs.pack", clock=clock)
+    trace.emit(TraceEvent.EPISODE_STARTED, {})
+    with clock.participant():
+        clock.sleep(2.5)
+    sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": 0})
+    assert close_agent_trace(sink, None) is None
+    trace.close()
+    started, request, closed = _events(tmp_path)
+    assert (started["wall_time_ns"], started["monotonic_ns"]) == (1_000 * S, 0)
+    for record in (request, closed):
+        assert (record["wall_time_ns"], record["monotonic_ns"]) == (1_002_500_000_000, 2_500_000_000)
+    payload = request["payload"]
+    assert payload["captured_wall_time_ns"] == 1_002_500_000_000
+    assert payload["captured_monotonic_ns"] == 2_500_000_000
 
 
 def _block_writer(sink):

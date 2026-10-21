@@ -387,7 +387,9 @@ def run(
     env = env_type(clocks, clock_mode, fps, world or World())
     agent = agent_type(clock, replies)
     trace = trace() if trace is Trace else trace
-    agent.sink = None if agent_trace_pack is None else AgentTraceSink(trace, agent_trace_pack)
+    agent.sink = (
+        None if agent_trace_pack is None else AgentTraceSink(trace, agent_trace_pack, clock=clock)
+    )
     logs: list[str] = []
     with clock.participant():
         timeline = run_episode(

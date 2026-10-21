@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
@@ -70,8 +71,9 @@ def _observation(k: int) -> ProviderObservation:
 
 def _run(driver, run_dir: Path, turns: int):
     """Start a session and run ``turns`` decisions the way DefaultHarness drives the runtime."""
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="ws")
-    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    clock = SystemClock()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="ws", clock=clock)
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     driver.bind_trace(sink)
     config = driver.config
     policy = current_context_policy().for_path(

@@ -150,10 +150,10 @@ def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False) -> dict:
     """Run main() for ``task`` and return its run_summary.json. With ``agent_trace`` the agent
     gets an AgentTraceSink on the episode trace, as ``agent.sink``, as set_up_agent makes one."""
 
-    def set_up_agent(setup, *args, episode_trace, run_dir, **kwargs):
+    def set_up_agent(setup, *args, episode_trace, run_dir, clock, **kwargs):
         setup.agent = agent
         if agent_trace:
-            sink = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
+            sink = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack", clock=clock)
             setup.agent_trace = agent.sink = sink
         setup.stage = "environment_setup"
 

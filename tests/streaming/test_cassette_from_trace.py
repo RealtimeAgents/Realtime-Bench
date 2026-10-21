@@ -68,13 +68,13 @@ def _realtime(stub, connection, message):
 def _record_session(run_dir, answer=_realtime):
     """Two turns in real time against a stub that answers with ``answer``, traced; the stub's one
     connection and the text deltas the driver read."""
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette")
+    clock = SystemClock()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette", clock=clock)
     # The runner records the episode origin before the agent's first frame (runner.py main).
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
-    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     try:
         with WsStub(answer) as stub:
-            clock = SystemClock()
             loop = clock.new_event_loop()
             try:
                 deltas = loop.run_until_complete(run_turns(driver_for(stub.port, clock, sink), 2))
@@ -129,7 +129,7 @@ def test_a_traced_session_becomes_a_cassette_that_replays_on_the_fake_clock(tmp_
 
 
 def test_a_trace_off_the_wall_clock_is_refused(tmp_path):
-    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="cassette")
+    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="cassette", clock=SystemClock())
     trace.emit("ActiveLoopStarted", {"start_unix_s": 0.0, "clock_mode": "token"})
     trace.close()
     with pytest.raises(ValueError, match="wall clock"):
@@ -137,9 +137,10 @@ def test_a_trace_off_the_wall_clock_is_refused(tmp_path):
 
 
 def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
-    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="cassette")
+    clock = SystemClock()
+    trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="cassette", clock=clock)
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
-    sink = AgentTraceSink(trace, tmp_path / "episode_blobs.pack")
+    sink = AgentTraceSink(trace, tmp_path / "episode_blobs.pack", clock=clock)
     # As providers/capture.py:318-325 records a write that raised.
     sink.capture(
         TraceEvent.SESSION_MESSAGE,
@@ -160,9 +161,10 @@ def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
 def _gemini_trace(run_dir, messages) -> None:
     """A Gemini Live session's messages, ``(direction, message)``, captured as the driver's
     recording connection captures them (providers/capture.py:266-275, gemini/live.py:271)."""
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette")
+    clock = SystemClock()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id="cassette", clock=clock)
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
-    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack")
+    sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     for direction, message in messages:
         sink.capture(
             TraceEvent.SESSION_MESSAGE,
