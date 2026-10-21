@@ -658,11 +658,11 @@ def test_history_overflow_ledger(api, tmp_path):
     omitted_now = [_runtime(r).get("request_context_omitted_actions") for r in records]
     assert {k: n for k, n in enumerate(omitted_now) if n} == dict.fromkeys(omitting, 10)
     prepared = [
-        e["payload"]["history"]["omitted_actions_total"]
+        e["payload"]["history"].get("omitted_actions_total")
         for e in _trace_events(tmp_path)
         if e["event"] == "GenerationPrepared"
     ]
-    assert prepared == omitted
+    assert prepared == totals
     header_line, kept = _ledger_lines(api, _bodies(records[first - 1])[0])
     assert kept and all(line.startswith("{") for line in kept)
     if api == "jev_decisions":
