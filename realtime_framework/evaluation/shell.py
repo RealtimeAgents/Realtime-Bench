@@ -66,6 +66,7 @@ from realtime_framework.evaluation.kernel.events import (
     AcceptResult,
     ActionExecuted,
     AdvanceClock,
+    AgentRecord,
     Capture,
     CheckEnd,
     ClockStepped,
@@ -202,6 +203,7 @@ def run_episode(
     clocks: Clocks,
     log: Callable[[str], object] = print,
     trace=None,
+    agent_trace=None,
     inputs_log: Path | None = None,
 ) -> list[tuple]:
     """Run one episode on the kernel; return its timeline, ``(k, t_k, d_ticks, tau_k, action)``
@@ -214,10 +216,15 @@ def run_episode(
     ``_loop_error``, ``_think_spent``, ``_dropped_intermediate_frames``, ``_stream_frozen`` and
     the drain of abandoned workers (``_drain_abandoned``).
 
+    ``agent_trace``, the agent's AgentTraceSink on ``trace``, hands the agent's records to the
+    kernel during the episode, and the shell writes them in the kernel's order. Once the episode
+    is finished the sink writes them itself again, after the shell has written those it handed
+    over by then.
+
     ``inputs_log`` records what the kernel was given, one JSON line for each call that handled
     something: its readings and the events the step took from the inbox. A new kernel fed the
     same reproduces the episode's log (phase2.md, 怎么验证)."""
-    return _Shell(agent, env, config, clocks, log, trace, inputs_log).run()
+    return _Shell(agent, env, config, clocks, log, trace, agent_trace, inputs_log).run()
 
 
 @dataclass
@@ -304,9 +311,11 @@ def _escaped_termination(
 
 
 class _Shell:
-    def __init__(self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, inputs_log):
+    def __init__(
+        self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, agent_trace, inputs_log
+    ):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
-        self.log, self.trace = log, trace
+        self.log, self.trace, self.agent_trace = log, trace, agent_trace
         self._inputs_log = inputs_log
         self.token = config.clock_mode == "token"
         self.policy = TurnPolicy(config)
@@ -345,13 +354,43 @@ class _Shell:
         env._drain_abandoned = self._drain_abandoned
         try:
             if self._inputs_log is None:
-                self._loop()
+                self._episode()
             else:
                 with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
-                    self._loop()
+                    self._episode()
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             self._wrap_up(traceback.format_exc())
         return self.timeline
+
+    def _episode(self) -> None:
+        if self.agent_trace is None:
+            return self._loop()
+        self.agent_trace.hand_over(self.post)
+        try:
+            self._loop()
+        finally:
+            self.agent_trace.take_back(self._write_handed if self._finished else lambda: None)
+
+    def _write_handed(self) -> None:
+        """Once the episode is finished: step the kernel through what is still due, the agent
+        records handed over before the sink took them back among it, and write the records. The
+        kernel handles nothing after the end, so any other event's echo is only a
+        KernelRecord."""
+        now = self._read()
+        while True:
+            with self._inbox:
+                self._now = now
+                commands = self.kernel.step(*now)
+                taken, self._posted = self._posted, []
+            if commands is None:
+                return
+            self._record_inputs("step", taken)
+            for command in commands:
+                entry = command.entry
+                if isinstance(entry.data, AgentRecord):
+                    self._emit(entry.kind, entry.data.data, entry)
+                else:
+                    self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
 
     def _loop(self) -> None:
         self._now = self._read()
@@ -1024,6 +1063,8 @@ class _Shell:
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
                 )
             self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
+        elif isinstance(data, AgentRecord):
+            self._emit(kind, data.data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
             if invalid.reason == "observation_stream_frozen":

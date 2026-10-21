@@ -14,6 +14,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 import types
 from unittest import mock
 
@@ -22,7 +23,9 @@ import pytest
 from realtime_framework.clock import Clocks, SystemClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.harness import StreamingAgent
+from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import runner
+from realtime_framework.evaluation.agent_trace import AgentTraceSink
 
 FPS = 1
 MAX_MINUTES = 0.0625
@@ -143,11 +146,15 @@ DESKTOP = types.SimpleNamespace(
 )
 
 
-def run_main(tmp_path, task, agent, clock, guest) -> dict:
-    """Run main() for ``task`` and return its run_summary.json."""
+def run_main(tmp_path, task, agent, clock, guest, *, agent_trace=False) -> dict:
+    """Run main() for ``task`` and return its run_summary.json. With ``agent_trace`` the agent
+    gets an AgentTraceSink on the episode trace, as ``agent.sink``, as set_up_agent makes one."""
 
-    def set_up_agent(setup, *args, **kwargs):
+    def set_up_agent(setup, *args, episode_trace, run_dir, **kwargs):
         setup.agent = agent
+        if agent_trace:
+            sink = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack")
+            setup.agent_trace = agent.sink = sink
         setup.stage = "environment_setup"
 
     argv = [
@@ -195,6 +202,37 @@ def test_main_reports_the_termination_the_loop_latched(tmp_path, reason, solved,
     assert summary["normalized_time_to_success"] == (
         round(END_S / HORIZON_S, 9) if solved else None
     )
+
+
+class RecordingAgent(FakeAgent):
+    """Records a request as it generates, and returns once its sink has handed the record over."""
+
+    def stream_generate(self, tick: int) -> dict:
+        self.sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": tick})
+        while self.sink._written < 1:
+            time.sleep(0.001)
+        return super().stream_generate(tick)
+
+
+def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):
+    """main() gives the shell the agent's sink: the request record is written in the kernel's
+    order, with its number, and the agent's records are closed after the episode."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, RecordingAgent(clock), clock, guest, agent_trace=True)
+    assert summary["invalid_run"] is None
+    path = tmp_path / "run" / "episode_trace.jsonl"
+    validate_episode_trace(path)
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    events = [record["event"] for record in records]
+    (request,) = [record for record in records if record["event"] == "ModelRequestSent"]
+    assert request["payload"]["source"] == "agent"
+    assert request["kernel_seq"] > records[events.index("InferenceStarted")]["kernel_seq"]
+    assert events.index("ModelRequestSent") < events.index("InferenceCompleted")
+    assert events.index("ModelRequestSent") < events.index("AgentTraceClosed")
+    (closed,) = [record["payload"] for record in records if record["event"] == "AgentTraceClosed"]
+    assert (closed["captures"], closed["written"], closed["error"]) == (1, 1, None)
 
 
 # Two functions in turn: a traceback folds a run of identical frames into one line.

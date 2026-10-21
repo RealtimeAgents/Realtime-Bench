@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent
+from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.shell import run_episode
 
@@ -64,6 +66,7 @@ class World:
     renders: bool = True  # render_current_frame commits a frame
     snapshot_error: str | None = None
     snapshotter: bool = True
+    on_release: Callable[[], None] | None = None  # what release_inputs does besides
 
 
 class Environment:
@@ -224,6 +227,8 @@ class Environment:
 
     def release_inputs(self) -> None:
         self.log("release_inputs")
+        if self.world.on_release is not None:
+            self.world.on_release()
 
     def record_lifecycle(self, record: dict) -> None:
         if record["decision"] in self.world.lifecycle_errors:
@@ -361,10 +366,13 @@ def run(
     inputs_log: Path | None = None,
     env_type: type[Environment] = Environment,
     log=None,
+    agent_trace_pack: Path | None = None,
     **config,
 ) -> Episode:
     """One episode through run_episode on a fresh fake clock; the abandoned workers are drained
-    afterwards, as main() does. ``trace`` is a new Trace unless one is given, or None."""
+    afterwards, as main() does. ``trace`` is a new Trace unless one is given, or None. With
+    ``agent_trace_pack`` the agent gets an AgentTraceSink on the trace, as ``agent.sink``, which
+    run_episode is given too."""
     clock = FakeClock(wall_origin=ORIGIN)
     clocks = Clocks(FrameClock(fps), clock) if clock_mode == "token" else Clocks(clock, clock)
     turn = TurnConfig(
@@ -379,6 +387,7 @@ def run(
     env = env_type(clocks, clock_mode, fps, world or World())
     agent = agent_type(clock, replies)
     trace = trace() if trace is Trace else trace
+    agent.sink = None if agent_trace_pack is None else AgentTraceSink(trace, agent_trace_pack)
     logs: list[str] = []
     with clock.participant():
         timeline = run_episode(
@@ -388,6 +397,7 @@ def run(
             clocks=clocks,
             log=log or logs.append,
             trace=trace,
+            agent_trace=agent.sink,
             inputs_log=inputs_log,
         )
         env._drain_abandoned()
