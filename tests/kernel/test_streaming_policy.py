@@ -789,6 +789,38 @@ def test_a_config_off_the_wall_clock_is_refused():
 # ---- what a single change to the rules would break --------------------------------------------
 
 
+def test_a_session_that_took_frames_after_its_rebuild_is_rebuilt_again_when_it_sticks_later():
+    """The second push hangs and its watchdog rebuilds the session at 3; frames go in again, so
+    the ninth push hanging long after is a stall of its own, which rebuilds the session once more
+    instead of invalidating the run."""
+    sim = _run(World(stuck_pushes={2, 9}), 15.0, push_watchdog_s=2.0)
+    assert [data["reason"] for data in sim.data("GenerationAbandoned")] == [
+        "push_watchdog",
+        "push_watchdog",
+        "deadline",
+    ]
+    assert sim.started == [(1, 0.0), (2, 3.0), (3, 10.0)]
+    assert sim.termination.invalid is None
+
+
+def test_pushes_failing_in_a_row_count_from_the_last_frame_that_went_in():
+    """Pushes 2, 3 and 5 fail and push 4 goes in between: never three in a row."""
+    sim = _run(World(push_errors={2: "item rejected", 3: "item rejected", 5: "item rejected"}), 8.0)
+    assert sim.data("GenerationAbandoned") == [{"generation": 1, "reason": "deadline"}]
+    assert sim.started == [(1, 0.0)]
+
+
+def test_a_grid_point_that_comes_while_a_capture_waits_is_skipped_and_counted():
+    """The read asked at 1 takes until 3.5; the capture due at 1 waits for it, and the grid points
+    at 2 and 3 come while it waits."""
+    sim = _run(World(check_times={2: 2.5}))
+    assert sim.captures == [0.0, 3.5, 4.0]
+    assert [(d["observation_id"], d["reason"]) for d in sim.data("FrameDropped")] == [
+        (None, "capture_busy"),
+        (None, "capture_busy"),
+    ]
+
+
 def test_giving_a_reply_up_leaves_the_action_another_reply_left_waiting():
     """The first reply ends at 1 with its typing waiting behind its click; the second is given up
     at 3. The typing is the first reply's and executes after the click."""
