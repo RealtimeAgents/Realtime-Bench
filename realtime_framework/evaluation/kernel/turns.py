@@ -529,7 +529,10 @@ class TurnPolicy:
         d, kernel = self.decision, self.kernel
         # A tap's end checks were made before the action finished, the last on the tick it
         # stopped at, which the check right after the action reads again. One that saw the end
-        # ends the episode there, by the task's reason; no check follows.
+        # ends the episode there, by the task's reason, and no check follows. A repeated tap
+        # presses on after a read saw the end (sandbox/actions.py
+        # GuestEnvironment._execute_clock_key), so the end is dated where the whole action
+        # stopped, and the reads after it count for nothing.
         for ended, reason, error in event.end_checks:
             if self._count_read(error):
                 break

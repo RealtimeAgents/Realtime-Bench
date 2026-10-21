@@ -1281,11 +1281,11 @@ def test_a_taps_reads_count_in_the_order_they_were_made():
     assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
 
 
-def test_an_end_seen_by_a_repeated_tap_dates_from_where_the_tap_stopped():
+def test_an_end_seen_by_a_repeated_tap_dates_from_where_the_whole_action_stopped():
     # Paused at 120 fps, a tap repeated twice; its first press sees the end at tick 1 and stops
     # that press, and the second press goes on to tick 2, as the environment presses every
-    # repeat (sandbox/actions.py GuestEnvironment._execute_clock_key). The action stops at 2,
-    # where the episode ends.
+    # repeat (sandbox/actions.py GuestEnvironment._execute_clock_key). The whole action stops at
+    # 2, where the episode ends, not at 1, where the end was seen.
     tap = Action(ActionType.KEY, {"key": "space", "repeat": 2})
     sim = _run(_token(10, None, env_fps=120), Reply(action=tap), ends_at=1)
     assert sim.tap_checks == [1, 2]
