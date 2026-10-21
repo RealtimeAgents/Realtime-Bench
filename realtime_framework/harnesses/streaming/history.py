@@ -47,13 +47,12 @@ def frame_block(frame: FrameRecord, observation: ProviderObservation) -> Content
     )
 
 
-def output_block(
-    generation: int, text: str, based_on: str | None, wall_ns: int | None
-) -> ContentBlock:
-    """The model output of the reply the kernel's ``generation`` produced. ``based_on`` is the
-    observation_id of the frame its action names; None when no sent frame backs it."""
+def output_block(decision: int, text: str, based_on: str | None, wall_ns: int | None) -> ContentBlock:
+    """The model output of reply ``decision``, the kernel's number of it (Outcome.decision).
+    ``based_on`` is the observation_id of the frame its action names; None when no sent frame
+    backs it."""
     return ContentBlock(
-        f"g{generation}.output",
+        f"d{decision}.output",
         "model_output",
         "model",
         BlockTime(wall_ns=wall_ns),
@@ -62,15 +61,19 @@ def output_block(
     )
 
 
-def feedback_block(generation: int, text: str, wall_ns: int | None) -> ContentBlock:
-    """The execution feedback on the action of the reply ``generation`` produced."""
+def feedback_block(
+    decision: int, call_id: str | None, text: str, wall_ns: int | None
+) -> ContentBlock:
+    """The execution feedback on one outcome of reply ``decision``: of the action that came in
+    call ``call_id`` (Outcome.call_id), or of the reply itself when it came to no action (None).
+    A reply may hand over several actions, each with its own feedback."""
     return ContentBlock(
-        f"g{generation}.feedback",
+        f"d{decision}.feedback" if call_id is None else f"d{decision}.{call_id}.feedback",
         "execution_feedback",
         "environment",
         BlockTime(wall_ns=wall_ns),
         text=text,
-        attached_to=f"g{generation}.output",
+        attached_to=f"d{decision}.output",
     )
 
 
