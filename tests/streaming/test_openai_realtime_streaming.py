@@ -175,6 +175,36 @@ def test_closing_a_streaming_session_lets_its_reader_end():
     assert session.closed is not None and session.failure is None
 
 
+class _FailingManager:
+    """The SDK's connection manager whose close raises, which may leave the connection open."""
+
+    def __exit__(self, *exc_info) -> None:
+        raise RuntimeError("close failed")
+
+
+def test_a_failed_close_cancels_the_reader_and_ends_its_waiters():
+    """A close that raises may leave the connection open, so the reader is cancelled instead of
+    waited for; whoever waits on the session then raises rather than waiting for good."""
+
+    async def scenario():
+        driver, connection = _offline_driver(), _FakeConnection()
+        session = _Session(1, connection, new_core())
+        session.read_continuously(Ticks())
+        reply = session.core.start_reply()
+        waiter = asyncio.create_task(session.receive_until(lambda: reply.events))
+        driver._session, driver._cm = session, _FailingManager()
+        await until(lambda: connection.in_flight == 1)
+        await driver._close_current()
+        cancelled = session._reader.cancelled()
+        raised = await asyncio.gather(waiter, return_exceptions=True)
+        connection.queue.put(_clean_close())  # ends the read the cancel left blocked
+        return cancelled, raised
+
+    cancelled, (raised,) = _within(scenario())
+    assert cancelled
+    assert isinstance(raised, ConnectionError)
+
+
 def test_a_streaming_sync_rebuilds_the_session():
     """Native streaming edits its session as frames are pushed; a sync, whatever its reason,
     rebuilds the session from the streaming view (decisions 4.7, 4.14)."""

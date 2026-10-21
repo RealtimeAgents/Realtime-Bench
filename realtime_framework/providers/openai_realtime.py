@@ -131,12 +131,21 @@ class _Session:
         """Read every event as it arrives until the connection ends, and hand each to the core
         with the time ``clock`` reads then (native streaming)."""
         self._clock, self._read_one = clock, asyncio.Event()
+        # The reader runs in the context of the call that starts it: the trace records every
+        # message it reads in that call's scope.
         self._reader = asyncio.create_task(self._read_all())
 
     async def _read_all(self) -> None:
-        while self.closed is None and self.failure is None:
-            await self._receive()
+        try:
+            while self.closed is None and self.failure is None:
+                await self._receive()
+                self._read_one.set()
+        except asyncio.CancelledError:
+            # Only a close that may have left the connection open cancels the reader: the
+            # session is over all the same for whoever waits on it.
+            self.failure = ConnectionError("OpenAI Realtime session closed")
             self._read_one.set()
+            raise
 
     async def stop_reading(self, *, closed: bool) -> None:
         """Once the connection is closed, wait for the reader to end; a connection that may
