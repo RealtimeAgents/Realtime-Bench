@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.clock import token_record
 
@@ -265,7 +267,9 @@ def test_history_overflow_ledger(tmp_path):
 def test_context_exceeded_before_request(tmp_path, monkeypatch):
     """A chat request that does not fit the window even with nothing retained is not sent, and
     the decision is invalid as context_exceeded_before_request. The harness raised it, so the
-    driver's classifier is not asked: even one that calls every error transient gets no retry."""
+    driver's classifier is not asked: even one that calls every error transient gets no retry.
+    Settled as the runner settles each result, it leaves the clock's output count unknown and
+    gives the clock no source, though it still counts as one inference response."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         # Below the first request's estimate of 9459 (test_history_overflow_ledger).
         config = chat_completions_config(stub.base_url, stream=False).model_copy(
@@ -283,7 +287,9 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
             observation = episode.frames.capture(0)
             episode.agent.configure_decision(episode.budget(observation.tick_number))
             episode.agent.stream_prefill(observation)
+            usage_before = episode_records.usage_snapshot(episode.agent)
             result = episode.agent.stream_generate(tick=0)
+            usage_after = episode_records.usage_snapshot(episode.agent)
         finally:
             episode.finish()
     assert stub.requests == [] and stub.unused_replies == 1
@@ -293,6 +299,13 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
     )
     # Its token record says why it has no usage (evaluation/clock.py token_record).
     assert token_record(result)["provider_usage_missing_reason"] == "request_not_sent"
+    result["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
+    env = SimpleNamespace()
+    episode_records.account_tokens(result, None, env)
+    assert (result["clock_output_tokens"], result["clock_output_tokens_source"]) == (None, None)
+    accounting = env._token_accounting
+    assert (accounting.responses, accounting.clock_sources) == (1, set())
+    assert accounting.missing_reasons == {"request_not_sent": 1}
     trace = (tmp_path / "episode_trace.jsonl").read_text()
     attempts = [
         e["payload"]

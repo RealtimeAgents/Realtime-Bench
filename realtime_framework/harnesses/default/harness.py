@@ -1766,7 +1766,10 @@ class DefaultHarness(VisionAgentBase):
                 "_trajectory_entry": log_entry,
             }
             if isinstance(final_error, RequestExceedsContext):
-                # Its token record (evaluation/clock.py token_record) says why it has no usage.
+                # Its token record (evaluation/clock.py token_record) says why it has no usage,
+                # and its clock output count stays unknown, with no clock source, rather than the
+                # zero of the frame's usage delta (evaluation/episode_records.py
+                # clock_output_tokens). It still counts as one inference response.
                 result["provider_usage_missing_reason"] = "request_not_sent"
             return result, False
 
