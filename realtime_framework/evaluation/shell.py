@@ -332,8 +332,10 @@ class _Shell:
         # A post and the step that takes it from the inbox, in one order.
         self._inbox = threading.Lock()
         self._posted: list = []  # posted since the last step
-        # The agent's records the kernel has not taken yet (_hand_over).
+        # The agent's records not given to the kernel yet (_hand_over), and the one given to it
+        # until it is written.
         self._held_records: deque[AgentRecord] = deque()
+        self._given: AgentRecord | None = None
         self._inputs = None  # the open inputs log
         self._timers: list[float] = []  # heap of when the timers the kernel set come due
         self._returned: deque[_Generation] = deque()  # results the workers handed back
@@ -387,9 +389,7 @@ class _Shell:
             self.agent_trace.take_back(self._write_handed if self._finished else self._write_held)
 
     def _hand_over(self, record: AgentRecord) -> None:
-        """An agent record from the sink's writer. The kernel takes it once nothing else is due
-        (_loop), one at a time: a backlog of them, however long it takes to write, holds back no
-        result that came back and no timer."""
+        """An agent record from the sink's writer, given to the kernel in its turn (_give)."""
         with self._inbox:
             self._held_records.append(record)
         self._wake.set()
@@ -398,8 +398,8 @@ class _Shell:
         """The loop raised before the end and the shell wraps the episode up without the kernel
         (_wrap_up): the agent records the kernel had not taken are written unnumbered, as the sink
         writes them once it has them back."""
-        taken = [event for event in self._posted if isinstance(event, AgentRecord)]
-        for record in taken + list(self._held_records):
+        given = [] if self._given is None else [self._given]
+        for record in given + list(self._held_records):
             if self.trace is None or self._trace_failed:
                 return
             try:
@@ -449,13 +449,23 @@ class _Shell:
                 self._settle_returned(returned)
                 if not self.token:
                     now = self._read()
+            self._give()
             commands = self._step(now)
             if commands is not None:
                 self._run_all(commands)
-            elif self._held_records:
-                self.post(self._held_records.popleft())
             else:
                 self._sleep()
+
+    def _give(self) -> None:
+        """Give the kernel the next agent record once the last is written: one a round, after
+        the results settled in it. A backlog of records, however long they take to write, holds
+        back no result and no timer by more than one, and a kernel with something due at every
+        step still numbers each a few steps after it came, not after the end."""
+        if self._given is not None or not self._held_records:
+            return
+        with self._inbox:
+            self._given = self._held_records.popleft()
+        self.post(self._given)
 
     def post(self, event) -> None:
         """Hand the kernel an event, from any thread, and wake the shell."""
@@ -1094,6 +1104,7 @@ class _Shell:
         InferenceCompleted; any other is a KernelRecord."""
         kind, data, decision = entry.kind, entry.data, self._decision
         if isinstance(data, AgentRecord):
+            self._given = None
             self._emit(kind, data.data, entry)
         elif kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
