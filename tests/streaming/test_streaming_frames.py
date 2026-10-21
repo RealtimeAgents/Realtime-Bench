@@ -1,12 +1,12 @@
 """What streaming adds to the frame table (harnesses/default/frames.py): use from several threads,
-and the provider's acknowledgement of each pushed frame."""
+the provider's acknowledgement of each pushed frame, and frames given up unsent."""
 
 from __future__ import annotations
 
 import sys
 import threading
 
-from realtime_framework.harnesses.default.frames import FrameTable
+from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, FrameTable
 
 GEOMETRY = {"image_size": [768, 432], "screen_size": [1920, 1080]}
 
@@ -73,3 +73,35 @@ def test_a_frame_without_a_protocol_confirmation_is_unknown():
     table.record_sent(record.frame, 100.2)
     table.record_ack_unknown(record.frame)
     assert (record.ack_status, record.acked_unix_s) == ("unknown", None)
+
+
+def test_a_dropped_frame_keeps_its_number_and_is_counted():
+    table = FrameTable()
+    records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, None) for n in (1, 2, 3)]
+    table.record_sent(1, 101.1)
+    table.record_dropped(2)
+    table.record_sent(3, 103.1)
+    assert [record.send_status for record in records] == ["sent", "dropped", "sent"]
+    assert records[1].sent_unix_s is None
+    assert table.dropped_count() == 1
+    assert table.latest() is records[2]
+
+
+def test_an_action_naming_a_dropped_frame_finds_nothing():
+    table = FrameTable()
+    table.register("obs-1", 101.0, GEOMETRY, None)
+    table.record_dropped(1)
+    assert table.locate(1) == (None, FRAME_NOT_IN_TABLE)
+
+
+def test_a_frame_age_counts_only_the_frames_sent_after_it():
+    table = FrameTable()
+    records = [table.register(f"obs-{n}", 100.0 + n, GEOMETRY, None) for n in range(1, 7)]
+    for frame in (1, 3, 5):
+        table.record_sent(frame, 100.0 + frame + 0.1)
+    for frame in (2, 4):
+        table.record_dropped(frame)
+    # Frame 6 is prepared but not sent yet.
+    assert table.age(records[0], 106.5) == {"age_frames": 2, "age_s": 5.5}
+    assert table.age(records[2], 106.5) == {"age_frames": 1, "age_s": 3.5}
+    assert table.age(records[4], 106.5) == {"age_frames": 0, "age_s": 1.5}
