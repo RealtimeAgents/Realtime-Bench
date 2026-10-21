@@ -141,6 +141,11 @@ class ActionExecuted:
     # stopped the tap's advance, and the episode ends at the tick the action finished, by the
     # task's reason.
     end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
+    # Native streaming: when the action took the environment and when it returned, in semantic
+    # seconds, as the action lane read them. None on the turn-based clocks, and for a run that
+    # failed before the action was read.
+    started_at: float | None = None
+    finished_at: float | None = None
 
     @property
     def priority(self) -> Priority:
