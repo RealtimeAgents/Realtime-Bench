@@ -1069,7 +1069,8 @@ def test_the_third_failed_read_in_a_row_invalidates_the_run(
 def test_a_failed_read_inside_a_tap_does_not_stop_it():
     # Paused at 120 fps, a tap at tick 0 is two ticks; its read at tick 1 fails and the tap goes
     # on to 2, where the task ends, as the environment does once the kernel counts its reads
-    # (shell.py kernel_counts_reads). The check after execution, at 2, reports the end.
+    # (shell.py kernel_counts_reads). The read at 2 saw the end: the episode ends there, with no
+    # check after execution.
     sim = _run(
         _token(10, None, env_fps=120, input_fps=120),
         Reply(action=TAP),
@@ -1084,17 +1085,34 @@ def test_a_failed_read_inside_a_tap_does_not_stop_it():
         (True, "target_reached", None),
     )
     assert _record(sim, "ActionResolved", 0)["environment_tick"] == 2
-    assert _asked(sim) == [0, 0, 2]
+    assert _asked(sim) == [0, 0]
     assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
     assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 2)
 
 
-def test_an_end_a_tap_saw_waits_for_the_next_read_when_the_check_after_it_fails():
-    # Paused at 120 fps, the tap's read at tick 1 sees the end and stops the tap there. The read
-    # passes on only that it answered (ActionExecuted.end_checks); the check after execution asks
-    # again, fails short of three in a row and answers "not over", so the end is found by the
-    # check after the next step, at 2, a tick late (today's loop invalidates the run at the
-    # failed check).
+def test_a_tap_that_sees_the_end_ends_the_episode_at_its_tick_by_the_tasks_reason():
+    # Paused at 120 fps, a tap at tick 0 is two ticks. The task ends at tick 1, which the tap's
+    # first read sees: the environment stops the tap there (sandbox/actions.py
+    # GuestEnvironment.wait_until_tick) and passes the end on (ActionExecuted.end_checks), so the
+    # episode ends at tick 1 by the task's reason. The tap is applied and ended it; no check
+    # follows execution. The loop top and the check before the tap are at 0.
+    sim = _run(
+        _token(10, None, env_fps=120), Reply(action=TAP), ends_at=1, end_reason="target_reached"
+    )
+    assert sim.tap_checks == [1]
+    assert _asked(sim) == [0, 0]
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
+    assert _record(sim, "EpisodeEnded", None) == {
+        "cause": "environment",
+        "reason": "target_reached",
+        "at": 1,
+    }
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 1)
+
+
+def test_an_end_a_tap_saw_is_not_lost_to_a_failed_check_after_it():
+    # As above, with the check after execution scripted to fail: it is not asked, so it neither
+    # delays the end nor counts. Today's loop would have invalidated the run there.
     sim = _run(
         _token(10, None, env_fps=120),
         Reply(action=TAP),
@@ -1103,26 +1121,22 @@ def test_an_end_a_tap_saw_waits_for_the_next_read_when_the_check_after_it_fails(
         check_errors={3: "check 3 failed"},
     )
     assert sim.tap_checks == [1]
-    assert _asked(sim) == [0, 0, 1, 2]
-    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", False)]
-    assert _pace(sim, 0)["to_tick"] == 2
-    assert sim.entries("RunInvalidated") == []
-    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 2)
-
-
-def test_a_tap_that_sees_the_end_stops_and_the_check_after_it_ends_the_episode():
-    # Paused at 120 fps, a tap at tick 0 is two ticks. The task ends at tick 1, which the tap's
-    # first check sees: the environment stops there (sandbox/actions.py
-    # GuestEnvironment.wait_until_tick), and the check right after execution, at the same tick,
-    # reports the end. The loop top and the check before the tap are at 0.
-    sim = _run(
-        _token(10, None, env_fps=120), Reply(action=TAP), ends_at=1, end_reason="target_reached"
-    )
-    assert sim.tap_checks == [1]
-    assert _asked(sim) == [0, 0, 1]
+    assert _asked(sim) == [0, 0]
     assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
-    assert sim.termination.stop_reason == "target_reached"
-    assert sim.termination.ended_at == 1
+    assert sim.entries("RunInvalidated") == []
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 1)
+
+
+def test_an_end_seen_by_a_repeated_tap_dates_from_where_the_tap_stopped():
+    # Paused at 120 fps, a tap repeated twice; its first press sees the end at tick 1 and stops
+    # that press, and the second press goes on to tick 2, as the environment presses every
+    # repeat (sandbox/actions.py GuestEnvironment._execute_clock_key). The action stops at 2,
+    # where the episode ends.
+    tap = Action(ActionType.KEY, {"key": "space", "repeat": 2})
+    sim = _run(_token(10, None, env_fps=120), Reply(action=tap), ends_at=1)
+    assert sim.tap_checks == [1, 2]
+    assert _asked(sim) == [0, 0]
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("game_decided", 2)
 
 
 # ---- the finite-B allowance and missing usage -------------------------------------------------

@@ -277,6 +277,21 @@ def test_a_command_the_kernel_waits_for_is_answered_though_it_raised():
     assert episode.statuses() == ["invalid_run"]
 
 
+def test_a_tap_read_that_saw_the_end_ends_the_episode_by_the_tasks_reason():
+    """Paused at tick 0: the tap's read saw the end, passed on as ActionExecuted.end_checks. The
+    episode ends there by the task's reason; the check that would follow execution, scripted to
+    fail, is never asked."""
+    world = World(
+        tap_checks={0: ((True, "target_reached", None),)}, check_errors={3: "state read 3"}
+    )
+    episode = run("token", 1.0, [Reply(0.0, TAP)], world)
+    assert [call for call, _, _ in episode.env.calls].count("check_end") == 2
+    assert episode.invalid is None
+    assert episode.env._stop_reason == "target_reached"
+    assert episode.statuses() == ["applied"]
+    assert episode.agent.outcomes[0].terminal_after_action is True
+
+
 def test_a_failed_end_check_alone_does_not_end_the_episode():
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], World(check_errors={2: "slow read"}))
     assert episode.invalid is None

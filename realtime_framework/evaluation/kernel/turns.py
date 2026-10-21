@@ -505,9 +505,13 @@ class TurnPolicy:
         if self.phase is not _Phase.EXECUTE:
             return
         d, kernel = self.decision, self.kernel
-        # A tap's end checks were made before the action finished.
-        for _, _, error in event.end_checks:
+        # A tap's end checks were made before the action finished. One that saw the end ends the
+        # episode where the tap stopped, by the task's reason; no check follows.
+        for ended, reason, error in event.end_checks:
             if self._count_read(error):
+                break
+            if ended:
+                kernel.end("environment", kernel.semantic, reason=reason)
                 break
         # A refusal or a failure leaves its own execution record (sandbox/actions.py
         # GuestEnvironment._execution_failed).
