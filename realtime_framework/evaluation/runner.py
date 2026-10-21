@@ -38,7 +38,7 @@ Runtime invariants:
     crossing the deadline can't rewrite a real environment terminal state into time_limit or
     lengthen the episode.
 """
-import hashlib as hashlib, math as math, traceback as traceback
+import math as math, traceback as traceback
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.evaluation import episode_records
@@ -78,18 +78,7 @@ class ObservationStreamWatchdog:
         self._first_seen_at = None
         self._count = 0
 
-    @staticmethod
-    def fingerprint(observation):
-        metadata = getattr(observation, "metadata", {}) or {}
-        digest = metadata.get("screenshot_sha256")
-        if not digest:
-            shot = getattr(observation, "screenshot", b"") or b""
-            digest = hashlib.sha256(shot).hexdigest()
-        return (
-            metadata.get("observation_id"),
-            getattr(observation, "tick_number", None),
-            digest,
-        )
+    fingerprint = staticmethod(episode_records.observation_fingerprint)
 
     def observe(self, observation):
         """Return True once N identical identities arrive with a progressing wall clock."""

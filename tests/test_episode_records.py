@@ -389,6 +389,23 @@ def test_a_wall_call_the_harness_aborted_needs_no_proof(reason):
     assert episode_records.result_invalid(r, _Tools(), "wall") is not None
 
 
+def test_a_frame_is_known_by_its_observation_id_tick_and_screenshot_digest():
+    observation = Observation(b"png", 1_000.5, 3.0, {"observation_id": "o3"})
+    assert episode_records.observation_fingerprint(observation) == (
+        "o3",
+        3.0,
+        hashlib.sha256(b"png").hexdigest(),
+    )
+    observation.metadata["screenshot_sha256"] = "digest"
+    assert episode_records.observation_fingerprint(observation) == ("o3", 3.0, "digest")
+    blank = Observation(b"", 0.0, 0.0, {})
+    assert episode_records.observation_fingerprint(blank) == (
+        None,
+        0.0,
+        hashlib.sha256(b"").hexdigest(),
+    )
+
+
 # ---- trace payloads ---------------------------------------------------------------------------
 
 CLICK = Action.click(10, 20)
