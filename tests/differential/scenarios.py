@@ -562,6 +562,36 @@ X12 = [
     ),
 ]
 
+# What the environment latches itself reaches the kernel before the command's answer
+# (evaluation/shell.py _Shell._env), and ends the episode first.
+LATCHED = [
+    # U4: decision 0 waits 2 s from its action time 0.5; its steps go to 1, 2 and 2.5, and the
+    # second, the third clock step of the episode, fails. The kernel cuts the wait short at
+    # tick 1; today's environment reports a failed action.
+    Script(
+        "token",
+        4.0,
+        _tokens([("wait:2", 50)] + [("click", 50)] * 3),
+        tokens_per_frame=100,
+        advance_errors=(3,),
+        expect=frozenset({"U2", "U4", "X1", "X2"}),
+        name="token-a-wait-whose-own-step-fails",
+    ),
+    # U5: decision 1's click at 1.5 s fails in the environment; reading the snapshot takes
+    # 1.5 s, and the kernel settles the click after it, at tick 3.
+    Script(
+        "wall",
+        SHORT_S,
+        (
+            Turn("click", attempts=(Attempt(0.5),)),
+            Turn("click", attempts=(Attempt(0.5),), fault="guest connection reset"),
+        ),
+        snapshot_s=1.5,
+        expect=frozenset({"U2", "U5", "X2"}),
+        name="wall-a-failed-action-settles-after-the-snapshot-read",
+    ),
+]
+
 # ---- 5. phase2.md:283 --------------------------------------------------------------------------
 
 EARLY_END = [
@@ -578,4 +608,4 @@ EARLY_END = [
     ),
 ]
 
-NAMED = FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + X12 + EARLY_END
+NAMED = FRAME_RATES + RUNNER_LOOP + [LONG] + MISSING + PER_RULE + X12 + LATCHED + EARLY_END
