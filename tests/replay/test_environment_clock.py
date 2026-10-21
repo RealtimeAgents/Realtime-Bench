@@ -12,7 +12,7 @@ from .clock_task import ClockTask
 
 def token_environment(fps: float) -> tuple[GuestEnvironment, ClockTask]:
     task = ClockTask(fps)
-    return GuestEnvironment(None, None, task, clock_mode="token"), task
+    return GuestEnvironment(None, task, clock_mode="token"), task
 
 
 @pytest.mark.parametrize("fps", [1.0, 2.0, 30.0, 60.0])

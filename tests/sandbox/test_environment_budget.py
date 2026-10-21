@@ -119,7 +119,6 @@ def _environment(guest: FakeGuest, task: Task | None = None, **options):
     """A GuestEnvironment on the token clock at 1 fps; by default its task has only the clock."""
     return actions.GuestEnvironment(
         GuestClient(host="127.0.0.1", port=guest.port),
-        None,
         task or _token_clock(Task()),
         honor_fail=False,
         clock_mode="token",
@@ -139,7 +138,6 @@ def _wall_environment(guest: FakeGuest) -> actions.GuestEnvironment:
     now = time.time()
     return actions.GuestEnvironment(
         GuestClient(host="127.0.0.1", port=guest.port),
-        now + 60.0,
         _WallTask(),
         honor_fail=False,
         clock_mode="wall",
@@ -453,7 +451,7 @@ def _timed(
     takes key input as a game's does (tests/replay/clock_task.py)."""
     task = task or ClockTask(1.0)
     env = actions.GuestEnvironment(
-        guest, None, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
+        guest, task, clock_mode="token", clocks=Clocks(FrameClock(1.0), clock), **options
     )
     return env, task
 
@@ -699,7 +697,6 @@ def test_a_4xx_from_the_guest_s_command_endpoint_is_an_environment_failure(secon
     clock = FakeClock(wall_origin=1_000.0)
     env = actions.GuestEnvironment(
         _MissingCommandEndpoint(clock, seconds),
-        1_060.0,
         _WallTask(),
         honor_fail=False,
         clock_mode="wall",
@@ -876,7 +873,6 @@ def _wall_on(clock: FakeClock, guest) -> actions.GuestEnvironment:
     """A GuestEnvironment on the wall clock, timed on ``clock``, whose guest is ``guest``."""
     return actions.GuestEnvironment(
         guest,
-        1_060.0,
         _WallTask(),
         honor_fail=False,
         clock_mode="wall",

@@ -5,10 +5,11 @@ tick_index, and the parts of the environment its ShellEnvironment protocol names
 on the token clock (set_episode_horizon, step_clock, release_keys, render_current_frame) has no
 wall-clock part. The legacy loop (tests/differential/legacy_loop.py _run_stream_legacy) asks done
 instead of check_end, paces with wait_until_tick and reads the optional time_remaining and
-past_deadline hooks. On the wall clock main() hands it a GuestEnvironment (sandbox/actions.py). This
-class follows GuestEnvironment's wall-clock branch call for call on the episode's fake clock
-(tests/fake_clock.py), serves the frames of frames.py, and executes nothing: each call is appended
-to ``calls`` in order, tagged with the decision it belongs to.
+past_deadline hooks. On the wall clock main() hands it a GuestEnvironment (sandbox/actions.py), the
+legacy loop one with its deadline (tests/differential/legacy_environment.py). This class follows
+their wall-clock branch call for call on the episode's fake clock (tests/fake_clock.py), serves the
+frames of frames.py, and executes nothing: each call is appended to ``calls`` in order, tagged with
+the decision it belongs to.
 
 Model latency is scripted here too, since it is wall time: a stub calls ``model_request(index)``
 as its ``on_request`` hook before it answers request ``index`` and sleeps that request's scripted
@@ -107,7 +108,7 @@ class FakeEnvironment:
             {"call": call, "decision": self.decision, "finalizing": self.finalizing, **fields}
         )
 
-    # ---- clock (actions.py tick_index to past_deadline) ----
+    # ---- clock (actions.py tick_index; the deadline's, legacy_environment.py) ----
 
     def clock_position(self) -> float:
         return max(0.0, (self.clock.time() - self.t0) / self.d)

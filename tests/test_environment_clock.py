@@ -1,6 +1,6 @@
 """GuestEnvironment on the episode clocks (sandbox/actions.py). On the wall clock the fake clock
-times its waits, its deadline and its key releases; under the token clock its tick is the
-semantic FrameClock, which only advancing the environment moves."""
+times its waits and its key releases; under the token clock its tick is the semantic FrameClock,
+which only advancing the environment moves."""
 
 from __future__ import annotations
 
@@ -36,10 +36,9 @@ class _WallTask:
         return {"fps": 1.0}
 
 
-def _wall(clock, horizon_s, **kwargs):
+def _wall(clock, **kwargs):
     return GuestEnvironment(
         _Guest(clock),
-        ORIGIN + horizon_s,
         _WallTask(),
         clock_mode="wall",
         wall_start_time=ORIGIN,
@@ -48,43 +47,21 @@ def _wall(clock, horizon_s, **kwargs):
     )
 
 
-def test_wall_wait_is_cut_at_the_deadline():
+def test_wall_wait_takes_the_time_it_asks_for():
+    """The deadline is the kernel's (kernel/turns.py); the legacy loop's environment cut the wait
+    at it (tests/differential/legacy_environment.py)."""
     clock = FakeClock(wall_origin=ORIGIN)
-    env = _wall(clock, 3.0)
+    env = _wall(clock)
     with clock.participant():
         clock.sleep(1.25)
         assert env.execute(Action.wait(5.0)) == "wait"
-        assert clock.monotonic() == 3.0
-        assert env._last_execution_result["duration_simulated_seconds"] == 1.75
-        assert env.time_remaining() == 0.0 and env.past_deadline() and env.done()
-
-
-class _SleepRecordingClock(FakeClock):
-    def __init__(self):
-        super().__init__(wall_origin=ORIGIN)
-        self.sleeps = []
-
-    def sleep(self, seconds):
-        self.sleeps.append(seconds)
-        super().sleep(seconds)
-
-
-def test_wall_wait_for_the_next_tick_polls_every_30_ms():
-    """From 0.51 s the wait sleeps 30 ms at a time and wakes on the first poll past tick 2."""
-    clock = _SleepRecordingClock()
-    env = _wall(clock, 10.0)
-    with clock.participant():
-        clock.sleep(0.51)
-        clock.sleeps.clear()
-        env.wait_until_tick(2)
-        assert env.tick_index() == 2
-        assert clock.sleeps == [0.03] * 50
-        assert clock.monotonic() == pytest.approx(2.01)
+        assert clock.monotonic() == 6.25
+        assert env._last_execution_result["duration_simulated_seconds"] == 5.0
 
 
 def test_wall_hold_is_released_by_a_timer_on_the_clock():
     clock = FakeClock(wall_origin=ORIGIN)
-    env = _wall(clock, 60.0)
+    env = _wall(clock)
     with clock.participant():
         clock.sleep(0.25)
         assert env.execute(Action.hold_key("arrowleft", 1.5)) == "applied"
@@ -106,7 +83,7 @@ def test_an_environment_operation_is_timed_on_the_operational_clock():
         left.append(Deadline(None, "CDP call").remaining())
         clock.sleep(budget + 1.0)
 
-    env = _wall(clock, 10 * budget, stop_check=stop_check)
+    env = _wall(clock, stop_check=stop_check)
     with clock.participant():
         assert env.done()
     assert left == [budget] and clock.monotonic() == budget + 1.0
@@ -122,7 +99,6 @@ def test_the_clocks_must_fit_the_clock_mode():
     with pytest.raises(ValueError, match="^the wall clock reads one clock for world and real time$"):
         GuestEnvironment(
             _Guest(clock),
-            ORIGIN + 10.0,
             _WallTask(),
             clock_mode="wall",
             wall_start_time=ORIGIN,
@@ -130,7 +106,7 @@ def test_the_clocks_must_fit_the_clock_mode():
         )
     with pytest.raises(ValueError, match=r"^the frame clock counts 1 s frames, the task 0.0333"):
         GuestEnvironment(
-            None, None, ClockTask(30.0), clock_mode="token", clocks=Clocks(FrameClock(1.0), clock)
+            None, ClockTask(30.0), clock_mode="token", clocks=Clocks(FrameClock(1.0), clock)
         )
 
 
@@ -144,7 +120,7 @@ def test_a_deadline_inside_an_operation_is_read_on_its_clock():
 def test_token_world_time_moves_only_when_the_environment_advances():
     operational = FakeClock()
     clocks = Clocks(FrameClock(2.0), operational)
-    env = GuestEnvironment(None, None, ClockTask(2.0), clock_mode="token", clocks=clocks)
+    env = GuestEnvironment(None, ClockTask(2.0), clock_mode="token", clocks=clocks)
     with operational.participant():
         operational.sleep(300.0)  # e.g. the provider watchdog, while the world is frozen
         assert env.tick_index() == 0 and clocks.semantic.monotonic() == 0.0
