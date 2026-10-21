@@ -194,10 +194,8 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_its_cursor_follows(
     the server's camelCase ones in standard base64 (tests/replay/test_gemini_live.py
     turn_script).
 
-    Only the cursor follows the recording here: the Gemini driver does not replay through
-    CassetteServer yet. google-genai connects over wss whatever the URL says (its
-    BaseApiClient._websocket_base_url), and the driver's
-    connection is an asyncio one, which clocked_connection does not wrap."""
+    Only the cursor follows the recording here; the Gemini driver replays a hand-written session
+    through CassetteServer in tests/streaming/test_streaming_e2e.py (live_agent)."""
     frame = base64.urlsafe_b64encode(frame_png(1)).decode()
     audio = base64.b64encode(bytes(range(256)) * 4).decode()  # standard base64, with "+" and "/"
     sent = [
