@@ -10,7 +10,6 @@ when it fed it.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from types import SimpleNamespace
 
@@ -18,6 +17,7 @@ import pytest
 from google.genai import _common, _live_converters, types
 from google.genai import errors as genai_errors
 from google.genai import live as genai_live
+from websockets.exceptions import ConnectionClosedError
 
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
@@ -63,6 +63,12 @@ class FedSocket:
         self._frames: asyncio.Queue = asyncio.Queue()
         self._answers: list[tuple] = []  # (kind, frames), in the order they are due
         self.fail = None  # a predicate on a client message whose send raises
+        self.stall = None  # a predicate on a client message whose send does not drain
+        # Closing waits for a write that does not drain, as websockets' close does.
+        self.close_stalls = False
+        self._dropped = asyncio.Event()
+        # websockets' transport: an abort drops the connection, which fails a write stuck in it.
+        self.transport = SimpleNamespace(abort=self._dropped.set)
 
     def feed(self, *frames) -> None:
         for frame in frames:
@@ -85,6 +91,9 @@ class FedSocket:
         message = json.loads(message)
         if self.fail is not None and self.fail(message):
             raise RuntimeError("the activity end does not go out")
+        if self.stall is not None and self.stall(message):
+            await self._dropped.wait()
+            raise ConnectionClosedError(None, None)
         self.sent.append(message)
         if self._answers and wire(message) == self._answers[0][0]:
             self.feed(*self._answers.pop(0)[1])
@@ -110,11 +119,23 @@ class FedLive:
             websocket=socket,
             setup_complete=types.LiveServerSetupComplete(),
         )
-        return contextlib.asynccontextmanager(lambda: _yield(session))()
+        return _Opened(session, socket)
 
 
-async def _yield(value):
-    yield value
+class _Opened:
+    """What client.aio.live.connect returns: entered, the session; exited, the connection
+    closed, which waits for a write stuck in its socket where FedSocket.close_stalls."""
+
+    def __init__(self, session, socket: FedSocket):
+        self._session = session
+        self._socket = socket
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *exc):
+        if self._socket.close_stalls:
+            await self._socket._dropped.wait()
 
 
 def setup_message(config) -> dict:
@@ -710,6 +731,32 @@ def test_a_go_away_in_a_reply_leaves_the_reply_to_end_before_the_deadline():
         "turn_complete",
     ]
     assert isinstance(failure, live.GoAwayDeadlineExceeded)
+
+
+def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatch):
+    """A push stuck in a write that does not drain holds the session. An abort's close of the
+    connection waits on the same write until its bound, then drops the connection under it: the
+    push fails, and the next reply's ensure_ready takes the session and rebuilds it."""
+    monkeypatch.setattr(live, "_CONNECTION_CLOSE_TIMEOUT_S", 0.05)
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        rig.socket.stall = lambda message: wire(message) == "video"
+        rig.socket.close_stalls = True
+        push = asyncio.ensure_future(rig.driver.push_frame(None, rig.view([pushed(1)])))
+        await settle()
+        await rig.driver.abort(None)
+        await settle()
+        failure = push.exception() if push.done() else None
+        await asyncio.wait_for(
+            rig.driver.ensure_ready(rig.seed, rig.view([]), lambda *_, **__: None), 2
+        )
+        await rig.driver.close()
+        return failure
+
+    assert isinstance(asyncio.run(run()), ConnectionClosedError)
+    assert len(rig.live.sockets) == 2
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():

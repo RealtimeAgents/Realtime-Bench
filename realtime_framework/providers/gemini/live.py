@@ -529,7 +529,7 @@ class GeminiLiveDriver(SessionLifecycle):
         """Close the open connection, if any; returns whether there was one."""
         cm, self._cm = self._cm, None
         reading, self._reading = self._reading, None
-        self._session = None
+        session, self._session = self._session, None
         self._receiver = None
         self._activity_open = False
         self._last_video_sent_at = None
@@ -546,8 +546,11 @@ class GeminiLiveDriver(SessionLifecycle):
                     cm.__aexit__(None, None, None),
                     _CONNECTION_CLOSE_TIMEOUT_S,
                 )
-            except Exception:  # noqa: BLE001, S110 - best-effort SDK cleanup
-                pass
+            except Exception:  # noqa: BLE001 - best-effort SDK cleanup
+                # A close stuck on a write that does not drain leaves that write stuck too, and
+                # a streaming push holds the session while it writes: drop the connection under
+                # both, which fails the write. google-genai keeps the WebSocket as ``_ws``.
+                session._ws.transport.abort()
         return cm is not None
 
     async def _connect(self, request: ConnectRequest) -> None:
