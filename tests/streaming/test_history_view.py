@@ -303,6 +303,33 @@ def test_archived_replies_leave_with_their_feedback_and_the_older_frames_before_
     assert ledger.block.time.wall_ns == 2_004
 
 
+def test_the_ledger_keeps_its_time_while_the_replies_archived_after_have_no_actions():
+    history = History().play("FRFR")
+    for _ in range(4):
+        history.play("FR")
+        history.actions[history.blocks[-1].id] = ()
+    view = _view(
+        history.blocks, frames=2, text="archive", actions=history.actions, policy=SMALL_WINDOW
+    )
+    # Six replies archive four; the fourth reply archived the two that had actions.
+    ledger = _ledger(view).block
+    assert _kept(view, "model_output") == ["g5.output", "g6.output"]
+    archived = history.actions["g1.output"] + history.actions["g2.output"]
+    assert (ledger.text, ledger.revision) == (executed_action_ledger(archived), 2)
+    assert ledger.time.wall_ns == 2_004
+
+
+def test_there_is_no_ledger_while_no_archived_reply_has_actions():
+    history = History().play("FR" * 4)
+    for reply in ("g1.output", "g2.output"):
+        history.actions[reply] = ()
+    view = _view(
+        history.blocks, frames=2, text="archive", actions=history.actions, policy=SMALL_WINDOW
+    )
+    assert _kept(view, "model_output") == ["g3.output", "g4.output"]
+    assert _ledger(view) is None
+
+
 def test_an_older_frame_accepted_after_the_last_archived_reply_stays():
     history = History().play("FRFRBFRBFR")
     view = _view(
