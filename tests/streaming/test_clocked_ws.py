@@ -283,6 +283,33 @@ def test_messages_the_client_leaves_unread_never_stop_its_reader():
     assert read == list(range(20))
 
 
+def test_big_messages_both_ways_at_once_never_deadlock():
+    """The client sends a big frame while the server's big replies to the message before it are
+    still under way, as screenshots go up while audio comes down. Each side waits until the
+    other's kernel holds what it wrote; were neither to read meanwhile, both would wait forever:
+    the client's reader needs the protocol lock its sender holds. The sizes are past what macOS
+    buffers on the loopback; Linux deadlocks already at a tenth of them."""
+    replies = [_record("s2c", {"type": "audio", "n": n, "data": "a" * 1_000_000}) for n in range(5)]
+    big = {"type": "frame", "data": "f" * 5_000_000}
+    records = [
+        _record("open", at=0.0),
+        _record("c2s", {"type": "hello"}, 0.0),
+        *replies,
+        _record("c2s", big, 0.0),
+    ]
+    read = []
+
+    def client(open_connection, clock):
+        ws = open_connection()
+        _send(ws, {"type": "hello"})
+        _send(ws, big)
+        read.extend(_recv(ws)["n"] for _ in replies)
+        ws.close()
+
+    assert _replay(records, client, real_limit_s=10.0) == []
+    assert read == list(range(5))
+
+
 def test_messages_that_arrive_together_each_follow_what_the_one_before_released():
     """Two messages in one read: the reply the first one released goes before the second one is
     compared, or the second would find that reply still next."""
