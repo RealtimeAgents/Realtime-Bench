@@ -21,7 +21,6 @@ import pytest
 
 from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation.kernel.events import Termination
 from realtime_framework.evaluation.reporting import summarize_streaming
 from realtime_framework.harnesses.default.prompts import (
     FUNCTION_CALL_FRAME_PROMPT,
@@ -51,8 +50,9 @@ EXECUTION_S = 0.1
 
 @pytest.fixture(autouse=True)
 def _slow_click(monkeypatch):
-    """A click that executes in no time commits as reply 2 starts on OpenAI, where the reply's end
-    hands its action over, and whether reply 2's request holds its feedback is then a race."""
+    """The click takes 0.1 s, so that its feedback is committed at 0.5 s: after OpenAI's reply 2
+    started (0.45 s), so that it goes in with the next frame, and before Gemini's (0.6 s), whose
+    trigger carries it. Neither then turns on which of two threads goes first."""
     execute = FakeEnvironment.execute
 
     def slow(self, action, *, release_at=None):
@@ -185,9 +185,10 @@ def realtime_cassette(frame_2_at: float = 1.0) -> list[dict]:
         _record("s2c", {"type": "response.created", "response": {"id": "resp_1"}}, 0.2),
         _record("s2c", {**added, "item": {"id": "item_1"}}, 0.2),
         _record("s2c", {"type": "response.output_text.delta", **reply, "delta": text}, 0.3),
+        # The click is handed over as its text is done, before its reply is.
         _record("s2c", {"type": "response.output_text.done", **reply, "text": text}, 0.4),
-        _record("s2c", {"type": "response.done", "response": done}, 0.4),
-        _record("c2s", {**create, "event_id": "<rtb_reply-2>"}, 0.4),
+        _record("s2c", {"type": "response.done", "response": done}, 0.45),
+        _record("c2s", {**create, "event_id": "<rtb_reply-2>"}, 0.45),
         _record("s2c", {"type": "response.created", "response": {"id": "resp_2"}}, 0.6),
         # The click's feedback, committed at 0.5 s, goes in before the next frame.
         *_realtime_push(2, [{"type": "input_text", "text": FEEDBACK}], 1.0, "item_1"),
@@ -285,7 +286,11 @@ def _the_episode(episode, call_id: str) -> dict:
     env, agent = episode.env, episode.agent
     assert episode.logs == []
     assert episode.problems == []  # every message at its time, and the cassette used up
-    assert episode.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.0, 3.5, None)
+    # As main() reads them (runner.py main).
+    assert (env._stop_reason, getattr(env, "_invalid_run", None)) == ("time_limit", None)
+    assert env._termination == {
+        "stop_reason": "time_limit", "end_s": 3.0, "snapshot_s": 3.5, "snapshot_delay_s": 0.5,
+    }  # fmt: skip
     (execution,) = env.executions
     assert (execution["time"], execution["status"]) == (0.4, "applied")
     assert execution["action"]["parameters"] == {"x": 100, "y": 200}
@@ -386,13 +391,11 @@ def test_a_session_that_departs_from_its_cassette_ends_the_episode_invalid(tmp_p
     assert episode.problems == [
         "conn 1 record 16: c2s conversation.item.create at t=1, recorded at t=1.5"
     ]
-    termination = episode.termination
-    assert (termination.stop_reason, termination.ended_at) == ("invalid_run", 1.0)
-    assert (termination.invalid.category, termination.invalid.reason) == (
-        "provider",
-        "generation_error",
-    )
-    assert "received 1011 (internal error) conn 1 record 16" in termination.invalid.detail
+    env = episode.env
+    assert (env._stop_reason, env._termination["end_s"]) == ("invalid_run", 1.0)
+    invalid = env._invalid_run
+    assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")
+    assert "received 1011 (internal error) conn 1 record 16" in invalid["detail"]
     assert episode.kernel("FrameDropped", "observation_id", "reason") == [
         (FRAMES[1], "push_failed")
     ]
