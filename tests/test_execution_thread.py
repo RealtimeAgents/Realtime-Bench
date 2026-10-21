@@ -8,6 +8,8 @@ import threading
 
 import pytest
 
+from realtime_framework.entity.model import RequestRetry, RetryCancelled, retry_cancellation
+from realtime_framework.entity.records import current_trace_scope, trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 
 from .fake_clock import FakeClock
@@ -31,6 +33,33 @@ def test_a_coroutine_runs_on_the_thread_on_the_clocks_time():
         try:
             assert thread.run(work()) == ("execution-test", 1.5)
             assert clock.monotonic() == 1.5
+        finally:
+            thread.stop()
+
+
+def test_a_coroutine_runs_in_its_callers_context():
+    """The trace scope and the retry cancellation the caller is in follow the coroutine onto the
+    thread: the agent trace attributes its records by them, and request units stop by them."""
+    clock = FakeClock()
+    abandoned = clock.event()
+    abandoned.set()
+
+    async def work():
+        async def send(attempt):
+            return attempt
+
+        try:
+            sent = await RequestRetry("unit", lambda exc: None, lambda *args: None).run_async(send)
+        except RetryCancelled:
+            sent = None
+        return current_trace_scope(), sent
+
+    with clock.participant():
+        thread = _started(clock)
+        try:
+            assert thread.run(work()) == (None, 1)
+            with trace_scope(phase="generation", decision=7), retry_cancellation(abandoned):
+                assert thread.run(work()) == ({"phase": "generation", "decision": 7}, None)
         finally:
             thread.stop()
 
