@@ -151,12 +151,14 @@ class GuestEnvironment:
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
-        # The identities of the keys the last execute() leased with a hold_key, for the kernel's
-        # shell, which ends the leases itself.
+        # The identities of the keys the last execute() leased with a token-clock hold_key, for
+        # the kernel's shell, which ends the leases itself; () on the wall clock, whose release
+        # timer ends them.
         self.last_held_keys = ()
         # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
-        # makes go to last_end_checks (None for a read that answered, the error of one that
-        # failed) instead of done(), which invalidates the run at the first failure.
+        # makes go to last_end_checks (the error of a read that failed, None otherwise, also when
+        # the task has no end check) instead of done(), which invalidates the run at the first
+        # failure.
         self.kernel_counts_reads = False
         self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
@@ -274,7 +276,7 @@ class GuestEnvironment:
 
     def _ended_after_step(self):
         """The end check after each token step of wait_until_tick. When the kernel counts failed
-        reads, a failed one goes to last_end_checks and the advance goes on."""
+        reads, every check goes to last_end_checks, and after a failed one the advance goes on."""
         if not self.kernel_counts_reads:
             return self.done()
         try:
