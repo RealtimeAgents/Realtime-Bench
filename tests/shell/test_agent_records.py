@@ -230,3 +230,45 @@ def test_a_backlog_of_agent_records_does_not_hold_back_a_result_that_came_back(t
     assert len(_agent_records(episode.trace)) == 500
     numbers = [record["kernel_seq"] for record in episode.trace.records if "kernel_seq" in record]
     assert numbers == sorted(numbers)
+
+
+class HeldRecordsAgent(Agent):
+    """Its second generation records three session messages at 2.1 s, while the shell is busy, and
+    returns only once the sink has handed them all over."""
+
+    def generate(self, generation, decision, observation, budget):
+        if decision == 1:
+            self.clock.sleep(1.1)
+            for index in range(3):
+                self.sink.capture(TraceEvent.SESSION_STATE_CHANGED, {"index": index})
+            _handed(self.sink, 3)
+        return super().generate(generation, decision, observation, budget)
+
+
+def test_records_the_kernel_never_took_are_written_when_it_raises(tmp_path, monkeypatch):
+    """The end check at 2.0 s takes until 2.5 s; meanwhile the agent records three session
+    messages. The kernel raises in its next step, before it took them, and the shell wraps the
+    episode up without it (N11): the three are still written, unnumbered, as the sink writes
+    once it has them back."""
+    step = Kernel.step
+
+    def broken(kernel, semantic, ops=None):
+        if semantic >= 2.5:
+            raise RuntimeError("step broke")
+        return step(kernel, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+    episode = run(
+        "wall",
+        3.0,
+        [Reply(0.5), Reply(0.1)],
+        World(slow_checks=[(2.0, 2.1, 0.5)]),
+        agent_type=HeldRecordsAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.invalid["reason"] == "run_exception"
+    summary = episode.agent.sink.finish(5.0)
+    assert (summary["captures"], summary["written"], summary["error"]) == (3, 3, None)
+    records = _agent_records(episode.trace)
+    assert [record["payload"]["index"] for record in records] == [0, 1, 2]
+    assert ["kernel_seq" in record for record in records] == [False] * 3
