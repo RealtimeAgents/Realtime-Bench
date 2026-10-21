@@ -246,6 +246,11 @@ def test_token_clock(case, monkeypatch, tmp_path):
         NATIVE_OUTPUT_LIMIT if cap is None else cap for cap in case.remaining
     ]
     assert [tau for _, _, _, tau, _ in timeline] == pytest.approx(case.action_ticks)
+    # The token delay is in model-input frames: the output charged over B, none in pause mode.
+    assert [r["token_delay_frames"] for r in lifecycle] == [
+        0.0 if case.tokens_per_frame is None else r["clock_output_tokens"] / case.tokens_per_frame
+        for r in lifecycle
+    ]
     assert [r["status"] for r in lifecycle] == case.statuses
     assert [r["next_observation_tick"] for r in lifecycle] == pytest.approx(case.next_ticks)
     assert [r["dropped_intermediate_frames"] for r in lifecycle] == case.dropped

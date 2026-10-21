@@ -447,21 +447,25 @@ def run_stream(
             # API cells are timestamped from their complete response usage; local cells use the
             # runtime's complete emitted-token count. Protocol delimiters are part of those counts.
             action_output_tokens = output_tokens
-            d_ticks = action_output_tokens / tokens_per_frame * frame_ticks
+            d_frames = action_output_tokens / tokens_per_frame
+            d_ticks = d_frames * frame_ticks
             if r.get("post_horizon_output_tokens"):
                 # The complete response lands past the horizon. The count charged, the allowance
                 # rounded down to a whole token, can place it just short of the horizon.
                 d_ticks = float(max_ticks) - float(t_k)
+                d_frames = d_ticks / frame_ticks
             deliberation_s = d_ticks * delta_s
         elif clock_mode == "token":
             action_output_tokens = output_tokens
             # Unlimited B is true pause mode: generation adds no simulated delay, so the action
             # lands on the observed state. Observation cadence is still fixed because the
             # post-action phase below advances one complete frame before the next capture.
+            d_frames = 0.0
             d_ticks = 0.0
             deliberation_s = 0.0
         else:
             action_output_tokens = None
+            d_frames = None
             deliberation_s = max(0.0, r.get("latency", 0.0) or 0.0)
             d_ticks = deliberation_s / delta_s
 
@@ -645,7 +649,7 @@ def run_stream(
                         action_resolved_unix_s=action_resolved_at,
                         frame_output_tokens=output_tokens,
                         action_output_tokens=action_output_tokens,
-                        token_delay_frames=d_ticks if clock_mode == "token" else None,
+                        token_delay_frames=d_frames,
                         next_observation_tick=next_observation_tick,
                         post_action_rendered=post_action_rendered,
                         dropped_intermediate_frames=dropped_frames,
