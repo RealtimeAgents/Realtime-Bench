@@ -498,20 +498,29 @@ class StreamingPolicy:
 
     def _stuck(self, reason: str) -> None:
         """Give the reply in flight up and start the next."""
-        generation = self.generation
-        if self._stopped() or generation is None:
+        if self._stopped():
             return
+        generation = self._abandon(reason)
+        if generation is None:
+            return
+        waiting = self.waiting
+        if waiting is not None and waiting.arrival.generation == generation:
+            self.waiting = None
+            self._resolve(waiting, CANCELLED_GENERATION)
+        self._start_reply()
+
+    def _abandon(self, reason: str) -> int | None:
+        """Give the reply in flight up, if one is; its generation."""
+        generation = self.generation
+        if generation is None:
+            return None
         kernel = self.kernel
         self.generation = None
         self.abandoned.add(generation)
         kernel.cancel_timer(self._reply_watchdog)
         self._reply_watchdog = None
         kernel.abandon_generation(reason)
-        waiting = self.waiting
-        if waiting is not None and waiting.arrival.generation == generation:
-            self.waiting = None
-            self._resolve(waiting, CANCELLED_GENERATION)
-        self._start_reply()
+        return generation
 
     # ---- actions ----------------------------------------------------------------------------
 
@@ -739,7 +748,8 @@ class StreamingPolicy:
         a task's end it finds by when it was asked, as the turn-based kernel files such an answer
         (core.py ``step``); and the read after an action that finished before the deadline, due
         behind a capture out or behind the action's answer, which dates it where the action
-        finished (N31). The read's budget bounds the wait, and the capture's."""
+        finished (N31). The read's budget bounds the wait, and the capture's. The reply in flight
+        is given up at the deadline all the same: nothing it says past it may land."""
         kernel = self.kernel
         if kernel.ending is not None or self._deadline_due:
             return
@@ -747,6 +757,7 @@ class StreamingPolicy:
             return
         if self._asked or (self.current is not None and not self._executing):
             self._deadline_due = True
+            self._abandon("deadline")
         else:
             kernel.end("deadline", self.config.duration_s)
 
