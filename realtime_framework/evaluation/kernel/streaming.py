@@ -407,7 +407,7 @@ class StreamingPolicy:
         self._capturing = False
         kernel = self.kernel
         # Also once the episode is over: the capture was under way at the end, and every frame
-        # captured is judged, failed or frozen, as on the turn-based clock.
+        # captured is judged, failed or frozen, as on the turn-based clock; a good one is dropped.
         if event.error is not None:
             return kernel.invalidate("environment", "observation_capture_failed", event.error)
         if self._frozen.observe(event.fingerprint, kernel.ops):
@@ -415,6 +415,7 @@ class StreamingPolicy:
                 "environment", "observation_stream_frozen", repr(event.fingerprint)
             )
         if self._stopped():
+            self._drop(event.observation_id, "ended")
             return self._proceed()
         if self._pushing is None:
             self._push(event)
@@ -449,7 +450,8 @@ class StreamingPolicy:
         frame, self._pushing = self._pushing, None
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
-        # Counted also once the episode is over: every frame captured goes in or is dropped.
+        # Counted also once the episode is over: every frame captured goes in or is dropped, but
+        # one that invalidates the run and one in a push still out when the run finishes.
         if event.error is None:
             self.frames_pushed += 1
         else:
