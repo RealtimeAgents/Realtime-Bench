@@ -314,8 +314,9 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         or fps <= 0
     ):
         raise ValueError("runtime.fps must be positive")
-    model_input_fps = runtime.get("model_input_fps", fps)
-    if (
+    # Unset, it stays None for the Harbor agent's options to default to fps, after any --ak fps.
+    model_input_fps = runtime.get("model_input_fps")
+    if "model_input_fps" in runtime and (
         not isinstance(model_input_fps, (int, float))
         or isinstance(model_input_fps, bool)
         or not math.isfinite(model_input_fps)
@@ -354,7 +355,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         validate_model_interaction(
             model_catalog[model]["adapter_type"],
             clock_mode=clock_mode,
-            model_input_fps=model_input_fps,
+            model_input_fps=fps if model_input_fps is None else model_input_fps,
             interaction_mode=interaction_mode,
             tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
         )

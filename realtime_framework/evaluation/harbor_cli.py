@@ -220,12 +220,13 @@ def plan_job(path: Path) -> dict:
     kwargs = {
         "suite": plan["suite"],
         "fps": runtime["fps"],
-        "model_input_fps": runtime["model_input_fps"],
         "interaction_mode": runtime["interaction_mode"],
         "duration_minutes": runtime["duration_minutes"],
         "seed": runtime["seed"],
         "clock": runtime["clock_mode"],
     }
+    if runtime["model_input_fps"] is not None:
+        kwargs["model_input_fps"] = runtime["model_input_fps"]
     if runtime["clock_mode"] == "token":
         kwargs["tokens_per_frame"] = runtime["tokens_per_frame"]
     return {

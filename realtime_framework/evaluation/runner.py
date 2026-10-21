@@ -447,21 +447,25 @@ def run_stream(
             # API cells are timestamped from their complete response usage; local cells use the
             # runtime's complete emitted-token count. Protocol delimiters are part of those counts.
             action_output_tokens = output_tokens
-            d_ticks = action_output_tokens / tokens_per_frame * frame_ticks
+            d_frames = action_output_tokens / tokens_per_frame
+            d_ticks = d_frames * frame_ticks
             if r.get("post_horizon_output_tokens"):
                 # The complete response lands past the horizon. The count charged, the allowance
                 # rounded down to a whole token, can place it just short of the horizon.
                 d_ticks = float(max_ticks) - float(t_k)
+                d_frames = d_ticks / frame_ticks
             deliberation_s = d_ticks * delta_s
         elif clock_mode == "token":
             action_output_tokens = output_tokens
             # Unlimited B is true pause mode: generation adds no simulated delay, so the action
             # lands on the observed state. Observation cadence is still fixed because the
             # post-action phase below advances one complete frame before the next capture.
+            d_frames = 0.0
             d_ticks = 0.0
             deliberation_s = 0.0
         else:
             action_output_tokens = None
+            d_frames = None
             deliberation_s = max(0.0, r.get("latency", 0.0) or 0.0)
             d_ticks = deliberation_s / delta_s
 
@@ -645,7 +649,7 @@ def run_stream(
                         action_resolved_unix_s=action_resolved_at,
                         frame_output_tokens=output_tokens,
                         action_output_tokens=action_output_tokens,
-                        token_delay_frames=d_ticks if clock_mode == "token" else None,
+                        token_delay_frames=d_frames,
                         next_observation_tick=next_observation_tick,
                         post_action_rendered=post_action_rendered,
                         dropped_intermediate_frames=dropped_frames,
@@ -946,6 +950,16 @@ def _model_identity(requested_model, requested_adapter=None):
     }
 
 
+def task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps):
+    """B in the task clock's frames, which are environment ticks. The task clock records
+    tokens_per_frame times its fps, the environment's, as the tokens per world second
+    (realtime_tasks/types.py clock_snapshot), which is then B times the model-input fps; at
+    equal rates it gets B as given."""
+    if tokens_per_frame is None or env_fps == model_input_fps:
+        return tokens_per_frame
+    return tokens_per_frame * model_input_fps / env_fps
+
+
 def _metric_avg(env, name):
     values = list(getattr(env, name, []) or []) if env is not None else []
     return round(sum(values) / len(values), 6) if values else None
@@ -1242,7 +1256,9 @@ def main():
         ctask = custom_tasks.get(a.task)
         ctask.configure_seed(a.seed)
         task = ctask.description()
-        ctask.configure_clock(a.clock, env_fps, tokens_per_frame)
+        ctask.configure_clock(
+            a.clock, env_fps, task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps)
+        )
         url = ctask.provision()
         if url:
             R.open_local_url_in_container(url, debug_port=getattr(ctask, "dbg_port", None))
@@ -1292,6 +1308,7 @@ def main():
                     clock=clocks.operational,
                 ),
                 clock=clocks.operational,
+                env_fps=env_fps,
             )
         finally:
             # The cleanup below closes what setup made, also when one of its steps failed.
@@ -1954,13 +1971,16 @@ def set_up_agent(
     model: str,
     open_capture,
     clock=None,
+    env_fps: float | None = None,
 ) -> None:
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
     ``instruction`` is the task description and ``model`` the model identity the tool trace
     records. ``open_capture(text_observation)`` returns the scene capture for the observation
     form the model's context policy names. ``clock`` is the episode's operational clock, which
-    the agent reads (real time when omitted). What this makes is recorded in ``setup``.
+    the agent reads (real time when omitted). ``env_fps`` is the environment frame rate, which
+    the clock note describes where it differs from the model-input rate ``cfg.fps``. What this
+    makes is recorded in ``setup``.
     """
     clock = clock or SystemClock()
     # Every pre-run rule on the model, clock, interaction mode and task, before any is built.
@@ -1974,6 +1994,7 @@ def set_up_agent(
         tokens_per_frame=tokens_per_frame,
         clock_mode=clock_mode,
         category=getattr(ctask, "category", None),
+        env_fps=env_fps,
     )
     setup.stage = "environment_setup"
 
