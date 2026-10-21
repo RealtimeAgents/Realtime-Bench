@@ -765,11 +765,13 @@ class GeminiLiveDriver(SessionLifecycle):
         (SessionLifecycle): their messages do not interleave, none goes to a connection being
         replaced, and one given up while it waits has planned nothing.
 
-        After a goAway, a push and a trigger raise RenewalRequired until the session is renewed.
-        The reply in flight then still ends on this connection; renew() once it has ended
-        resumes the session with the latest resumable handle (SessionCore.resume_handle_for),
-        or rebuilds it from the history where there is none, or where this driver closed the
-        connection (an abort) or a trigger did not go out whole."""
+        After a goAway, a push and a trigger raise RenewalRequired until the session is renewed;
+        a frame so refused is not in the session until a push of a view it is the newest of.
+        The reply in flight then still ends on this connection, by the goAway deadline; renew()
+        once it has ended resumes the session with the latest resumable handle
+        (SessionCore.resume_handle_for), or rebuilds it from the history where there is none, or
+        where this driver closed the connection (an abort) or a trigger did not go out whole.
+        renew() before then closes the connection under the reply, whose events() raise."""
         async with self._session_lock():
             session = self._session_for_input()
             if self._activity_open:

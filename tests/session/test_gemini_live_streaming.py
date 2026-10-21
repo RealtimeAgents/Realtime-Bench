@@ -1014,6 +1014,27 @@ def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply
     assert [wire(message) for message in rig.socket.sent] == ["video", ("text", "frame 2")]
 
 
+def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        generation = await rig.driver.request_reply(request)
+        rig.socket.feed(update("handle-1"), GO_AWAY)
+        await settle()
+        await rig.driver.renew(rig.seed, rig.view([pushed(1)]), lambda *args, **_: None)
+        try:
+            await drain(rig.driver.events(generation))
+        except RuntimeError as exc:
+            failure = str(exc)
+        await rig.driver.close()
+        return failure
+
+    assert asyncio.run(run()) == "Gemini Live connection 1: a read was cancelled"
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
+
+
 @pytest.mark.parametrize("lost", ["abort", "failed trigger"])
 def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
     """Once an abort closed the connection, or a trigger did not go out whole, what the session
