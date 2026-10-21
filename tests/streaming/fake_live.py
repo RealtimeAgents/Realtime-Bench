@@ -25,11 +25,14 @@ from realtime_framework.entity.events import (
     UsageSnapshot,
 )
 from realtime_framework.entity.model import (
+    FATAL,
+    TRANSIENT,
     GenerationHandle,
     HistorySyncResult,
     PushReceipt,
     RealtimeCapabilities,
     SyncDisposition,
+    TransportFailure,
 )
 from realtime_framework.entity.records import UNTRACED
 from realtime_framework.harnesses.streaming import agent as agent_module
@@ -156,6 +159,8 @@ class FakeLiveDriver(SessionLifecycle):
         self.renewal_required = False
         self.open = False
         self.connect_s = 0.0  # how long opening a connection takes
+        self.connect_failures: list[Exception] = []  # what the next connects raise, in turn
+        self.connect_attempts = 0
         self.resumes = False  # a goAway renewal resumes the session instead of rebuilding it
         self._pushes: dict[str, asyncio.Event] = {}  # set once that observation's push went out
 
@@ -166,6 +171,9 @@ class FakeLiveDriver(SessionLifecycle):
         # Opening a connection closes the one before, as both live drivers' _connect does.
         await self._close_current()
         await asyncio.sleep(self.connect_s)
+        self.connect_attempts += 1
+        if self.connect_failures:
+            raise self.connect_failures.pop(0)
         self._open()
         self.calls.append(("connect", _ids(request.history)))
 
@@ -201,6 +209,11 @@ class FakeLiveDriver(SessionLifecycle):
 
     async def interrupt(self, generation):
         self.calls.append(("interrupt", generation.generation_id))
+
+    def classify_transport_error(self, exc: BaseException) -> TransportFailure:
+        """A dropped connection is transient, as both live drivers take one; anything else
+        fatal."""
+        return TransportFailure(TRANSIENT if isinstance(exc, ConnectionError) else FATAL)
 
     def connection_renewal_reason(self) -> str | None:
         # Read on the execution thread, where the reader applies a goAway: read anywhere else,
