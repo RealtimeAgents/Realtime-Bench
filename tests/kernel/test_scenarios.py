@@ -213,13 +213,12 @@ def test_a_reply_back_while_the_snapshot_is_taken_is_discarded():
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 5.0, 3.0, 5.0, None)
 
 
-@pytest.mark.parametrize("latency", [4.0, 8.0], ids=["inside-the-old-grace", "past-it"])
-def test_a_reply_after_the_deadline_is_not_waited_for(latency):
-    """宽限期过了才返回: the reply would come back 1 s or 5 s after the deadline. Today a call
-    that slow would be abandoned at the deadline plus the 2 s grace and reported skipped_timeout;
-    now there is no grace, so whatever the latency the episode ends at the deadline, interrupts
-    the call and finishes without waiting for it."""
-    sim = _run(_wall(3.0), World(replies=[Reply(latency=latency, action=CLICK)]))
+def test_a_reply_after_the_deadline_is_not_waited_for():
+    """宽限期过了才返回: the reply would come back 5 s after the deadline. Today a call that slow
+    is abandoned at the deadline plus the 2 s grace and reported skipped_timeout (runner.py
+    _move_timeout); now there is no grace, so the episode ends at the deadline, interrupts the
+    call and finishes without waiting for it. (A reply inside the old grace is the test before.)"""
+    sim = _run(_wall(3.0), World(replies=[Reply(latency=8.0, action=CLICK)]))
     assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
     assert sim.aborted == [(1, 3.0)]
     assert sim.snapshots == [(3.0, 3.0)]
