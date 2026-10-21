@@ -68,7 +68,7 @@ extend-select = ["TID251"]
 [tool.ruff.lint.per-file-ignores]
 # The clock module makes these calls for everyone else.
 "realtime_framework/clock.py" = ["TID251"]
-# Task code does not change in phase 2; its time reads are listed in the clock report.
+# Task code does not change in phase 2.
 "realtime_tasks/**" = ["TID251"]
 # Tests wait in real time where they mean to, and tests/fake_clock.py implements the fake clock.
 "tests/**" = ["TID251"]
@@ -81,10 +81,9 @@ extend-select = ["TID251"]
 "realtime_framework/evaluation/harbor.py" = ["TID251"]
 "realtime_framework/evaluation/harbor_results.py" = ["TID251"]
 "realtime_framework/evaluation/submission.py" = ["TID251"]
-# Guest and browser I/O with real-time bounds of its own (HTTP and CDP timeouts, render fences),
-# which the task adapters also call.
-"realtime_framework/sandbox/guest.py" = ["TID251"]
-"realtime_framework/sandbox/browser/cdp.py" = ["TID251"]
+# The browser clock's frame waits (cdp_advance_rendered_frame, cdp_sync_realtime_frame), which the
+# task runtimes call (realtime_tasks/game/runtime.py, realtime_tasks/web/runtime.py) without an
+# episode clock.
 "realtime_framework/sandbox/browser/clock.py" = ["TID251"]
 # Records only: trace, pack and report timestamps, and the trace writer's GIL yields.
 "realtime_framework/evaluation/agent_trace.py" = ["TID251"]

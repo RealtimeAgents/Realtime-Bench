@@ -10,7 +10,6 @@ episode instead of launching an ``apptainer exec`` helper for every clock, input
 import hashlib as hashlib
 import json as json
 import threading as threading
-import time as time
 import urllib.request
 from collections import deque as deque
 from contextlib import contextmanager as contextmanager
@@ -18,6 +17,7 @@ from typing import Any as Any
 
 from websockets.sync.client import connect as connect
 
+from realtime_framework.clock import Clock as Clock
 from realtime_framework.sandbox.budget import Deadline as Deadline
 from realtime_framework.sandbox.budget import bounded as bounded
 
@@ -231,13 +231,16 @@ def client_for(
         return client
 
 
-def ensure_page_focus(port: int, *, target_hint: str = "", timeout: float = 1.0) -> bool:
+def ensure_page_focus(
+    port: int, *, clock: Clock, target_hint: str = "", timeout: float = 1.0
+) -> bool:
     """Give the page Chrome's keyboard focus; return True when it had to be restored.
 
     Desktop key input goes wherever Chrome's focus is, including the omnibox, which keeps focus
     after a CDP navigation from ``about:blank``.  ``Page.bringToFront`` returns focus to the page
     without dispatching input to it.  Focus emulation is never used: it makes
-    ``document.hasFocus()`` true while real key events still reach the omnibox.
+    ``document.hasFocus()`` true while real key events still reach the omnibox. The wait for the
+    focus runs on ``clock``, the episode's operational clock.
     """
     client = client_for(port, target_hint=target_hint)
     if client.evaluate("document.hasFocus()") is True:
@@ -245,11 +248,11 @@ def ensure_page_focus(port: int, *, target_hint: str = "", timeout: float = 1.0)
     response = client.call("Page.bringToFront")
     if response.get("error"):
         raise RuntimeError(f"Page.bringToFront failed: {response['error']}")
-    deadline = time.monotonic() + timeout
+    deadline = clock.monotonic() + timeout
     while client.evaluate("document.hasFocus()") is not True:
-        if time.monotonic() >= deadline:
+        if clock.monotonic() >= deadline:
             raise RuntimeError("page did not regain keyboard focus from the browser toolbar")
-        time.sleep(0.02)
+        clock.sleep(0.02)
     return True
 
 

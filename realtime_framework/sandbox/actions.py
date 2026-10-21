@@ -139,6 +139,13 @@ class GuestEnvironment:
         # token clock it is the FrameClock that holds the logical tick. Records read the
         # operational clock.
         self.clocks = clocks or episode_clocks(clock_mode, fps)
+        if clock_mode == "token" and self.clocks.semantic.frame_seconds != self.d:
+            raise ValueError(
+                f"the frame clock counts {self.clocks.semantic.frame_seconds:g} s frames, "
+                f"the task {self.d:g} s ticks"
+            )
+        if clock_mode != "token" and self.clocks.semantic is not self.clocks.operational:
+            raise ValueError("the wall clock reads one clock for world and real time")
         self.t0 = (
             self.clocks.operational.time() if wall_start_time is None else float(wall_start_time)
         )
