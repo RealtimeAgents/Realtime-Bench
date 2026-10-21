@@ -672,6 +672,11 @@ GUI_FUNCTION_ACTION_DESCRIPTION = (
     "when no suitable mark exists. It is queued for execution according to the active clock setting."
 )
 
+GUI_FUNCTION_FRAME_DESCRIPTION = (
+    "Number in the FRAME label of the screenshot this action is based on. Its P/R marks and "
+    "coordinates are read from that screenshot."
+)
+
 
 def _parameters(properties, required=(), choices=()):
     """Describe mutually exclusive parameter forms without changing native tool names.
@@ -709,7 +714,8 @@ def _parameters(properties, required=(), choices=()):
     return schema
 
 
-def gui_function_declarations():
+def gui_function_declarations(*, frame_reference: bool = False):
+    """``frame_reference``: streaming, where every call also names the frame it is based on."""
     coordinate = {
         "type": "number",
         "description": (
@@ -822,6 +828,12 @@ def gui_function_declarations():
             (),
         ),
     }
+    if frame_reference:
+        frame = {"type": "integer", "minimum": 1, "description": GUI_FUNCTION_FRAME_DESCRIPTION}
+        specs = {
+            name: ({**props, "frame": frame}, (*required, "frame"), choices)
+            for name, (props, required, choices) in specs.items()
+        }
     action_notes = {
         "click": "Omit all target/x/y fields only to click at the current cursor.",
         "right_click": "Right-click; omit all target/x/y fields only for the current cursor.",
@@ -847,8 +859,13 @@ def gui_function_declarations():
     ]
 
 
-def canonical_function_action(name: str, arguments: dict) -> dict:
-    declarations = {item["name"]: item for item in gui_function_declarations()}
+def canonical_function_action(
+    name: str, arguments: dict, *, frame_reference: bool = False
+) -> dict:
+    """The call as a JSON action object; a streaming call's frame stays in it for grounding."""
+    declarations = {
+        item["name"]: item for item in gui_function_declarations(frame_reference=frame_reference)
+    }
     if name not in declarations or not isinstance(arguments, dict):
         raise ValueError("unknown GUI function or invalid arguments")
     schema = declarations[name]["parameters_json_schema"]
@@ -856,7 +873,8 @@ def canonical_function_action(name: str, arguments: dict) -> dict:
         raise ValueError("unexpected GUI function arguments")
     if set(schema["required"]) - set(arguments):
         raise ValueError("missing GUI function arguments")
-    action = Action(ActionType(name), dict(arguments))
+    parameters = {key: value for key, value in arguments.items() if key != "frame"}
+    action = Action(ActionType(name), parameters)
     valid, reason = validate_action_intent(action)
     if not valid:
         raise ValueError(reason)

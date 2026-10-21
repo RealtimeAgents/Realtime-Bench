@@ -298,6 +298,27 @@ def _badge_position(
     return best[1]
 
 
+def _badge_font(image_size: tuple[int, int]):
+    return ImageFont.load_default(size=max(14, min(24, round(min(image_size) / 27))))
+
+
+def _badge_size(draw, text: str, font) -> tuple[int, int]:
+    text_box = draw.textbbox((0, 0), text, font=font, stroke_width=1)
+    return text_box[2] - text_box[0] + 8, text_box[3] - text_box[1] + 6
+
+
+def _draw_badge(draw, box, text: str, font, color: tuple[int, int, int, int]) -> None:
+    draw.rounded_rectangle(box, radius=3, fill=color, outline=(255, 255, 255, 245), width=1)
+    draw.text(
+        (box[0] + 4, box[1] + 3),
+        text,
+        font=font,
+        fill=(255, 255, 255, 255),
+        stroke_width=1,
+        stroke_fill=(0, 0, 0, 230),
+    )
+
+
 def _render_marks(
     image_bytes: bytes,
     marks: dict[str, dict],
@@ -310,8 +331,7 @@ def _render_marks(
         image = source.convert("RGBA")
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    font_size = max(14, min(24, round(min(image.size) / 27)))
-    font = ImageFont.load_default(size=font_size)
+    font = _badge_font(image.size)
     sx, sy = image.width / action_width, image.height / action_height
     occupied: list[tuple[int, int, int, int]] = []
 
@@ -321,10 +341,7 @@ def _render_marks(
         color: tuple[int, int, int, int],
         keep_clear: tuple[int, int, int, int] | None = None,
     ):
-        text_box = draw.textbbox((0, 0), mark, font=font, stroke_width=1)
-        width = text_box[2] - text_box[0] + 8
-        height = text_box[3] - text_box[1] + 6
-        box = _badge_position(anchor, (width, height), image.size, occupied)
+        box = _badge_position(anchor, _badge_size(draw, mark, font), image.size, occupied)
         occupied.append(box)
         centre = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
         start = anchor
@@ -339,15 +356,7 @@ def _render_marks(
             )
             start = min(corners, key=lambda c: (c[0] - centre[0]) ** 2 + (c[1] - centre[1]) ** 2)
         draw.line((start[0], start[1], centre[0], centre[1]), fill=color, width=2)
-        draw.rounded_rectangle(box, radius=3, fill=color, outline=(255, 255, 255, 245), width=1)
-        draw.text(
-            (box[0] + 4, box[1] + 3),
-            mark,
-            font=font,
-            fill=(255, 255, 255, 255),
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 230),
-        )
+        _draw_badge(draw, box, mark, font, color)
 
     for mark, entry in marks.items():
         if entry["kind"] == "point":
@@ -405,6 +414,22 @@ def _render_marks(
     output = io.BytesIO()
     rendered.save(output, format="PNG", optimize=True)
     return output.getvalue(), "png"
+
+
+def render_frame_number(image_bytes: bytes, frame: int) -> bytes:
+    """Draw a ``FRAME n`` badge in the screenshot's top-left corner, over any marks; PNG."""
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        image = source.convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = _badge_font(image.size)
+    label = f"FRAME {frame}"
+    width, height = _badge_size(draw, label, font)
+    _draw_badge(draw, (2, 2, 2 + width, 2 + height), label, font, (20, 20, 20, 235))
+    rendered = Image.alpha_composite(image, overlay).convert("RGB")
+    output = io.BytesIO()
+    rendered.save(output, format="PNG", optimize=True)
+    return output.getvalue()
 
 
 def build_hybrid_som(
@@ -789,12 +814,11 @@ class ToolRuntime:
             "image_mime_subtype": som.get("image_mime_subtype") if som else None,
         }
 
-    def resolve_action(self, action, execution: dict | None):
-        """Compile current-observation mark references into the canonical coordinate action."""
-        marks = execution.get("marks") if isinstance(execution, dict) else {}
-        resolved, trace = resolve_action_references(action, marks or {})
-        if isinstance(execution, dict):
-            execution["reference_resolution"] = trace
+    def resolve_action(self, action, marks: dict, execution: dict):
+        """Compile mark references against one frame's marks into the canonical coordinate
+        action, and keep the resolution for ``execution``'s trace row."""
+        resolved, trace = resolve_action_references(action, marks)
+        execution["reference_resolution"] = trace
         return resolved
 
     def finish(
