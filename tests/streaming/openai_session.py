@@ -9,9 +9,7 @@ generation; then close. The history is the request builder's
 
 from __future__ import annotations
 
-import asyncio
 import io
-import threading
 
 from PIL import Image
 
@@ -26,6 +24,7 @@ from realtime_framework.entity.model import (
     SessionSeed,
 )
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
@@ -101,18 +100,17 @@ async def run_turns(driver: OpenAIRealtimeDriver, turns: int) -> list[tuple[str,
 def run_on_fake_clock(
     clock, coroutine, timeout: float = 60.0, *, real_limit_s: float = REAL_LIMIT_S
 ):
-    """Run ``coroutine`` on a loop the fake clock made, the way RealtimeRuntime runs its loop
-    (harnesses/default/context.py, _start_loop and _submit), while this thread takes part in the
-    clock: at most ``timeout`` fake seconds and ``real_limit_s`` real ones."""
-    loop = clock.new_event_loop()
-    thread = threading.Thread(target=loop.run_forever, daemon=True)
-    thread.start()
+    """Run ``coroutine`` on an execution thread of the fake clock, as the harness runs driver
+    operations (harnesses/default/execution_thread.py), while this thread takes part in the
+    clock: at most ``timeout`` fake seconds and ``real_limit_s`` real ones. A coroutine that did
+    not finish is cancelled when the thread stops, and its cleanup, the driver's close, runs
+    there."""
+    execution = ExecutionThread(clock, "replay")
+    execution.start()
     try:
-        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        future = execution.submit(coroutine)
         with real_time_limit(real_limit_s, future.cancel), clock.participant():
             assert clock.wait(future, timeout), "the coroutine did not finish"
             return future.result()
     finally:
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join()
-        loop.close()
+        execution.stop()

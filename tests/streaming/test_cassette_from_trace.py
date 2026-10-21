@@ -230,8 +230,11 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_replays(tmp_path):
 
 def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path):
     """M3: the trace records no close (providers/capture.py:303-331), so the stub's close in the
-    second reply is not in the cassette. The replayed driver waits for that reply until the fake
-    clock's limit, and the server names the connection it was left with."""
+    second reply is not in the cassette. The replayed driver waits for that reply on the open
+    connection until the fake clock's limit. Given up there, it closes the connection as its
+    cleanup (openai_session.py run_on_fake_clock), after the connection's last record, which a
+    recording without closes allows. A client that never closed it would be reported as having
+    left it open (test_clocked_ws.py)."""
 
     def closes_in_the_second_reply(stub, connection, message):
         if (
@@ -253,7 +256,9 @@ def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path)
         driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         with pytest.raises(AssertionError, match="the coroutine did not finish"):
             run_on_fake_clock(clock, run_turns(driver, 2), timeout=30.0)
-    assert server.finish() == [ws_cassette.LEFT_OPEN.format(conn=1)]
+        (connection,) = server._connections
+        close = connection.protocol.close_rcvd
+    assert (close.code, server.finish()) == (1000, [])
 
 
 def test_a_retried_run_converts_its_last_attempt_only(tmp_path):
