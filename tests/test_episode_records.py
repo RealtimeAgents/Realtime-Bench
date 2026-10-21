@@ -1,7 +1,7 @@
 """The records one decision leaves (evaluation/episode_records.py), called directly rather than
 through run_stream: the output caps and their audit, what a result is annotated with, the
-output-token source the clock is charged with and the token accounting, whether a result is usable
-and the payloads of its trace events."""
+output-token source the clock is charged with and the token accounting, whether a result is usable,
+the payloads of its trace events and its action lifecycle record."""
 
 from __future__ import annotations
 
@@ -626,3 +626,139 @@ def test_action_resolved_records_what_became_of_the_action():
         coordinate_trace=None,
     )
     assert payload["action"] is None
+
+
+# ---- the action lifecycle record --------------------------------------------------------------
+
+
+def _lifecycle(r, clock_mode="token", **outcome):
+    fields = {
+        "decision": 3,
+        "observation_tick": 3.0,
+        "clock_mode": clock_mode,
+        "frame_age_s": 1.23456789,
+        "action_clock_position": 4.5,
+        "action_resolved_unix_s": 1_004.5,
+        "frame_output_tokens": 384,
+        "action_output_tokens": 384,
+        "token_delay_frames": 1.5,
+        "next_observation_tick": 5.0,
+        "post_action_rendered": False,
+        "dropped_intermediate_frames": 0,
+        "status": "applied",
+        "terminal_after_action": False,
+        "action": CLICK,
+        "execution_result": {"dispatched": True},
+        "coordinate_trace": {"space": "screen"},
+        "clock_advance": {"ticks": 1.5},
+        "recorded_unix_s": 1_004.75,
+    }
+    return episode_records.lifecycle_record(r, **{**fields, **outcome})
+
+
+def test_the_lifecycle_record_joins_the_settled_result_and_the_outcome():
+    r = {
+        "realtime_runtime": {"generation_id": "turn-3-0123456789ab"},
+        "observation_id": "o3",
+        "observation_batch": BATCH,
+        "observation_tick": 3.0,
+        "observation_timestamp": 1_000.5,
+        "latency": 2.5,
+        "provider_ttft_s": 0.25,
+        "token_accounting": {"schema": "realtime_bench.token_accounting.v2"},
+        "provider_output_tokens": 384,
+        "clock_output_tokens": 384,
+        "clock_output_tokens_source": "provider_reported_output_usage",
+        "remaining_clock_tokens": 2_560,
+        "unclamped_clock_output_tokens": None,
+        "post_horizon_output_tokens": 0,
+        "action_protocol": {"source": "tool_call"},
+        "decision_output_cap": 2_560,
+        "native_output_limit": 128_000,
+        "runtime_output_token_cap": 2_560,
+        "provider_output_token_cap": 2_560,
+        "transport_output_token_cap": 2_560,
+        "handoff_token_cap": 0,
+        "action_token_cap": 2_560,
+    }
+    _exactly(
+        _lifecycle(r),
+        {
+            "decision": 3,
+            "generation_id": "turn-3-0123456789ab",
+            "observation_id": "o3",
+            "observation_batch": BATCH,
+            "observation_tick": 3.0,
+            "observation_timestamp": 1_000.5,
+            "frame_age_at_action_s": 1.234568,
+            "frame_age_clock": "simulated_token_clock",
+            "frame_age_definition": "action_simulated_time_minus_observation_simulated_time",
+            "model_latency_s": 2.5,
+            "harness_timeout_reason": None,
+            "model_latency_scope": "observation_preparation_through_complete_response_processing",
+            "decision_wall_latency_s": None,
+            "provider_call_wall_latency_s": None,
+            "runtime_turn_wall_latency_s": None,
+            "provider_ttft_s": 0.25,
+            "provider_ttft_source": None,
+            "provider_ttft_missing_reason": None,
+            "latency_clock": "wall_monotonic",
+            "action_clock_position": 4.5,
+            "action_resolved_unix_s": 1_004.5,
+            "frame_output_tokens": 384,
+            "token_accounting": {"schema": "realtime_bench.token_accounting.v2"},
+            "action_output_tokens": 384,
+            "provider_output_tokens": 384,
+            "provider_reasoning_output_tokens": None,
+            "provider_visible_output_tokens": None,
+            "provider_audio_output_tokens": None,
+            "provider_token_normalization_schema": None,
+            "provider_token_semantics": None,
+            "clock_output_tokens": 384,
+            "clock_output_tokens_source": "provider_reported_output_usage",
+            "remaining_clock_tokens": 2_560,
+            "unclamped_clock_output_tokens": None,
+            "post_horizon_output_tokens": 0,
+            "provider_response_status": None,
+            "provider_response_status_reason": None,
+            "action_protocol": {"source": "tool_call"},
+            "token_accounting_source": "provider_reported_output_usage",
+            "token_delay_frames": 1.5,
+            "next_observation_tick": 5.0,
+            "post_action_rendered": False,
+            "dropped_intermediate_frames": 0,
+            "decision_output_cap": 2_560,
+            "native_output_limit": 128_000,
+            "runtime_output_token_cap": 2_560,
+            "provider_output_token_cap": 2_560,
+            "transport_output_token_cap": 2_560,
+            "handoff_token_cap": 0,
+            "action_token_cap": 2_560,
+            "status": "applied",
+            "terminal_after_action": False,
+            "action": episode_records.action_record(CLICK),
+            "execution_result": {"dispatched": True},
+            "coordinate_trace": {"space": "screen"},
+            "clock_advance": {"ticks": 1.5},
+            "recorded_unix_s": 1_004.75,
+        },
+    )
+
+
+def test_the_wall_clock_lifecycle_record_measures_the_frame_age_in_wall_time():
+    record = _lifecycle(
+        {},
+        "wall",
+        frame_age_s=None,
+        action=None,
+        action_output_tokens=None,
+        token_delay_frames=None,
+        clock_advance=None,
+        status="skipped_timeout",
+    )
+    assert (record["frame_age_clock"], record["frame_age_definition"]) == (
+        "wall_clock",
+        "action_resolution_wall_time_minus_observation_wall_time",
+    )
+    assert record["frame_age_at_action_s"] is None and record["action"] is None
+    assert record["generation_id"] is None and record["post_horizon_output_tokens"] == 0

@@ -1,6 +1,6 @@
 """What one decision leaves on the record: its output caps and their audit, what its result is
 annotated with, the output tokens its clock is charged with and its token accounting, whether its
-result is usable, and the payloads of its trace events.
+result is usable, the payloads of its trace events and its action lifecycle record.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -502,4 +502,99 @@ def action_resolved(
         "environment_tick": environment_tick,
         "execution_result": execution_result,
         "coordinate_trace": coordinate_trace,
+    }
+
+
+# ---- the action lifecycle record --------------------------------------------------------------
+
+
+def lifecycle_record(
+    r: dict,
+    *,
+    decision: int,
+    observation_tick: float,
+    clock_mode: str,
+    frame_age_s: float | None,
+    action_clock_position: float,
+    action_resolved_unix_s: float,
+    frame_output_tokens: int | None,
+    action_output_tokens: int | None,
+    token_delay_frames: float | None,
+    next_observation_tick: float,
+    post_action_rendered: bool,
+    dropped_intermediate_frames: int,
+    status: str,
+    terminal_after_action: bool,
+    action: Action | None,
+    execution_result,
+    coordinate_trace,
+    clock_advance,
+    recorded_unix_s: float,
+) -> dict:
+    """One decision's action lifecycle record: its frame, latencies, token accounting and caps from
+    the settled result ``r``, and what became of its action."""
+    return {
+        "decision": decision,
+        "generation_id": (r.get("realtime_runtime") or {}).get("generation_id"),
+        "observation_id": r.get("observation_id"),
+        "observation_batch": r.get("observation_batch"),
+        "observation_tick": observation_tick,
+        "observation_timestamp": r.get("observation_timestamp"),
+        "frame_age_at_action_s": round(frame_age_s, 6) if frame_age_s is not None else None,
+        "frame_age_clock": "simulated_token_clock" if clock_mode == "token" else "wall_clock",
+        "frame_age_definition": (
+            "action_simulated_time_minus_observation_simulated_time"
+            if clock_mode == "token"
+            else "action_resolution_wall_time_minus_observation_wall_time"
+        ),
+        # Compatibility field: this is the complete adapter decision duration, not pure provider
+        # compute and not time to first token.
+        "model_latency_s": r.get("latency"),
+        "harness_timeout_reason": r.get("harness_timeout_reason"),
+        "model_latency_scope": "observation_preparation_through_complete_response_processing",
+        "decision_wall_latency_s": r.get("decision_wall_latency_s"),
+        "provider_call_wall_latency_s": r.get("provider_call_wall_latency_s"),
+        "runtime_turn_wall_latency_s": r.get("runtime_turn_wall_latency_s"),
+        "provider_ttft_s": r.get("provider_ttft_s"),
+        "provider_ttft_source": r.get("provider_ttft_source"),
+        "provider_ttft_missing_reason": r.get("provider_ttft_missing_reason"),
+        "latency_clock": "wall_monotonic",
+        "action_clock_position": action_clock_position,
+        "action_resolved_unix_s": action_resolved_unix_s,
+        "frame_output_tokens": frame_output_tokens,
+        "token_accounting": r.get("token_accounting"),
+        "action_output_tokens": action_output_tokens,
+        "provider_output_tokens": r.get("provider_output_tokens"),
+        "provider_reasoning_output_tokens": r.get("provider_reasoning_output_tokens"),
+        "provider_visible_output_tokens": r.get("provider_visible_output_tokens"),
+        "provider_audio_output_tokens": r.get("provider_audio_output_tokens"),
+        "provider_token_normalization_schema": r.get("provider_token_normalization_schema"),
+        "provider_token_semantics": r.get("provider_token_semantics"),
+        "clock_output_tokens": r.get("clock_output_tokens"),
+        "clock_output_tokens_source": r.get("clock_output_tokens_source"),
+        "remaining_clock_tokens": r.get("remaining_clock_tokens"),
+        "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
+        "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
+        "provider_response_status": r.get("provider_response_status"),
+        "provider_response_status_reason": r.get("provider_response_status_reason"),
+        "action_protocol": r.get("action_protocol"),
+        "token_accounting_source": r.get("clock_output_tokens_source"),
+        "token_delay_frames": token_delay_frames,
+        "next_observation_tick": next_observation_tick,
+        "post_action_rendered": post_action_rendered,
+        "dropped_intermediate_frames": dropped_intermediate_frames,
+        "decision_output_cap": r.get("decision_output_cap"),
+        "native_output_limit": r.get("native_output_limit"),
+        "runtime_output_token_cap": r.get("runtime_output_token_cap"),
+        "provider_output_token_cap": r.get("provider_output_token_cap"),
+        "transport_output_token_cap": r.get("transport_output_token_cap"),
+        "handoff_token_cap": r.get("handoff_token_cap"),
+        "action_token_cap": r.get("action_token_cap"),
+        "status": status,
+        "terminal_after_action": terminal_after_action,
+        "action": action_record(action),
+        "execution_result": execution_result,
+        "coordinate_trace": coordinate_trace,
+        "clock_advance": clock_advance,
+        "recorded_unix_s": recorded_unix_s,
     }
