@@ -251,6 +251,22 @@ def test_in_a_converted_recording_the_client_may_go_ahead_of_the_servers_times()
     assert cursor.finish() == []
 
 
+def test_a_server_message_gone_ahead_of_carries_this_sessions_ids():
+    records = [
+        _record("open"),
+        _record("c2s", _create("<rtb_user-1>")),
+        _record("s2c", _added("<rtb_user-1>"), 1.0002),
+        _record("c2s", RESPONSE_CREATE),
+    ]
+    cursor = _cursor(records)
+    cursor.open(0.0)
+    cursor.receive(1, _create("rtb_user_77"), 0.0)
+    assert cursor.release(1, 1.0) == []
+    cursor.receive(1, RESPONSE_CREATE, 1.0)
+    assert [r["msg"] for r in cursor.release(1, 1.0)] == [_added("rtb_user_77")]
+    assert cursor.finish() == []
+
+
 def test_nothing_gone_ahead_of_is_released_once_the_message_differs():
     records = [
         _record("open"),
