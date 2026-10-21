@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+from functools import partial
+from types import SimpleNamespace
 
 import pytest
 from websockets.exceptions import ConnectionClosedOK
@@ -23,6 +25,7 @@ from realtime_framework.entity.events import (
 )
 from realtime_framework.entity.model import (
     ConnectRequest,
+    GenerationHandle,
     GenerationRequest,
     HistorySyncRequest,
     HistorySyncResult,
@@ -600,6 +603,45 @@ def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed()
         "f2.frame": False,
         "f3.frame": False,
     }
+
+
+class _Wire:
+    """Stands in for the SDK connection's writes: keeps each item create and delete and each
+    response create and cancel, in the order they were written."""
+
+    def __init__(self) -> None:
+        self.written: list[tuple[str, dict]] = []
+        item = SimpleNamespace(
+            create=partial(self._write, "item.create"), delete=partial(self._write, "item.delete")
+        )
+        self.conversation = SimpleNamespace(item=item)
+        self.response = SimpleNamespace(
+            create=partial(self._write, "response.create"),
+            cancel=partial(self._write, "response.cancel"),
+        )
+
+    def _write(self, kind: str, **kwargs) -> None:
+        self.written.append((kind, kwargs))
+
+
+def test_an_interrupt_cancels_a_reply_on_its_own_session_only():
+    """A reply whose session a rebuild replaced was closed with it: interrupting it sends nothing,
+    as a cancel on the new connection would name a response it never had, whose error fails the
+    reply in progress there. A reply on the session as it is is cancelled on its connection."""
+    driver, old, new = _offline_driver(), _Wire(), _Wire()
+    replaced = _Session(1, old, new_core())
+    reply = replaced.core.start_reply()
+    reply.response_id = "resp_1"
+    driver._session, driver._conn = _Session(2, new, new_core()), new
+    result = _within(driver.interrupt(GenerationHandle("reply-1", opaque=(replaced, reply))))
+    assert (old.written, new.written) == ([], [])
+    assert result.history_state == ProviderHistoryState.UNKNOWN
+    driver._session, driver._conn = replaced, old
+    result = _within(driver.interrupt(GenerationHandle("reply-1", opaque=(replaced, reply))))
+    assert old.written == [
+        ("response.cancel", {"response_id": "resp_1", "event_id": reply.cancel_event_id})
+    ]
+    assert result.history_state == ProviderHistoryState.CONTAMINATED
 
 
 class _Responses:
