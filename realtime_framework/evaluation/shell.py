@@ -807,6 +807,8 @@ class _Shell:
         decision.coordinate_trace = env._last_coordinate_trace
         answer = ActionExecuted(
             command.decision,
+            # As the environment returned it; a guest reply's "timestamp" is real time inside the
+            # sandbox (sandbox/guest.py execute_action).
             result=env._last_execution_result,
             held_keys=env.last_held_keys,
             rejection=rejection,

@@ -595,6 +595,8 @@ def action_resolved(
         "action_clock_position": action_clock_position,
         "action_resolved_unix_s": action_resolved_unix_s,
         "environment_tick": environment_tick,
+        # Recorded as the environment returned it: a guest reply's "timestamp" is real time
+        # inside the sandbox (sandbox/guest.py execute_action).
         "execution_result": execution_result,
         "coordinate_trace": coordinate_trace,
     }
@@ -687,6 +689,7 @@ def lifecycle_record(
         "status": status,
         "terminal_after_action": terminal_after_action,
         "action": action_record(action),
+        # As in action_resolved: a guest reply's "timestamp" is real time inside the sandbox.
         "execution_result": execution_result,
         "coordinate_trace": coordinate_trace,
         "clock_advance": clock_advance,
