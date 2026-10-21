@@ -226,7 +226,10 @@ def run_episode(
 
     ``inputs_log`` records what the kernel was given, one JSON line for each call that handled
     something: its readings and the events the step took from the inbox. A new kernel fed the
-    same reproduces the episode's log (phase2.md, 怎么验证)."""
+    same reproduces the episode's log (phase2.md, 怎么验证). A step the kernel raised in is
+    recorded too, marked ``raised``; the log of an episode the kernel finished ends with an
+    ``end`` line, so one without it is incomplete: the loop raised, a write failed or the process
+    was stopped."""
     return _Shell(agent, env, config, clocks, log, trace, agent_trace, inputs_log).run()
 
 
@@ -369,14 +372,18 @@ class _Shell:
             except Exception:  # noqa: BLE001 - see above
                 self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         try:
-            self._episode()
-        except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
-            self._wrap_up(traceback.format_exc())
-        if inputs is not None:
             try:
-                inputs.close()
-            except Exception:  # noqa: BLE001 - see above
-                self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
+                self._episode()
+            except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
+                self._wrap_up(traceback.format_exc())
+            else:
+                self._record_inputs("end", [])
+        finally:
+            if inputs is not None:
+                try:
+                    inputs.close()
+                except Exception:  # noqa: BLE001 - see above
+                    self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         return self.timeline
 
     def _episode(self) -> None:
@@ -415,13 +422,9 @@ class _Shell:
             self.post(self._held_records.popleft())
         now = self._read()
         while True:
-            with self._inbox:
-                self._now = now
-                commands = self.kernel.step(*now)
-                taken, self._posted = self._posted, []
+            commands = self._step(now)
             if commands is None:
                 return
-            self._record_inputs("step", taken)
             for command in commands:
                 entry = command.entry
                 if isinstance(entry.data, AgentRecord):
@@ -431,9 +434,8 @@ class _Shell:
 
     def _loop(self) -> None:
         self._now = self._read()
-        commands = self.kernel.start(*self._now)
         self._record_inputs("start", [])
-        self._run_all(commands)
+        self._run_all(self.kernel.start(*self._now))
         while not self._finished:
             # Cleared before the step takes the inbox: a post the step misses sets it again.
             self._wake.clear()
@@ -474,7 +476,7 @@ class _Shell:
             self._posted.append(event)
         self._wake.set()
 
-    def _record_inputs(self, call: str, events: list) -> None:
+    def _record_inputs(self, call: str, events: list, *, raised: bool = False) -> None:
         if self._inputs is None:
             return
         semantic, ops = self._now
@@ -485,7 +487,10 @@ class _Shell:
                 "ops": ops,
                 "events": [{"event": type(event).__name__, **_jsonable(event)} for event in events],
             }
+            if raised:
+                line["raised"] = True
             self._inputs.write(json.dumps(line) + "\n")
+            self._inputs.flush()
         except Exception:  # noqa: BLE001 - a replay aid; the episode goes on without it
             self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
             self._inputs = None
@@ -500,8 +505,12 @@ class _Shell:
     def _step(self, now: tuple[float, float | None]):
         with self._inbox:
             self._now = now
-            commands = self.kernel.step(*now)
             taken, self._posted = self._posted, []
+            try:
+                commands = self.kernel.step(*now)
+            except BaseException:
+                self._record_inputs("step", taken, raised=True)
+                raise
         if commands is not None:  # a step that took an event always handles something
             self._record_inputs("step", taken)
         return commands
@@ -733,7 +742,7 @@ class _Shell:
     def _settle_returned(self, count: int) -> None:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
         them to the kernel. One back after a bound on its generation fell due waits for the
-        kernel to give the generation up, as the runner's bounded wait did (runner.py
+        kernel to give the generation up, as the runner's bounded wait did (legacy_loop.py
         _bounded_call). The late result of a generation the kernel gave up on goes back as it
         came, to be discarded: the runner never handled one either. One back before a bound the
         kernel then handled first, busy as the shell was, is settled all the same: the kernel
@@ -1246,7 +1255,7 @@ class _Shell:
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         if bound is not None:
             # The cap and the watchdog as the runner names them (legacy_loop.py _move_timeout); the
-            # deadline from the call's start, where the runner gave the time left plus a grace.
+            # deadline from the call's start, where the legacy loop gave the time left plus a grace.
             self.log(
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
                 "— discarded"
