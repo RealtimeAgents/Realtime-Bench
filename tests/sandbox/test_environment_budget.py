@@ -238,8 +238,8 @@ def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
 
 
 def test_a_wall_shortcut_refused_after_its_budget_went_on_the_lock_is_still_refused(budgets):
-    """Coordinator's decision N19, as user decision 35: the refusal says the environment works.
-    The model is told why, without the budget's words."""
+    """Coordinator's decision N19, as user decision 35: the wait for the lock is not the action's
+    fault, so the refusal is told to the model as usual, without the budget's words."""
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)

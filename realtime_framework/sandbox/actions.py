@@ -982,10 +982,14 @@ class GuestEnvironment:
         (GuestRefused), if ``exc`` is one.
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
-        unexpected parameters, ...) and answers 400. That is the model's action being
+        unexpected parameters, ...) and answers 400 on /action. That is the model's action being
         rejected, not an environment failure, so it must not invalidate the run. A refusal that
-        comes after the action's budget ran out is one too: the BudgetExceeded keeps it as its
-        cause. A 4xx from another endpoint does not show that the environment works.
+        comes after the action's budget ran out is one too, and the BudgetExceeded keeps it as its
+        cause: the guest's late answer still shows that the guest works; the runtime's own
+        refusal comes late only after a wait for the wall lock, which is not the action's fault,
+        though it means the release timer's keyup was slow. A 4xx from another endpoint, such as
+        the /execute of the xdotool commands, does not show that the environment works, and the
+        run is invalid.
         """
         for error in (exc, exc.__cause__):
             if isinstance(error, (ActionRejected, GuestRefused)):
