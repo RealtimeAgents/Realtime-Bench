@@ -1,8 +1,8 @@
-"""What one decision leaves on the record: the result of a generation that raised, its output caps
-and their audit, what its result is annotated with, the output tokens its clock is charged with and
-its token accounting, whether its result is usable, the protocol of a DONE or FAIL landed as a wait,
-its frame's identity for the frozen-stream check, the payloads of its trace events and its action
-lifecycle record.
+"""What one decision leaves on the record: the result of a generation that raised or was given up
+on at a bound, its output caps and their audit, what its result is annotated with, the output tokens
+its clock is charged with and its token accounting, whether its result is usable, the protocol of a
+DONE or FAIL landed as a wait, its frame's identity for the frozen-stream check, the payloads of its
+trace events and its action lifecycle record.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -32,6 +32,18 @@ def generation_error(latency: float, detail: str) -> dict:
         "invalid_category": "provider",
         "invalid_reason": "generation_error",
         "invalid_detail": detail,
+    }
+
+
+def timed_out_result(latency: float, reason: str) -> dict:
+    """The result of a call the loop gave up on at a bound (``reason``): no action, and no usage
+    reported for it."""
+    return {
+        "action": None,
+        "latency": latency,
+        "timed_out": True,
+        "harness_timeout_reason": reason,
+        "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
     }
 
 

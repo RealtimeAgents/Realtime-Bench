@@ -8,10 +8,12 @@ scripted world (tests/shell/world.py).
 
 from __future__ import annotations
 
+import time
+
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import DecisionBudget
 
-from .world import CLICK, ORIGIN, Reply, World, run
+from .world import CLICK, ORIGIN, Agent, Reply, World, run
 
 HOLD = Action.hold_key("a", 1.25)
 WAIT = Action.wait(0.5)
@@ -208,27 +210,58 @@ def test_a_done_reply_lands_as_a_wait_and_its_record_says_why():
     assert "ActionProposed" not in episode.trace.events()
 
 
-def test_a_move_over_the_per_move_cap_is_skipped_and_its_late_result_discarded():
+def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_out_call():
     """The legacy wall cap is a timer: at 1 s the kernel gives the generation up, the agent is
-    asked to abort it and the decision is reported skipped. The aborted call hands back what it
-    had; the kernel discards it and the trace still has its InferenceCompleted."""
-    episode = run("wall", 3.0, [Reply(2.0), Reply(0.5)], per_move_cap_s=1.0)
+    asked to abort it and the decision is reported skipped. Its records are the runner's of the
+    call it gave up on (runner.py _run_step): the cap's latency and no usage. The aborted call
+    hands back what it had; the kernel discards it and nothing records it."""
+    episode = run("wall", 2.0, [Reply(2.0), Reply(0.5)], per_move_cap_s=1.0)
     agent = episode.agent
     assert episode.statuses() == ["skipped_timeout", "applied"]
     assert ("abort", 1) in agent.calls and ("discard", 1) in agent.calls
     assert ("accept", 1) not in agent.calls
     skipped = episode.env.lifecycle[0]
-    assert (skipped["status"], skipped["observation_id"], skipped["model_latency_s"]) == (
-        "skipped_timeout",
-        "obs-0",
-        None,
-    )
-    late = [
-        payload
-        for payload in episode.trace.payloads("InferenceCompleted")
-        if payload["decision"] == 0
+    assert skipped["status"] == "skipped_timeout"
+    assert (skipped["observation_id"], skipped["model_latency_s"]) == ("obs-0", 1.0)
+    assert skipped["harness_timeout_reason"] == "per_move_cap"
+    assert skipped["token_accounting"] is not None
+    assert episode.timeline[0][2] == 1.0  # the delay is the call's latency, in ticks
+    assert [(row["decision"], row.get("timed_out")) for row in agent.trajectory] == [
+        (0, True),
+        (1, None),
     ]
-    assert [(payload["stale"], payload["latency_s"]) for payload in late] == [(True, 1.0)]
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["timed_out"], p["stale"]) for p in completed] == [
+        (0, True, False),
+        (1, False, False),
+    ]
+    echoes = [
+        r["payload"]["data"]
+        for r in episode.trace.records
+        if r["event"] == "KernelRecord" and r["payload"]["kind"] == "GenerationFinished"
+    ]
+    assert [echo.generation for echo in echoes] == [1]
+    assert episode.env._token_accounting.summary()["responses"] == 2
+
+
+class _SlowAbort(Agent):
+    """Its aborted call hands back before the shell steps again."""
+
+    def abort(self, generation=None) -> None:
+        super().abort(generation)
+        time.sleep(0.002)
+
+
+def test_the_late_result_of_a_generation_the_deadline_cut_is_never_settled():
+    """The deadline gives the generation up and ends the episode; the decision goes unreported.
+    Its aborted call hands back at once, but leaves no trajectory row, token record or
+    InferenceCompleted: the runner never handled a late result either."""
+    episode = run("wall", 2.0, [Reply(hang=True)], agent_type=_SlowAbort)
+    assert episode.statuses() == []
+    assert episode.agent.calls[0] == ("abort", 1)
+    assert episode.agent.trajectory == []
+    assert getattr(episode.env, "_token_accounting", None) is None
+    assert "InferenceCompleted" not in episode.trace.events()
 
 
 def test_a_paused_decision_lands_on_its_frame_and_moves_one_frame_on():
