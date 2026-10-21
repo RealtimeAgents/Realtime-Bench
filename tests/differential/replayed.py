@@ -5,8 +5,9 @@ Wall clock: the chat_completions agent against ChatCompletionsStub and a FakeEnv
 (tests/replay/fake_env.py), all on one fake clock per episode (tests/fake_clock.py), so every
 reply, operation and wait takes exactly the script's time. Token clock and paused: the openrouter
 agent against OpenRouterStub and GuestEnvironment itself on a task clock
-(tests/replay/token_env.py); operational time is real, which the token clock's world time does not
-read. The agent parses each reply with its own parser; nothing here knows the loop's rules.
+(tests/replay/token_env.py); operational time moves a step at every reading (_Operational), which
+the token clock's world time does not read. The agent parses each reply with its own parser;
+nothing here knows the loop's rules.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.clock import Clocks
+from realtime_framework.clock import Clocks, SystemClock
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
@@ -28,7 +29,7 @@ from tests.replay.baseline import REAL_TIME_FIELDS, Normalizer, action_record
 from tests.replay.build import build_episode
 from tests.replay.clock_task import ClockTask
 from tests.replay.fake_env import FakeEnvironment, Hang
-from tests.replay.frames import ReplayTask
+from tests.replay.frames import CLOCK_ORIGIN, ReplayTask
 from tests.replay.scenario import TASK_INSTRUCTION
 from tests.replay.stub import ChatCompletionsStub, Failure, Reply
 from tests.replay.stub_openrouter import OpenRouterStub
@@ -339,6 +340,26 @@ class _Guest:
         return {"status": "ok"}
 
 
+class _Operational(SystemClock):
+    """The token clock's operational clock: it waits in real time, its times stay at CLOCK_ORIGIN
+    as token_env.py's do, and each reading is a microsecond past the one before. Both loops take
+    a stream as frozen only while operational time moves on (turns.py _FrozenStream, runner.py
+    ObservationStreamWatchdog), as it does in production; the token watchdog's 300 s are never
+    reached."""
+
+    def __init__(self) -> None:
+        self._readings = 0
+        self._lock = threading.Lock()
+
+    def time(self) -> float:
+        return CLOCK_ORIGIN
+
+    def monotonic(self) -> float:
+        with self._lock:
+            self._readings += 1
+            return self._readings * 1e-6
+
+
 class TokenWorld(_Latched, TokenEnvironment):
     """TokenEnvironment with the script's end, failed state reads and advances, refusals and
     faults, and a log of every end check and key release with the tick it happened at. The step,
@@ -361,6 +382,7 @@ class TokenWorld(_Latched, TokenEnvironment):
         self._advances = 0
         self._applied = 0
         super().__init__(frames, task, max_minutes=script.duration_s / 60, stop_check=self._stop)
+        self.clock = _Operational()
         self.g = _Guest(self)
         task.failure = self._advance_failure
 
@@ -850,6 +872,7 @@ def project(script: Script, env, side: str) -> Projection:
         "requested": requested,
     }
     # The trace records by decision, normalized as the replay baselines are.
-    # "synthesized": decisions whose reply records are a call the shell gave up on (rules._x3).
-    beyond = {"requests": env.requests, "usage": env.usage, "trace": trace, "synthesized": []}
+    # "synthesized": what the records of a call the shell gave up on say, by decision
+    # (rules._abandoned).
+    beyond = {"requests": env.requests, "usage": env.usage, "trace": trace, "synthesized": {}}
     return Projection(side, {"decisions": decisions, "episode": episode}, facts, beyond)

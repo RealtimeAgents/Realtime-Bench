@@ -2,24 +2,26 @@
 
     driver(agent, env, config, *, clocks, log, trace) -> timeline
 
-with ``config`` the episode's TurnConfig and the timeline in run_stream's shape (k, t_k, d_ticks,
-tau_k, action). ``legacy`` is today's loop and ``shell`` the kernel's (wave2-plan.md, P1 对外接口);
-the environment the script's world is built on is the same for both.
+with ``config`` the episode's TurnConfig and the timeline in the legacy loop's shape (k, t_k,
+d_ticks, tau_k, action). ``legacy`` is the turn loop main() ran before the switch, kept to run side
+by side (runner.py _run_stream_legacy; decision 11 archives it here as legacy_loop.py), and
+``shell`` the kernel's (wave2-plan.md, P1 对外接口); the environment the script's world is built on
+is the same for both.
 """
 
 from __future__ import annotations
 
 from realtime_framework.clock import Clocks
 from realtime_framework.evaluation.kernel.turns import TurnConfig
-from realtime_framework.evaluation.runner import run_stream
+from realtime_framework.evaluation.runner import _run_stream_legacy
 from realtime_framework.evaluation.shell import run_episode
 
 
 def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
-    """run_stream with the arguments main() passes it (evaluation/runner.py main), the horizon
-    from the episode's minutes as there; the kernel takes it within 1e-9 of a whole tick as that
-    tick (kernel/turns.py TurnConfig)."""
-    return run_stream(
+    """The legacy loop with the arguments main() passed it before the switch, the horizon from the
+    episode's minutes as there; the kernel takes it within 1e-9 of a whole tick as that tick
+    (kernel/turns.py TurnConfig)."""
+    return _run_stream_legacy(
         agent,
         env,
         delta_s=1.0 / config.env_fps,

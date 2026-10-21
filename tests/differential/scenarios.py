@@ -47,7 +47,7 @@ FRAME_RATES = [
         ),
         env_fps=60.0,
         tokens_per_frame=160,
-        expect=frozenset({"KF5", "U7", "X1"}),
+        expect=frozenset({"KF5", "X1"}),
         name="frame_rates-token-60_1",
     ),
     Script(
@@ -59,7 +59,7 @@ FRAME_RATES = [
         env_fps=30.0,
         input_fps=7.0,
         tokens_per_frame=70,
-        expect=frozenset({"KF5", "U7", "X1"}),
+        expect=frozenset({"KF5", "X1"}),
         name="frame_rates-token-30_7",
     ),
     Script(
@@ -69,7 +69,7 @@ FRAME_RATES = [
         env_fps=2.0,
         input_fps=2.0,
         tokens_per_frame=100,
-        expect=frozenset({"KF5", "U7", "X1"}),
+        expect=frozenset({"KF5", "X1"}),
         name="frame_rates-token-2_2",
     ),
     Script(
@@ -77,7 +77,7 @@ FRAME_RATES = [
         3.75,
         _tokens([("click", 80), ("wait:1.5", 40), ("click", 500)]),
         env_fps=60.0,
-        expect=frozenset({"KF5", "U7", "X1"}),
+        expect=frozenset({"KF5", "X1"}),
         name="frame_rates-token-pause-60_1",
     ),
     Script(
@@ -85,7 +85,7 @@ FRAME_RATES = [
         3.75,
         _timed(["click", "type:Ada", "click"], [0.5, 1.25, 0.875]),
         env_fps=60.0,
-        expect=frozenset({"K-a", "K-g", "U7", "X3"}),
+        expect=frozenset({"K-a", "K-g"}),
         name="frame_rates-wall-60_1",
     ),
     Script(
@@ -94,7 +94,7 @@ FRAME_RATES = [
         _timed(["click", "type:Ada", "click", "click"], [0.1, 0.2, 0.05, 0.5]),
         env_fps=30.0,
         input_fps=7.0,
-        expect=frozenset({"K-a", "K-g", "U7", "X3", "X4"}),
+        expect=frozenset({"K-a", "K-g", "X4"}),
         name="frame_rates-wall-30_7",
     ),
     Script(
@@ -103,7 +103,7 @@ FRAME_RATES = [
         _timed(["click", "type:Ada", "click"], [0.25, 0.75, 0.5]),
         env_fps=2.0,
         input_fps=2.0,
-        expect=frozenset({"K-a", "K-g", "U7", "X3"}),
+        expect=frozenset({"K-a", "K-g"}),
         name="frame_rates-wall-2_2",
     ),
 ]
@@ -117,14 +117,14 @@ RUNNER_LOOP = [
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, LATE_REPLY_S]),
-        expect=frozenset({"K-a", "K-g", "U7", "X3"}),
+        expect=frozenset({"K-a", "K-g"}),
         name="runner-late_reply",
     ),
     Script(
         "wall",
         SHORT_S,
         _timed(["click", "done", "click", "click"], [0.5, 0.5, 0.5, LATE_REPLY_S]),
-        expect=frozenset({"K-a", "K-g", "U7", "X1", "X3", "X7"}),
+        expect=frozenset({"K-a", "K-g", "X1", "X7"}),
         name="runner-done_reply",
     ),
     Script(
@@ -133,7 +133,7 @@ RUNNER_LOOP = [
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click"),),
         ends_after=3,
         end_reason="task_completed",
-        expect=frozenset({"U7", "X2"}),
+        expect=frozenset({"X2"}),
         name="runner-environment_done",
     ),
     Script(
@@ -141,21 +141,21 @@ RUNNER_LOOP = [
         SHORT_S,
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click"),),
         ends_at_s=2.25,
-        expect=frozenset({"KF5d", "U7", "X2"}),
+        expect=frozenset({"KF5d", "X2"}),
         name="runner-environment_done_during_reply",
     ),
     Script(
         "wall",
         SHORT_S,
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click", attempts=HANG),),
-        expect=frozenset({"K-a", "K-g", "U7", "X3"}),
+        expect=frozenset({"K-a", "K-g"}),
         name="runner-bounded_call_timeout",
     ),
     Script(
         "wall",
         SHORT_S,
         (Turn("click"), Turn("type:Ada", fault="guest connection reset"), Turn("click")),
-        expect=frozenset({"U2", "U7", "X2"}),
+        expect=frozenset({"U2", "X2"}),
         name="runner-environment_failure",
     ),
 ]
@@ -194,7 +194,7 @@ LONG = Script(
         Turn(word, attempts=(Attempt(latency),), rejected=LONG_REJECTED.get(k))
         for k, (word, latency) in enumerate(zip(LONG_WORDS, LONG_LATENCIES, strict=True))
     ),
-    expect=frozenset({"K-a", "K-g", "U7", "X1", "X3"}),
+    expect=frozenset({"K-a", "K-g", "X1"}),
     name="runner-long",
 )
 
@@ -206,7 +206,7 @@ MISSING = [
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, 0.75]),
-        expect=frozenset({"K-a", "U7", "X3"}),
+        expect=frozenset({"K-a"}),
         name="wall-result-at-the-deadline",
     ),
     # Decision 2 starts a 5 s wait at 2.5 s; the deadline cuts it at 3.75 s.
@@ -214,7 +214,7 @@ MISSING = [
         "wall",
         SHORT_S,
         _timed(["click", "type:Ada", "wait:5"], [0.5, 0.5, 0.5]),
-        expect=frozenset({"U7", "X1", "X2"}),
+        expect=frozenset({"X1", "X2"}),
         name="wall-wait-across-the-deadline",
     ),
     # Decision 3's request fails twice with HTTP 503 at once, as in test_runner_clock: the first
@@ -225,7 +225,7 @@ MISSING = [
         SHORT_S,
         _timed(FORM[:3], [0.5] * 3)
         + (Turn("click", attempts=(Attempt(0.0, 503), Attempt(0.0, 503), Attempt(0.5))),),
-        expect=frozenset({"K-a", "K-g", "U7", "X3"}),
+        expect=frozenset({"K-a", "K-g"}),
         name="wall-retry-across-the-deadline",
     ),
     # A 0.5 s hold pressed at 0.25 s is released at 0.75 s, between the frames at 0 and 1 s.
@@ -233,7 +233,7 @@ MISSING = [
         "wall",
         2.5,
         _timed(["hold:shift:0.5", "click", "click"], [0.25, 0.25, 0.25]),
-        expect=frozenset({"U7", "X2"}),
+        expect=frozenset({"X2"}),
         name="wall-hold-between-frames",
     ),
     # A 0.5 s hold at tick 0 on a 1 fps token clock ends at tick 0.5, between frames 0 and 1.
@@ -242,7 +242,7 @@ MISSING = [
         3.0,
         _tokens([("hold:a:0.5", 0), ("click", 50), ("click", 50)]),
         tokens_per_frame=100,
-        expect=frozenset({"KF5", "U7"}),
+        expect=frozenset({"KF5"}),
         name="token-hold-between-frames",
     ),
     # From capture 1 on every frame repeats; the third identical one invalidates the run.
@@ -251,7 +251,7 @@ MISSING = [
         6.0,
         _timed(["click"] * 5, [0.5] * 5),
         frozen_from=1,
-        expect=frozenset({"K-h", "U7"}),
+        expect=frozenset({"K-h"}),
         name="wall-frozen-stream",
     ),
     Script(
@@ -260,7 +260,7 @@ MISSING = [
         _tokens([("click", 50)] * 5),
         tokens_per_frame=100,
         frozen_from=1,
-        expect=frozenset({"K-h", "KF5", "U7"}),
+        expect=frozenset({"K-h", "KF5"}),
         name="token-frozen-stream",
     ),
 ]
@@ -277,7 +277,7 @@ PER_RULE = [
         _timed(FORM, [0.5] * 4),
         env_fps=4.0,
         ends_at_s=2.25,
-        expect=frozenset({"K-b", "K-g", "U7", "X3"}),
+        expect=frozenset({"K-b", "K-g", "U10"}),
         name="wall-ends-during-a-reply",
     ),
     # K-b: the check at 0.75 s finds the end while decision 0 paces to the frame at 1 s.
@@ -287,7 +287,7 @@ PER_RULE = [
         _timed(FORM, [0.25] * 4),
         env_fps=4.0,
         ends_at_s=0.6,
-        expect=frozenset({"K-b", "K-g", "U7", "X2"}),
+        expect=frozenset({"K-b", "K-g", "X2"}),
         name="wall-ends-while-pacing",
     ),
     # K-c: the check at 2 s finds the end in the middle of a 2.5 s wait started at 0.25 s.
@@ -296,7 +296,7 @@ PER_RULE = [
         SHORT_S,
         _timed(["wait:2.5", "click", "click"], [0.25] * 3),
         ends_at_s=1.5,
-        expect=frozenset({"K-b", "K-c", "K-g", "U7", "X1", "X2"}),
+        expect=frozenset({"K-b", "K-c", "K-g", "X1", "X2"}),
         name="wall-wait-cut-by-the-end",
     ),
     # K-rel: the hold takes effect 0.125 s after the Execute, once the guards and focus ran.
@@ -305,7 +305,7 @@ PER_RULE = [
         2.5,
         _timed(["hold:shift:0.5", "click", "click"], [0.25] * 3),
         execute_s=0.125,
-        expect=frozenset({"K-rel", "U7", "X2"}),
+        expect=frozenset({"K-rel", "X2"}),
         name="wall-hold-pressed-after-the-guards",
     ),
     # K-i: decision 1 runs out of the think budget and skips its action; the check at 1.75 s
@@ -317,16 +317,17 @@ PER_RULE = [
         env_fps=4.0,
         think_budget_s=0.75,
         ends_at_s=1.75,
-        expect=frozenset({"K-g", "K-i", "U7", "X2"}),
+        expect=frozenset({"K-g", "K-i", "X2"}),
         name="wall-think-budget-and-the-end",
     ),
-    # K-l: the per-move cap gives up on a 0.5 s reply after 0.4 s.
+    # The per-move cap gives up on a 0.5 s reply after 0.4 s. K-l does not show: no time passes
+    # between the capture and the generation's start (rules.py).
     Script(
         "wall",
         SHORT_S,
         _timed(FORM, [0.5] * 4),
         per_move_cap_s=0.4,
-        expect=frozenset({"K-l", "X2", "X4", "X6"}),
+        expect=frozenset({"X2", "X4", "X6"}),
         name="wall-per-move-cap",
     ),
     # K-f: decision 1's reply reports no usage on the finite token clock.
@@ -335,7 +336,7 @@ PER_RULE = [
         3.0,
         (Turn("click", 50), Turn("click", None), Turn("click", 50)),
         tokens_per_frame=100,
-        expect=frozenset({"K-f", "KF5", "U7"}),
+        expect=frozenset({"K-f", "KF5"}),
         name="token-missing-usage",
     ),
     # K-j: a key held until tick 1.495 is still down when decision 1 taps at tick 1.49; the
@@ -345,7 +346,7 @@ PER_RULE = [
         3.0,
         _tokens([("hold:a:1.495", 0), ("key:tab", 49), ("click", 50), ("click", 50)]),
         tokens_per_frame=100,
-        expect=frozenset({"K-j", "KF5", "U7"}),
+        expect=frozenset({"K-j", "KF5"}),
         name="token-lease-ends-inside-a-tap",
     ),
     # K-e: the first clock step, decision 0's move to its action time 0.5, fails.
@@ -355,7 +356,7 @@ PER_RULE = [
         TWO_CLICKS,
         tokens_per_frame=100,
         advance_errors=(1,),
-        expect=frozenset({"K-e", "U2", "U7"}),
+        expect=frozenset({"K-e", "U2"}),
         name="token-advance-fails-while-approaching",
     ),
     # K-e: the second clock step, decision 0's pacing from 0.5 to 1, fails.
@@ -365,7 +366,7 @@ PER_RULE = [
         TWO_CLICKS,
         tokens_per_frame=100,
         advance_errors=(2,),
-        expect=frozenset({"K-e", "KF5", "U2", "U7"}),
+        expect=frozenset({"K-e", "KF5", "U2"}),
         name="token-advance-fails-while-pacing",
     ),
     # K-d: decision 0's 384 tokens are 1.5 s, past the 1 s per-move cap, so it places no action;
@@ -378,7 +379,7 @@ PER_RULE = [
         tokens_per_frame=256,
         per_move_cap_s=1.0,
         ends_at_s=1.0,
-        expect=frozenset({"K-d", "KF5", "U7", "X2"}),
+        expect=frozenset({"K-d", "KF5", "X2"}),
         name="token-skipped-decision-after-the-end",
     ),
     # K-i on the token clock: the same, with the think budget run out instead of the cap.
@@ -389,7 +390,7 @@ PER_RULE = [
         tokens_per_frame=256,
         think_budget_s=0.5,
         ends_at_s=1.0,
-        expect=frozenset({"K-d", "K-i", "KF5", "U7", "X2"}),
+        expect=frozenset({"K-d", "K-i", "KF5", "X2"}),
         name="token-think-budget-and-the-end",
     ),
     # The task ends at 0.75 s, found by the check after the pacing step to tick 1.
@@ -399,7 +400,7 @@ PER_RULE = [
         TWO_CLICKS,
         tokens_per_frame=100,
         ends_at_s=0.75,
-        expect=frozenset({"KF5", "U7", "X2"}),
+        expect=frozenset({"KF5", "X2"}),
         name="token-ends-while-pacing",
     ),
 ]
@@ -421,7 +422,7 @@ X12 = [
         TWO_CLICKS,
         tokens_per_frame=100,
         check_errors=(2, 3),
-        expect=frozenset({"KF5", "U7", "X12"}),
+        expect=frozenset({"KF5", "X12"}),
         name="token-two-failed-reads-in-a-row-are-tolerated",
     ),
     # Checks 1 to 3 fail; the third is the one after decision 0's click, which stands applied with
@@ -433,7 +434,7 @@ X12 = [
         TWO_CLICKS,
         tokens_per_frame=100,
         check_errors=(1, 2, 3),
-        expect=frozenset({"KF5", "U2", "U7", "X12", "X2"}),
+        expect=frozenset({"KF5", "U2", "X12", "X2"}),
         name="token-third-failed-read-after-the-action",
     ),
     # Checks 1 and 2 fail and so does the read inside the tap: the tap is reported applied, with
@@ -445,7 +446,7 @@ X12 = [
         tokens_per_frame=100,
         check_errors=(1, 2),
         tap_check_errors=(1,),
-        expect=frozenset({"KF5", "U2", "U7", "X12", "X2"}),
+        expect=frozenset({"KF5", "U2", "X12", "X2"}),
         name="token-third-failed-read-inside-a-tap",
     ),
     # Checks 1 and 2 fail, the read inside the tap succeeds and resets the count, and checks 3
@@ -456,7 +457,7 @@ X12 = [
         TAP_FIRST,
         tokens_per_frame=100,
         check_errors=(1, 2, 3, 4),
-        expect=frozenset({"KF5", "U7", "X12"}),
+        expect=frozenset({"KF5", "X12"}),
         name="token-a-read-inside-a-tap-resets-the-count",
     ),
     # The read inside the tap fails, then checks 3 and 4: the third is the check after pacing.
@@ -467,7 +468,7 @@ X12 = [
         tokens_per_frame=100,
         check_errors=(3, 4),
         tap_check_errors=(1,),
-        expect=frozenset({"KF5", "U2", "U7", "X12", "X2"}),
+        expect=frozenset({"KF5", "U2", "X12", "X2"}),
         name="token-a-failed-read-inside-a-tap-counts",
     ),
     # KF4: the task ends at 0.51 s, between check 2 and the read inside the tap, which sees the
@@ -479,7 +480,7 @@ X12 = [
         TAP_FIRST,
         tokens_per_frame=100,
         ends_at_s=0.51,
-        expect=frozenset({"KF4", "KF5", "U7", "X2"}),
+        expect=frozenset({"KF4", "KF5", "X2"}),
         name="token-the-end-seen-inside-a-tap",
     ),
     # As above, with check 3 to fail: it would be the read after the tap, which the kernel never
@@ -491,7 +492,7 @@ X12 = [
         tokens_per_frame=100,
         ends_at_s=0.51,
         check_errors=(3,),
-        expect=frozenset({"KF4", "KF5", "U7", "X2"}),
+        expect=frozenset({"KF4", "KF5", "X2"}),
         name="token-no-read-after-the-end-seen-inside-a-tap",
     ),
     # At 240 fps the tap at tick 0.5 steps to 1.5, 2.5, 3.5 and 4.5, reading after each step.
@@ -505,7 +506,7 @@ X12 = [
         tokens_per_frame=100,
         check_errors=(1, 2),
         tap_check_errors=(1,),
-        expect=frozenset({"KF5", "U2", "U7", "X12", "X2"}),
+        expect=frozenset({"KF5", "U2", "X12", "X2"}),
         name="token-a-tap-goes-on-after-the-third-failed-read",
     ),
     # As above, with the task over at tick 2: the tap's read at 2.5 sees it and stops the tap.
@@ -519,7 +520,7 @@ X12 = [
         check_errors=(1, 2),
         tap_check_errors=(1,),
         ends_at_s=2.0 / 240.0,
-        expect=frozenset({"KF5", "U2", "U7", "X12", "X2"}),
+        expect=frozenset({"KF5", "U2", "X12", "X2"}),
         name="token-a-tap-goes-on-after-the-third-failed-read-to-the-end",
     ),
     # Wall clock, decisions at 0, 1, 2 and 3 s. The kernel reads each frame by its timer and after
@@ -531,7 +532,7 @@ X12 = [
         _timed(FORM, [0.5] * 4),
         env_fps=3.0,
         failing_reads_s=((1.4, 1.6),),
-        expect=frozenset({"U7", "X12", "X2"}),
+        expect=frozenset({"X12", "X2"}),
         name="wall-two-failed-reads-are-tolerated",
     ),
     # At 8 fps the periodic reads at 1.25 and 1.375 s fail, then the one after decision 1's
@@ -543,7 +544,7 @@ X12 = [
         _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
         env_fps=8.0,
         failing_reads_s=((1.2, 1.6),),
-        expect=frozenset({"U2", "U7", "X2"}),
+        expect=frozenset({"U2", "X2"}),
         name="wall-third-failed-read-is-todays-first",
     ),
     # The periodic reads at 1.125, 1.25 and 1.375 s fail while decision 1 waits for its reply:
@@ -554,7 +555,7 @@ X12 = [
         _timed(FORM, [0.5] * 4),
         env_fps=8.0,
         failing_reads_s=((1.1, 1.45),),
-        expect=frozenset({"K-g", "U7", "X12", "X3"}),
+        expect=frozenset({"K-g", "U11", "X12"}),
         name="wall-third-failed-read-during-a-reply",
     ),
     # Two failed periodic reads, a successful one at 1.375 s, then the one after decision 1's
@@ -565,30 +566,31 @@ X12 = [
         _timed(FORM, [0.5, 0.45, 0.5, 0.5]),
         env_fps=8.0,
         failing_reads_s=((1.1, 1.3), (1.4, 1.48)),
-        expect=frozenset({"U7", "X12", "X2"}),
+        expect=frozenset({"X12", "X2"}),
         name="wall-a-successful-read-resets-the-count",
     ),
 ]
 
 # A fault the environment latches itself. Both scripts assert today's loop's outcome.
 LATCHED = [
-    # Former U4: decision 0 waits 2 s from its action time 0.5; its steps go to 1, 2 and 2.5,
-    # and the second, the third clock step of the episode, fails. The shell answers the step with
-    # its error and the kernel settles the wait on it, a failed action, as today's environment
-    # does (turns.py TurnPolicy._step_failed; evaluation/shell.py _Shell._failure).
+    # Former U4: decision 0 waits 2 s from its action time 0.5; its steps go to 1.5 and 2.5, and
+    # the second, the third clock step of the episode, fails, so the wait stops at 1.5. The shell
+    # answers the step with its error only (evaluation/shell.py _Shell._failure), and the kernel
+    # settles the wait on it as a failed action, invalid_run at tick 1.5, as today's environment
+    # does (turns.py TurnPolicy._step_failed).
     Script(
         "token",
         4.0,
         _tokens([("wait:2", 50)] + [("click", 50)] * 3),
         tokens_per_frame=100,
         advance_errors=(3,),
-        expect=frozenset({"KF5", "U2", "U7", "X1", "X2"}),
+        expect=frozenset({"KF5", "U2", "X1", "X2"}),
         name="token-a-wait-whose-own-step-fails",
     ),
-    # U5: decision 1's click at 1.5 s fails in the environment, which latches the run invalid
-    # while execute() returns; reading the snapshot takes 1.5 s. The shell posts the latched
-    # Invalidated before the action's answer (evaluation/shell.py _Shell._env), so the kernel
-    # settles the click after the snapshot read, at tick 3; today's loop at tick 1.
+    # Former U5: decision 1's click at 1.5 s fails in the environment, which latches the run
+    # invalid while execute() returns; reading the snapshot takes 1.5 s. The shell answers the
+    # action with its error before the latched Invalidated (N6; evaluation/shell.py
+    # _Shell._execute), so the kernel settles the click where it ran, at tick 1, as today's loop.
     Script(
         "wall",
         SHORT_S,
@@ -597,14 +599,14 @@ LATCHED = [
             Turn("click", attempts=(Attempt(0.5),), fault="guest connection reset"),
         ),
         snapshot_s=1.5,
-        expect=frozenset({"U2", "U7", "X2"}),
+        expect=frozenset({"U2", "X2"}),
         name="wall-a-failed-action-settles-after-the-snapshot-read",
     ),
 ]
 
 # Named scripts that assert today's outcome where the shell is still to be fixed, with why:
 # they fail until then (test_named.py, xfail strict), and pass once it is.
-PENDING = {"wall-a-failed-action-settles-after-the-snapshot-read": "p1c 修 U4/U5"}
+PENDING: dict[str, str] = {}
 
 # KF5d: the task ends at a decision's landing, after its frame was read. The kernel lands the
 # action without a read before it; today's loop reads, finds the end and lands nothing.
@@ -616,7 +618,7 @@ LANDED = [
         1.25,
         _timed(["wait:0.5"], [0.5]),
         ends_at_s=0.5,
-        expect=frozenset({"K-g", "KF5d", "U7", "X2"}),
+        expect=frozenset({"K-g", "KF5d", "X2"}),
         name="wall-a-wait-lands-after-the-end",
     ),
     # A refused click at 0.5 s is read after by nobody; the periodic read at 1 s finds the end
@@ -626,7 +628,7 @@ LANDED = [
         2.0,
         (Turn("click", attempts=(Attempt(0.5),), rejected="the guest refused the action"),),
         ends_at_s=0.25,
-        expect=frozenset({"K-g", "KF5d", "U7", "X2"}),
+        expect=frozenset({"K-g", "KF5d", "X2"}),
         name="wall-a-refused-action-lands-after-the-end",
     ),
 ]
@@ -642,7 +644,7 @@ HORIZON = [
         env_fps=5.0,
         input_fps=5.0,
         tokens_per_frame=100,
-        expect=frozenset({"KF2", "KF5", "U7", "X4"}),
+        expect=frozenset({"KF2", "KF5", "X4"}),
         name="token-horizon-a-few-ulps-past-a-tick",
     ),
 ]
@@ -658,7 +660,7 @@ EARLY_END = [
         ends_after=3,
         end_reason="task_success",
         snapshot_s=1.5,
-        expect=frozenset({"U7", "X2"}),
+        expect=frozenset({"X2"}),
         name="wall-early-end-snapshot-past-the-deadline",
     ),
 ]
