@@ -4,9 +4,10 @@ The openrouter API posts through LiteLLM's OpenRouter provider with LiteLLM's ow
 (providers/litellm.py:1123-1136, 605-610) to ``{OPENROUTER_BASE_URL}/chat/completions``; the driver
 reads OPENROUTER_BASE_URL because the catalog entries carry no base_url (providers/litellm.py:
 470-475). Each request takes the next script entry: a Reply is streamed as OpenRouter server-sent
-events, a Failure is answered with its HTTP status, headers and JSON error body, and a Held reply
-is streamed up to its last event, which waits until the test releases it. Every request is kept
-with its method, path, headers and raw body, in arrival order.
+events, a Failure is answered with its HTTP status, headers and JSON error body, a Held reply
+is streamed up to its last event, which waits until the test releases it, and a Cut reply up to
+its first text chunk, where the connection closes. Every request is kept with its method, path,
+headers and raw body, in arrival order.
 """
 
 from __future__ import annotations
@@ -24,6 +25,14 @@ HOLD_TIMEOUT_S = 30.0  # a Held reply's last event is sent after this even witho
 @dataclass(frozen=True)
 class Held:
     """A reply whose last event (the usage chunk) is sent only after ``release_last_event``."""
+
+    reply: Reply
+
+
+@dataclass(frozen=True)
+class Cut:
+    """A reply whose stream breaks off after its first text chunk: the connection closes short of
+    the length the response announced."""
 
     reply: Reply
 
@@ -112,10 +121,20 @@ class OpenRouterStub:
                     return
                 model = json.loads(body)["model"]
                 index = len(stub.requests)
-                reply = entry.reply if isinstance(entry, Held) else entry
+                reply = entry.reply if isinstance(entry, Held | Cut) else entry
                 events = _events(reply, model, index, stub._route)
                 lines = [f"data: {json.dumps(event)}\n\n".encode() for event in events]
                 lines.append(b"data: [DONE]\n\n")
+                if isinstance(entry, Cut):
+                    first_text = next(
+                        i
+                        for i, event in enumerate(events)
+                        if event["choices"][0]["delta"].get("content")
+                    )
+                    sent = b"".join(lines[: first_text + 1])
+                    self._start(200, (), "text/event-stream", sent, length=len(b"".join(lines)))
+                    self.close_connection = True
+                    return
                 if not isinstance(entry, Held):
                     self._start(200, (), "text/event-stream", b"".join(lines))
                     return
