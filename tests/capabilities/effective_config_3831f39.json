@@ -153,6 +153,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -240,7 +241,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "01af1d9378897b33107eb5cf1df69d38ba82fb8a3ea8791de042ac0db862c91b"
+    "hash": "50ef54d61717928e78b1f84d87b5250e6bc2a5849458e114f825f5ab0946509c"
    },
    "token/None": {
     "config": {
@@ -278,6 +279,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -365,7 +367,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f536ec78a0086cddc394bddd97e42bb3a8b5693a2d2bebdff4b6fc4180fcf50b"
+    "hash": "45727b8513a86d308a2caa63879d2ffde931866a4480d41ad9b4bf1fc454943c"
    },
    "wall/None": {
     "config": {
@@ -403,6 +405,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -490,7 +493,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e7cdbaaf3dd5198d18ab187da74d1bac917a5de4cf205ae0c1bcf40863439bec"
+    "hash": "9d0bfafc209e57e1ac5ff40b9cffbc6916faa6510cfa631b5f4b554ae2aeb4d3"
    }
   },
   "vendor": "anthropic"
@@ -601,6 +604,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -688,7 +692,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e877398b86a493da212410949c5874567449fa85a86c2ca227f1f288337fba98"
+    "hash": "623da4ed73845c174c3c5f76b8e1c3884a118e89f54e46d4be8ec25c8a24b91a"
    },
    "token/None": {
     "config": {
@@ -726,6 +730,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -813,7 +818,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "93ee884e7a5c3cca8f94b16ccfa8f86a24d25e5f3c16ce140c6c8163d21533c3"
+    "hash": "5b06190591350cc183b906f5ff15bbdaaf3dfb74c117054f6b60a8021c24430b"
    },
    "wall/None": {
     "config": {
@@ -851,6 +856,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -938,7 +944,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "caf27d7b04c82260a48b91ee9444a13f7b840ff74df04a9af1cadcb7420c6ff7"
+    "hash": "bfd3ef295d97a4efbcf7e5676a55c2a353fb2be452cd642d7347f0e4859b112b"
    }
   },
   "vendor": "anthropic"
@@ -1048,6 +1054,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -1135,7 +1142,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "17f6d7220e1fce217ab150dcd6b9fbe9b7055f1685607d6c9f87e9641e1644f8"
+    "hash": "05f1a134c32a1f27b0a936803efafaf35fac122a4da9cc860ba61e47e2400129"
    },
    "token/None": {
     "config": {
@@ -1173,6 +1180,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -1260,7 +1268,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4fde3086d17918dc325a81e5efe79dbda3a054bb6118f4c8ea0681cbba11b366"
+    "hash": "16ed8470ea7aac6de16db48b8d3097128ee3b5bc998bdc251a038090c3ad9cc5"
    },
    "wall/None": {
     "config": {
@@ -1298,6 +1306,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -1385,7 +1394,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0b440bc65a537186269e5b71f9cfda13449d040dd51d1c5b99aff0f137372c35"
+    "hash": "9875a7662eb37bd06f79d273eb9c972bc4d4d6a35cdcec4b60f3cc636f26433d"
    }
   },
   "vendor": "anthropic"
@@ -1496,6 +1505,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -1583,7 +1593,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a0257e6e992fa9231df5cab6f939a12c7f78160c7ce8367547df57415ef71bcb"
+    "hash": "734a2febac8d0ed37306216a84745dd3868668aa73bf0cb7c6ee1493dfe0eecd"
    },
    "token/None": {
     "config": {
@@ -1621,6 +1631,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -1708,7 +1719,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c5fbbc4646cabf42b7af5c031b988974a435f07fbacfa67bed9ffbc18aac3f2d"
+    "hash": "d5cb42b70f338458d9ff3054f8df89af91d958f1f92e588de528c68dd7a38b97"
    },
    "wall/None": {
     "config": {
@@ -1746,6 +1757,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -1833,7 +1845,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9739f46d964967eeca6781ecf5441d3583993c6c5d32a9a495d42fb4c55c52da"
+    "hash": "abf7ad0aa1d1e67aa8229c5a406b77aa3cf4f08f16ec6bf068ef5fe9e0c81b95"
    }
   },
   "vendor": "deepseek"
@@ -1944,6 +1956,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2031,7 +2044,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b0ddec2cfac68c17dfeaa0ae96b88bb72c6696c8ee25edbfb5360f37cdf86682"
+    "hash": "b78637cdd35d9b875be378c7ec6d565942f4c0422748f875864ff7d21624379a"
    },
    "token/None": {
     "config": {
@@ -2069,6 +2082,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2156,7 +2170,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9b6a2905845f126a82f31814ed9ac77fd8b6b5e97331ead5c12c48086fd86205"
+    "hash": "9d2855904afb1620864c37768712531150a62ed35bc42d0ef30bde4d20d8a0c7"
    },
    "wall/None": {
     "config": {
@@ -2194,6 +2208,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2281,7 +2296,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1d038a86aadedbe373572a56a91bd1e08da5ac75255125181a28ee43fde341fe"
+    "hash": "928ae663a06299ef99c09816a3ce6f0c236effb9e86cd6554bab9eca6ada3fe5"
    }
   },
   "vendor": "google"
@@ -2404,6 +2419,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2488,7 +2504,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b9b05a9f08de1f31df5f48c12a36a977373cdb940de391344306720163e3e7f5"
+    "hash": "790b6aefaf0f95f9a066ad5a733c56662b4d57daf87b8190244778a535be9afb"
    },
    "token/None": {
     "config": {
@@ -2526,6 +2542,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2610,7 +2627,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bf851c0290bf15e561906042f5fa7fe83771f663caa7d9080e2eae773d7bc666"
+    "hash": "1ac41fb2ca413336f88e28d0a9c10f2c0d18af69437f201ff36e48c8fdc745c5"
    },
    "wall/None": {
     "config": {
@@ -2648,6 +2665,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2732,7 +2750,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a2b105a5e209822858110f8ac2d2c3b10ef68c52bb10ddbbc93359dcf125a327"
+    "hash": "28e29ea495d8393b5ced79fe34c795e442fd9b6ea6a17270b84b0250c554d68d"
    }
   },
   "vendor": "google"
@@ -2855,6 +2873,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -2939,7 +2958,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0a2682a7f368250d42939f345d576f2d804f56a29be32f04c5d5c76426607a31"
+    "hash": "ba55c16ebf7db05cfc438ed2e8e5a1d53f549038ff53df85c6444531ef03a94a"
    },
    "token/None": {
     "config": {
@@ -2977,6 +2996,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3061,7 +3081,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1779b9488517b4a9bdaf7ff665d4688455fb5aaa379d91791606f68ef63ee6c3"
+    "hash": "df3ff16655ea0c85867189f43228610e186eca675f06598749d578fc34c54766"
    },
    "wall/None": {
     "config": {
@@ -3099,6 +3119,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3183,7 +3204,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e79167b0a84949323eb5dc5a463aec587e76e6b57e468eff614ccc6a361c81d6"
+    "hash": "21b456ffcb002a61291507348259ecca2420cdbbfca79044c6f3eb5f321a7f24"
    }
   },
   "vendor": "google"
@@ -3306,6 +3327,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3390,7 +3412,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f724b9c59d7d0a14a27b53ca9764409483e4930c442a5596cc2cfe431f0aae09"
+    "hash": "906d68da6d377c03aa54ae49265de5650bef76c7c5a1932161207b829d71ebf1"
    },
    "token/None": {
     "config": {
@@ -3428,6 +3450,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3512,7 +3535,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "82c4c92a676850572901ecfba8dea04875e672c1bc439385d325ea4343b526b3"
+    "hash": "85c2c8b69288fe7293f84269e67288b415c83448248d2f7cae2a15d5d68b97c7"
    },
    "wall/None": {
     "config": {
@@ -3550,6 +3573,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3634,7 +3658,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b75c6d0238279d597ac41368d3ad68f379a8622abe625f7cb24c004e19140fc5"
+    "hash": "c2e68e095a7bd427e8da9ff71e37e05ba76cdee8d85103bda299ab61d874451b"
    }
   },
   "vendor": "google"
@@ -3745,6 +3769,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3832,7 +3857,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b11e15e57990e075383bebb357f368657866b548be0e702d2740cc15a32166e5"
+    "hash": "afefcc01c0690b5353e0330955c1d791230ba7fe8df8a639f48ad659812dc7d3"
    },
    "token/None": {
     "config": {
@@ -3870,6 +3895,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -3957,7 +3983,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8d5d8c1c8a6de8758a9eb270b852e4d8a53b39a346069e1723033068b6d6c7da"
+    "hash": "c875d20ed8ecaa74677cb1d6f99291f386100e81205a3f2a4ebd09d7baa87a7d"
    },
    "wall/None": {
     "config": {
@@ -3995,6 +4021,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -4082,7 +4109,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "009991ffffe7f88ef91192642d4d2d0c09d62c446ca3b79bd2a4fc155006fef0"
+    "hash": "e280e874ea090d38cbb5255cc5141cdebb6163e119d1b016213c481af650d50c"
    }
   },
   "vendor": "openai"
@@ -4193,6 +4220,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -4280,7 +4308,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b9b75daace108f14fee446752ce604c0a4ffda1f82bf29c11c5427168847f02f"
+    "hash": "4e92a506a1ec143233f6e07555abc3a473fdf5894ce2df505b824db1168d37c5"
    },
    "token/None": {
     "config": {
@@ -4318,6 +4346,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -4405,7 +4434,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d65baf10d0607324093dd0464037415e8ac17d5e480bbbfe92d37257418025e8"
+    "hash": "b5574dc4dad8b437fe58e6a5272af6bfe7e30a3145b850d2ddce1478d5248792"
    },
    "wall/None": {
     "config": {
@@ -4443,6 +4472,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -4530,7 +4560,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "51046681539d10fbf033c9305f33ef3bf9780351e07a7a06ed875f4d731a109d"
+    "hash": "b92749a1f8c4aca9c7e0c55ab7a3f9df2c4f24aca57053311bea48b343f0a141"
    }
   },
   "vendor": "openai"
@@ -4642,6 +4672,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -4720,7 +4751,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a55adac408424e368af77de13efb4a55ddd179f92e760a6cf80e7383b9dd4b73"
+    "hash": "c12513ebff98d3fe2aa5d6ee44e964f52341527617c6cf33c3c6662241e509db"
    }
   },
   "vendor": "openai"
@@ -4830,6 +4861,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -4908,7 +4940,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "066808737425739f20d899c85f1a092d7189231a07649c3d63c2b4e945f962bc"
+    "hash": "2c173e5dd8fa7f23cf80d82c57b146e4acffad7be35be1dd10654a5f2b9077d5"
    },
    "token/None": {
     "config": {
@@ -4946,6 +4978,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5024,7 +5057,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e6d736dc229396793947a235ee8bb250c695ff831ba1bd38bdba453ba47c874c"
+    "hash": "ee0754ed9ec1ff9a7532055c049408813cd373a7c469b28aa87cdb1cb6bc9870"
    },
    "wall/None": {
     "config": {
@@ -5062,6 +5095,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5140,7 +5174,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "78e1ef1d917503cf99c7d828276093a8570c1d3d9ac4f1c678f15652e40de169"
+    "hash": "1dc6b521fffd75aa5caf907932fd8724a03ea2f5b9d58d08820f2c796f4f3b2b"
    }
   },
   "vendor": "openai"
@@ -5251,6 +5285,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5329,7 +5364,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "84fbab24cbf63d00905c01e0301991f97de93c4ecafd1f389710981f652c70a1"
+    "hash": "eedfa156b0baf6aa61ea946293d69118626a387edb3f5faae912b00463e4cac1"
    }
   },
   "vendor": "typesafe"
@@ -5440,6 +5475,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5527,7 +5563,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c18725673604d252c881fd645f2a32778d6e3bc8146418162bc52c30073e4119"
+    "hash": "41ef0ac49f69d30f9e065db9851181aac9c9fb49a8a160e9a216d0486a32961c"
    },
    "token/None": {
     "config": {
@@ -5565,6 +5601,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5652,7 +5689,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "af973ea660f6886c2cd8d5d0a8d7ff2e0759eba676c8046d04f747c4c4fd8378"
+    "hash": "061e9c7c02c2d05e51b6db96610e156e78662be702587c46e82da6337e7c053d"
    },
    "wall/None": {
     "config": {
@@ -5690,6 +5727,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5777,7 +5815,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "af6834972dcd60fb3d022524a14221eb2ef0b28ac531e67a03e0574d5c92d18a"
+    "hash": "3d6497efef0b0c93d0d626c9dca056e68c957c8345687b3d98644d352f8d9f45"
    }
   },
   "vendor": "moonshot"
@@ -5898,6 +5936,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -5985,7 +6024,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8172b07679880d5e051f40299d5d9d3f17706d08595227702d0a3b1dbdca2e81"
+    "hash": "5a8762c822f008b85ff84d15283fc821be1468ff39c08b50214c830046aecd06"
    }
   },
   "vendor": "litellm"
@@ -6109,6 +6148,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -6196,7 +6236,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fda475fb4bf040f3e4c95561dc00ddb654d7c80d74f01d5db5574791502e9fce"
+    "hash": "b2d1b1ef63090502917ee3923555fa670c991de72926a1d78ca312fd621563c0"
    }
   },
   "vendor": "compatible"
@@ -6317,6 +6357,7 @@
        "jev_current_prefix": "Current observation: ",
        "jev_history_prefix": "Recent action and feedback history: ",
        "jev_ledger_header": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every action; start/step/count expands exact indices):",
+       "jev_ledger_header_omitted": "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs; repeat_count and occurrences preserve every listed action; start/step/count expands exact indices):",
        "ledger_header": "ARCHIVED EXECUTED ACTIONS (older than the verbatim detailed-history window):",
        "ledger_omission": "[{count} earlier archived actions were omitted to fit the context window.]",
        "luna_action_label": "Chosen action: ",
@@ -6404,7 +6445,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "43249a578e44598142b045ae6e5df27fd66fb1349b8e8188b131894b7be7f201"
+    "hash": "989b061bd0729c752a36a7c72a1753762d71cec0075ddc453fec0398ca7c840d"
    }
   },
   "vendor": "compatible"

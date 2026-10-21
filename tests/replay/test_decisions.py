@@ -24,7 +24,7 @@ import pytest
 
 import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
-from realtime_framework.entity.context_policy import LEDGER_OMISSION
+from realtime_framework.entity.context_policy import FIXED_TEXTS, LEDGER_OMISSION
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
@@ -554,11 +554,14 @@ def test_history_overflow_ledger(tmp_path):
     def ledger(k: int) -> list[str]:
         return _bodies(records[k])[0]["state"]["history"][1]["content"].split("\n")
 
-    assert all(line.startswith("{") for line in ledger(first - 1)[1:])
+    header_line, *kept = ledger(first - 1)
+    assert header_line == FIXED_TEXTS.jev_ledger_header
+    assert all(line.startswith("{") for line in kept)
     for k in range(first, len(records)):
         header_line, note, *kept = ledger(k)
         omitted = 10 * sum(k >= decision for decision in script.LEDGER_OMISSIONS)
-        assert header_line.startswith(JEV_LEDGER_HEADER)
+        # The header no longer says that every action is kept.
+        assert header_line == FIXED_TEXTS.jev_ledger_header_omitted
         assert note == LEDGER_OMISSION.format(count=omitted)
         assert kept and all(line.startswith("{") for line in kept)
     _settle("history_overflow_ledger", header, records, tmp_path)
