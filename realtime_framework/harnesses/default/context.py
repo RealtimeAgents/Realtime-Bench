@@ -250,10 +250,28 @@ class RealtimeRuntime:
         with self._state_lock:
             return cancel.is_set() or self._state == RuntimeState.CLOSED
 
-    def record_execution_feedback(self, feedback: str) -> None:
-        if self._turns:
-            self._turns[-1].execution_feedback = feedback
-            self._turns[-1].feedback_wall_ns = self.clock.time_ns()
+    def _stop_if_abandoned(self, cancel: threading.Event, before: str) -> None:
+        """Stop an aborted generation. _run_turn checks before it applies the retention policy,
+        before it sends its observation and before it starts its reply."""
+        if self._abandoned(cancel):
+            raise RetryCancelled(f"generation abandoned before {before}")
+
+    def record_execution_feedback(self, feedback: str, decision: int | None = None) -> None:
+        """Attach an action's execution feedback to the turn of its decision; with no decision,
+        to the newest turn, as the legacy loop reports."""
+        turns = [turn for turn in self._turns if decision is None or turn.decision == decision]
+        if turns:
+            turns[-1].execution_feedback = feedback
+            turns[-1].feedback_wall_ns = self.clock.time_ns()
+
+    def accept_turn(self, turn: CanonicalTurn) -> None:
+        """Write an accepted generation's turn into the retained history. The write runs on the
+        loop, where a generation that was abandoned but still runs reads the history."""
+
+        async def write() -> None:
+            self._turns.append(turn)
+
+        self._submit(write())
 
     def _action_ledger(self, history: list[dict]) -> str:
         return executed_action_ledger(history, limit=self._archived_action_count)
@@ -267,8 +285,9 @@ class RealtimeRuntime:
         ledger: str,
         incoming: Iterable[CanonicalTurn] = (),
     ) -> CanonicalRequest:
-        """The retained history (and the incoming frame) where a session encoder needs it before
-        or after the request exists: the same builder and blocks as the request."""
+        """The retained history (and the turn of the generation under way) where a session
+        encoder needs it before or after the request exists: the same builder and blocks as the
+        request."""
         return request_builder(tuple(self._turns) + tuple(incoming), self.ledger_block(ledger))
 
     def _record_archived_turns(self, turns: Iterable[CanonicalTurn]) -> int:
@@ -342,6 +361,7 @@ class RealtimeRuntime:
         current_generation: GenerationHandle | None = None,
         force_rebuild: bool = False,
         removed_turns: tuple[CanonicalTurn, ...] = (),
+        incoming: tuple[CanonicalTurn, ...] = (),
     ) -> HistorySyncResult:
         seed = self._seed
         if seed is None:
@@ -352,7 +372,7 @@ class RealtimeRuntime:
                 HistorySyncRequest(
                     seed=seed,
                     reason=reason,
-                    history=self.history_view(request_builder, ledger),
+                    history=self.history_view(request_builder, ledger, incoming),
                     current_generation=current_generation,
                     force_rebuild=force_rebuild,
                 )
@@ -360,9 +380,9 @@ class RealtimeRuntime:
         except Exception as exc:
             self._connected = False
             self._set_state(RuntimeState.BROKEN)
-            self._record_sync(reason, force_rebuild, removed_turns, error=exc)
+            self._record_sync(reason, force_rebuild, removed_turns, incoming, error=exc)
             raise
-        self._record_sync(reason, force_rebuild, removed_turns, result=result)
+        self._record_sync(reason, force_rebuild, removed_turns, incoming, result=result)
         if result.history_state == ProviderHistoryState.EXACT:
             self._connected = True
             self._set_state(RuntimeState.READY)
@@ -432,7 +452,10 @@ class RealtimeRuntime:
             raise ValueError("each generation accepts exactly one observation")
         executed_action_ledger = self._action_ledger(action_history)
         await self._ensure_ready(executed_action_ledger, request_builder)
+        self._stop_if_abandoned(cancel, "its history")
         incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
+        # The policy archive and fold apply before the generation, accepted or not: a discarded
+        # generation leaves them, and their HistoryChanged records, in place.
         retained, incoming, removed_turns, retention = self._retained(self._turns, incoming)
         self._turns[:] = retained
         self._record_retention(retention)
@@ -472,9 +495,7 @@ class RealtimeRuntime:
 
         if not incoming:
             raise RuntimeError("no current observation")
-        # An aborted generation sends neither its observation nor its request.
-        if self._abandoned(cancel):
-            raise RetryCancelled("generation abandoned before its request")
+        self._stop_if_abandoned(cancel, "its request")
         history = self.history_view(request_builder, executed_action_ledger, incoming)
         input_refs = [
             await self.driver.send_observation(turn.observation, history) for turn in incoming
@@ -515,6 +536,7 @@ class RealtimeRuntime:
             compactions += 1
             archived_count += len(archived)
 
+        self._stop_if_abandoned(cancel, "its reply")
         self._record_generation_prepared(incoming, physical_metadata, request.generation)
         self._set_state(RuntimeState.GENERATING)
         provider_call_started_monotonic_ns = self.clock.monotonic_ns()
@@ -585,14 +607,16 @@ class RealtimeRuntime:
                 "unknown", "generation_terminal_state", terminal_history, request.generation_id
             )
         output = collector.finish()
-        if not cancelled:
-            incoming[-1].output = output.text
-            incoming[-1].output_wall_ns = self.clock.time_ns()
-            incoming[-1].output_reasoning = output.reasoning_text
-            incoming[-1].action_history_index = len(action_history)
-            incoming[-1].provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
-            self._turns.extend(incoming)
+        turn = incoming[-1]
+        turn.output = output.text
+        turn.output_wall_ns = self.clock.time_ns()
+        turn.output_reasoning = output.reasoning_text
+        turn.action_history_index = len(action_history)
+        turn.provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
 
+        # The turn joins the history only once the result is accepted (accept_turn). A sync after
+        # the generation already includes it: a result that is discarded was aborted first, and
+        # the abort's close makes the next generation rebuild from the accepted history.
         needs_sync = not cancelled and (
             terminal_history != ProviderHistoryState.EXACT or reconnect_required
         )
@@ -603,6 +627,7 @@ class RealtimeRuntime:
                 request_builder=request_builder,
                 current_generation=generation,
                 force_rebuild=False,
+                incoming=(turn,),
             )
         elif cancelled:
             # abort() already dirtied and scheduled cleanup for this generation. A newer turn may
@@ -619,6 +644,7 @@ class RealtimeRuntime:
         finished_monotonic_ns = self.clock.monotonic_ns()
         return RuntimeTurnResult(
             output=output,
+            turn=turn,
             generation_id=request.generation_id,
             history_sync=sync,
             terminal_history_state=terminal_history,
@@ -642,8 +668,9 @@ class RealtimeRuntime:
         decision: int,
         cancel: threading.Event,
     ) -> RuntimeTurnResult:
-        """One generation. ``cancel`` is its own event; once it is set the generation sends
-        nothing more."""
+        """One generation. ``cancel`` is its own event: once it is set, the generation stops at
+        its next check (_stop_if_abandoned) and its retries end. Its turn comes back in the
+        result, for accept_turn once it is accepted."""
         try:
             return self._submit(
                 self._run_turn(
@@ -794,7 +821,9 @@ class RealtimeRuntime:
         # A replayed live session re-sends past tool calls in the policy's format.
         return ["tool_call_replay"] if self.policy.tool_call_replay is not None else []
 
-    def _record_sync(self, reason, force_rebuild, removed_turns, *, result=None, error=None):
+    def _record_sync(
+        self, reason, force_rebuild, removed_turns, incoming=(), *, result=None, error=None
+    ):
         """One HistoryChanged per sync call, of the kind the driver's result reports.
 
         The fallback kinds come from provider_metadata keys the drivers already return.
@@ -823,7 +852,7 @@ class RealtimeRuntime:
             trigger,
             policy_item or None,
             turns=self._turn_refs(removed_turns),
-            replayed_turns=len(self._turns) if rebuilt else None,
+            replayed_turns=len(self._turns) + len(incoming) if rebuilt else None,
             sync={
                 "reason": reason,
                 "force_rebuild": force_rebuild,

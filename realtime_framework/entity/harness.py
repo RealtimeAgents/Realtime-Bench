@@ -49,9 +49,17 @@ class StreamingAgent(ABC):
     def stream_generate(self, tick: int = 0) -> dict:
         raise NotImplementedError(f"{type(self).__name__} is not a frame-driven adapter")
 
+    def commit_action(self, status: str, detail: str = "") -> None:
+        """Report the outcome of the decision stream_generate last ran; an adapter without
+        feedback reports nothing."""
+
+    def abort(self, generation: int | None = None) -> None:
+        """Interrupt a generation in flight: ``generation`` is the event kernel's number of it,
+        None whichever is active. An adapter with nothing to interrupt does nothing."""
+
     # The event kernel's agent (evaluation/shell.py KernelAgent). These defaults run the legacy
-    # turn: stream_generate writes the history itself and marks a result stale once the runtime's
-    # epoch has moved on, so accepting and discarding have nothing left to do.
+    # turn: stream_generate writes the history itself and marks a result stale once an abort has
+    # cancelled it, so accepting and discarding have nothing left to do.
 
     def generate(
         self, generation: int, decision: int, observation: Observation, budget: DecisionBudget
