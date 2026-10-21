@@ -571,6 +571,19 @@ def test_a_reply_message_arrives_as_received():
     assert core.latest_resume_handle == "handle-0" and core.replies == {}
 
 
+def test_a_message_carries_the_time_it_was_read():
+    """Each message carries the driver's time it was read, in a reply or between replies: when
+    it came off the wire for a reader that reads every message as it arrives, and so when the
+    calls it carries arrived."""
+    core = session_core(streaming=True)
+    connected(core)
+    start_turn(core, "turn-0")
+    call = message({"toolCall": {"functionCalls": [{"id": "call-0", "name": "click", "args": {}}]}})
+    assert arrive(core, call, now=12.5).at == 12.5
+    assert receive(core, server_content(turnComplete=True), now=13.0).at == 13.0
+    assert arrive(core, update("handle-0"), now=14.0).at == 14.0
+
+
 def test_an_orphan_go_away_asks_for_a_new_connection():
     """Between replies, a goAway read as it arrives asks for a new connection, by the server's
     deadline, as it does in a reply."""

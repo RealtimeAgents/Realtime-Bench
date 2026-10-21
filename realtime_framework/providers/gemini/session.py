@@ -216,6 +216,9 @@ class Received:
     generation: int  # the generation in flight on that connection when it was read
     generation_id: str  # that generation's request id
     message: Any
+    # When it was read, on the driver's monotonic clock: for a reader that reads every message
+    # as it arrives, when it came off the wire, and so when an action it carries arrived.
+    at: float
     status: str | None  # interaction_status
     interrupted: bool  # this message reports an interruption
     contaminated: bool  # the generation was interrupted, by this message or an earlier one
@@ -237,6 +240,7 @@ class Orphan:
 
     connection: int  # the connection it was read from
     message: Any
+    at: float  # when it was read, as in Received
     control: dict  # what a goAway asks of the session: reconnect after it
     cancelled: tuple[str, ...]  # the ids of the tool calls this message cancels, as in Received
 
@@ -577,6 +581,7 @@ class SessionCore:
             generation.number,
             generation.id,
             message,
+            now,
             status,
             interrupted,
             generation.interrupted,
@@ -597,7 +602,7 @@ class SessionCore:
         control = (
             self._control(message, clean=False, now=now) if connection == self.connection else {}
         )
-        return Orphan(connection, message, control, _cancelled(message))
+        return Orphan(connection, message, now, control, _cancelled(message))
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
         update = getattr(message, "session_resumption_update", None)
