@@ -45,9 +45,10 @@ operation takes the environment when it is sent: a read samples the task, and an
 its keys, at the time the policy sent it, which is the time the policy judges it by; the shell
 reports when an action really held the environment, and the records keep that.
 
-The kernel freezes the snapshot at the first end signal. An action executing then finishes first:
-the shell takes the snapshot next after it, bounded by the action's budget, as the turn-based shell
-does by running both on its one thread (evaluation/streaming_shell.py ``_freeze``).
+The kernel freezes the snapshot at the first end signal. An action executing then finishes first,
+and a capture out with it: the shell takes the snapshot next after them, bounded by the larger of
+the action's budget and the capture's (N32), as the turn-based shell takes it right after the
+action on its one thread (evaluation/streaming_shell.py ``_freeze``).
 """
 
 from __future__ import annotations
