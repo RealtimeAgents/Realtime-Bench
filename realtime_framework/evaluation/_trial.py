@@ -247,6 +247,11 @@ def main(argv=None):
     if catalog.is_external_driver(entry.adapter_type):
         # The driver's code, part of the configuration hash (evaluation/config.py).
         settings["external_driver"] = _yaml.external_driver_identity(entry.adapter_type)
+    if args.interaction_mode == "streaming":
+        # The settings the run records (evaluation/config.py effective_run_config), part of the
+        # configuration hash.
+        driver = catalog.adapter_class(entry.adapter_type)
+        settings["streaming"] = {**driver.streaming_settings, **resolved_model.streaming}
     if args.dry_run:
         print(json.dumps(settings, indent=2))
         return 0

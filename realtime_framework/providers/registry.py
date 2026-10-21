@@ -331,8 +331,8 @@ def load_definitions(directory):
 
 def _streaming_settings(filename: str, api: str, driver: type, settings) -> dict:
     """A model YAML's streaming settings: some of the keys its driver's streaming_settings
-    declares, each a positive integer. Merged over the driver's, Gemini Live's sliding window
-    keeps fewer tokens than set it off (google.genai SlidingWindow.target_tokens)."""
+    declares, each a positive integer. Merged over the driver's, a sliding window that names both
+    thresholds keeps fewer tokens than set it off (google.genai SlidingWindow.target_tokens)."""
     declared = getattr(driver, "streaming_settings", None)
     if declared is None:
         raise ValueError(f"{filename}: the {api} API takes no streaming settings")
@@ -349,7 +349,7 @@ def _streaming_settings(filename: str, api: str, driver: type, settings) -> dict
             raise ValueError(f"{filename}: streaming.{name} must be a positive integer")
     merged = {**declared, **settings}
     if (
-        "compression_target_tokens" in merged
+        {"compression_target_tokens", "compression_trigger_tokens"} <= merged.keys()
         and merged["compression_target_tokens"] >= merged["compression_trigger_tokens"]
     ):
         raise ValueError(
@@ -479,6 +479,8 @@ def _check_driver(target: str, driver: type) -> None:
             raise ValueError(
                 f"{target!r} declares streaming but no streaming_settings (a dict class attribute)"
             )
+        # Held to what a model YAML's are, which replace them.
+        _streaming_settings(repr(target), target, driver, driver.streaming_settings)
     estimates = driver.capabilities.request_size_estimation
     if callable(getattr(driver, "request_context_status", None)) and not estimates:
         raise ValueError(
