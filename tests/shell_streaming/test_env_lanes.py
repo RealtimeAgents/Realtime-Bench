@@ -10,7 +10,8 @@ from __future__ import annotations
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType, Observation
-from realtime_framework.evaluation.env_lanes import EnvLanes, Executed
+from realtime_framework.entity.model import RetryCancelled
+from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
 from realtime_framework.evaluation.kernel.events import (
     ActionExecuted,
     CheckEnd,
@@ -257,3 +258,39 @@ def test_an_end_check_holds_the_gate_alone_and_waits_for_the_action():
         ("check_end", 2.125, 2.625),
         ("capture", 2.625, 2.875),
     ]
+
+
+def test_a_lane_closed_right_after_its_command_ends_once_it_answered():
+    """L6: the close and the command's wake-up are one; the thread must still end."""
+    clock, posted = FakeClock(), []
+    lane = Lane("test", posted.append, clock)
+
+    def command():
+        clock.sleep(0.5)
+        return "answer"
+
+    with clock.participant():
+        lane.submit(command)
+        lane.close()
+        clock.sleep(1.0)
+    lane._thread.join(2.0)
+    assert posted == ["answer"]
+    assert not lane._thread.is_alive()
+
+
+def test_an_operation_that_raises_a_base_exception_is_answered_too():
+    """L6: RetryCancelled is a BaseException (entity/model.py:483); a lane that let it through
+    would die with its command held, and the kernel would wait for that answer for good."""
+    clock, env, inbox, lanes = _lanes()
+
+    def cancelled(action, *, release_at=None):
+        raise RetryCancelled("abandoned")
+
+    env.execute = cancelled
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        (event,) = [event for _, event in inbox.wait_for(1)]
+        lanes.execute(Execute(1, CLICK), lambda record: None)  # the lane is free again
+        inbox.wait_for(2)
+    lanes.close()
+    assert event.decision == 0 and "RetryCancelled: abandoned" in event.error
