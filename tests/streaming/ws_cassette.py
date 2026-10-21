@@ -111,7 +111,7 @@ def from_trace(run_dir: Path) -> list[dict]:
     receives when it reads it, with the connection that carried it (providers/capture.py:266-370),
     in the order they were captured (evaluation/agent_trace.py:179-196); the bodies are in the
     blob pack. A server message's ``at`` is its capture's wall time less the episode origin the
-    runner records in ActiveLoopStarted (evaluation/runner.py:1407-1419), which on the wall clock
+    runner records in ActiveLoopStarted (evaluation/runner.py:1417-1426), which on the wall clock
     is semantic time; the client's records have none, so only their order is compared. A retried
     run appends attempts; the last one with that record is taken.
 

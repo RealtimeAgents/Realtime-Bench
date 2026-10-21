@@ -18,7 +18,8 @@ connection reads its socket on a thread websockets starts in its constructor
 blocks on the message queue that thread fills (websockets/sync/messages.py:72-92). On the fake
 clock a thread blocked like that counts as busy, so time never moves while the client waits for a
 message. The subclass does the reading on a thread the clock starts, which waits until its socket
-turns readable, and recv() waits on the clock until a message is queued or the connection ends.
+turns readable, and recv() waits on the clock until a frame is queued or the connection ends: a
+message is one frame, since the cassette server never splits one.
 Reading never pauses: a paused reader would block on a lock until the client reads
 (sync/connection.py:89-96, 811), which on the fake clock is busy too. Like the server, the client
 waits until what it sent is delivered before it goes on.
