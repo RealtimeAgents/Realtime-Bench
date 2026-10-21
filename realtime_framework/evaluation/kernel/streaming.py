@@ -386,11 +386,10 @@ class StreamingPolicy:
     def _captured(self, event: FrameCaptured) -> None:
         self._capturing = False
         kernel = self.kernel
+        # Also once the episode is over: the capture was under way at the end, and every frame
+        # captured is judged, failed or frozen, as on the turn-based clock.
         if event.error is not None:
-            # Also once the episode is over: the capture was under way at the end.
             return kernel.invalidate("environment", "observation_capture_failed", event.error)
-        if kernel.ending is not None:
-            return
         if self._frozen.observe(event.fingerprint, kernel.ops):
             return kernel.invalidate(
                 "environment", "observation_stream_frozen", repr(event.fingerprint)
