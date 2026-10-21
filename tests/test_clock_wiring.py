@@ -99,13 +99,16 @@ def test_set_up_agent_builds_the_agent_its_sink_and_tool_runtime_on_its_clock(tm
             episode.finish()
 
 
-def test_the_agent_builds_its_driver_and_runtime_on_its_clock():
-    """The runtime only waits on its clock for the driver operations it runs on its own thread
-    (harnesses/default/context.py), which a test cannot time, so its clock is checked as such."""
+def test_the_agent_builds_its_driver_runtime_and_execution_thread_on_its_clock():
+    """The runtime waits on its clock for the driver operations it runs on the agent's execution
+    thread, whose loop the clock makes (harnesses/default/execution_thread.py); a test cannot
+    time those waits, so the clocks are checked as such."""
     clock = FakeClock()
     agent = create_agent(DECISIONS, clock=clock)
     assert agent.driver.clock is clock
     assert agent._runtime.clock is clock
+    assert agent._execution_thread.clock is clock
+    assert agent._runtime.execution is agent._execution_thread
 
 
 def test_an_openai_realtime_connect_backs_off_on_the_agent_clock():
