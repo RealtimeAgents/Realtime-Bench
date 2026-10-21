@@ -71,11 +71,12 @@ def test_environment_rate_above_the_cap_starts(runner_cells):
     cell = runner_cells[WEB]
     assert cell["error"] is None
     assert (cell["run"]["fps"], cell["run"]["model_input_fps"]) == (2.0, 1.0)
-    # The environment: the task clock, GuestEnvironment's tick and the loop's ticks.
+    # The environment: the task clock, GuestEnvironment's tick, and the loop's two rates and its
+    # horizon in world seconds.
     assert cell["task"]["task_clock"]["fps"] == 2.0
     assert cell["guest_environment"]["tick_seconds"] == 0.5
     loop = cell["run_stream"]
-    assert (loop["delta_s"], loop["frame_ticks"], loop["max_ticks"]) == (0.5, 2.0, 600.0)
+    assert (loop["env_fps"], loop["input_fps"], loop["duration_s"]) == (2.0, 1.0, 300.0)
     # The model: its config, and the rate its prompt names.
     assert cell["frame_rates"] == {"env_fps": 2.0, "model_input_fps": 1.0}
     assert cell["runtime_config"]["fps"] == 2.0
@@ -92,7 +93,7 @@ def test_token_clock_is_set_up_with_b_per_model_input_frame(runner_cells):
     cell = runner_cells[GAME]
     assert cell["error"] is None
     loop = cell["run_stream"]
-    assert (loop["frame_ticks"], loop["tokens_per_frame"]) == (60.0, 100)
+    assert (loop["env_fps"], loop["input_fps"], loop["tokens_per_frame"]) == (60.0, 1.0, 100)
     assert cell["frame_rates"] == {"env_fps": 60.0, "model_input_fps": 1.0}
     prompt = cell["clock_prompt"]
     assert "observations are scheduled at f=1 frames per simulated second" in prompt
@@ -229,7 +230,7 @@ def test_a_token_run_summary_charges_b_per_model_input_frame(tmp_path, monkeypat
         env.record_lifecycle({"decision": 0, "clock_output_tokens": 50})
         env._termination_snapshot_captured = True
         env._termination_snapshot = {"kind": "realtime", "state": {"generation": 0}}
-        d_ticks = 50 / 100 * loop["frame_ticks"]
+        d_ticks = 50 / 100 * loop["env_fps"] / loop["input_fps"]
         return [(0, 0, d_ticks, d_ticks, None)]
 
     argv = ["--model", GEMINI, "--task", WEB, *TOKEN_60_1]
@@ -246,8 +247,9 @@ def test_a_token_run_summary_charges_b_per_model_input_frame(tmp_path, monkeypat
 
 
 def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, monkeypatch):
-    """At 30/7 a model-input frame is 30/7 environment ticks, which main() hands run_stream as
-    it is; the ratios of runner_cells are whole. Claude has no video cap, unlike Gemini Live."""
+    """At 30/7 a model-input frame is 30/7 environment ticks. main() hands run_stream the two
+    rates as they are, and the kernel computes frame times from them (kernel/turns.py _frames,
+    _ticks); the ratios of runner_cells are whole. Claude has no video cap, unlike Gemini Live."""
     from realtime_framework.evaluation import runner
 
     loops = []
@@ -262,7 +264,7 @@ def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, mon
     with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
         runner.main()
     (loop,) = loops
-    assert (loop["delta_s"], loop["frame_ticks"], loop["max_ticks"]) == (1 / 30, 30 / 7, 9000.0)
+    assert (loop["env_fps"], loop["input_fps"], loop["duration_s"]) == (30.0, 7.0, 300.0)
 
 
 def test_main_refuses_a_model_input_rate_above_the_environment_rate(tmp_path, monkeypatch):
@@ -344,7 +346,7 @@ def test_a_run_plan_carries_both_rates_to_the_runner(tmp_path):
     assert (runtime["fps"], runtime["model_input_fps"]) == (2, 1)
     assert cell["trial"]["settings"]["model_config"]["fps"] == 1.0
     assert cell["frame_rates"] == {"env_fps": 2.0, "model_input_fps": 1.0}
-    assert cell["run_stream"]["frame_ticks"] == 2.0
+    assert (cell["run_stream"]["env_fps"], cell["run_stream"]["input_fps"]) == (2.0, 1.0)
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 

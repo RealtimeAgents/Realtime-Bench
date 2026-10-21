@@ -20,11 +20,15 @@ from .frames import CLOCK_ORIGIN, FrameSource
 
 
 class _RunnerClock(SystemClock):
-    """run_stream's clock (loop.py) on the token clock: it waits in real time, and the times it
-    records stay at CLOCK_ORIGIN, since token time never moves them."""
+    """run_stream's operational clock (loop.py) on the token clock: it waits in real time, and
+    the times it records stay at CLOCK_ORIGIN and its readings at 0, since token time never moves
+    them. The shell's watchdog, which reads it, never comes due."""
 
     def time(self) -> float:
         return CLOCK_ORIGIN
+
+    def monotonic(self) -> float:
+        return 0.0
 
 
 class _Guest:

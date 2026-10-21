@@ -21,6 +21,7 @@ import pytest
 
 from realtime_framework.clock import Clocks, SystemClock
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.evaluation import runner
 
 FPS = 1
@@ -31,9 +32,11 @@ LATENCY_S = 0.5  # the decision's generation
 SNAPSHOT_S = 0.5  # one call of the task's evaluation_snapshot()
 CLOSE_S = HORIZON_S  # one agent.close()
 
-# done() asks the task before the decision, before the click is dispatched and after it lands.
-# The last one reports the end, which is when it started; the loop finalizes once it returned.
-END_S = QUERY_S + LATENCY_S + QUERY_S
+# The kernel asks the task at most once a frame and once after every action (kernel/turns.py
+# _check_end): before the decision and after the click lands, but not before the click is
+# dispatched, since this frame was read. The one after the landing reports the end, which is when
+# it was asked; the snapshot is frozen once it returned.
+END_S = QUERY_S + LATENCY_S
 FINALIZED_S = END_S + QUERY_S
 SNAPSHOT_AT_S = FINALIZED_S + SNAPSHOT_S  # when evaluation_snapshot() returned
 
@@ -110,11 +113,14 @@ class FakeTask:
         return {"resolved": self.solved, "evaluation_version": 1}
 
 
-class FakeAgent:
+class FakeAgent(StreamingAgent):
     def __init__(self, clock):
         self.clock = clock
 
-    def configure_decision(self, budget):
+    def initialize(self, task_instruction, initial_observation):
+        pass
+
+    def discard_pending_observations(self):
         pass
 
     def stream_prefill(self, observation):
@@ -203,10 +209,12 @@ def _raise_deeper(depth):
 
 
 class FailingAgent(FakeAgent):
-    """Binding its budget raises from deep in a call stack, as an SDK's can: the traceback runs
-    far past the invalid-run detail's 2000 characters and names the exception last."""
+    """Mapping its output cap to the transport's, which the shell does on its own thread as it
+    starts a generation (episode_records.decision_budget), raises from deep in a call stack, as a
+    driver's can: the traceback runs far past the invalid-run detail's 2000 characters and names
+    the exception last."""
 
-    def configure_decision(self, budget):
+    def transport_output_token_cap(self, provider_cap):
         _raise_deep(40)
 
 

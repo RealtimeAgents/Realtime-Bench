@@ -1,15 +1,16 @@
 """run_stream past the deadline, on the fake clock (tests/fake_clock.py).
 
-Before the clock was injectable, real waiting decided these cases: the runner's bounded wait for a
-decision (evaluation/runner.py:337-338), the retry executor's backoff (entity/model.py:466-467)
-and GuestEnvironment's wall-clock wait (sandbox/actions.py:857-861). Here each episode runs the
-same way every time and the assertions read the clock. The episode is test_runner_loop's short
-one: 3.75 s at 1 fps, decisions at 0, 1, 2 and 3 s; a decision starting at 3.0 s waits at most the
-0.75 s left plus DEADLINE_GRACE_S.
+The kernel's deadline timer (evaluation/kernel/turns.py on_timer), the retry executor's backoff
+(entity/model.py RequestRetry) and the kernel's timer for a wall-clock wait (kernel/turns.py
+_start_wait) decide these cases; on the fake clock each episode runs the same way every time and
+the assertions read the clock. The episode is test_runner_loop's short one: 3.75 s at 1 fps,
+decisions at 0, 1, 2 and 3 s. At the deadline the kernel freezes the snapshot and gives up a
+generation still running, whose decision is not reported.
 """
 
 from __future__ import annotations
 
+import json
 import math
 
 import realtime_framework.entity.model as model_module
@@ -30,7 +31,7 @@ from .test_chat_completions import MODEL_KEY, chat_completions_config
 from .test_runner_loop import SHORT_MAX_MINUTES, TYPE_ADA
 
 FORM = [Step(CLICK_NAME), TYPE_ADA, Step(CLICK_SUBMIT), Step(CLICK_AGREE)]
-GIVE_UP_S = SHORT_MAX_MINUTES * 60 + runner.DEADLINE_GRACE_S  # 5.75 s after the start
+DEADLINE_S = SHORT_MAX_MINUTES * 60  # 3.75 s after the start
 UNAVAILABLE = Failure(503, {"error": {"message": "upstream down", "code": 503}})
 
 
@@ -74,32 +75,31 @@ def _run_on_fake_environment(tmp_path, script, latencies):
     return env, arrivals
 
 
-def _gave_up_at(env) -> float:
-    """When the loop ended: _finalize stamps it right after the timed-out decision."""
+def _ended_at(env) -> float:
+    """When the episode ended: the shell stamps it as it freezes the snapshot (shell.py
+    _freeze)."""
     return env._active_end_unix_s - env.t0
 
 
-def test_reply_after_the_grace_period_is_dropped(tmp_path):
-    """Decision 3's reply takes 3 s. The runner gives up at the deadline plus the grace, aborts
-    the agent and skips the decision (runner.py:337-345, 405-411, 523); the reply would have come
-    at 6.0 s. The abort closes the request and cancels the decision's generation, so the abandoned
-    worker does not send it again (DefaultHarness.abort; entity/model.py RequestRetry)."""
+def test_reply_after_the_deadline_is_dropped(tmp_path):
+    """Decision 3's reply takes 3 s and would come at 6.0 s. At the deadline the kernel gives the
+    generation up and the shell aborts the agent (shell.py _abort); the decision is not reported.
+    The abort closes the request and cancels the decision's generation, so the abandoned worker
+    does not send it again (DefaultHarness.abort; entity/model.py RequestRetry)."""
     env, arrivals = _run_on_fake_environment(tmp_path, replies(FORM), [0.5, 0.5, 0.5, 3.0])
-    assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3 + [
-        "skipped_timeout"
-    ]
+    assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3
     assert [e["action"]["action_type"] for e in env.executions] == ["click", "type", "click"]
     check_wall_clock_properties(env, "time_limit")
-    assert _gave_up_at(env) == GIVE_UP_S
+    assert _ended_at(env) == DEADLINE_S
     assert arrivals == [0.0, 1.0, 2.0, 3.0]
 
 
 def test_retry_backoff_past_the_deadline(tmp_path, monkeypatch):
-    """Decision 3's request fails twice with HTTP 503 before any output. The harness backs off
-    1 s, then 3 s, each +-25% (entity/model.py:367-385). The second backoff would run past the
-    point where the runner gives up; the abort cancels the decision's generation, which ends the
-    backoff then, and the decision is skipped without a third attempt (entity/model.py
-    RequestRetry)."""
+    """Decision 2's request fails twice with HTTP 503 before any output. The harness backs off
+    1 s, then 3 s, each +-25% (entity/model.py TransportRetryPolicy). The second backoff would run
+    past the deadline, where the kernel gives the generation up and the shell aborts the agent;
+    the abort cancels the decision's generation, which ends the backoff then, and the decision is
+    not reported, without a third attempt (entity/model.py RequestRetry)."""
     backoffs = []
 
     def backoff(clock, cancel, seconds):
@@ -109,21 +109,19 @@ def test_retry_backoff_past_the_deadline(tmp_path, monkeypatch):
 
     wait = model_module._backoff
     monkeypatch.setattr(model_module, "_backoff", backoff)
-    script = [*replies(FORM[:3]), UNAVAILABLE, UNAVAILABLE]
-    env, arrivals = _run_on_fake_environment(tmp_path, script, [0.5, 0.5, 0.5, 0.0, 0.0])
-    assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3 + [
-        "skipped_timeout"
-    ]
+    script = [*replies(FORM[:2]), UNAVAILABLE, UNAVAILABLE]
+    env, arrivals = _run_on_fake_environment(tmp_path, script, [0.5, 0.5, 0.0, 0.0])
+    assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 2
     check_wall_clock_properties(env, "time_limit")
-    assert _gave_up_at(env) == GIVE_UP_S
+    assert _ended_at(env) == DEADLINE_S
     first, second = TRANSPORT_RETRY.backoff_s[:2]
     jitter = TRANSPORT_RETRY.jitter_ratio
-    assert len(arrivals) == 5 and arrivals[:4] == [0.0, 1.0, 2.0, 3.0]
-    assert first * (1 - jitter) <= arrivals[4] - 3.0 <= first * (1 + jitter)
-    assert arrivals[4] + second * (1 - jitter) > GIVE_UP_S
+    assert len(arrivals) == 4 and arrivals[:3] == [0.0, 1.0, 2.0]
+    assert first * (1 - jitter) <= arrivals[3] - 2.0 <= first * (1 + jitter)
+    assert arrivals[3] + second * (1 - jitter) > DEADLINE_S
     (delay_1, started_1, ended_1, _), (delay_2, started_2, ended_2, ended_at) = backoffs
     assert ended_1 == started_1 + delay_1  # the first backoff waits its delay out
-    assert ended_at == env._active_end_unix_s  # the second ends when the runner gives up
+    assert ended_at == env._active_end_unix_s  # the second ends at the deadline
     assert ended_2 < started_2 + delay_2
 
 
@@ -142,12 +140,14 @@ class _WallTask(ReplayTask):
 
 
 def test_wait_past_the_deadline_on_guest_environment(tmp_path):
-    """GuestEnvironment's own wall-clock branch under run_stream: it polls every 30 ms for the
-    next tick (actions.py:265-267) and sleeps out a WAIT, cut at the deadline (actions.py:857-861).
-    Decision 2 asks for a 5 s wait at about 2.5 s; it ends at the deadline and so does the
-    episode."""
+    """GuestEnvironment, which main() hands run_stream on the wall clock. Decision 2 asks for a
+    5 s wait when its reply arrives at 2.5 s. The kernel lets the wait's time pass on a timer of
+    its own (kernel/turns.py _start_wait), so the wait never reaches GuestEnvironment.execute; the
+    deadline cuts it, the decision is reported as a wait, and the episode ends there."""
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     steps = [Step(CLICK_NAME), TYPE_ADA, Step('{"action": "wait", "duration": 5}', status="wait")]
+    audit = tmp_path / "action_lifecycle.jsonl"
+    executed = []
     with (
         ChatCompletionsStub(
             replies(steps), on_request=lambda index: clock.sleep(0.5), clock=clock
@@ -161,30 +161,42 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
             deadline,
             _WallTask(),
             scene_capture=episode.frames,
+            action_audit_path=audit,
             clock_mode="wall",
             wall_start_time=CLOCK_ORIGIN,
             clocks=Clocks(clock, clock),
         )
+        execute = env.execute
+
+        def recorded_execute(action, **options):
+            executed.append(action.action_type.value)
+            return execute(action, **options)
+
+        env.execute = recorded_execute
         try:
             timeline = runner.run_stream(
                 episode.agent,
                 env,
-                delta_s=1.0,
-                max_ticks=SHORT_MAX_MINUTES * 60,
-                log=lambda line: None,
                 clock_mode="wall",
-                clock=clock,
+                duration_s=SHORT_MAX_MINUTES * 60,
+                env_fps=1.0,
+                input_fps=1.0,
+                log=lambda line: None,
+                clocks=Clocks(clock, clock),
             )
         finally:
             env._drain_abandoned()
             episode.agent.close()
     assert stub.unscripted == 0 and stub.unused_replies == 0
     assert [action.action_type.value for *_, action in timeline] == ["click", "type", "wait"]
+    assert executed == ["click", "type"]
     assert env._stop_reason == "time_limit"
-    waited = env._last_execution_result
+    lifecycle = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert [record["status"] for record in lifecycle] == ["applied", "applied", "wait"]
+    waited = lifecycle[2]["execution_result"]
     assert waited["requested_duration_simulated_seconds"] == 5.0
-    # The wait started when decision 2's reply arrived, on the 30 ms grid after tick 2.
+    # The wait started when decision 2's reply arrived, 0.5 s after tick 2.
     _, t_k, _, tau_k, _ = timeline[2]
-    assert t_k == 2 and 2.5 <= tau_k <= 2.53 + 1e-9
+    assert t_k == 2 and tau_k == 2.5
     assert math.isclose(waited["duration_simulated_seconds"], 3.75 - tau_k, abs_tol=1e-6)
     assert math.isclose(env._active_end_unix_s, deadline, abs_tol=1e-6)
