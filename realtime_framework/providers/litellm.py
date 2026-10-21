@@ -34,10 +34,12 @@ from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import TRANSIENT
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
+from realtime_framework.entity.model import retry_cancel_event
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
@@ -48,6 +50,7 @@ from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
 from realtime_framework.providers.capture import traced_post
@@ -65,15 +68,30 @@ _END = object()
 
 
 # Helpers
-def pace_request(clock) -> None:
-    """Apply the optional process-wide minimum interval between provider requests."""
+def pace_request(clock, trace) -> None:
+    """Apply the optional process-wide minimum interval between provider requests.
+
+    A wait is written to ``trace`` before it starts, as the session encoders record theirs
+    (providers/session_lifecycle.py _record_wait). Like RequestRetry's backoff, it ends once the
+    generation is abandoned (the enclosing retry_cancellation), and RetryCancelled stops the
+    request unsent.
+    """
     interval = float(os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0"))
     if interval <= 0:
         return
     with _REQUEST_GATE:
         wait = _LAST_REQUEST_AT[0] + interval - clock.time()
         if wait > 0:
-            clock.sleep(wait)
+            trace.capture(
+                TraceEvent.SESSION_WAIT,
+                {
+                    "wait": "request_pacing",
+                    "seconds": wait,
+                    "until_monotonic_ns": clock.monotonic_ns() + round(wait * 1e9),
+                },
+            )
+            if clock.wait(retry_cancel_event(), wait):
+                raise RetryCancelled("generation abandoned during the request_pacing wait")
         _LAST_REQUEST_AT[0] = clock.time()
 
 
@@ -664,7 +682,7 @@ class LiteLLMDriver:
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if not self._stream_enabled():
             return await self._start_complete_response(request)
-        await asyncio.to_thread(pace_request, self.clock)
+        await asyncio.to_thread(pace_request, self.clock, self._trace)
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
         response = await self._sdk.acompletion(**kwargs)
@@ -911,7 +929,7 @@ class LiteLLMDriver:
     # ---- complete responses ----------------------------------------------------------------
 
     async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        await asyncio.to_thread(pace_request, self.clock)
+        await asyncio.to_thread(pace_request, self.clock, self._trace)
         raw = {}
         # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
         logged = LoggerCapture(self) if self.protocol.client is None else None
