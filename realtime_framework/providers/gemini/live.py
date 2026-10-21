@@ -39,6 +39,7 @@ from realtime_framework.providers.gemini.session import Content
 from realtime_framework.providers.gemini.session import Part
 from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
+from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ class _Receiver:
             )
 
 
-class GeminiLiveDriver:
+class GeminiLiveDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="gemini_live",
         persistent_session=True,
@@ -483,10 +484,8 @@ class GeminiLiveDriver:
                 pass
         return cm is not None
 
-    async def connect(self, request: ConnectRequest) -> None:
-        await self._connect_once(request)
-
-    async def _connect_once(self, request: ConnectRequest) -> None:
+    async def _connect(self, request: ConnectRequest) -> None:
+        """One attempt: a Gemini Live connect has no retry of its own."""
         replacing = await self._close_current()
         connect = self._core.connect(request.history, request.resume_handle, replacing=replacing)
         if connect.release_grace:
@@ -1068,7 +1067,7 @@ class GeminiLiveDriver:
                 {"interrupt_error": repr(exc)[:300]},
             )
 
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+    async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         resume_error = None
         try:
             current = request.current_generation
@@ -1080,7 +1079,7 @@ class GeminiLiveDriver:
             )
             if handle:
                 try:
-                    await self._connect_once(
+                    await self._connect(
                         ConnectRequest(
                             seed=request.seed,
                             resume_handle=handle,
@@ -1099,7 +1098,7 @@ class GeminiLiveDriver:
                 except Exception as exc:  # noqa: BLE001 - fall through to canonical replay
                     resume_error = repr(exc)[:300]
             # Renew and replay with the same task credential, including resume failure fallback.
-            await self._connect_once(ConnectRequest(seed=request.seed, history=request.history))
+            await self._connect(ConnectRequest(seed=request.seed, history=request.history))
             return HistorySyncResult(
                 SyncDisposition.REBUILT,
                 ProviderHistoryState.EXACT,
@@ -1121,6 +1120,3 @@ class GeminiLiveDriver:
                 ProviderHistoryState.UNKNOWN,
                 detail=repr(exc)[:500],
             )
-
-    async def close(self) -> None:
-        await self._close_current()

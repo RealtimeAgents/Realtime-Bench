@@ -53,6 +53,7 @@ from realtime_framework.providers.openai_realtime_session import Delete
 from realtime_framework.providers.openai_realtime_session import Operation
 from realtime_framework.providers.openai_realtime_session import RealtimeSessionCore
 from realtime_framework.providers.openai_realtime_session import history_frames
+from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)
 _CLIENT_ID_MAX_LENGTH = 32
@@ -147,7 +148,7 @@ class _Session:
             self._read = None
 
 
-class OpenAIRealtimeDriver:
+class OpenAIRealtimeDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_realtime",
         persistent_session=True,
@@ -320,7 +321,7 @@ class OpenAIRealtimeDriver:
             except Exception:  # noqa: BLE001, S110 - best-effort SDK cleanup
                 pass
 
-    async def connect(self, request: ConnectRequest) -> None:
+    async def _connect(self, request: ConnectRequest) -> None:
         await self._close_current()
 
         def open_session():
@@ -610,7 +611,7 @@ class OpenAIRealtimeDriver:
             },
         )
 
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+    async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         generation = request.current_generation
         if (
             not request.force_rebuild
@@ -635,6 +636,3 @@ class OpenAIRealtimeDriver:
             )
         except Exception:  # noqa: BLE001 - fall back to canonical replay
             return await self._rebuild(request)
-
-    async def close(self) -> None:
-        await self._close_current()
