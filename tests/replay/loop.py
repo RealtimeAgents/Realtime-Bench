@@ -164,13 +164,11 @@ def commit_statuses(env: FakeEnvironment) -> list[tuple[int, str, str]]:
 def check_wall_clock_properties(env: FakeEnvironment, stop_reason: str) -> None:
     """phase1.md, 回放测试: on the wall clock no action runs after the deadline, no action runs
     twice, and the episode ends for the right reason. The task's end is known once a state read
-    sees it, and the kernel reads at most once a frame and once after every action
-    (kernel/turns.py _check_end): an action that arrives after the task decided, in a frame
-    already read, still runs, but none runs once a read has seen the end."""
+    sees it, and the kernel reads right before landing an action unless it read at that same
+    reading (kernel/turns.py _read_already): no action runs once the task has decided."""
     for execution in env.executions:
         assert execution["time"] < env.deadline, f"executed after the deadline: {execution}"
-        over = execution["episode_over"]
-        assert over in {None, "task"}, f"executed after the episode: {execution}"
+        assert execution["episode_over"] is None, f"executed after the episode: {execution}"
     seen = next(
         (i for i, c in enumerate(env.calls) if c["call"] == "env.check_end" and "failed" not in c),
         len(env.calls),
