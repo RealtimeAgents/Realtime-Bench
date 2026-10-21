@@ -622,12 +622,13 @@ class TurnPolicy:
             kernel.record(TraceEvent.ACTION_APPLIED.value, **record)
         d.next_tick = self._tick()
         # Pace whether or not an action landed, so an empty decision cannot repeat within one
-        # frame; never after the end (runner.py _apply).
+        # frame; never after the end, nor from the horizon on, on either clock: on the wall clock
+        # an answer filed before the deadline can be handled after it (runner.py _apply).
         if (
             not terminal_after_action
             and status not in {"not_applied_terminal", "invalid_run"}
             and kernel.ending is None
-            and (not self.token or self._tick() < config.max_ticks)
+            and self._tick() < config.max_ticks
         ):
             action_end = max(float(d.tau), float(self._tick()))
             d.next_tick = self._next_observation_tick(d.t_k, action_end)
