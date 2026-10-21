@@ -704,6 +704,9 @@ class _Shell:
                 result, held.inference = self._settle(held, held.result)
             except Exception:  # noqa: BLE001 - as an exception that escaped the legacy loop
                 self._raised(traceback.format_exc())
+                # Recorded as far as settling it got: the kernel gives it up for the
+                # run_exception, and nothing is recorded for it again.
+                del self._generations[held.generation]
             else:
                 held.invalid = result.invalid
                 self.post(GenerationFinished(held.generation, result))
@@ -1154,12 +1157,11 @@ class _Shell:
                 self.post(held.invalid)
             return
         if bound is None:
-            # It ran until the reading the kernel gave it up at.
-            ended = {"environment": "task_end", "invalid": "invalid_run"}[reason]
+            # It ran until the episode ended (decision 32), however late the shell got to it.
+            ended = {"environment": "task_end", "invalid": "invalid_run"}.get(reason, reason)
+            ending = self.kernel.ending
             seconds = (
-                entry.ops - held.started_ops
-                if self.token
-                else entry.semantic - held.started_semantic
+                ending.ops - held.started_ops if self.token else ending.at - held.started_semantic
             )
             r = episode_records.abandoned_result(round(seconds, 2), ended)
         elif bound == "provider_watchdog":

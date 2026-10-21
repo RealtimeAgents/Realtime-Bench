@@ -359,6 +359,24 @@ def test_caps_past_the_provider_allowance_fail_the_audit_of_a_usable_result():
     episode_records.audit_output_caps(adapter, {}, DecisionBudget(1_000, None, None, "wall"))
 
 
+@pytest.mark.parametrize(
+    "given_up",
+    [
+        episode_records.abandoned_result(0.9, "task_end"),
+        episode_records.timed_out_result(2.0, "wall_deadline"),
+    ],
+    ids=["at-the-end", "at-a-bound"],
+)
+def test_a_call_given_up_on_has_no_caps_of_its_own_to_fail_the_audit(given_up):
+    """It has no output: the adapter's caps may still be the previous decision's, as for a
+    result invalidated before its generation."""
+    budget = DecisionBudget(1_000, 1_000, 1_000, "token")
+    adapter = SimpleNamespace(_frame_handoff_max_tokens=201, _frame_action_max_tokens=800)
+    r = dict(given_up)
+    episode_records.audit_output_caps(adapter, r, budget)
+    assert (r["handoff_token_cap"], r["action_token_cap"]) == (201, 800)
+
+
 class _Audited:
     def __init__(self, error=None):
         self.error = error
