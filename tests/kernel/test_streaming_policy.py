@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.evaluation.kernel.events import (
-    Capture,
     CheckEnd,
     Clock,
     Commit,
@@ -68,16 +67,18 @@ def _outcome(decision: int, status: str, at: float, **fields) -> Outcome:
 
 def test_the_episode_asks_and_captures_at_once_then_on_both_grids():
     """The end checks follow the environment grid, the captures the input-frame grid; the deadline
-    beats the check due with it."""
+    beats the check due with it. One operation is out at a time: the first capture follows the
+    first read's answer."""
     sim = _run(World(), 3.0, env_fps=2.0)
-    commands = [c for c in sim.commands[:9] if not isinstance(c, Record)]
+    commands = [c for c in sim.commands[:8] if not isinstance(c, Record)]
     assert commands == [
         SetTimer(Clock.SEMANTIC, 3.0),
         SetTimer(Clock.SEMANTIC, 0.5),
         SetTimer(Clock.SEMANTIC, 1.0),
         CheckEnd(1),
-        Capture(),
     ]
+    names = [c.entry.kind if isinstance(c, Record) else type(c).__name__ for c in sim.commands]
+    assert names.index("EndChecked") < names.index("Capture")
     assert sim.checks == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
     assert sim.captures == [0.0, 1.0, 2.0]
     assert sim.pushes == [("obs-0", 1), ("obs-1", 2), ("obs-2", 3)]
@@ -161,9 +162,10 @@ def test_a_capture_that_fails_invalidates_the_run():
 
 
 def test_a_capture_under_way_at_the_end_that_fails_still_invalidates_the_run():
-    """The third capture runs from 2 to 3.5, across the deadline; the termination waits for it."""
+    """The third capture runs from 2 to 3.5, across the deadline; the snapshot waits for it, and
+    so does the termination."""
     sim = _run(World(capture_times={3: 1.5}, capture_errors={3: "screenshot failed"}), 3.0)
-    assert _ended(sim) == ("invalid_run", "deadline", 3.0, 3.0)
+    assert _ended(sim) == ("invalid_run", "deadline", 3.0, 3.5)
     assert sim.termination.invalid.reason == "observation_capture_failed"
     assert sim.records[-1].semantic == 3.5
 
@@ -378,10 +380,10 @@ def test_the_environment_end_is_dated_by_the_check_that_saw_it():
 
 def test_a_read_failing_after_the_end_still_counts():
     """The reads at 0 and 1 fail; the one asked at 2 is answered at 3.5, after the deadline, and is
-    the third failure in a row."""
+    the third failure in a row. The snapshot waits for it."""
     errors = {1: "cdp timeout", 2: "cdp timeout", 3: "cdp timeout"}
     sim = _run(World(check_errors=errors, check_times={3: 1.5}), 3.0)
-    assert _ended(sim) == ("invalid_run", "deadline", 3.0, 3.0)
+    assert _ended(sim) == ("invalid_run", "deadline", 3.0, 3.5)
     assert sim.termination.invalid == Invalidated(
         "environment", "terminal_state_check_failed", "cdp timeout"
     )
@@ -477,3 +479,35 @@ def test_no_generation_starts_after_the_last_one_before_the_deadline():
     starts = [c for c in sim.commands if isinstance(c, StartGeneration)]
     assert [s.decision for s in starts] == [0, 1, 2]
     assert sim.started == [(1, 0.0), (2, 1.0), (3, 2.0)]
+
+
+# ---- the shell's gate -----------------------------------------------------------------------------
+
+
+def test_an_end_an_action_brings_is_dated_by_the_read_that_saw_it():
+    """The click executes from 1 to 4 and the task reports its end from 3.9. The reads due at 1,
+    2 and 3 wait for the click; the one at 4 sees the end."""
+    calls = (Call(1.0, CLICK, execute_s=3.0),)
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=3.9), 10.0)
+    assert sim.checks == [0.0, 4.0]
+    assert _ended(sim) == ("game_decided", "environment", 4.0, 4.0)
+
+
+def test_an_action_that_arrives_while_a_read_holds_the_environment_waits_and_not_past_the_deadline():
+    """The read asked at 4 takes 3 s; the click at 4.5 waits for it and the deadline comes first."""
+    world = World(replies=[Reply(10.0, calls=(Call(4.5, CLICK),))], check_times={5: 3.0})
+    sim = _run(world)
+    assert sim.executed == []
+    assert sim.statuses() == ["not_applied_time_limit"]
+    assert sim.termination.cause == "deadline"
+
+
+def test_a_hold_that_waits_for_the_environment_is_held_its_whole_duration():
+    """The read asked at 1 takes 2 s; the 1 s hold arriving at 1.25 is pressed at 3 and released
+    at 4."""
+    hold = Action.hold_key("a", 1.0)
+    world = World(replies=[Reply(5.0, calls=(Call(1.25, hold),))], check_times={2: 2.0})
+    sim = _run(world)
+    assert sim.executed == [(3.0, hold)]
+    assert sim.data("KeyReleaseScheduled") == [{"decision": 0, "index": 0, "at": 4.0}]
+    assert sim.key_events == [(4.0, ("a",))]

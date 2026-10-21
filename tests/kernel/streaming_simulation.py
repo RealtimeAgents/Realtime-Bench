@@ -4,11 +4,16 @@ native streaming).
 No threads. A scripted world says how long each environment operation, frame push and reply takes,
 when a reply hands over each of its actions and cancels calls, and from when the task reports its
 end. Time is simulated wall time: ``ops`` is both clocks. Capturing, pushing, end checks and
-executing each run on a lane of their own, standing for the shell's other threads: a command starts
-at once and its answer is posted when its time is up, so the kernel goes on handling events
-meanwhile. A lane takes one command at a time; one more while it is busy is a policy bug. Commit
-and the snapshot run on the shell's own thread and occupy it, but a snapshot waits for the action
-executing: the shell takes it under the task lock that the action holds, and goes on meanwhile.
+executing each run on a lane of their own, standing for the shell's other threads, and the answer
+is posted when the command's time is up, so the kernel goes on handling events meanwhile. A lane
+takes one command at a time; one more while it is busy is a policy bug.
+
+As in the streaming shell (evaluation/env_lanes.py), captures, end checks, actions and the snapshot
+share one gate, first come first served: an operation reads the task, presses keys or takes its
+frame once the gate is its, not when it was asked for. The snapshot runs on a thread of its own and
+goes next after the operation holding the gate, ahead of those waiting (``EnvLanes.freeze_turn``);
+the shell bounds that wait by the action's budget, which no script here runs into. Commit runs on
+the shell's own thread and occupies it.
 
 Every command is checked as it runs (one generation in flight at most; nothing captured, pushed,
 started, asked or executed at or after the deadline or after the end), and every finished episode
@@ -146,8 +151,10 @@ class Simulation:
         self.ops = world.start_s
         self.records: list[Entry] = []
         self.commands: list = []
-        self.checks: list[float] = []  # when each end check was asked
-        self.captures: list[float] = []  # when each capture started
+        self.checks: list[float] = []  # when each end check read the task
+        self.captures: list[float] = []  # when each capture took its frame
+        # (operation, asked, took the gate, let it go) of every operation on the gate.
+        self.operations: list[tuple[str, float, float, float]] = []
         self.pushes: list[tuple[str | None, int]] = []  # (observation, frame) of each push
         self.sent: dict[int, float] = {}  # frame -> its capture time, once it went out
         self.executed: list[tuple[float, Action]] = []  # (start, action)
@@ -170,7 +177,9 @@ class Simulation:
         self._posts: dict[int, list] = {}  # generation -> its pending posts
         self._finished: set[int] = set()  # generations whose result was posted
         self._in_flight: int | None = None
-        self._busy: dict[str, float] = {}  # lane -> when its command is done
+        self._busy: set[str] = set()  # the lanes running a command
+        self._holder: str | None = None  # the operation holding the gate
+        self._line: deque[Callable] = deque()  # the operations waiting for it, in order
         self._observed: dict[str | None, float] = {}  # observation -> capture time
         self._calls: dict[int, tuple[Action, Call]] = {}  # id(action) -> (action, its call)
         self._releases: dict[str, float] = {}  # key -> its latest release time
@@ -240,16 +249,44 @@ class Simulation:
         return entry
 
     def _lane(self, lane: str, seconds: float, answer: Callable) -> None:
-        """Run a command on its lane; ``answer`` posts its result when it is done."""
+        """Run a command off the gate on its lane; ``answer`` posts its result when it is done."""
         assert lane not in self._busy, f"the {lane} lane is busy"
-        done = self.ops + seconds
-        self._busy[lane] = done
+        self._busy.add(lane)
 
         def finish() -> None:
-            del self._busy[lane]
+            self._busy.discard(lane)
             answer()
 
-        self._later(done, finish)
+        self._later(self.ops + seconds, finish)
+
+    def _gated(self, lane: str, seconds: float, run: Callable, *, ahead: bool = False) -> None:
+        """Run an operation on its lane once it holds the gate: ``run()`` acts on the world then
+        and returns what posts its answer once the operation lets the gate go, ``seconds`` later.
+        ``ahead`` puts it next after the holder, ahead of those waiting."""
+        assert lane not in self._busy, f"the {lane} lane is busy"
+        self._busy.add(lane)
+        asked = self.ops
+
+        def take() -> None:
+            self._holder, started = lane, self.ops
+            answer = run()
+
+            def let_go() -> None:
+                self.operations.append((lane, asked, started, self.ops))
+                self._busy.discard(lane)
+                self._holder = None
+                if self._line:
+                    self._line.popleft()()
+                answer()
+
+            self._later(started + seconds, let_go)
+
+        if self._holder is None:
+            take()
+        elif ahead:
+            self._line.appendleft(take)
+        else:
+            self._line.append(take)
 
     # ---- commands ---------------------------------------------------------------------------
 
@@ -268,16 +305,7 @@ class Simulation:
             case SetTimer(at=at):
                 self._wakes.append(at)
             case CheckEnd(request=request):
-                self.checks.append(self.ops)
-                index = len(self.checks)
-                error = world.check_errors.get(index)
-                ended = error is None and world.ends_at is not None and self.ops >= world.ends_at
-                reason = world.end_reason if ended else None
-                self._lane(
-                    "check",
-                    world.check_times.get(index, world.check_s),
-                    lambda: kernel.post(EndChecked(request, ended, reason, error)),
-                )
+                self._check(request)
             case Capture():
                 self._capture()
             case PushFrame(observation_id=observation_id):
@@ -299,15 +327,7 @@ class Simulation:
                 error = world.commit_errors.get(len(self.outcomes))
                 kernel.post(OutcomeCommitted(outcome.decision, error))
             case FreezeSnapshot():
-                if "execute" in self._busy:
-                    # The task lock is the action's until it finishes; the shell goes on meanwhile.
-                    self._later(
-                        self._busy["execute"],
-                        lambda: self._later(self.ops + world.snapshot_s, self._frozen),
-                    )
-                else:
-                    self._spend(world.snapshot_s)
-                    self._frozen()
+                self._gated("snapshot", world.snapshot_s, lambda: self._frozen, ahead=True)
             case ReleaseInputs():
                 self.released_inputs = True
             case Finish(termination=termination):
@@ -316,30 +336,44 @@ class Simulation:
                 raise AssertionError(f"a streaming episode does not run {command!r}")
 
     def _frozen(self) -> None:
+        """The snapshot's answer, once its read returned."""
         self.snapshots.append(self.ops)
         self.kernel.post(SnapshotFrozen(self.ops, self.ops, self.world.snapshot_error))
 
+    def _check(self, request: int) -> None:
+        """The task answers what holds once the read has the gate."""
+        world, index = self.world, sum(name == "check" for name, *_ in self.operations) + 1
+
+        def read() -> Callable:
+            self.checks.append(self.ops)
+            error = world.check_errors.get(index)
+            ended = error is None and world.ends_at is not None and self.ops >= world.ends_at
+            reason = world.end_reason if ended else None
+            return lambda: self.kernel.post(EndChecked(request, ended, reason, error))
+
+        self._gated("check", world.check_times.get(index, world.check_s), read)
+
     def _capture(self) -> None:
-        world, index = self.world, len(self.captures)
-        self.captures.append(self.ops)
+        """The frame is the one on screen once the capture has the gate."""
+        world, index = self.world, len(self._observed)
         observation_id = f"obs-{index}"
-        tick = math.floor(self.ops * self.config.env_fps + 1e-9)
-        timestamp = self.ops
-        self._observed[observation_id] = timestamp
-        error = world.capture_errors.get(index + 1)
-        frame = index
-        if world.frozen_from is not None and index >= world.frozen_from:
-            frame = world.frozen_from
-            self._frozen_tick = tick if self._frozen_tick is None else self._frozen_tick
-            tick = self._frozen_tick
-        fingerprint = (f"frame-{frame}", tick, f"sha-{frame}")
-        self._lane(
-            "capture",
-            world.capture_times.get(index + 1, world.capture_s),
-            lambda: self.kernel.post(
-                FrameCaptured(observation_id, tick, timestamp, fingerprint, error)
-            ),
-        )
+        self._observed[observation_id] = None
+
+        def take() -> Callable:
+            self.captures.append(self.ops)
+            tick = math.floor(self.ops * self.config.env_fps + 1e-9)
+            timestamp = self._observed[observation_id] = self.ops
+            error = world.capture_errors.get(index + 1)
+            frame = index
+            if world.frozen_from is not None and index >= world.frozen_from:
+                frame = world.frozen_from
+                self._frozen_tick = tick if self._frozen_tick is None else self._frozen_tick
+                tick = self._frozen_tick
+            fingerprint = (f"frame-{frame}", tick, f"sha-{frame}")
+            event = FrameCaptured(observation_id, tick, timestamp, fingerprint, error)
+            return lambda: self.kernel.post(event)
+
+        self._gated("capture", world.capture_times.get(index + 1, world.capture_s), take)
 
     def _push(self, observation_id: str | None) -> None:
         """The frame gets the next frame-table number, as the agent registers it to push it, and
@@ -436,24 +470,39 @@ class Simulation:
             self._later(self.ops, lambda: self._finish(generation, GenerationResult()))
 
     def _execute(self, decision: int, action: Action, release_at: float | None) -> None:
+        """The action presses once it has the gate; its answer says when it took the gate and
+        when it let it go."""
         world = self.world
         _, call = self._calls[id(action)]
-        self.executed.append((self.ops, action))
-        if call.error is None and call.rejection is None and release_at is not None:
-            # The release timer is armed right after the press; a key already held until later
-            # keeps its later release.
-            for key in key_identities(action):
-                at = max(self._releases.get(key, release_at), release_at)
-                self._releases[key] = at
-                self._later(at, lambda key=key, at=at: self._release(key, at))
-        result = {"action": action.action_type.value}
-        self._lane(
-            "execute",
-            world.execute_s if call.execute_s is None else call.execute_s,
-            lambda: self.kernel.post(
-                ActionExecuted(decision, result, rejection=call.rejection, error=call.error)
-            ),
-        )
+        seconds = world.execute_s if call.execute_s is None else call.execute_s
+
+        def press() -> Callable:
+            started = self.ops
+            self.executed.append((started, action))
+            if call.error is None and call.rejection is None and release_at is not None:
+                # The release timer is armed right after the press; a key already held until
+                # later keeps its later release.
+                for key in key_identities(action):
+                    at = max(self._releases.get(key, release_at), release_at)
+                    self._releases[key] = at
+                    self._later(at, lambda key=key, at=at: self._release(key, at))
+            result = {"action": action.action_type.value}
+
+            def answer() -> None:
+                self.kernel.post(
+                    ActionExecuted(
+                        decision,
+                        result,
+                        rejection=call.rejection,
+                        error=call.error,
+                        started_at=started,
+                        finished_at=self.ops,
+                    )
+                )
+
+            return answer
+
+        self._gated("execute", seconds, press)
 
     def _release(self, key: str, at: float) -> None:
         if self._releases.get(key) != at:
@@ -491,6 +540,11 @@ class Simulation:
                     command.generation,
                 )
         assert not set(self.accepted) & set(self.discarded)
+        # The policy keeps one environment operation out at a time: each one it asks for takes
+        # the gate when it is asked, so it acts in the world before the deadline, as asked.
+        for name, asked, started, _ in self.operations:
+            if name != "snapshot":
+                assert started == asked, f"the {name} asked at {asked} waited until {started}"
         # Every action that arrived has exactly one outcome, recorded and committed; the nth
         # arrival is action n. Only a real action is a proposal, as on the turn-based clock.
         arrivals = self.entries("ActionArrived")

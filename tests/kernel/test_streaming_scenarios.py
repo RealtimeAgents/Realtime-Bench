@@ -126,14 +126,16 @@ def test_a_deadline_during_an_execution_freezes_once_the_action_finishes():
 
 
 def test_an_end_the_task_reports_during_an_execution_settles_the_waiting_action():
-    """The task reports its end to the check at 2: the typing waiting behind the click is not
-    applied, and the click finishes at 4 before the snapshot."""
+    """The task reports its end from 2, while the click executes from 1 to 4. The read due at 2
+    waits for the click and goes before the typing waiting behind it: it sees the end at 4, and
+    the typing is not applied."""
     calls = (Call(1.0, CLICK, execute_s=3.0), Call(1.5, TYPE))
     sim = _run(World(replies=[Reply(3.0, calls=calls)], ends_at=2.0))
     assert sim.statuses() == ["applied", "not_applied_terminal"]
     assert sim.executed == [(1.0, CLICK)]
+    assert sim.checks == [0.0, 4.0]
     assert sim.snapshots == [4.0]
-    assert sim.termination == Termination("game_decided", "environment", 2.0, 4.0, 2.0, 4.0, None)
+    assert sim.termination == Termination("game_decided", "environment", 4.0, 4.0, 4.0, 4.0, None)
 
 
 # ---- 生成被看门狗放弃以后迟到的结果和动作 ------------------------------------------------------------
@@ -142,13 +144,15 @@ def test_an_end_the_task_reports_during_an_execution_settles_the_waiting_action(
 def test_a_reply_the_watchdog_gave_up_hands_over_late_and_is_refused():
     """The first reply would run 4 s; its watchdog gives it up at 2 and the next reply starts.
     Its click, executing since 1, runs to its end; its typing, handed over at 3, is refused, and
-    its result at 4 is discarded."""
+    its result at 4 is discarded. The capture due at 1 waits for the click, so the next reply
+    starts on the first frame."""
     first = Reply(4.0, calls=(Call(1.0, CLICK, "a"), Call(3.0, TYPE, "b")), interruptible=False)
     second = Reply(1.0, calls=(Call(0.5, SCROLL, "c"),))
     sim = _run(World(replies=[first, second], execute_s=1.5), 4.5, reply_watchdog_s=2.0)
     assert sim.started == [(1, 0.0), (2, 2.0), (3, 3.0)]
     assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "reply_watchdog"}
-    assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-1"
+    assert sim.data("InferenceStarted")[1]["observation_id"] == "obs-0"
+    assert sim.captures == [0.0, 2.5, 4.0]
     assert (sim.accepted, sim.discarded) == ([2], [1])
     assert sim.executed == [(1.0, CLICK), (2.5, SCROLL)]
     assert sim.statuses() == ["applied", "applied", "cancelled_generation"]
