@@ -22,6 +22,7 @@ import json
 from dataclasses import dataclass, replace
 
 from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.model import TRANSPORT_RETRY
 
 CLOCKS = ("wall", "token", "pause")
 
@@ -49,8 +50,16 @@ class Turn:
 
     @property
     def latency_s(self) -> float:
-        """Seconds from the generation's start to its result, when it has one."""
-        return sum(attempt.latency_s for attempt in self.attempts)
+        """Seconds from the generation's start to its result, when it has one: the attempts'
+        own times and, after each failed one, the shared retry policy's nominal backoff
+        (entity/model.py:387-405). Today's backoff is jittered by up to a quarter, so a script
+        with retries compares only where that cannot matter, such as a reply past the deadline
+        either way."""
+        failed = sum(attempt.status is not None for attempt in self.attempts)
+        backoff = TRANSPORT_RETRY.backoff_s
+        return sum(attempt.latency_s for attempt in self.attempts) + sum(
+            backoff[min(retry, len(backoff)) - 1] for retry in range(1, failed + 1)
+        )
 
     @property
     def hangs(self) -> bool:
