@@ -773,6 +773,58 @@ def test_context_preset_of_a_model_yaml(tmp_path, endpoint, preset):
     )
 
 
+@pytest.mark.parametrize(
+    "endpoint, streaming, message",
+    [
+        (
+            "{api: openai_realtime, model: gpt-realtime-2}",
+            "[20]",
+            "m.yaml: streaming must be a mapping",
+        ),
+        (
+            "{api: openai_realtime, model: gpt-realtime-2}",
+            "{compression_trigger_tokens: 65536}",
+            (
+                "m.yaml: unknown streaming settings ['compression_trigger_tokens']; the "
+                "openai_realtime API takes ['retained_frames']"
+            ),
+        ),
+        (
+            "{api: openai_realtime, model: gpt-realtime-2}",
+            "{retained_frames: 0}",
+            "m.yaml: streaming.retained_frames must be a positive integer",
+        ),
+        (
+            "{api: openai_realtime, model: gpt-realtime-2}",
+            "{retained_frames: true}",
+            "m.yaml: streaming.retained_frames must be a positive integer",
+        ),
+        (
+            "{api: gemini_live, model: gemini-3.8-live}",
+            "{compression_trigger_tokens: 32768.0}",
+            "m.yaml: streaming.compression_trigger_tokens must be a positive integer",
+        ),
+        # Against the default target of 32768.
+        (
+            "{api: gemini_live, model: gemini-3.8-live}",
+            "{compression_trigger_tokens: 32768}",
+            "m.yaml: streaming.compression_target_tokens must be below compression_trigger_tokens",
+        ),
+        (
+            "{api: moonshot, model: kimi-k3}",
+            "{retained_frames: 20}",
+            "m.yaml: the moonshot API takes no streaming settings",
+        ),
+    ],
+    ids=["list", "other-api-key", "zero", "bool", "float", "target-not-below", "not-live"],
+)
+def test_streaming_settings_of_a_model_yaml(tmp_path, endpoint, streaming, message):
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "m.yaml").write_text(f"endpoint: {endpoint}\nstreaming: {streaming}\n")
+    fails(lambda: catalog.load_definitions(models), message)
+
+
 def test_reasoning_effort_of_other_apis():
     fails(
         lambda: catalog.validate_reasoning_effort("gemini-live", "bogus"),
