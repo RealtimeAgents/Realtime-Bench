@@ -548,12 +548,17 @@ class TurnPolicy:
             config.max_ticks + 1e-9
         )
         by_horizon = horizon_truncates and self._tick() >= config.max_ticks - 1e-9
+        # The wall deadline cuts a wait as today's sleep does, which flags neither truncation
+        # (sandbox/actions.py GuestEnvironment.execute); the task's end or an invalidation cuts it
+        # on either clock.
+        ending = self.kernel.ending
+        by_deadline = ending is not None and ending.cause == "deadline"
         d.execution_result = {
             "duration_simulated_seconds": elapsed,
             "requested_duration_simulated_seconds": duration,
             "truncated_by_episode_horizon": by_horizon,
             "truncated_by_terminal_condition": (
-                self.token and elapsed + 1e-9 < duration and not by_horizon
+                elapsed + 1e-9 < duration and not by_horizon and not by_deadline
             ),
         }
         self._after_execution("wait")
