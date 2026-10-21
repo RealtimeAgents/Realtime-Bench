@@ -321,6 +321,17 @@ def test_a_streaming_rebuild_replays_the_streaming_view(placement):
     assert connect.seeded == ("f1.frame", "d1.output", "f2.frame", feedback, "f3.frame")
 
 
+def test_a_streaming_rebuild_skips_an_empty_reply_output():
+    """A reply that said nothing replays as nothing, as a turn-based seed skips empty text."""
+    connect = plan(
+        session_core(streaming=True),
+        streaming_view([pushed(1), output_block(1, "", "obs-1", None), pushed(2)]),
+    )
+    (contents,) = connect.seed
+    assert [content.role for content in contents] == ["user", "user"]
+    assert connect.seeded == ("f1.frame", "f2.frame")
+
+
 def test_a_streaming_frame_is_pushed_as_video_then_its_text():
     """A pushed frame is a video frame and then its text, with no activity around them and
     nothing between them; it counts as sent once handed to the connection."""

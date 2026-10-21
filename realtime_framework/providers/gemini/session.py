@@ -363,9 +363,11 @@ class SessionCore:
         canonical action of the native call that its turn's tool block carries, so it has no
         Content of its own; an execution feedback of its own is a text Content after the turn's
         tool rounds. The streaming view (harnesses/streaming/history.py) has no tool blocks:
-        each reply's output and each execution feedback, whether its own block or one in front of
-        a frame, is a text Content, in the view's order, as a trigger carries feedback, and a
-        frame is its own text, as a push sends it.
+        each reply's output that said anything and each execution feedback, whether its own
+        block or one in front of a frame, is a text Content, in the view's order, and a frame is
+        its own text, as a push sends it. That order is not the one the live session got them
+        in: there each feedback came with the trigger after it, after the frames pushed
+        meanwhile.
         """
         if history is None:
             return [], ()
@@ -392,6 +394,8 @@ class SessionCore:
                     continue
                 contents += tool_contents
             elif self.streaming and block.kind in ("model_output", "execution_feedback"):
+                if not block.text:
+                    continue
                 contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
             elif _is_feedback(item):
                 contents.append(_feedback_content(item))
