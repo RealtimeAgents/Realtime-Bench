@@ -789,16 +789,16 @@ class GeminiLiveDriver(SessionLifecycle):
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Streaming: start the next reply with one activity, holding the execution feedback of
-        ``request.canonical`` that the session lacks (SessionCore.trigger), once the reply before
-        it ended: a connection carries one reply at a time. Its generation starts before the
-        activity goes out, so that the reader takes the reply's first message for it. The
-        session's NO_INTERRUPTION keeps the activity from cutting off what the server may still
-        be generating. It holds the session as push_frame does."""
+        ``request.canonical`` that the session lacks (SessionCore.trigger), once the events() of
+        the reply before it are done: a connection carries one reply at a time. Its generation
+        starts before the activity goes out, so that the reader takes the reply's first message
+        for it. The session's NO_INTERRUPTION keeps the activity from cutting off what the
+        server may still be generating. It holds the session as push_frame does."""
         async with self._session_lock():
             session = self._session_for_input()
             if self._activity_open:
                 raise RuntimeError("Gemini Live input activity is already open")
-            if self._core.replies.get(self._core.connection) is not None:
+            if any(reply.receiver is self._receiver for reply in self._replies.values()):
                 raise RuntimeError("Gemini Live has a reply in flight on the connection")
             generation = await self.start_generation(request)
             trigger = None
