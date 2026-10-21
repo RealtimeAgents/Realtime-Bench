@@ -109,7 +109,8 @@ class PersistentCDPClient:
         timeout: float = 120,
         session_id: str | None = None,
     ) -> dict:
-        """Send one command and return its reply; ``timeout`` bounds the whole call."""
+        """Send one command and return its reply; ``timeout`` bounds the lock wait, the connect
+        and the wait for the reply, not the send."""
         deadline = Deadline(timeout, f"CDP {method}")
         with self._locked(deadline):
             self._ensure_connected(deadline)
