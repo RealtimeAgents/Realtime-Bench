@@ -46,6 +46,7 @@ from realtime_framework.harnesses.streaming.history import (
 )
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.gemini.session import Delivery
+from realtime_framework.providers.session_lifecycle import RenewalRequired
 from tests.session.test_gemini_live_receive import DeliveryLog, RecordingClock, server_closed
 from tests.session.test_gemini_live_session import pushed
 
@@ -900,6 +901,39 @@ def test_a_push_whose_write_failed_is_unknown():
 
     asyncio.run(run())
     assert log.events[1:] == [("unknown", ["f1.frame"], "gemini_live.ws-1", 1)]
+
+
+def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply_ended():
+    """A goAway in a reply: pushes raise RenewalRequired, the reply goes on to its end, and the
+    renewal after it resumes the session with the latest resumable handle; it takes pushes
+    again."""
+    rig = Rig()
+    record = []
+
+    async def run():
+        await rig.connect()
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        generation = await rig.driver.request_reply(request)
+        rig.socket.feed(update("handle-1"), GO_AWAY)
+        await settle()
+        try:
+            await rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)]))
+        except RenewalRequired as exc:
+            refused = exc
+        rig.socket.feed(TURN_COMPLETE)
+        await drain(rig.driver.events(generation))
+        renewed = await rig.driver.renew(
+            rig.seed, rig.view([pushed(1), pushed(2)]), lambda *args, **_: record.append(args)
+        )
+        await rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)]))
+        await rig.driver.close()
+        return refused, renewed
+
+    refused, renewed = asyncio.run(run())
+    assert isinstance(refused, RuntimeError)
+    assert renewed.provider_metadata["session_resumed"]
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
+    assert [wire(message) for message in rig.socket.sent] == ["video", ("text", "frame 2")]
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():

@@ -32,6 +32,13 @@ from realtime_framework.entity.request import CanonicalRequest
 _CLEANUP_WAIT_S = 10.0
 
 
+class RenewalRequired(RuntimeError):
+    """The provider asked for a new connection (connection_renewal_reason), and the session
+    takes no input until renew() made it: a frame refused for that is held back, not lost to a
+    broken session. A reply in flight goes on to its end on the old connection first; renew()
+    after it resumes the session where the encoder can."""
+
+
 class SessionLifecycle:
     """A live encoder's session: connected or not, dirty or not, and the last abort's cleanup.
 

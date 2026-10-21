@@ -46,6 +46,7 @@ from realtime_framework.providers.gemini.session import Part
 from realtime_framework.providers.gemini.session import RealtimeInput
 from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
+from realtime_framework.providers.session_lifecycle import RenewalRequired
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)
@@ -712,7 +713,7 @@ class GeminiLiveDriver(SessionLifecycle):
         """The open session, which takes input until a goAway asks for a new connection, and in
         streaming while its reader reads."""
         if self._core.renewal_required:
-            raise RuntimeError(
+            raise RenewalRequired(
                 "Gemini Live requires canonical history synchronization before input"
             )
         session = self._session
@@ -747,7 +748,12 @@ class GeminiLiveDriver(SessionLifecycle):
 
         A push and a trigger hold the session as a connection operation does
         (SessionLifecycle): their messages do not interleave, none goes to a connection being
-        replaced, and one given up while it waits has planned nothing."""
+        replaced, and one given up while it waits has planned nothing.
+
+        After a goAway, a push and a trigger raise RenewalRequired until the session is renewed.
+        The reply in flight then still ends on this connection; renew() once it has ended
+        resumes the session with the latest resumable handle (SessionCore.resume_handle_for),
+        or rebuilds it from the history where there is none."""
         async with self._session_lock():
             session = self._session_for_input()
             if self._activity_open:
