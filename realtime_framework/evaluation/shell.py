@@ -342,13 +342,13 @@ class _Shell:
         if self._inputs is None:
             return
         semantic, ops = self._now
-        line = {
-            "call": call,
-            "semantic": semantic,
-            "ops": ops,
-            "events": [{"event": type(event).__name__, **_jsonable(event)} for event in events],
-        }
         try:
+            line = {
+                "call": call,
+                "semantic": semantic,
+                "ops": ops,
+                "events": [{"event": type(event).__name__, **_jsonable(event)} for event in events],
+            }
             self._inputs.write(json.dumps(line) + "\n")
         except Exception:  # noqa: BLE001 - a replay aid; the episode goes on without it
             self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
@@ -552,22 +552,23 @@ class _Shell:
         clock.start_thread(lambda: self._generate(held), name=f"generation-{held.generation}")
 
     def _generate(self, held: _Generation) -> None:
-        """The worker: one generation, handed back to the shell's thread as it came."""
+        """The worker: one generation, handed back to the shell's thread as it came, whatever
+        happens on the way: the kernel waits for it."""
         try:
             pending = self.agent.generate(
                 held.generation, held.decision, held.observation, held.budget
             )
             held.result = pending.result
-        # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled):
-        # the result must come back, or the kernel would wait for it.
+        # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled).
         except BaseException:  # noqa: BLE001 - a failed generation invalidates the run
             failure = traceback.format_exc()
-            self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
             latency = round(self.clocks.operational.time() - held.started_at, 2)
             held.result = episode_records.generation_error(latency, failure)
-        self._returned.append(held)
-        held.done.set()
-        self._wake.set()
+            self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
+        finally:
+            self._returned.append(held)
+            held.done.set()
+            self._wake.set()
 
     def _settle_returned(self, count: int) -> None:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
@@ -806,6 +807,12 @@ class _Shell:
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
         (runner.py ``_termination``); the token clock's are ticks."""
+        try:
+            self._terminate(termination)
+        finally:
+            self._finished = True  # nothing more will be asked (kernel/core.py)
+
+    def _terminate(self, termination: Termination) -> None:
         env = self.env
         ticks_per_s = self.config.env_fps if self.token else 1.0
         end_s = termination.ended_at / ticks_per_s
@@ -826,7 +833,6 @@ class _Shell:
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
             env._invalid_run = _invalid_record(invalid)
-        self._finished = True
 
     # ---- the episode trace --------------------------------------------------------------------
 

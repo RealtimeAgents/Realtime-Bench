@@ -344,6 +344,8 @@ def run(
     trace=Trace,
     agent_type: type[Agent] = Agent,
     inputs_log: Path | None = None,
+    env_type: type[Environment] = Environment,
+    log=None,
     **config,
 ) -> Episode:
     """One episode through run_episode on a fresh fake clock; the abandoned workers are drained
@@ -359,13 +361,19 @@ def run(
         timing=timing or RunnerTimingConfig(),
         **config,
     )
-    env = Environment(clocks, clock_mode, fps, world or World())
+    env = env_type(clocks, clock_mode, fps, world or World())
     agent = agent_type(clock, replies)
     trace = trace() if trace is Trace else trace
     logs: list[str] = []
     with clock.participant():
         timeline = run_episode(
-            agent, env, turn, clocks=clocks, log=logs.append, trace=trace, inputs_log=inputs_log
+            agent,
+            env,
+            turn,
+            clocks=clocks,
+            log=log or logs.append,
+            trace=trace,
+            inputs_log=inputs_log,
         )
         env._drain_abandoned()
     return Episode(turn, env, agent, trace, clock, timeline, logs)
