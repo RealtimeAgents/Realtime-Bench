@@ -122,8 +122,11 @@ def test_an_openai_realtime_connect_backs_off_on_the_agent_clock():
 
     @contextlib.contextmanager
     def connection():
+        number = len(attempts)
         yield SimpleNamespace(
-            _connection=SimpleNamespace(trace_connection_number=len(attempts)),
+            _connection=SimpleNamespace(
+                trace_connection_number=number, trace_connection_id=f"openai_realtime.ws-{number}"
+            ),
             session=SimpleNamespace(update=lambda **arguments: None),
         )
 

@@ -273,7 +273,8 @@ class GeminiLiveDriver(SessionLifecycle):
         self._cm = None
         self._session = None
         self._receiver: _Receiver | None = None  # the open connection's reader
-        self._core = SessionCore(self.options)
+        self._trace_connection: str | None = None  # the trace's id of the last connection opened
+        self._core = SessionCore(self.options, on_delivery=self._delivered)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
         # The goAway deadline the trace has a wait for, on the open connection.
@@ -293,6 +294,10 @@ class GeminiLiveDriver(SessionLifecycle):
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
+
+    def _delivered(self, state: str, contents: list[tuple]) -> None:
+        """What became of writes the core recorded, on the connection opened last."""
+        self._record_delivery(state, contents, self._trace_connection)
 
     @staticmethod
     def _exception_chain(exc: BaseException):
@@ -523,6 +528,8 @@ class GeminiLiveDriver(SessionLifecycle):
         self._session = session
         self._activity_open = False
         self._last_video_sent_at = None
+        # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
+        self._trace_connection = session._ws.trace_connection_id
         self._core.connected(connect)
         self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
         self._connect_metadata = {

@@ -14,8 +14,8 @@ The open connection keeps what the client wrote on it, by key: ``("setup",)``, `
 <history block id>)`` and ``("tool_response", <call id>)``, each sent once handed to the
 connection, confirmed when the server acknowledges it (only the setup is: setupComplete) and
 unknown when its send failed. A resumed session also holds what the server restored from the
-handle, which this record does not list. Nothing reads it yet; the phase-2 split of the EXACT
-session state puts it in the event log.
+handle, which this record does not list. Each change is handed to ``on_delivery``, which the
+driver writes to the event log.
 """
 
 from __future__ import annotations
@@ -151,6 +151,17 @@ def _feedback_content(item) -> Content:
     return Content(_ROLES[item.intent.role], (Part(text=item.block.text),))
 
 
+def _block_of(key: tuple) -> str | None:
+    """The history block a delivery key carries: the setup carries the system block."""
+    if key == ("setup",):
+        return "system"
+    return key[1] if key[0] == "block" else None
+
+
+def _unrecorded(state: str, contents: list[tuple]) -> None:
+    pass
+
+
 def history_batches(history: list[Content], limit: int = HISTORY_CONTENTS_PER_MESSAGE) -> list:
     """Pack history without splitting one observation/model/tool-response exchange."""
     groups = []
@@ -283,12 +294,15 @@ class SessionCore:
     handle, goAway or clean boundary is taken from it.
     """
 
-    def __init__(self, options: dict, *, streaming: bool = False):
+    def __init__(self, options: dict, *, streaming: bool = False, on_delivery=_unrecorded):
         """``options`` are the driver's resolved Live options (live.py live_options);
         ``streaming``: native streaming drives the session, pushing frames, triggering replies
-        and reading every message as it arrives."""
+        and reading every message as it arrives; ``on_delivery(state, contents)`` hears each
+        change in the delivery record, with each key and the history block it carries ("system"
+        for the setup)."""
         self._completion_signal = options["completion_signal"]
         self.streaming = streaming
+        self._on_delivery = on_delivery
         # What a queued acknowledgement adds to each function response, and so each replayed
         # receipt that did not store its own.
         self.tool_response_options = (
@@ -455,7 +469,8 @@ class SessionCore:
         self._connections += 1
         self._generations = 0
         self.connection = self._connections
-        self.delivery = {("setup",): Delivery.CONFIRMED}
+        self.delivery = {}
+        self._set([("setup",)], Delivery.CONFIRMED)
         self.sending(("block", block_id) for block_id in connect.seeded)
         self.carried.update(connect.carried)
         self.renewal_required = False
@@ -484,12 +499,17 @@ class SessionCore:
 
     def sending(self, keys) -> None:
         """Record writes as handed to the connection, before any answer can arrive."""
-        for key in keys:
-            self.delivery[key] = Delivery.SENT
+        self._set(keys, Delivery.SENT)
 
     def send_failed(self, keys) -> None:
+        self._set(keys, Delivery.UNKNOWN)
+
+    def _set(self, keys, delivery: Delivery) -> None:
+        keys = list(keys)
         for key in keys:
-            self.delivery[key] = Delivery.UNKNOWN
+            self.delivery[key] = delivery
+        if keys:
+            self._on_delivery(delivery.value, [(key, _block_of(key)) for key in keys])
 
     def observe(self, history: CanonicalRequest) -> Observation:
         """Plan the history view's newest frame, after its feedback, as one input, and record it

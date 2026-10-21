@@ -475,6 +475,29 @@ def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
     assert frame.feedback == (feedback_content("F1"),)
 
 
+def test_each_change_in_delivery_is_heard_with_its_block():
+    """on_delivery hears what the event log records: the setup confirmed and the seed sent once
+    the connection is up, each observation and acknowledgement sent as it is handed over, and
+    unknown once a send failed."""
+    heard = []
+    core = SessionCore(
+        {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
+        on_delivery=lambda state, contents: heard.append((state, contents)),
+    )
+    connected(core, view([turn(0)]))
+    frame = core.observe(view([turn(0), turn(1)]))
+    core.send_failed(frame.keys)
+    core.calls_received([("call-1", "click")])
+    core.acknowledging()
+    assert heard == [
+        ("confirmed", [(("setup",), "system")]),
+        ("sent", [(("block", "d0.frame"), "d0.frame"), (("block", "d0.tools"), "d0.tools")]),
+        ("sent", [(("block", "d1.frame"), "d1.frame")]),
+        ("unknown", [(("block", "d1.frame"), "d1.frame")]),
+        ("sent", [(("tool_response", "call-1"), None)]),
+    ]
+
+
 def test_observation_and_acknowledgement_delivery():
     core = session_core()
     connected(core)

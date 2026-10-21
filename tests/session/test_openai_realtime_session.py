@@ -220,6 +220,34 @@ def test_an_edit_deletes_an_archived_frame_s_feedback_and_anchors_after_a_kept_o
     assert create2 == ("create", "user", held["d1.frame"][1], True)
 
 
+def test_each_change_in_delivery_is_heard_with_its_block():
+    """on_delivery hears what the event log records: sent once a write returned, confirmed by
+    the first acknowledgement (one that comes before the write returns makes "sent" moot), and
+    unknown once a write failed."""
+    heard = []
+    numbers = itertools.count(1)
+    core = RealtimeSessionCore(
+        lambda kind: f"rtb_{kind}_{next(numbers)}",
+        lambda state, contents: heard.append((state, contents)),
+    )
+    user, assistant = core.replay(view([turn(0, "a0")]))
+    sent(core, [user])
+    core.sending(assistant)
+    core.receive(done(assistant.item_id))
+    core.sent(assistant)
+    core.receive(done(user.item_id))
+    core.receive(server(type="conversation.item.created", item={"id": user.item_id}))
+    frame = core.observe(view([turn(0, "a0"), turn(1)]))
+    core.sending(frame)
+    core.send_failed(frame)
+    assert heard == [
+        ("sent", [(user.key, "d0.frame")]),
+        ("confirmed", [(assistant.key, "d0.output")]),
+        ("confirmed", [(user.key, "d0.frame")]),
+        ("unknown", [(frame.key, "d1.frame")]),
+    ]
+
+
 def test_fold_in_place_waits_for_every_ack_in_any_order():
     turns = [turn(0, "a0"), turn(1, "a1"), turn(2, "a2")]
     core = opened(turns)
@@ -920,6 +948,31 @@ def test_a_push_is_settled_once_acknowledged_or_refused():
         Delivery.REFUSED,
     )
     assert core.settled(acknowledged) and core.settled(refused)
+
+
+def test_a_pushed_blocks_fate_is_heard_with_its_block():
+    """on_delivery hears a push's fate as the event log records it: confirmed by its
+    acknowledgement, or refused once the server's error names its client event. A feedback
+    pushed as its own item names its own block."""
+    heard = []
+    numbers = itertools.count(1)
+    core = RealtimeSessionCore(
+        lambda kind: f"rtb_{kind}_{next(numbers)}",
+        lambda state, contents: heard.append((state, contents)),
+    )
+    blocks = stream("FRFB")
+    frame = core.push(streaming_view(blocks[:3]))
+    feedback = core.push(streaming_view(blocks))
+    sent(core, [frame, feedback])
+    core.receive(done(frame.item_id))
+    core.receive(error(feedback.event_id))
+    assert blocks[3].kind == "execution_feedback"
+    assert heard == [
+        ("sent", [(frame.key, "f2.frame")]),
+        ("sent", [(feedback.key, blocks[3].id)]),
+        ("confirmed", [(frame.key, "f2.frame")]),
+        ("refused", [(feedback.key, blocks[3].id)]),
+    ]
 
 
 def test_a_block_refused_again_after_a_rebuild_is_refused_alone():

@@ -867,7 +867,10 @@ class RealtimeRuntime:
         )
 
     def _record_session_state(self, state, cause, provider_state, generation_id=None) -> None:
-        """Record when the provider-side context becomes unknown, or exact again."""
+        """Record when the provider-side context becomes unknown, or exact again, as the session
+        operations reported it. What became of each content the encoder wrote is its
+        SessionDelivery records; what the provider keeps beside it, the capability
+        server_context."""
         if state == self._session_state:
             return
         self._session_state = state
