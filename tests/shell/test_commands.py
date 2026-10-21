@@ -342,7 +342,7 @@ def _decisions(payloads: list[dict]) -> list:
     return [(p["decision"], p["timed_out"]) for p in payloads]
 
 
-def test_a_result_back_while_the_shell_is_busy_is_settled_only_if_the_kernel_takes_it():
+def test_a_result_back_after_the_cap_while_the_shell_is_busy_is_never_settled():
     """The end check asked at 1 s takes 1 s; the reply comes back at 1.7 s, during it and after
     the 1.5 s cap. When the check is over, the cap has given the generation up first: the move's
     only records are those of the call given up on, and the late result leaves none."""
@@ -398,7 +398,9 @@ def test_a_later_move_over_the_cap_took_the_cap():
 
 
 def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
-    """The runner's lines for them (runner.py _run_step, _mark_budget_exhausted)."""
+    """The runner's lines for them (runner.py _run_step, _mark_budget_exhausted). The deadline
+    line gives the seconds from the call's start; the runner's gave the time left plus its
+    grace (K-a)."""
     capped = run("wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.0)
     assert "[default] k=0 generation TIMED OUT (>1.0s, per_move_cap) — discarded" in capped.logs
     cut = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])

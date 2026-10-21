@@ -1140,13 +1140,15 @@ class _Shell:
         """A generation the kernel gave up on. One whose result came back before and was settled
         keeps the call's own records, written now, ahead of the decision's, and what made that
         result unusable still invalidates the run, as the runner's check of every result did
-        (runner.py _apply): the kernel discards the result with its reason. Otherwise one given
-        up on at the per-move cap, the wall deadline or the provider watchdog timed out: it is
-        logged and recorded as the runner records a call it gave up on (runner.py _run_step),
-        with no usage, which leaves the episode's cost incomplete (decision 48). One the task's
-        end or an invalidation gave up on is recorded so too, named for what ended the episode
-        (N10). Only the move over the cap is reported, as skipped (kernel/turns.py on_timer);
-        the others end the episode and their decision goes unreported."""
+        (runner.py _apply): the shell posts that reason, as the kernel discards the result
+        without it. Otherwise one given up on at the per-move cap, the wall deadline or the
+        provider watchdog timed out: it is logged and recorded as the runner records a call it
+        gave up on (runner.py _run_step), with no usage, which leaves the episode's cost
+        incomplete (decision 48). One the task's end or an invalidation gave up on is recorded
+        so too, named for what ended the episode (N10), as a synthesized record the token
+        totals and the model timing leave out (N34). Only the move over the cap is reported, as
+        skipped (kernel/turns.py on_timer); the others end the episode and their decision goes
+        unreported."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
@@ -1186,7 +1188,8 @@ class _Shell:
             capped = bound == "per_move_cap"
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         if bound is not None:
-            # The log names the bound as the runner does (runner.py _move_timeout).
+            # The cap and the watchdog as the runner names them (runner.py _move_timeout); the
+            # deadline from the call's start, where the runner gave the time left plus a grace.
             self.log(
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
                 "— discarded"

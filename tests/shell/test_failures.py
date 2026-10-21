@@ -2,11 +2,12 @@
 
 An exception the legacy loop let escape it (runner.py _run_stream_legacy) invalidates the run as
 runner:run_exception and the episode still finalizes. An invalid run the environment latches
-itself in an operation that returns keeps its own reason: the shell posts it before the
-command's answer, after it when the answer carries the same failure of the action, and the wall
-clock's key-release timer posts it through ``on_invalid``. Failed state reads are counted by the
-kernel, three in a row invalidate the run, the ones a token key tap makes inside execute() too
-(X12).
+itself keeps its own reason. For an operation that returns, the shell posts it before the
+command's answer, after it when the answer carries the same failure of the action; for a clock
+step that raised, the kernel names the failure as the environment does and the environment's
+record stays; the wall clock's key-release timer posts it through ``on_invalid``. Failed state
+reads are counted by the kernel, three in a row invalidate the run, the ones a token key tap
+makes inside execute() too (X12).
 """
 
 from __future__ import annotations
@@ -626,8 +627,9 @@ def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
     ids=["release", "render"],
 )
 def test_a_token_release_or_render_that_raises_invalidates_the_run(world, action, at, reason):
-    """Each action lands at tick 1. The hold's lease ends at tick 1.5 on the way to the next
-    frame, and its release raises; or the frame the click committed fails to render. The kernel
+    """Each action lands at tick 1. The hold's lease ends at tick 1.5, as the clock moves to
+    the second action, and its release raises; or the frame the click committed fails to
+    render. The kernel
     gives the step the environment's reason (kernel/turns.py _released, _rendered). The
     traceback is the summary's error, as under the runner, whose loop the exception escaped."""
     replies = [Reply(0.0, action, output_tokens=100)] * 2

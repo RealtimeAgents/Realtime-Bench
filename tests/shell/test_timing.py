@@ -130,8 +130,10 @@ def test_a_token_result_back_before_the_watchdog_is_taken_though_settling_it_cro
     tokens_per_frame,
 ):
     """The result comes back 5 ms before the 7 s operational watchdog and settling it takes
-    10 ms. The world stands still while it settles, so the kernel gets it at the reading it came
-    back at, as the runner's bounded wait returned with it (runner.py _bounded_call)."""
+    10 ms. The world stands still while it settles, so the kernel gets it at the reading the
+    shell took as it woke for it, before the settling, as the runner's bounded wait returned
+    with it (runner.py _bounded_call). (A shell that woke later than the watchdog would lose it:
+    the window is the wake-up lag.)"""
     replies = [Reply(6.995, CLICK, output_tokens=100), Reply(0.0, CLICK, output_tokens=100)]
     timing = RunnerTimingConfig(provider_watchdog_s=7.0)
     episode = run(
