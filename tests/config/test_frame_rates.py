@@ -93,6 +93,9 @@ def test_token_clock_charges_b_per_model_input_frame(runner_cells):
     prompt = cell["clock_prompt"]
     assert "observations are scheduled at f=1 frames per simulated second" in prompt
     assert "kappa=B*f=100 charged tokens per simulated second" in prompt
+    # The task clock counts environment ticks: B per tick, the same kappa.
+    task_clock = cell["task"]["task_clock"]
+    assert (task_clock["fps"], task_clock["tokens_per_world_second"]) == (60.0, 100.0)
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
