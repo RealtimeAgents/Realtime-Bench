@@ -2,11 +2,12 @@
 
 runner.set_up_agent gives create_agent, the agent's trace sink and the tool runtime the clock
 main() hands it. create_agent gives the harness its clock, and the harness builds the driver and
-the runtime with it (harnesses/default/harness.py _setup_backend). A driver passes it on to its connect retry, its
-request pacing, its Choice decisions and the hooks that time its HTTP responses. Each of these
-falls back to real time when it is given no clock, so a clock lost on the way changes nothing a
-test on real time can see. Here every agent is built by create_agent on the fake clock
-(tests/fake_clock.py), and each case reads a time that only the agent's clock can have produced.
+the runtime with it (harnesses/default/harness.py _setup_backend). A driver passes it on to its
+connect retry, its request pacing, its Choice decisions and the hooks that time its HTTP
+responses. Each of these falls back to real time when it is given no clock, so a clock lost on
+the way changes nothing a test on real time can see. Here every agent is built by create_agent on
+the fake clock (tests/fake_clock.py), and each case reads a time that only the agent's clock can
+have produced.
 """
 
 from __future__ import annotations
