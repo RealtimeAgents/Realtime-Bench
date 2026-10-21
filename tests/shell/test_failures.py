@@ -144,6 +144,15 @@ def test_the_shell_stops_at_the_finish_though_writing_the_termination_raises():
     assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
+def test_a_failed_trajectory_row_of_a_call_the_deadline_cut_invalidates_the_run():
+    """The record of the call the deadline gave up on is written like any result's (decision
+    48): a failed write is a harness failure, after the end too (runner.py _decide)."""
+    episode = run("wall", 2.0, [Reply(hang=True)], agent_type=_FirstRowFails)
+    assert episode.invalid["reason"] == "trajectory_write_failed"
+    assert episode.env._stop_reason == "invalid_run"
+    assert episode.env._termination["end_s"] == 2.0
+
+
 class _Cancelled(BaseException):
     """As entity/model.py RetryCancelled, which is not an Exception."""
 

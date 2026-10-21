@@ -343,17 +343,44 @@ def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
     assert "[think] deliberation budget exhausted: 2.0s >= 1.5s -> forfeit" in spent.logs
 
 
-def test_a_result_the_deadline_beat_while_the_shell_was_busy_leaves_no_records():
-    """The end check asked at 2 s takes 1.5 s; the reply comes back at 2.9 s, during it. When the
-    check is over, the 3 s deadline has given the generation up first and ended the episode: the
-    decision goes unreported and its result is never settled."""
+def test_a_result_the_deadline_beat_while_the_shell_was_busy_is_never_settled():
+    """The end check asked at 2 s takes 1.5 s; the reply comes back at 2.9 s, during it, and is
+    filed when the check is over (decision 47). The 3 s deadline has given the generation up by
+    then and ended the episode: the decision goes unreported and the result is never settled;
+    the records are those of the call the deadline gave up on (decision 48)."""
     world = World(slow_checks=[(2.0, 2.5, 1.5)])
     episode = run("wall", 3.0, [Reply(2.9)], world)
     assert episode.statuses() == []
-    assert episode.agent.trajectory == []
-    assert getattr(episode.env, "_token_accounting", None) is None
-    assert "InferenceCompleted" not in episode.trace.events()
+    rows = episode.agent.trajectory
+    assert [(row["decision"], row.get("timed_out")) for row in rows] == [(0, True)]
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["timed_out"], p["latency_s"]) for p in completed] == [(0, True, 3.0)]
     assert episode.env._termination["stop_reason"] == "time_limit"
+
+
+def test_a_generation_the_deadline_gave_up_on_is_recorded_as_the_runner_records_it():
+    """Decision 48: the call the 3 s deadline cut leaves the runner's record of a call it gave up
+    on (runner.py _run_step): an InferenceCompleted, a trajectory row and a token record without
+    usage, so the episode's output tokens are not complete. The decision is not reported (K-a),
+    and the agent's own usage is not touched (decision 37)."""
+    episode = run("wall", 3.0, [Reply(0.5, output_tokens=40), Reply(hang=True)])
+    assert episode.statuses() == ["applied"]
+    assert len(episode.env.lifecycle) == 1
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p["timed_out"], p["latency_s"]) for p in completed] == [
+        (0, False, 0.5),
+        (1, True, 2.0),
+    ]
+    rows = [
+        (row["decision"], row.get("timed_out"), row.get("harness_timeout_reason"))
+        for row in episode.agent.trajectory
+    ]
+    assert rows == [(0, None, None), (1, True, "wall_deadline")]
+    summary = episode.env._token_accounting.summary()
+    assert summary["responses"] == 2
+    assert summary["provider_usage_missing_reasons"]["generation_aborted_at_wall_timeout"] == 1
+    assert summary["counts"]["provider_output_tokens"]["complete"] is False
+    assert summary["counts"]["provider_output_tokens"]["known_total"] == 40
 
 
 def test_a_paused_decision_lands_on_its_frame_and_moves_one_frame_on():

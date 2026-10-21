@@ -1,5 +1,5 @@
 """What one decision leaves on the record: the result of a generation that raised or was given up
-on at a bound, its output caps and their audit, what its result is annotated with, the output tokens
+on at a bound or by the watchdog, its output caps and their audit, what its result is annotated with, the output tokens
 its clock is charged with and its token accounting, whether its result is usable, the protocol of a
 DONE or FAIL landed as a wait, its frame's identity for the frozen-stream check, the payloads of its
 trace events and its action lifecycle record.
@@ -44,6 +44,18 @@ def timed_out_result(latency: float, reason: str) -> dict:
         "timed_out": True,
         "harness_timeout_reason": reason,
         "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
+    }
+
+
+def watchdog_result(latency: float, seconds: float) -> dict:
+    """The result of a token-clock call the provider watchdog gave up on after ``seconds``: no
+    action, and a provider failure that makes the run invalid."""
+    return {
+        "action": None,
+        "latency": latency,
+        "invalid_category": "provider",
+        "invalid_reason": "generation_watchdog_timeout",
+        "invalid_detail": f"generation exceeded {seconds:g}s",
     }
 
 
