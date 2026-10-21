@@ -47,10 +47,10 @@ _NOTES = {
     "none": "NOTE: your reply had no valid action, so nothing was executed.",
 }
 # A reply's protocol failure: its outcome is the reply's, beside those of the actions it handed
-# over.
+# over, which the outcome does not count; the reply may have handed over none.
 _PROTOCOL_FAILURE_NOTE = (
-    "NOTE: your reply held something that could not be executed ({failure}); nothing ran for it, "
-    "and each action the reply handed over has its own feedback."
+    "NOTE: your reply held something that could not be executed ({failure}); nothing ran for it. "
+    "Actions the reply handed over, if any, have their own feedback."
 )
 _FRAME_NOTE = (
     "NOTE: this action was NOT executed because its frame field {why}. Set frame to the FRAME "
