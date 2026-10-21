@@ -12,6 +12,7 @@ import asyncio
 import itertools
 
 import pytest
+from websockets.exceptions import ConnectionClosedOK
 
 from realtime_framework.entity.events import (
     GenerationBoundary,
@@ -32,6 +33,7 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.streaming.history import frame_block
 from realtime_framework.providers.openai_realtime import _Session
+from realtime_framework.providers.openai_realtime_session import Delete
 from tests.fake_clock import FakeClock
 from tests.replay import baseline
 from tests.session.test_openai_realtime_receive import (
@@ -43,7 +45,9 @@ from tests.session.test_openai_realtime_receive import (
 )
 from tests.session.test_openai_realtime_session import (
     TEXTS,
+    Server,
     done,
+    error,
     new_core,
     response_events,
     sent,
@@ -168,9 +172,10 @@ def test_closing_a_streaming_session_lets_its_reader_end():
         driver._session, driver._cm = session, _ClosingManager(connection)
         await until(lambda: connection.in_flight == 1)
         await driver._close_current()
-        return connection, session
+        return connection, session, session._reader.done()
 
-    connection, session = _within(scenario())
+    connection, session, ended = _within(scenario())
+    assert ended
     assert connection.in_flight == 0
     assert session.closed is not None and session.failure is None
 
@@ -222,6 +227,74 @@ def test_a_streaming_sync_rebuilds_the_session():
     for reason in ("history_block_compaction", "provider_history_changed"):
         _within(driver._sync_history(HistorySyncRequest(SEED, reason, history)))
     assert rebuilt == ["history_block_compaction", "provider_history_changed"]
+
+
+class _Answers(Server):
+    """The session core tests' server model, which also refuses the create of each block in
+    ``refused`` and fails every delete when ``deletes_fail``."""
+
+    def __init__(self, refused=(), *, deletes_fail: bool = False) -> None:
+        super().__init__()
+        self.refused, self.deletes_fail = set(refused), deletes_fail
+
+    def answer(self, operation):
+        if operation.block in self.refused or (self.deletes_fail and isinstance(operation, Delete)):
+            return error(operation.event_id)
+        return super().answer(operation)
+
+
+async def answering(server: Server, blocks):
+    """An offline driver on a native-streaming session over a fake connection, behind which
+    ``server`` answers each operation the driver sends; the session holds the replay of
+    ``blocks``. A clean close queued on the connection ends its reader."""
+    driver, connection = _offline_driver(), _FakeConnection()
+    session = _Session(1, connection, new_core())
+    session.read_continuously(Ticks())
+    driver._session, driver._conn = session, object()
+    driver._send = lambda operation: connection.queue.put(server.answer(operation))
+    replay = session.core.replay_streaming(streaming_view(list(blocks), frames=5))
+    await driver._send_all(replay)
+    await session.receive_until(lambda: all(map(session.core.settled, replay)))
+    return driver, connection
+
+
+def test_a_refused_frame_raises_though_the_feedback_pushed_before_it_went_in():
+    """Under separate_message the feedback the session lacks goes in as an item of its own before
+    the frame; the server refusing the frame raises, and the feedback stays."""
+
+    async def scenario():
+        driver, connection = await answering(_Answers({"f2.frame"}), stream("FR"))
+        with pytest.raises(RuntimeError, match="^OpenAI Realtime refused f2.frame: "):
+            await driver.push_frame(_observation(2), streaming_view(stream("FRBF"), frames=5))
+        connection.queue.put(_clean_close())
+        return driver._session.core
+
+    assert sorted(_within(scenario()).frames) == ["d1.feedback", "f1.frame"]
+
+
+def test_a_fold_the_server_fails_leaves_the_session_dirty():
+    """A fold the server fails leaves the session dirty, for the next ensure_ready to rebuild it
+    from the view; the frame pushed with it is in all the same."""
+
+    async def scenario():
+        driver, connection = await answering(_Answers(deletes_fail=True), stream("F"))
+        await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=1))
+        connection.queue.put(_clean_close())
+        return driver
+
+    driver = _within(scenario())
+    assert driver._dirty
+    assert "f2.frame" in driver._session.core.frames
+
+
+def test_a_connection_that_closes_before_the_frame_is_confirmed_fails_the_push():
+    async def scenario():
+        driver, connection = await answering(Server(), stream("F"))
+        driver._send = lambda operation: connection.queue.put(_clean_close())
+        with pytest.raises(ConnectionClosedOK):
+            await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=5))
+
+    _within(scenario())
 
 
 # ---- a streaming session against a cassette, on the fake clock -------------------------------
@@ -362,7 +435,7 @@ RECORDS = [
 def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
     """Frames go in while a reply streams, each fold of an older frame confirmed between the
     reply's events, none of which is lost; a refused frame is lost alone; closing the session
-    ends its reader. The cassette checks every message the driver sent, and when."""
+    ends its reader. The cassette checks every message the driver sent, in order."""
     clock, table, blocks = FakeClock(), FrameTable(), []
     answer = AnswerRequirements("text_json", "standard_vlm")
     seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)

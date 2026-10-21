@@ -520,11 +520,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def push_frame(self, observation: ProviderObservation, history) -> None:
-        """Native streaming: push the frame the streaming history view ends with, after the
-        feedback it holds that the session lacks, and fold the frames the view folds
-        (decision 23). Returns once the server confirmed the frame; raises when the server
-        refused it, which loses that frame alone. A fold the server fails leaves the session
-        dirty, for the next ensure_ready to rebuild it from the view."""
+        """Native streaming: push the frame the streaming history view ends with, which the
+        session lacks, after the feedback the view holds that the session lacks too, and fold
+        the frames the view folds (decision 23). Returns once the server confirmed the frame;
+        raises when the server refused it, which loses that frame alone, or the connection
+        closed first. A fold the server fails leaves the session dirty, for the next
+        ensure_ready to rebuild it from the view."""
         session = self._connected_session()
         core = session.core
         pushes = core.push(history)
