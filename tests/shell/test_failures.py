@@ -84,6 +84,25 @@ def test_a_generation_that_raises_is_an_unusable_result():
     assert [(p["error"], p["invalid_reason"]) for p in completed] == [(True, "generation_error")]
 
 
+class _FirstRowFails(Agent):
+    def finalize_decision_audit(self, result: dict) -> None:
+        if result["decision"] == 0:
+            raise OSError("trajectory disk full")
+        super().finalize_decision_audit(result)
+
+
+def test_a_failed_trajectory_row_of_a_move_over_the_cap_invalidates_the_run():
+    """The record of the call given up on at the cap is written like any result's: a failed
+    write is a harness failure (runner.py _decide)."""
+    episode = run(
+        "wall", 3.0, [Reply(hang=True), Reply(0.5)], per_move_cap_s=1.0, agent_type=_FirstRowFails
+    )
+    assert episode.invalid["category"] == "harness"
+    assert episode.invalid["reason"] == "trajectory_write_failed"
+    assert "OSError: trajectory disk full" in episode.invalid["detail"]
+    assert episode.env._stop_reason == "invalid_run"
+
+
 class _Cancelled(BaseException):
     """As entity/model.py RetryCancelled, which is not an Exception."""
 
