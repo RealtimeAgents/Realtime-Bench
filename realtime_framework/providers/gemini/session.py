@@ -109,7 +109,7 @@ class Push:
 @dataclass(frozen=True)
 class Trigger:
     """A reply's start as native streaming sends it: one activity on realtime_input, not a client
-    turn_complete. It holds the execution feedback no seed or trigger has carried into the session
+    turn_complete. It holds the execution feedback no seed or trigger has handed to the session
     yet, and the silent audio an activity must hold."""
 
     inputs: tuple[RealtimeInput, ...]
@@ -292,8 +292,8 @@ class SessionCore:
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         self.last_turn_clean = False
-        # The history blocks a seed or a trigger carried into the session, by id, across
-        # connections: a rebuild replaces them with its seed, a resume keeps them.
+        # The history blocks a seed or a trigger has handed to a connection of the session, by
+        # id, over the episode.
         self.carried: set[str] = set()
         # The generation whose reply is being read, by connection, until the reply ends.
         self.replies: dict[int, _Generation] = {}
@@ -425,8 +425,7 @@ class SessionCore:
         self.connection = self._connections
         self.delivery = {("setup",): Delivery.CONFIRMED}
         self.sending(("block", block_id) for block_id in connect.seeded)
-        if connect.resume_handle is None:
-            self.carried = set(connect.seeded)
+        self.carried.update(connect.seeded)
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -480,8 +479,8 @@ class SessionCore:
         return observation
 
     def push(self, history: CanonicalRequest) -> Push:
-        """Plan the streaming history view's newest frame as native streaming pushes it, and
-        record it as being written."""
+        """Plan the streaming history view's newest frame, one the session does not hold yet, as
+        native streaming pushes it, and record it as being written."""
         frame = next(item.block for item in reversed(history.items) if item.block.kind == "frame")
         push = Push(
             (RealtimeInput("video", image=frame.image), RealtimeInput("text", text=frame.text)),
@@ -493,8 +492,8 @@ class SessionCore:
 
     def trigger(self, history: CanonicalRequest) -> Trigger:
         """Plan the activity that starts a streaming session's next reply, with the history
-        view's execution feedback not carried into the session yet, and record that feedback as
-        being written."""
+        view's execution feedback no seed or trigger has handed to the session yet, and record
+        that feedback as being written."""
         feedback = [
             item.block
             for item in history.items
