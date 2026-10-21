@@ -1015,6 +1015,11 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
             runtime = getattr(agent, "tool_runtime", None)
             if runtime is not None and execution is not None:
                 parsed = runtime.resolve_action(parsed, frame.marks, execution)
+                if streaming:
+                    # The decision's inspection row names the frame whose marks resolved it.
+                    execution["reference_resolution"].update(
+                        frame=frame.frame, observation_id=frame.observation_id
+                    )
             elif action_has_target_references(parsed):
                 parsed = None
         if parsed is not None:
