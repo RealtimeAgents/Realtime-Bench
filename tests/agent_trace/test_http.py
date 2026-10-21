@@ -37,7 +37,7 @@ from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
 from realtime_framework.providers.litellm import ChatCompletionsDriver
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
-from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
+from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
 from ..replay.build import build_episode
 from ..replay.frames import ReplayTask
@@ -421,7 +421,7 @@ def _turn(k, prompt, **recorded) -> CanonicalTurn:
 def _request(config):
     """One earlier turn and an archived action before the current frame: the JEV digest state is
     then four messages (system, ledger, digest, current observation)."""
-    current = "Choose." + OBSERVATION_INTERACTABLES_HEADER + json.dumps({"observation_id": "obs-1"})
+    current = "Choose." + FRAME_INTERACTABLES_HEADER + json.dumps({"observation_id": "obs-1"})
     turns = (
         _turn(0, "older observation", output='{"action": "wait"}', execution_feedback="applied"),
         _turn(1, current),

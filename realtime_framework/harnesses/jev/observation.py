@@ -20,7 +20,7 @@ from realtime_framework.providers.decisions.questions import (
     TEXT_COMPOSITION_POLICY,
 )
 from realtime_framework.sandbox.observation.interactables import format_interactables
-from realtime_framework.sandbox.observation.som import OBSERVATION_INTERACTABLES_HEADER
+from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
 
 def choice_observation(task_instruction, observation, execution, *, frame_prompt, game):
@@ -64,7 +64,7 @@ def choice_observation(task_instruction, observation, execution, *, frame_prompt
         if key not in {"candidates", "text_composition", "game_choices"}
     }
     observation.prompt = (
-        frame_prompt + OBSERVATION_INTERACTABLES_HEADER + json.dumps(visible, ensure_ascii=False)
+        frame_prompt + FRAME_INTERACTABLES_HEADER + json.dumps(visible, ensure_ascii=False)
     )
     choice = ChoiceRequirements(
         instructions=GAME_INSTRUCTIONS if state["game_choices"] else GUI_INSTRUCTIONS,
