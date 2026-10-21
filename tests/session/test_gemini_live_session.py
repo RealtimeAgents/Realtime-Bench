@@ -14,7 +14,15 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
+from realtime_framework.harnesses.streaming.history import (
+    StreamingRetention,
+    feedback_block,
+    frame_block,
+    history_view,
+    output_block,
+)
 from realtime_framework.providers.gemini.session import (
     REPLAY_THOUGHT_SIGNATURE,
     Content,
@@ -83,6 +91,26 @@ def view(turns, *, ledger: str = "", history_format: str = "native_tools"):
         ledger_block(ledger, 1, 0),
         AnswerRequirements("function_call", "standard_vlm"),
         CallParameters("gemini-live", None, None),
+    )
+
+
+def pushed(k: int):
+    """Frame k as the streaming agent accepts it, under frame-table number k."""
+    observation = turn(k).observation
+    return frame_block(FrameRecord(k, observation.observation_id, float(k), {}, None), observation)
+
+
+def streaming_view(blocks, *, frames: int = 2):
+    """The streaming history view of the accepted ``blocks``: every reply kept, and the newest
+    ``frames`` frames with their screenshots."""
+    return history_view(
+        blocks,
+        policy=current_context_policy().for_path("gemini_live", {}, None),
+        system=system_block("system instruction", None),
+        retention=StreamingRetention(frames, "placeholder", "all"),
+        actions={},
+        answer=AnswerRequirements("function_call", "standard_vlm"),
+        call=CallParameters("gemini-live", None, None),
     )
 
 
@@ -230,6 +258,33 @@ def test_seed_replays_tool_rounds_as_a_transcript():
         '[{"id": "call-0-0", "name": "click", "response": '
         '{"status": "queued"}}], "completion_text": ""}]'
     )
+
+
+def test_a_streaming_rebuild_replays_the_streaming_view():
+    """A streaming session is rebuilt from the streaming view, in its order: the frames, the
+    older ones folded to text, each reply's output as model text and each feedback as user
+    text."""
+    action = '{"action": "click", "target": "P1", "frame": 1}'
+    history = streaming_view(
+        [
+            pushed(1),
+            output_block(1, action, "obs-1", None),
+            pushed(2),
+            feedback_block(1, "EXECUTION RESULT: ok", None),
+            pushed(3),
+        ]
+    )
+    connect = plan(session_core(streaming=True), history)
+    assert connect.mode == "canonical_history_replay"
+    (contents,) = connect.seed
+    assert contents == [
+        Content("user", (Part(text=history.policy.texts.folded_visual),)),
+        Content("model", (Part(text=action),)),
+        frame_content(2),
+        Content("user", (Part(text="EXECUTION RESULT: ok"),)),
+        frame_content(3),
+    ]
+    assert connect.seeded == ("f1.frame", "g1.output", "f2.frame", "g1.feedback", "f3.frame")
 
 
 def test_observation_and_acknowledgement_delivery():

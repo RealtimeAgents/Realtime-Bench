@@ -280,8 +280,10 @@ class SessionCore:
     def _seed(self, history: CanonicalRequest | None) -> tuple[list[Content], tuple[str, ...]]:
         """The Contents that replay the history view, and the ids of their blocks.
 
-        The system block travels in the setup instead. A model output is the canonical action of
-        the native call that its turn's tool block carries, so it has no Content of its own.
+        The system block travels in the setup instead. In a turn-based view a model output is the
+        canonical action of the native call that its turn's tool block carries, so it has no
+        Content of its own. The streaming view (harnesses/streaming/history.py) has no tool blocks:
+        each reply's output and each execution feedback is a text Content, in the view's order.
         """
         if history is None:
             return [], ()
@@ -307,6 +309,8 @@ class SessionCore:
                 if not tool_contents:
                     continue
                 contents += tool_contents
+            elif self.streaming and block.kind in ("model_output", "execution_feedback"):
+                contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
             else:
                 continue
             seeded.append(block.id)
