@@ -262,7 +262,7 @@ class TurnPolicy:
             self.decision.timeout = None
             kernel.abandon_generation("per_move_cap")
             self._accept(GenerationResult(latency=timer.data["bound"]), timed_out=True)
-        elif timer.kind == "wake":
+        elif timer.kind in ("wake", "landing"):
             self._moved()
 
     def on_end(self) -> None:
@@ -433,11 +433,15 @@ class TurnPolicy:
         d.target = min(d.tau, config.max_ticks)
         d.action, d.protocol_failure, d.timed_out = action, protocol_failure, timed_out
         d.approach_from = self._tick()
+        self.phase = _Phase.APPROACH
         if self.token:
             # Token time stood still during the generation: move it to the action time first.
-            self.phase = _Phase.APPROACH
             return self._move(d.target, self._approached)
-        self._approached()
+        # The shell accepts the result first, in this step's commands, and that takes time: the
+        # action lands at the reading after it, where the deadline and the end are judged
+        # (runner.py _land_action reads the clock right before it executes).
+        self._then = self._approached
+        self.kernel.set_timer("landing", Clock.SEMANTIC, self.kernel.semantic, Priority.COMPLETION)
 
     def _unusable(self, proposed: bool, action, category, reason, detail) -> None:
         """An unusable result invalidates the run before anything is paced or reported to the

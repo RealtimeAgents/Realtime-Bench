@@ -98,6 +98,7 @@ class World:
     check_s: float = 0.0
     check_seconds: dict[int, float] = field(default_factory=dict)  # end check (1-based) -> its own
     execute_s: float = 0.0
+    accept_s: float = 0.0
     advance_s: float = 0.0
     commit_s: float = 0.0
     snapshot_s: float = 0.0
@@ -272,6 +273,7 @@ class Simulation:
                     )
             case AcceptResult(generation=generation):
                 self.accepted.append(generation)
+                self._spend(world.accept_s)
             case DiscardResult(generation=generation):
                 self.discarded.append(generation)
             case Execute(decision=decision, action=action, release_at=release_at):
