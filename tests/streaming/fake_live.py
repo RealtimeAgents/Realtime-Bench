@@ -42,12 +42,14 @@ EXACT, CONTAMINATED = ProviderHistoryState.EXACT, ProviderHistoryState.CONTAMINA
 
 @dataclass(frozen=True)
 class Call:
-    """A function call message ``at`` seconds into the reply."""
+    """A function call message ``at`` seconds into the reply, or, ``after_push``, at the instant
+    that observation's push went out."""
 
     at: float
     call_id: str
     name: str
     arguments: dict
+    after_push: str | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,7 @@ class FakeLiveDriver(SessionLifecycle):
         self.renewal_required = False
         self.open = False
         self.connect_s = 0.0  # how long opening a connection takes
+        self._pushes: dict[str, asyncio.Event] = {}  # set once that observation's push went out
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
@@ -186,6 +189,7 @@ class FakeLiveDriver(SessionLifecycle):
         self._take_input()
         if observation.observation_id in self.failing:
             raise RuntimeError("push failed")
+        self._pushes.setdefault(observation.observation_id, asyncio.Event()).set()
         return {"observation_id": observation.observation_id}
 
     async def request_reply(self, request) -> GenerationHandle:
@@ -199,6 +203,8 @@ class FakeLiveDriver(SessionLifecycle):
         for sequence, message in enumerate(reply.messages, 1):
             if not await self._until(start + message.at):
                 return
+            if getattr(message, "after_push", None) is not None:
+                await self._pushes.setdefault(message.after_push, asyncio.Event()).wait()
             received = self.clock.monotonic()
             if isinstance(message, Fail):
                 raise message.error

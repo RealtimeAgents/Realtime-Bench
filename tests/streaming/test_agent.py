@@ -705,3 +705,27 @@ def test_a_replys_output_goes_where_it_began_before_its_actions_feedback(monkeyp
     agent.push(observation(clock, 4))
     assert agent.driver.calls[-1][2][3:] == ("d3.output", "d3.c1.feedback", "f3.frame", "f4.frame")
     agent.close()
+
+
+def test_an_action_that_comes_as_a_push_goes_out_finds_that_frame_sent(monkeypatch, clock):
+    """The frame is in the session once its push went out: an action that comes in that same
+    instant may name it, and counts it in the age of an older frame it names."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    first = observation(clock, 1)
+    agent.push(first)
+    calls = tuple(
+        Call(0.0, f"c{n}", "click", {"x": 1, "y": 1, "button": "left", "frame": n}, "obs-2")
+        for n in (1, 2)
+    )
+    agent.driver.replies.append(Reply(calls, ends_at=1.0))
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, first, BUDGET))
+    clock.sleep(0.5)
+    agent.push(observation(clock, 2))
+    assert clock.wait(replied, 1.0)
+    assert [(a.call_id, a.rejection, a.frame, a.frame_age_frames) for a in posted] == [
+        ("c1", None, 1, 1),
+        ("c2", None, 2, 0),
+    ]
+    agent.close()
