@@ -312,7 +312,7 @@ class StreamingPolicy:
     def on_timer(self, handle: int, timer) -> None:
         kernel, config = self.kernel, self.config
         if timer.kind == "deadline":
-            self._apply_deadline()
+            self._apply_deadline(at_its_timer=True)
         elif timer.kind == "end_check":
             if not self._stopped():
                 if self._frame() != self._read_frame:
@@ -753,7 +753,7 @@ class StreamingPolicy:
 
     # ---- end checks and the deadline --------------------------------------------------------
 
-    def _apply_deadline(self) -> None:
+    def _apply_deadline(self, at_its_timer: bool = False) -> None:
         """End the episode once the deadline has passed. An answer filed before the deadline can
         be handled after it, behind a command the shell ran across it; the deadline then ends the
         episode before the answer leads to anything, but for an action's. Two reads decide first,
@@ -762,7 +762,10 @@ class StreamingPolicy:
         (core.py ``step``); and the read after an action that finished before the deadline, due
         behind a capture out or behind the action's answer, which dates it where the action
         finished (N31). The read's budget bounds the wait, and the capture's. The reply in flight
-        is given up at the deadline all the same: nothing it says past it may land."""
+        is given up at the deadline all the same: nothing it says past it may land. An action
+        executing is left to the deadline's own timer, which comes after every answer filed
+        before the deadline, the action's among them when it finished before it (core.py
+        ``step``): then the read after it decides."""
         kernel = self.kernel
         if kernel.ending is not None or self._deadline_due:
             return
@@ -771,13 +774,19 @@ class StreamingPolicy:
         if self._asked or (self.current is not None and not self._executing):
             self._deadline_due = True
             self._abandon("deadline")
-        else:
+        elif at_its_timer or not self._executing:
             kernel.end("deadline", self.config.duration_s)
 
     def _stopped(self) -> bool:
-        """Whether nothing more may be done in the world, once the deadline is applied."""
+        """Whether nothing more may be done in the world: the deadline has passed, whether it has
+        ended the episode yet or not."""
         self._apply_deadline()
-        return self.kernel.ending is not None or self._deadline_due
+        kernel = self.kernel
+        return (
+            kernel.ending is not None
+            or self._deadline_due
+            or kernel.semantic >= self.config.duration_s
+        )
 
     def _ask(self) -> None:
         """Read the state now: no capture or action is out, so the read samples the task now, the
@@ -794,11 +803,12 @@ class StreamingPolicy:
     def _end_checked(self, event: EndChecked) -> None:
         kernel = self.kernel
         asked_at = self._asked.pop(event.request)
+        # The read after an action stands for one as the action finished (N31).
+        at = asked_at if self.current is None else self.current.finished_at
         # A read that fails once the episode is over still counts.
-        if self._count_read(event.error):
+        if self._count_read(event.error, at):
             return
         if event.ended:
-            at = asked_at if self.current is None else self.current.finished_at
             return kernel.end("environment", at, reason=event.reason)
         if self._deadline_due:
             return kernel.end("deadline", self.config.duration_s)
@@ -817,15 +827,16 @@ class StreamingPolicy:
         """The environment frame the clock is in."""
         return _floor(self.kernel.semantic * self.config.env_fps)
 
-    def _count_read(self, error: str | None) -> bool:
-        """Count one state read; True when it is the failure that invalidates the run."""
+    def _count_read(self, error: str | None, at: float) -> bool:
+        """Count one state read; True when it is the failure that invalidates the run, which ends
+        where that read stands, as an end a read sees does (N44)."""
         if error is None:
             self._failed_reads = 0
             return False
         self._failed_reads += 1
         if self._failed_reads < READ_FAILURE_LIMIT:
             return False
-        self.kernel.invalidate("environment", "terminal_state_check_failed", error)
+        self.kernel.invalidate("environment", "terminal_state_check_failed", error, at=at)
         return True
 
     def _schedule(self, kind: str, fps: float) -> None:
