@@ -126,12 +126,15 @@ class EnvironmentBudgetConfig:
     at the cleanup after the outcome is latched (release_inputs), whose failure is only logged.
     """
 
-    # Execute one action, everything from the page focus to the page's action barrier. Extended for
-    # text input and holds as the guest's request timeout is (sandbox/guest.py action_timeout). A
-    # game's key action under the token clock goes over CDP and is timed per key event instead.
+    # Execute one action through the guest or xdotool, from its checks to the page's action
+    # barrier and the hold snapshot; the wall clock's key lock is waited for whole and judged at
+    # the end. Text input gets the guest's longer request timeout (sandbox/guest.py
+    # action_timeout); a valid timed action, at most 10 s, stays within 20 s. A game's key action
+    # under the token clock goes over CDP and is timed per key event instead.
     action_s: float = 20.0
-    # Send one such key event, a press or a release; a tap's frame between its press and its
-    # release is a clock advance. As long as the guest's request for a key may take.
+    # Send one key event of a game under the token clock over CDP, a press or a release: an
+    # action's, a lease's end or the cleanup's. A tap's frame between its press and its release is
+    # a clock advance. The same 10 s the wall clock gives the guest's request for a key.
     key_event_s: float = 10.0
     # Capture one observation: the page probes, the guest's screenshots and the wait for the render
     # fence. As long as one CDP call may take by default.
