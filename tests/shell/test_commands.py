@@ -13,7 +13,7 @@ import gc
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import DecisionBudget
 
-from .world import CLICK, ORIGIN, Reply, World, run
+from .world import CLICK, ORIGIN, Agent, Reply, World, run
 
 HOLD = Action.hold_key("a", 1.25)
 WAIT = Action.wait(0.5)
@@ -206,6 +206,25 @@ def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():
         assert round(age, 6) == record["frame_age_at_action_s"] == 0.5
     (executed,) = [time for call, time, _ in env.calls if call == "execute"]
     assert resolved[0] - env.t0 == executed - 0.125  # before the check right before execution
+
+
+class _SlowTrajectory(Agent):
+    """Writing a trajectory row takes 0.125 s."""
+
+    def finalize_decision_audit(self, result: dict) -> None:
+        super().finalize_decision_audit(result)
+        self.clock.sleep(0.125)
+
+
+def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_settling_it_took_time():
+    """The result comes back at 0.5 s and settling it takes 0.125 s, which is not its own: it
+    lands at 0.5 s, and its record's resolution time and frame age agree, as the definition the
+    record gives says they must."""
+    episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=_SlowTrajectory)
+    for record in episode.env.lifecycle:
+        assert record["frame_age_at_action_s"] == 0.5
+        age = record["action_resolved_unix_s"] - record["observation_timestamp"]
+        assert round(age, 6) == 0.5
 
 
 def test_an_action_the_guest_refuses_is_reported_with_its_reason():

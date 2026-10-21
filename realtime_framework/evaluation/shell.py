@@ -884,8 +884,12 @@ class _Shell:
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
             if data["phase"] == "inference_to_action":
                 # The action lands: the runner times its resolution here, whatever comes of it
-                # (runner.py _apply).
-                decision.landed_at = self.clocks.operational.time()
+                # (runner.py _apply). On the wall clock that is the reading the kernel landed it
+                # at, which its frame age counts from too (kernel/turns.py _approached); on the
+                # token clock it is when the clock got to the action time.
+                decision.landed_at = (
+                    self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
+                )
             self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
