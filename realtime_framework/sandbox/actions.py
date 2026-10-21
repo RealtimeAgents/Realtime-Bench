@@ -123,7 +123,6 @@ class GuestEnvironment:
     def __init__(
         self,
         guest,
-        deadline,
         task,
         frames_dir=None,
         honor_fail=True,
@@ -138,9 +137,8 @@ class GuestEnvironment:
         # One environment tick, from the task clock the task and its service advance by.
         fps = task.clock_snapshot()["fps"]
         self.d = 1.0 / fps
-        # Wall-clock time, deadlines, waits and key releases read the semantic clock; under the
-        # token clock it is the FrameClock that holds the logical tick. Records read the
-        # operational clock.
+        # Wall-clock time, waits and key releases read the semantic clock; under the token clock
+        # it is the FrameClock that holds the logical tick. Records read the operational clock.
         self.clocks = clocks or episode_clocks(clock_mode, fps)
         if clock_mode == "token" and self.clocks.semantic.frame_seconds != self.d:
             raise ValueError(
@@ -152,7 +150,6 @@ class GuestEnvironment:
         self.t0 = (
             self.clocks.operational.time() if wall_start_time is None else float(wall_start_time)
         )
-        self.deadline = deadline
         self.clock_mode = clock_mode
         self.task = task
         self._episode_horizon_tick = None
@@ -279,10 +276,6 @@ class GuestEnvironment:
                 self._release_expired_clock_keys()
                 if self._ended_after_step():
                     break
-            return
-        clock = self.clocks.semantic
-        while self.tick_index() < target and clock.time() < self.deadline:
-            clock.sleep(0.03)
 
     def _ended_after_step(self):
         """The end check after each token step of wait_until_tick. When the kernel counts failed
@@ -353,12 +346,6 @@ class GuestEnvironment:
                 "detail": str(exc),
             }
             raise
-
-    def time_remaining(self):
-        return None if self.clock_mode == "token" else self.deadline - self.clocks.semantic.time()
-
-    def past_deadline(self):
-        return False if self.clock_mode == "token" else self.clocks.semantic.time() >= self.deadline
 
     @staticmethod
     def _key_identity(key):
@@ -1042,8 +1029,7 @@ class GuestEnvironment:
                     if self.clock_mode == "token":
                         self.wait_until_tick(self._logical_tick + duration / self.d)
                     else:
-                        remaining = max(0.0, self.deadline - self.clocks.semantic.time())
-                        self.clocks.semantic.sleep(min(duration, remaining))
+                        self.clocks.semantic.sleep(duration)
                 elapsed = round(
                     max(0.0, (self.clock_position() - started_at) * self.d),
                     9,
@@ -1160,9 +1146,7 @@ class GuestEnvironment:
     def done(self):
         if getattr(self, "_invalid_run", None):
             return True
-        if self._done or (
-            self.clock_mode != "token" and self.clocks.semantic.time() >= self.deadline
-        ):
+        if self._done:
             return True
         if self.stop_check is not None:
             try:
@@ -1187,10 +1171,10 @@ class GuestEnvironment:
     def check_end(self):
         """Ask the task whether the episode is over, for the kernel's shell: ``(ended, reason)``.
 
-        Unlike done(), no deadline is compared and ``_invalid_run`` is neither read nor written: a
-        failed read raises, and the kernel counts it (evaluation/shell.py). An end is latched in
-        ``_episode_over`` and ``_terminal_reason`` as done() latches it. On the wall clock one
-        read has its own, shorter budget.
+        Unlike done(), ``_invalid_run`` is neither read nor written: a failed read raises, and the
+        kernel counts it (evaluation/shell.py). An end is latched in ``_episode_over`` and
+        ``_terminal_reason`` as done() latches it. On the wall clock one read has its own, shorter
+        budget.
         """
         if self.stop_check is None:
             return False, None

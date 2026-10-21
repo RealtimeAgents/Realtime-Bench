@@ -60,7 +60,6 @@ class TokenEnvironment(GuestEnvironment):
         self.finalizing = False
         super().__init__(
             _Guest(self),
-            None,
             task,
             stop_check=stop_check,
             scene_capture=frames,

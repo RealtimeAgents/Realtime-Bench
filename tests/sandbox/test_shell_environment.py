@@ -43,10 +43,9 @@ class _WallTask:
         return {"fps": 1.0}
 
 
-def _wall(clock, horizon_s=60.0, **kwargs):
+def _wall(clock, **kwargs):
     return GuestEnvironment(
         _Guest(clock),
-        ORIGIN + horizon_s,
         _WallTask(),
         clock_mode="wall",
         wall_start_time=ORIGIN,
@@ -57,7 +56,7 @@ def _wall(clock, horizon_s=60.0, **kwargs):
 
 def _token(fps=1.0, **kwargs):
     task = ClockTask(fps)
-    return GuestEnvironment(None, None, task, clock_mode="token", **kwargs), task
+    return GuestEnvironment(None, task, clock_mode="token", **kwargs), task
 
 
 # ---- check_end ------------------------------------------------------------------------------
@@ -73,15 +72,16 @@ def _on(clock_mode, clock, **kwargs):
     return env
 
 
-def test_an_end_check_asks_the_task_past_the_deadline_and_in_an_invalid_run():
-    """done() answers both without asking the task (sandbox/actions.py done)."""
+def test_an_end_check_asks_the_task_in_an_invalid_run():
+    """done() answers it without asking the task (sandbox/actions.py done). The deadline is the
+    kernel's; the legacy loop's environment compared it too (tests/differential)."""
     clock = FakeClock(wall_origin=ORIGIN)
     asked = []
-    env = _wall(clock, 1.0, stop_check=lambda: asked.append(clock.monotonic()))
+    env = _wall(clock, stop_check=lambda: asked.append(clock.monotonic()))
     env._invalid_run = {"category": "environment", "reason": "action_execution_failed"}
     with clock.participant():
         clock.sleep(2.0)
-        assert env.past_deadline() and env.done()
+        assert env.done()
         assert env.check_end() == (False, None)
     assert asked == [2.0]
     assert env._invalid_run == {"category": "environment", "reason": "action_execution_failed"}
@@ -137,7 +137,7 @@ def test_one_end_check_is_bounded_by_the_budget_of_its_clock(clock_mode, budget_
         return False
 
     if clock_mode == "wall":
-        env = _wall(clock, 1_000.0, stop_check=stop_check)
+        env = _wall(clock, stop_check=stop_check)
     else:
         env, _ = _token(stop_check=stop_check, clocks=Clocks(FrameClock(1.0), clock))
     with clock.participant():
@@ -149,7 +149,7 @@ def test_one_end_check_is_bounded_by_the_budget_of_its_clock(clock_mode, budget_
 
 def test_the_legacy_loop_s_end_check_keeps_its_budget_on_the_wall_clock():
     clock = FakeClock(wall_origin=ORIGIN)
-    env = _wall(clock, 1_000.0, stop_check=lambda: clock.sleep(11.0))
+    env = _wall(clock, stop_check=lambda: clock.sleep(11.0))
     with clock.participant():
         assert env.done() is False
     assert getattr(env, "_invalid_run", None) is None
@@ -632,7 +632,7 @@ def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(kernel_counts_re
     monkeypatch.setattr(task, "advance_clock", lambda frames=1, key_events=(): None)
     monkeypatch.setattr(task, "clock_key_event", lambda *args, **kwargs: None)
     task.configure_clock("token", 1.0)
-    env = GuestEnvironment(None, None, task, clock_mode="token", stop_check=task.episode_over)
+    env = GuestEnvironment(None, task, clock_mode="token", stop_check=task.episode_over)
     env.kernel_counts_reads = kernel_counts_reads
     assert env.execute(TAP) == "applied"
     assert len(reads) == 1

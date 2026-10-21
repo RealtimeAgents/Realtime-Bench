@@ -162,7 +162,6 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
         deadline = CLOCK_ORIGIN + SHORT_MAX_MINUTES * 60
         env = GuestEnvironment(
             _Guest(),
-            deadline,
             _WallTask(),
             scene_capture=episode.frames,
             action_audit_path=audit,
@@ -251,7 +250,6 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     task = ClockTask(1.0)
     env = GuestEnvironment(
         _Guest(),
-        None,
         task,
         scene_capture=FrameSource(task, text_observation=False, fps=1.0),
         clock_mode="token",
