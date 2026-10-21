@@ -1,7 +1,7 @@
 """The age DefaultHarness gives a streaming action's frame counts every frame it sent before the
 action arrived, also one sent at that same instant: the send and the arrival are read alike
-(harnesses/default/frames.py FrameTable.record_sent and age), on the fake clock (tests/fake_clock.py)
-at an instant whose nanosecond reading rounds to just after its seconds."""
+(harnesses/default/frames.py FrameTable.record_sent and age). On the fake clock
+(tests/fake_clock.py), at an instant whose nanosecond reading rounds to just after its seconds."""
 
 from __future__ import annotations
 
