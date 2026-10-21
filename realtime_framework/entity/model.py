@@ -69,8 +69,9 @@ class RealtimeCapabilities:
     # or, for prompt windows too small to retain SoM turns, only a digest of actions and feedback.
     # Context policy items 3 and 9 decide what is sent; tests/replay/test_context_policy.py pins it.
     history_replay: Literal["canonical", "action_digest"] = "canonical"
-    # What the encoder can render of the context policy; the pre-run checks hold the policy
-    # against it (providers/preflight.py check_context_policy). Undeclared means unsupported.
+    # What the encoder can render of the context policy: the roles, feedback placements,
+    # reasoning replay and tool-call replay forms below, which the pre-run checks hold the
+    # policy against (providers/preflight.py check_context_policy). Undeclared means unsupported.
     # The request roles (entity/request.py Role) the encoder maps onto protocol roles.
     roles: tuple[str, ...] = ()
     # The protocol has no roles: blocks are told apart by their position and labels.
@@ -80,12 +81,15 @@ class RealtimeCapabilities:
     # Item 6: whether past reasoning can be sent back, and whether the provider's documentation
     # requires it in multi-turn conversations.
     reasoning_replay: Literal["unsupported", "optional", "required"] = "unsupported"
-    # What the provider keeps of the conversation besides what the client sent: nothing, or a
-    # session's own items the client never sees (reasoning, thoughts, audio).
+    # Not checked, but recorded in the run configuration (evaluation/config.py
+    # effective_run_config); undeclared means unknown. What the provider keeps of the
+    # conversation besides what the client sent: nothing, or a session's own items the client
+    # never sees (reasoning, thoughts, audio).
     server_context: Literal["none", "unknown"] = "unknown"
     # Item 10: the forms past tool calls can be replayed in (PathPolicy.tool_call_replay values).
     tool_call_replay: tuple[str, ...] = ()
-    # Choice channel: options per question; the selection flow groups larger candidate sets.
+    # Not a context-policy item. Choice channel: options per question; the selection flow groups
+    # larger candidate sets.
     max_choices: int | None = None
     # Reports complete usage for a finite token clock.
     finite_frame_budget: bool = True
