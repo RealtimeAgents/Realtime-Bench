@@ -465,6 +465,74 @@ def test_a_cancellation_between_replies_comes_with_the_next_reply():
     assert first_event.received_at is not None
 
 
+def test_a_cancellation_between_replies_is_held_across_a_reconnect():
+    """A cancellation read between replies is not dropped with its connection: the next reply,
+    on the new one, hands it over first, telling the connection it was read on."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        first = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), TURN_COMPLETE)
+        await drain(rig.driver.events(first))
+        rig.socket.feed(cancelled("call-0"))
+        await settle()
+        await rig.connect()
+        second = await rig.start("turn-1")
+        rig.socket.feed(TURN_COMPLETE)
+        events = await drain(rig.driver.events(second))
+        await rig.driver.close()
+        return events
+
+    first_event, *rest = asyncio.run(run())
+    assert isinstance(first_event, FunctionCallsCancelled)
+    assert (first_event.call_ids, first_event.generation_id) == (("call-0",), "turn-1")
+    assert (first_event.connection, rest[-1].connection) == (1, 2)
+
+
+def test_a_cancellation_is_stamped_when_read_and_handed_over_once():
+    """A cancellation's arrival is when the reader read it, held between replies or in one;
+    one held is the first of the next reply's events, numbered as they are, and of no later
+    reply's."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        first = await rig.start("turn-0")
+        rig.socket.feed(call("call-0"), call("call-1"), TURN_COMPLETE)
+        await drain(rig.driver.events(first))
+        held = [rig.driver.clock.monotonic()]
+        rig.socket.feed(cancelled("call-0"))
+        await settle()
+        held.append(rig.driver.clock.monotonic())
+        await asyncio.sleep(0.05)
+        second = await rig.start("turn-1")
+        within = [rig.driver.clock.monotonic()]
+        rig.socket.feed(cancelled("call-1"))
+        await settle()
+        within.append(rig.driver.clock.monotonic())
+        await asyncio.sleep(0.05)
+        rig.socket.feed(TURN_COMPLETE)
+        events = await drain(rig.driver.events(second))
+        third = await rig.start("turn-2")
+        rig.socket.feed(TURN_COMPLETE)
+        later = await drain(rig.driver.events(third))
+        await rig.driver.close()
+        return held, within, events, later
+
+    held, within, events, later = asyncio.run(run())
+    assert [(type(e).__name__, e.sequence) for e in events] == [
+        ("FunctionCallsCancelled", 1),
+        ("FunctionCallsCancelled", 2),
+        ("UsageSnapshot", 3),
+        ("GenerationBoundary", 4),
+    ]
+    assert [e.call_ids for e in events[:2]] == [("call-0",), ("call-1",)]
+    assert held[0] <= events[0].received_at <= held[1]
+    assert within[0] <= events[1].received_at <= within[1]
+    assert not [e for e in later if isinstance(e, FunctionCallsCancelled)]
+
+
 def test_a_failed_read_ends_every_reply_on_the_connection():
     """A read that fails ends the reader: the reply waiting raises the failure, and so does
     every later reply on that connection."""
