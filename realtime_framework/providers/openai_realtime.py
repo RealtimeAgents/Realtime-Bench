@@ -154,7 +154,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         protocol_family="openai_realtime",
         persistent_session=True,
         roles=("instruction", "input", "model"),
-        feedback_placements=("frame_prefix",),
+        feedback_placements=("separate_message",),
         server_context="unknown",
         can_compact_history_in_place=True,
         terminal_output_usage=True,
@@ -410,8 +410,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         return self._session
 
     async def send_observation(self, observation: ProviderObservation, history) -> dict:
-        # The history ends with this observation's frame.
-        await self._send_all([self._connected_session().core.observe(history)])
+        # The history ends with this observation's frame, after the feedback on the actions
+        # before it.
+        core = self._connected_session().core
+        await self._send_all([*core.new_feedback(history), core.observe(history)])
         return {}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
