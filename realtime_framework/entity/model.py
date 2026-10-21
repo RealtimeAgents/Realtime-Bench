@@ -142,6 +142,9 @@ class ProviderObservation:
     # Session paths send the pending execution feedback before the frame prompt; it is kept
     # apart from the prompt and dropped when the screenshot folds.
     feedback_prefix: str = ""
+    # Other paths open a frame only with the feedback on a decision of which nothing was
+    # accepted, which no turn carries; the fold keeps it.
+    unattached_feedback: str = ""
 
     @property
     def observation_id(self) -> str:
@@ -189,6 +192,7 @@ class CanonicalTurn:
             image_detail=source.image_detail,
             geometry={},
             inspection=None,
+            unattached_feedback=source.unattached_feedback,
         )
         self.visual_folded = True
 
