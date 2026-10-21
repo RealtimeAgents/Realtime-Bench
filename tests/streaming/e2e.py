@@ -2,9 +2,9 @@
 cassette (tests/streaming/clocked_ws.py CassetteServer), the replay's wall-clock environment
 (tests/replay/fake_env.py) and the streaming shell (evaluation/streaming_shell.py).
 
-``run_e2e`` takes the agent from a factory, ``agent_factory(clock, port, origin)``, built against
-the cassette's server on ``port``; ``origin`` is the environment's t0, from which an action's
-arrival is read in semantic seconds. Until the native-streaming agent exists, the agents here are
+``run_e2e`` takes the agent from a factory, ``agent_factory(clock, port)``, built against the
+cassette's server on ``port``; the shell hands it the environment's t0 (bind_inbox), from which an
+action's arrival is read in semantic seconds. Until the native-streaming agent exists, the agents here are
 scripted: each speaks its API's wire on one clocked connection, as its driver's streaming
 methods do, and hands an action over as the message carrying it comes off the wire.
 
@@ -82,8 +82,8 @@ class _ScriptedAgent:
     """What both scripted agents share: the StreamingKernelAgent bookkeeping, the reader thread
     and the frames pushed. A subclass connects, pushes, triggers and reads its own wire."""
 
-    def __init__(self, clock, url: str, origin: float):
-        self.clock, self.origin, self.post = clock, origin, None
+    def __init__(self, clock, url: str):
+        self.clock, self.origin, self.post = clock, 0.0, None
         self.pushed: list[_Pushed] = []
         self.started, self.aborted = [], []
         self.accepted, self.discarded, self.committed = [], [], []
@@ -138,8 +138,8 @@ class _ScriptedAgent:
 
     # ---- StreamingKernelAgent -----------------------------------------------------------------
 
-    def bind_inbox(self, post) -> None:
-        self.post = post
+    def bind_inbox(self, post, origin: float) -> None:
+        self.post, self.origin = post, origin
 
     def generate(self, generation, decision, observation, budget) -> PendingDecision:
         reply = _Reply(self.clock, generation)
@@ -192,12 +192,12 @@ def _image_url(observation) -> str:
 class ScriptedRealtimeAgent(_ScriptedAgent):
     """OpenAI Realtime's wire, as the driver's push_frame and request_reply write it."""
 
-    def __init__(self, clock, port: int, origin: float = 0.0):
+    def __init__(self, clock, port: int):
         self._acks: dict[str, threading.Event] = {}
         self._confirmed: set[str] = set()
         self._requested: list[_Reply] = []  # waiting for their response.created
         self._by_response: dict[str, _Reply] = {}
-        super().__init__(clock, f"ws://127.0.0.1:{port}/v1/realtime?model=gpt-realtime-2", origin)
+        super().__init__(clock, f"ws://127.0.0.1:{port}/v1/realtime?model=gpt-realtime-2")
         self.send({"type": "session.update", "session": {"type": "realtime"}})
 
     def waiters(self) -> list:
@@ -286,10 +286,10 @@ class ScriptedLiveAgent(_ScriptedAgent):
         }
     }
 
-    def __init__(self, clock, port: int, origin: float = 0.0):
+    def __init__(self, clock, port: int):
         self._reply: _Reply | None = None  # the reply in flight: Gemini Live names none
         self._set_up = clock.event()
-        super().__init__(clock, f"ws://127.0.0.1:{port}{LIVE_PATH}", origin)
+        super().__init__(clock, f"ws://127.0.0.1:{port}{LIVE_PATH}")
         self.send(self.SETUP)
         clock.wait(self._set_up, None)
 
@@ -370,8 +370,8 @@ def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=
     path = tmp_path / "episode_trace.jsonl"
     trace, logs = EpisodeTrace(path, run_id="e2e", clock=clock), []
     server = CassetteServer(cassette, clock, normalizer=normalizer or RealtimeNormalizer())
-    with server, real_time_limit(REAL_LIMIT_S, server.drop), clock.participant():
-        agent = agent_factory(clock, server.port, env.t0)
+    with server, real_time_limit(REAL_LIMIT_S, server.drop, clock.monotonic), clock.participant():
+        agent = agent_factory(clock, server.port)
         try:
             termination = run_streaming_episode(
                 agent, env, StreamingConfig(duration_s=duration_s),
