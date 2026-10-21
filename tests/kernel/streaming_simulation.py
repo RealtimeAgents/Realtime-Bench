@@ -77,11 +77,13 @@ ENDED = {"invalid_run", "not_applied_time_limit", "not_applied_terminal"}
 REFUSED_LATE = ENDED | {CANCELLED_GENERATION}  # an action its reply hands over once given up
 WITHDRAWN = ENDED | {CANCELLED_CALL, CANCELLED_GENERATION}  # a cancelled call's action not run
 # The records written past the deadline before it ends the episode, besides the events' echoes:
-# none decides anything, also while the end waits for a read asked before the deadline.
+# none decides anything, also while the end waits for a read asked before the deadline. A frame is
+# dropped then only as a push failed.
 LATE_RECORDS = {
     "TimerFired",
     TraceEvent.ACTION_PROPOSED.value,
     "CallCancelled",
+    "FrameDropped",
     "ResultDiscarded",
     "RunInvalidated",
 }
