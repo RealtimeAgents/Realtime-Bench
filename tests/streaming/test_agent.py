@@ -26,6 +26,7 @@ from .fake_live import (
     RecordingToolRuntime,
     Reply,
     Text,
+    TextEnd,
     TextLiveDriver,
     make_agent,
     observation,
@@ -182,19 +183,36 @@ def test_a_call_that_is_no_action_is_the_replys_protocol_failure_and_hands_nothi
     agent.close()
 
 
-def test_an_action_in_text_is_parsed_once_the_reply_ended_and_named_by_the_agent(
-    monkeypatch, clock
-):
+def test_an_action_in_text_arrives_when_its_text_is_complete_named_by_the_agent(monkeypatch, clock):
+    """Its text completed 0.5 s into a reply that ends 2 s in: the action arrived then
+    (decisions 19 and 4.17), and is posted as it does, while the reply goes on."""
+    agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME)
+    posted = []
+    agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
+    frame = _two_frames(agent, clock)
+    action = '{"action": "click", "x": 10, "y": 20, "button": "left", "frame": 2}'
+    agent.driver.replies.append(
+        Reply((Text(0.25, action[:20]), Text(0.5, action[20:]), TextEnd(0.75)), 2.0)
+    )
+    r = agent.generate(0, 0, frame, BUDGET).result
+    [(arrival, posted_at)] = posted
+    assert (arrival.call_id, arrival.arrived_at, arrival.frame) == ("text", 2.75, 2)
+    assert (arrival.frame_age_s, posted_at) == (0.75, 1.75)
+    assert r["raw"] == action
+    agent.close()
+
+
+def test_an_action_in_text_that_never_completed_is_parsed_when_the_reply_ended(monkeypatch, clock):
+    """With no completed text, as when the response was cut short, the reply's end stands in."""
     agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME)
     posted = []
     agent.bind_inbox(posted.append, ORIGIN)
     frame = _two_frames(agent, clock)
     action = '{"action": "click", "x": 10, "y": 20, "button": "left", "frame": 2}'
-    agent.driver.replies.append(Reply((Text(0.25, action[:20]), Text(0.5, action[20:])), 2.0))
-    r = agent.generate(0, 0, frame, BUDGET).result
+    agent.driver.replies.append(Reply((Text(0.5, action),), 2.0, boundaries=("interrupted",)))
+    agent.generate(0, 0, frame, BUDGET)
     [arrival] = posted
-    assert (arrival.call_id, arrival.arrived_at, arrival.frame) == ("text", 4.0, 2)
-    assert r["raw"] == action
+    assert (arrival.call_id, arrival.arrived_at) == ("text", 4.0)
     agent.close()
 
 

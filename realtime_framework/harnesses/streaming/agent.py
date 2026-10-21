@@ -19,10 +19,11 @@ A reply starts on the view. Each function call is parsed as its message is read,
 it names, and posted to the kernel with the time its message came off the wire, in semantic
 seconds from the episode's origin; one whose frame cannot be found arrives refused. One that is no
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
-the reply ended. A call the provider cancels, of this reply or an earlier one, is withdrawn under
-the generation it came in, once its action was posted. A reply ends as a turn does: a provider
-fault fails it, a session it leaves other than exact is rebuilt before it is used again, and a
-function call reply must complete.
+the text is complete, and arrived then; once the reply ended where no text completed. A call the
+provider cancels, of this reply or an earlier one, is withdrawn under the generation it came in,
+once its action was posted. A reply ends as a turn does: a provider fault fails it, a session it
+leaves other than exact is rebuilt before it is used again, and a function call reply must
+complete.
 
 An accepted reply's output joins the view where the output began, so that a rebuilt session shows
 the model its actions before their results; a discarded one adds nothing. Each outcome the kernel
@@ -51,6 +52,7 @@ from realtime_framework.entity.events import (
     ProviderError,
     ProviderHistoryState,
     TextDelta,
+    TextDone,
     UsageSnapshot,
 )
 from realtime_framework.entity.model import (
@@ -132,6 +134,7 @@ class _Reply:
     complete: bool = False
     terminal_usage: bool = False
     interrupted: bool = False
+    text_done: bool = False  # its text action was parsed, when its text was completed
     protocol_failure: str | None = None  # the first
     based_on: str | None = None  # the observation id of the frame its first action names
     # Where in the blocks its output began, which its output goes to once accepted: before the
@@ -447,8 +450,9 @@ class NativeStreamingAgent(VisionAgentBase):
                 reply.interrupted and not (reply.calls and reply.terminal_usage)
             ):
                 raise RuntimeError("native tool accounting requires a complete reply")
-        elif self._answer.action_channel == "text_json":
-            # The encoder does not tell when the text was completed: the reply's end stands in.
+        elif self._answer.action_channel == "text_json" and not reply.text_done:
+            # No text was completed, as when the response was cut short: the reply's end stands
+            # in for when it was.
             self._arrived(reply, reply.output, TEXT_CALL, self.clock.monotonic())
 
     def _take(self, reply: _Reply, event) -> None:
@@ -463,6 +467,12 @@ class NativeStreamingAgent(VisionAgentBase):
             (reply.reasoning if event.channel == "reasoning" else reply.text).append(event.text)
         elif isinstance(event, UsageSnapshot):
             reply.usage = event.usage
+        elif isinstance(event, TextDone):
+            # The reply's action, in the text so far, arrived when the text was completed
+            # (decisions 19 and 4.17); text after it is the reply's output only.
+            if self._answer.action_channel == "text_json" and not reply.text_done:
+                reply.text_done = True
+                self._arrived(reply, reply.output, TEXT_CALL, event.received_at)
         elif isinstance(event, ProviderError):
             # A provider fault, not the model's: the run cannot be scored, as a turn's.
             if event.fatal:

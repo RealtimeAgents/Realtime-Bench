@@ -21,6 +21,7 @@ from realtime_framework.entity.events import (
     ProviderError,
     ProviderHistoryState,
     TextDelta,
+    TextDone,
     UsageSnapshot,
 )
 from realtime_framework.entity.model import (
@@ -56,6 +57,14 @@ class Call:
 class Text:
     at: float
     text: str
+
+
+@dataclass(frozen=True)
+class TextEnd:
+    """The output text is complete ``at`` seconds into the reply, as OpenAI Realtime's
+    response.output_text.done says."""
+
+    at: float
 
 
 @dataclass(frozen=True)
@@ -200,6 +209,7 @@ class FakeLiveDriver(SessionLifecycle):
     async def events(self, generation: GenerationHandle):
         reply, start = generation.opaque, self.clock.monotonic()
         gid = generation.generation_id
+        text = ""
         for sequence, message in enumerate(reply.messages, 1):
             if not await self._until(start + message.at):
                 return
@@ -226,7 +236,10 @@ class FakeLiveDriver(SessionLifecycle):
                     arguments=message.arguments,
                     received_at=received,
                 )
+            elif isinstance(message, TextEnd):
+                yield TextDone(gid, sequence, text=text, received_at=received)
             else:
+                text += message.text
                 yield TextDelta(gid, sequence, text=message.text)
         if not await self._until(start + reply.ends_at):
             return

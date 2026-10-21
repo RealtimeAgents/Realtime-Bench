@@ -33,6 +33,16 @@ class TextDelta(ProviderEvent):
 
 
 @dataclass(frozen=True)
+class TextDone(ProviderEvent):
+    """One output text is complete, all of it in ``text``: an action in it arrived then
+    (decisions 19 and 4.17). For a driver that reads every message as it arrives, when it read
+    the message, as for FunctionCall."""
+
+    text: str = ""
+    received_at: float = field(kw_only=True)
+
+
+@dataclass(frozen=True)
 class FunctionCall(ProviderEvent):
     call_id: str = ""
     name: str = ""
