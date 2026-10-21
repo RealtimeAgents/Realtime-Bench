@@ -42,9 +42,9 @@ class StreamingRetention:
     form still open in the native-streaming plan (stream-plan.md 4.4, 4.6)."""
 
     frames: int  # the newest frames, which keep their screenshots
-    # What an older frame becomes, without its screenshot: "placeholder", the turn-based fold
-    # placeholder in place of its text; "text", its text with its element list; "prompt", its
-    # text without the element list.
+    # What an older frame becomes, folded (without its screenshot): "placeholder", the turn-based
+    # fold placeholder in place of its text; "text", its text with its element list; "prompt",
+    # its text without the element list.
     older_frames: Literal["placeholder", "text", "prompt"]
     # "all": every output and feedback stays. "archive": the policy's turn window counts replies
     # as the turn-based one counts turns, and the replies it archives leave for the action ledger.
@@ -151,7 +151,12 @@ def _archived_replies(count: int, turns: Retention) -> int:
 
 
 def _older_frame(block: ContentBlock, form: str, policy: PathPolicy) -> ContentBlock:
+    # Folded in every form: the session encoders take a folded frame for one whose screenshot
+    # left (providers/openai_realtime_session.py _edit_batch).
     if form == "placeholder":
-        return replace(block, text=policy.texts.folded_visual, image=None, folded=True)
-    text = block.text if form == "text" else without_observation_interactables(block.text)
-    return replace(block, text=text, image=None)
+        text = policy.texts.folded_visual
+    elif form == "text":
+        text = block.text
+    else:
+        text = without_observation_interactables(block.text)
+    return replace(block, text=text, image=None, folded=True)
