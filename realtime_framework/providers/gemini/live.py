@@ -473,11 +473,7 @@ class GeminiLiveDriver(SessionLifecycle):
             system_instruction=self.types.Content(
                 parts=[self.types.Part(text=seed.system_instruction)]
             ),
-            # Streaming asks the server which client message each handle covers, so a run's
-            # trace shows it; nothing reads the index yet, as its counting is not documented.
-            session_resumption=self.types.SessionResumptionConfig(
-                handle=connect.resume_handle, transparent=True if streaming else None
-            ),
+            session_resumption=self.types.SessionResumptionConfig(handle=connect.resume_handle),
             history_config=(
                 self.types.HistoryConfig(initial_history_in_client_content=True)
                 if connect.seed
