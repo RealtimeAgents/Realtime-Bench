@@ -455,7 +455,7 @@ class DeliveryLog:
     def capture(self, event, payload, **_) -> None:
         if event == TraceEvent.SESSION_DELIVERY:
             blocks = [content["block"] for content in payload["contents"]]
-            state = (payload["state"], blocks, payload["connection"], len(self.sent()))
+            state = (payload["state"], blocks, payload["connection_id"], len(self.sent()))
             self.events.append(state)
 
 

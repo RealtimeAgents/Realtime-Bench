@@ -288,7 +288,7 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
     deliveries: dict[tuple, list] = {}
     for delivery in (e["payload"] for e in events if e["event"] == "SessionDelivery"):
         for content in delivery["contents"]:
-            states = deliveries.setdefault((delivery["connection"], tuple(content["key"])), [])
+            states = deliveries.setdefault((delivery["connection_id"], tuple(content["key"])), [])
             states.append((delivery["state"], content["block"]))
     refused = json.loads(load_body(pack, deletes[-1]["body"]))["item_id"]
     assert deliveries[(first, ("delete", refused))] == [("sent", None), ("refused", None)]
@@ -434,10 +434,10 @@ def test_gemini_live_session(tmp_path, monkeypatch):
     # frame and each tool response.
     deliveries = [e["payload"] for e in events if e["event"] == "SessionDelivery"]
     confirmed = [d for d in deliveries if d["state"] == "confirmed"]
-    assert [d["connection"] for d in confirmed] == [first, resumed, replayed]
+    assert [d["connection_id"] for d in confirmed] == [first, resumed, replayed]
     assert all(d["contents"] == [{"key": ["setup"], "block": "system"}] for d in confirmed)
     assert {d["state"] for d in deliveries} == {"confirmed", "sent"}
-    seed = next(d for d in deliveries if d["connection"] == replayed and d["state"] == "sent")
+    seed = next(d for d in deliveries if d["connection_id"] == replayed and d["state"] == "sent")
     assert [c["block"] for c in seed["contents"]] == [
         "d0.frame",
         "d0.tools",
