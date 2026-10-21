@@ -1066,6 +1066,47 @@ def test_the_third_failed_read_in_a_row_invalidates_the_run(
     assert termination.invalid == Invalidated("environment", "terminal_state_check_failed", detail)
 
 
+def test_a_failed_read_inside_a_tap_does_not_stop_it():
+    # Paused at 120 fps, a tap at tick 0 is two ticks; its read at tick 1 fails and the tap goes
+    # on to 2, where the task ends, as the environment does once the kernel counts its reads
+    # (shell.py kernel_counts_reads). The check after execution, at 2, reports the end.
+    sim = _run(
+        _token(10, None, env_fps=120, input_fps=120),
+        Reply(action=TAP),
+        ends_at=2,
+        end_reason="target_reached",
+        tap_check_errors={1: "tap 1 failed"},
+    )
+    assert sim.tap_checks == [1, 2]
+    (executed,) = sim.entries("ActionExecuted")
+    assert executed.data.end_checks == ("tap 1 failed", None)
+    assert _record(sim, "ActionResolved", 0)["environment_tick"] == 2
+    assert _asked(sim) == [0, 0, 2]
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 2)
+
+
+def test_an_end_a_tap_saw_waits_for_the_next_read_when_the_check_after_it_fails():
+    # Paused at 120 fps, the tap's read at tick 1 sees the end and stops the tap there. The read
+    # passes on only that it answered (ActionExecuted.end_checks); the check after execution asks
+    # again, fails short of three in a row and answers "not over", so the end is found by the
+    # check after the next step, at 2, a tick late (today's loop invalidates the run at the
+    # failed check).
+    sim = _run(
+        _token(10, None, env_fps=120),
+        Reply(action=TAP),
+        ends_at=1,
+        end_reason="target_reached",
+        check_errors={3: "check 3 failed"},
+    )
+    assert sim.tap_checks == [1]
+    assert _asked(sim) == [0, 0, 1, 2]
+    assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", False)]
+    assert _pace(sim, 0)["to_tick"] == 2
+    assert sim.entries("RunInvalidated") == []
+    assert (sim.termination.stop_reason, sim.termination.ended_at) == ("target_reached", 2)
+
+
 def test_a_tap_that_sees_the_end_stops_and_the_check_after_it_ends_the_episode():
     # Paused at 120 fps, a tap at tick 0 is two ticks. The task ends at tick 1, which the tap's
     # first check sees: the environment stops there (sandbox/actions.py
