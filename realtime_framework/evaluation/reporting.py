@@ -1840,13 +1840,22 @@ def report(root):
                     if (not matched or summary.get("clock_mode") != identity["clock_mode"]
                             or summary.get("tokens_per_frame") != identity["tokens_per_frame"]):
                         raise ValueError("Unscored result or identity mismatch")
-                    records = [
-                        json.loads(line)
-                        for line in (path.parent / "action_lifecycle.jsonl")
-                        .read_text()
-                        .splitlines()
-                        if line
-                    ]
+                    streaming = identity["interaction_mode"] == "streaming"
+                    if streaming:
+                        # A streaming episode has no turns, so it writes no decision lifecycle
+                        # (runner.py run_stream): its run summary's streaming section stands in.
+                        section = summary["streaming"]
+                        if section.get("schema") != STREAMING_SUMMARY_SCHEMA:
+                            raise ValueError("Invalid streaming section")
+                        records = []
+                    else:
+                        records = [
+                            json.loads(line)
+                            for line in (path.parent / "action_lifecycle.jsonl")
+                            .read_text()
+                            .splitlines()
+                            if line
+                        ]
                     if len(records) != summary["decisions"] or len(
                         {r["decision"] for r in records}
                     ) != len(records):
@@ -1885,12 +1894,7 @@ def report(root):
                         # Exclude partially recorded tasks from pooled token distributions.
                         charged_tokens=known if len(known) == len(tokens) else [],
                         charged_tokens_complete=complete,
-                        # summarize_streaming's, which every streaming run summary has.
-                        **(
-                            {"streaming": summary["streaming"]}
-                            if identity["interaction_mode"] == "streaming"
-                            else {}
-                        ),
+                        **({"streaming": section} if streaming else {}),
                     )
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     row["error"] = str(exc)
