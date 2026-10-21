@@ -21,6 +21,7 @@ the run is compared with tests/replay/baselines/.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -60,6 +61,13 @@ def realtime_config(base_url: str) -> ModelConfig:
     return config.model_copy(update={"api_base_url": base_url})
 
 
+def session_waits(run_dir: Path) -> list[str]:
+    """What the driver waited for, in order: the SessionWait records of the episode trace,
+    written before each wait (providers/session_lifecycle.py _record_wait)."""
+    lines = (run_dir / "episode_trace.jsonl").read_text(encoding="utf-8").splitlines()
+    return [e["payload"]["wait"] for e in map(json.loads, lines) if e["event"] == "SessionWait"]
+
+
 def _run(stub: RealtimeStub, steps, tmp_path: Path, scenario: str) -> list[dict]:
     """Run the steps in one episode; return the records a baseline holds."""
     config = realtime_config(stub.base_url)
@@ -86,7 +94,7 @@ def _run(stub: RealtimeStub, steps, tmp_path: Path, scenario: str) -> list[dict]
         initialize_events, _ = stub.since(start)
         records = run_steps(episode, steps, stub)
     finally:
-        episode.agent.close()
+        episode.finish()
     connections = stub.finish()
 
     assert stub.violations == [], stub.violations
@@ -299,6 +307,7 @@ def test_long_scenario(tmp_path):
     assert wire_caps[:57] == ["inf"] * 57 and wire_caps[57:] == [4096, 3072, 2048]
 
     _compare_with_baseline("token-long", records, baseline.trajectory(tmp_path))
+    assert session_waits(tmp_path) == []  # edits in place; nothing to wait for
 
 
 def test_dropped_response_reconnects(tmp_path):
@@ -335,6 +344,8 @@ def test_dropped_response_reconnects(tmp_path):
     assert runtime["transport_reconnect_reason"].startswith("transient: ConnectionClosedError(")
     assert runtime["transport_retry_usage"] == [None]
     _compare_with_baseline("token-dropped-response", records, baseline.trajectory(tmp_path))
+    # The turn's retry backs off in the harness (RequestRetry), not in the session.
+    assert session_waits(tmp_path) == []
 
 
 def test_dropped_response_after_archive_replays_ledger(tmp_path):
@@ -391,6 +402,7 @@ def test_rejected_upgrade_retries_connect(tmp_path):
     assert [event["type"] for event in initialize["events"]] == ["session.update"]
     assert all(_connections_used(r) == [2] for r in _steps(records))
     _compare_with_baseline("token-rejected-upgrade", records, baseline.trajectory(tmp_path))
+    assert session_waits(tmp_path) == ["connect_backoff"]
 
 
 def test_session_edit_error_rebuilds(tmp_path):
