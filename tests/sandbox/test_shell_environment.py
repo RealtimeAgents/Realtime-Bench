@@ -350,6 +350,21 @@ def test_a_wall_release_that_keeps_failing_tells_the_shell_from_the_timer_s_thre
     assert env._invalid_run["reason"] == "wall_key_release_failed"
 
 
+def test_a_wall_release_failure_in_a_run_already_invalid_tells_the_shell_nothing():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _StuckGuest(clock)
+    told = []
+    env.on_invalid = told.append
+    with clock.participant():
+        env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
+        env._invalid_run = {"category": "environment", "reason": "action_execution_failed"}
+        clock.sleep(5.0)
+    assert len([command for _, command in env.g.commands if "keyup" in command]) == 4
+    assert told == []
+    assert env._invalid_run["reason"] == "action_execution_failed"
+
+
 # ---- the end checks inside a token key tap --------------------------------------------------
 
 TAP = Action(ActionType.KEY, {"key": "space"})
@@ -382,6 +397,16 @@ def test_a_tap_s_failed_reads_go_to_the_kernel_and_the_tap_goes_on():
     assert failed.rstrip().endswith("RuntimeError: no state") and answered is None
     assert env.tick_index() == 2
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "advance", "keyUp"]
+    assert getattr(env, "_invalid_run", None) is None
+
+
+def test_the_end_checks_of_a_repeated_tap_are_kept_in_order():
+    no_state = RuntimeError("no state")
+    env, _ = _token(stop_check=_answers(no_state, False, no_state))
+    _kernel_counting(env).execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
+    first, second, third = env.last_end_checks
+    assert first.rstrip().endswith("RuntimeError: no state") and second is None
+    assert third.rstrip().endswith("RuntimeError: no state")
     assert getattr(env, "_invalid_run", None) is None
 
 
