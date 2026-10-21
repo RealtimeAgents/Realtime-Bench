@@ -1877,9 +1877,11 @@ def report(root):
                     ):
                         raise ValueError("Invalid charged-token value")
                     known = [value for value in tokens if value is not None]
-                    counts = ((summary.get("token_accounting") or {}).get("counts") or {}).get(
-                        "clock_output_tokens", {}
-                    )
+                    accounting = summary.get("token_accounting") or {}
+                    # A decision the kernel gave up on has no lifecycle record, and its response
+                    # no place in the reported decisions' subtotal (clock.py TokenAccounting).
+                    reported = accounting.get("reported_decisions", accounting)
+                    counts = (reported.get("counts") or {}).get("clock_output_tokens", {})
                     complete = bool(tokens and len(known) == len(tokens))
                     if (
                         counts.get("responses_with_count", 0) != len(known)
