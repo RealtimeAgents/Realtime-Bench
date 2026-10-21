@@ -25,8 +25,13 @@ class ExecutionThread:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
+    @property
+    def running(self) -> bool:
+        """Started and not stopped: submit takes coroutines."""
+        return self._loop is not None and not self._loop.is_closed()
+
     def start(self) -> None:
-        if self._loop is not None and not self._loop.is_closed():
+        if self.running:
             return
         loop = self.clock.new_event_loop()
         ready = threading.Event()
@@ -45,11 +50,10 @@ class ExecutionThread:
     def submit(self, coroutine) -> concurrent.futures.Future:
         """Schedule ``coroutine`` on the thread and return at once. Coroutines start in the
         order they are submitted."""
-        loop = self._loop
-        if loop is None or loop.is_closed():
+        if not self.running:
             coroutine.close()
             raise RuntimeError("the execution thread is not running")
-        return asyncio.run_coroutine_threadsafe(coroutine, loop)
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop)
 
     def run(self, coroutine, timeout: float | None = None):
         """Run ``coroutine`` on the thread and return its result. After ``timeout`` seconds on
@@ -66,9 +70,9 @@ class ExecutionThread:
     def stop(self, timeout: float = 5.0) -> None:
         """Stop the loop and, once its thread has ended within ``timeout`` seconds, close it.
         Coroutines still pending on it never finish."""
-        loop = self._loop
-        if loop is None or loop.is_closed():
+        if not self.running:
             return
+        loop = self._loop
         loop.call_soon_threadsafe(loop.stop)
         thread = self._thread
         if thread is not None:
