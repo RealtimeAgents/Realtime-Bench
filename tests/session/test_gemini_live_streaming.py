@@ -44,7 +44,7 @@ from realtime_framework.harnesses.streaming.history import (
 )
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.gemini.session import Delivery
-from tests.session.test_gemini_live_receive import RecordingClock, server_closed
+from tests.session.test_gemini_live_receive import DeliveryLog, RecordingClock, server_closed
 from tests.session.test_gemini_live_session import pushed
 
 MODEL = (
@@ -403,6 +403,7 @@ def test_a_cancellation_between_replies_comes_with_the_next_reply():
     assert isinstance(first_event, FunctionCallsCancelled)
     assert (first_event.call_ids, first_event.generation_id) == (("call-0",), "turn-1")
     assert (first_event.connection, first_event.generation) == (1, None)
+    assert first_event.received_at is not None
 
 
 def test_a_failed_read_ends_every_reply_on_the_connection():
@@ -516,6 +517,37 @@ def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
     ]
     assert delivery == Delivery.SENT
     assert rig.log == []
+
+
+def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
+    """The event log hears a pushed frame as sent after its text went out, and a trigger's
+    feedback after the activity ended, on the connection they went out on; and once each reply
+    is done, no queue is left for it."""
+    rig = Rig()
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+    ]
+    log = DeliveryLog(lambda: rig.live.sockets[-1].sent if rig.live.sockets else [])
+    rig.driver.bind_trace(log)
+
+    async def run():
+        await rig.connect()
+        await rig.driver.push_frame(None, rig.view(blocks))
+        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        rig.socket.answer("activityEnd", TURN_COMPLETE)
+        await drain(rig.driver.events(await rig.driver.request_reply(request)))
+        left = dict(rig.driver._replies)
+        await rig.driver.close()
+        return left
+
+    assert asyncio.run(run()) == {}
+    connection = "gemini_live.ws-1"
+    assert log.events[1:] == [
+        ("sent", ["f1.frame"], connection, 2),
+        ("sent", ["d1.feedback"], connection, 6),
+    ]
 
 
 def test_a_push_and_a_trigger_go_out_one_after_the_other():
