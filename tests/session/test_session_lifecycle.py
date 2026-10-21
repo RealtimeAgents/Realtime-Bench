@@ -271,8 +271,8 @@ def test_close_waits_for_the_abort_for_a_while(interrupt_s, log):
 
 
 def test_a_close_its_caller_gives_up_on_still_closes():
-    """RealtimeRuntime.close gives driver.close 5 s (context.py:723), less than close waits for
-    a stuck abort. Cancelled while it waits, close still closes the connection."""
+    """A caller that gives close less time than close waits for a stuck abort: cancelled while it
+    waits, close still closes the connection."""
     with _rig() as rig:
         rig.encoder.interrupt_s = 60.0
         abort = rig.thread.submit(rig.encoder.abort(GENERATION))
@@ -324,7 +324,7 @@ def test_a_recovery_that_raises_is_recorded_and_the_session_reopened_next():
     ],
 )
 def test_what_a_sync_leaves_decides_the_next_use(disposition, state, next_use):
-    """As the runtime maps a sync's result (harnesses/default/context.py:377-384): exact is
+    """As the runtime mapped a sync's result before the session moved into the encoder: exact is
     ready, broken or unsupported is closed, anything else is dirty."""
     with _rig() as rig:
         rig.encoder.syncs = [HistorySyncResult(disposition, state), EXACT]
@@ -342,8 +342,8 @@ def test_what_a_sync_leaves_decides_the_next_use(disposition, state, next_use):
 )
 def test_a_sync_cut_short_leaves_the_session_to_be_recovered(interruption):
     """A sync may close the connection before an abandoned generation's cancellation cuts it
-    short (Gemini's resume does). The runtime is left SYNCHRONIZING then, not READY
-    (context.py:360, 408), so its next use rebuilds the session."""
+    short (Gemini's resume does). The session is left dirty then, as the runtime was left
+    SYNCHRONIZING before the move, so its next use rebuilds the session."""
     with _rig() as rig:
         rig.encoder.syncs = [interruption, EXACT]
 
