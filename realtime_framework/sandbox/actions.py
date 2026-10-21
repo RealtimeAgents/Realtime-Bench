@@ -392,33 +392,36 @@ class GuestEnvironment:
             if identity in self._held_keys and identity not in exclude
         ]
 
+    def _clock_key_event(self, event_type, chord, held_modifiers):
+        """Send one token-clock key event within its own budget."""
+        with operation_budget(
+            "key press" if event_type == "keyDown" else "key release",
+            ENVIRONMENT_BUDGET.key_event_s,
+            clock=self.clocks.operational,
+        ):
+            self.task.clock_key_event(event_type, chord, held_modifiers=held_modifiers)
+
     def release_keys(self, keys):
         """Token clock, for the kernel's shell: release these held keys, by identity, whose lease
         ended; a key that is not held is skipped."""
-        with operation_budget(
-            "key release", ENVIRONMENT_BUDGET.action_s, clock=self.clocks.operational
-        ):
-            self._release_clock_keys(keys)
+        self._release_clock_keys(keys)
 
-    def _release_clock_keys(self, identities=None):
-        selected = (
-            list(self._held_keys)
-            if identities is None
-            else [identity for identity in identities if identity in self._held_keys]
-        )
+    def _clock_key_up(self, identities):
+        """Release these held token-clock keys in one keyUp; a key that is not held is skipped."""
+        selected = [identity for identity in identities if identity in self._held_keys]
         if not selected:
             return
+        chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
+        self._clock_key_event("keyUp", chord, held_modifiers=self._held_modifiers(exclude=selected))
+        for identity in selected:
+            self._held_keys.pop(identity, None)
+        if self._repeat_key in selected:
+            self._repeat_key = None
+
+    def _release_clock_keys(self, identities):
+        """_clock_key_up, invalidating the run when it fails."""
         try:
-            chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
-            self.task.clock_key_event(
-                "keyUp",
-                chord,
-                held_modifiers=self._held_modifiers(exclude=selected),
-            )
-            for identity in selected:
-                self._held_keys.pop(identity, None)
-            if self._repeat_key in selected:
-                self._repeat_key = None
+            self._clock_key_up(identities)
         except Exception as exc:
             self._invalid_run = {
                 "category": "environment",
@@ -568,6 +571,15 @@ class GuestEnvironment:
                     "be used, not the browser's address bar, tabs or the desktop around it"
                 )
 
+    def _reject(self, action):
+        """Run the _reject_* checks that apply to the action."""
+        if action.action_type in (ActionType.KEY, ActionType.HOLD_KEY):
+            self._reject_page_reload(action)
+            self._reject_browser_shortcut(action)
+        elif action.action_type.value in POINTER_ACTIONS:
+            self._reject_zoom_scroll(action)
+            self._reject_outside_page(action)
+
     def _ensure_page_focus(self):
         """Keep desktop key input on the page; returns True when focus had to be restored."""
         ensure = getattr(self.scene_capture, "ensure_page_focus", None)
@@ -582,7 +594,7 @@ class GuestEnvironment:
             # Modifiers held by an earlier hold_key stay down: they only flag the tap's events.
             inherited_modifiers = self._held_modifiers(exclude=requested_identities)
             for _ in range(repeat):
-                self.task.clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
+                self._clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
                 # A new press of a repeatable key takes over auto-repeat on a real keyboard; the
                 # tap is released before its first repeat could fire, so nothing repeats
                 # afterwards. Modifier keys do not repeat and leave the repeating key alone.
@@ -592,14 +604,14 @@ class GuestEnvironment:
                 # never see a keyDown+keyUp delivered inside one frozen instant. Render
                 # one frame with the key down before releasing it (~17 ms of virtual time).
                 self.wait_until_tick(self._logical_tick + TAP_HOLD_S / self.d)
-                self.task.clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
+                self._clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
             # A tap of an already-held key must not terminate its outstanding lease. The lease may
             # have expired during the rendered frame above, so only keys still held are pressed
             # again.
             restore_identities = [item for item in overlapping if item in self._held_keys]
             if restore_identities:
                 restore = "+".join(self._held_keys[item]["wire"] for item in restore_identities)
-                self.task.clock_key_event(
+                self._clock_key_event(
                     "keyDown",
                     restore,
                     held_modifiers=self._held_modifiers(exclude=restore_identities),
@@ -635,10 +647,10 @@ class GuestEnvironment:
         extended = [identity for identity, _ in parts if identity in self._held_keys]
         new_chord = "+".join(wire for _, wire in new_parts)
         if new_parts:
-            self.task.clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+            self._clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
         if duration <= 1e-9:
             if new_parts:
-                self.task.clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
+                self._clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
                 # The transient press took over auto-repeat and was released at once.
                 self._repeat_key = None
         else:
@@ -871,10 +883,11 @@ class GuestEnvironment:
             self._held_mouse_buttons.discard(button)
 
     def release_inputs(self):
-        """Best-effort episode cleanup for every stateful input primitive."""
+        """Best-effort episode cleanup for every stateful input primitive. It runs once the
+        outcome is latched: a failure raises for the caller to log and leaves the run as it was."""
         try:
             if self.clock_mode == "token" and hasattr(self.task, "clock_key_event"):
-                self._release_clock_keys()
+                self._clock_key_up(list(self._held_keys))
             if self.clock_mode != "token":
                 self._release_wall_holds()
         finally:
@@ -963,17 +976,12 @@ class GuestEnvironment:
             except Exception as exc:
                 return self._execution_failed(exc)
         try:
-            if action_type in (ActionType.KEY, ActionType.HOLD_KEY):
-                self._reject_page_reload(action)
-                self._reject_browser_shortcut(action)
-            elif action_type.value in POINTER_ACTIONS:
-                self._reject_zoom_scroll(action)
-                self._reject_outside_page(action)
             if (
                 self.clock_mode == "token"
                 and hasattr(self.task, "clock_key_event")
                 and action_type in (ActionType.KEY, ActionType.HOLD_KEY)
             ):
+                self._reject(action)
                 self._last_execution_result = self._execute_clock_key(action)
                 self.actions += 1
                 return "applied"
@@ -981,6 +989,9 @@ class GuestEnvironment:
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
             ):
+                # The checks and the hold snapshot below take _wall_lock, which the wall clock's
+                # release timer holds during its guest request.
+                self._reject(action)
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
                     ActionType.KEY,
@@ -1015,6 +1026,7 @@ class GuestEnvironment:
                     if not isinstance(result, dict):
                         result = {"guest_result": result}
                     result["business_action_barrier"] = barrier_result
+                active_holds = self._active_hold_snapshot()
             if focus_restored:
                 if not isinstance(result, dict):
                     result = {"guest_result": result}
@@ -1026,7 +1038,7 @@ class GuestEnvironment:
             elif action_type == ActionType.MOUSE_UP:
                 self._held_mouse_buttons.discard(action.parameters.get("button", "left"))
             if isinstance(self._last_execution_result, dict):
-                self._last_execution_result["active_holds"] = self._active_hold_snapshot()
+                self._last_execution_result["active_holds"] = active_holds
                 self._last_execution_result["active_mouse_buttons"] = sorted(
                     self._held_mouse_buttons
                 )

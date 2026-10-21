@@ -122,13 +122,20 @@ class EnvironmentBudgetConfig:
     """Overall time budget in seconds of each environment operation (sandbox/budget.py).
 
     The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in
-    evaluation/runner.py. Running past a budget fails the operation and invalidates the run.
+    evaluation/runner.py. Running past a budget fails the operation and invalidates the run, except
+    at the cleanup after the outcome is latched (release_inputs), whose failure is only logged.
     """
 
-    # Execute one action; extended for text input and holds as the guest's request timeout is
-    # (sandbox/guest.py action_timeout).
-    action_s: float = 10.0
-    capture_s: float = 120.0  # capture one observation; the CDP call default
+    # Execute one action, everything from the page focus to the page's action barrier. Extended for
+    # text input and holds as the guest's request timeout is (sandbox/guest.py action_timeout). A
+    # game's key action under the token clock goes over CDP and is timed per key event instead.
+    action_s: float = 20.0
+    # Send one such key event, a press or a release; a tap's frame between its press and its
+    # release is a clock advance. As long as the guest's request for a key may take.
+    key_event_s: float = 10.0
+    # Capture one observation: the page probes, the guest's screenshots and the wait for the render
+    # fence. As long as one CDP call may take by default.
+    capture_s: float = 120.0
     state_read_s: float = 120.0  # ask the task whether the episode ended; the CDP call default
     # The same read when the kernel's shell asks on the wall clock, at the environment rate. Three
     # failed reads in a row invalidate the run, so a wedged environment ends it in about 30 s.

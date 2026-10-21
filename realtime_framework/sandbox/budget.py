@@ -3,14 +3,16 @@ from __future__ import annotations
 # Budget
 """Deadlines for environment operations and the sandbox calls they make.
 
-An environment operation (executing an action, capturing a frame, reading task state, advancing
-the token clock) runs synchronously on the loop thread, and the scored snapshot waits for it. It
-takes one absolute deadline when it starts. A CDP call made inside it spends what is left on the
-lock wait, the connect and each receive, and a message that is not the awaited reply does not
-restart the timer; a guest request gets at most what is left for its connect and for each read.
-Waits that cannot be cut this way (a WebSocket send, the task runtimes' own HTTP requests) are
-caught when the operation ends: an operation that ends after its deadline fails. Task runtimes
-pass no budget; the clients read the current operation's deadline here.
+An environment operation (executing an action, sending one key event under the token clock,
+capturing a frame, reading task state, advancing the token clock) runs synchronously on the loop
+thread, and the scored snapshot waits for it. It takes one absolute deadline when it starts. A CDP
+call made inside it spends what is left on the lock wait, the connect and each receive, and a
+message that is not the awaited reply does not restart the timer; a guest request gets at most
+what is left for its connect and for each read.
+Waits that are not cut this way (a WebSocket send, the task runtimes' own HTTP requests, the wall
+clock's lock on its key holds) are caught when the operation ends: an operation that ends after
+its deadline fails. Task runtimes pass no budget; the clients read the current operation's
+deadline here.
 """
 
 from contextlib import contextmanager as contextmanager
@@ -66,7 +68,7 @@ class Deadline:
 
     def overrun(self) -> bool:
         """Whether a wait ran out of this deadline or it has passed."""
-        return self.expired or (self.at is not None and self.clock.monotonic() >= self.at)
+        return self.expired or self.clock.monotonic() >= self.at
 
 
 @contextmanager
@@ -82,9 +84,9 @@ def operation_budget(name: str, seconds: float, clock: Clock | None = None):
     try:
         yield
     except Exception as exc:
-        if deadline.overrun():
+        if deadline.overrun() and str(exc) != deadline.message:
             # One line keeps both, so a truncated failure detail still names the budget.
-            raise BudgetExceeded(f"{deadline.message} ({type(exc).__name__}: {exc})") from None
+            raise BudgetExceeded(f"{deadline.message} ({type(exc).__name__}: {exc})") from exc
         raise
     finally:
         _OPERATION.reset(token)
