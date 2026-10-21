@@ -713,3 +713,17 @@ def test_frames_dropped_while_a_response_streams_lose_no_event():
         ("delete", core.frames["d2.frame"].user_item_id, None, True),
         ("create", "user", ledger.item_id, True),
     ]
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_a_streaming_reply_keeps_its_items_under_its_output_block(status):
+    """A native-streaming reply answers no frame: its events join it as a turn's do, and at its
+    response.done its output items are kept under the output block it becomes."""
+    core = opened([turn(0, "a0")])
+    assistant = core.frames["d0.frame"].assistant_item_ids
+    reply = core.start_reply("g1.output")
+    events = response_events(status)
+    assert all(core.receive(event) for event in events)
+    assert list(reply.events) == events
+    assert core.outputs == ({} if status == "failed" else {"g1.output": ["srv_1"]})
+    assert core.frames["d0.frame"].assistant_item_ids == assistant

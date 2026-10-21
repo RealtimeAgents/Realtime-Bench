@@ -158,16 +158,18 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
 
 @dataclass
 class Generation:
-    """One response on this connection: its number on the connection, the frame it answers, its
-    response id once the server created it, the output items the server made for it, the client
-    event that cancels it, and its server events not yet taken, in arrival order."""
+    """One response on this connection: its number on the connection, the frame it answers (in
+    native streaming, the output block it becomes instead), its response id once the server
+    created it, the output items the server made for it, the client event that cancels it, and
+    its server events not yet taken, in arrival order."""
 
     number: int
-    answered: SentFrame
+    answered: SentFrame | None
     response_id: str | None = None
     output_item_ids: list[str] = field(default_factory=list)
     cancel_event_id: str | None = None
     events: deque = field(default_factory=deque)
+    output_id: str | None = None
 
 
 class RealtimeSessionCore:
@@ -192,6 +194,8 @@ class RealtimeSessionCore:
         self.delivery: dict[tuple[str, str], Delivery] = {}
         # Every frame native streaming pushed, by the client event of its create.
         self.pushes: dict[str, Push] = {}
+        # The items of each reply native streaming requested, by the output block it becomes.
+        self.outputs: dict[str, list[str]] = {}
         # The in-place edit waiting for the server: its operations not yet confirmed, and the
         # error that failed it.
         self._edit: EditBatch | None = None
@@ -476,6 +480,14 @@ class RealtimeSessionCore:
         self._requested.append(generation)
         return generation
 
+    def start_reply(self, output_id: str) -> Generation:
+        """Register a response native streaming is about to request, whose output becomes the
+        history view's block ``output_id``; it takes its events as start_generation's does."""
+        self._generations += 1
+        generation = Generation(self._generations, None, output_id=output_id)
+        self._requested.append(generation)
+        return generation
+
     def receive(self, event) -> bool:
         """Apply one server event of this connection, in arrival order. Returns whether a state
         took it: an operation it confirms, or the push, edit or response it is about."""
@@ -539,7 +551,8 @@ class RealtimeSessionCore:
 
     def _response_event(self, generation: Generation, kind: str, event) -> None:
         """Record what a response event says about the conversation: the output items the server
-        made, and at response.done the answered frame's assistant items."""
+        made, and at response.done the answered frame's assistant items, or the items of the
+        output block a native-streaming reply becomes."""
         if kind in {"response.output_item.added", "response.output_item.done"}:
             self._output_item(generation, getattr(getattr(event, "item", None), "id", None))
         elif kind == "response.done":
@@ -548,7 +561,10 @@ class RealtimeSessionCore:
                 self._output_item(generation, getattr(item, "id", None))
             if getattr(response, "status", None) != "failed":
                 # A superseded response's session is closed and replayed before its next use.
-                generation.answered.assistant_item_ids = list(generation.output_item_ids)
+                if generation.answered is None:
+                    self.outputs[generation.output_id] = list(generation.output_item_ids)
+                else:
+                    generation.answered.assistant_item_ids = list(generation.output_item_ids)
             del self._responses[generation.response_id]
 
     @staticmethod
