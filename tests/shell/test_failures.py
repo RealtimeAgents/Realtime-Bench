@@ -2,10 +2,10 @@
 
 An exception the legacy loop let escape it (runner.py run_stream) invalidates the run as
 runner:run_exception and the episode still finalizes. An invalid run the environment latches
-itself keeps its own reason: the shell posts it before the command's answer, and the wall
-clock's key-release timer posts it through ``on_invalid``. Failed state reads are counted by the
-kernel, three in a row invalidate the run, the ones a token key tap makes inside execute() too
-(X12).
+itself in an operation that returns keeps its own reason: the shell posts it before the
+command's answer, and the wall clock's key-release timer posts it through ``on_invalid``. Failed
+state reads are counted by the kernel, three in a row invalidate the run, the ones a token key
+tap makes inside execute() too (X12).
 """
 
 from __future__ import annotations
