@@ -372,7 +372,7 @@ def _probe_runner(request: dict) -> dict:
             "clock_prompt": adapter.streaming_note,
             "settings_at_agent_setup": state["settings_at_agent_setup"],
             "settings_at_call": {
-                # providers/litellm.py:71, read before each LiteLLM-driver request.
+                # providers/litellm.py pace_request, read before each LiteLLM-driver request.
                 "min_request_interval_s": float(
                     os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0")
                 ),
