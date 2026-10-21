@@ -324,10 +324,10 @@ class TurnPolicy:
             self.decisions, event.observation_id, event.tick, event.timestamp
         )
         if self.token and config.tokens_per_frame is not None:
-            # The allowance left before the horizon is the input frames left times B
-            # (runner.py _decide).
-            frames_left = self._frames(config.max_ticks - d.t_k)
-            d.remaining = max(0, math.floor(frames_left * config.tokens_per_frame + 1e-9))
+            # The allowance left before the horizon is the input frames left times B, rounded
+            # down within float noise, which grows with it (runner.py _decide).
+            allowance = self._frames(config.max_ticks - d.t_k) * config.tokens_per_frame
+            d.remaining = max(0, math.floor(allowance + max(1e-9, allowance * 1e-12)))
             if d.remaining <= 0:
                 self.phase = _Phase.HORIZON
                 return self._move(config.max_ticks, self._at_horizon)
