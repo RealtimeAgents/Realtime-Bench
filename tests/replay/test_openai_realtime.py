@@ -39,6 +39,7 @@ from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import SessionSeed
@@ -530,6 +531,34 @@ def test_network_fault_retries_connect(fault, monkeypatch):
     assert len(waits) == 3
     assert raised.value.failure == TransportFailure(TRANSIENT, exhausted=True)
     assert raised.value.retries == 3
+
+
+@pytest.mark.parametrize(
+    ("status", "attempts", "kind"),
+    [(401, 1, FATAL), (403, 1, FATAL), (429, 4, RATE_LIMITED)],
+)
+def test_a_refused_upgrade_retries_connect_as_its_status_says(status, attempts, kind, monkeypatch):
+    """A refused upgrade carries its HTTP status (websockets InvalidStatus), which
+    classify_http_failure reads: 401 and 403 are fatal and end connect() at its first attempt;
+    429 is rate limiting, retried as the shared policy retries it (entity/model.py
+    TRANSPORT_RETRY)."""
+    waits = []
+    monkeypatch.setattr(
+        model_module, "_backoff", lambda clock, cancel, seconds: waits.append(seconds)
+    )
+    trace = _ConnectAttempts()
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    request = ConnectRequest(seed=SessionSeed("instruction", MODEL_KEY, None, 1.0, answer))
+    with RealtimeStub([], reject_upgrades=(1, 2, 3, 4), reject_status=status) as stub:
+        driver = OpenAIRealtimeDriver(realtime_config(stub.base_url))
+        driver.bind_trace(trace)
+        with pytest.raises(TransportFailureError) as raised:
+            asyncio.run(driver.connect(request))
+        rejected = [connection.rejected for connection in stub.connections]
+    assert rejected == [status] * attempts
+    assert trace.attempts == [("retry", kind)] * (attempts - 1) + [("failed", kind)]
+    assert len(waits) == attempts - 1
+    assert raised.value.failure.kind == kind
 
 
 def _while_handling(error: Exception, handled: Exception) -> Exception:
