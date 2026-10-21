@@ -1126,6 +1126,7 @@ class GeminiLiveDriver(SessionLifecycle):
                         call.id or "",
                         call.name or "",
                         arguments,
+                        received_at=received.at if self.streaming else None,
                         **numbers,
                     )
                 # Acknowledge every pending call as queued; the next observation carries its

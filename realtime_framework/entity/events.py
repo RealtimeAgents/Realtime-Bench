@@ -37,6 +37,9 @@ class FunctionCall(ProviderEvent):
     call_id: str = ""
     name: str = ""
     arguments: dict = field(default_factory=dict)
+    # For a driver that reads every message as it arrives: when it read the call's message, on
+    # its operational clock, which is when the call came off the wire.
+    received_at: float | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
