@@ -660,7 +660,16 @@ class GuestEnvironment:
         extended = [identity for identity, _ in parts if identity in self._held_keys]
         new_chord = "+".join(wire for _, wire in new_parts)
         if new_parts:
-            self._clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+            try:
+                self._clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+            except Exception:
+                # The press may have reached the page: its keys count as held, for the cleanup.
+                for identity, wire in new_parts:
+                    self._held_keys[identity] = {
+                        "wire": wire,
+                        "expires_at_tick": self._logical_tick,
+                    }
+                raise
         if duration <= 1e-9:
             if new_parts:
                 self._clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
@@ -831,9 +840,25 @@ class GuestEnvironment:
                 (identity, wire) for identity, wire in parts if identity not in self._wall_holds
             ]
             if new_parts:
-                self._wall_command(
-                    ["xdotool", "keydown", "--", *(keysyms[identity] for identity, _ in new_parts)]
-                )
+                try:
+                    self._wall_command(
+                        [
+                            "xdotool",
+                            "keydown",
+                            "--",
+                            *(keysyms[identity] for identity, _ in new_parts),
+                        ]
+                    )
+                except Exception:
+                    # The keydown may have reached the desktop: its keys count as held, for the
+                    # cleanup.
+                    for identity, wire in new_parts:
+                        self._wall_holds[identity] = {
+                            "wire": wire,
+                            "keysym": keysyms[identity],
+                            "expires_at": now,
+                        }
+                    raise
             pressed_at = self.clocks.semantic.time()
             expires_at = (
                 now + duration

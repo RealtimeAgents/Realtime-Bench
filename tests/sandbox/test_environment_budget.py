@@ -785,6 +785,60 @@ def test_a_key_whose_release_failed_stays_held_and_the_cleanup_releases_it_again
     assert env._held_keys == {}
 
 
+@pytest.mark.parametrize("delivered", [True, False], ids=["delivered-late", "lost"])
+def test_the_cleanup_releases_the_keys_of_a_hold_whose_press_failed(delivered):
+    """Coordinator's decision N20: the press may have reached the page, so its keys count as
+    maybe down; releasing a key that is up does nothing."""
+    clock = FakeClock()
+    env, task = _timed(clock)
+    _slow_key_event(clock, task, 0, 60.0, delivered=delivered)
+    with clock.participant():
+        assert env.execute(Action.hold_key("shift+a", 1.0)) == "failed"
+        env.release_inputs()
+    pressed = [("keyDown", "shift+a")] if delivered else []
+    assert [(event["event"], event["key"]) for event in task.events] == [
+        *pressed,
+        ("keyUp", "shift+a"),
+    ]
+    assert env._held_keys == {}
+
+
+class _DesktopCommands:
+    """The guest's command endpoint, which records each command; an xdotool keydown reaches the
+    desktop, but its answer spends the action's budget (sandbox/guest.py execute_command)."""
+
+    def __init__(self, clock: FakeClock):
+        self.clock = clock
+        self.commands: list[str] = []
+
+    def execute_command(self, command: str, timeout: int = 30) -> dict:
+        self.commands.append(command)
+        if "keydown" in command:
+            _sandbox_call(self.clock, 3600.0)
+        return {"returncode": 0}
+
+
+def test_the_cleanup_releases_the_keys_of_a_wall_hold_whose_keydown_request_failed():
+    clock = FakeClock(wall_origin=1_000.0)
+    guest = _DesktopCommands(clock)
+    env = actions.GuestEnvironment(
+        guest,
+        1_060.0,
+        _WallTask(),
+        honor_fail=False,
+        clock_mode="wall",
+        wall_start_time=1_000.0,
+        clocks=Clocks(clock, clock),
+    )
+    with clock.participant():
+        assert env.execute(Action.hold_key("a", 1.0)) == "failed"
+        env.release_inputs()
+    assert [command for command in guest.commands if command.startswith("xdotool")] == [
+        "xdotool keydown -- a",
+        "xdotool keyup -- a",
+    ]
+
+
 @pytest.mark.parametrize("slow", [True, False], ids=["slow", "failing"])
 def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(slow):
     """release_inputs runs once run_stream has latched the outcome, and the runner only logs its
