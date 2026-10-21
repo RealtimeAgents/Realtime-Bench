@@ -137,7 +137,8 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
 
 def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
     """4.8: the deadline falls at 3 s, during the action. The snapshot goes right after it; the
-    read due at 2 s waited for the action and was never sent."""
+    read due at 2 s waited for the action and was never sent. The presentation ends when the
+    snapshot begins, after the action, as on the turn-based shell."""
     termination, env, agent = _episode(3.0, ONE_CLICK)
     assert env.intervals[4:] == [
         ("capture", 2.0, 2.25),
@@ -145,6 +146,7 @@ def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
         ("snapshot", 3.775, 4.275),
     ]
     assert termination == Termination("time_limit", "deadline", 3.0, 4.275, 3.0, 4.275, None)
+    assert env._active_end_unix_s == 3.775
     ((_, outcome),) = agent.committed
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
 
