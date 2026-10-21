@@ -20,6 +20,7 @@ from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation.agent_trace import load_body
+from realtime_framework.evaluation.clock import token_record
 
 from . import baseline
 from .build import build_episode
@@ -282,6 +283,8 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
         "provider",
         "context_exceeded_before_request",
     )
+    # Its token record says why it has no usage (evaluation/clock.py token_record).
+    assert token_record(result)["provider_usage_missing_reason"] == "request_not_sent"
     trace = (tmp_path / "episode_trace.jsonl").read_text()
     attempts = [
         e["payload"]
