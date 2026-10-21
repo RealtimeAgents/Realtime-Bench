@@ -198,3 +198,14 @@ def test_a_client_stuck_in_real_time_fails_instead_of_hanging():
 
     with pytest.raises(AssertionError, match="did not finish within 1 real second"):
         _replay(records, client, connection=ClientConnection, real_limit_s=1.0)
+
+
+def test_a_connection_the_server_ends_twice_raises_nothing():
+    """L10: the server's exit ends a connection the client left open (shutdown), and the closing
+    handshake that follows ends it again, which macOS refuses with ENOTCONN."""
+    records = [_record("open", at=0.0), _record("c2s", {"type": "hello"}, 0.0)]
+
+    def client(open_connection, clock):
+        _send(open_connection(), {"type": "hello"})  # and never closed
+
+    assert not [problem for problem in _replay(records, client) if "OSError" in problem]
