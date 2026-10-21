@@ -667,3 +667,41 @@ def test_a_reply_aborted_while_a_push_reopens_the_session_is_never_asked_for(mon
     assert out["value"].cancelled
     assert not [call for call in agent.driver.calls if call[0] == "reply"]
     agent.close()
+
+
+def test_a_replys_output_comes_before_the_feedback_committed_before_it_was_accepted(
+    monkeypatch, clock
+):
+    """A wait is settled where it arrives, before its reply is accepted: a session rebuilt from
+    the view shows the model its action before the result of it."""
+    agent = make_agent(monkeypatch, clock, TextLiveDriver, REALTIME)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((Text(0.25, '{"action": "wait", "frame": 2}'),), 1.0))
+    agent.generate(0, 0, frame, BUDGET)
+    [arrival] = posted
+    agent.commit(_outcome(0, "wait", "text", action=arrival.action))
+    agent.accept(0)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-1][2][3:] == ("d0.output", "d0.text.feedback", "f3.frame")
+    agent.close()
+
+
+def test_a_replys_output_goes_where_it_began_before_its_actions_feedback(monkeypatch, clock):
+    """A click executes while its reply goes on, and a frame is pushed meanwhile: the reply's
+    output stands where it began, before both."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=1.0))
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.commit(_outcome(3, "applied", "c1", action=posted[0].action))
+    agent.push(observation(clock, 3))
+    assert clock.wait(replied, 1.0)
+    agent.accept(7)
+    agent.push(observation(clock, 4))
+    assert agent.driver.calls[-1][2][3:] == ("d3.output", "d3.c1.feedback", "f3.frame", "f4.frame")
+    agent.close()

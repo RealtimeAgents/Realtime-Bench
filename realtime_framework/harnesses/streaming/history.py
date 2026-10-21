@@ -1,12 +1,12 @@
 """The native-streaming history view: what a live session should hold, computed from the content
 blocks the streaming agent has accepted (phase2.md, native streaming 上下文怎么管).
 
-The agent keeps the blocks in the order it accepted them: each pushed frame under its frame-table
-number, each reply's model output, based on the frame its action names, and each execution
-feedback, attached to the output whose action it reports. The view keeps the frames and outputs
-in that order under their ids, so an encoder can diff two views by id. Only the newest frames keep
-their screenshots; an older frame folds as a turn-based frame does, and never gets its screenshot
-back. Every output stays, however old.
+The agent keeps the blocks in the order they came to the session: each pushed frame under its
+frame-table number, each accepted reply's model output where the output began, based on the frame
+its action names, and each execution feedback, attached to the output whose action it reports.
+The view keeps the frames and outputs in that order under their ids, so an encoder can diff two
+views by id. Only the newest frames keep their screenshots; an older frame folds as a turn-based
+frame does, and never gets its screenshot back. Every output stays, however old.
 
 Feedback goes where the policy places it (PathPolicy.feedback), as in a turn-based request
 (harnesses/default/request.py _turn_items). As its own block, it keeps its id and stays where it
@@ -99,9 +99,9 @@ def history_view(
     answer: AnswerRequirements,
     call: CallParameters,
 ) -> CanonicalRequest:
-    """The session the accepted ``blocks`` (frames, outputs and feedback, in acceptance order)
-    make: the system instruction, then every block in order, the frames older than the newest
-    ``retained_frames`` folded, and the feedback where the policy places it."""
+    """The session the accepted ``blocks`` (frames, outputs and feedback, in the order the
+    agent keeps them) make: the system instruction, then every block in order, the frames older
+    than the newest ``retained_frames`` folded, and the feedback where the policy places it."""
     frame_prefix = _FRAME_PREFIX[policy.feedback]
     frames = [index for index, block in enumerate(blocks) if block.kind == "frame"]
     older = set(frames[: max(0, len(frames) - retained_frames)])
