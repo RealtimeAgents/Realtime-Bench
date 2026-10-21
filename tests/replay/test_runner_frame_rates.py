@@ -360,6 +360,49 @@ def test_a_failed_clock_advance_keeps_the_environment_s_reason(monkeypatch, tmp_
     assert "RuntimeError: page clock did not advance" in env._loop_error
 
 
+class _FrozenTokenEnvironment(TokenEnvironment):
+    """From decision 1 on, the stream replays decision 1's frame: the same observation id, tick and
+    pixels, while the world moves on."""
+
+    def capture(self):
+        observation = super().capture()
+        if self.decision == 1:
+            self._frozen = observation
+        return self._frozen if self.decision > 1 else observation
+
+
+@pytest.mark.usefixtures("openrouter_env")
+def test_a_token_stream_that_replays_one_frame_is_judged_frozen(monkeypatch, tmp_path):
+    """60/1, B=160: each reply's 80 tokens move the world half a frame. From decision 1 on the
+    stream replays one frame; at its third showing (RUNNER_TIMING.observation_freeze_n) the
+    kernel invalidates the run as frozen (kernel/turns.py _captured), operational time having
+    moved on with the world (token_env.py _RunnerClock), and no generation starts for it."""
+    entry = catalog.get(OPENROUTER_MODEL_KEY)
+    config = catalog.to_model_config(
+        OPENROUTER_MODEL_KEY, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]
+    )
+    task = ClockTask(60.0, runner.task_clock_tokens_per_frame(160, 60.0, 1.0))
+    with OpenRouterStub([reply(TAB, 80)] * 3, route=ROUTE) as stub:
+        monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = build_episode(
+            config,
+            tmp_path,
+            task=task,
+            instruction=TASK_INSTRUCTION,
+            model_key=OPENROUTER_MODEL_KEY,
+            clock_mode="token",
+            tokens_per_frame=160,
+            env_fps=60.0,
+        )
+        env = _FrozenTokenEnvironment(episode.frames, task, max_minutes=0.25)
+        run_loop(episode, env)
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    invalid = env._invalid_run
+    assert (invalid["category"], invalid["reason"]) == ("environment", "observation_stream_frozen")
+    assert env._stream_frozen is True
+    assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3
+
+
 @dataclass(frozen=True)
 class WallCase:
     name: str

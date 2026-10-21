@@ -20,15 +20,21 @@ from .frames import CLOCK_ORIGIN, FrameSource
 
 
 class _RunnerClock(SystemClock):
-    """run_stream's operational clock (loop.py) on the token clock: it waits in real time, and
-    the times it records stay at CLOCK_ORIGIN and its readings at 0, since token time never moves
-    them. The shell's watchdog, which reads it, never comes due."""
+    """run_stream's operational clock (loop.py) on the token clock: it waits in real time, the
+    times it records stay at CLOCK_ORIGIN, and its readings are the world's seconds, which move
+    with the tick and not while a generation runs. So the readings are the same on every run,
+    and a stream that replays one frame while the world moves on is judged frozen
+    (kernel/turns.py _FrozenStream); the shell's watchdog, which reads it too, never comes
+    due."""
+
+    def __init__(self, env: GuestEnvironment):
+        self._env = env
 
     def time(self) -> float:
         return CLOCK_ORIGIN
 
     def monotonic(self) -> float:
-        return 0.0
+        return self._env._logical_tick / self._env.fps
 
 
 class _Guest:
@@ -62,7 +68,7 @@ class TokenEnvironment(GuestEnvironment):
         )
         self.fps = task.clock_snapshot()["fps"]
         self.max_minutes = max_minutes
-        self.clock = _RunnerClock()
+        self.clock = _RunnerClock(self)
         task.on_event = self._task_event
 
     def log(self, call: str, **fields) -> None:
