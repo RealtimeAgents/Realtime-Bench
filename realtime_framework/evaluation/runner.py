@@ -41,8 +41,11 @@ Runtime invariants:
 import math as math, traceback as traceback
 
 from realtime_framework.clock import SystemClock
+from realtime_framework.clock import episode_clocks
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.config import DEFAULT_MODE
+from realtime_framework.evaluation.kernel.turns import TurnConfig
+from realtime_framework.evaluation.shell import run_episode
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
@@ -103,6 +106,49 @@ def _whole_up(value):
 def run_stream(
     adapter,
     env,
+    *,
+    clock_mode="token",
+    duration_s=60.0,
+    env_fps=1.0,
+    input_fps=1.0,
+    tokens_per_frame=None,
+    think_budget_s=None,
+    per_move_cap_s=None,
+    log=print,
+    trace=None,
+    agent_trace=None,
+    clocks=None,
+):
+    """Run one episode on the event kernel's shell (shell.run_episode) and return its timeline.
+    The horizon in world seconds and the two frame rates are main()'s own values: the kernel's
+    frame arithmetic takes the rates, which tick lengths would give back only to within an ulp.
+    ``agent_trace`` is the agent's AgentTraceSink on ``trace``, whose records the kernel numbers
+    during the episode. ``clocks`` are the episode's (realtime_framework/clock.py), real ones when
+    omitted."""
+    config = TurnConfig(
+        clock_mode,
+        duration_s,
+        env_fps,
+        input_fps,
+        tokens_per_frame,
+        think_budget_s,
+        per_move_cap_s,
+        timing=RUNNER_TIMING,
+    )
+    return run_episode(
+        adapter,
+        env,
+        config,
+        clocks=clocks or episode_clocks(clock_mode, env_fps),
+        log=log,
+        trace=trace,
+        agent_trace=agent_trace,
+    )
+
+
+def _run_stream_legacy(
+    adapter,
+    env,
     delta_s=1.0,
     frame_ticks=1.0,
     max_ticks=60,
@@ -114,7 +160,8 @@ def run_stream(
     trace=None,
     clock=None,
 ):
-    """``clock`` is the episode's operational clock (realtime_framework/clock.py), real time when
+    """The turn loop main() ran before the kernel's shell, kept only to be run side by side with
+    it. ``clock`` is the episode's operational clock (realtime_framework/clock.py), real time when
     omitted; on the wall clock it is also the semantic clock ``env`` reads."""
     clock = clock or SystemClock()
     if clock_mode not in {"token", "wall"}:
@@ -375,22 +422,11 @@ def run_stream(
                     "invalid_reason": "generation_watchdog_timeout",
                     "invalid_detail": f"generation exceeded {timeout:g}s",
                 }
-            return {
-                "action": None,
-                "latency": round(clock.time() - t0, 2),
-                "timed_out": True,
-                "harness_timeout_reason": timeout_reason,
-                "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
-            }
+            return episode_records.timed_out_result(round(clock.time() - t0, 2), timeout_reason)
         log(f"[default] k={k} generation failed, recovering:\n{err}")
-        return {
-            "action": None,
-            "latency": round(clock.time() - t0, 2),
-            "error": True,
-            "invalid_category": "provider",
-            "invalid_reason": "generation_error",
-            "invalid_detail": err or "adapter returned a non-object generation result",
-        }
+        return episode_records.generation_error(
+            round(clock.time() - t0, 2), err or "adapter returned a non-object generation result"
+        )
 
     def _charge(r, deliberation_s):
         # Charge the deliberation clock for one move and apply the per-move cap. A move whose
@@ -601,7 +637,7 @@ def run_stream(
         frame_age_s = None
         if isinstance(observation_timestamp, (int, float)):
             frame_age_s = (
-                max(0.0, (tau_k - r.get("observation_tick", t_k)) * delta_s)
+                max(0.0, (tau_k - r["observation_tick"]) * delta_s)
                 if clock_mode == "token"
                 else max(0.0, action_resolved_at - observation_timestamp)
             )
@@ -631,7 +667,6 @@ def run_stream(
                     episode_records.lifecycle_record(
                         r,
                         decision=k,
-                        observation_tick=r.get("observation_tick", t_k),
                         clock_mode=clock_mode,
                         frame_age_s=frame_age_s,
                         action_clock_position=round(tau_k, 9),
@@ -795,8 +830,6 @@ def run_stream(
             observation=obs,
             native_output_limit=native_output_limit,
             budget=budget,
-            remaining_clock_tokens=remaining_clock_tokens,
-            clock_mode=clock_mode,
             tokens_per_frame=tokens_per_frame,
         )
         usage_after = episode_records.usage_snapshot(adapter)
@@ -819,12 +852,7 @@ def run_stream(
         proposed = r.get("action")
         if proposed is not None and proposed.action_type in {ActionType.DONE, ActionType.FAIL}:
             r["action"] = Action.wait()
-            action_protocol = {
-                **action_protocol,
-                "source": "invalid_action_fallback_wait",
-                "valid_action": False,
-                "protocol_failure": "unsupported_terminal_action",
-            }
+            action_protocol = episode_records.terminal_wait_protocol(action_protocol)
             r["action_protocol"] = action_protocol
         if r.get("action") is not None and not action_protocol.get("protocol_failure"):
             _emit(
@@ -889,7 +917,6 @@ sys.path.insert(0, str(ROOT))
 
 import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
-from realtime_framework.clock import episode_clocks
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
@@ -1428,16 +1455,17 @@ def main():
             timeline = run_stream(
                 agent,
                 env,
-                delta_s=1.0 / env_fps,
-                frame_ticks=env_fps / model_input_fps,
-                max_ticks=a.max_minutes * 60 * env_fps,
-                log=lambda m: print(m, flush=True),
+                clock_mode=a.clock,
+                duration_s=a.max_minutes * 60,
+                env_fps=env_fps,
+                input_fps=model_input_fps,
+                tokens_per_frame=tokens_per_frame,
                 think_budget_s=think_budget,
                 per_move_cap_s=per_move_cap,
-                clock_mode=a.clock,
-                tokens_per_frame=tokens_per_frame,
+                log=lambda m: print(m, flush=True),
                 trace=episode_trace,
-                clock=clocks.operational,
+                agent_trace=agent_trace,
+                clocks=clocks,
             )
             error = getattr(env, "_loop_error", None)
         finally:

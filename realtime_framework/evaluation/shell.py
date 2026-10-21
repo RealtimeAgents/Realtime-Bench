@@ -66,6 +66,7 @@ from realtime_framework.evaluation.kernel.events import (
     AcceptResult,
     ActionExecuted,
     AdvanceClock,
+    AgentRecord,
     Capture,
     CheckEnd,
     ClockStepped,
@@ -202,6 +203,7 @@ def run_episode(
     clocks: Clocks,
     log: Callable[[str], object] = print,
     trace=None,
+    agent_trace=None,
     inputs_log: Path | None = None,
 ) -> list[tuple]:
     """Run one episode on the kernel; return its timeline, ``(k, t_k, d_ticks, tau_k, action)``
@@ -214,10 +216,15 @@ def run_episode(
     ``_loop_error``, ``_think_spent``, ``_dropped_intermediate_frames``, ``_stream_frozen`` and
     the drain of abandoned workers (``_drain_abandoned``).
 
+    ``agent_trace``, the agent's AgentTraceSink on ``trace``, hands the agent's records to the
+    kernel during the episode, and the shell writes them in the kernel's order. Once the episode
+    is finished the sink writes them itself again, after the shell has written those it handed
+    over by then.
+
     ``inputs_log`` records what the kernel was given, one JSON line for each call that handled
     something: its readings and the events the step took from the inbox. A new kernel fed the
     same reproduces the episode's log (phase2.md, 怎么验证)."""
-    return _Shell(agent, env, config, clocks, log, trace, inputs_log).run()
+    return _Shell(agent, env, config, clocks, log, trace, agent_trace, inputs_log).run()
 
 
 @dataclass
@@ -244,6 +251,7 @@ class _Generation:
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
+    echo: Entry | None = None  # the kernel's record of the result, which those are written under
 
 
 @dataclass
@@ -303,9 +311,11 @@ def _escaped_termination(
 
 
 class _Shell:
-    def __init__(self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, inputs_log):
+    def __init__(
+        self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, agent_trace, inputs_log
+    ):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
-        self.log, self.trace = log, trace
+        self.log, self.trace, self.agent_trace = log, trace, agent_trace
         self._inputs_log = inputs_log
         self.token = config.clock_mode == "token"
         self.policy = TurnPolicy(config)
@@ -326,6 +336,7 @@ class _Shell:
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
+        self._accepting: set[int] = set()  # the generations the batch being run accepts
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -343,13 +354,43 @@ class _Shell:
         env._drain_abandoned = self._drain_abandoned
         try:
             if self._inputs_log is None:
-                self._loop()
+                self._episode()
             else:
                 with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
-                    self._loop()
+                    self._episode()
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             self._wrap_up(traceback.format_exc())
         return self.timeline
+
+    def _episode(self) -> None:
+        if self.agent_trace is None:
+            return self._loop()
+        self.agent_trace.hand_over(self.post)
+        try:
+            self._loop()
+        finally:
+            self.agent_trace.take_back(self._write_handed if self._finished else lambda: None)
+
+    def _write_handed(self) -> None:
+        """Once the episode is finished: step the kernel through what is still due, the agent
+        records handed over before the sink took them back among it, and write the records. The
+        kernel handles nothing after the end, so any other event's echo is only a
+        KernelRecord."""
+        now = self._read()
+        while True:
+            with self._inbox:
+                self._now = now
+                commands = self.kernel.step(*now)
+                taken, self._posted = self._posted, []
+            if commands is None:
+                return
+            self._record_inputs("step", taken)
+            for command in commands:
+                entry = command.entry
+                if isinstance(entry.data, AgentRecord):
+                    self._emit(entry.kind, entry.data.data, entry)
+                else:
+                    self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
 
     def _loop(self) -> None:
         self._now = self._read()
@@ -431,6 +472,7 @@ class _Shell:
     # ---- commands -----------------------------------------------------------------------------
 
     def _run_all(self, commands: list) -> None:
+        self._accepting = {c.generation for c in commands if isinstance(c, AcceptResult)}
         for command in commands:
             self._run(command)
 
@@ -458,10 +500,12 @@ class _Shell:
                 self._start_generation(command)
             case AbortGeneration(generation=generation):
                 self._abort(generation)
-            # Its records are written by now (the echo comes first); its frame and result go.
+            # Its frame and result go; the records of a settled result follow the agent's accept.
             case AcceptResult(generation=generation):
-                self._decision.result = self._generations.pop(generation).result
+                held = self._generations.pop(generation)
+                self._decision.result = held.result
                 self.agent.accept(generation)
+                self._write_inference(held)
             case DiscardResult(generation=generation):
                 del self._generations[generation]
                 self.agent.discard(generation)
@@ -667,8 +711,6 @@ class _Shell:
             observation=held.observation,
             native_output_limit=held.native_output_limit,
             budget=budget,
-            remaining_clock_tokens=held.remaining,
-            clock_mode=clock_mode,
             tokens_per_frame=self.config.tokens_per_frame,
         )
         usage_after = episode_records.usage_snapshot(agent)
@@ -694,6 +736,21 @@ class _Shell:
             invalid=episode_records.result_invalid(r, agent, clock_mode),
         )
         return result, inference
+
+    def _write_inference(self, held: _Generation) -> None:
+        """The OutputChunkReceived and InferenceCompleted records of a settled result, under the
+        kernel's record of it. An agent that holds its result adds its usage as it accepts it
+        (harnesses/default/harness.py), so the frame's usage is what the usage grew by until now."""
+        if held.echo is None:
+            return
+        chunks, completed = held.inference
+        usage_after = episode_records.usage_snapshot(self.agent)
+        if held.usage_before is not None and usage_after is not None:
+            completed = {
+                **completed,
+                "frame_usage": episode_records.frame_usage(held.usage_before, usage_after),
+            }
+        self._emit_inference((chunks, completed), held.echo)
 
     def _abort(self, generation: int) -> None:
         held = self._generations.get(generation)  # None when its StartGeneration raised
@@ -784,7 +841,6 @@ class _Shell:
                 episode_records.lifecycle_record(
                     r,
                     decision=outcome.decision,
-                    observation_tick=r["observation_tick"],
                     clock_mode=config.clock_mode,
                     frame_age_s=outcome.frame_age_s,
                     action_clock_position=outcome.action_clock_position,
@@ -958,7 +1014,13 @@ class _Shell:
                 entry,
             )
         elif kind == "GenerationFinished" and self._generations[data.generation].inference:
-            self._emit_inference(self._generations[data.generation].inference, entry)
+            held = self._generations[data.generation]
+            held.echo = entry
+            # The kernel takes a result in the step that echoes it (kernel/core.py _dispatch),
+            # whose next command is AcceptResult: the records wait for the agent to have it. A
+            # result the kernel discards adds no usage.
+            if data.generation not in self._accepting:
+                self._write_inference(held)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
             self._emit(
                 TraceEvent.ACTION_PROPOSED,
@@ -998,6 +1060,8 @@ class _Shell:
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
                 )
             self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
+        elif isinstance(data, AgentRecord):
+            self._emit(kind, data.data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
             if invalid.reason == "observation_stream_frozen":

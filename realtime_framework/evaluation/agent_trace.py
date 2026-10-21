@@ -26,9 +26,10 @@ import zlib
 from pathlib import Path
 
 from realtime_framework.entity.records import TraceEvent, current_trace_scope
+from realtime_framework.evaluation.kernel.events import AgentRecord
 
 # Bound on writing the queued agent records at episode end, sized like ABANDONED_DRAIN_S
-# (runner.py:52-54). A run whose agent records are incomplete is invalid.
+# (runner.py). A run whose agent records are incomplete is invalid.
 AGENT_TRACE_FLUSH_S = 30.0
 # Base64 spans at least this long are stored verbatim and once per hash.
 SPAN_MIN_CHARS = 4096
@@ -157,7 +158,12 @@ def _json_bytes(value) -> bytes:
 
 
 class AgentTraceSink:
-    """Queue agent records on any thread; one writer thread emits them in capture order."""
+    """Queue agent records on any thread; one writer thread emits them in capture order.
+
+    While the kernel's shell runs an episode, the writer hands each record to the kernel as an
+    AgentRecord instead (``hand_over``): the kernel numbers it into the episode log and the shell
+    writes it, so agent and kernel records share one order. The blobs and the session links are
+    still made here, before the record is handed over."""
 
     def __init__(self, trace, pack_path: Path):
         self.trace = trace
@@ -172,6 +178,7 @@ class AgentTraceSink:
         # The writer emits only while holding this lock; finish() takes it to fence the writer.
         self._emit_lock = threading.Lock()
         self._fenced = False
+        self._post = None  # the kernel's inbox while records are handed over
         self._sessions: dict[str, dict] = {}
         self._writer = threading.Thread(target=self._run, name="agent-trace-writer", daemon=True)
         self._writer.start()
@@ -207,10 +214,26 @@ class AgentTraceSink:
                 with self._emit_lock:
                     if self._fenced:
                         return
-                    self.trace.emit(event, record)
+                    if self._post is None:
+                        self.trace.emit(event, record)
+                    else:
+                        scope = record["scope"] or {}
+                        self._post(AgentRecord(event.value, record, scope.get("generation")))
                     self._written += 1
             except Exception:  # noqa: BLE001 - any write failure invalidates the run
                 self._error = traceback.format_exc()
+
+    def hand_over(self, post) -> None:
+        """From the next record on, hand each to the kernel with ``post`` instead of writing it."""
+        with self._emit_lock:
+            self._post = post
+
+    def take_back(self, write_handed) -> None:
+        """Write the records again. ``write_handed`` writes those already handed over first; the
+        writer waits for it."""
+        with self._emit_lock:
+            self._post = None
+            write_handed()
 
     def _record(self, sequence, event, payload, body, classify, wall_time_ns, monotonic_ns, scope):
         record = {
