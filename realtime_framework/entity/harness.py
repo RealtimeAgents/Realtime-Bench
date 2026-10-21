@@ -14,9 +14,9 @@ if TYPE_CHECKING:  # the entity layer does not import the evaluation package at 
 
 
 class DecisionSetupError(Exception):
-    """configure_decision or stream_prefill raised in the legacy turn (StreamingAgent.generate).
-    The legacy loop ran those on its own thread, so their failure, the cause, is the runner's and
-    not the model's (N30)."""
+    """configure_decision raised in the legacy turn (StreamingAgent.generate). The legacy loop ran
+    it on its own thread, so its failure, the cause, is the runner's and not the model's (N30);
+    stream_prefill it ran in the call it bounded, whose failure is a generation error."""
 
 
 class StreamingAgent(ABC):
@@ -72,9 +72,9 @@ class StreamingAgent(ABC):
     ) -> PendingDecision:
         try:
             self.configure_decision(budget)
-            self.stream_prefill(observation)
         except Exception as error:
             raise DecisionSetupError from error
+        self.stream_prefill(observation)
         result = self.stream_generate(tick=decision)
         return PendingDecision(generation, decision, result, cancelled=bool(result.get("stale")))
 

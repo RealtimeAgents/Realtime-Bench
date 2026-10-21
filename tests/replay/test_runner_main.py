@@ -363,16 +363,14 @@ class FailingPrefillAgent(FakeAgent):
         _raise_deep(40)
 
 
-@pytest.mark.parametrize("agent_type", [FailingAgent, FailingPrefillAgent])
-def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path, agent_type):
-    """The first decision raises after the loop's first end check, as it binds its budget or
-    takes its frame, which the legacy loop did on its own thread (N30): the run is invalid as the
-    runner's, its detail ends with the exception and the summary's error holds the whole
-    traceback."""
+def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path):
+    """The first decision raises after the loop's first end check, as it binds its budget, which
+    the legacy loop did on its own thread (N30): the run is invalid as the runner's, its detail
+    ends with the exception and the summary's error holds the whole traceback."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "deadline_expired", False)
-    summary = run_main(tmp_path, task, agent_type(clock), clock, guest)
+    summary = run_main(tmp_path, task, FailingAgent(clock), clock, guest)
 
     invalid = summary["invalid_run"]
     assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
@@ -380,6 +378,27 @@ def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path, agent_type
     assert error.startswith("Traceback (most recent call last):") and len(error) > 2000
     assert error.rstrip().endswith("RuntimeError: budget rejected")
     assert invalid["detail"] == error[-2000:]
+    assert summary["outcome"] == "error"
+    assert summary["termination"] == {
+        "stop_reason": "invalid_run",
+        "end_s": QUERY_S,
+        "snapshot_s": QUERY_S + SNAPSHOT_S,
+        "snapshot_delay_s": SNAPSHOT_S,
+    }
+
+
+def test_a_frame_the_agent_fails_to_take_is_its_generation_error(tmp_path):
+    """The first decision raises as it takes its frame, which the legacy loop did in the call
+    it bounds (legacy_loop.py _decide): the run is invalid as the provider's generation error,
+    and the summary has no error."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "deadline_expired", False)
+    summary = run_main(tmp_path, task, FailingPrefillAgent(clock), clock, guest)
+
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")
+    assert summary["error"] is None
     assert summary["outcome"] == "error"
     assert summary["termination"] == {
         "stop_reason": "invalid_run",
