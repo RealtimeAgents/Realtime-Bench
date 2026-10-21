@@ -134,6 +134,26 @@ def test_the_environment_keeps_its_reason_for_a_tap_whose_advance_failed():
     assert getattr(episode.env, "_loop_error", None) is None
 
 
+def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
+    """Paused at tick 0, a 3 s wait: its second step fails and the environment latches
+    clock_advance_failed. The wait is a failed action, as the environment reports it
+    (sandbox/actions.py GuestEnvironment.execute; kernel/turns.py _step_failed): invalid_run,
+    an error for its execution record, no ActionApplied, and nothing escaped the loop."""
+    world = World(advance_errors={2: "advance failed"})
+    episode = run("token", 5.0, [Reply(0.0, Action.wait(3.0))], world)
+    _finalized(episode, 1.0)
+    assert episode.invalid == {
+        "category": "environment",
+        "reason": "clock_advance_failed",
+        "detail": "advance failed",
+    }
+    assert episode.statuses() == ["invalid_run"]
+    (record,) = episode.env.lifecycle
+    assert "RuntimeError: advance failed" in record["execution_result"]["error"]
+    assert "ActionApplied" not in episode.trace.events()
+    assert getattr(episode.env, "_loop_error", None) is None
+
+
 def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
     """The kernel keeps the end of a long detail (kernel/core.py invalidate); the record main()
     reads stays the environment's, whole, as under the runner (runner.py _invalidate)."""
@@ -145,8 +165,10 @@ def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
 
 
 def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
-    """The environment latches clock_advance_failed and raises, which escaped the legacy loop:
-    the reason is the environment's and the traceback is the summary's error."""
+    """The environment latches clock_advance_failed and raises while the clock moves to the
+    action time. The step is answered with its error and the kernel gives it the environment's
+    reason (kernel/turns.py _step_failed); the record stays the environment's. Under the runner
+    the exception escaped the loop and became the summary's error; here nothing escapes."""
     world = World(advance_errors={1: "advance failed"})
     episode = run("token", 3.0, [Reply(0.0, CLICK, output_tokens=100)], world, tokens_per_frame=100)
     _finalized(episode, 0.0)
@@ -155,7 +177,8 @@ def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
         "reason": "clock_advance_failed",
         "detail": "advance failed",
     }
-    assert "RuntimeError: advance failed" in episode.env._loop_error
+    assert "RuntimeError: advance failed" in episode.trace.payloads("RunInvalidated")[0]["detail"]
+    assert getattr(episode.env, "_loop_error", None) is None
 
 
 def test_a_failed_wall_key_release_invalidates_the_run_when_it_happens():
