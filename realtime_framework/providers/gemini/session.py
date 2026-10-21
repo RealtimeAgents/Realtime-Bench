@@ -560,7 +560,9 @@ class SessionCore:
 
     def trigger(self, history: CanonicalRequest) -> Trigger:
         """Plan the activity that starts a streaming session's next reply, with what the session
-        lacks of the history view's execution feedback, and record it as being written.
+        lacks of the history view's execution feedback, and record it as being written. Start
+        the reply's generation (start_generation) before the activity goes out: read as it
+        arrives, the reply's first message would otherwise be an orphan, and its calls lost.
 
         The feedback is in blocks of its own or in blocks in front of frames, as the policy
         places it (PathPolicy.feedback). A block in front of the next frame gains a line with each
