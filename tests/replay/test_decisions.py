@@ -467,16 +467,25 @@ def test_history_overflow_two_blocks(tmp_path):
 
 def test_history_overflow_exhausted(tmp_path):
     """A request still over the window once every turn is archived is not sent: the decision is
-    invalid and the episode ends (harnesses/default/context.py _run_turn)."""
+    invalid, for its context rather than its provider, and the episode ends
+    (harnesses/default/context.py _run_turn)."""
     header, records = _play_terms(script.TERMS_EXHAUSTED, ARCHIVE_WINDOWS["exhausted"], tmp_path)
     *_, failed = records
     assert failed["step"] == script.TERMS_ARCHIVE_DECISION and failed["requests"] == []
-    assert failed["result"]["invalid_reason"] == "provider_request_failed"
+    assert failed["result"]["invalid_category"] == "harness"
+    assert failed["result"]["invalid_reason"] == "context_exceeded_before_request"
     assert failed["result"]["invalid_detail"] == (
-        "RuntimeError('Task instructions, execution ledger and current observation exceed "
-        "context capacity; use a larger endpoint window')"
+        "RequestExceedsContext('Task instructions, execution ledger and current observation "
+        "exceed context capacity; use a larger endpoint window')"
     )
     assert failed["commit"] is None and failed["action_history_entry"] is None
+    (attempt,) = [
+        e["payload"]
+        for e in map(json.loads, (tmp_path / "episode_trace.jsonl").read_text().splitlines())
+        if e["event"] == "ModelAttemptFinished"
+        and e["payload"]["scope"]["decision"] == script.TERMS_ARCHIVE_DECISION
+    ]
+    assert attempt["invalid_reason"] == "context_exceeded_before_request"
     changes = _pressure_archives(tmp_path)
     assert [change["ledger"]["archived_actions_after"] for change in changes] == [10, 20, 24]
     assert {change["scope"]["decision"] for change in changes} == {script.TERMS_ARCHIVE_DECISION}

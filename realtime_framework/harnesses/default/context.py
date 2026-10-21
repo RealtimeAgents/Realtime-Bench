@@ -131,6 +131,12 @@ def session_frame_text(observation) -> str:
     return f"{prefix}\n{observation.prompt}" if prefix else observation.prompt
 
 
+class RequestExceedsContext(RuntimeError):
+    """The request did not fit the declared context window, so it was never sent."""
+
+    invalid_reason = "context_exceeded_before_request"
+
+
 class RealtimeRuntime:
     """Own the protocol-neutral lifecycle around one provider driver.
 
@@ -555,7 +561,7 @@ class RealtimeRuntime:
                     "Request exceeds physical context; driver must implement native context compaction"
                 )
             if not self._turns:
-                raise RuntimeError(
+                raise RequestExceedsContext(
                     "Task instructions, execution ledger and current observation exceed context capacity; use a larger endpoint window"
                 )
             archived = self._turns[: self.policy.turns.block]
