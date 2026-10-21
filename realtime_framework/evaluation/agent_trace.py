@@ -274,7 +274,8 @@ class AgentTraceSink:
             length += start - previous
             spans.append({"at": length, "ref": self.pack.put(data[start:end])})
             previous = end
-            # Yields the GIL so the runtime loop runs between screenshots; waits no time.
+            # Yields the GIL so the execution thread's loop runs between screenshots; waits no
+            # time.
             time.sleep(0)  # noqa: TID251
         pieces.append(data[previous:])
         template = b"".join(pieces)

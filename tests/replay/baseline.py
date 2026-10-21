@@ -50,19 +50,19 @@ REAL_TIME_FIELDS = frozenset(
     }
 )
 RANDOM_IDS = (
-    ("generation", re.compile(r"turn-\d+-[0-9a-f]{12}")),  # uuid4: harness.py:1245
-    ("inspection", re.compile(r"inspect-\d{6}-[0-9a-f]{8}")),  # uuid4: som.py:660
+    ("generation", re.compile(r"turn-\d+-[0-9a-f]{12}")),  # uuid4: DefaultHarness._generate
+    ("inspection", re.compile(r"inspect-\d{6}-[0-9a-f]{8}")),  # uuid4: som.py _next_call_id
     ("stub", re.compile(r"(?:http|ws)://127\.0\.0\.1:\d+")),  # the stub's OS-assigned port
-    ("session", re.compile(r"rtb-[0-9a-f]{32}")),  # uuid4 per driver: providers/litellm.py:481
-    # OpenAI Realtime client ids "rtb_<kind>_" + uuid4 hex (providers/openai_realtime.py:226-233;
-    # kinds at providers/openai_realtime_session.py:187, 200, 215, 284, 290, 294, 309, 313)
+    ("session", re.compile(r"rtb-[0-9a-f]{32}")),  # uuid4 per driver: LiteLLMDriver.__init__
+    # OpenAI Realtime client ids "rtb_<kind>_" + uuid4 hex (providers/openai_realtime.py
+    # _new_client_id), of the kinds the replayed sessions use (openai_realtime_session.py _new_id)
     ("rtb_user", re.compile(r"rtb_user_[0-9a-f]+")),
     ("rtb_assistant", re.compile(r"rtb_assistant_[0-9a-f]+")),
     ("rtb_ledger", re.compile(r"rtb_ledger_[0-9a-f]+")),
-    ("rtb_feedback", re.compile(r"rtb_feedback_[0-9a-f]+")),  # openai_realtime_session.py
+    ("rtb_feedback", re.compile(r"rtb_feedback_[0-9a-f]+")),
     ("rtb_create", re.compile(r"rtb_create_[0-9a-f]+")),
     ("rtb_delete", re.compile(r"rtb_delete_[0-9a-f]+")),
-    # output item ids of the Realtime stub (tests/replay/ws_openai_realtime.py:423)
+    # output item ids of the Realtime stub (tests/replay/ws_openai_realtime.py _respond)
     ("server_item", re.compile(r"item_srv_\d+")),
 )
 DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # providers/litellm.py:348
