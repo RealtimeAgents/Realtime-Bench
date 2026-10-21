@@ -147,16 +147,24 @@ def _check_live_options(config) -> None:
 def _check_live_model_contract(config) -> None:
     """Reject setup combinations that violate the selected Live model's API contract."""
     options = live_options(config)
+    model_name = str(config.model_name).rsplit("/", 1)[-1]
+    if model_name == _GEMINI_FLASH_LIVE:
+        # Ahead of the rule below, which would reject blocking with silent responses again.
+        fixes = []
+        if options["tool_behavior"] != "blocking":
+            fixes.append("tool_behavior=blocking")
+        if options["tool_response_scheduling"] == "silent":
+            fixes.append("tool_response_scheduling=omit")
+        if fixes:
+            raise ValueError(
+                f"{_GEMINI_FLASH_LIVE} calls functions synchronously only; use "
+                + " and ".join(fixes)
+            )
     if (
         options["tool_response_scheduling"] == "silent"
         and options["tool_behavior"] != "non_blocking"
     ):
         raise ValueError("Silent Gemini tool responses require non-blocking tools")
-    model_name = str(config.model_name).rsplit("/", 1)[-1]
-    if model_name == _GEMINI_FLASH_LIVE and options["tool_behavior"] != "blocking":
-        raise ValueError(
-            f"{_GEMINI_FLASH_LIVE} calls functions synchronously only; use tool_behavior=blocking"
-        )
     if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
         raise ValueError(
             "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"
