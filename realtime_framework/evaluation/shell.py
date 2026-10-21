@@ -57,6 +57,7 @@ from typing import Any, Protocol
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.config import DecisionBudget
+from realtime_framework.entity.harness import DecisionSetupError
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
@@ -253,6 +254,7 @@ class _Generation:
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
+    escaped: str | None = None  # the traceback of a failure that escaped the legacy loop
     echo: Entry | None = None  # the kernel's record of the result, which those are written under
 
 
@@ -693,6 +695,11 @@ class _Shell:
                 held.generation, held.decision, held.observation, held.budget
             )
             held.result = pending.result
+        except DecisionSetupError as error:
+            # Settled as an exception that escaped the legacy loop (_settle_returned).
+            held.escaped = "".join(traceback.format_exception(error.__cause__))
+            latency = round(self.clocks.operational.time() - held.started_at, 2)
+            held.result = episode_records.generation_error(latency, held.escaped)
         # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled).
         except BaseException:  # noqa: BLE001 - a failed generation invalidates the run
             failure = traceback.format_exc()
@@ -718,9 +725,14 @@ class _Shell:
         _bounded_call). The late result of a generation the kernel gave up on goes back as it
         came, to be discarded: the runner never handled one either. One back before a bound the
         kernel then handled first, busy as the shell was, is settled all the same: the kernel
-        discards it, and its records are its own."""
+        discards it, and its records are its own. A failure in the steps the legacy loop ran on
+        its own thread (DecisionSetupError) invalidates the run as one that escaped that loop,
+        before the kernel gets the result."""
         for _ in range(count):
             held = self._returned.popleft()
+            if held.escaped is not None:
+                self._raised(held.escaped)
+                held.escaped = None
             if self.kernel.generation != held.generation:
                 self.post(GenerationFinished(held.generation, GenerationResult()))
                 continue
