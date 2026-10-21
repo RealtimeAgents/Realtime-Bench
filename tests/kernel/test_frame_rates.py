@@ -281,6 +281,25 @@ def test_a_large_allowance_is_rounded_down_within_float_noise():
 
 
 @pytest.mark.parametrize(
+    ("minutes", "whole"),
+    [
+        (0.17, 51),  # 51.00000000000001 ticks, 7.1e-15 past tick 51
+        (32.02, 9606),  # 9606.000000000002 ticks, 1.8e-12 past tick 9606
+        (51.00000002 / 300, None),  # 2e-8 past tick 51
+    ],
+    ids=["0.17-min", "32.02-min", "past-1e-9"],
+)
+def test_the_horizon_snaps_to_a_whole_tick_within_1e9(minutes, whole):
+    """At 5 fps the run's horizon is max_minutes * 60 * 5 ticks (runner.py main), whose float noise
+    grows with it; within 1e-9 of a whole tick it is that tick, as the environment's clock snaps,
+    and further off it stays as it is."""
+    ticks = minutes * 60 * 5
+    assert TurnConfig("token", minutes * 60, env_fps=5).max_ticks == (
+        ticks if whole is None else whole
+    )
+
+
+@pytest.mark.parametrize(
     ("tokens_per_frame", "last"),
     [(None, "applied"), (100, "not_applied_tick_limit")],
     ids=["paused", "finite-b"],
