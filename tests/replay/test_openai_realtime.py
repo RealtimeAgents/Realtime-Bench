@@ -563,6 +563,47 @@ def test_a_refused_upgrade_retries_connect_as_its_status_says(status, attempts, 
     assert raised.value.failure.kind == kind
 
 
+@pytest.mark.parametrize(
+    ("status", "reason"), [(429, "provider_rate_limited"), (503, "provider_unavailable")]
+)
+def test_a_rebuild_that_spends_its_connect_retries_fails_the_turn(
+    status, reason, tmp_path, monkeypatch
+):
+    """Decision 39: a rebuild's connect makes the shared policy's four attempts, and once they
+    are spent the turn fails with that verdict, as a first connect does, rather than being
+    retried whole. The first response is dropped before any output, so the harness retries the
+    decision on a rebuilt session, whose every upgrade the server refuses."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    steps = LONG_SCENARIO[:1]
+    with RealtimeStub(
+        replies(steps),
+        drop_responses=(1,),
+        reject_upgrades=tuple(range(2, 12)),
+        reject_status=status,
+    ) as stub:
+        episode = build_episode(
+            realtime_config(stub.base_url),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=MODEL_KEY,
+            clock_mode="token",
+            tokens_per_frame=TOKENS_PER_FRAME,
+            max_ticks=MAX_TICKS,
+        )
+        try:
+            stub.wait_for_session_update()
+            agent, observation = episode.agent, episode.frames.capture(0)
+            agent.configure_decision(episode.budget(observation.tick_number))
+            agent.stream_prefill(observation)
+            result = agent.stream_generate(tick=0)
+        finally:
+            episode.finish()
+        rejected = [connection.rejected for connection in stub.connections]
+    assert rejected == [None] + [status] * 4
+    assert result["invalid_reason"] == reason
+
+
 def _while_handling(error: Exception, handled: Exception) -> Exception:
     """``error`` as raised while ``handled`` was being handled."""
     try:
