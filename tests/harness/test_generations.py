@@ -28,7 +28,7 @@ from realtime_framework.harnesses.default.prompts import (
 )
 from tests.frames.test_grounding import moving_probe
 from tests.replay import scenario_decisions
-from tests.replay.build import build_episode
+from tests.replay.build import build_episode, wait_for_abort
 from tests.replay.frames import ReplayTask
 from tests.replay.scenario import (
     CLICK_NAME,
@@ -306,7 +306,7 @@ def test_an_abort_before_the_reply_sends_no_request(tmp_path):
             box, done = _in_worker(lambda: agent.generate(1, 0, observation, budget))
             assert entered.wait(WAIT_S), "generation 1 reached no observation step"
             agent.abort(1)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             release.set()
             pending = _joined(box, done)
             agent.discard(1)
@@ -328,7 +328,7 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
         episode = _chat_episode(stub, tmp_path)
         agent, runtime = episode.agent, episode.agent._runtime
         entered, release = threading.Event(), threading.Event()
-        ensure_ready, retained = runtime._ensure_ready, runtime._retained
+        ensure_ready, retained = runtime.session.ensure_ready, runtime._retained
         sends = _count_calls(agent.driver, "send_observation")
         retentions = []
 
@@ -345,7 +345,7 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
                 release.wait(WAIT_S)
             return retained(*args)
 
-        runtime._ensure_ready, runtime._retained = ready, retaining
+        runtime.session.ensure_ready, runtime._retained = ready, retaining
         try:
             box, done = _in_worker(lambda: _generate(episode, 1, 0))
             assert entered.wait(WAIT_S), f"generation 1 never reached {where}"
@@ -372,7 +372,7 @@ def test_an_abort_after_the_reply_keeps_nothing(tmp_path):
             box, done = _in_worker(lambda: _generate(episode, 1, 0))
             assert entered.wait(WAIT_S), "generation 1 got no reply"
             agent.abort(1)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             release.set()
             pending = _joined(box, done)
             agent.discard(1)
@@ -405,7 +405,7 @@ def test_the_legacy_loop_drops_a_reply_its_abort_cancelled(tmp_path):
             box, done = _in_worker(lambda: agent.stream_generate(tick=0))
             assert entered.wait(WAIT_S), "decision 0 got no reply"
             agent.abort()
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             release.set()
             result = _joined(box, done)
         finally:
@@ -648,7 +648,7 @@ def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
             box, done = _in_worker(lambda: agent.generate(1, 0, late, late_budget))
             assert inspecting.wait(WAIT_S), "generation 1 inspected no frame"
             agent.abort(1)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             box2, done2 = _in_worker(lambda: agent.generate(2, 1, own, own_budget))
             assert asked.wait(WAIT_S), "generation 2 sent no request"
             inspected.set()
@@ -941,7 +941,7 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
             box, done = _in_worker(lambda: _generate(episode, 2, 1))
             assert entered.wait(WAIT_S), "decision 1 got no reply"
             agent.abort(2)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             release.set()
             skipped = _joined(box, done)
             agent.commit(_outcome(1, "skipped_timeout"))
@@ -1002,7 +1002,7 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
             box, done = _in_worker(lambda: agent.generate(1, 0, first, budget))
             assert entered.wait(WAIT_S), "generation 1 sent no observation"
             agent.abort(1)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             stub.load(scenario_decisions.WEB_LONG[1].script)
             accepted = agent.generate(2, 1, second, episode.budget(second.tick_number))
             agent.accept(2)
@@ -1049,7 +1049,7 @@ def test_an_abandoned_generation_archives_nothing_under_pressure(tmp_path):
             box, done = _in_worker(lambda: agent.generate(1, 0, first, budget))
             assert entered.wait(WAIT_S), "generation 1 sized no request"
             agent.abort(1)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             accepted = agent.generate(2, 1, second, episode.budget(second.tick_number))
             agent.accept(2)
             release.set()
@@ -1113,7 +1113,7 @@ def test_an_abandoned_generation_omits_nothing_under_pressure(tmp_path):
             box2, done2 = _in_worker(lambda: agent.generate(2, 1, frames[1], budgets[1]))
             assert sizing.wait(WAIT_S), "generation 2 sized no request"
             agent.abort(2)
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             box3, done3 = _in_worker(lambda: agent.generate(3, 2, frames[2], budgets[2]))
             assert replying.wait(WAIT_S), "generation 3 reached no reply"
             history = (
@@ -1140,7 +1140,7 @@ def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
     """Luna, aborted while decision 0's question is under way, as the legacy loop's per-move cap
     does. The abort closes the Decisions HTTP client (providers/openai_decisions.py close), and
     the held question then fails on it. Decision 1 connects again first
-    (RealtimeRuntime._ensure_ready), which opens a new client, so its questions are sent and
+    (the session's ensure_ready), which opens a new client, so its questions are sent and
     answered."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
     with DecisionsStub(upstream="openai") as stub:
@@ -1155,7 +1155,7 @@ def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
             assert entered.wait(WAIT_S), "decision 0 asked no question"
             closed = agent.driver.client
             agent.abort()
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             assert closed.is_closed
             release.set()
             _joined(box, done)

@@ -12,6 +12,7 @@ kernel/turns.py TurnConfig.max_ticks). The finite token clock changes the per-de
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from dataclasses import dataclass
@@ -29,6 +30,17 @@ from realtime_framework.sandbox.observation import som
 from . import baseline
 from .frames import FrameSource
 from .hermetic import HISTORY_ENV
+
+
+def wait_for_abort(agent, timeout: float) -> None:
+    """Return once the cleanup of the agent's last abort (providers/session_lifecycle.py abort)
+    is done. The abort was submitted first, and the loop starts what it is given in order."""
+    session = agent._runtime.session
+
+    async def cleanup_done():
+        await asyncio.wait({session._cleanup})
+
+    agent._runtime._submit(cleanup_done(), timeout=timeout)
 
 
 class ToolRuntime(som.ToolRuntime):

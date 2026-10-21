@@ -39,7 +39,7 @@ from realtime_framework.entity.model import (
 )
 
 from ..fake_clock import FakeClock
-from .build import build_episode
+from .build import build_episode, wait_for_abort
 from .fake_env import FakeEnvironment, Hang
 from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import commit_statuses, run_loop
@@ -114,14 +114,12 @@ def _generate_in_worker(episode, observation, decision=0):
 
 
 def _abort_like_the_kernel(agent) -> None:
-    """The shell runs AbortGeneration as abort(generation). Waiting for the cleanup
-    RealtimeRuntime.abort schedules only makes the state below deterministic."""
-    runtime = agent._runtime
+    """The shell runs AbortGeneration as abort(generation). Waiting for the cleanup the
+    session's abort runs (providers/session_lifecycle.py) only makes the state below
+    deterministic."""
     agent.abort(GENERATION)
-    cleanup = runtime._cleanup_future
-    assert cleanup is not None
-    cleanup.result(timeout=WAIT_S)
-    assert runtime._connected is False  # RealtimeRuntime._abort_active
+    wait_for_abort(agent, WAIT_S)
+    assert agent._runtime.session._connected is False  # SessionLifecycle._interrupt_and_close
 
 
 def _discarded(agent, box, done) -> None:
@@ -601,12 +599,12 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
 
 
 def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
-    """Stateless API. Attempt 1 gets HTTP 503, which leaves the runtime DIRTY
-    (RealtimeRuntime.run_turn), so attempt 2 first recovers it (RealtimeRuntime._ensure_ready).
-    The abort lands during that recovery. The recovery closes what it rebuilt once it returns,
-    and the attempt stops there (RealtimeRuntime._sync): it sends no observation and no request.
-    _run_turn's own checks before each are tested on the agent
-    (tests/harness/test_generations.py)."""
+    """Stateless API. Attempt 1 gets HTTP 503, which leaves the session dirty
+    (RealtimeRuntime.run_turn), so attempt 2 first recovers it (the session's ensure_ready,
+    providers/session_lifecycle.py). The abort lands during that recovery. The recovery closes
+    what it rebuilt once it returns, and the attempt stops there (SessionLifecycle._sync): it
+    sends no observation and no request. _run_turn's own checks before each are tested on the
+    agent (tests/harness/test_generations.py)."""
     openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
@@ -648,7 +646,7 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
 
 def test_session_abort_before_reconnecting_opens_no_session(tmp_path, monkeypatch):
     """Session API. Response 1 is dropped, and attempt 2 rebuilds the session through connect()
-    (RealtimeRuntime._ensure_ready). The abort lands before connect() opens it. connect()'s own
+    (the session's ensure_ready). The abort lands before connect() opens it. connect()'s own
     attempts run under the generation's retry_cancellation (providers/openai_realtime.py
     _connect), so no WebSocket opens and no response runs; the connect records its first attempt
     as cancelled."""
@@ -727,7 +725,7 @@ def test_session_abort_during_connect_backoff(tmp_path, monkeypatch):
 
 def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkeypatch):
     """Session API. An abort closes the session, and the next decision reconnects
-    (RealtimeRuntime._ensure_ready); every upgrade is refused (HTTP 503). connect() makes the
+    (the session's ensure_ready); every upgrade is refused (HTTP 503). connect() makes the
     shared policy's four attempts and raises TransportFailureError with its retries spent, which
     classify_transport_error passes on (providers/openai_realtime.py), so the turn is not retried
     on top of it: four connects in all, not four per turn attempt."""
@@ -739,7 +737,7 @@ def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkey
         try:
             stub.wait_for_session_update()
             agent.abort()  # no generation is under way: it only closes the session
-            agent._runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             observation = episode.frames.capture(0)
             budget = episode.budget(observation.tick_number)
             pending = agent.generate(GENERATION, 0, observation, budget)

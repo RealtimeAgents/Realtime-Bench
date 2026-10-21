@@ -33,6 +33,7 @@ from realtime_framework.providers.preflight import (
     check_token_budget,
     validate_model_interaction,
 )
+from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
 GAME, WEB = "gomoku", "rt_waitlist_fit"
 
@@ -861,11 +862,12 @@ def test_context_status_needs_its_declaration():
 
 def test_a_session_declares_no_request_estimate():
     """The runtime archives the history a stateless request carries when it does not fit; a
-    persistent session holds its own, so a driver that declares both is refused at load."""
+    persistent session holds its own, so a driver that declares both is refused at load. The
+    driver manages its session (SessionLifecycle), as persistent_session requires."""
     driver = catalog.adapter_class("chat_completions")
     session = type(
         "Session",
-        (driver,),
+        (driver, SessionLifecycle),
         {"capabilities": replace(driver.capabilities, persistent_session=True)},
     )
     fails(

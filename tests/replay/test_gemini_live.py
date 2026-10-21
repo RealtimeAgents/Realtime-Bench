@@ -757,8 +757,8 @@ def test_interrupted_empty_turn_retry_keeps_its_usage(live_env, tmp_path):
     assert usage["native_response_usage_exact"] is True
     assert runtime["transport_retry_usage_status"] == "complete"
     # Only the retry opens a connection: its recovery closes the interrupted one and waits the
-    # release before it replays the history (harnesses/default/context.py
-    # RealtimeRuntime._ensure_ready; live.py GeminiLiveDriver._connect).
+    # release before it replays the history (providers/session_lifecycle.py
+    # SessionLifecycle.ensure_ready; live.py GeminiLiveDriver._connect).
     steps = records[2:-1]
     opened = [
         k for k, record in enumerate(steps) if any(f["dir"] == "open" for f in record["frames"])

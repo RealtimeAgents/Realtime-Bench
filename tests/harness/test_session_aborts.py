@@ -7,7 +7,7 @@ import json
 import threading
 
 import realtime_framework.entity.model as model_module
-from tests.replay.build import build_episode
+from tests.replay.build import build_episode, wait_for_abort
 from tests.replay.frames import ReplayTask
 from tests.replay.scenario import CLICK_NAME, TASK_INSTRUCTION
 from tests.replay.steps import Step
@@ -189,7 +189,7 @@ def test_an_abort_in_the_sync_after_a_generation_keeps_its_usage(tmp_path, monke
 
 def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
     """Response 2 is dropped before any output, so generation 2's second attempt rebuilds the
-    session (RealtimeRuntime._ensure_ready). The kernel aborts generation 2 before the rebuild's
+    session (the driver's ensure_ready). The kernel aborts generation 2 before the rebuild's
     connection exists, so the abort's close finds nothing to close; the rebuild then opens
     connection 2 and replays the history on it. The abandoned generation must not leave the
     runtime ready on that connection: it is closed, and decision 2 opens connection 3."""
@@ -208,9 +208,9 @@ def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
             release.set()
             abandoned = _joined(box, done)
             agent.discard(2)
-            runtime._cleanup_future.result(timeout=WAIT_S)
+            wait_for_abort(agent, WAIT_S)
             # The driver holds no connection: the one the rebuild opened is closed.
-            left = (runtime._connected, runtime.state.value, agent.driver._conn)
+            left = (agent.driver._connected, runtime.state.value, agent.driver._conn)
             _generate(episode, 3, 2)
             agent.accept(3)
         finally:
