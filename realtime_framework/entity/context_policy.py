@@ -58,7 +58,9 @@ from realtime_framework.entity.records import _jsonable
 # screen, as the text-JSON frames do; the clock note names the environment ticks when the two
 # frame rates differ; the notes on a done run as a wait and on a decision with no accepted answer;
 # OpenAI Realtime and Gemini Live send each action's execution feedback as its own item, not in
-# front of the next frame.
+# front of the next frame; the streaming harness's feedback says that a superseded action was
+# replaced while it waited, why a cancelled call did not run, and that a reply's protocol failure
+# leaves each action it handed over its own feedback (harnesses/streaming/feedback.py).
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
