@@ -11,7 +11,6 @@ stateless driver the same way, so the runtime drives every driver alike.
 from __future__ import annotations
 
 import asyncio
-import threading
 from collections.abc import Callable
 
 from realtime_framework.entity.events import ProviderHistoryState
@@ -29,7 +28,6 @@ from realtime_framework.entity.model import (
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 
-_NEVER_CANCELLED = threading.Event()
 # How long close() waits for an abort's cleanup before it cancels it and closes all the same.
 _CLEANUP_WAIT_S = 10.0
 
@@ -57,12 +55,12 @@ class SessionLifecycle:
 
     Every timed wait the encoder takes on the clock is written to the trace before it starts
     (_record_wait), once: what it waits for, how long, and until which time on the operational
-    clock. A wait that would last no time, or for a cleanup already done, is not recorded, and
-    _wait does not take one of no time.
+    clock. A wait that would last no time, for a cleanup already done or for a generation already
+    abandoned is not recorded, and _wait does not take it.
     ensure_ready's wait for an abort's cleanup has no time bound and is not recorded.
-    _wait ends early once the cancel event it is given is set; the encoders' own waits give none
-    yet, so nothing ends them early. A bound on an operation (a goAway deadline, a close) ends
-    with the operation, and an abort's close ends the operation.
+    The encoder's own waits (_wait) end early once their generation is abandoned. A bound on an
+    operation (a goAway deadline, a close) ends with the operation, and an abort's close ends the
+    operation.
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
@@ -260,16 +258,16 @@ class SessionLifecycle:
         if self._cleanup is cleanup:
             self._cleanup = None
 
-    async def _wait(
-        self, wait: str, seconds: float, cancel: threading.Event = _NEVER_CANCELLED
-    ) -> None:
+    async def _wait(self, wait: str, seconds: float) -> None:
         """Wait ``seconds`` on the operational clock, on an executor thread as RequestRetry's
-        backoff does. Once ``cancel`` is set the generation the wait belongs to is abandoned, and
-        RetryCancelled ends the wait. Unlike RequestRetry, which takes the event of the enclosing
-        retry_cancellation, it waits only on the ``cancel`` it is given. A wait of no time is
-        neither recorded nor taken."""
+        backoff does, and like it on the cancel event of the enclosing retry_cancellation: once
+        the generation the wait belongs to is abandoned, RetryCancelled ends the wait. A wait of
+        no time, or for a generation already abandoned, is neither recorded nor taken."""
         if seconds <= 0:
             return
+        cancel = retry_cancel_event()
+        if cancel.is_set():
+            raise RetryCancelled(f"generation abandoned before the {wait} wait")
         self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")

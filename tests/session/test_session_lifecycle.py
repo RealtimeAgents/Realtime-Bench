@@ -361,12 +361,13 @@ def test_a_sync_cut_short_leaves_the_session_to_be_recovered(interruption):
     ]
 
 
-def test_a_wait_runs_on_the_clock_and_a_cancel_ends_it():
+def test_a_wait_runs_on_the_clock_and_its_generation_s_cancel_ends_it():
     with _rig() as rig:
         rig.run(rig.encoder._wait("session_release", 2.0))
         assert rig.clock.monotonic() == 2.0
         cancel = rig.clock.event()
-        waiting = rig.thread.submit(rig.encoder._wait("session_release", 2.0, cancel))
+        with retry_cancellation(cancel):
+            waiting = rig.thread.submit(rig.encoder._wait("session_release", 2.0))
         rig.clock.sleep(0.5)
         cancel.set()
         assert rig.clock.wait(waiting, 10.0)
@@ -967,6 +968,60 @@ def test_openai_realtime_records_the_connect_backoff():
     ]
     assert trace.waits == [("connect_backoff", delay, 100 * S + round(delay * S))]
     assert log == [("record", "connect_backoff"), ("sleep", delay)]
+
+
+def test_openai_realtime_records_no_connect_backoff_once_its_generation_is_abandoned():
+    """The generation is abandoned during the failed attempt: RequestRetry does not wait the
+    delay, so no wait is recorded, and no second attempt runs."""
+    driver, _ = _openai(refuse=1)
+    trace = _Trace()
+    driver.clock = _FrozenClock([])
+    driver.bind_trace(trace)
+    abandoned = threading.Event()
+    realtime = driver.client.realtime
+    connect = realtime.connect
+
+    def abandoning_connect(**arguments):
+        abandoned.set()
+        return connect(**arguments)
+
+    realtime.connect = abandoning_connect
+
+    async def run():
+        with retry_cancellation(abandoned), pytest.raises(RetryCancelled):
+            await driver.connect(ConnectRequest(seed=SEED))
+
+    asyncio.run(run())
+    # The attempt the cancellation stops is recorded as such, and no wait before it.
+    assert [(event, payload.get("outcome")) for event, payload, _ in trace.events] == [
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "retry"),
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "cancelled"),
+    ]
+
+
+def test_gemini_live_an_abandoned_generation_neither_waits_the_release_grace_nor_reconnects():
+    """After an abort the next connect waits 2 s for the old session's release first. The
+    generation was abandoned by then (its abort came while it waited for the session lock):
+    it takes no wait, records none and opens no session."""
+    rig = Rig("gemini-3.8-live", [[HANG], []])
+    trace = _Trace()
+    rig.driver.bind_trace(trace)
+    abandoned = threading.Event()
+    abandoned.set()
+
+    async def run():
+        await rig.connect()
+        await rig.driver.abort(await rig.start("turn-0"))
+        history = rig.view([frame_turn(0)])
+        with (
+            retry_cancellation(abandoned),
+            pytest.raises(RetryCancelled, match="before the session_release wait$"),
+        ):
+            await rig.driver.connect(ConnectRequest(seed=rig.seed, history=history))
+
+    asyncio.run(run())
+    assert rig.log == [("connect", None)]  # neither a grace sleep nor a second connect
+    assert [wait for wait, _, _ in trace.waits] == ["connection_close"]  # the abort's close
 
 
 def test_close_records_its_wait_for_an_abort():
