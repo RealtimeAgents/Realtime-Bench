@@ -294,6 +294,23 @@ def test_jobs_from_before_the_split_report_the_environment_rate(tmp_path):
     assert (report["fps"], report["model_input_fps"]) == (2.0, 2.0)
 
 
+def test_local_reports_on_runs_from_before_the_split_read_the_environment_rate(tmp_path):
+    """The same for a local report: a run recorded with one --fps is grouped with runs recorded
+    since at that rate for both, and its run summary passes a check that expects both."""
+    from realtime_framework.evaluation.reporting import report, summary_ok
+
+    cell = tmp_path / GEMINI
+    cell.mkdir()
+    runs = [{"task_id": WEB, "fps": 2.0}, {"task_id": GAME, "fps": 2.0, "model_input_fps": 2.0}]
+    (cell / "summary.json").write_text(json.dumps({"runs": runs}))
+    (group,) = report(tmp_path)["groups"]
+    assert (group["fps"], group["model_input_fps"]) == (2.0, 2.0)
+    path = tmp_path / "run_summary.json"
+    path.write_text(json.dumps({"stop_reason": "terminal", "fps": 2.0}))
+    assert summary_ok(path, expected_fps=2.0, expected_model_input_fps=2.0)
+    assert not summary_ok(path, expected_fps=2.0, expected_model_input_fps=1.0)
+
+
 def test_a_leaderboard_submission_needs_both_rates_at_one(tmp_path):
     """rtbench upload's check of three jobs (evaluation/submission.py:53-76); each one's trial
     has no report, which counts as a failed task."""

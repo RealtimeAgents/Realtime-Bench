@@ -946,6 +946,8 @@ def summary_ok(
         "runtime_config_hash": expected_runtime_config_hash,
         "interactables_protocol": expected_interactables_protocol,
     }
+    # Runs recorded before the frame rates were split fed the model at the environment rate.
+    summary.setdefault("model_input_fps", summary.get("fps"))
     return all(value is None or summary.get(field) == value for field, value in expected.items())
 
 
@@ -1613,6 +1615,10 @@ def report(root):
                     "public_category",
                 )
             }
+            if identity["model_input_fps"] is None:
+                # Runs recorded before the frame rates were split fed the model at the
+                # environment rate.
+                identity["model_input_fps"] = identity["fps"]
             identity["clock_mode"] = expected.get("clock_mode", cell.get("clock_mode", "wall"))
             identity["tokens_per_frame"] = expected.get("tokens_per_frame", cell.get("tokens_per_frame"))
             row = {
