@@ -38,8 +38,12 @@ agent and knows its identity for the frozen-stream check. An action's is ActionE
 the environment right after the action, before the next action can change what it read
 (``_last_exec_error``, ``_last_rejected_by_guest``, ``_last_execution_result``, ``last_held_keys``,
 ``last_end_checks``) with when it held the gate and when it returned; its coordinate trace and
-those times go to the shell as Executed before the answer. An end check's is EndChecked. A command
-whose run raised is answered with the error, as the turn-based shell answers one.
+those times go to the shell as Executed before the answer. An end check's is EndChecked. An
+environment operation that raised is answered with the error, as the turn-based shell answers one.
+What the shell's own code does with an answer (``captured``, ``executed``) raising is the shell's
+failure, not the environment's: it goes to the shell's ``raised`` first, which makes it a
+run_exception as the turn-based shell does (shell.py ``_raised``). A capture is then answered as
+failed; an action with its answer all the same, since it ran.
 
 End checks run on a lane of their own (stream-plan 4.9). The streaming policy sends one only
 while no capture or action is out, and neither while one is out (kernel/streaming.py ``_proceed``),
@@ -242,11 +246,15 @@ class Executed:
 class EnvLanes:
     """The capture, action and end-check lanes of one streaming episode, behind one gate.
     ``clock`` is the operational clock; ``post`` is the shell's, which hands an event to the
-    kernel (Kernel.post) and wakes the shell."""
+    kernel (Kernel.post) and wakes the shell; ``raised(failure)`` takes a traceback of the shell's
+    own code that raised on a lane."""
 
-    def __init__(self, env, post: Callable[[object], None], clock):
+    def __init__(
+        self, env, post: Callable[[object], None], clock, *, raised: Callable[[str], None]
+    ):
         self.env = env
         self._clock = clock
+        self._raised = raised
         self.gate = EnvGate(env, post, clock)
         self._capture = Lane("capture", post, clock, self.gate, CAPTURE)
         self._action = Lane("action", post, clock, self.gate, ACTION)
@@ -259,11 +267,17 @@ class EnvLanes:
 
         def run(turn):
             try:
-                return captured(self.gate.call(self.env.capture, turn=turn))
+                observation = self.gate.call(self.env.capture, turn=turn)
             # Also a BaseException (entity/model.py RetryCancelled): the answer must come back,
             # or the kernel would wait for it.
             except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 return FrameCaptured(error=traceback.format_exc())
+            try:
+                return captured(observation)
+            except BaseException:  # noqa: BLE001 - the shell's own failure
+                failure = traceback.format_exc()
+                self._raised(failure)
+                return FrameCaptured(error=failure)
 
         self._capture.submit(run)
 
@@ -273,11 +287,15 @@ class EnvLanes:
 
         def run(turn):
             try:
-                answer, record = self.gate.call(self._act, command, turn=turn)
-                executed(record)
+                try:
+                    answer, record = self.gate.call(self._act, command, turn=turn)
+                except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
+                    return ActionExecuted(command.decision, error=traceback.format_exc())
+                try:
+                    executed(record)
+                except BaseException:  # noqa: BLE001 - the shell's own failure; the action ran
+                    self._raised(traceback.format_exc())
                 return answer
-            except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
-                return ActionExecuted(command.decision, error=traceback.format_exc())
             finally:
                 self.executing = self._executing_turn = None
 

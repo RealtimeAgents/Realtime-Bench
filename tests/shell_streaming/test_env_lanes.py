@@ -36,9 +36,14 @@ def _frame(observation: Observation) -> FrameCaptured:
 
 
 def _lanes():
+    """Lanes whose shell makes its own failure a run_exception, as streaming_shell does."""
     clock = FakeClock()
     env, inbox = FakeEnv(clock), Inbox(clock)
-    return clock, env, inbox, EnvLanes(env, inbox.post, clock)
+
+    def raised(failure):
+        inbox.post(Invalidated("runner", "run_exception", failure))
+
+    return clock, env, inbox, EnvLanes(env, inbox.post, clock, raised=raised)
 
 
 def test_each_command_is_answered_once_the_gate_lets_it_run():
@@ -379,7 +384,7 @@ def test_an_invalid_run_the_release_timer_claims_reaches_the_kernel_before_the_a
             answered.set()
         events.append(event)
 
-    lanes = EnvLanes(env, post, clock)
+    lanes = EnvLanes(env, post, clock, raised=lambda failure: None)
 
     def execute(action, *, release_at=None):
         env._invalid_run = INVALID
@@ -393,3 +398,38 @@ def test_an_invalid_run_the_release_timer_claims_reaches_the_kernel_before_the_a
         clock.sleep(1.0)
     lanes.close()
     assert [type(event) for event in events] == [Invalidated, ActionExecuted]
+
+
+def test_a_capture_callback_that_raises_is_the_shells_failure():
+    """L4: what the shell makes of a frame raising is the shell's failure, not the environment's;
+    it goes to ``raised`` before the answer, as the turn-based shell's run_exception goes before
+    the command's answer (shell.py _run). The answer is the failed capture's."""
+    clock, _, inbox, lanes = _lanes()
+
+    def captured(observation):
+        raise RuntimeError("shell bookkeeping failed")
+
+    with clock.participant():
+        lanes.capture(captured)
+        events = [event for _, event in inbox.wait_for(2)]
+    lanes.close()
+    assert (events[0].category, events[0].reason) == ("runner", "run_exception")
+    assert "shell bookkeeping failed" in events[0].detail
+    assert isinstance(events[1], FrameCaptured) and "shell bookkeeping failed" in events[1].error
+
+
+def test_an_executed_callback_that_raises_leaves_the_actions_answer():
+    """L4: the action ran; what the shell does with its record raising changes nothing of it."""
+    clock, _, inbox, lanes = _lanes()
+
+    def executed(record):
+        raise RuntimeError("shell bookkeeping failed")
+
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), executed)
+        events = [event for _, event in inbox.wait_for(2)]
+    lanes.close()
+    assert (events[0].category, events[0].reason) == ("runner", "run_exception")
+    assert events[1] == ActionExecuted(
+        0, result={"executed": "click"}, started_at=0.0, finished_at=2.0
+    )

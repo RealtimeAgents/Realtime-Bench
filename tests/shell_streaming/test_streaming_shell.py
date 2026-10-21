@@ -15,6 +15,7 @@ import json
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.kernel.events import Invalidated, Termination
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.reporting import EpisodeTrace
@@ -217,3 +218,16 @@ def test_a_stuck_reply_is_given_up_on_the_shells_thread_and_the_next_one_starts(
     assert agent.started[:2] == [(1, "obs-1", 0.875), (2, agent.started[1][1], 30.875)]
     assert 1 in agent.discarded
     assert termination.stop_reason == "time_limit"
+
+
+def test_the_shells_own_failure_on_a_lane_invalidates_the_run_as_a_run_exception(monkeypatch):
+    """L4: the shell's frame handling raises on the capture lane. As on the turn-based shell, the
+    run is invalid for the shell's exception and its traceback is the loop error."""
+
+    def fingerprint(observation):
+        raise RuntimeError("fingerprint failed")
+
+    monkeypatch.setattr(episode_records, "observation_fingerprint", fingerprint)
+    termination, env, _ = _episode(6.0, ONE_CLICK)
+    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
+    assert "fingerprint failed" in env._loop_error
