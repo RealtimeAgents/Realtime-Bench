@@ -7,7 +7,9 @@ gives every push and connection operation the view they make (history.py), so th
 rebuilt from the view holds what the live one did. Every driver operation runs on the agent's one
 execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py). Each
 push and each reply readies the session first, and renews the connection the provider asked to
-renew, except a push while a reply is on: renewing would end it.
+renew, except a push while a reply is on the session: readying it then would close the reply's
+connection, or rebuild the session without the reply's output. A push the session refuses until
+it is renewed, as Gemini Live's after a goAway, waits for that reply instead.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and records
 it as sent once the driver put it into the session. A frame whose push failed keeps its number and
@@ -147,6 +149,12 @@ class NativeStreamingAgent(VisionAgentBase):
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
+        # The replies on the session: asked for, and not yet accepted, discarded or aborted.
+        # Readying the session under one would close its connection, or rebuild the session
+        # without its output. ``_off_session`` is set while there is none.
+        self._on_session: set[int] = set()
+        self._off_session = self.clock.event()
+        self._off_session.set()
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
         # What each action asked for (action_text), by its outcome's (decision, call id).
         self._requested: dict[tuple[int, str], str] = {}
@@ -257,6 +265,7 @@ class NativeStreamingAgent(VisionAgentBase):
         pushed = _Pushed(record, value, execution)
         try:
             with trace_scope(phase="push", observation_id=value.observation_id):
+                self._wait_for_renewal()
                 self._execution.run(self._push(observation.metadata.get("observation_id"), pushed))
         except BaseException:
             self._finish_inspection(pushed, "push_failed")
@@ -269,15 +278,26 @@ class NativeStreamingAgent(VisionAgentBase):
             {"frame": record.frame, "observation_id": observation.metadata.get("observation_id")},
         )
 
+    def _wait_for_renewal(self) -> None:
+        """A session the provider asked to renew takes no frame before it is renewed, as Gemini
+        Live's after a goAway, and renewing it would end the reply on it: the frame waits, on
+        the push lane, until that reply is accepted, discarded or aborted. The frames captured
+        meanwhile wait in the policy's slot, not counted as failed pushes."""
+        while (
+            self.driver.capabilities.connection_renewal and self.driver.connection_renewal_reason()
+        ):
+            with self._lock:
+                if not self._on_session:
+                    return
+            self.clock.wait(self._off_session, None)
+
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
         async with self._readying:
             with self._lock:
                 view = self._view()
-                # Renewing the connection would end a reply on it, and one that ended is renewed
-                # from once its output is accepted: meanwhile a session that asked to be renewed
-                # refuses the frame.
-                replying = bool(self._replies)
-            await self._ready(view, renew=not replying)
+                on_session = bool(self._on_session)
+            if not on_session:
+                await self._ready(view, renew=True)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
@@ -350,6 +370,9 @@ class NativeStreamingAgent(VisionAgentBase):
                         generation=reply.generation,
                     )
                 )
+                with self._lock:
+                    self._on_session.add(reply.generation)
+                    self._off_session.clear()
             async for event in self.driver.events(reply.handle):
                 self._take(reply, event)
             if not reply.cancel.is_set():
@@ -359,6 +382,8 @@ class NativeStreamingAgent(VisionAgentBase):
             # reply rebuilds it (SessionLifecycle.ensure_ready). The encoder's goAway deadline
             # passing during the reply raises too: an incomplete reply is no result.
             self.driver.mark_dirty()
+            with self._lock:
+                self._off(reply.generation)
             raise
 
     def _ended(self, reply: _Reply) -> None:
@@ -466,12 +491,21 @@ class NativeStreamingAgent(VisionAgentBase):
                 reply.cancel.set()
         with trace_scope(phase="abort", generation=generation):
             self._execution.run(self.driver.abort(None if reply is None else reply.handle))
+        with self._lock:
+            self._off(generation)
+
+    def _off(self, generation: int) -> None:
+        """The reply is no longer on the session; the caller holds the lock."""
+        self._on_session.discard(generation)
+        if not self._on_session:
+            self._off_session.set()
 
     def accept(self, generation: int) -> None:
         """AcceptResult: the reply's output joins the view, and its usage the episode's. A
         failed reply, which the kernel accepts too, joins nothing, as a failed turn."""
         with self._lock:
             reply = self._replies.pop(generation)
+            self._off(generation)
             if reply.output and not reply.failed:
                 self._blocks.append(
                     output_block(reply.decision, reply.output, reply.based_on, self.clock.time_ns())
@@ -486,6 +520,7 @@ class NativeStreamingAgent(VisionAgentBase):
         """DiscardResult: a reply given up adds nothing."""
         with self._lock:
             reply = self._replies.pop(generation)
+            self._off(generation)
         self._log_reply(reply, "reply_discarded")
 
     def commit(self, outcome: Outcome) -> None:
