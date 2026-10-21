@@ -1079,7 +1079,10 @@ def test_a_failed_read_inside_a_tap_does_not_stop_it():
     )
     assert sim.tap_checks == [1, 2]
     (executed,) = sim.entries("ActionExecuted")
-    assert executed.data.end_checks == ("tap 1 failed", None)
+    assert executed.data.end_checks == (
+        (False, None, "tap 1 failed"),
+        (True, "target_reached", None),
+    )
     assert _record(sim, "ActionResolved", 0)["environment_tick"] == 2
     assert _asked(sim) == [0, 0, 2]
     assert [(o.status, o.terminal_after_action) for o in sim.outcomes] == [("applied", True)]

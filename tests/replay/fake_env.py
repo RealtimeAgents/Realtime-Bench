@@ -95,7 +95,7 @@ class FakeEnvironment:
         # execution leases no token-clock key and makes no end check, and here no key-release
         # timer runs that could invalidate the run.
         self.last_held_keys: tuple[str, ...] = ()
-        self.last_end_checks: tuple[str | None, ...] = ()
+        self.last_end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
         self.kernel_counts_reads = False
         self.on_invalid = None
 

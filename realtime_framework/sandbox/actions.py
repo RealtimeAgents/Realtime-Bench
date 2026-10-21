@@ -163,9 +163,9 @@ class GuestEnvironment:
         # timer ends them.
         self.last_held_keys = ()
         # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
-        # makes go to last_end_checks (the error of a read that failed, None otherwise, also when
-        # the task has no end check) instead of done(), which invalidates the run at the first
-        # failure.
+        # makes go to last_end_checks, each (ended, reason, error) as check_end() answered or
+        # failed, (False, None, None) also when the task has no end check, instead of done(),
+        # which invalidates the run at the first failure.
         self.kernel_counts_reads = False
         self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
@@ -283,15 +283,16 @@ class GuestEnvironment:
 
     def _ended_after_step(self):
         """The end check after each token step of wait_until_tick. When the kernel counts failed
-        reads, every check goes to last_end_checks, and after a failed one the advance goes on."""
+        reads, every check goes to last_end_checks as (ended, reason, error), and after a failed
+        one, (False, None, its traceback), the advance goes on."""
         if not self.kernel_counts_reads:
             return self.done()
         try:
-            ended, _ = self.check_end()
+            ended, reason = self.check_end()
         except Exception:  # noqa: BLE001 - the kernel counts the failed read
-            self.last_end_checks += (traceback.format_exc(),)
+            self.last_end_checks += ((False, None, traceback.format_exc()),)
             return False
-        self.last_end_checks += (None,)
+        self.last_end_checks += ((ended, reason, None),)
         return ended
 
     def step_clock(self, step):

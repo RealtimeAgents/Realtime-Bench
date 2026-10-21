@@ -419,7 +419,7 @@ def test_a_key_tap_holds_its_key_a_sixtieth_of_a_second(rates, tap_checks):
     assert sim.executed[0] == (0, 0, tap)
     assert sim.tap_checks == pytest.approx(tap_checks, abs=1e-9)
     (executed,) = sim.entries("ActionExecuted")
-    assert executed.data.end_checks == (None,) * len(tap_checks)
+    assert executed.data.end_checks == ((False, None, None),) * len(tap_checks)
     tapped = tap_checks[-1]
     resolved = sim.entries("ActionResolved")[0]
     assert resolved.data["environment_tick"] == pytest.approx(tapped, abs=1e-9)

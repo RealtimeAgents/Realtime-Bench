@@ -484,8 +484,9 @@ def test_a_tap_s_failed_reads_go_to_the_kernel_and_the_tap_goes_on():
     TAP_HOLD_S); while the kernel counts, no failed read stops the tap or invalidates the run."""
     env, task = _token(120.0, stop_check=_answers(RuntimeError("no state"), False))
     assert _kernel_counting(env).execute(TAP) == "applied"
-    failed, answered = env.last_end_checks
-    assert failed.rstrip().endswith("RuntimeError: no state") and answered is None
+    (failed, _, error), answered = env.last_end_checks
+    assert not failed and error.rstrip().endswith("RuntimeError: no state")
+    assert answered == (False, None, None)
     assert env.tick_index() == 2
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "advance", "keyUp"]
     assert getattr(env, "_invalid_run", None) is None
@@ -503,7 +504,8 @@ def test_a_tap_s_reads_that_run_past_their_budget_go_to_the_kernel_too():
     with clock.participant():
         assert _kernel_counting(env).execute(TAP) == "applied"
     assert len(env.last_end_checks) == 2
-    for error in env.last_end_checks:
+    for ended, reason, error in env.last_end_checks:
+        assert (ended, reason) == (False, None)
         assert error.rstrip().endswith("BudgetExceeded: state read took longer than 120 s")
     assert getattr(env, "_invalid_run", None) is None
 
@@ -513,15 +515,16 @@ def test_the_end_checks_of_a_repeated_tap_are_kept_in_order():
     env, _ = _token(stop_check=_answers(no_state, False, no_state))
     _kernel_counting(env).execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
     first, second, third = env.last_end_checks
-    assert first.rstrip().endswith("RuntimeError: no state") and second is None
-    assert third.rstrip().endswith("RuntimeError: no state")
+    assert first[:2] == (False, None) and first[2].rstrip().endswith("RuntimeError: no state")
+    assert second == (False, None, None)
+    assert third[:2] == (False, None) and third[2].rstrip().endswith("RuntimeError: no state")
     assert getattr(env, "_invalid_run", None) is None
 
 
 def test_a_tap_whose_read_sees_the_end_stops_there():
     env, task = _token(120.0, stop_check=_answers("task_success"))
     assert _kernel_counting(env).execute(TAP) == "applied"
-    assert env.last_end_checks == (None,)
+    assert env.last_end_checks == ((True, "task_success", None),)
     assert env.tick_index() == 1
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
     assert env._episode_over and env._terminal_reason == "task_success"
@@ -531,7 +534,11 @@ def test_a_repeated_tap_whose_first_read_sees_the_end_keeps_it():
     """The reads after it, in the tap's other repeats, find the episode still going."""
     env, _ = _token(stop_check=_answers("task_success", False, False))
     _kernel_counting(env).execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
-    assert set(env.last_end_checks) == {None}
+    assert env.last_end_checks == (
+        (True, "task_success", None),
+        (False, None, None),
+        (False, None, None),
+    )
     assert env._episode_over and env._terminal_reason == "task_success"
 
 
@@ -548,9 +555,10 @@ def test_each_execution_starts_its_end_checks_over():
     env, _ = _token(stop_check=_answers(RuntimeError("no state"), False))
     _kernel_counting(env)
     env.execute(TAP)
-    assert len(env.last_end_checks) == 1 and env.last_end_checks[0] is not None
+    ((_, _, error),) = env.last_end_checks
+    assert error is not None
     env.execute(TAP)
-    assert env.last_end_checks == (None,)
+    assert env.last_end_checks == ((False, None, None),)
     env.execute(Action.hold_key("a", 1.0))
     assert env.last_end_checks == ()
 
@@ -574,5 +582,5 @@ def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(kernel_counts_re
     assert env.execute(TAP) == "applied"
     assert len(reads) == 1
     assert task._score_start == task._score_best == 3.0
-    assert env.last_end_checks == ((None,) if kernel_counts_reads else ())
+    assert env.last_end_checks == (((False, None, None),) if kernel_counts_reads else ())
     assert getattr(env, "_invalid_run", None) is None

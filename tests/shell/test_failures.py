@@ -238,8 +238,8 @@ def test_a_failed_wall_key_release_invalidates_the_run_when_it_happens():
 @pytest.mark.parametrize(
     ("tap_checks", "invalid"),
     [
-        (("tap read 1", "tap read 2"), True),
-        (("tap read 1", None), False),
+        (((False, None, "tap read 1"), (False, None, "tap read 2")), True),
+        (((False, None, "tap read 1"), (False, None, None)), False),
     ],
     ids=["three-in-a-row", "a-read-between"],
 )

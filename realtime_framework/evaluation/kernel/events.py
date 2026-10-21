@@ -135,10 +135,11 @@ class ActionExecuted:
     held_keys: tuple[str, ...] = ()  # token clock: key identities a hold_key now holds
     rejection: str | None = None  # the guest refused the action; the run stays valid
     error: str | None = None  # the environment failed; the run is invalid
-    # The state reads of a tap's end checks, in order: None for one that answered, the error of one
-    # that failed. They count toward the failed reads in a row like the kernel's own checks. One
-    # that saw the end stopped the tap; the check right after execution asks again.
-    end_checks: tuple[str | None, ...] = ()
+    # The state reads of a tap's end checks, in order, each (ended, reason, error): an answer and
+    # the task's reason when it names one, or (False, None, the error) for one that failed. They
+    # count toward the failed reads in a row like the kernel's own checks. One that saw the end
+    # stopped the tap's advance; the check right after execution asks again.
+    end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
 
     @property
     def priority(self) -> Priority:

@@ -342,7 +342,7 @@ class Simulation:
         self.executed.append((decision, self.semantic(), action))
         error, rejection = world.execute_errors.get(decision), world.rejections.get(decision)
         held: tuple[str, ...] = ()
-        end_checks: list[str | None] = []
+        end_checks: list[tuple[bool, str | None, str | None]] = []
         if error is None and rejection is None:
             if self.token and action.action_type is ActionType.KEY:
                 for _ in range(int(action.parameters.get("repeat", 1))):
@@ -369,22 +369,23 @@ class Simulation:
             )
         )
 
-    def _tap(self) -> list[str | None]:
+    def _tap(self) -> list[tuple[bool, str | None, str | None]]:
         """One repeat of a token key tap: the tick moves TAP_HOLD_S / d, at most to the horizon,
         one tick at most per step, and the end is checked after each step, within the action's
         time; a check that sees the end stops the tap (sandbox/actions.py
         GuestEnvironment._execute_clock_key, GuestEnvironment.wait_until_tick). A failed check
         does not, as in the environment once the kernel counts its reads (shell.py
-        kernel_counts_reads; under the legacy loop done() stops the tap): its error goes to the
-        kernel in ActionExecuted.end_checks."""
+        kernel_counts_reads; under the legacy loop done() stops the tap). Each read goes to the
+        kernel in ActionExecuted.end_checks as (ended, reason, error)."""
         world, reads = self.world, []
         target = min(self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps), self.config.max_ticks)
         while self.tick + 1e-9 < target:
             self.tick = _snap(self.tick + min(1.0, target - self.tick))
             self.tap_checks.append(self.tick)
             error = world.tap_check_errors.get(len(self.tap_checks))
-            reads.append(error)
-            if error is None and world.ends_at is not None and self.tick >= world.ends_at:
+            ended = error is None and world.ends_at is not None and self.tick >= world.ends_at
+            reads.append((ended, world.end_reason if ended else None, error))
+            if ended:
                 break
         return reads
 
