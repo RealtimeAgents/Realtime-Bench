@@ -92,7 +92,11 @@ class FrameTable:
     def age(self, record: FrameRecord, at_unix_s: float) -> dict:
         """How old a frame is when an action based on it arrives: the frames sent after it by
         then (not those still unsent), and the seconds since its capture. Streaming runs on the
-        wall clock only, so its frames' capture times are wall time as well."""
+        wall clock only, so its frames' capture times are wall time as well.
+
+        ``at_unix_s`` must be read as the send times were, with Clock.time(): a frame sent at the
+        arrival instant counts, but the same instant read another way, as Clock.time_ns() / 1e9,
+        can round to just after it."""
         with self._lock:
             newer = (self._frames[n] for n in range(record.frame + 1, len(self._frames) + 1))
             return {
