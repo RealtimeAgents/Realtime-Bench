@@ -1030,11 +1030,16 @@ def _random_wall_episode(seed: int) -> tuple[TurnConfig, World]:
 
 def test_random_wall_episodes_keep_the_invariants():
     """Whatever the operations cost, no episode captures, starts, executes or asks anything from
-    the deadline on, and every other invariant holds."""
+    the deadline on, a check asked before the deadline after the task ended ends the episode by
+    the task's end however late it answers, and every other invariant holds."""
     for seed in range(1000):
         config, world = _random_wall_episode(seed)
         sim = Simulation(config, world).run()
         try:
             _check_invariants(sim)
+            if world.ends_at is not None and any(
+                world.ends_at <= asked < config.duration_s for asked, _ in sim.checks
+            ):
+                assert sim.termination.cause == "environment"
         except AssertionError as error:
             raise AssertionError(f"random wall episode {seed}") from error

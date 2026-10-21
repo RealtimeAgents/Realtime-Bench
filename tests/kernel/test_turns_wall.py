@@ -268,16 +268,15 @@ def test_a_deadline_during_a_long_execution_keeps_it_applied_and_snapshots_after
 @pytest.mark.parametrize(
     ("world", "asked", "captures", "started", "executed", "outcomes", "ended"),
     [
-        # The loop starts at 1.5 s and its check answers at 2.25 s; the periodic check due at 2 s
-        # runs first, until 3 s. The answer is handled after it: nothing is captured.
+        # The loop starts at 2.5 s and its check answers at 3.25 s: nothing is captured.
         (
-            World(replies=[Reply(9.0, CLICK)], start_s=1.5, check_s=0.75),
-            [1.5, 2.25],
+            World(replies=[Reply(9.0, CLICK)], start_s=2.5, check_s=0.75),
+            [2.5],
             [],
             [],
             [],
             [],
-            ("time_limit", "deadline", 3.0, 3.0),
+            ("time_limit", "deadline", 3.0, 3.25),
         ),
         # The frame at 2 s is captured until 2.5 s; the periodic check due at 2 s runs first,
         # until 3.25 s. No generation is started on the frame.
@@ -290,16 +289,15 @@ def test_a_deadline_during_a_long_execution_keeps_it_applied_and_snapshots_after
             [],
             ("time_limit", "deadline", 3.0, 3.25),
         ),
-        # The reply at 2 s is checked until 2.75 s; the periodic check due at 2 s runs first,
-        # until 3.5 s. The click is not executed.
+        # The reply at 2.5 s is checked until 3 s: the click is not executed.
         (
-            World(replies=[Reply(1.25, CLICK), Reply(9.0)], check_s=0.75),
-            [0.0, 1.0, 2.0, 2.75],
-            [(0, 0.75)],
-            [0.75],
+            World(replies=[Reply(2.0, CLICK), Reply(9.0)], check_s=0.5),
+            [0.0, 1.0, 2.0, 2.5],
+            [(0, 0.5)],
+            [0.5],
             [],
-            [_outcome(0, "not_applied_time_limit", 2.0, 3, 1.25)],
-            ("time_limit", "deadline", 3.0, 3.5),
+            [_outcome(0, "not_applied_time_limit", 2.5, 3, 2.0)],
+            ("time_limit", "deadline", 3.0, 3.0),
         ),
         # The click at 2 s is executed until 2.75 s; the periodic check due at 2 s runs first,
         # until 3.25 s. The click stays applied and no check follows it.
@@ -318,9 +316,10 @@ def test_a_deadline_during_a_long_execution_keeps_it_applied_and_snapshots_after
 def test_an_answer_handled_after_the_deadline_is_not_acted_on(
     world, asked, captures, started, executed, outcomes, ended
 ):
-    # A synchronous periodic check runs across the deadline at 3 s while an answer filed before
-    # it waits; that answer is handled first, after 3 s, and the deadline then ends the episode
-    # instead of what the answer would lead to (phase2.md, 时间和结束判定).
+    # An answer filed before the deadline at 3 s is handled after it: the answer to a check asked
+    # before the deadline, or one that waited while a synchronous periodic check ran across it.
+    # The deadline then ends the episode instead of what the answer would lead to (phase2.md,
+    # 时间和结束判定).
     sim = _episode(_wall(3.0), world)
     assert _asked(sim) == asked
     assert sim.captures == captures
@@ -329,6 +328,19 @@ def test_an_answer_handled_after_the_deadline_is_not_acted_on(
     assert sim.outcomes == outcomes
     assert _ended(sim) == ended
     _assert_nothing_after_the_end(sim)
+
+
+def test_the_answer_to_the_check_before_landing_goes_before_a_periodic_check_due_after_it():
+    # The reply at 4.75 s is checked until 5.5 s, during which the periodic check due at 5 s comes
+    # due. The answer is filed at its asking, 4.75 s, so the click is executed at 5.5 s, before
+    # the deadline, as today's runner executes it once its check returns. The periodic check then
+    # runs until 6.25 s, past the deadline, and the check after execution is not asked.
+    world = World(replies=[Reply(4.0, CLICK), Reply(9.0)], check_s=0.75)
+    sim = _episode(_wall(6.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.0, 4.75, 5.5]
+    assert sim.executed == [(0, 5.5, CLICK)]
+    assert sim.outcomes == [_outcome(0, "applied", 4.75, 6, 4.0, terminal=True)]
+    assert _ended(sim) == ("time_limit", "deadline", 6.0, 6.25)
 
 
 def test_a_deadline_inside_the_next_frame_wait_stops_it_at_the_deadline():
@@ -374,6 +386,40 @@ def test_an_end_found_by_a_periodic_check_during_a_generation_dates_from_the_ask
     ]
     assert sim.outcomes == []
     assert _ended(sim) == (stop_reason, "environment", 4.0, 4.25)
+    _assert_nothing_after_the_end(sim)
+
+
+@pytest.mark.parametrize(
+    ("latency", "check_s", "ends_at", "asked", "outcomes", "ended"),
+    [
+        # The check before landing is asked at 2.75 s, after the task ended at 2.5 s, and answers
+        # at 3 s, with the deadline.
+        (
+            2.5,
+            0.25,
+            2.5,
+            [0.0, 1.0, 2.0, 2.75],
+            [_outcome(0, "not_applied_terminal", 2.75, 3, 2.5)],
+            ("game_decided", "environment", 2.75, 3.0),
+        ),
+        # Checks take 1.25 s: the periodic check due at 2 s is asked at 2.5 s, after the task ended
+        # at 2.25 s, and answers at 3.75 s, during the generation.
+        (9.0, 1.25, 2.25, [0.0, 1.25, 2.5], [], ("game_decided", "environment", 2.5, 3.75)),
+    ],
+    ids=["before-landing", "periodic"],
+)
+def test_an_end_found_by_a_check_asked_before_the_deadline_is_the_tasks_end(
+    latency, check_s, ends_at, asked, outcomes, ended
+):
+    # The answer comes after the deadline, but the end dates from the asking, before it: the task
+    # ended before the time limit (phase2.md, 时间和结束判定; decision 4).
+    world = World(replies=[Reply(latency, CLICK)], ends_at=ends_at, check_s=check_s)
+    sim = _episode(_wall(3.0), world)
+    assert _asked(sim) == asked
+    assert sim.executed == []
+    assert sim.outcomes == outcomes
+    assert _fired(sim, "deadline") == []
+    assert _ended(sim) == ended
     _assert_nothing_after_the_end(sim)
 
 

@@ -24,6 +24,7 @@ from realtime_framework.evaluation.kernel.events import (
     AgentRecord,
     Clock,
     DiscardResult,
+    EndChecked,
     Entry,
     Finish,
     FreezeSnapshot,
@@ -77,6 +78,7 @@ class Kernel:
         self._out: list = []
         self._generations = itertools.count(1)
         self._requests = itertools.count(1)
+        self._asked: dict[int, float] = {}  # request -> semantic reading it was made at
 
     # ---- the shell's side -------------------------------------------------------------------
 
@@ -92,7 +94,13 @@ class Kernel:
         """Handle the next due event or timer; None when nothing is due yet."""
         self._read(semantic, ops)
         for event in self.inbox.take():
-            self.agenda.add(Clock.SEMANTIC, self.semantic, event.priority, event)
+            # An end check's answer is filed at the reading it was asked at, the time its end is
+            # dated by: a check asked before the deadline is handled before it (phase2.md,
+            # 时间和结束判定).
+            at = self.semantic
+            if isinstance(event, EndChecked):
+                at = self._asked.pop(event.request, at)
+            self.agenda.add(Clock.SEMANTIC, at, event.priority, event)
         due = self.agenda.pop({Clock.SEMANTIC: self.semantic, Clock.OPS: self.ops})
         if due is None:
             return None
@@ -126,7 +134,9 @@ class Kernel:
 
     def request(self) -> int:
         """A fresh id to match an answer to its command."""
-        return next(self._requests)
+        request = next(self._requests)
+        self._asked[request] = self.semantic
+        return request
 
     def set_timer(self, kind: str, clock: Clock, at: float, priority: Priority, /, **data) -> int:
         """Record the intended wake-up first, then ask the shell for it."""
