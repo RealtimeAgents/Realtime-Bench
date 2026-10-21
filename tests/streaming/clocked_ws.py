@@ -269,7 +269,12 @@ class _Connection:
             if data:
                 self.sock.sendall(data)
             else:
-                self.sock.shutdown(socket.SHUT_WR)
+                # Ended already by the server's exit; websockets does the same
+                # (sync/connection.py:1031-1034).
+                try:
+                    self.sock.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
                 ended = True
         # Nothing the server sent may be in flight while it waits on the clock again.
         wait_delivered(self.sock)
