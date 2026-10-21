@@ -4,7 +4,9 @@
 as evaluation/shell.py drives the turn-based policy: it reads the clock, runs the commands each
 ``step`` returns, posts their answers, and in between waits for a post or for the next timer the
 kernel set. What differs is where the commands run: the shell's own thread never waits for the
-environment or for the session (phase2.md, native streaming).
+environment or for the session (phase2.md, native streaming). One command waits for the gate on
+it, ReleaseInputs, which the kernel sends once every operation it sent is answered: the gate is
+free by then.
 
 - Captures, actions and end checks run on the environment lanes, behind the shell's gate
   (evaluation/env_lanes.py): a capture and an action share it, so frames keep coming during a
@@ -17,8 +19,10 @@ environment or for the session (phase2.md, native streaming).
   hands the capture lane a second capture.
 - At the end the snapshot is taken on a thread of its own, next after the action executing and
   ahead of the reads waiting for the gate, as the turn-based shell takes it right after the action
-  on its one thread (4.8). It waits for that action at most the action's budget; an action still
-  running then fails the snapshot, and the run is invalid. It is read in its own budget.
+  on its one thread (4.8). It holds the gate alone, so it also waits for a capture that runs
+  alongside that action: at most the larger of the action's budget and a capture's (N32). An
+  operation still running then fails the snapshot, and the run is invalid. It is read in its own
+  budget.
 
 Wall clock only: ``semantic`` is ``clocks.semantic.time() - env.t0``, and the two clocks are one.
 
@@ -30,6 +34,7 @@ its coordinate trace, as the action lane read them, are written as ActionExecuti
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import threading
 import traceback
@@ -196,11 +201,17 @@ class _StreamingShell:
     def _raised(self, failure: str) -> None:
         """The shell's own code raised, on its thread or on a lane: the run is invalid and the
         episode still finalizes; the first traceback is the loop error (runner.py main)."""
-        self.log(f"[streaming] shell raised:\n{failure}")
         with self._loop_error_lock:
             if self._loop_error is None:
                 self._loop_error = self.env._loop_error = failure
         self.post(Invalidated("runner", "run_exception", failure))
+        self._say(f"[streaming] shell raised:\n{failure}")
+
+    def _say(self, message: str) -> None:
+        """Log from a thread that owes the kernel an answer: a log that raises (its stdout gone)
+        loses the line, not the answer."""
+        with contextlib.suppress(Exception):
+            self.log(message)
 
     def _handle(self, command) -> None:
         match command:
@@ -323,7 +334,7 @@ class _StreamingShell:
             )
         except BaseException:  # noqa: BLE001 - a failed reply invalidates the run
             failure = traceback.format_exc()
-            self.log(f"[streaming] reply {command.generation} failed:\n{failure}")
+            self._say(f"[streaming] reply {command.generation} failed:\n{failure}")
             r = episode_records.generation_error(round(clock.time() - started, 2), failure)
             result = GenerationResult(invalid=episode_records.result_invalid(r, self.agent, "wall"))
         done.set()
@@ -366,9 +377,11 @@ class _StreamingShell:
     # ---- the end ------------------------------------------------------------------------------
 
     def _freeze(self) -> None:
-        """On a thread of its own: the snapshot, next after the action executing (4.8)."""
+        """The snapshot, next after the action executing (4.8), on its own thread (_freezing). A
+        read that raises fails the snapshot, a cancellation's too."""
         env, clock = self.env, self.clocks.operational
-        # The presentation boundary precedes the scorer's snapshot.
+        # The presentation boundary precedes the scorer's snapshot; it moves to when the read
+        # begins, once the gate is the snapshot's.
         env._active_end_unix_s = clock.time()
         env._termination_snapshot_captured = False
         # The Task base class has none (realtime_tasks/types.py).
@@ -376,16 +389,21 @@ class _StreamingShell:
         error = None
         if snapshotter is not None:
             turn, executing = self.lanes.freeze_turn()
+            # The action, and a capture alongside it (N32).
             wait = (
                 None
                 if executing is None
-                else action_timeout(executing.action, ENVIRONMENT_BUDGET.action_s)
+                else max(
+                    action_timeout(executing.action, ENVIRONMENT_BUDGET.action_s),
+                    ENVIRONMENT_BUDGET.capture_s,
+                )
             )
+            # Also a BaseException (entity/model.py RetryCancelled).
             try:
                 snapshot = self.lanes.gate.call(
                     self._read_snapshot, snapshotter, turn=turn, wait=wait
                 )
-            except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
+            except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
             else:
                 env._termination_snapshot = snapshot
@@ -410,6 +428,7 @@ class _StreamingShell:
 
     def _read_snapshot(self, snapshotter):
         clock = self.clocks.operational
+        self.env._active_end_unix_s = clock.time()  # after the action, as on the turn-based shell
         with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s, clock=clock):
             return snapshotter()
 

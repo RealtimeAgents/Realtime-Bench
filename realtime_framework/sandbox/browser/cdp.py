@@ -193,13 +193,16 @@ class PersistentCDPClient:
 
 
 _REGISTRY_LOCK = threading.Lock()
-_CLIENTS: dict[tuple[int, str], PersistentCDPClient] = {}
+_CLIENTS: dict[tuple[int, str, str], PersistentCDPClient] = {}
 _ALIASES: dict[tuple[int, str], str] = {}
 
 
 def client_for(
-    port: int, *, target_id: str | None = None, target_hint: str = ""
+    port: int, *, target_id: str | None = None, target_hint: str = "", session: str = ""
 ) -> PersistentCDPClient:
+    """The client of ``session`` on the page target. Each session is a connection with a lock of
+    its own, as Chrome lets one target have several clients; ``""`` is the one every caller
+    shares unless it names another."""
     port = int(port)
     explicit_target = target_id is not None
     alias = (port, str(target_hint or ""))
@@ -215,7 +218,7 @@ def client_for(
         if not targets:
             raise RuntimeError(f"CDP port {port} has no page target")
         target_id = str(targets[0].get("id") or "")
-    key = (port, target_id)
+    key = (port, target_id, session)
     with _REGISTRY_LOCK:
         client = _CLIENTS.get(key)
         if client is None:
@@ -267,9 +270,11 @@ def close_port(port: int) -> None:
         client.close()
 
 
-def _probe_one(port: int, target: dict, expression: str, *, include_ax_tree=False) -> dict:
+def _probe_one(
+    port: int, target: dict, expression: str, *, include_ax_tree=False, session: str = ""
+) -> dict:
     target_id = str(target.get("id") or "")
-    client = client_for(port, target_id=target_id)
+    client = client_for(port, target_id=target_id, session=session)
     value = client.evaluate(expression, timeout=8)
     if not isinstance(value, dict):
         raise RuntimeError("browser extractor returned no object")
@@ -316,8 +321,10 @@ def probe_interactables(
     spec: dict,
     desktop_size: tuple[int, int],
     include_ax_tree: bool = False,
+    session: str = "",
 ) -> dict:
-    """Evaluate the observation-bound DOM extractor over persistent page sessions."""
+    """Evaluate the observation-bound DOM extractor over persistent page sessions, ``session``'s
+    (client_for)."""
     from realtime_framework.sandbox.browser.cdp_interactables import build_expression as build_expression
 
     pages = page_targets(port)
@@ -344,7 +351,9 @@ def probe_interactables(
     warnings = []
     for page in pages:
         try:
-            windows.append(_probe_one(port, page, expression, include_ax_tree=include_ax_tree))
+            windows.append(
+                _probe_one(port, page, expression, include_ax_tree=include_ax_tree, session=session)
+            )
         except Exception as exc:
             warnings.append(f"window_probe_failed:{type(exc).__name__}:{str(exc)[:160]}")
     warnings.extend(warning for value in windows for warning in value.get("warnings", []))
