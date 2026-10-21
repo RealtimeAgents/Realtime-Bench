@@ -529,17 +529,34 @@ def stream(script: str) -> list:
     return blocks
 
 
-def streaming_view(blocks, frames: int = 2) -> CanonicalRequest:
+def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message") -> CanonicalRequest:
     """The streaming history view of the blocks, laid out here as harnesses/streaming/history.py
     lays it out, so that these tests do not hang on the view's signature: the system
     instruction, then every block in order, every reply and feedback kept (decision 4.6), the
-    frames older than the newest ``frames`` folded to the turn-based placeholder (decision 23)."""
+    frames older than the newest ``frames`` folded to the turn-based placeholder (decision 23),
+    and the feedback where the policy's ``feedback`` places it: as its own block, or with the
+    feedback since the frame before in front of the next frame, which loses it when it folds."""
     framed = [index for index, block in enumerate(blocks) if block.kind == "frame"]
     older = set(framed[: max(0, len(framed) - frames)])
-    items = [RequestItem(SYSTEM, Intent("instruction", "head"))]
+    items, pending = [RequestItem(SYSTEM, Intent("instruction", "head"))], []
     for index, block in enumerate(blocks):
+        if feedback == "frame_prefix" and block.kind == "execution_feedback":
+            pending.append(block)
+            continue
         if index in older:
             block = replace(block, text=TEXTS.folded_visual, image=None, folded=True)
+        elif block.kind == "frame" and pending:
+            prefix = ContentBlock(
+                block.id.removesuffix("frame") + "prefix",
+                "execution_feedback",
+                "environment",
+                block.time,
+                text="\n".join(waiting.text for waiting in pending),
+                attached_to=block.id,
+            )
+            items.append(RequestItem(prefix, Intent("input", "frame_prefix")))
+        if block.kind == "frame":
+            pending = []
         role = "model" if block.kind == "model_output" else "input"
         items.append(RequestItem(block, Intent(role, "in_order")))
     return CanonicalRequest(POLICY, "turns", tuple(items), ANSWER, CALL)
@@ -574,10 +591,11 @@ def test_a_new_connection_replays_the_streaming_view():
     assert new_core().replay_streaming(None) == []
 
 
-def streamed(blocks, frames: int = 2) -> RealtimeSessionCore:
+def streamed(blocks, frames: int = 2, feedback: str = "separate_message") -> RealtimeSessionCore:
     """A core that replayed the streaming view of these blocks, every item confirmed."""
     core = new_core()
-    for operation in sent(core, core.replay_streaming(streaming_view(blocks, frames))):
+    view = streaming_view(blocks, frames, feedback)
+    for operation in sent(core, core.replay_streaming(view)):
         core.receive(done(operation.item_id))
     return core
 
@@ -591,6 +609,37 @@ def items_of(core: RealtimeSessionCore) -> dict[str, str]:
     """Each streaming block's item in the session: a frame's or feedback's, a reply's last."""
     items = {block_id: sent.user_item_id for block_id, sent in core.frames.items()}
     return items | {block_id: ids[-1] for block_id, ids in core.outputs.items()}
+
+
+def test_frame_prefix_feedback_goes_into_the_frame_after_it():
+    """Under the frame_prefix placement the view puts the feedback since the frame before in
+    front of the next frame, as a turn-based frame carries it: a rebuild and a push write it into
+    that frame's item, and when the frame folds the feedback gives way to the placeholder with
+    it, so the next frame's placeholder goes after that frame's."""
+    replayed = new_core().replay_streaming(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
+    assert [(op.role, op.text) for op in replayed] == [
+        ("user", "frame 1"),
+        ("assistant", "r1"),
+        ("user", "frame 2"),
+        ("user", "fb1\nframe 3"),
+    ]
+
+    core = streamed(stream("FRF"), 3, "frame_prefix")
+    pushed = core.push(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
+    assert (pushed.text, core.frames["f3.frame"].text) == ("fb1\nframe 3", "fb1\nframe 3")
+    acknowledge(core, sent(core, [pushed]))
+    acknowledge(core, sent(core, [core.push(streaming_view(stream("FRFBFF"), 3, "frame_prefix"))]))
+    item = items_of(core)
+    batch = core.queue_edit(streaming_view(stream("FRFBFF"), 1, "frame_prefix"))
+    assert shape(batch.operations) == [
+        ("delete", item["f1.frame"], None, True),
+        ("create", "user", "root", True),
+        ("delete", item["f2.frame"], None, True),
+        ("create", "user", item["d1.output"], True),
+        ("delete", item["f3.frame"], None, True),
+        ("create", "user", batch.operations[3].item_id, True),
+    ]
+    assert {op.text for op in batch.operations if isinstance(op, Create)} == {TEXTS.folded_visual}
 
 
 def test_a_push_names_its_client_event():

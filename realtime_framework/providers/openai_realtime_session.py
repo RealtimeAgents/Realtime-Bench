@@ -3,14 +3,15 @@
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it, and the archived-action ledger item; in native streaming, an item for
 each block of the streaming history view, a frame, a reply's output or an execution feedback, in
-the order the agent accepted them. From a history view it plans the item creates and deletes that
-bring the server there, and it records what became of each one: unknown while it is written, sent
-once the write returned, acknowledged once the server confirmed it. Each server event the driver
-reads is handed to ``receive``, in the order the connection delivered it, which passes it to the
-state it belongs to: an acknowledgement or error settles the in-place edit waiting for it, an
-error about a block native streaming pushed refuses that block alone, a response event joins its
-generation. Sending and receiving are the driver's; it reads only while something waits for an
-event, so what arrives after the last wait reaches the core with the next read.
+the order the agent accepted them, feedback placed in front of a frame going into the frame's
+item. From a history view it plans the item creates and deletes that bring the server there, and
+it records what became of each one: unknown while it is written, sent once the write returned,
+acknowledged once the server confirmed it. Each server event the driver reads is handed to
+``receive``, in the order the connection delivered it, which passes it to the state it belongs
+to: an acknowledgement or error settles the in-place edit waiting for it, an error about a block
+native streaming pushed refuses that block alone, a response event joins its generation. Sending
+and receiving are the driver's; it reads only while something waits for an event, so what
+arrives after the last wait reaches the core with the next read.
 """
 
 from __future__ import annotations
@@ -123,7 +124,8 @@ class EditBatch:
 
 @dataclass(frozen=True)
 class ViewFrame:
-    """One frame of a history view, with the frame prefix before it and the output after it."""
+    """One frame of a history view, with the frame prefix before it and the output after it; of
+    a native-streaming view, one block, a frame with the prefix before it."""
 
     item: RequestItem
     prefix: str = ""
@@ -157,11 +159,19 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
     return ledger, frames
 
 
-def streaming_blocks(items) -> list[RequestItem]:
+def streaming_blocks(items) -> list[ViewFrame]:
     """Read a native-streaming history view (harnesses/streaming/history.py): its blocks in the
     order the agent accepted them, frames, replies' outputs and execution feedback, each one item
-    of the session."""
-    return [item for item in items if item.intent.position == "in_order"]
+    of the session. Feedback the policy places in front of a frame is that frame's prefix, as a
+    turn-based frame's is."""
+    blocks, prefix = [], ""
+    for item in items:
+        if item.intent.position == "frame_prefix":
+            prefix = item.block.text
+        elif item.intent.position == "in_order":
+            blocks.append(ViewFrame(item, prefix))
+            prefix = ""
+    return blocks
 
 
 @dataclass
@@ -291,19 +301,20 @@ class RealtimeSessionCore:
 
     def replay_streaming(self, history: CanonicalRequest | None) -> list[Create]:
         """Plan a new session's items from a native-streaming history view (None for an empty
-        session), one per block in order: a frame's user item, a folded one the placeholder
-        without its screenshot; a reply's assistant item, none for an empty output as a turn's
-        has none; an execution feedback's user item. The mirror becomes the session they make."""
+        session), one per block in order: a frame's user item, with the feedback in front of it,
+        a folded one the placeholder without its screenshot; a reply's assistant item, none for an
+        empty output as a turn's has none; an execution feedback's user item. The mirror becomes
+        the session they make."""
         operations: list[Create] = []
-        for item in [] if history is None else streaming_blocks(history.items):
-            block = item.block
+        for frame in [] if history is None else streaming_blocks(history.items):
+            block = frame.item.block
             if block.kind == "model_output":
-                assistant = self._output_create(item if block.text else None)
+                assistant = self._output_create(frame.item if block.text else None)
                 self.outputs[block.id] = [] if assistant is None else [assistant.item_id]
                 operations += [] if assistant is None else [assistant]
             else:
-                user = self._frame_create(ViewFrame(item))
-                self.frames[block.id] = SentFrame(user.item_id, block.text, block.folded)
+                user = self._frame_create(frame)
+                self.frames[block.id] = SentFrame(user.item_id, frame.text, block.folded)
                 operations.append(user)
         return operations
 
@@ -315,14 +326,14 @@ class RealtimeSessionCore:
         return user
 
     def push(self, history: CanonicalRequest) -> Create:
-        """Plan the user item of a native-streaming history view's newest block, a frame or an
-        execution feedback, as native streaming pushes it while responses and edits are in
-        progress: its create names a client event, so a server error about it refuses this block
-        alone."""
-        item = streaming_blocks(history.items)[-1]
-        user = self._frame_create(ViewFrame(item), event_id=self._new_id("push"))
-        self.frames[item.block.id] = SentFrame(user.item_id, item.block.text, item.block.folded)
-        self.pushes[user.event_id] = Push(item.block.id, user.item_id)
+        """Plan the user item of a native-streaming history view's newest block, a frame with the
+        feedback in front of it or an execution feedback, as native streaming pushes it while
+        responses and edits are in progress: its create names a client event, so a server error
+        about it refuses this block alone."""
+        frame = streaming_blocks(history.items)[-1]
+        user = self._frame_create(frame, event_id=self._new_id("push"))
+        self.frames[frame.id] = SentFrame(user.item_id, frame.text, frame.item.block.folded)
+        self.pushes[user.event_id] = Push(frame.id, user.item_id)
         return user
 
     def in_place_problem(self, history: CanonicalRequest) -> str | None:
@@ -475,7 +486,7 @@ class RealtimeSessionCore:
             return None
         history, self._queued = self._queued, None
         blocks = self._held_blocks(history)
-        if not all(self._holds(item.block) for item in blocks):
+        if not all(self._holds(frame.item.block) for frame in blocks):
             # The view still holds a block whose push the server refused.
             raise RuntimeError(
                 "Realtime history edit refused: retained block is missing its provider item ID"
@@ -485,16 +496,16 @@ class RealtimeSessionCore:
     def _holds(self, block) -> bool:
         return block.id in (self.outputs if block.kind == "model_output" else self.frames)
 
-    def _held_blocks(self, history: CanonicalRequest) -> list[RequestItem]:
+    def _held_blocks(self, history: CanonicalRequest) -> list[ViewFrame]:
         """A native-streaming view's blocks up to the newest one the session holds, which an edit
         covers. The view's blocks after it are not pushed yet, or were refused; the session's
         blocks the view lacks were pushed after it was made, as a view keeps every block it once
         had (decision 4.6). The edit leaves both alone."""
         blocks = streaming_blocks(history.items)
-        held = [index for index, item in enumerate(blocks) if self._holds(item.block)]
+        held = [index for index, frame in enumerate(blocks) if self._holds(frame.item.block)]
         return blocks[: held[-1] + 1] if held else []
 
-    def _fold_batch(self, blocks: list[RequestItem]) -> EditBatch:
+    def _fold_batch(self, blocks: list[ViewFrame]) -> EditBatch:
         """Plan one native-streaming edit from the blocks it covers, in send order: replace each
         user item whose text changed or whose screenshot folded, after the item of the block
         before it in the view, as a turn-based edit does (decision 23: the view folds each frame
@@ -507,20 +518,20 @@ class RealtimeSessionCore:
         folded_count = 0
         prompt_edit_count = 0
         previous_item_id = "root"
-        for item in blocks:
-            block = item.block
+        for frame in blocks:
+            block = frame.item.block
             if block.kind == "model_output":
                 if self.outputs[block.id]:
                     previous_item_id = self.outputs[block.id][-1]
                 continue
             sent = self.frames[block.id]
-            replacement = self._replacement(ViewFrame(item), sent, previous_item_id)
+            replacement = self._replacement(frame, sent, previous_item_id)
             operations += replacement
             folded_count += int(block.folded and not sent.folded)
-            prompt_edit_count += int(block.text != sent.text)
+            prompt_edit_count += int(frame.text != sent.text)
             previous_item_id = replacement[-1].item_id if replacement else sent.user_item_id
             if replacement:
-                replaced[block.id] = (previous_item_id, block.text, block.folded)
+                replaced[block.id] = (previous_item_id, frame.text, block.folded)
         return EditBatch(
             tuple(operations),
             self.ledger_item_id,
