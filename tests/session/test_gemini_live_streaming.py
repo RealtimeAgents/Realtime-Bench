@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -33,9 +34,11 @@ from realtime_framework.entity.model import (
     ConnectRequest,
     GenerationRequest,
     HistorySyncRequest,
+    RetryCancelled,
     RuntimeState,
     SessionSeed,
     SyncDisposition,
+    retry_cancellation,
 )
 from realtime_framework.entity.records import UNTRACED, current_trace_scope, trace_scope
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
@@ -121,33 +124,41 @@ class FedSocket:
 
 class FedLive:
     """client.aio.live: each connect opens a session on a new FedSocket; ``configs`` holds each
-    connect's setup."""
+    connect's setup. While ``setup_stalls``, a connect's setupComplete does not come; ``stall``
+    is each new socket's FedSocket.stall."""
 
     def __init__(self):
         self.sockets: list[FedSocket] = []
         self.configs: list = []
+        self.setup_stalls = False
+        self.stall = None
 
     def connect(self, *, model, config):
         self.configs.append(config)
         socket = FedSocket(len(self.sockets) + 1)
+        socket.stall = self.stall
         self.sockets.append(socket)
         session = genai_live.AsyncSession(
             api_client=SimpleNamespace(vertexai=False),
             websocket=socket,
             setup_complete=types.LiveServerSetupComplete(),
         )
-        return _Opened(session, socket)
+        return _Opened(session, socket, setup_stalls=self.setup_stalls)
 
 
 class _Opened:
-    """What client.aio.live.connect returns: entered, the session; exited, the connection
-    closed, which waits for a write stuck in its socket where FedSocket.close_stalls."""
+    """What client.aio.live.connect returns: entered, the session once the setup is
+    acknowledged; exited, the connection closed, which waits for a write stuck in its socket
+    where FedSocket.close_stalls."""
 
-    def __init__(self, session, socket: FedSocket):
+    def __init__(self, session, socket: FedSocket, *, setup_stalls: bool = False):
         self._session = session
         self._socket = socket
+        self._setup_stalls = setup_stalls
 
     async def __aenter__(self):
+        if self._setup_stalls:
+            await asyncio.Event().wait()
         return self._session
 
     async def __aexit__(self, *exc):
@@ -872,6 +883,61 @@ def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatc
 
     assert isinstance(asyncio.run(run()), ConnectionClosedError)
     assert len(rig.live.sockets) == 2
+
+
+@pytest.mark.parametrize(
+    ("stuck", "streaming"), [("setup", False), ("setup", True), ("seed", True)]
+)
+def test_an_abort_ends_a_connect_its_abandoned_generation_is_stuck_in(stuck, streaming):
+    """A connect waiting for the server's setupComplete, or for a seed write that does not
+    drain, holds the session. The abort of the generation it readies the session for ends it,
+    so the next generation readies a session of its own."""
+    rig = Rig(streaming=streaming)
+    history = rig.view([pushed(1)]) if stuck == "seed" else None
+    if stuck == "setup":
+        rig.live.setup_stalls = True
+    else:
+        rig.live.stall = lambda message: wire(message) == "client_content"
+
+    async def run():
+        cancel = threading.Event()
+        with retry_cancellation(cancel):
+            readying = asyncio.ensure_future(
+                rig.driver.ensure_ready(rig.seed, history, lambda *_, **__: None)
+            )
+        await settle()
+        cancel.set()
+        await asyncio.wait_for(rig.driver.abort(None), 2)
+        ended = None
+        try:
+            await asyncio.wait_for(readying, 2)
+        except RetryCancelled as exc:
+            ended = exc
+        rig.live.setup_stalls, rig.live.stall = False, None
+        await asyncio.wait_for(rig.driver.ensure_ready(rig.seed, history, lambda *_, **__: None), 2)
+        state = rig.driver.state
+        await rig.driver.close()
+        return ended, state
+
+    ended, state = asyncio.run(run())
+    assert isinstance(ended, RetryCancelled)
+    assert state == RuntimeState.READY and len(rig.live.sockets) == 2
+
+
+def test_a_close_ends_a_connect_still_opening():
+    rig = Rig()
+    rig.live.setup_stalls = True
+
+    async def run():
+        connecting = asyncio.ensure_future(rig.connect())
+        await settle()
+        await asyncio.wait_for(rig.driver.close(), 2)
+        try:
+            await asyncio.wait_for(connecting, 2)
+        except RuntimeError as exc:
+            return str(exc)
+
+    assert asyncio.run(run()) == "Gemini Live session closed while it opened"
 
 
 def test_each_message_is_traced_under_the_reply_it_was_read_for():
