@@ -68,9 +68,9 @@ def run_main(tmp_path, monkeypatch, *argv) -> dict:
     guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
     decision loop that fails at once, so the run ends invalid. Returns the run summary."""
     import sys
-    import types
 
     import realtime_tasks.registry as tasks
+    from realtime_framework.clock import Clocks, SystemClock
     from realtime_framework.evaluation import effective_config as probe
     from realtime_framework.evaluation import reporting, runner
     from realtime_framework.sandbox import desktop
@@ -79,8 +79,15 @@ def run_main(tmp_path, monkeypatch, *argv) -> dict:
         monkeypatch.setattr(desktop, name, lambda *args, **kwargs: None)
     monkeypatch.setattr(desktop, "_start_screen_recording", lambda run_dir=None: False)
     monkeypatch.setattr(reporting, "finalize_video", lambda run_dir: None)
-    clock = types.SimpleNamespace(time=runner.time.time, sleep=lambda seconds: None)
-    monkeypatch.setattr(runner, "time", clock)
+
+    class NoSleeps(SystemClock):
+        """main()'s setup waits take no time here."""
+
+        def sleep(self, seconds):
+            pass
+
+    clock = NoSleeps()
+    monkeypatch.setattr(runner, "episode_clocks", lambda clock_mode, fps: Clocks(clock, clock))
     monkeypatch.setattr(runner, "GuestClient", probe._Guest)
     monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
     monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))
