@@ -262,47 +262,100 @@ def test_a_reply_is_parsed_as_json_loads_parses_it(endpoint, api):
     assert result.response == reply
 
 
+OBJECT = "Decisions response must be an object"
+UPSTREAM = "Decisions response did not come from the configured upstream provider"
+FAMILY = "Decisions response model differs from the requested model family"
+USAGE = "Decisions response is missing valid native token usage"
+# These four are followed by the answer as received.
+NO_ANSWER = "Decisions response is missing a valid choice answer (or was refused)"
+CHOICE = "Decisions returned a choice outside the requested criteria"
+DISTRIBUTION = "Decisions returned an incomplete probability distribution"
+VALUES = "Decisions returned invalid probabilities or confidence"
 INVALID = {
-    "not_an_object": lambda api: [],
-    "other_provider": lambda api: _reply(api, provider="anthropic"),
-    "no_provider": lambda api: _without(_reply(api), "provider"),
-    "shorter_model_name": lambda api: _reply(api, model=APIS[api][1].rpartition("-")[0]),
-    "model_name_running_on": lambda api: _reply(api, model=APIS[api][1] + "2"),
-    "no_model": lambda api: _without(_reply(api), "model"),
-    "no_usage": lambda api: _without(_reply(api), "usage"),
-    "usage_without_output": lambda api: _reply(api, usage={"input_tokens": 1}),
-    "usage_as_float": lambda api: _reply(api, usage={"input_tokens": 1.0, "output_tokens": 1}),
-    "usage_as_bool": lambda api: _reply(api, usage={"input_tokens": 1, "output_tokens": True}),
-    "usage_as_text": lambda api: _reply(api, usage={"input_tokens": "1", "output_tokens": 1}),
-    "negative_input_tokens": lambda api: _reply(
-        api, usage={"input_tokens": -1, "output_tokens": 1}
+    # name: (message, reply)
+    "not_an_object": (OBJECT, lambda api: []),
+    "other_provider": (UPSTREAM, lambda api: _reply(api, provider="anthropic")),
+    "no_provider": (UPSTREAM, lambda api: _without(_reply(api), "provider")),
+    "shorter_model_name": (
+        FAMILY,
+        lambda api: _reply(api, model=APIS[api][1].rpartition("-")[0]),
     ),
-    "negative_output_tokens": lambda api: _reply(
-        api, usage={"input_tokens": 1, "output_tokens": -1}
+    "model_name_running_on": (FAMILY, lambda api: _reply(api, model=APIS[api][1] + "2")),
+    "no_model": (FAMILY, lambda api: _without(_reply(api), "model")),
+    "no_usage": (USAGE, lambda api: _without(_reply(api), "usage")),
+    "usage_without_output": (USAGE, lambda api: _reply(api, usage={"input_tokens": 1})),
+    "usage_as_float": (
+        USAGE,
+        lambda api: _reply(api, usage={"input_tokens": 1.0, "output_tokens": 1}),
     ),
-    "no_answers": lambda api: _without(_reply(api), "answers"),
-    "no_answer": lambda api: _reply(api, answers={}),
-    "answers_not_a_mapping": lambda api: _reply(api, answers=[]),
-    "refusal": lambda api: _reply(
-        api, answers={"next_action": {"type": "refusal", "refusal": "no"}}
+    "usage_as_bool": (
+        USAGE,
+        lambda api: _reply(api, usage={"input_tokens": 1, "output_tokens": True}),
     ),
-    "answer_of_another_type": lambda api: _answer(api, type="score"),
-    "choice_not_offered": lambda api: _answer(api, choice="c"),
-    "choice_not_text": lambda api: _answer(api, choice=1),
-    "probability_missing": lambda api: _answer(api, probabilities={"a": 1.0}),
-    "probability_extra": lambda api: _answer(api, probabilities={"a": 1.0, "b": 0.0, "c": 0.0}),
-    "probability_above_one": lambda api: _answer(api, probabilities={"a": 1.5, "b": 0.0}),
-    "probability_below_zero": lambda api: _answer(api, probabilities={"a": 1.0, "b": -0.1}),
-    "probability_nan": lambda api: _answer(api, probabilities={"a": math.nan, "b": 0.0}),
-    "probability_as_bool": lambda api: _answer(api, probabilities={"a": True, "b": 0.0}),
-    "probability_as_text": lambda api: _answer(api, probabilities={"a": "1", "b": 0.0}),
-    "no_confidence": lambda api: _reply(
-        api, answers={"next_action": _without(_reply(api)["answers"]["next_action"], "confidence")}
+    "usage_as_text": (
+        USAGE,
+        lambda api: _reply(api, usage={"input_tokens": "1", "output_tokens": 1}),
     ),
-    "confidence_above_one": lambda api: _answer(api, confidence=1.5),
-    "confidence_infinite": lambda api: _answer(api, confidence=math.inf),
-    "confidence_as_bool": lambda api: _answer(api, confidence=True),
-    "confidence_null": lambda api: _answer(api, confidence=None),
+    "negative_input_tokens": (
+        USAGE,
+        lambda api: _reply(api, usage={"input_tokens": -1, "output_tokens": 1}),
+    ),
+    "negative_output_tokens": (
+        USAGE,
+        lambda api: _reply(api, usage={"input_tokens": 1, "output_tokens": -1}),
+    ),
+    "no_answers": (NO_ANSWER, lambda api: _without(_reply(api), "answers")),
+    "no_answer": (NO_ANSWER, lambda api: _reply(api, answers={})),
+    "answers_not_a_mapping": (NO_ANSWER, lambda api: _reply(api, answers=[])),
+    "refusal": (
+        NO_ANSWER,
+        lambda api: _reply(api, answers={"next_action": {"type": "refusal", "refusal": "no"}}),
+    ),
+    "answer_of_another_type": (NO_ANSWER, lambda api: _answer(api, type="score")),
+    "choice_not_text": (NO_ANSWER, lambda api: _answer(api, choice=1)),
+    "probability_as_bool": (
+        NO_ANSWER,
+        lambda api: _answer(api, probabilities={"a": True, "b": 0.0}),
+    ),
+    "probability_as_text": (
+        NO_ANSWER,
+        lambda api: _answer(api, probabilities={"a": "1", "b": 0.0}),
+    ),
+    "no_confidence": (
+        NO_ANSWER,
+        lambda api: _reply(
+            api,
+            answers={"next_action": _without(_reply(api)["answers"]["next_action"], "confidence")},
+        ),
+    ),
+    "confidence_as_bool": (NO_ANSWER, lambda api: _answer(api, confidence=True)),
+    "confidence_null": (NO_ANSWER, lambda api: _answer(api, confidence=None)),
+    "choice_not_offered": (CHOICE, lambda api: _answer(api, choice="c")),
+    "probability_missing": (DISTRIBUTION, lambda api: _answer(api, probabilities={"a": 1.0})),
+    "probability_extra": (
+        DISTRIBUTION,
+        lambda api: _answer(api, probabilities={"a": 1.0, "b": 0.0, "c": 0.0}),
+    ),
+    "probability_above_one": (
+        VALUES,
+        lambda api: _answer(api, probabilities={"a": 1.5, "b": 0.0}),
+    ),
+    "probability_below_zero": (
+        VALUES,
+        lambda api: _answer(api, probabilities={"a": 1.0, "b": -0.1}),
+    ),
+    "probability_nan": (VALUES, lambda api: _answer(api, probabilities={"a": math.nan, "b": 0.0})),
+    "confidence_above_one": (VALUES, lambda api: _answer(api, confidence=1.5)),
+    "confidence_infinite": (VALUES, lambda api: _answer(api, confidence=math.inf)),
+    # The upstream and the model are checked before the rest.
+    "other_provider_and_no_usage": (
+        UPSTREAM,
+        lambda api: _without(_reply(api, provider="anthropic"), "usage"),
+    ),
+    "other_model_and_no_answers": (
+        FAMILY,
+        lambda api: _without(_reply(api, model="other/model"), "answers"),
+    ),
 }
 
 
@@ -310,15 +363,21 @@ INVALID = {
 @pytest.mark.parametrize("case", list(INVALID))
 def test_an_invalid_reply_fails_the_question(endpoint, case, api):
     """Rejected before the selection flow reads it; a retry would not change it."""
-    error, _ = _decide(endpoint, api, _serve(200, INVALID[case](api)))
-    assert isinstance(error, ValueError)
+    message, make = INVALID[case]
+    reply = make(api)
+    if message in (NO_ANSWER, CHOICE, DISTRIBUTION, VALUES):
+        answers = reply.get("answers")
+        message += f": {(answers.get('next_action') if isinstance(answers, dict) else None)!r}"
+    error, _ = _decide(endpoint, api, _serve(200, reply))
+    assert type(error) is ValueError
+    assert str(error) == message
     assert APIS[api][0].classify_question_error(error) == TransportFailure(FATAL)
 
 
 @pytest.mark.parametrize("api", list(APIS))
 def test_a_body_that_is_not_json_fails_the_question(endpoint, api):
     error, _ = _decide(endpoint, api, _serve(200, b"<html>", content_type="text/html"))
-    assert isinstance(error, ValueError)
+    assert type(error) is json.JSONDecodeError
     assert APIS[api][0].classify_question_error(error) == TransportFailure(FATAL)
 
 
