@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.evaluation.kernel.events import (
+    CheckEnd,
     Commit,
     FrameRendered,
     FreezeSnapshot,
@@ -22,6 +23,7 @@ from .projection import Projection, decision, key_releases
 from .script import Script, action_key, sim_action
 
 NEVER_S = 1e9  # a call that is never answered
+STATE_READ_FAILED = "state read failed"
 
 
 def turn_config(script: Script) -> TurnConfig:
@@ -62,7 +64,8 @@ def world(script: Script) -> World:
         frozen_from=script.frozen_from,
         rejections={k: t.rejected for k, t in enumerate(script.turns) if t.rejected},
         execute_errors={k: t.fault for k, t in enumerate(script.turns) if t.fault},
-        check_errors={n: "state read failed" for n in script.check_errors},
+        check_errors={n: STATE_READ_FAILED for n in script.check_errors},
+        tap_check_errors={n: STATE_READ_FAILED for n in script.tap_check_errors},
         advance_errors={n: "page clock did not advance" for n in script.advance_errors},
         snapshot_error=script.snapshot_error,
     )
@@ -71,12 +74,13 @@ def world(script: Script) -> World:
 class ScriptedSimulation(Simulation):
     """The simulation with the replayed world's traits it lacks: a token tap stops at the
     episode horizon, as GuestEnvironment's does (sandbox/actions.py:240-244, 548); the task ends
-    once ``ends_after`` actions have taken effect; and it has no renderer, so the render barrier
-    commits no frame (sandbox/actions.py:286-292)."""
+    once the script's ``ends_after`` actions have taken effect; on the wall clock every end check
+    asked within one of the script's ``failing_reads_s`` fails; and it has no renderer, so the
+    render barrier commits no frame (sandbox/actions.py:286-292)."""
 
-    def __init__(self, config, world, ends_after: int | None = None) -> None:
+    def __init__(self, config, world, script: Script) -> None:
         super().__init__(config, world)
-        self.ends_after = ends_after
+        self.script = script
         self.applied = 0
 
     def _execute(self, decision: int, action, release_at) -> None:
@@ -87,11 +91,13 @@ class ScriptedSimulation(Simulation):
         if decision in world.rejections or decision in world.execute_errors:
             return
         self.applied += 1
-        if self.applied == self.ends_after:
+        if self.applied == self.script.ends_after:
             now = self.semantic()
             world.ends_at = now if world.ends_at is None else min(world.ends_at, now)
 
     def _run(self, command) -> None:
+        if isinstance(command, CheckEnd) and self.script.read_fails_at(self.semantic()):
+            self.world.check_errors[len(self.checks) + 1] = STATE_READ_FAILED
         if isinstance(command, RenderFrame):
             self.commands.append(command)
             self.renders.append(self.semantic())
@@ -102,7 +108,7 @@ class ScriptedSimulation(Simulation):
 
 def simulate(script: Script) -> Projection:
     config = turn_config(script)
-    sim = ScriptedSimulation(config, world(script), script.ends_after)
+    sim = ScriptedSimulation(config, world(script), script)
     sim.run()
     return project(script, sim)
 

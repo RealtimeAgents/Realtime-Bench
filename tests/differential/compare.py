@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import drivers
 from .replayed import replay
-from .rules import Verdict, check
+from .rules import Verdict, check, x12_plan, x12_probe
 from .script import Script
 from .simulated import simulate
 
@@ -21,7 +21,22 @@ class ExpectationNotShown(UserWarning):
 
 
 def compare(script: Script, run_dir: Path, driver=drivers.legacy) -> Verdict:
-    return check(script, replay(script, run_dir, driver), simulate(script))
+    """A script with failed state reads first plays today's loop once with every failure taken
+    as a read that saw no end, to learn the order of its reads; then today's loop plays what X12
+    says the kernel does with them (rules.x12_plan)."""
+    if not script.fails_reads:
+        return check(script, replay(script, run_dir, driver), simulate(script))
+    probe = replay(x12_probe(script), _subdir(run_dir, "x12-probe"), driver)
+    plan = x12_plan(script, probe)
+    old = replay(plan.script, _subdir(run_dir, "x12-plan"), driver)
+    old.facts["x12_end"], old.facts["x12_shown"] = plan.end_at, plan.shown
+    return check(script, old, simulate(script))
+
+
+def _subdir(run_dir: Path, name: str) -> Path:
+    path = run_dir / name
+    path.mkdir()
+    return path
 
 
 def record(verdict: Verdict, *, named: bool) -> None:
