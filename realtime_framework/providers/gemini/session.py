@@ -316,18 +316,21 @@ class SessionCore:
         self._generations = 0  # generations started on the open connection
         self.connection: int | None = None  # the open connection's number, from 1
         self.delivery: dict[tuple, Delivery] = {}  # what the client wrote on it
+        # The clean-boundary state a turn-based renewal resumes by; streaming reads none of it.
         self.candidate_resume_handle: str | None = None  # latest resumption update of this turn
+        self.resume_handle: str | None = None  # promoted at a clean interaction boundary
+        self.last_turn_clean = False
         # (id, name) of the tool calls received and not yet acknowledged.
         self.pending_calls: list[tuple] = []
         self.go_away_deadline: float | None = None  # on the driver's monotonic clock
-        self.resume_handle: str | None = None  # promoted at a clean interaction boundary
         # Since the connection was planned: the latest handle the server called resumable, else
         # the one the connection resumes. Streaming resumes with it.
         self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
-        self.last_turn_clean = False
-        # The execution feedback a seed or a trigger has handed to a connection of the session,
-        # over the episode: the text handed, by block id.
+        # Streaming: the execution feedback a seed or a trigger has handed to a connection of the
+        # session, over the episode, the text handed by block id. A resume keeps it: what a
+        # trigger handed after the handle the session resumed from is lost with the server's
+        # state, and no trigger hands it again.
         self.carried: dict[str, str] = {}
         # The generation whose reply is being read, by connection, until the reply ends.
         self.replies: dict[int, _Generation] = {}
@@ -343,16 +346,17 @@ class SessionCore:
         self.resume_handle = resume_handle
         self.latest_resume_handle = resume_handle
         contents, seeded = self._seed(history)
-        feedback = [] if history is None else [item.block for item in history.items]
+        # Only streaming triggers read what the seed carries.
+        items = history.items if history is not None and self.streaming else ()
         return Connect(
             resume_handle,
             tuple(history_batches(contents)),
             seeded,
             release_grace=replacing or bool(contents),
             carried=tuple(
-                (block.id, block.text)
-                for block in feedback
-                if block.kind == "execution_feedback" and block.id in seeded
+                (item.block.id, item.block.text)
+                for item in items
+                if item.block.kind == "execution_feedback" and item.block.id in seeded
             ),
         )
 
@@ -496,7 +500,7 @@ class SessionCore:
         renewal resumes: turn-based only after a clean interaction, with the handle promoted at
         it; streaming, which has few clean boundaries, with the latest handle the server called
         resumable, whatever was sent or read after it, so the session it restores may lack input
-        or output the history has."""
+        or output the history has, or hold output the history lacks."""
         if self.streaming:
             return self.latest_resume_handle if reason == "go_away" and not force_rebuild else None
         if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:

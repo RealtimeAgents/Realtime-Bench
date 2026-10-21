@@ -496,6 +496,22 @@ def test_separate_feedback_is_the_same_content_in_native_streaming_as_turn_based
     assert "d1.feedback" in turn_based.seeded and "d1.feedback" in streaming.seeded
 
 
+def test_only_a_streaming_seed_counts_the_feedback_it_carries():
+    """What a seed carries is for the triggers after it, which only streaming sends."""
+    assert plan(session_core(), separate_view([fed(0, "F0")])).carried == ()
+    streaming = plan(
+        session_core(streaming=True),
+        streaming_view(
+            [
+                pushed(0),
+                output_block(0, "click P1", "obs-0", None),
+                feedback_block(0, None, "F0", None),
+            ]
+        ),
+    )
+    assert streaming.carried == (("d0.feedback", "F0"),)
+
+
 def test_an_observation_carries_the_feedback_the_session_does_not_hold_yet():
     core = session_core()
     connected(core)
