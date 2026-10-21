@@ -5,9 +5,9 @@ connection and the input of each observation, as neutral Contents and Parts. Gem
 (live.py) turns them into google-genai types, writes and reads the WebSocket and reads the clock,
 and reports back what it wrote and received. The core keeps the session state and answers with
 the operations to perform: how to open the next connection and what to seed on it, whether a sync
-resumes or rebuilds, which tool calls to acknowledge, which connection and generation a server
-message belongs to and whether that generation's output ends with it. Nothing in it awaits, so
-each call is one transition, in the order of the session.
+resumes or rebuilds, which tool calls to acknowledge and which the server cancels, which
+connection and generation a server message belongs to and whether that generation's output ends
+with it. Nothing in it awaits, so each call is one transition, in the order of the session.
 
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
 <history block id>)`` and ``("tool_response", <call id>)``, each sent once handed to the
@@ -138,6 +138,11 @@ def interaction_status(message) -> str | None:
     return str(getattr(status, "value", status)).rsplit(".", 1)[-1].upper()
 
 
+def _cancelled(message) -> tuple[str, ...]:
+    """The ids of the tool calls a toolCallCancellation cancels, in the server's order."""
+    return tuple(getattr(getattr(message, "tool_call_cancellation", None), "ids", None) or ())
+
+
 @dataclass(frozen=True)
 class Connect:
     """Open the next connection, once the current one is closed.
@@ -172,7 +177,7 @@ class Received:
     generation asks for a message, so a message that arrived after one reply ended and before
     the next generation started is read, and numbered, as part of the next. Attributing messages
     by arrival is left to streaming, which reads as messages arrive: one read between a reply's
-    end and the next generation's start then belongs to no generation, an orphan here.
+    end and the next generation's start then belongs to no generation, an Orphan.
     """
 
     connection: int  # the connection it was read from
@@ -185,6 +190,23 @@ class Received:
     complete: bool  # the interaction completes here, by the configured completion signal
     ends: bool  # the generation's output ends with this message
     control: dict  # what a goAway asks of the turn: reconnect after it
+    # The ids of the tool calls this message cancels: not to be executed. It does not end the
+    # reply.
+    cancelled: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Orphan:
+    """One server message that no generation's reply takes, as the core applied it (arrived).
+
+    Its goAway still asks for a new connection and its resumption update is still the candidate,
+    promoted at a clean boundary; read from a closed connection, it changes nothing.
+    """
+
+    connection: int  # the connection it was read from
+    message: Any
+    control: dict  # what a goAway asks of the session: reconnect after it
+    cancelled: tuple[str, ...]  # the ids of the tool calls this message cancels, as in Received
 
 
 @dataclass
@@ -192,6 +214,29 @@ class _Generation:
     number: int  # on its connection, from 1
     id: str
     interrupted: bool = False
+
+
+# Resumption rules: the handle a sync resumes with, or None to rebuild from the history.
+
+
+def resume_at_clean_boundary(
+    core: SessionCore, reason: str, *, force_rebuild: bool, generation_clean: bool
+) -> str | None:
+    """Only a goAway renewal after a clean interaction resumes, with the handle promoted at that
+    boundary."""
+    if reason == "go_away" and not force_rebuild and core.last_turn_clean and generation_clean:
+        return core.resume_handle
+    return None
+
+
+def resume_latest_handle(
+    core: SessionCore, reason: str, *, force_rebuild: bool, generation_clean: bool
+) -> str | None:
+    """A goAway renewal resumes with the latest handle the server called resumable, whatever was
+    sent or read after it: the session it restores may lack input or output the history has."""
+    if reason == "go_away" and not force_rebuild:
+        return core.latest_resume_handle
+    return None
 
 
 class SessionCore:
@@ -207,9 +252,11 @@ class SessionCore:
     handle, goAway or clean boundary is taken from it.
     """
 
-    def __init__(self, options: dict):
-        """``options`` are the driver's resolved Live options (live.py live_options)."""
+    def __init__(self, options: dict, *, resumption=resume_at_clean_boundary):
+        """``options`` are the driver's resolved Live options (live.py live_options);
+        ``resumption`` is the rule resume_handle_for applies."""
         self._completion_signal = options["completion_signal"]
+        self._resumption = resumption
         # What a queued acknowledgement adds to each function response, and so each replayed
         # receipt that did not store its own.
         self.tool_response_options = (
@@ -226,6 +273,9 @@ class SessionCore:
         self.pending_calls: list[tuple] = []
         self.go_away_deadline: float | None = None  # on the driver's monotonic clock
         self.resume_handle: str | None = None  # promoted at a clean interaction boundary
+        # Since the connection was planned: the latest handle the server called resumable, else
+        # the one the connection resumes.
+        self.latest_resume_handle: str | None = None
         self.renewal_required = False  # a goAway asked for a new connection
         self.last_turn_clean = False
         # The generation whose reply is being read, by connection, until the reply ends.
@@ -240,6 +290,7 @@ class SessionCore:
         from the history view (None for an empty session). A resume carries no history: the
         server restores the session from the handle."""
         self.resume_handle = resume_handle
+        self.latest_resume_handle = resume_handle
         contents, seeded = self._seed(history)
         return Connect(
             resume_handle,
@@ -364,11 +415,11 @@ class SessionCore:
         self.go_away_deadline = None
 
     def resume_handle_for(self, reason: str, *, force_rebuild: bool, generation_clean: bool):
-        """The handle a sync resumes with, or None to rebuild from the history. Only a goAway
-        renewal after a clean interaction resumes."""
-        if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
-            return self.resume_handle
-        return None
+        """The handle a sync resumes with, or None to rebuild from the history, by the core's
+        resumption rule: by default only a goAway renewal after a clean interaction resumes."""
+        return self._resumption(
+            self, reason, force_rebuild=force_rebuild, generation_clean=generation_clean
+        )
 
     # ---- writes ----------------------------------------------------------------------------
 
@@ -401,6 +452,9 @@ class SessionCore:
         return observation
 
     def interrupt_sent(self) -> None:
+        """The interrupt is an input: no handle resumes the session until a turn completes
+        cleanly."""
+        self.last_turn_clean = False
         self.resume_handle = None
 
     def calls_received(self, calls: list[tuple]) -> None:
@@ -438,7 +492,7 @@ class SessionCore:
     def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
         monotonic clock). With no generation's reply being read on that connection the message is
-        an orphan: nothing takes it, and it changes nothing (None)."""
+        an orphan: nothing takes it, and it changes nothing (None; see arrived)."""
         generation = self.replies.get(connection)
         if generation is None:
             return None
@@ -473,7 +527,33 @@ class SessionCore:
             complete,
             ends,
             control,
+            _cancelled(message),
         )
+
+    def arrived(self, connection: int, message, now: float) -> Received | Orphan:
+        """Apply one server message as a reader that reads every message as it arrives does
+        (streaming): as received() does while a generation's reply is being read on
+        ``connection``, else as an orphan. An orphan's goAway asks for a new connection, and its
+        resumption update is promoted when the session is at a clean boundary: no observation or
+        interrupt sent, and no output read, since the last clean completion, seed or resume.
+
+        Output that no generation takes (an acknowledgement can prompt a reply of its own) is not
+        in the history, so it ends the boundary as an observation does.
+        """
+        received = self.received(connection, message, now)
+        if received is not None:
+            return received
+        if connection != self.connection:
+            return Orphan(connection, message, {}, _cancelled(message))
+        if (
+            getattr(message, "server_content", None) is not None
+            or getattr(message, "tool_call", None) is not None
+        ):
+            self.last_turn_clean = False
+            self.resume_handle = None
+            self.candidate_resume_handle = None
+        control = self._control(message, clean=self.last_turn_clean, now=now)
+        return Orphan(connection, message, control, _cancelled(message))
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
         update = getattr(message, "session_resumption_update", None)
@@ -482,6 +562,7 @@ class SessionCore:
                 self.candidate_resume_handle = None
             elif getattr(update, "new_handle", None):
                 self.candidate_resume_handle = update.new_handle
+                self.latest_resume_handle = update.new_handle
         # Resumption updates often arrive before the final server-content message. Promote the
         # latest candidate only at a clean turn boundary; a handle captured mid-generation may not
         # represent the complete provider turn.
