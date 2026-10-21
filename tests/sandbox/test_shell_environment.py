@@ -314,6 +314,48 @@ def test_a_wall_hold_is_released_at_the_kernel_s_time_not_a_duration_after_the_p
     assert _xdotool(env) == [(0.25, "xdotool keydown -- Left"), (1.5, "xdotool keyup -- Left")]
 
 
+class _SlowFocus:
+    """Gives the page its keyboard focus back (sandbox/observation/capture.py ensure_page_focus)
+    in ``seconds``."""
+
+    def __init__(self, clock, seconds):
+        self.clock = clock
+        self.seconds = seconds
+
+    def ensure_page_focus(self):
+        self.clock.sleep(self.seconds)
+        return True
+
+
+@pytest.mark.parametrize(
+    ("release_at", "lease_s", "keyup_s"),
+    [
+        pytest.param(1.5, 1.0, 1.5, id="released-after-the-press"),
+        pytest.param(0.2, 0.0, 0.5, id="release-time-passed-before-the-press"),
+    ],
+)
+def test_a_wall_hold_records_when_the_kernel_s_release_ends_its_lease(release_at, lease_s, keyup_s):
+    """The press waits for the page focus; a release time that has passed by then lets the key
+    up at once, which the execution result shows next to the duration asked for."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
+    with clock.participant():
+        assert env.execute(Action.hold_key("arrowleft", 0.2), release_at=release_at) == "applied"
+        clock.sleep(5.0)
+    result = env._last_execution_result
+    assert (result["duration_seconds"], result["lease_seconds"]) == (0.2, lease_s)
+    assert _xdotool(env) == [(0.5, "xdotool keydown -- Left"), (keyup_s, "xdotool keyup -- Left")]
+
+
+def test_a_legacy_wall_hold_records_no_lease():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    with clock.participant():
+        assert env.execute(Action.hold_key("arrowleft", 1.0)) == "applied"
+        clock.sleep(5.0)
+    assert "lease_seconds" not in env._last_execution_result
+
+
 def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
