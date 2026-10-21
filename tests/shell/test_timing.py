@@ -98,6 +98,8 @@ def test_a_result_settled_across_the_deadline_does_not_land():
     assert episode.env._termination["stop_reason"] == "time_limit"
     line = "[default] k=0 generation back in 2.995s, settled past its wall_deadline — discarded"
     assert line in episode.logs
+    numbers = [record["kernel_seq"] for record in episode.trace.records]
+    assert numbers == sorted(numbers)
 
 
 def test_a_result_settled_across_the_cap_is_the_moves_only_record():
@@ -117,6 +119,8 @@ def test_a_result_settled_across_the_cap_is_the_moves_only_record():
     assert episode.env.lifecycle[0]["model_latency_s"] == pytest.approx(1.495)
     line = "[default] k=0 generation back in 1.495s, settled past its per_move_cap — discarded"
     assert line in episode.logs
+    numbers = [record["kernel_seq"] for record in episode.trace.records]
+    assert numbers == sorted(numbers)
 
 
 @pytest.mark.parametrize("tokens_per_frame", [100, None], ids=["token", "paused"])
