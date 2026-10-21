@@ -250,7 +250,7 @@ MISSING = [
         6.0,
         _timed(["click"] * 5, [0.5] * 5),
         frozen_from=1,
-        expect=frozenset({"K-h"}),
+        expect=frozenset({"K-h", "U6"}),
         name="wall-frozen-stream",
     ),
     Script(
@@ -259,7 +259,7 @@ MISSING = [
         _tokens([("click", 50)] * 5),
         tokens_per_frame=100,
         frozen_from=1,
-        expect=frozenset({"K-h"}),
+        expect=frozenset({"K-h", "U6"}),
         name="token-frozen-stream",
     ),
 ]
