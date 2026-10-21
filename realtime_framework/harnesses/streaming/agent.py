@@ -7,7 +7,9 @@ gives every push and connection operation the view they make (history.py), so th
 rebuilt from the view holds what the live one did. Every driver operation runs on the agent's one
 execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py). Each
 push and each reply readies the session first, and renews the connection the provider asked to
-renew, except a push while a reply is on: renewing would end it.
+renew, except a push while a reply is on the session: readying it then would close the reply's
+connection, or rebuild the session without the reply's output. A push the session refuses until
+it is renewed, as Gemini Live's after a goAway, waits for that reply instead.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and records
 it as sent once the driver put it into the session. A frame whose push failed keeps its number and
@@ -18,14 +20,18 @@ it names, and posted to the kernel with the time its message came off the wire, 
 seconds from the episode's origin; one whose frame cannot be found arrives refused. One that is no
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
 the reply ended. A call the provider cancels, of this reply or an earlier one, is withdrawn under
-the generation it came in, once its action was posted.
+the generation it came in, once its action was posted. A reply ends as a turn does: a provider
+fault fails it, a session it leaves other than exact is rebuilt before it is used again, and a
+function call reply must complete.
 
-An accepted reply's output joins the view; a discarded one adds nothing. Each outcome the kernel
+An accepted reply's output joins the view where the output began, so that a rebuilt session shows
+the model its actions before their results; a discarded one adds nothing. Each outcome the kernel
 commits joins it as its execution feedback (feedback.py), where the policy places it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
@@ -41,6 +47,9 @@ from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
+    GenerationBoundary,
+    ProviderError,
+    ProviderHistoryState,
     TextDelta,
     UsageSnapshot,
 )
@@ -50,6 +59,7 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     PendingDecision,
     ProviderObservation,
+    RetryCancelled,
     SessionSeed,
     retry_cancellation,
 )
@@ -82,6 +92,8 @@ from realtime_framework.providers.registry import adapter_class
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
+# The boundaries that end a reply, whose provider history state is the session's after it.
+_TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
 
 
 @dataclass(frozen=True)
@@ -102,13 +114,23 @@ class _Reply:
     decision: int
     own: _Pushed  # the frame it started on
     cancel: threading.Event = field(default_factory=threading.Event)  # set once it is aborted
+    failed: bool = False  # generate() raised for it
     handle: GenerationHandle | None = None
     text: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)  # each function call, as its JSON action
     usage: dict | None = None
+    # Its terminal boundaries, as a turn's (RealtimeRuntime._run_turn): the provider history
+    # state of the last, and whether a turn_complete, with its usage, or an interrupted came.
+    terminal: ProviderHistoryState = ProviderHistoryState.UNKNOWN
+    complete: bool = False
+    terminal_usage: bool = False
+    interrupted: bool = False
     protocol_failure: str | None = None  # the first
     based_on: str | None = None  # the observation id of the frame its first action names
+    # Where in the blocks its output began, which its output goes to once accepted: before the
+    # feedback on its actions and the frames pushed since.
+    position: int | None = None
 
     @property
     def output(self) -> str:
@@ -125,9 +147,18 @@ class NativeStreamingAgent(VisionAgentBase):
         # The episode's operational clock; on the wall clock it is the semantic one as well.
         self.clock = clock or SystemClock()
         self._lock = threading.Lock()  # the blocks and the replies; the shell's threads share them
+        # Held, on the execution thread, while a push readies the session and while a reply
+        # readies it and is asked for: no push reopens the session between the two.
+        self._readying = asyncio.Lock()
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
+        # The replies on the session: asked for, and not yet accepted, discarded or aborted.
+        # Readying the session under one would close its connection, or rebuild the session
+        # without its output. ``_off_session`` is set while there is none.
+        self._on_session: set[int] = set()
+        self._off_session = self.clock.event()
+        self._off_session.set()
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
         # What each action asked for (action_text), by its outcome's (decision, call id).
         self._requested: dict[tuple[int, str], str] = {}
@@ -230,41 +261,55 @@ class NativeStreamingAgent(VisionAgentBase):
     # ---- frames -------------------------------------------------------------------------------
 
     def push(self, observation: Observation) -> None:
-        """Enter the frame in the frame table and put it into the session, readied first. Raises
-        when it did not go in."""
+        """Enter the frame in the frame table and put it into the session, readied first, and
+        record it sent. Raises when it did not go in."""
         value, execution, record = bind_observation(
             self, observation, self.interaction_profile.frame_prompt, observation.tick_number
         )
         pushed = _Pushed(record, value, execution)
         try:
             with trace_scope(phase="push", observation_id=value.observation_id):
+                self._wait_for_renewal()
                 self._execution.run(self._push(observation.metadata.get("observation_id"), pushed))
         except BaseException:
             self._finish_inspection(pushed, "push_failed")
             raise
-        self.frames.record_sent(record.frame, self.clock.time())
-        # The kernel's records name the frame by its observation id, the session's by its block:
-        # this ties the two (evaluation/reporting.py summarize_streaming).
-        self._trace.capture(
-            TraceEvent.FRAME_SENT,
-            {"frame": record.frame, "observation_id": observation.metadata.get("observation_id")},
-        )
+
+    def _wait_for_renewal(self) -> None:
+        """A session the provider asked to renew takes no frame before it is renewed, as Gemini
+        Live's after a goAway, and renewing it would end the reply on it: the frame waits, on
+        the push lane, until that reply is accepted, discarded or aborted. The frames captured
+        meanwhile wait in the policy's slot, not counted as failed pushes."""
+        while (
+            self.driver.capabilities.connection_renewal and self.driver.connection_renewal_reason()
+        ):
+            with self._lock:
+                if not self._on_session:
+                    return
+            self.clock.wait(self._off_session, None)
 
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
-        with self._lock:
-            view = self._view()
-            # Renewing the connection would end a reply on it, and one that ended is renewed
-            # from once its output is accepted: meanwhile a session that asked to be renewed
-            # refuses the frame.
-            replying = bool(self._replies)
-        await self._ready(view, renew=not replying)
+        async with self._readying:
+            with self._lock:
+                view = self._view()
+                on_session = bool(self._on_session)
+            if not on_session:
+                await self._ready(view, renew=True)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
         await self.driver.push_frame(pushed.value, view)
+        # On the execution thread, where the reply's messages are read: an action read from
+        # now on finds the frame sent, and counts it in an older frame's age.
         with self._lock:
+            self.frames.record_sent(pushed.record.frame, self.clock.time())
             self._blocks.append(block)
             self._pushed[key] = pushed
+        # The kernel's records name the frame by its observation id, the session's by its block:
+        # this ties the two (evaluation/reporting.py summarize_streaming).
+        self._trace.capture(
+            TraceEvent.FRAME_SENT, {"frame": pushed.record.frame, "observation_id": key}
+        )
 
     # ---- replies ------------------------------------------------------------------------------
 
@@ -291,6 +336,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._execution.run(self._reply(reply, budget))
         except BaseException:
             if not reply.cancel.is_set():
+                reply.failed = True
                 self._finish_inspection(reply.own, "reply_failed", raw_action_output=reply.output)
                 raise
             outcome = "cancelled"
@@ -310,37 +356,82 @@ class NativeStreamingAgent(VisionAgentBase):
             await self.driver.renew(self._seed, view, self._record_session)
 
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
-        with self._lock:
-            view = self._view()
-        await self._ready(view, renew=True)
-        request = GenerationRequest(
-            generation_id=f"streaming-{reply.generation}",
-            provider_output_token_cap=budget.provider_output_tokens,
-            transport_output_token_cap=budget.transport_output_tokens,
-            clock_mode="wall",
-            canonical=view,
-            generation=reply.generation,
-        )
         try:
-            reply.handle = await self.driver.request_reply(request)
+            async with self._readying:
+                with self._lock:
+                    view = self._view()
+                await self._ready(view, renew=True)
+                # A push may have reopened the session for the reply after it was given up:
+                # asked for then, it would run beside the next one (context.py _run_turn).
+                if reply.cancel.is_set():
+                    raise RetryCancelled("generation abandoned before its reply")
+                reply.handle = await self.driver.request_reply(
+                    GenerationRequest(
+                        generation_id=f"streaming-{reply.generation}",
+                        provider_output_token_cap=budget.provider_output_tokens,
+                        transport_output_token_cap=budget.transport_output_tokens,
+                        clock_mode="wall",
+                        canonical=view,
+                        generation=reply.generation,
+                    )
+                )
+                with self._lock:
+                    self._on_session.add(reply.generation)
+                    self._off_session.clear()
             async for event in self.driver.events(reply.handle):
                 self._take(reply, event)
+            if not reply.cancel.is_set():
+                self._ended(reply)
         except Exception:
             # The session may hold some of the reply, which the view does not: the next push or
             # reply rebuilds it (SessionLifecycle.ensure_ready). The encoder's goAway deadline
             # passing during the reply raises too: an incomplete reply is no result.
             self.driver.mark_dirty()
+            with self._lock:
+                self._off(reply.generation)
             raise
-        if self._answer.action_channel == "text_json":
+
+    def _ended(self, reply: _Reply) -> None:
+        """The reply's stream ended, as a turn's does (RealtimeRuntime._run_turn): a session it
+        left other than exact is rebuilt from the view before it is used again, and a function
+        call reply that did not complete is no result (FunctionCallTurnCollector.finish). A text
+        reply's action is parsed whatever the end, from the text that came."""
+        if reply.terminal != ProviderHistoryState.EXACT:
+            self.driver.mark_dirty()
+        if self._answer.action_channel == "function_call":
+            # A call already handed over fixed its action: an interruption after it stands once
+            # the terminal usage came.
+            if not reply.complete or (
+                reply.interrupted and not (reply.calls and reply.terminal_usage)
+            ):
+                raise RuntimeError("native tool accounting requires a complete reply")
+        elif self._answer.action_channel == "text_json":
             # The encoder does not tell when the text was completed: the reply's end stands in.
             self._arrived(reply, reply.output, TEXT_CALL, self.clock.monotonic())
 
     def _take(self, reply: _Reply, event) -> None:
         """One message of the reply, on the execution thread as it is read."""
+        if reply.position is None and (
+            isinstance(event, FunctionCall)
+            or (isinstance(event, TextDelta) and event.channel == "visible")
+        ):
+            with self._lock:
+                reply.position = len(self._blocks)
         if isinstance(event, TextDelta):
             (reply.reasoning if event.channel == "reasoning" else reply.text).append(event.text)
         elif isinstance(event, UsageSnapshot):
             reply.usage = event.usage
+        elif isinstance(event, ProviderError):
+            # A provider fault, not the model's: the run cannot be scored, as a turn's.
+            if event.fatal:
+                raise RuntimeError(event.detail)
+        elif isinstance(event, GenerationBoundary):
+            if event.kind in _TERMINAL:
+                reply.terminal = event.history_state
+            reply.complete |= event.kind == "turn_complete"
+            reply.interrupted |= event.kind == "interrupted"
+            if event.kind == "turn_complete":
+                reply.terminal_usage = bool(event.metadata.get("terminal_usage_received"))
         elif isinstance(event, FunctionCall):
             try:
                 action = canonical_function_action(
@@ -411,15 +502,32 @@ class NativeStreamingAgent(VisionAgentBase):
                 reply.cancel.set()
         with trace_scope(phase="abort", generation=generation):
             self._execution.run(self.driver.abort(None if reply is None else reply.handle))
+        with self._lock:
+            self._off(generation)
+
+    def _off(self, generation: int) -> None:
+        """The reply is no longer on the session; the caller holds the lock."""
+        self._on_session.discard(generation)
+        if not self._on_session:
+            self._off_session.set()
 
     def accept(self, generation: int) -> None:
-        """AcceptResult: the reply's output joins the view, and its usage the episode's."""
+        """AcceptResult: the reply's output joins the view where it began, and its usage the
+        episode's. A failed reply, which the kernel accepts too, joins nothing, as a failed
+        turn."""
         with self._lock:
             reply = self._replies.pop(generation)
-            if reply.output:
-                self._blocks.append(
-                    output_block(reply.decision, reply.output, reply.based_on, self.clock.time_ns())
+            self._off(generation)
+            if reply.output and not reply.failed:
+                self._blocks.insert(
+                    reply.position,
+                    output_block(
+                        reply.decision, reply.output, reply.based_on, self.clock.time_ns()
+                    ),
                 )
+        if reply.failed:
+            self._log_reply(reply, "reply_failed")
+            return
         self._accumulate_usage(reply.usage)
         self._log_reply(reply, "reply")
 
@@ -427,6 +535,7 @@ class NativeStreamingAgent(VisionAgentBase):
         """DiscardResult: a reply given up adds nothing."""
         with self._lock:
             reply = self._replies.pop(generation)
+            self._off(generation)
         self._log_reply(reply, "reply_discarded")
 
     def commit(self, outcome: Outcome) -> None:
