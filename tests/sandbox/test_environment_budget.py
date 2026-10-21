@@ -490,19 +490,43 @@ def test_a_call_that_ran_out_of_the_operation_s_budget_is_its_failure():
     assert env._invalid_run["detail"] == "clock advance took longer than 120 s"
 
 
-def test_an_error_that_only_reads_like_the_budget_s_is_still_wrapped():
-    """Only a BudgetExceeded of the operation's own deadline goes through as it is."""
+def _raise_the_budget_s_words(clock: FakeClock) -> None:
+    clock.sleep(2.0)
+    raise RuntimeError("state read took longer than 1 s")
+
+
+def _run_out_of_its_own_shorter_deadline(clock: FakeClock) -> None:
+    """A call with its own 0.5 s whose wait is not cut finds its deadline passed."""
+    deadline = Deadline(0.5, "sandbox call")
+    clock.sleep(2.0)
+    deadline.remaining()
+
+
+@pytest.mark.parametrize(
+    ("fail", "cause"),
+    [
+        pytest.param(
+            _raise_the_budget_s_words,
+            "RuntimeError: state read took longer than 1 s",
+            id="another-error-in-its-words",
+        ),
+        pytest.param(
+            _run_out_of_its_own_shorter_deadline,
+            "BudgetExceeded: sandbox call took longer than 0.5 s",
+            id="a-call-s-own-deadline",
+        ),
+    ],
+)
+def test_only_the_operation_s_own_budget_exceeded_goes_through_as_it_is(fail, cause):
     clock = FakeClock()
     with (
         clock.participant(),
         pytest.raises(BudgetExceeded) as raised,
         operation_budget("state read", 1.0, clock=clock),
     ):
-        clock.sleep(2.0)
-        raise RuntimeError("state read took longer than 1 s")
-    message = "state read took longer than 1 s"
-    assert str(raised.value) == f"{message} (RuntimeError: {message})"
-    assert isinstance(raised.value.__cause__, RuntimeError)
+        fail(clock)
+    assert str(raised.value) == f"state read took longer than 1 s ({cause})"
+    assert raised.value.__cause__ is not None
 
 
 def test_a_task_failure_past_the_budget_keeps_its_traceback():
