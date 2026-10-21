@@ -172,16 +172,23 @@ def test_an_older_frame_in_placeholder_form_is_the_turn_based_fold():
 def test_an_older_frame_in_text_form_keeps_its_element_list():
     history = History().play("FF")
     older = _frames(_view(history.blocks, frames=1, older_frames="text"))[0]
-    assert older == replace(history.blocks[0], image=None)
+    assert older == replace(history.blocks[0], image=None, folded=True)
     assert FRAME_INTERACTABLES_HEADER in older.text
-    assert not older.folded
 
 
 def test_an_older_frame_in_prompt_form_drops_its_element_list():
     history = History().play("FF")
     older = _frames(_view(history.blocks, frames=1, older_frames="prompt"))[0]
-    assert older == replace(history.blocks[0], text="Frame 1 of the form.", image=None)
-    assert not older.folded
+    assert older == replace(
+        history.blocks[0], text="Frame 1 of the form.", image=None, folded=True
+    )
+
+
+@pytest.mark.parametrize("older_frames", OLDER_FORMS)
+def test_every_older_frame_is_folded_and_the_newest_are_not(older_frames):
+    history = History().play("FFF")
+    frames = _frames(_view(history.blocks, frames=2, older_frames=older_frames))
+    assert [frame.folded for frame in frames] == [True, False, False]
 
 
 def test_outputs_and_feedback_stay_where_they_were_accepted():
