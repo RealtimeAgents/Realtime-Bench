@@ -365,6 +365,7 @@ SESSION_UPDATE = {
 RESPONSE_CREATE = {
     "type": "response.create",
     "response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}},
+    "event_id": "<rtb_reply-1>",
 }
 USAGE = {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25}
 
@@ -725,11 +726,35 @@ def test_a_reply_goes_out_after_the_feedback_the_session_lacks():
         "reply-2", None, "inf", "wall", canonical=streaming_view(stream("FRB"))
     )
     handle = _within(driver.request_reply(request))
+    _, reply = handle.opaque
     (_, feedback), reply_create = wire.written
     assert feedback["item"]["content"] == [{"type": "input_text", "text": "fb1"}]
     assert reply_create == (
         "response.create",
-        {"response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}}},
+        {
+            "response": {"max_output_tokens": "inf", "reasoning": {"effort": "low"}},
+            "event_id": reply.request_event_id,
+        },
     )
-    _, reply = handle.opaque
     assert reply.answered is None
+
+
+def test_a_reply_asked_for_while_one_is_in_progress_raises():
+    """A connection carries one reply at a time: request_reply raises while the reply before it
+    has not ended, and writes nothing."""
+    driver, core, wire = _offline_driver(), new_core(), _Wire()
+    sent(core, core.push(streaming_view(stream("F"))))
+    driver._session, driver._conn = _Session(1, wire, core), wire
+    view = streaming_view(stream("F"))
+
+    async def scenario():
+        await driver.request_reply(
+            GenerationRequest("reply-1", None, "inf", "wall", canonical=view)
+        )
+        with pytest.raises(RuntimeError, match="^OpenAI Realtime reply already in progress$"):
+            await driver.request_reply(
+                GenerationRequest("reply-2", None, "inf", "wall", canonical=view)
+            )
+
+    _within(scenario())
+    assert [kind for kind, _ in wire.written] == ["response.create"]
