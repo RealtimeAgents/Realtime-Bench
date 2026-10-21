@@ -5,7 +5,9 @@ real run's inputs after a change needs (phase2.md, 怎么验证)."""
 
 from __future__ import annotations
 
+import io
 import json
+import pathlib
 import threading
 
 import pytest
@@ -148,4 +150,39 @@ def test_an_input_the_log_cannot_hold_leaves_the_episode_to_finish(tmp_path):
     )
     assert episode.statuses() == ["applied", "applied"]
     assert episode.env._stop_reason == "time_limit"
+    assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
+
+
+class _FullDisk(io.StringIO):
+    """A log file whose last flush, on closing, finds the disk full."""
+
+    def close(self) -> None:
+        if not self.closed:
+            super().close()
+            raise OSError(28, "No space left on device")
+
+
+def _opens(monkeypatch, opened) -> None:
+    monkeypatch.setattr(pathlib.Path, "open", lambda path, *args, **kwargs: opened())
+
+
+def test_an_inputs_log_that_fails_to_close_leaves_the_episode_as_it_ended(monkeypatch, tmp_path):
+    """The log is a replay aid: the deadline episode it failed to close for is still a valid
+    episode that ended at the deadline, its inputs released once."""
+    _opens(monkeypatch, _FullDisk)
+    episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)], inputs_log=tmp_path / "in.jsonl")
+    assert episode.invalid is None
+    assert episode.env._termination["stop_reason"] == "time_limit"
+    assert episode.env.names().count("release_inputs") == 1
+    assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
+
+
+def test_an_inputs_log_that_cannot_be_opened_leaves_the_episode_to_run(monkeypatch, tmp_path):
+    def refuse():
+        raise OSError(13, "Permission denied")
+
+    _opens(monkeypatch, refuse)
+    episode = run("wall", 2.0, [Reply(0.5)] * 2, inputs_log=tmp_path / "in.jsonl")
+    assert episode.invalid is None
+    assert episode.statuses() == ["applied", "applied"]
     assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
