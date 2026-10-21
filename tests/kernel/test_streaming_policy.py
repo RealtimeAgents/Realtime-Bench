@@ -20,6 +20,7 @@ from realtime_framework.evaluation.kernel.events import (
     Record,
     SetTimer,
     StartGeneration,
+    Termination,
 )
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.harnesses.default.frames import (
@@ -378,12 +379,13 @@ def test_the_environment_end_is_dated_by_the_check_that_saw_it():
     assert _ended(sim) == ("success", "environment", 2.0, 2.5)
 
 
-def test_a_read_failing_after_the_end_still_counts():
+def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_answers_after():
     """The reads at 0 and 1 fail; the one asked at 2 is answered at 3.5, after the deadline, and is
-    the third failure in a row. The snapshot waits for it."""
+    the third failure in a row. The end waited for it, as the turn-based kernel files the answer
+    before the deadline, and the run is invalid from its answer on."""
     errors = {1: "cdp timeout", 2: "cdp timeout", 3: "cdp timeout"}
     sim = _run(World(check_errors=errors, check_times={3: 1.5}), 3.0)
-    assert _ended(sim) == ("invalid_run", "deadline", 3.0, 3.5)
+    assert _ended(sim) == ("invalid_run", "invalid", 3.5, 3.5)
     assert sim.termination.invalid == Invalidated(
         "environment", "terminal_state_check_failed", "cdp timeout"
     )
@@ -556,3 +558,30 @@ def test_a_frame_the_read_after_an_action_read_is_not_read_again_at_its_grid_poi
     calls = (Call(1.25, CLICK, execute_s=0.625), Call(1.875, TYPE, grounding=MISSING_FRAME))
     sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=0.25), 3.0)
     assert sim.checks == [0.0, 1.0, 2.125]
+
+
+# ---- a read across the deadline ---------------------------------------------------------------
+
+
+def test_a_read_asked_before_the_deadline_that_finds_the_end_beats_it():
+    """The task reports its end from 2; the read asked at 2 takes 1.5 s and answers after the
+    deadline at 3. The end waits for it and is the task's, dated by the read."""
+    world = World(ends_at=2.0, end_reason="success", check_times={3: 1.5})
+    sim = _run(world, 3.0)
+    assert sim.termination == Termination("success", "environment", 2.0, 3.5, 3.5, 3.5, None)
+
+
+def test_a_read_across_the_deadline_that_finds_no_end_ends_the_episode_at_the_deadline():
+    sim = _run(World(check_times={3: 1.5}), 3.0)
+    assert sim.termination == Termination("time_limit", "deadline", 3.0, 3.5, 3.5, 3.5, None)
+
+
+def test_an_action_that_arrives_while_the_end_waits_for_a_read_is_settled_by_that_end():
+    """The click arrives at 3.25, while the end waits for the read asked at 2."""
+    world = World(
+        replies=[Reply(10.0, calls=(Call(3.25, CLICK),))], ends_at=2.0, check_times={3: 1.5}
+    )
+    sim = _run(world, 3.0)
+    assert sim.executed == []
+    assert sim.statuses() == ["not_applied_terminal"]
+    assert sim.termination.cause == "environment"
