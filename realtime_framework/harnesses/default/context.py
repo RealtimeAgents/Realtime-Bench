@@ -857,7 +857,12 @@ class RealtimeRuntime:
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
                     "archived_actions_total": self._archived_action_count,
-                    "omitted_actions_total": self._omitted_action_count,
+                    # As history_omitted_actions_total in the step's provider metadata.
+                    **(
+                        {"omitted_actions_total": self._omitted_action_count}
+                        if self._omitted_action_count
+                        else {}
+                    ),
                     "detailed_turns": len(self._turns),
                     "current_observations": len(incoming),
                     "prompt_turns": len(turns),
