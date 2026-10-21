@@ -25,6 +25,7 @@ import traceback
 import zlib
 from pathlib import Path
 
+from realtime_framework.clock import Clock
 from realtime_framework.entity.records import TraceEvent, current_trace_scope
 from realtime_framework.evaluation.kernel.events import AgentRecord
 
@@ -151,7 +152,8 @@ def _json_bytes(value) -> bytes:
         else:
             pieces.append(json.dumps(item, ensure_ascii=False).encode("utf-8"))
             if isinstance(item, str) and len(item) >= SPAN_MIN_CHARS:
-                time.sleep(0)
+                # Yields the GIL; waits no time.
+                time.sleep(0)  # noqa: TID251
 
     encode(value)
     return b"".join(pieces)
@@ -163,10 +165,12 @@ class AgentTraceSink:
     While the kernel's shell runs an episode, the writer hands each record to the kernel as an
     AgentRecord instead (``hand_over``): the kernel numbers it into the episode log and the shell
     writes it, so agent and kernel records share one order. The blobs and the session links are
-    still made here, before the record is handed over."""
+    still made here, before the record is handed over. A capture's times are read on ``clock``,
+    the episode's operational clock."""
 
-    def __init__(self, trace, pack_path: Path):
+    def __init__(self, trace, pack_path: Path, *, clock: Clock):
         self.trace = trace
+        self.clock = clock
         self.pack = BlobPack(pack_path)
         self._queue: queue.SimpleQueue = queue.SimpleQueue()
         self._lock = threading.Lock()
@@ -188,8 +192,8 @@ class AgentTraceSink:
 
         ``classify`` marks a live-session message and names its acknowledgement keys.
         """
-        wall_time_ns = time.time_ns()
-        monotonic_ns = time.monotonic_ns()
+        wall_time_ns = self.clock.time_ns()
+        monotonic_ns = self.clock.monotonic_ns()
         scope = current_trace_scope()
         with self._lock:
             if self._sealed:
@@ -270,7 +274,8 @@ class AgentTraceSink:
             length += start - previous
             spans.append({"at": length, "ref": self.pack.put(data[start:end])})
             previous = end
-            time.sleep(0)  # let the runtime loop run between screenshots
+            # Yields the GIL so the runtime loop runs between screenshots; waits no time.
+            time.sleep(0)  # noqa: TID251
         pieces.append(data[previous:])
         template = b"".join(pieces)
         described["template"] = self.pack.put(template, compress=True)

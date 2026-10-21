@@ -91,6 +91,8 @@ class GuestClient:
                 response=resp,
             )
         resp.raise_for_status()
+        # The guest's reply is kept as is, its "timestamp" too: real time inside the sandbox,
+        # not a time on the episode clocks.
         result = resp.json()
         if isinstance(result, dict):
             result.setdefault("coordinate_trace", coordinate_trace)

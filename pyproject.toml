@@ -75,21 +75,19 @@ extend-select = ["TID251"]
 # Outside an episode or outside the runner process: image and container setup, the guest server
 # inside the sandbox, Harbor trials and results, and submission.
 "realtime_framework/sandbox/apptainer.py" = ["TID251"]
-"realtime_framework/sandbox/desktop.py" = ["TID251"]
 "realtime_framework/sandbox/guest_server/server.py" = ["TID251"]
 "realtime_framework/evaluation/_trial.py" = ["TID251"]
 "realtime_framework/evaluation/harbor.py" = ["TID251"]
 "realtime_framework/evaluation/harbor_results.py" = ["TID251"]
 "realtime_framework/evaluation/submission.py" = ["TID251"]
+# The desktop: Chrome's start before the episode, and the screen recording, whose timing
+# (recording-timing.json) is written in real time during the episode to line up with ffmpeg's
+# frame times. It times the recording only and is not scored.
+"realtime_framework/sandbox/desktop.py" = ["TID251"]
 # The browser clock's frame waits (cdp_advance_rendered_frame, cdp_sync_realtime_frame), which the
 # task runtimes call (realtime_tasks/game/runtime.py, realtime_tasks/web/runtime.py) without an
 # episode clock.
 "realtime_framework/sandbox/browser/clock.py" = ["TID251"]
-# Records only: trace, pack and report timestamps, and the trace writer's GIL yields.
-"realtime_framework/evaluation/agent_trace.py" = ["TID251"]
-"realtime_framework/evaluation/reporting.py" = ["TID251"]
-# Replaces time.sleep while it runs runner main() up to the loop to export the configuration.
-"realtime_framework/evaluation/effective_config.py" = ["TID251"]
 
 [tool.setuptools.package-data]
 "realtime_tasks" = ["**/*"]

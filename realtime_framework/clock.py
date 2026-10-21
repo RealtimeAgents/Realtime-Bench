@@ -2,7 +2,8 @@ from __future__ import annotations
 
 # Clock
 """The time of one episode. Framework code reads the time and waits only through a Clock, except
-in the files and lines pyproject.toml exempts from the clock rule (TID251).
+in the files pyproject.toml exempts from the clock rule (TID251) and on lines marked
+``# noqa: TID251``.
 
 An episode has two clocks (phase2.md, 时钟). The semantic clock is world time: deadlines, the
 frame grid and action timing read it. The operational clock times watchdogs, retry backoff,

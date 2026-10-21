@@ -102,6 +102,7 @@ def resolve_run_identity(
 def capture_generation_artifact(
     run_dir: Path,
     *,
+    clock: Clock,
     ctask=None,
     adapter=None,
     model=None,
@@ -123,7 +124,8 @@ def capture_generation_artifact(
     inference boundary; it is written verbatim so the saved artifact and the run summary score the
     identical frozen state (re-sampling here would fold a second, later live read and let the two
     disagree). Returns the manifest that is also atomically written to
-    generation_artifact/manifest.json.
+    generation_artifact/manifest.json; its capture time is read on ``clock``, the episode's
+    operational clock.
     """
     artifact_dir = Path(run_dir) / "generation_artifact"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +146,7 @@ def capture_generation_artifact(
     )
     manifest = {
         "artifact_version": 2,
-        "captured_unix_s": time.time(),
+        "captured_unix_s": clock.time(),
         **run_identity,
         "category": getattr(ctask, "category", None),
         "instance_id": getattr(ctask, "task_id", None),
@@ -1743,7 +1745,8 @@ def report(root):
                             error_reason="result_validation_failed",
                         )
             groups[json.dumps(identity, sort_keys=True)].append(row)
-    output = {"snapshot_utc": datetime.now(timezone.utc).isoformat(), "groups": []}
+    # Outside any episode: over finished runs, after runner main() has returned.
+    output = {"snapshot_utc": datetime.now(timezone.utc).isoformat(), "groups": []}  # noqa: TID251
     for identity_json, rows in groups.items():
         scored = [row for row in rows if row["status"] == "scored"]
         passed = sum(row["solved"] for row in scored)
@@ -1952,7 +1955,8 @@ def reevaluate_main():
     invalid_reason = _invalid_evaluation(result)
     reported_invalid_reason = invalid_reason
     record = {
-        "reevaluated_unix_s": time.time(),
+        # Outside any episode: a finished run, re-evaluated from its saved state.
+        "reevaluated_unix_s": time.time(),  # noqa: TID251
         "source_manifest": "generation_artifact/manifest.json",
         "suite_id": manifest.get("suite_id"),
         "suite_version": manifest.get("suite_version"),
@@ -2046,6 +2050,7 @@ def reevaluate_main():
 
 
 import threading
+from realtime_framework.clock import Clock
 from realtime_framework.entity.records import (
     GENESIS_HASH,
     _jsonable,
@@ -2059,18 +2064,21 @@ class EpisodeTrace:
 
     Opening an existing file validates it and resumes at the next sequence number.  This preserves
     append-only behavior when a crashed run is retried in the same run directory; a new ``attempt_id``
-    distinguishes the retry without rewriting prior evidence.
+    distinguishes the retry without rewriting prior evidence. Each record's wall and monotonic
+    times are read on ``clock``, the episode's operational clock.
     """
 
     def __init__(
         self,
         path: str | Path,
         *,
+        clock: Clock,
         run_id: str | None = None,
         attempt_id: str | None = None,
         durable: bool = False,
     ):
         self.path = Path(path)
+        self.clock = clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id
         self.attempt_id = attempt_id or uuid.uuid4().hex
@@ -2104,8 +2112,8 @@ class EpisodeTrace:
                 "event": event_name,
                 "run_id": self.run_id,
                 "attempt_id": self.attempt_id,
-                "wall_time_ns": time.time_ns(),
-                "monotonic_ns": time.monotonic_ns(),
+                "wall_time_ns": self.clock.time_ns(),
+                "monotonic_ns": self.clock.monotonic_ns(),
                 "previous_event_sha256": self._head_hash,
                 "payload": _jsonable(payload or {}),
                 **_jsonable(fields),
