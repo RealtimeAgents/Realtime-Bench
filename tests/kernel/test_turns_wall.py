@@ -633,7 +633,7 @@ def test_the_end_cuts_a_wait_short_and_it_stays_a_wait(
 # ---- held keys --------------------------------------------------------------------------------
 
 
-def test_a_hold_is_released_by_the_shell_at_its_lease_end_and_a_held_key_is_only_extended():
+def test_each_hold_carries_the_end_of_its_own_lease_and_the_shell_keeps_the_later_one():
     replies = [
         Reply(1.25, Action.hold_key("a", 3.0)),
         Reply(1.25, Action.hold_key("a+b", 2.0)),
@@ -647,7 +647,8 @@ def test_a_hold_is_released_by_the_shell_at_its_lease_end_and_a_held_key_is_only
     assert [(d["decision"], d["at"]) for d in _data(sim, "KeyReleaseScheduled")] == expected
     executes = [c for c in sim.commands if isinstance(c, Execute)]
     assert [(c.decision, c.release_at) for c in executes] == expected
-    # A held key keeps the later end (sandbox/actions.py:723-727): "a" goes up at
+    # The shell, as Execute asks of it, keeps a held key down until its later end
+    # (sandbox/actions.py:723-727); the simulated shell's timer lifts "a" at
     # max(4.25, 5.25, 4.75) = 5.25, together with "b".
     assert sim.key_events == [(5.25, "up", ("a",)), (5.25, "up", ("b",))]
     assert len(sim.entries("KeysReleased")) == 2

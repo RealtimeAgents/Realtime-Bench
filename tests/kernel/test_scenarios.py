@@ -163,10 +163,11 @@ def _check_invariants(sim: Simulation) -> None:
 # ---- 宽限期 --------------------------------------------------------------------------------------
 
 
-def test_a_reply_inside_todays_grace_is_discarded():
-    """宽限期内返回: the reply comes back 1 s after the deadline. Today it would still reach the
-    landing check and be not_applied_time_limit; now the deadline ends the episode at once, so the
-    reply, back while the 2 s snapshot is being taken, is discarded and nothing is reported."""
+def test_a_reply_back_while_the_snapshot_is_taken_is_discarded():
+    """宽限期内返回: the reply comes back 1 s after the deadline, inside today's 2 s grace. Today it
+    would still reach the landing check and be not_applied_time_limit; now there is no grace: the
+    deadline ends the episode at once, so the reply, back while the 2 s snapshot is being taken,
+    is discarded and nothing is reported."""
     sim = _run(_wall(3.0), World(replies=[Reply(latency=4.0, action=CLICK)], snapshot_s=2.0))
     # The loop top and the checks every second; the deadline beats the check due at 3.
     assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
@@ -181,11 +182,13 @@ def test_a_reply_inside_todays_grace_is_discarded():
     assert sim.termination == Termination("time_limit", "deadline", 3.0, 5.0, 3.0, 5.0, None)
 
 
-def test_a_reply_past_todays_grace_is_not_waited_for():
-    """宽限期过了才返回: the reply would come back 5 s after the deadline. Today the call would be
-    abandoned at the deadline plus the 2 s grace and reported skipped_timeout; now the episode ends
-    at the deadline, interrupts the call and finishes without waiting for it."""
-    sim = _run(_wall(3.0), World(replies=[Reply(latency=8.0, action=CLICK)]))
+@pytest.mark.parametrize("latency", [4.0, 8.0], ids=["inside-the-old-grace", "past-it"])
+def test_a_reply_after_the_deadline_is_not_waited_for(latency):
+    """宽限期过了才返回: the reply would come back 1 s or 5 s after the deadline. Today a call
+    that slow would be abandoned at the deadline plus the 2 s grace and reported skipped_timeout;
+    now there is no grace, so whatever the latency the episode ends at the deadline, interrupts
+    the call and finishes without waiting for it."""
+    sim = _run(_wall(3.0), World(replies=[Reply(latency=latency, action=CLICK)]))
     assert sim.checks == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
     assert sim.aborted == [(1, 3.0)]
     assert sim.snapshots == [(3.0, 3.0)]
@@ -345,11 +348,12 @@ def test_a_wall_hold_is_released_by_the_shell_timer_between_frames():
 # ---- 重试跨过截止 ----------------------------------------------------------------------------------
 
 
-def test_retry_records_past_the_deadline_are_numbered_and_the_late_result_discarded():
-    """重试跨过截止 (wall): the call's first attempt fails and its retry runs past the deadline. The
-    records the agent posts are numbered in handling order before and after the end, the call is
-    written off at the deadline, its result (back during the 2 s snapshot) is discarded, and
-    nothing handed in after Finish reaches the policy."""
+def test_the_records_of_a_retry_across_the_deadline_are_numbered_and_its_result_discarded():
+    """重试跨过截止 (wall): the call's first attempt fails and its retry runs past the deadline.
+    The retry runs in the agent, which only posts the records of its attempts; the kernel numbers
+    them in handling order before and after the end, writes the call off at the deadline, discards
+    its result (back during the 2 s snapshot), and hands nothing posted after Finish to the
+    policy."""
     records = (
         (0.5, "ModelRequestSent"),
         (1.5, "ModelAttemptFinished"),
