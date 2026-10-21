@@ -446,7 +446,14 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         # The history is None when the runtime opens the episode's first session.
         if self.interaction_mode == "streaming":
             session.read_continuously(self.clock)
-            await self._send_all(session.core.replay_streaming(request.history))
+            replay = session.core.replay_streaming(request.history)
+            await self._send_all(replay)
+            # A fold anchors a frame on the item its confirmation says the server put it after:
+            # the session takes pushes once the replay's are settled.
+            pushed = [op for op in replay if op.event_id is not None]
+            await session.receive_until(lambda: all(map(session.core.settled, pushed)))
+            if not all(map(session.core.settled, pushed)):
+                raise session.closed
         else:
             await self._send_all(session.core.replay(request.history))
 

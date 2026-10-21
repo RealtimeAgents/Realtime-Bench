@@ -391,6 +391,62 @@ async def _collect(events) -> list:
     return [event async for event in events]
 
 
+# A rebuilt session replays frames 1 and 2, which the server confirms only at 0.3 s; frame 3,
+# pushed next, folds frame 1 after the item the server put it after, which only a confirmation
+# names.
+REBUILT = [
+    {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+    c2s(SESSION_UPDATE),
+    push(1, 1, 1),
+    push(2, 2, 2),
+    item_done(1, None) | {"at": 0.3},
+    item_done(2, "<rtb_user-1>") | {"at": 0.3},
+    push(3, 3, 3),
+    *fold(1, 1, 4, 1, "root"),
+    item_done(3, "<rtb_user-2>"),
+    item_deleted(1),
+    item_done(4, None),
+    {"conn": 1, "dir": "close", "at": None, "msg": {"by": "client", "code": 1000}},
+]
+
+
+def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed():
+    """connect() replays the streaming view as pushes and returns once the server confirmed
+    them, so the first fold after it knows where the server put each replayed frame."""
+    clock, table, blocks = FakeClock(), FrameTable(), []
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+
+    def frame(k: int):
+        observation = _observation(k)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        blocks.append(frame_block(record, observation))
+        return observation, streaming_view(blocks, frames=2)
+
+    async def scenario(driver):
+        frame(1)
+        _, history = frame(2)
+        await driver.connect(ConnectRequest(seed=seed, history=history))
+        connected = clock.monotonic()
+        await driver.push_frame(*frame(3))
+        session = driver._session
+        await driver.close()
+        return connected, session
+
+    with CassetteServer(REBUILT, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED)
+        driver.interaction_mode = "streaming"
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        connected, session = run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+    assert connected == 0.3
+    assert {k: f.folded for k, f in session.core.frames.items()} == {
+        "f1.frame": True,
+        "f2.frame": False,
+        "f3.frame": False,
+    }
+
+
 class _Responses:
     """Stands in for the SDK connection's response resource: keeps each response.create."""
 
