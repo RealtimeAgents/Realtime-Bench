@@ -382,6 +382,34 @@ def test_a_wall_hold_lasts_to_the_kernel_s_release_time_or_a_short_while_more(
     assert times == pytest.approx((0.5, 0.5 + held_s))
 
 
+class _SlowKeydownGuest(_Guest):
+    """Its xdotool keydown reaches the desktop ``seconds`` after it is sent."""
+
+    def __init__(self, clock, seconds):
+        super().__init__(clock)
+        self.seconds = seconds
+
+    def execute_command(self, command, timeout=30):
+        if "keydown" in command:
+            self.clock.sleep(self.seconds)
+        return super().execute_command(command, timeout)
+
+
+def test_a_delayed_wall_hold_counts_its_short_while_from_the_press():
+    """The keydown's own request takes time as well: the short while, and the lease the
+    execution result gives, count from when it returned."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
+    env.g = _SlowKeydownGuest(clock, 0.05)
+    with clock.participant():
+        assert env.execute(Action.hold_key("arrowleft", 0.2), release_at=0.2) == "applied"
+        clock.sleep(5.0)
+    times, commands = zip(*_xdotool(env))
+    assert commands == ("xdotool keydown -- Left", "xdotool keyup -- Left")
+    assert times == pytest.approx((0.55, 0.55 + TAP_HOLD_S))
+    assert env._last_execution_result["lease_seconds"] == round(TAP_HOLD_S, 3)
+
+
 def test_a_legacy_wall_hold_records_no_lease():
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
@@ -392,6 +420,7 @@ def test_a_legacy_wall_hold_records_no_lease():
 
 
 def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
+    """The execution result gives the second hold's own lease, which the held key outlasts."""
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
     with clock.participant():
@@ -405,6 +434,7 @@ def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
         (2.0, "xdotool keyup -- a"),
         (3.0, "xdotool keyup -- Left"),
     ]
+    assert env._last_execution_result["lease_seconds"] == 1.0
 
 
 # ---- on_invalid -----------------------------------------------------------------------------
