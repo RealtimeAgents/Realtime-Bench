@@ -21,7 +21,7 @@ class Clock(str, Enum):
     # Environment ticks on the token clock, which only the kernel moves; seconds since the episode
     # origin on the wall clock.
     SEMANTIC = "semantic"
-    # Watchdogs, backoff and pacing, in seconds. On the wall clock it is the semantic clock.
+    # Watchdogs, in seconds. On the wall clock it is the semantic clock.
     OPS = "ops"
 
 
@@ -59,7 +59,7 @@ class Timer:
 
 @dataclass(frozen=True)
 class Invalidated:
-    """A non-model failure. The run is never scored (runner.py:171-180)."""
+    """A non-model failure. The run is never scored (runner.py _invalidate)."""
 
     category: str
     reason: str
@@ -104,12 +104,12 @@ class GenerationResult:
 
     action: Action | None = None
     # Complete output tokens to charge to the token clock, chosen by the shell in the runner's
-    # source order (runner.py:209-231); None when the provider reported none.
+    # source order (episode_records.py clock_output_tokens); None when the provider reported none.
     output_tokens: int | None = None
     latency: float = 0.0  # the agent's decision latency in seconds, charged on the wall clock
     protocol_failure: str | None = None
     # An unusable result: the generation's own failure, or an invalid inspection proof, in the
-    # runner's order (runner.py:455-477).
+    # runner's order (episode_records.py result_invalid).
     invalid: Invalidated | None = None
 
 
@@ -158,7 +158,8 @@ class ClockStepped:
 @dataclass(frozen=True)
 class KeysReleased:
     """Keys whose lease ended were released: by ReleaseKeys on the token clock, or by the shell's
-    release timer on the wall clock."""
+    release timer on the wall clock. A release that failed for good, after the timer's retries on
+    the wall clock, carries its error and invalidates the run on either clock."""
 
     keys: tuple[str, ...]
     error: str | None = None
@@ -354,11 +355,16 @@ class ReleaseInputs:
 
 @dataclass(frozen=True)
 class Termination:
-    """How the episode ended. Reports and metrics read this, not the clock after teardown."""
+    """How the episode ended. Reports and metrics read this, not the clock after teardown.
+
+    Semantic times are environment ticks on the token clock and seconds since the origin on the
+    wall clock; the shell writes them as world seconds in the run's termination record."""
 
     stop_reason: str
     cause: str  # the first end signal
-    ended_at: float  # semantic time by rule: the deadline, the horizon or the answering check
+    # Semantic time by rule: the deadline, the horizon, the answering check, or the time of the
+    # first end signal's handling for the other causes; a later invalidation leaves it unchanged.
+    ended_at: float
     snapshot_at: float | None  # semantic time the snapshot was taken; None when it failed
     ops_ended_at: float
     ops_snapshot_at: float | None

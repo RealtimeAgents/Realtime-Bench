@@ -9,6 +9,18 @@ hand the kernel writes the termination record (phase2.md, 事件内核; 时间�
 
 A policy provides ``merged_clocks``, ``settled``, ``start(kernel)``, ``on_event(event)``,
 ``on_result(result)``, ``on_timer(handle, timer)`` and ``on_end()``.
+
+The shell answers every command that names its answer (events.py) with exactly one event, posted
+before it steps again: CheckEnd, Capture, Execute, AdvanceClock, ReleaseKeys, RenderFrame, Commit
+and FreezeSnapshot. A command that fails, the shell's own exception included, is answered with the
+error, never left unanswered: the decision in hand settles only on its answer, and the episode
+cannot finish before. StartGeneration is answered by GenerationFinished whenever the worker is
+done; the kernel does not wait for one it aborted. Record, SetTimer, AbortGeneration,
+AcceptResult, DiscardResult and ReleaseInputs want no answer; SetTimer asks to be stepped once its
+clock reads ``at``. After Finish the shell steps no more, so nothing posted later is handled or
+numbered. A log entry's kind is the class name of the event handled, an AgentRecord's own kind, or
+the name of a record the kernel writes, a TraceEvent value for the trace's; shell.py says how the
+episode trace names each.
 """
 
 from __future__ import annotations
@@ -24,6 +36,7 @@ from realtime_framework.evaluation.kernel.events import (
     AgentRecord,
     Clock,
     DiscardResult,
+    EndChecked,
     Entry,
     Finish,
     FreezeSnapshot,
@@ -39,7 +52,7 @@ from realtime_framework.evaluation.kernel.events import (
     Timer,
 )
 
-# Stop reasons of the end causes that are not the environment's own (runner.py:791-805).
+# Stop reasons of the end causes that are not the environment's own (runner.py _finalize).
 STOP_REASONS = {
     "invalid": "invalid_run",
     "think_budget": "think_budget",
@@ -77,6 +90,7 @@ class Kernel:
         self._out: list = []
         self._generations = itertools.count(1)
         self._requests = itertools.count(1)
+        self._asked: dict[int, float] = {}  # request -> semantic reading it was made at
 
     # ---- the shell's side -------------------------------------------------------------------
 
@@ -92,7 +106,13 @@ class Kernel:
         """Handle the next due event or timer; None when nothing is due yet."""
         self._read(semantic, ops)
         for event in self.inbox.take():
-            self.agenda.add(Clock.SEMANTIC, self.semantic, event.priority, event)
+            # An end check's answer is filed at the reading it was asked at, the time its end is
+            # dated by: a check asked before the deadline is handled before it (phase2.md,
+            # 时间和结束判定).
+            at = self.semantic
+            if isinstance(event, EndChecked):
+                at = self._asked.pop(event.request, at)
+            self.agenda.add(Clock.SEMANTIC, at, event.priority, event)
         due = self.agenda.pop({Clock.SEMANTIC: self.semantic, Clock.OPS: self.ops})
         if due is None:
             return None
@@ -126,7 +146,9 @@ class Kernel:
 
     def request(self) -> int:
         """A fresh id to match an answer to its command."""
-        return next(self._requests)
+        request = next(self._requests)
+        self._asked[request] = self.semantic
+        return request
 
     def set_timer(self, kind: str, clock: Clock, at: float, priority: Priority, /, **data) -> int:
         """Record the intended wake-up first, then ask the shell for it."""
@@ -166,7 +188,7 @@ class Kernel:
     def invalidate(self, category: str, reason: str, detail=None) -> None:
         """Latch the first non-model failure; it ends the episode and the run is never scored."""
         if self.invalid is None:
-            # The end of a traceback names the exception (runner.py:205-207).
+            # The end of a traceback names the exception (runner.py _invalidate).
             self.invalid = Invalidated(
                 category, reason, None if detail is None else str(detail)[-2000:]
             )

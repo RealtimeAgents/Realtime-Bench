@@ -1,6 +1,8 @@
-"""What one decision leaves on the record: its output caps and their audit, what its result is
-annotated with, the output tokens its clock is charged with and its token accounting, whether its
-result is usable, the payloads of its trace events and its action lifecycle record.
+"""What one decision leaves on the record: the result of a generation that raised or was given up
+on at a bound, its output caps and their audit, what its result is annotated with, the output tokens
+its clock is charged with and its token accounting, whether its result is usable, the protocol of a
+DONE or FAIL landed as a wait, its frame's identity for the frozen-stream check, the payloads of its
+trace events and its action lifecycle record.
 
 run_stream's turn loop builds its records with these, and the kernel's shell is to build the same
 records with them. Nothing here paces the episode, orders the skips or waits: each function takes
@@ -18,6 +20,31 @@ from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.evaluation.clock import TokenAccounting, token_record
 from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.sandbox.observation.som import valid_inspection_proof
+
+
+def generation_error(latency: float, detail: str) -> dict:
+    """The result of a generation that raised: no action, and a provider failure that makes it
+    unusable."""
+    return {
+        "action": None,
+        "latency": latency,
+        "error": True,
+        "invalid_category": "provider",
+        "invalid_reason": "generation_error",
+        "invalid_detail": detail,
+    }
+
+
+def timed_out_result(latency: float, reason: str) -> dict:
+    """The result of a call the loop gave up on at a bound (``reason``): no action, and no usage
+    reported for it."""
+    return {
+        "action": None,
+        "latency": latency,
+        "timed_out": True,
+        "harness_timeout_reason": reason,
+        "provider_usage_missing_reason": "generation_aborted_at_wall_timeout",
+    }
 
 
 def decision_budget(
@@ -322,6 +349,17 @@ def result_invalid(r: dict, adapter, clock_mode: str) -> Invalidated | None:
     return None
 
 
+def terminal_wait_protocol(action_protocol: dict) -> dict:
+    """The action protocol of a DONE or FAIL that landed as a wait: the loop has no terminal
+    actions."""
+    return {
+        **action_protocol,
+        "source": "invalid_action_fallback_wait",
+        "valid_action": False,
+        "protocol_failure": "unsupported_terminal_action",
+    }
+
+
 def frame_output_tokens(r: dict) -> int | None:
     """The output tokens that place the decision's action: the clock count already settled on
     ``r``, else the count its sources give now."""
@@ -329,6 +367,21 @@ def frame_output_tokens(r: dict) -> int | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
         return int(value)
     return clock_output_tokens(r)[0]
+
+
+def observation_fingerprint(observation: Observation) -> tuple:
+    """The producer's identity of a frame: its observation id, tick and screenshot digest. The
+    same identity repeated while time moves on is a frozen stream."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    digest = metadata.get("screenshot_sha256")
+    if not digest:
+        shot = getattr(observation, "screenshot", b"") or b""
+        digest = hashlib.sha256(shot).hexdigest()
+    return (
+        metadata.get("observation_id"),
+        getattr(observation, "tick_number", None),
+        digest,
+    )
 
 
 # ---- trace payloads ---------------------------------------------------------------------------

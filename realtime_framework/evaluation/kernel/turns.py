@@ -15,8 +15,9 @@ both rates (phase2.md, 帧率): B counts tokens per input frame, observations si
 grid at the first environment tick at or after each grid point, and the horizon is in environment
 ticks. With both rates equal to 1 every expression reduces to the runner's.
 
-Written from the runner's loop (runner.py:842-1179) and the environment clock
-(sandbox/actions.py:214-252, 821-871), not shared with them, so that the two can be compared.
+Written from the runner's loop (runner.py run_stream, _decide) and the environment clock
+(sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute), not shared with
+them, so that the two can be compared.
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ from realtime_framework.evaluation.kernel.events import (
 )
 
 # Status of an action that was not landed because the episode ended before it could, by the
-# end's cause (runner.py:526-529). The token horizon ends an episode only at the loop top.
+# end's cause (runner.py _land_action). The token horizon ends an episode only at the loop top.
 NOT_APPLIED = {
     "deadline": "not_applied_time_limit",
     "environment": "not_applied_terminal",
@@ -72,7 +73,7 @@ class TurnConfig:
     env_fps: float = 1.0
     input_fps: float = 1.0
     tokens_per_frame: int | None = None  # B, per input frame
-    think_budget_s: float | None = None  # legacy diagnostics (runner.py:1422-1429)
+    think_budget_s: float | None = None  # legacy diagnostics (runner.py main)
     per_move_cap_s: float | None = None
     timing: RunnerTimingConfig = field(default_factory=RunnerTimingConfig)
 
@@ -86,8 +87,12 @@ class TurnConfig:
 
     @property
     def max_ticks(self) -> float:
-        """The horizon T in environment ticks."""
-        return self.duration_s * self.env_fps
+        """The horizon T in environment ticks. Within 1e-9 of a whole tick it is that tick, where
+        the environment's clock snaps to (sandbox/actions.py GuestEnvironment.wait_until_tick):
+        0.17 min at 5 fps is tick 51, not 51.00000000000001."""
+        ticks = self.duration_s * self.env_fps
+        whole = round(ticks)
+        return float(whole) if abs(ticks - whole) < 1e-9 else ticks
 
 
 class _Phase(str, Enum):
@@ -127,6 +132,7 @@ class _Decision:
     landing_at: float | None = None
     execute_at: float = 0.0
     wait: tuple[float, float] | None = None  # (start position, requested seconds)
+    failed: str | None = None  # the error of a step of the wait's own clock move
     status: str | None = None
     detail: str = ""
     terminal_after_action: bool = False
@@ -138,7 +144,7 @@ class _Decision:
 
 
 def _ceil(value: float) -> int:
-    """The next integer, or this one when ``value`` is within 1e-9 of it (runner.py:600-605)."""
+    """The next integer, or this one when ``value`` is within 1e-9 of it (runner.py _whole_up)."""
     rounded = round(value)
     return int(rounded) if abs(value - rounded) < 1e-9 else math.ceil(value)
 
@@ -149,7 +155,7 @@ def _floor(value: float) -> int:
 
 class _FrozenStream:
     """The same producer identity ``threshold`` times while operational time moves on: the stream
-    is replaying one frame instead of advancing (runner.py:65-99)."""
+    is replaying one frame instead of advancing (runner.py ObservationStreamWatchdog)."""
 
     def __init__(self, threshold: int) -> None:
         self.threshold = max(2, int(threshold))
@@ -201,7 +207,8 @@ class TurnPolicy:
         self.kernel = kernel
         kernel.record("TurnPolicyStarted", **asdict(self.config))
         if not self.token:
-            # The wall horizon is the deadline; the tick limit coincides with it (runner.py:842).
+            # The wall horizon is the deadline; the tick limit coincides with it (runner.py
+            # run_stream).
             kernel.set_timer("deadline", Clock.SEMANTIC, self.config.duration_s, Priority.CONTROL)
             self._schedule_end_check()
         self._loop_top()
@@ -234,7 +241,7 @@ class TurnPolicy:
             kernel.end("deadline", timer.at)
         elif timer.kind == "end_check":
             # A check a synchronous command delayed past the deadline is not asked: the deadline
-            # comes first, as in GuestEnvironment.done (sandbox/actions.py:950).
+            # comes first, as in sandbox/actions.py GuestEnvironment.done.
             if kernel.semantic < self.config.duration_s:
                 self._check_end(None)
                 self._schedule_end_check()
@@ -244,7 +251,7 @@ class TurnPolicy:
                 "provider", "generation_watchdog_timeout", f"generation exceeded {seconds:g}s"
             )
         elif timer.kind == "per_move_cap":
-            # A slower move places no action this turn and costs the cap (runner.py:422-432).
+            # A slower move places no action this turn and costs the cap (runner.py _charge).
             self.decision.timeout = None
             kernel.abandon_generation("per_move_cap")
             self._accept(GenerationResult(latency=timer.data["bound"]), timed_out=True)
@@ -277,8 +284,19 @@ class TurnPolicy:
         self.phase = _Phase.GUARD
         self._check_end(self._guarded)
 
+    def _past_deadline(self) -> bool:
+        """Wall clock: an answer filed before the deadline can be handled after it, behind a
+        synchronous command that ran across it. Then the deadline ends the episode before the
+        answer leads to anything in the world; nothing lands after the end."""
+        if self.token or self.kernel.semantic < self.config.duration_s:
+            return False
+        self.kernel.end("deadline", self.config.duration_s)
+        return True
+
     def _guarded(self) -> None:
-        # The horizon is tested after the end check (runner.py:842).
+        if self._past_deadline():
+            return
+        # The horizon is tested after the end check (runner.py run_stream).
         if self.token and self._tick() >= self.config.max_ticks:
             self.phase = _Phase.SETTLED
             return self.kernel.end("horizon", self.config.max_ticks)
@@ -286,23 +304,27 @@ class TurnPolicy:
         self.kernel.emit(Capture())
 
     def _captured(self, event: FrameCaptured) -> None:
-        if self.phase is not _Phase.CAPTURE:
-            return
         kernel, config = self.kernel, self.config
         if event.error is not None:
+            # Also once the episode is over: the capture was under way at the end, and today's
+            # loop judges every failed capture (runner.py _decide).
             self.phase = _Phase.SETTLED
             return kernel.invalidate("environment", "observation_capture_failed", event.error)
+        if self.phase is not _Phase.CAPTURE:
+            return
         if self._frozen.observe(event.fingerprint, kernel.ops):
             self.phase = _Phase.SETTLED
             return kernel.invalidate(
                 "environment", "observation_stream_frozen", repr(event.fingerprint)
             )
+        if self._past_deadline():
+            return
         d = self.decision = _Decision(
             self.decisions, event.observation_id, event.tick, event.timestamp
         )
         if self.token and config.tokens_per_frame is not None:
             # The allowance left before the horizon is the input frames left times B
-            # (runner.py:867-873).
+            # (runner.py _decide).
             frames_left = self._frames(config.max_ticks - d.t_k)
             d.remaining = max(0, math.floor(frames_left * config.tokens_per_frame + 1e-9))
             if d.remaining <= 0:
@@ -311,7 +333,7 @@ class TurnPolicy:
         kernel.start_generation(d.index, d.observation_id, d.t_k, d.remaining)
         self.phase = _Phase.GENERATE
         # The bound on one call: an operational watchdog on the token clock, the legacy per-move
-        # cap on the wall clock, whose deadline is a timer of its own (runner.py:300-312).
+        # cap on the wall clock, whose deadline is a timer of its own (runner.py _move_timeout).
         watchdog = config.timing.provider_watchdog_s
         if self.token and watchdog > 0:
             d.timeout = kernel.set_timer(
@@ -335,11 +357,12 @@ class TurnPolicy:
         kernel, config, d = self.kernel, self.config, self.decision
         tokens_per_frame = config.tokens_per_frame
         action, protocol_failure = result.action, result.protocol_failure
-        # The loop has no terminal actions (runner.py:1143-1153).
+        # The loop has no terminal actions (runner.py _decide).
         if action is not None and action.action_type in (ActionType.DONE, ActionType.FAIL):
             action, protocol_failure = Action.wait(), "unsupported_terminal_action"
         tokens = result.output_tokens
-        # Output past the horizon is billed but not charged to the clock (runner.py:982-996).
+        # Output past the horizon is billed but not charged to the clock (episode_records.py
+        # account_tokens).
         if d.remaining is not None and tokens is not None and tokens > d.remaining:
             d.post_horizon = tokens - d.remaining
             tokens = d.remaining
@@ -366,11 +389,16 @@ class TurnPolicy:
                 "missing_output_token_usage",
                 "finite token-clock decisions require provider or deterministic local usage",
             )
-        # The action time (runner.py:488-514): n tokens are n / B input frames on the token clock;
+        # The action time (runner.py _apply): n tokens are n / B input frames on the token clock;
         # paused, the action lands on the observed tick; on the wall clock it lands at the clock
         # position when the result is handled.
         if self.token and tokens_per_frame is not None:
             d.d_ticks = tokens * config.env_fps / (tokens_per_frame * config.input_fps)
+            if d.post_horizon:
+                # The whole response ends past the horizon, so the action lands there, though the
+                # allowance, whole tokens, can fall short of it: an action whose completed response
+                # lands beyond the horizon is not applied (runner.py module docstring).
+                d.d_ticks = config.max_ticks - d.t_k
             deliberation = d.d_ticks / config.env_fps
         elif self.token:
             deliberation = 0.0
@@ -397,7 +425,8 @@ class TurnPolicy:
 
     def _unusable(self, proposed: bool, action, category, reason, detail) -> None:
         """An unusable result invalidates the run before anything is paced or reported to the
-        agent (runner.py:455-487); a proposed action still gets its outcome."""
+        agent (runner.py _apply; episode_records.py result_invalid). A proposed action still gets
+        its outcome, where today's loop writes none: every proposed action has one here."""
         d = self.decision
         self.phase = _Phase.SETTLED
         self.kernel.invalidate(category, reason, detail)
@@ -434,7 +463,7 @@ class TurnPolicy:
         self._check_end(self._pre_checked)
 
     def _skipped(self) -> str | None:
-        """The skip order before execution (runner.py:520-531), or None to go on."""
+        """The skip order before execution (runner.py _land_action), or None to go on."""
         d, kernel = self.decision, self.kernel
         if kernel.invalid is not None:
             return "invalid_run"
@@ -447,7 +476,10 @@ class TurnPolicy:
         return None
 
     def _pre_checked(self) -> None:
-        # The horizon ends the episode at the next loop top, as today (runner.py:530-531, 842).
+        if self._past_deadline():
+            return
+        # The horizon ends the episode at the next loop top, as today (runner.py _land_action,
+        # run_stream).
         if self.token and self._tick() >= self.config.max_ticks:
             return self._resolve("not_applied_tick_limit")
         d, kernel = self.decision, self.kernel
@@ -456,7 +488,8 @@ class TurnPolicy:
             return self._start_wait()
         release_at = None
         if not self.token and d.action.action_type is ActionType.HOLD_KEY:
-            # A wall hold's lease ends this long after it is pressed (sandbox/actions.py:705-728).
+            # A wall hold's lease ends this long after it is pressed (sandbox/actions.py
+            # GuestEnvironment._execute_wall_hold).
             duration = float(d.action.parameters.get("duration", 1.0))
             if duration > 0:
                 release_at = d.execute_at + duration
@@ -472,13 +505,14 @@ class TurnPolicy:
         for error in event.end_checks:
             if self._count_read(error):
                 break
-        # A refusal or a failure leaves its own execution record (sandbox/actions.py:817).
+        # A refusal or a failure leaves its own execution record (sandbox/actions.py
+        # GuestEnvironment._execution_failed).
         d.execution_result = event.result
         if event.error is not None:
             kernel.invalidate("environment", "action_execution_failed", event.error)
             return self._resolve("invalid_run")
         if event.rejection is not None:
-            # A refused action skips the check after execution (runner.py:533-537).
+            # A refused action skips the check after execution (runner.py _land_action).
             d.detail = event.rejection
             return self._resolve("rejected")
         if self.token and event.held_keys:
@@ -487,7 +521,7 @@ class TurnPolicy:
 
     def _after_execution(self, status: str) -> None:
         # An executed action can end the task at once: check before any time passes
-        # (runner.py:542-546).
+        # (runner.py _land_action).
         self.decision.status = status
         if self.kernel.ending is not None:
             return self._resolve(status, terminal_after_action=True)
@@ -496,7 +530,7 @@ class TurnPolicy:
 
     def _lease(self, keys: tuple[str, ...]) -> None:
         """Token clock: a hold keeps each key down until its lease ends, and a held key is only
-        extended (sandbox/actions.py:546-576)."""
+        extended (sandbox/actions.py GuestEnvironment._execute_clock_key)."""
         d = self.decision
         duration = float(d.action.parameters.get("duration", 1.0))
         start = d.execute_at
@@ -505,8 +539,9 @@ class TurnPolicy:
             self.leases[key] = max(self.leases.get(key, start), end)
 
     def _start_wait(self) -> None:
-        """A wait action is time passing: token ticks under end checks, or a wall timer that the
-        end interrupts (sandbox/actions.py:830-870)."""
+        """A wait action is time passing: token ticks under end checks (sandbox/actions.py
+        GuestEnvironment.execute), or a wall timer that any end interrupts, where today's sleep
+        stops only at the deadline."""
         d = self.decision
         duration = float(d.action.parameters.get("duration", 0.0))
         d.wait = (self._position(), duration)
@@ -519,18 +554,28 @@ class TurnPolicy:
 
     def _waited(self) -> None:
         d, config = self.decision, self.config
+        if d.failed is not None:
+            # The environment reports a wait whose step failed as a failed action
+            # (sandbox/actions.py GuestEnvironment.execute; runner.py _land_action).
+            d.execution_result = {"error": d.failed}
+            return self._resolve("invalid_run")
         started, duration = d.wait
         elapsed = round(max(0.0, (self._position() - started) / config.env_fps), 9)
         horizon_truncates = self.token and started + duration * config.env_fps > (
             config.max_ticks + 1e-9
         )
         by_horizon = horizon_truncates and self._tick() >= config.max_ticks - 1e-9
+        # The wall deadline cuts a wait as today's sleep does, which flags neither truncation
+        # (sandbox/actions.py GuestEnvironment.execute); the task's end or an invalidation cuts it
+        # on either clock.
+        ending = self.kernel.ending
+        by_deadline = ending is not None and ending.cause == "deadline"
         d.execution_result = {
             "duration_simulated_seconds": elapsed,
             "requested_duration_simulated_seconds": duration,
             "truncated_by_episode_horizon": by_horizon,
             "truncated_by_terminal_condition": (
-                self.token and elapsed + 1e-9 < duration and not by_horizon
+                elapsed + 1e-9 < duration and not by_horizon and not by_deadline
             ),
         }
         self._after_execution("wait")
@@ -553,7 +598,7 @@ class TurnPolicy:
             kernel.record(TraceEvent.ACTION_APPLIED.value, **record)
         d.next_tick = self._tick()
         # Pace whether or not an action landed, so an empty decision cannot repeat within one
-        # frame; never after the end (runner.py:592-608).
+        # frame; never after the end (runner.py _apply).
         if (
             not terminal_after_action
             and status not in {"not_applied_terminal", "invalid_run"}
@@ -570,7 +615,7 @@ class TurnPolicy:
     def _paced(self) -> None:
         d = self.decision
         # At an exact boundary the move was empty, so commit the action's pixels at the same tick
-        # before the next capture (runner.py:610-623).
+        # before the next capture (runner.py _apply).
         if (
             self.token
             and d.action is not None
@@ -594,7 +639,7 @@ class TurnPolicy:
     def _boundary_reached(self) -> None:
         d = self.decision
         post_after = self._tick()
-        # Every input frame the decision crossed but one was dropped (runner.py:624-625).
+        # Every input frame the decision crossed but one was dropped (runner.py _apply).
         crossed = max(0, int(_floor(self._frames(post_after)) - _floor(self._frames(d.t_k))))
         d.dropped = max(0, crossed - 1)
         self.kernel.record(
@@ -616,7 +661,7 @@ class TurnPolicy:
     def _commit(self) -> None:
         d, config = self.decision, self.config
         # The frame age: simulated time on the token clock, wall time on the wall clock
-        # (runner.py:648-655).
+        # (runner.py _apply).
         if d.timestamp is None:
             frame_age = None
         elif self.token:
@@ -653,7 +698,7 @@ class TurnPolicy:
             kernel.invalidate("provider", "action_commit_feedback_failed", event.error)
         if kernel.ending is not None:
             return
-        # The legacy budget ends the episode once the decision is reported (runner.py:1170-1172).
+        # The legacy budget ends the episode once the decision is reported (runner.py _decide).
         if d.over_budget:
             return kernel.end("think_budget", kernel.semantic)
         self._loop_top()
@@ -662,6 +707,8 @@ class TurnPolicy:
 
     def _check_end(self, then: Callable | None) -> None:
         """Ask whether the episode is over; ``then`` runs when it is not."""
+        if then is not None and self._past_deadline():
+            return
         request = self.kernel.request()
         self._asked[request] = self.kernel.semantic
         if then is not None:
@@ -715,7 +762,8 @@ class TurnPolicy:
 
     def _advance(self) -> None:
         """One step of at most one tick, cut where a lease ends; each step is followed by the
-        release of leases that ended and an end check (sandbox/actions.py:214-249)."""
+        release of leases that ended and an end check (sandbox/actions.py
+        GuestEnvironment.wait_until_tick)."""
         tick = self._tick()
         if not tick + 1e-9 < self._target:
             return self._moved()
@@ -731,8 +779,16 @@ class TurnPolicy:
         if self._then is None:
             return
         if event.error is not None:
-            return self.kernel.invalidate("environment", "clock_advance_failed", event.error)
+            return self._step_failed("clock_advance_failed", event.error)
         self._release(lambda: self._check_end(self._advance))
+
+    def _step_failed(self, reason: str, error: str) -> None:
+        """A step of a token-clock move failed to advance or to release keys: the run is invalid,
+        for the environment's reasons (sandbox/actions.py GuestEnvironment.wait_until_tick,
+        GuestEnvironment._release_clock_keys). A wait whose own step failed is a failed action."""
+        if self.phase is _Phase.WAIT:
+            self.decision.failed = error
+        self.kernel.invalidate("environment", reason, error)
 
     def _release(self, then: Callable) -> None:
         tick = self._tick()
@@ -745,11 +801,14 @@ class TurnPolicy:
         self.kernel.emit(ReleaseKeys(keys))
 
     def _keys_released(self, event: KeysReleased) -> None:
+        if event.error is not None:
+            if self.token:
+                return self._step_failed("clock_key_release_failed", event.error)
+            # The environment's reason (sandbox/actions.py GuestEnvironment._wall_release_due).
+            return self.kernel.invalidate("environment", "wall_key_release_failed", event.error)
         # Wall-clock releases come from the shell's own timer and need no answer.
         if self._released is None:
             return
-        if event.error is not None:
-            return self.kernel.invalidate("environment", "clock_key_release_failed", event.error)
         then, self._released = self._released, None
         then()
 
@@ -780,6 +839,6 @@ class TurnPolicy:
 
     def _next_observation_tick(self, t_k: float, action_end: float) -> float:
         """The first input frame after the observed one and not before the action ends, at the
-        first environment tick at or after it, and never past the horizon (runner.py:600-606)."""
+        first environment tick at or after it, and never past the horizon (runner.py _apply)."""
         frame = max(_floor(self._frames(t_k)) + 1, _ceil(self._frames(action_end)))
         return min(_ceil(self._ticks(frame)), self.config.max_ticks)
