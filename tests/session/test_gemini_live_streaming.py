@@ -33,7 +33,9 @@ from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.streaming.history import history_view
 from realtime_framework.providers.gemini import live
+from realtime_framework.providers.gemini.session import Delivery
 from tests.session.test_gemini_live_receive import RecordingClock, server_closed
+from tests.session.test_gemini_live_session import pushed
 
 MODEL = (
     "gemini-3.8-live"  # the client_content preset: streaming goes on realtime_input all the same
@@ -274,6 +276,35 @@ def test_a_failed_read_ends_every_reply_on_the_connection():
 
     first, second = asyncio.run(run())
     assert first.code == 1011 and second is first
+
+
+def test_a_pushed_frame_goes_on_the_video_stream_then_its_text_and_starts_no_reply():
+    """A frame goes out as a video frame, then its text, with no activity around it and no wait
+    between: its block is sent once both are written. After a goAway nothing is pushed until the
+    session is renewed."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        pushed_frame = await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        delivery = rig.driver._core.delivery[("block", "f1.frame")]
+        rig.socket.feed(GO_AWAY)
+        await settle()
+        try:
+            await rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)]))
+        except RuntimeError as exc:
+            refused = str(exc)
+        await rig.driver.close()
+        return pushed_frame, delivery, refused
+
+    pushed_frame, delivery, refused = asyncio.run(run())
+    assert pushed_frame == {"observation_id": "obs-1"}
+    video, text = rig.socket.sent
+    assert list(video["realtime_input"]) == ["video"]
+    assert text == {"realtime_input": {"text": "frame 1"}}
+    assert rig.log == []  # no wait
+    assert delivery == Delivery.SENT
+    assert refused == "Gemini Live requires canonical history synchronization before input"
 
 
 def test_closing_the_connection_ends_the_reply_waiting_on_it():
