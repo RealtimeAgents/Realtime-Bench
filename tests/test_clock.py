@@ -46,7 +46,7 @@ def test_system_clock_waits_for_an_event_or_a_future():
 
 
 def _running_loop(clock):
-    """Like RealtimeRuntime's loop: the loop takes part, the thread that runs it does not."""
+    """Like the execution thread's loop: the loop takes part, the thread that runs it does not."""
     loop = clock.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
     return loop

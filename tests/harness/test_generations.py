@@ -201,6 +201,35 @@ def _hold_questions(driver):
     return entered, release
 
 
+@pytest.mark.parametrize("api", ["stateless", "session"])
+def test_the_agent_runs_its_driver_on_its_execution_thread(tmp_path, api):
+    """DefaultHarness keeps the execution thread, whatever the driver: initialize() started it
+    and the runtime runs on it; close() stops it once the runtime has closed the session."""
+    stub_type, scripted = (
+        (ChatCompletionsStub, replies([Step(CLICK_NAME)]))
+        if api == "stateless"
+        else (RealtimeStub, realtime_replies([Step(CLICK_NAME)]))
+    )
+    with stub_type(scripted) as stub:
+        episode = (
+            _chat_episode(stub, tmp_path)
+            if api == "stateless"
+            else build_episode(
+                realtime_config(stub.base_url),
+                tmp_path,
+                task=ReplayTask(),
+                instruction=TASK_INSTRUCTION,
+                model_key=REALTIME_MODEL_KEY,
+            )
+        )
+        thread = episode.agent._execution_thread
+        try:
+            assert episode.agent._runtime.execution is thread and thread.running
+        finally:
+            episode.finish()
+        assert not thread.running
+
+
 def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
     """generate() hands back the decision result and holds what it would write; accept() writes
     the turn, the action record, the usage, the provider usage and the tool call's end."""

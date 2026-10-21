@@ -31,6 +31,7 @@ from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.context import RealtimeRuntime
+from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
@@ -79,7 +80,8 @@ def _run(driver, run_dir: Path, turns: int):
     policy = current_context_policy().for_path(
         config.adapter_type, config.provider_options, config.context_preset
     )
-    runtime = RealtimeRuntime(driver, policy, trace=sink)
+    execution = ExecutionThread(SystemClock(), "execution-thread-ws")
+    runtime = RealtimeRuntime(driver, policy, trace=sink, execution=execution)
     history: list[dict] = []
     channel = driver.capabilities.action_channel
     # As DefaultHarness._answer_requirements declares them (harnesses/default/harness.py).
@@ -92,6 +94,7 @@ def _run(driver, run_dir: Path, turns: int):
     def request_builder(turns, ledger):
         return build_request(policy, system, turns, ledger, answer, call)
 
+    execution.start()
     try:
         with trace_scope(phase="initialize"):
             runtime.start(seed)
@@ -113,6 +116,7 @@ def _run(driver, run_dir: Path, turns: int):
     finally:
         with trace_scope(phase="close"):
             runtime.close()
+        execution.stop()
     assert close_agent_trace(sink, None) is None
     trace.close()
     validate_episode_trace(run_dir / "episode_trace.jsonl")
