@@ -30,7 +30,7 @@ from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
 from .steps import run_steps
 from .stub import Reply
-from .stub_openrouter import Failure, Held, OpenRouterStub, route_metadata
+from .stub_openrouter import Cut, Failure, Held, OpenRouterStub, route_metadata
 from .test_chat_completions import _check_history_changes, _check_rejection_feedback
 
 BASELINES = Path(__file__).parent / "baselines"
@@ -320,6 +320,34 @@ def test_whole_turn_retry_429_with_retry_after(openrouter_env, tmp_path):
     assert carried[0] is None and 120.0 in carried
     honored = TransportFailure(RATE_LIMITED, 120.0)
     assert TRANSPORT_RETRY.delay_s(1, key, honored) is None
+
+
+def test_partial_output_is_not_retried(openrouter_env, tmp_path):
+    """The stream breaks off after its first text chunk: LiteLLM raises MidStreamFallbackError
+    over httpx.ReadError, which the classifier takes as TRANSIENT (providers/litellm.py
+    classify_transport_error). But the turn already received output, and the harness never sends
+    such a turn again (harnesses/default/harness.py stream_generate, ``replayable``): a retry
+    could repeat an action. The decision fails as provider_stream_interrupted after one
+    request."""
+    openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    (reply,) = replies(LONG_SCENARIO[:1])
+    with openrouter_episode(openrouter_env, tmp_path, [Cut(reply)], **TOKEN_CLOCK) as (
+        stub,
+        _,
+        episode,
+    ):
+        classified = _spy_classifier(episode.agent.driver)
+        agent = episode.agent
+        observation = episode.frames.capture(0)
+        agent.configure_decision(episode.budget(observation.tick_number))
+        agent.stream_prefill(observation)
+        result = agent.stream_generate(tick=0)
+    assert len(stub.requests) == 1
+    ((failure, _),) = classified
+    assert failure == TransportFailure(TRANSIENT)
+    assert result["invalid_reason"] == "provider_stream_interrupted"
+    assert result["output_chunks"]
+    assert result["_trajectory_entry"]["transport_reconnect_attempts"] == 0
 
 
 def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], list, list]:
