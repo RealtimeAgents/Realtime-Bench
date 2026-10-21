@@ -10,8 +10,8 @@ call the agent's start_episode, which no agent defines.
 On the wall clock any agent build_episode returns on the same clock can be driven, given a stub
 that serves on that clock and calls ``env.model_request`` as its ``on_request`` hook (see
 fake_env.py); the calling thread takes part in the clock. On the token clock run_stream's
-operational clock is TokenEnvironment's, whose recorded times and readings stay at the origin
-(token_env.py).
+operational clock is TokenEnvironment's, whose recorded times stay at the origin and whose
+readings are the world's seconds (token_env.py _RunnerClock).
 """
 
 from __future__ import annotations

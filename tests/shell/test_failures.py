@@ -225,7 +225,7 @@ def test_a_result_settled_past_its_bound_still_invalidates_the_run(
 ):
     """The result comes back 5 ms before the bound and settling it ends 5 ms after it: the
     kernel gives the generation up first and discards it. What made the result unusable still
-    invalidates the run, as the runner's check of every result it settled did (runner.py
+    invalidates the run, as the runner's check of every result it settled did (legacy_loop.py
     _apply). (The next call never answers: the record of a call given up on needs no proof.)"""
     if bound == "cap":
         replies = [Reply(1.495, raises=raises), Reply(hang=True)]

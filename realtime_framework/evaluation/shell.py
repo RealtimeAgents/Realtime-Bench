@@ -742,7 +742,7 @@ class _Shell:
     def _settle_returned(self, count: int) -> None:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
         them to the kernel. One back after a bound on its generation fell due waits for the
-        kernel to give the generation up, as the runner's bounded wait did (runner.py
+        kernel to give the generation up, as the runner's bounded wait did (legacy_loop.py
         _bounded_call). The late result of a generation the kernel gave up on goes back as it
         came, to be discarded: the runner never handled one either. One back before a bound the
         kernel then handled first, busy as the shell was, is settled all the same: the kernel
@@ -1255,7 +1255,7 @@ class _Shell:
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         if bound is not None:
             # The cap and the watchdog as the runner names them (legacy_loop.py _move_timeout); the
-            # deadline from the call's start, where the runner gave the time left plus a grace.
+            # deadline from the call's start, where the legacy loop gave the time left plus a grace.
             self.log(
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
                 "— discarded"

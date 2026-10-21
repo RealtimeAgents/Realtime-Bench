@@ -182,7 +182,7 @@ class AgentTraceSink:
         # The writer emits only while holding this lock; finish() takes it to fence the writer.
         self._emit_lock = threading.Lock()
         self._fenced = False
-        self._post = None  # the kernel's inbox while records are handed over
+        self._post = None  # the shell's hand_over while records are handed over
         self._sessions: dict[str, dict] = {}
         self._writer = threading.Thread(target=self._run, name="agent-trace-writer", daemon=True)
         self._writer.start()
@@ -228,7 +228,7 @@ class AgentTraceSink:
                 self._error = traceback.format_exc()
 
     def hand_over(self, post) -> None:
-        """From the next record on, hand each to the kernel with ``post`` instead of writing it."""
+        """From the next record on, hand each to the shell with ``post`` instead of writing it."""
         with self._emit_lock:
             self._post = post
 
