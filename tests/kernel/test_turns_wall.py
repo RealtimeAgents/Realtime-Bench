@@ -355,6 +355,18 @@ def test_an_action_in_a_frame_read_already_is_executed_at_once_and_read_after():
     assert _ended(sim) == ("time_limit", "deadline", 6.0, 6.25)
 
 
+def test_the_frame_at_the_horizon_is_waited_for_until_the_deadline():
+    # 0.17 min at 5 fps: the deadline is 10.200000000000001 s and the horizon tick 51, whose frame
+    # begins 1 ulp before it, at 10.2 s. A decision is never started there: the move to the
+    # horizon frame wakes at the deadline, which comes first, as if no decision cost any time.
+    config = _wall(0.17 * 60, env_fps=5.0, input_fps=5.0)
+    sim = _episode(config, World(replies=[Reply(0.0, CLICK)] * 53))
+    assert [tick for tick, _ in sim.captures] == list(range(51))
+    assert _timers(sim, "wake")[-1] == config.duration_s
+    assert sim.outcomes[-1] == _outcome(50, "applied", 50.0, 51, 0.0)
+    assert _ended(sim) == ("time_limit", "deadline", config.duration_s, config.duration_s)
+
+
 def test_a_deadline_inside_the_next_frame_wait_stops_it_at_the_deadline():
     sim = _episode(_wall(5.5), World(replies=[Reply(5.25, CLICK)]))
     # next = min(max(0 + 1, ceil(5.25)), T = 5.5) = 5.5 (runner.py _apply); the deadline beats the
