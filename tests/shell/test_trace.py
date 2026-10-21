@@ -220,11 +220,17 @@ class HoldingAgent(Agent):
 
 def test_a_result_s_usage_is_measured_once_the_agent_has_accepted_it():
     """The frame's usage is what the agent's usage grew by from the generation's start to its
-    result's acceptance; the result's records still sit where the kernel took it."""
+    result's acceptance; the result's records still sit where the kernel took it. The clock's
+    count, needed before the acceptance, is not taken from what the usage grew by until then: the
+    result names no count of its own, so there is none."""
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=HoldingAgent)
     trace = episode.trace
-    usages = [payload["frame_usage"] for payload in trace.payloads("InferenceCompleted")]
-    assert usages == [{"output_tokens": 7, "responses": 1}] * 2
+    completed = trace.payloads("InferenceCompleted")
+    assert [payload["frame_usage"] for payload in completed] == [
+        {"output_tokens": 7, "responses": 1}
+    ] * 2
+    counts = [(p["clock_output_tokens"], p["clock_output_tokens_source"]) for p in completed]
+    assert counts == [(None, None)] * 2
     events = trace.events()
     completed = [i for i, event in enumerate(events) if event == "InferenceCompleted"]
     assert [events[i + 1] for i in completed] == ["ActionProposed"] * 2

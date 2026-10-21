@@ -543,8 +543,10 @@ class _Shell:
             case AcceptResult(generation=generation):
                 held = self._generations.pop(generation)
                 self._decision.result = held.result
-                self.agent.accept(generation)
-                self._write_inference(held)
+                try:
+                    self.agent.accept(generation)
+                finally:
+                    self._write_inference(held)
             case DiscardResult(generation=generation):
                 del self._generations[generation]
                 self.agent.discard(generation)
@@ -770,10 +772,12 @@ class _Shell:
             budget=budget,
             tokens_per_frame=self.config.tokens_per_frame,
         )
+        # The clock's count is the result's own: an agent that holds its result adds its usage
+        # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
+        episode_records.account_tokens(r, held.remaining, self.env)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(held.usage_before, usage_after)
-        episode_records.account_tokens(r, held.remaining, self.env)
         observation_id = r["observation_id"]
         inference = (
             episode_records.output_chunks(r, held.decision, observation_id),
