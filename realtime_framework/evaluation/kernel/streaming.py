@@ -91,10 +91,19 @@ class StreamingConfig:
     push_failure_limit: int = 3
     timing: RunnerTimingConfig = field(default_factory=RunnerTimingConfig)  # the frozen stream
 
+    def __post_init__(self) -> None:
+        # A grid of no rate divides by zero; a watchdog of no time gives replies up at one
+        # instant forever. None of them can be switched off.
+        for name in ("duration_s", "env_fps", "input_fps", "reply_watchdog_s", "push_watchdog_s"):
+            if not getattr(self, name) > 0:
+                raise ValueError(f"{name} must be positive, not {getattr(self, name)!r}")
+        if self.push_failure_limit < 1:
+            raise ValueError("push_failure_limit must be at least 1")
+
 
 class _FrozenStream:
     """The same producer identity ``threshold`` times while time moves on: the stream is replaying
-    one frame instead of advancing (runner.py:65-99)."""
+    one frame instead of advancing (runner.py ObservationStreamWatchdog)."""
 
     def __init__(self, threshold: int) -> None:
         self.threshold = max(2, int(threshold))
@@ -489,7 +498,7 @@ class StreamingPolicy:
 
     def _arrived(self, event: ActionArrived) -> None:
         generation, action, protocol_failure = event.generation, event.action, None
-        # There are no terminal actions here either (runner.py:1143-1153).
+        # There are no terminal actions here either (runner.py _decide).
         if action is not None and action.action_type in (ActionType.DONE, ActionType.FAIL):
             action, protocol_failure = Action.wait(), "unsupported_terminal_action"
         a = _Action(
@@ -535,7 +544,8 @@ class StreamingPolicy:
         a.started_at = kernel.semantic
         release_at = None
         if action.action_type is ActionType.HOLD_KEY:
-            # A wall hold's lease ends this long after it is pressed (sandbox/actions.py:705-728).
+            # A wall hold's lease ends this long after it is pressed (sandbox/actions.py
+            # GuestEnvironment._execute_wall_hold).
             duration = float(action.parameters.get("duration", 1.0))
             if duration > 0:
                 release_at = a.started_at + duration
@@ -556,7 +566,8 @@ class StreamingPolicy:
             a.finished_at = kernel.semantic
         else:
             a.started_at, a.finished_at = event.started_at, event.finished_at
-        # A refusal or a failure leaves its own execution record (GuestEnvironment.execute).
+        # A refusal or a failure leaves its own execution record (sandbox/actions.py
+        # GuestEnvironment._execution_failed).
         a.execution_result = event.result
         if event.error is not None:
             self.current = None
