@@ -402,6 +402,22 @@ def test_a_key_tap_holds_its_key_a_sixtieth_of_a_second(rates, tap_checks):
     assert boundary["from_tick"] == pytest.approx(tapped, abs=1e-9)
 
 
+def test_a_key_tap_stops_at_the_horizon():
+    """At 60/1 with B = 120, 119 tokens put a tap at tick 59.5 of T = 60. Its sixtieth of a second
+    is one tick, but the environment stops it at the horizon (sandbox/actions.py
+    GuestEnvironment.wait_until_tick); nothing is paced past T and the next loop top ends there."""
+    tap = Action(ActionType.KEY, {"key": "space"})
+    config = _config("token", (60, 1), 1.0, 120)
+    sim = _run(config, [Reply(latency=0.5, action=tap, output_tokens=119)])
+    assert sim.executed == [(0, 59.5, tap)]
+    assert sim.tap_checks == [60]
+    resolved = sim.entries("ActionResolved")[0]
+    assert (resolved.data["status"], resolved.data["environment_tick"]) == ("applied", 60)
+    assert _boundaries(sim) == []
+    assert sim.outcomes[0].next_observation_tick == 60
+    assert sim.termination == Termination("tick_limit", "horizon", 60, 60, 0.5, 0.5, None)
+
+
 @pytest.mark.parametrize(
     ("rates", "duration_s", "checks"),
     [

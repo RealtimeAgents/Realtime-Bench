@@ -423,6 +423,18 @@ def test_only_an_applied_action_on_an_exact_boundary_renders(action, rejection, 
     assert _pace(sim, 0)["post_action_rendered"] is bool(renders)
 
 
+def test_the_barrier_renders_nothing_for_a_task_without_a_renderer():
+    # n = 256 puts the click on the boundary at 1, so the barrier runs there; a task without a
+    # renderer commits no frame (sandbox/actions.py GuestEnvironment.render_current_frame returns
+    # None), and the action is reported unrendered (runner.py _apply).
+    sim = _run(_token(10), Reply(action=CLICK, output_tokens=256), _idle(9), renderer=False)
+    assert sim.renders == [1]
+    assert _pace(sim, 0) == _to_boundary(0, 1, 1, False, 0)
+    assert sim.outcomes[0] == _outcome(
+        0, "applied", tau=1.0, delay=1.0, next_tick=1, dropped=0, tokens=256
+    )
+
+
 @pytest.mark.parametrize(
     ("repeat", "next_tick", "dropped", "rendered"),
     [(1, 2, 1, False), (60, 2, 1, True), (90, 3, 2, False)],
