@@ -65,3 +65,7 @@ class StreamingNoSettings(StreamingNoSwitch):
 
     def __init__(self, config, *, clock=None, streaming=False):
         super().__init__(config, clock=clock)
+
+
+class StreamingBadSettings(StreamingNoSettings):
+    streaming_settings: ClassVar[dict] = {"compression_trigger_tokens": 0}
