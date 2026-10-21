@@ -24,7 +24,8 @@ the generation it came in, once its action was posted. A reply ends as a turn do
 fault fails it, a session it leaves other than exact is rebuilt before it is used again, and a
 function call reply must complete.
 
-An accepted reply's output joins the view; a discarded one adds nothing. Each outcome the kernel
+An accepted reply's output joins the view where the output began, so that a rebuilt session shows
+the model its actions before their results; a discarded one adds nothing. Each outcome the kernel
 commits joins it as its execution feedback (feedback.py), where the policy places it.
 """
 
@@ -127,6 +128,9 @@ class _Reply:
     interrupted: bool = False
     protocol_failure: str | None = None  # the first
     based_on: str | None = None  # the observation id of the frame its first action names
+    # Where in the blocks its output began, which its output goes to once accepted: before the
+    # feedback on its actions and the frames pushed since.
+    position: int | None = None
 
     @property
     def output(self) -> str:
@@ -406,6 +410,12 @@ class NativeStreamingAgent(VisionAgentBase):
 
     def _take(self, reply: _Reply, event) -> None:
         """One message of the reply, on the execution thread as it is read."""
+        if reply.position is None and (
+            isinstance(event, FunctionCall)
+            or (isinstance(event, TextDelta) and event.channel == "visible")
+        ):
+            with self._lock:
+                reply.position = len(self._blocks)
         if isinstance(event, TextDelta):
             (reply.reasoning if event.channel == "reasoning" else reply.text).append(event.text)
         elif isinstance(event, UsageSnapshot):
@@ -501,14 +511,18 @@ class NativeStreamingAgent(VisionAgentBase):
             self._off_session.set()
 
     def accept(self, generation: int) -> None:
-        """AcceptResult: the reply's output joins the view, and its usage the episode's. A
-        failed reply, which the kernel accepts too, joins nothing, as a failed turn."""
+        """AcceptResult: the reply's output joins the view where it began, and its usage the
+        episode's. A failed reply, which the kernel accepts too, joins nothing, as a failed
+        turn."""
         with self._lock:
             reply = self._replies.pop(generation)
             self._off(generation)
             if reply.output and not reply.failed:
-                self._blocks.append(
-                    output_block(reply.decision, reply.output, reply.based_on, self.clock.time_ns())
+                self._blocks.insert(
+                    reply.position,
+                    output_block(
+                        reply.decision, reply.output, reply.based_on, self.clock.time_ns()
+                    ),
                 )
         if reply.failed:
             self._log_reply(reply, "reply_failed")
