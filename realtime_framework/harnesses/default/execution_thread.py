@@ -63,7 +63,8 @@ class ExecutionThread:
         return future.result()
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Stop the loop and close it; coroutines still pending on it never finish."""
+        """Stop the loop and, once its thread has ended within ``timeout`` seconds, close it.
+        Coroutines still pending on it never finish."""
         loop = self._loop
         if loop is None or loop.is_closed():
             return

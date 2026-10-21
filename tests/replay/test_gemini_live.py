@@ -525,7 +525,7 @@ def test_driver_default_short(live_env, tmp_path):
 
 
 class _SleepRecordingClock(SystemClock):
-    """The driver's clock, whose waits (live.py:496, 597-610) only advance its monotonic time
+    """The driver's clock, whose waits (live.py:497, 600-612) only advance its monotonic time
     and are recorded; everything else is real time."""
 
     def __init__(self):
