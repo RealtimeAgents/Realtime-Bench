@@ -354,14 +354,22 @@ class _Shell:
         env.kernel_counts_reads = True
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
+        # A replay aid, opened and closed apart from the episode, which goes on without it.
+        inputs = None
+        if self._inputs_log is not None:
+            try:
+                inputs = self._inputs = Path(self._inputs_log).open("w", encoding="utf-8")  # noqa: SIM115 - closed below, whatever the episode does
+            except Exception:  # noqa: BLE001 - see above
+                self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         try:
-            if self._inputs_log is None:
-                self._episode()
-            else:
-                with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
-                    self._episode()
+            self._episode()
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             self._wrap_up(traceback.format_exc())
+        if inputs is not None:
+            try:
+                inputs.close()
+            except Exception:  # noqa: BLE001 - see above
+                self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         return self.timeline
 
     def _episode(self) -> None:
