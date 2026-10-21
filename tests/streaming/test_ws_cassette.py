@@ -262,3 +262,30 @@ def test_nothing_gone_ahead_of_is_released_once_the_message_differs():
     cursor.receive(1, {"type": "response.cancel"}, 0.5)
     assert cursor.failed
     assert cursor.release(1, 2.0) == []
+
+
+def test_a_message_ahead_of_a_reactive_server_record_names_it():
+    """L9: the server releases a reactive record before it reads the client, so the cursor finds
+    one still next only after a problem elsewhere, or when called without release."""
+    cursor = _cursor(
+        [_record("open", at=0.0), _record("s2c", {"type": "x"}), _record("c2s", {"type": "a"}, 0)]
+    )
+    cursor.open(0.0)
+    cursor.receive(1, {"type": "a"}, 0.0)
+    assert cursor.problems == [
+        "conn 1 record 1: c2s a sent at t=0, before the recorded s2c x (reactive)"
+    ]
+
+
+def test_nothing_after_a_server_close_is_released_with_it():
+    """L9: records after a server close on its connection can never be used: they stay, and the
+    end reports them."""
+    close = {"by": "server", "code": 1011, "reason": "scripted"}
+    cursor = _cursor(
+        [_record("open", at=0.0), _record("close", close, 1.0), _record("s2c", {"type": "y"}, 1.0)]
+    )
+    cursor.open(0.0)
+    assert cursor.release(1, 1.0) == [_record("close", close, 1.0)]
+    assert cursor.release(1, 1.0) == []
+    assert cursor.next_due(1) is None
+    assert cursor.finish() == ["conn 1: 1 record(s) left unused, from record 2 (s2c y)"]
