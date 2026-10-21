@@ -206,14 +206,15 @@ class _SlowTrajectory(Agent):
 
 
 def test_a_wall_action_is_timed_at_the_reading_it_lands_at_though_settling_it_took_time():
-    """The result comes back at 0.5 s and settling it takes 0.125 s, which is not its own: it
-    lands at 0.5 s, and its record's resolution time and frame age agree, as the definition the
-    record gives says they must."""
+    """The result comes back at 0.5 s and settling it takes 0.125 s; the kernel gets it after,
+    as the runner landed it after settling it (runner.py _decide): it lands at 0.625 s, and its
+    record's resolution time and frame age agree, as the definition the record gives says they
+    must."""
     episode = run("wall", 2.0, [Reply(0.5), Reply(0.5)], agent_type=_SlowTrajectory)
     for record in episode.env.lifecycle:
-        assert record["frame_age_at_action_s"] == 0.5
+        assert record["frame_age_at_action_s"] == 0.625
         age = record["action_resolved_unix_s"] - record["observation_timestamp"]
-        assert round(age, 6) == 0.5
+        assert round(age, 6) == 0.625
 
 
 def test_an_action_the_guest_refuses_is_reported_with_its_reason():

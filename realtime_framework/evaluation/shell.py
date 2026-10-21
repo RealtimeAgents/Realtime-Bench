@@ -317,16 +317,18 @@ class _Shell:
         while not self._finished:
             # Cleared before the step takes the inbox: a post the step misses sets it again.
             self._wake.clear()
-            # The results back before the reading are filed at it: the time it takes to settle
-            # them is not theirs, and one back later waits for the next reading. They are settled
-            # only once nothing else is due by then: a deadline or a cap that came first gives
-            # their generation up, and a result the kernel will not take leaves no record.
+            # The results back before the reading are settled only once nothing else is due by
+            # then: a deadline or a cap that came first gives their generation up, and a result
+            # the kernel will not take leaves no record. One back later waits for the next
+            # reading. The kernel gets them at the reading after the settling, which takes time
+            # in the world too: a deadline that came meanwhile goes first, and nothing lands after
+            # it (phase2.md, 时间和结束判定).
             returned = len(self._returned)
             now = self._read()
             commands = self._step(now)
             if commands is None and returned:
                 self._settle_returned(returned)
-                commands = self._step(now)
+                commands = self._step(self._read())
             if commands is None:
                 self._sleep()
             else:
@@ -630,8 +632,12 @@ class _Shell:
     def _timed_out(self, entry: Entry) -> None:
         """The kernel reports a move over the per-move cap as skipped (kernel/turns.py
         ``on_timer``); the other generations it gives up on end the episode and their decision
-        goes unreported. The move's records are the runner's of a call it gave up on."""
+        goes unreported. The move's records are the runner's of a call it gave up on, unless the
+        call came back before the cap and was settled after it: then they are its own."""
         held = self._generations[entry.data["generation"]]
+        if held.inference is not None:
+            self._decision.result = held.result
+            return
         # The cap, however late the shell got to it: the kernel charges the move that much.
         latency = round(self._cap_due - held.started_semantic, 2)
         r = episode_records.timed_out_result(latency, entry.data["reason"])
