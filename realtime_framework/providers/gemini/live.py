@@ -198,6 +198,7 @@ class GeminiLiveDriver(SessionLifecycle):
         action_channel="function_call",
         classifies_transport_errors=True,
         connection_renewal=True,
+        interaction_modes=frozenset({"turn_based", "streaming"}),
     )
     deployment = Deployment(
         family="streaming",
@@ -229,12 +230,15 @@ class GeminiLiveDriver(SessionLifecycle):
             },
         },
     }
-    # Native streaming only (interaction_mode "streaming"), recorded in the run configuration: the
-    # setup's context_window_compression. Once the context reaches trigger_tokens, the server drops
-    # the oldest turns (never the system instruction) down to sliding_window.target_tokens, which
-    # must be smaller. Placeholders until a smoke test: a target near what OpenAI Realtime keeps
-    # with its 20 frames, and a trigger at twice it (the server's default ratio), half of these
-    # models' 131,072-token window.
+    # The API's native-streaming settings: the setup's context_window_compression. Once the
+    # session reaches compression_trigger_tokens, the server shortens it to
+    # compression_target_tokens, from the start of a user turn, and says nothing of what it
+    # removed; the system instruction stays (google-genai SlidingWindow: target_tokens "Should be
+    # < trigger_tokens", which the catalog requires). Placeholders until a smoke test
+    # (docs/streaming_smoke_test.md): a trigger at half the 131,072-token input of these models in
+    # LiteLLM's model map, and a target at half the trigger, the server's default when none is
+    # set. A model YAML's streaming settings replace those they name (ModelConfig.streaming); a
+    # driver holds the values it runs with.
     streaming_settings: ClassVar[dict] = {
         "compression_trigger_tokens": 65_536,
         "compression_target_tokens": 32_768,
@@ -264,6 +268,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self.config = config
         self.clock = clock or SystemClock()
         self.streaming = streaming
+        self.streaming_settings = {**self.streaming_settings, **config.streaming}
         self.types = types
         self._api_error_type = errors.APIError
         self._connection_closed_type = ConnectionClosed

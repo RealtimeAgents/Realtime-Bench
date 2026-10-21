@@ -102,6 +102,9 @@ class RealtimeCapabilities:
     maps_output_cap: bool = False  # transport_output_token_cap(provider_cap)
     # How the driver can interact: one request per frame ("turn_based"), or native streaming.
     interaction_modes: frozenset[str] = frozenset({"turn_based"})
+    # The highest model-input rate a native-streaming session takes, where frames go in as
+    # items rather than as video (max_video_fps bounds that in either mode); None: no other cap.
+    max_streaming_fps: float | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

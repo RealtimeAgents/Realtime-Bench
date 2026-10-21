@@ -216,6 +216,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         terminal_output_usage=True,
         classifies_transport_errors=True,
         maps_output_cap=True,
+        interaction_modes=frozenset({"turn_based", "streaming"}),
+        # The 1 fps native streaming is designed for, until a smoke test finds the rate the API
+        # keeps up with (docs/streaming_smoke_test.md).
+        max_streaming_fps=1.0,
     )
     deployment = Deployment(
         family="streaming",
@@ -225,18 +229,20 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         litellm_provider="openai",
     )
     model_defaults: ClassVar[dict[str, dict]] = {}
-    # Native streaming only (interaction_mode "streaming"), recorded in the run configuration: a
-    # frame older than the newest retained_frames folds in place, as a turn-based one does. A
-    # placeholder (the turn-based visual budget, 20 s at 1 fps) until a smoke test measures what a
-    # frame costs against the model's context.
+    # The API's native-streaming settings: a frame older than the newest retained_frames folds in
+    # place, as a turn-based one does. A placeholder, the turn-based visual budget (20 s at
+    # 1 fps), until a smoke test measures what a frame costs against the model's context
+    # (docs/streaming_smoke_test.md). A model YAML's streaming settings replace those they name
+    # (ModelConfig.streaming); a driver holds the values it runs with.
     streaming_settings: ClassVar[dict] = {"retained_frames": 20}
-    # "streaming" for a native-streaming episode, set before the session connects: the session
-    # then reads every event as it arrives, and is rebuilt from the streaming history view.
-    interaction_mode = "turn_based"
 
-    def __init__(self, config, *, clock=None):
+    def __init__(self, config, *, clock=None, streaming: bool = False):
+        """``streaming``: the session native streaming drives, which reads every event as it
+        arrives and is rebuilt from the streaming history view."""
         self.config = config
         self.clock = clock or SystemClock()
+        self.streaming = streaming
+        self.streaming_settings = {**self.streaming_settings, **config.streaming}
         load_project_secrets()
         key = config.api_key or os.environ.get(config.api_key_env or "OPENAI_API_KEY")
         if not key:
@@ -466,7 +472,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             ),
         )
         # The history is None when the runtime opens the episode's first session.
-        if self.interaction_mode == "streaming":
+        if self.streaming:
             session.read_continuously(self.clock)
             replay = session.core.replay_streaming(request.history)
             await self._send_all(replay)
@@ -771,7 +777,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         )
 
     async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
-        if self.interaction_mode == "streaming":
+        if self.streaming:
             # Native streaming edits the session as frames are pushed (push_frame); any sync
             # rebuilds it from the streaming view (decisions 4.7, 4.14).
             return await self._rebuild(request)

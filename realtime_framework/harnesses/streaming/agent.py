@@ -180,7 +180,8 @@ class NativeStreamingAgent(VisionAgentBase):
             fps=float(self.config.fps),
             answer=self._answer,
         )
-        # Until the frame count is a setting of its own (stream-plan 4.12): the encoder's, else
+        # The encoder's streaming setting (ModelConfig.streaming over its defaults); one that
+        # keeps no frame count of its own, as Gemini Live leaves its context to the server, takes
         # the policy's.
         self._retained = self.driver.streaming_settings.get(
             "retained_frames", self._context_policy.visuals.keep
@@ -242,6 +243,12 @@ class NativeStreamingAgent(VisionAgentBase):
             self._finish_inspection(pushed, "push_failed")
             raise
         self.frames.record_sent(record.frame, self.clock.time())
+        # The kernel's records name the frame by its observation id, the session's by its block:
+        # this ties the two (evaluation/reporting.py summarize_streaming).
+        self._trace.capture(
+            TraceEvent.FRAME_SENT,
+            {"frame": record.frame, "observation_id": observation.metadata.get("observation_id")},
+        )
 
     async def _push(self, key: str | None, pushed: _Pushed) -> None:
         with self._lock:
