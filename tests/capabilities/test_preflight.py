@@ -532,13 +532,13 @@ def test_declared_methods_exist():
 
 def test_declared_roles_are_the_encoders_roles():
     """The roles each encoder maps a request intent onto (openai_realtime_session.py ROLES,
-    gemini/live.py _ROLES); Decisions state has none."""
+    gemini/session.py _ROLES); Decisions state has none."""
     from realtime_framework.providers import openai_realtime_session
-    from realtime_framework.providers.gemini import live
+    from realtime_framework.providers.gemini import session as gemini_session
 
     for api, roles in (
         ("openai_realtime", openai_realtime_session.ROLES),
-        ("gemini_live", live._ROLES),
+        ("gemini_live", gemini_session._ROLES),
     ):
         assert set(catalog.adapter_class(api).capabilities.roles) == set(roles), api
     for api in catalog.APIS:
