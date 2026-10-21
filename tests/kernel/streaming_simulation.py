@@ -599,6 +599,36 @@ class Simulation:
             assert (index in proposed) == (
                 data["action"] is not None and data["protocol_failure"] is None
             )
+        # The agent is told of each action as it was recorded, in the order it was settled: the
+        # call and decision it came in, when it arrived, its status, whether it was the last, and
+        # where it landed, in environment ticks.
+        decision_of = {
+            data["generation"]: data["decision"] for data in self.data("InferenceStarted")
+        }
+        told = [outcome for outcome in self.outcomes if outcome.arrived_at is not None]
+        for outcome, entry in zip(told, self.entries("ActionResolved"), strict=True):
+            data = entry.data
+            landed = entry.semantic if data["started_at"] is None else data["started_at"]
+            assert (
+                outcome.decision,
+                outcome.call_id,
+                outcome.arrived_at,
+                outcome.status,
+                outcome.terminal_after_action,
+                outcome.action_clock_position,
+            ) == (
+                decision_of[data["generation"]],
+                data["call_id"],
+                data["arrived_at"],
+                data["status"],
+                data["terminal_after_action"],
+                round(landed * self.config.env_fps, 9),
+            )
+        # A hold's keys are released its duration after it was pressed.
+        for data in self.data("KeyReleaseScheduled"):
+            action = outcomes[data["index"]]
+            duration = float(action["action"].parameters.get("duration", 1.0))
+            assert data["at"] == action["started_at"] + duration
         # Actions that Execute ran did so in arrival order, one after another; a superseded one
         # names the later action that took its place.
         executed = sorted(
