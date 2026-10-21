@@ -64,11 +64,12 @@ def test_the_runner_refuses_streaming(runner_cells):
     assert runner_cells[GAME]["error"] == f"ValueError: {UNSUPPORTED}"
 
 
-def run_main(tmp_path, monkeypatch, *argv, agents=None, clock_mode="wall") -> dict:
+def run_main(tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="wall") -> dict:
     """runner.main() in this interpreter with the export probe's stand-ins for the container, the
     guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
-    decision loop that fails at once, so the run ends invalid. Each agent built is appended to
-    ``agents``; ``clock_mode`` None leaves --clock out. Returns the run summary."""
+    decision loop that fails at once, so the run ends invalid. The interaction mode each agent is
+    built for is appended to ``agents``, and the one the loop is run in to ``loops``;
+    ``clock_mode`` None leaves --clock out. Returns the run summary."""
     import sys
 
     import realtime_tasks.registry as tasks
@@ -83,9 +84,10 @@ def run_main(tmp_path, monkeypatch, *argv, agents=None, clock_mode="wall") -> di
     monkeypatch.setattr(apptainer, "build_image", lambda name: None)  # main() with --report-root
     monkeypatch.setattr(reporting, "finalize_video", lambda run_dir: None)
     agents = [] if agents is None else agents
+    loops = [] if loops is None else loops
 
     def create_agent(config, **kwargs):
-        agents.append(config)
+        agents.append(kwargs["interaction_mode"])
         return probe._Agent(config)
 
     class NoSleeps(SystemClock):
@@ -103,6 +105,7 @@ def run_main(tmp_path, monkeypatch, *argv, agents=None, clock_mode="wall") -> di
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
 
     def run_stream(adapter, env, **loop):
+        loops.append(loop["interaction_mode"])
         raise RuntimeError("decision loop failed")
 
     monkeypatch.setattr(runner, "run_stream", run_stream)
@@ -147,6 +150,63 @@ def test_the_runner_refuses_streaming_on_its_default_clock(streaming_gemini, tmp
     )
     assert summary["error"].strip().endswith("ValueError: Streaming requires a wall clock")
     assert (summary["clock_mode"], agents) == ("token", [])
+
+
+@pytest.mark.parametrize("interaction_mode", ["turn_based", "streaming"])
+def test_the_runner_builds_the_agent_and_runs_the_loop_of_its_mode(
+    streaming_gemini, tmp_path, monkeypatch, interaction_mode
+):
+    """runner.set_up_agent builds the agent of the run's mode (harnesses/registry.py
+    create_agent) and main() runs the loop in it (runner.py run_stream)."""
+    agents, loops = [], []
+    run_main(
+        tmp_path, monkeypatch, "--interaction-mode", interaction_mode, agents=agents, loops=loops
+    )
+    assert (agents, loops) == ([interaction_mode], [interaction_mode])
+
+
+@pytest.mark.parametrize(
+    "interaction_mode, agent_class",
+    [("turn_based", "DefaultHarness"), ("streaming", "NativeStreamingAgent")],
+)
+def test_each_mode_has_its_agent(interaction_mode, agent_class):
+    """The agent's own interaction mode is the run's: the native-streaming agent's session
+    driver is built for streaming."""
+    from realtime_framework.harnesses.registry import create_agent
+
+    config = catalog.to_model_config(GEMINI, fps=1.0, reasoning_effort="fixed").model_copy(
+        update={"api_key": "test-key"}
+    )
+    agent = create_agent(config, interaction_mode=interaction_mode)
+    assert (type(agent).__name__, agent.interaction_mode) == (agent_class, interaction_mode)
+    if interaction_mode == "streaming":
+        assert agent.driver.streaming is True
+
+
+def test_a_streaming_episode_runs_on_the_streaming_shell(monkeypatch):
+    """runner.run_stream hands a streaming episode its horizon, frame rates, frozen-stream timing
+    and clock to the streaming shell, whose config refuses any clock but the wall clock; the
+    episode has no turns."""
+    from realtime_framework.evaluation import runner
+    from realtime_framework.evaluation.kernel.streaming import StreamingConfig
+
+    episodes = []
+    monkeypatch.setattr(
+        runner, "run_streaming_episode", lambda agent, env, config, **kwargs: episodes.append(config)
+    )
+
+    def streaming(clock_mode):
+        return runner.run_stream(
+            "agent", "env", clock_mode=clock_mode, duration_s=300.0, env_fps=2.0, input_fps=1.0,
+            log=print, clocks=object(), interaction_mode="streaming",
+        )
+
+    assert streaming("wall") == []
+    assert episodes == [
+        StreamingConfig(300.0, 2.0, 1.0, timing=runner.RUNNER_TIMING, clock_mode="wall")
+    ]
+    with pytest.raises(ValueError, match="native streaming runs on the wall clock, not 'token'"):
+        streaming("token")
 
 
 def test_a_streaming_run_keeps_the_hash_it_expected(streaming_gemini, tmp_path, monkeypatch):

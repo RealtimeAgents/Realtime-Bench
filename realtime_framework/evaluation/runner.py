@@ -2,15 +2,18 @@ from __future__ import annotations
 
 # Loop
 """The decision loop main() runs: run_stream drives one episode on the event kernel's shell
-(evaluation/shell.py) with the run's frame rates, horizon and timing. The turn loop it replaced is
-kept only for the side-by-side runs (tests/differential/legacy_loop.py)."""
+(evaluation/shell.py) with the run's frame rates, horizon and timing, or a native-streaming
+episode on the streaming shell (evaluation/streaming_shell.py). The turn loop it replaced is kept
+only for the side-by-side runs (tests/differential/legacy_loop.py)."""
 import traceback as traceback
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.clock import episode_clocks
 from realtime_framework.evaluation.config import DEFAULT_MODE
+from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.shell import run_episode
+from realtime_framework.evaluation.streaming_shell import run_streaming_episode
 
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
@@ -34,13 +37,32 @@ def run_stream(
     agent_trace=None,
     clocks=None,
     inputs_log=None,
+    interaction_mode="turn_based",
 ):
     """Run one episode on the event kernel's shell (shell.run_episode) and return its timeline.
     The horizon in world seconds and the two frame rates are main()'s own values: the kernel's
     frame arithmetic takes the rates, which tick lengths would give back only to within an ulp.
     ``agent_trace`` is the agent's AgentTraceSink on ``trace``, whose records the kernel numbers
     during the episode. ``clocks`` are the episode's (realtime_framework/clock.py), real ones when
-    omitted. ``inputs_log`` is where the shell records what the kernel was given, to replay it."""
+    omitted. ``inputs_log`` is where the shell records what the kernel was given, to replay it.
+
+    A streaming episode (``interaction_mode`` streaming, on the native-streaming agent) runs on
+    the streaming shell instead, which takes neither the token clock nor deliberation caps, writes
+    the agent's records as they come rather than through the kernel, and keeps no inputs log. It
+    has no turns, so its timeline is empty; its run summary's streaming section stands in."""
+    if interaction_mode == "streaming":
+        streaming = StreamingConfig(
+            duration_s, env_fps, input_fps, timing=RUNNER_TIMING, clock_mode=clock_mode
+        )
+        run_streaming_episode(
+            adapter,
+            env,
+            streaming,
+            clocks=clocks or episode_clocks(clock_mode, env_fps),
+            log=log,
+            trace=trace,
+        )
+        return []
     config = TurnConfig(
         clock_mode,
         duration_s,
@@ -639,6 +661,7 @@ def main():
                 agent_trace=agent_trace,
                 clocks=clocks,
                 inputs_log=run_dir / "kernel_inputs.jsonl",
+                interaction_mode=a.interaction_mode,
             )
             error = getattr(env, "_loop_error", None)
         finally:
@@ -1184,7 +1207,13 @@ def set_up_agent(
     )
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack", clock=clock)
-    agent = setup.agent = create_agent(cfg, log_dir=run_dir, trace=setup.agent_trace, clock=clock)
+    agent = setup.agent = create_agent(
+        cfg,
+        log_dir=run_dir,
+        trace=setup.agent_trace,
+        clock=clock,
+        interaction_mode=interaction_mode,
+    )
     configure_agent(
         agent,
         fps=cfg.fps,

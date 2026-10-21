@@ -343,7 +343,7 @@ def _probe_runner(request: dict) -> dict:
     tasks.get = lambda task_id: _Task(registered(task_id))
     state = {}
 
-    def create_agent(config, log_dir=None, *, trace=None, clock=None):
+    def create_agent(config, log_dir=None, *, trace=None, clock=None, interaction_mode=None):
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
         # (harnesses/default/harness.py:1003).
