@@ -851,6 +851,7 @@ def _retry_usage_status(usages):
     return "partial" if any(u is not None for u in usages) else "unavailable"
 from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollector
 from realtime_framework.harnesses.default.context import RealtimeRuntime
+from realtime_framework.harnesses.default.context import RequestExceedsContext
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
@@ -1580,6 +1581,7 @@ class DefaultHarness(VisionAgentBase):
         failure_detail = ""
         failure_reason = ""
         final_error = None
+        failure_category = "provider"
 
         def send(attempt):
             nonlocal collector
@@ -1605,7 +1607,7 @@ class DefaultHarness(VisionAgentBase):
             )
 
         def record(attempt, exc, failure, delay):
-            nonlocal failure_detail, failure_reason, final_error
+            nonlocal failure_detail, failure_reason, final_error, failure_category
             received = received_output(exc)
             if delay is not None:
                 retry_reasons.append(f"{failure.kind}: {exc!r}"[:300])
@@ -1626,6 +1628,8 @@ class DefaultHarness(VisionAgentBase):
             # whatever the cause.
             final_error = exc
             failure_reason = "provider_stream_interrupted" if received else failure.invalid_reason
+            if isinstance(exc, RequestExceedsContext):  # nothing was sent to the provider
+                failure_reason, failure_category = exc.invalid_reason, "harness"
             failure_detail = repr(exc)[:500]
             if retry_reasons:
                 failure_detail = (
@@ -1720,7 +1724,7 @@ class DefaultHarness(VisionAgentBase):
                 "decision_wall_latency_s": latency,
                 "usage": collector.usage,
                 "output_chunks": collector.chunks,
-                "invalid_category": "provider",
+                "invalid_category": failure_category,
                 "invalid_reason": failure_reason,
                 "invalid_detail": failure_detail,
                 "_trajectory_entry": log_entry,
