@@ -296,8 +296,9 @@ def _escaped_termination(
 ) -> Termination:
     """How an episode ended whose kernel, or its shell's reading of the clocks, raised (N11), as
     a shell tells it without the kernel. The run is invalid for the first failure: the kernel's
-    or the environment's when one was latched, run_exception otherwise. It ended at the first end
-    signal: the kernel's when it had one, else the reading the failure came at."""
+    or the environment's when one was latched, run_exception otherwise, ``failure`` being the
+    first traceback the shell latched, the summary's error. It ended at the first end signal:
+    the kernel's when it had one, else the reading the failure came at."""
     ending = kernel.ending
     invalid = kernel.invalid or (
         _invalidated(latched)
@@ -354,14 +355,22 @@ class _Shell:
         env.kernel_counts_reads = True
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
+        # A replay aid, opened and closed apart from the episode, which goes on without it.
+        inputs = None
+        if self._inputs_log is not None:
+            try:
+                inputs = self._inputs = Path(self._inputs_log).open("w", encoding="utf-8")  # noqa: SIM115 - closed below, whatever the episode does
+            except Exception:  # noqa: BLE001 - see above
+                self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         try:
-            if self._inputs_log is None:
-                self._episode()
-            else:
-                with Path(self._inputs_log).open("w", encoding="utf-8") as self._inputs:
-                    self._episode()
+            self._episode()
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             self._wrap_up(traceback.format_exc())
+        if inputs is not None:
+            try:
+                inputs.close()
+            except Exception:  # noqa: BLE001 - see above
+                self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         return self.timeline
 
     def _episode(self) -> None:
@@ -665,8 +674,13 @@ class _Shell:
             held.result = episode_records.generation_error(latency, failure)
             self.log(f"[default] k={held.decision} generation failed, recovering:\n{failure}")
         finally:
-            semantic, ops = self._read()
-            held.returned_at = ops if self.token else semantic
+            # The reading on the bound's clock, taken from the clock itself: the environment is
+            # the shell thread's (ShellEnvironment).
+            held.returned_at = (
+                self.clocks.operational.monotonic() - self._origin
+                if self.token
+                else self.clocks.semantic.time() - self.env.t0
+            )
             self._returned.append(held)
             held.done.set()
             self._wake.set()
@@ -691,6 +705,9 @@ class _Shell:
                 result, held.inference = self._settle(held, held.result)
             except Exception:  # noqa: BLE001 - as an exception that escaped the legacy loop
                 self._raised(traceback.format_exc())
+                # Recorded as far as settling it got: the kernel gives it up for the
+                # run_exception, and nothing is recorded for it again.
+                del self._generations[held.generation]
             else:
                 held.invalid = result.invalid
                 self.post(GenerationFinished(held.generation, result))
@@ -906,6 +923,9 @@ class _Shell:
 
     def _freeze(self) -> None:
         error = self._read_snapshot()
+        # Should the reading after it raise, a wrap-up does not read the snapshot again; only the
+        # token clock's reading can raise, and its world stood still meanwhile.
+        self._frozen_at = self._now[0]
         semantic, ops = self._read()  # when the read returned
         self._frozen_at = semantic
         self.post(SnapshotFrozen(semantic, semantic if ops is None else ops, error))
@@ -953,18 +973,7 @@ class _Shell:
 
     def _terminate(self, termination: Termination) -> None:
         env = self.env
-        ticks_per_s = self.config.env_fps if self.token else 1.0
-        end_s = termination.ended_at / ticks_per_s
-        snapshot_s = termination.snapshot_at / ticks_per_s if self._snapshot_read else None
-        env._termination = {
-            "stop_reason": termination.stop_reason,
-            "end_s": round(end_s, 9),
-            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-        }
-        env._stop_reason = termination.stop_reason
-        env._think_spent = self.policy.spent
-        env._dropped_intermediate_frames = self.policy.dropped_frames
+        # The verdict first: main() reads it whatever else could be written (runner.py main).
         invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
         # The record of a failure the environment latched itself is its own, the detail whole.
         if invalid is not None and (
@@ -972,6 +981,23 @@ class _Shell:
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
             env._invalid_run = _invalid_record(invalid)
+        env._stop_reason = termination.stop_reason
+        ticks_per_s = self.config.env_fps if self.token else 1.0
+        end_s = termination.ended_at / ticks_per_s
+        # A snapshot read whose reading after it failed is one the kernel took as failed.
+        snapshot_s = (
+            termination.snapshot_at / ticks_per_s
+            if self._snapshot_read and termination.snapshot_at is not None
+            else None
+        )
+        env._termination = {
+            "stop_reason": termination.stop_reason,
+            "end_s": round(end_s, 9),
+            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
+            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
+        }
+        env._think_spent = self.policy.spent
+        env._dropped_intermediate_frames = self.policy.dropped_frames
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
@@ -981,6 +1007,8 @@ class _Shell:
         record written. A failure on the way is only logged."""
         self._escaped(failure)
         env = self.env
+        # What the environment latched by now came first; a failure during the wrap-up after.
+        latched = getattr(env, "_invalid_run", None)
         try:
             for generation in list(self._generations):
                 self._abort(generation)
@@ -990,14 +1018,13 @@ class _Shell:
                 # The token clock's world stands still meanwhile; its reading may be what raised.
                 self._frozen_at = semantic if self.token else self._read()[0]
             self._release_inputs()
-            latched = getattr(env, "_invalid_run", None)
             first = self.kernel.invalid is None and latched is None
             termination = _escaped_termination(
                 self.kernel,
                 semantic,
                 semantic if ops is None else ops,
                 self._frozen_at,
-                failure,
+                self._loop_error,  # this one's, unless a failure the kernel never took came first
                 latched,
             )
             self._terminate(termination)
@@ -1114,13 +1141,15 @@ class _Shell:
         """A generation the kernel gave up on. One whose result came back before and was settled
         keeps the call's own records, written now, ahead of the decision's, and what made that
         result unusable still invalidates the run, as the runner's check of every result did
-        (runner.py _apply): the kernel discards the result with its reason. Otherwise one given
-        up on at the per-move cap, the wall deadline or the provider watchdog timed out: it is
-        logged and recorded as the runner records a call it gave up on (runner.py _run_step),
-        with no usage, which leaves the episode's cost incomplete (decision 48). One the task's
-        end or an invalidation gave up on is recorded so too, named for what ended the episode
-        (N10). Only the move over the cap is reported, as skipped (kernel/turns.py on_timer);
-        the others end the episode and their decision goes unreported."""
+        (runner.py _apply): the shell posts that reason, as the kernel discards the result
+        without it. Otherwise one given up on at the per-move cap, the wall deadline or the
+        provider watchdog timed out: it is logged and recorded as the runner records a call it
+        gave up on (runner.py _run_step), with no usage, which leaves the episode's cost
+        incomplete (decision 48). One the task's end or an invalidation gave up on is recorded
+        so too, named for what ended the episode (N10), as a synthesized record the token
+        totals and the model timing leave out (N34). Only the move over the cap is reported, as
+        skipped (kernel/turns.py on_timer); the others end the episode and their decision goes
+        unreported."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
@@ -1141,12 +1170,11 @@ class _Shell:
                 self.post(held.invalid)
             return
         if bound is None:
-            # It ran until the reading the kernel gave it up at.
-            ended = {"environment": "task_end", "invalid": "invalid_run"}[reason]
+            # It ran until the episode ended (decision 32), however late the shell got to it.
+            ended = {"environment": "task_end", "invalid": "invalid_run"}.get(reason, reason)
+            ending = self.kernel.ending
             seconds = (
-                entry.ops - held.started_ops
-                if self.token
-                else entry.semantic - held.started_semantic
+                ending.ops - held.started_ops if self.token else ending.at - held.started_semantic
             )
             r = episode_records.abandoned_result(round(seconds, 2), ended)
         elif bound == "provider_watchdog":
@@ -1161,7 +1189,8 @@ class _Shell:
             capped = bound == "per_move_cap"
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         if bound is not None:
-            # The log names the bound as the runner does (runner.py _move_timeout).
+            # The cap and the watchdog as the runner names them (runner.py _move_timeout); the
+            # deadline from the call's start, where the runner gave the time left plus a grace.
             self.log(
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
                 "— discarded"

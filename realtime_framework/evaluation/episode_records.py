@@ -309,12 +309,15 @@ def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:
         )
         or 0
     )
-    # A decision that was invalidated before generation (e.g. inspection_protocol_error)
-    # never recomputed the adapter's per-decision caps, so they still describe the previous
-    # decision; auditing them against this decision's allowance would raise spuriously.
+    # A decision that was invalidated before generation (e.g. inspection_protocol_error), or a
+    # call given up on, which has no output, may never have recomputed the adapter's
+    # per-decision caps, so they can still describe the previous decision; auditing them
+    # against this decision's allowance would raise spuriously.
     if (
         budget.provider_output_tokens is not None
         and r.get("invalid_reason") is None
+        and r.get("harness_timeout_reason") is None
+        and r.get("harness_abort_reason") is None
         and handoff_cap + action_cap > budget.provider_output_tokens
     ):
         raise RuntimeError(
@@ -556,6 +559,8 @@ def inference_completed(r: dict, decision: int, observation_id: str | None) -> d
         "timed_out": bool(r.get("timed_out")),
         "error": bool(r.get("error")),
         "invalid_reason": r.get("invalid_reason"),
+        # Only the synthesized record of a call given up on at the episode's end has it (N34).
+        **({"harness_abort_reason": reason} if (reason := r.get("harness_abort_reason")) else {}),
     }
 
 
