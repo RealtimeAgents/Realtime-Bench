@@ -85,7 +85,7 @@ def wait_delivered(sock) -> None:
     lock the reader needs next (websockets/sync/connection.py:833, 1024). This one never blocks:
     busy until the peer's kernel holds every byte written to ``sock``, or the peer has closed the
     connection, or the socket has."""
-    while sock.fileno() >= 0 and fake_clock._unacknowledged(sock.fileno()) > 0:
+    while _in_flight(sock):
         try:
             if not sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT):
                 return
@@ -94,6 +94,12 @@ def wait_delivered(sock) -> None:
         except OSError:
             return
         time.sleep(0.0001)
+
+
+def _in_flight(sock) -> bool:
+    # The fake clock's own measure of the bytes in flight, private to tests/fake_clock.py: a wait
+    # for delivery has to agree with what the clock waits for.
+    return sock.fileno() >= 0 and fake_clock._unacknowledged(sock.fileno()) > 0
 
 
 class CassetteServer:
@@ -165,6 +171,7 @@ class _Connection:
         self.number: int | None = None
         self.closing = False  # the server sent its close
         self.dropped = False  # the server ended it, which then reads as ended
+        self._took = False  # sending took in bytes the next _read has not followed yet
 
     def drop(self) -> None:
         self.dropped = True
@@ -214,7 +221,7 @@ class _Connection:
                 return self._fail()
             self._send()
             timeout = None if due is None else max(0.0, due - server._now())
-            if not server._clock.wait_readable(self.sock, timeout):
+            if not self._took and not server._clock.wait_readable(self.sock, timeout):
                 continue  # the next timed record is due
             # What is due goes before what the client did, its close included.
             with server._lock:
@@ -273,7 +280,11 @@ class _Connection:
             self._send()
 
     def _read(self) -> bool:
-        """Feed what the socket holds next to the protocol; False at the end of the stream."""
+        """Feed what the socket holds next to the protocol, unless sending took some in already;
+        False at the end of the stream."""
+        if self._took:
+            self._took = False
+            return True
         self.server._clock.wait_readable(self.sock)
         data = self.sock.recv(RECV_BYTES)
         if data:
@@ -286,7 +297,7 @@ class _Connection:
         ended = False
         for data in self.protocol.data_to_send():
             if data:
-                self.sock.sendall(data)
+                self._write(data)
             else:
                 # Ended already by the server's exit; websockets does the same
                 # (sync/connection.py:1031-1034).
@@ -295,10 +306,45 @@ class _Connection:
                 except OSError:
                     pass
                 ended = True
-        # Nothing the server sent may be in flight while it waits on the clock again.
-        wait_delivered(self.sock)
         if ended:
             self._await_client_end()
+
+    def _write(self, data: bytes) -> None:
+        """Write ``data`` and stay busy until the client's kernel holds every byte written: none
+        may be in flight while the server waits on the clock again. What the client sends
+        meanwhile is taken in, and followed by the next ``_read``. A client sending a big message
+        reads nothing until that send is done (websockets holds the protocol lock its reader
+        needs), so a server that only wrote would wait for that client forever. Done when the
+        client has ended the stream, or the connection is dropped."""
+        view = memoryview(data)
+        self.sock.setblocking(False)  # macOS blocks a send on a full buffer despite MSG_DONTWAIT
+        try:
+            while not self.dropped and (view or _in_flight(self.sock)):
+                if view:
+                    try:
+                        view = view[self.sock.send(view) :]
+                    except BlockingIOError:
+                        pass
+                if not self._take():
+                    return
+                time.sleep(0.0001)
+        finally:
+            self.sock.setblocking(True)
+
+    def _take(self) -> bool:
+        """Feed the protocol what the socket holds; False once the client has ended the stream,
+        whose end is left to ``_read``. The socket is non-blocking meanwhile."""
+        while True:
+            try:
+                data = self.sock.recv(RECV_BYTES)
+            except BlockingIOError:
+                return True
+            except ConnectionResetError:
+                return False
+            if not data:
+                return False
+            self.protocol.receive_data(data)
+            self._took = True
 
     def _await_client_end(self) -> None:
         """The server ended its side after the closing handshake; the client ends its own as soon
