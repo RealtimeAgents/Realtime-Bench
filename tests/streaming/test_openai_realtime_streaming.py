@@ -151,6 +151,28 @@ def test_a_failed_read_ends_the_streaming_reader_and_raises_in_every_waiter():
     assert all(raised is failure for raised in _within(scenario()))
 
 
+def test_an_event_the_core_fails_on_ends_the_streaming_reader_and_raises_in_every_waiter():
+    """The session core failing on an event (here a second error about one push) ends the reader
+    as a failed read does: every waiter raises the core's error instead of waiting for good."""
+
+    async def scenario():
+        connection, core = _FakeConnection(), new_core()
+        (pushed,) = sent(core, core.push(streaming_view(stream("F"))))
+        session = _Session(1, connection, core)
+        session.read_continuously(Ticks())
+        reply = core.start_reply()
+        waiter = asyncio.create_task(session.receive_until(lambda: reply.events))
+        for event in (error(pushed.event_id), error(pushed.event_id)):
+            connection.queue.put(event)
+        (raised,) = await asyncio.gather(waiter, return_exceptions=True)
+        return session, raised
+
+    session, raised = _within(scenario(), timeout=5.0)
+    assert isinstance(raised, KeyError)
+    assert session.failure is raised
+    assert session._reader.done()
+
+
 class _ClosingManager:
     """Stands in for the SDK's connection manager: leaving it closes the connection, which ends
     the read in flight with a clean close."""
