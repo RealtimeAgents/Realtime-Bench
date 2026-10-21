@@ -14,7 +14,7 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
-from realtime_framework.evaluation.kernel.streaming import CallsCancelled
+from realtime_framework.evaluation.kernel.streaming import CallsCancelled, PushHeld, PushResumed
 from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
 from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
@@ -1118,3 +1118,30 @@ def test_closing_ends_a_push_waiting_to_try_reopening_the_session_again(monkeypa
     assert clock.monotonic() - started < 0.5
     assert clock.wait(pushed, 1.0)
     assert "error" in pushing
+
+
+def test_a_push_held_for_a_renewal_tells_the_kernel_when_it_waits_and_when_it_goes_on(
+    monkeypatch, clock
+):
+    """The held push is waiting, not stuck (review-final-streaming 中-2): PushHeld goes to the
+    kernel as it starts waiting, PushResumed once the reply it waits for is off the session,
+    before the frame goes in."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((GoAway(0.5),), ends_at=2.0))
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    pushed, _ = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    assert clock.wait(replied, 2.0)
+    clock.sleep(0.5)
+    agent.accept(7)
+    assert clock.wait(pushed, 1.0)
+    holds = [
+        (type(event).__name__, event.observation_id, at)
+        for event, at in posted
+        if isinstance(event, (PushHeld, PushResumed))
+    ]
+    assert holds == [("PushHeld", "obs-3", 2.0), ("PushResumed", "obs-3", 3.5)]
+    agent.close()
