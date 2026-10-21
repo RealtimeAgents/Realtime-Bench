@@ -25,6 +25,7 @@ from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
     GenerationBoundary,
+    ProviderHistoryState,
 )
 from realtime_framework.entity.model import (
     ConnectRequest,
@@ -247,8 +248,30 @@ def test_a_go_away_and_a_handle_with_no_reply_in_flight_renew_by_resuming_the_la
 
     reason, result = asyncio.run(run())
     assert reason == "go_away"
-    assert result.disposition == SyncDisposition.EXACT
+    assert (result.disposition, result.detail) == (
+        SyncDisposition.EXACT,
+        "resumed Gemini Live session at its latest resumable handle: go_away",
+    )
+    assert result.provider_metadata["session_resumed"]
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
+
+
+def test_an_interrupt_closes_the_connection():
+    """Under NO_INTERRUPTION an activity start cuts no reply off: interrupting a streaming reply
+    closes its connection, which cancels the turn, and sends nothing, also for a model whose
+    turn-based transport is realtime input."""
+    rig = Rig("replay-gemini-live")
+
+    async def run():
+        await rig.connect()
+        generation = await rig.start("turn-0")
+        result = await rig.driver.interrupt(generation)
+        return result, rig.driver._session
+
+    result, session = asyncio.run(run())
+    assert result.history_state == ProviderHistoryState.CONTAMINATED
+    assert result.provider_metadata == {"interrupt_method": "connection_close"}
+    assert session is None and rig.socket.sent == []
 
 
 def test_a_reply_s_messages_reach_its_events_as_they_arrive():

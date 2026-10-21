@@ -1265,9 +1265,10 @@ class GeminiLiveDriver(SessionLifecycle):
     async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
         if self._session is None or self._activity_open:
             return InterruptResult(ProviderHistoryState.UNKNOWN)
-        if self.options["input_transport"] == "client_content":
-            # This transport does not opt into manual audio activity detection. Closing the
-            # connection cancels the incomplete turn without injecting an invalid ActivityStart.
+        if self.streaming or self.options["input_transport"] == "client_content":
+            # client_content does not opt into manual audio activity detection, and streaming's
+            # NO_INTERRUPTION lets an ActivityStart cut nothing off. Closing the connection
+            # cancels the incomplete turn without injecting an ActivityStart.
             await self._close_current()
             return InterruptResult(
                 ProviderHistoryState.CONTAMINATED,
@@ -1302,10 +1303,18 @@ class GeminiLiveDriver(SessionLifecycle):
                             resume_handle=handle,
                         )
                     )
+                    # Streaming resumes at the latest resumable handle, not at a clean boundary
+                    # (SessionCore.resume_handle_for); the session takes the next reply all the
+                    # same, and what the server keeps of its context is not known anyway.
+                    resumed = (
+                        "resumed Gemini Live session at its latest resumable handle"
+                        if self.streaming
+                        else "resumed clean Gemini Live session"
+                    )
                     return HistorySyncResult(
                         SyncDisposition.EXACT,
                         ProviderHistoryState.EXACT,
-                        detail=f"resumed clean Gemini Live session: {request.reason}",
+                        detail=f"{resumed}: {request.reason}",
                         provider_metadata={
                             **self._connect_metadata,
                             "session_resumed": True,
