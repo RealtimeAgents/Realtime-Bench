@@ -8,16 +8,18 @@ Clock readings. On the wall clock ``semantic`` is ``clocks.semantic.time() - env
 since the episode origin, and ``ops`` is None: the two clocks are one. On the token clock, and
 paused, ``semantic`` is ``env.tick_index()``, environment ticks, and ``ops`` is operational seconds
 since the kernel started; it must be passed, or the kernel would time its watchdogs in ticks
-(kernel/core.py ``_read``). ``Execute.release_at`` and, on the wall clock, ``FrameCaptured.timestamp``
-are semantic seconds since the episode origin.
+(kernel/core.py ``_read``). ``Execute.release_at`` and, on the wall clock,
+``FrameCaptured.timestamp`` are semantic seconds since the episode origin.
 
-Episode-trace names. A kernel record whose kind is a TraceEvent is written under that name, its
-payload completed with the fields the runner writes today; the echo of FrameCaptured is written as
-ObservationCaptured, and that of GenerationFinished as OutputChunkReceived and InferenceCompleted.
-Every other record (TimerSet, EpisodeEnded, Termination, the other echoes of events the kernel
-handled, SnapshotFrozen among them) is written as ``KernelRecord`` with payload ``{"kind", "data"}``,
-so the one SnapshotFrozen in the trace is the snapshot main() writes, where reporting ends the
-active interval. Every record carries ``kernel_seq``, ``semantic`` and ``ops`` at the top level.
+Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
+ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, their
+payload completed with the fields the runner writes today. Of the echoes of the events it handled,
+FrameCaptured is written as ObservationCaptured, GenerationFinished as OutputChunkReceived and
+InferenceCompleted, and an agent's AgentRecord under its own kind with the data its trace sink gave.
+Every other record (TimerSet, EpisodeEnded, Termination and the other echoes, SnapshotFrozen's too)
+is written as ``KernelRecord`` with payload ``{"kind", "data"}``, so the one SnapshotFrozen in the
+trace is the snapshot main() writes, where reporting ends the active interval. Every record carries
+``kernel_seq``, ``semantic`` and ``ops`` at the top level.
 
 Failed state reads. The run is invalid once three state reads in a row have failed; a read that
 answers starts the count over. The kernel keeps the count (kernel/turns.py READ_FAILURE_LIMIT),
@@ -41,11 +43,14 @@ from realtime_framework.evaluation.kernel.events import Outcome
 
 class ShellEnvironment(Protocol):
     """The environment adapter as the shell runs the kernel's commands on it, all on the shell's
-    thread. An operation that fails raises. The environment may latch the run invalid itself
-    (``_invalid_run``) with a more precise reason, such as ``clock_advance_failed`` from a tap; the
-    shell posts that as Invalidated before the command's answer."""
+    thread. An operation that fails raises, except ``execute()``: it returns ``"failed"`` and
+    leaves the error in ``_last_exec_error``, whether the guest refused the action in
+    ``_last_rejected_by_guest`` and the execution record in ``_last_execution_result``, which the
+    shell reads as the runner does (runner.py:576-585, 626). The environment may also latch the run
+    invalid itself (``_invalid_run``) with a more precise reason, such as ``clock_advance_failed``
+    from a tap; the shell posts that as Invalidated before the command's answer."""
 
-    t0: float  # the episode origin, on the semantic clock
+    t0: float  # wall clock: the episode origin, which semantic readings count from
     d: float  # seconds per environment tick
     task: Any  # the task runtime; the shell reads its evaluation_snapshot() at the freeze
     # Token clock: the key identities, as the environment names them, that the last execute()
@@ -108,7 +113,8 @@ class KernelAgent(Protocol):
         self, generation: int, decision: int, observation: Observation, budget: DecisionBudget
     ) -> PendingDecision:
         """StartGeneration: one generation on ``observation``. It writes no history: the result is
-        held until the kernel accepts or discards it."""
+        held until the kernel accepts or discards it. StreamingAgent's default runs the legacy
+        turn, which writes it at once (entity/harness.py)."""
 
     def accept(self, generation: int) -> None:
         """AcceptResult: write the held result into the history, the action record and the
