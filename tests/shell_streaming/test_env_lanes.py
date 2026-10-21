@@ -7,6 +7,7 @@ answer reached the kernel's inbox.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 
 import pytest
@@ -361,3 +362,34 @@ def test_an_invalid_run_latched_before_the_lanes_began_is_not_theirs_to_post():
         inbox.wait_for(1)
     lanes.close()
     assert [type(event) for _, event in inbox.events] == [FrameCaptured]
+
+
+def test_an_invalid_run_the_release_timer_claims_reaches_the_kernel_before_the_actions_answer():
+    """L5: the timer claims the record the action latched and posts it; the action's check after
+    it finds the record claimed. Its answer must not overtake the timer's post: here the post
+    waits until the answer comes, or half a real second, and the answer must come second."""
+    clock = FakeClock()
+    env, events, claimed, answered = FakeEnv(clock), [], threading.Event(), threading.Event()
+
+    def post(event):
+        if isinstance(event, Invalidated):
+            claimed.set()
+            answered.wait(0.5)
+        else:
+            answered.set()
+        events.append(event)
+
+    lanes = EnvLanes(env, post, clock)
+
+    def execute(action, *, release_at=None):
+        env._invalid_run = INVALID
+        threading.Thread(target=lambda: lanes.gate.latched(INVALID), daemon=True).start()
+        assert claimed.wait(2.0)
+        return "applied"
+
+    env.execute = execute
+    with clock.participant():
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        clock.sleep(1.0)
+    lanes.close()
+    assert [type(event) for event in events] == [Invalidated, ActionExecuted]

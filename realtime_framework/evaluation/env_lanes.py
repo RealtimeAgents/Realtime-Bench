@@ -132,12 +132,15 @@ class EnvGate:
                 self._grant()
 
     def latched(self, record: dict) -> None:
-        """Post the invalid-run record the environment latched itself, unless it was posted."""
+        """Post the invalid-run record the environment latched itself, unless it was posted.
+        Posted under the mutex: an operation that finds the record claimed must not post its
+        answer before the claim's post. The kernel's inbox takes no gate lock, so no lock is
+        taken the other way round."""
         with self._mutex:
             if record is self._posted:
                 return
             self._posted = record
-        self._post(Invalidated(record["category"], record["reason"], record.get("detail")))
+            self._post(Invalidated(record["category"], record["reason"], record.get("detail")))
 
     def _grant(self) -> None:
         """Give the gate to the waiters that may have it now, in line order (caller holds the
