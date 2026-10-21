@@ -734,7 +734,7 @@ def effective_run_config(
         # Every context-policy item and its version, as this model API applies them.
         "context_policy": context_policy.to_record(),
         # entity.model.TRANSPORT_RETRY, identical for every model API.
-        "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v1",
+        "transport_retry_policy": "harness_shared_3_retries_1_3_8s_jitter25_retry_after_30s_v2",
         "frame_max_dimension": int(os.environ.get("FRAME_MAX_DIM", str(DEFAULT_FRAME_MAX_DIM))),
         "container_runtime": runtime_identity(),
         "model_config": model_config,
