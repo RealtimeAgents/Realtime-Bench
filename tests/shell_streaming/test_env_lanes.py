@@ -14,7 +14,7 @@ import pytest
 
 from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.model import RetryCancelled
-from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
+from realtime_framework.evaluation.env_lanes import EnvGate, EnvLanes, Executed, Lane
 from realtime_framework.evaluation.kernel.events import (
     ActionExecuted,
     CheckEnd,
@@ -303,6 +303,98 @@ def test_an_operation_that_raises_a_base_exception_is_answered_too():
         inbox.wait_for(2)
     lanes.close()
     assert event.decision == 0 and "RetryCancelled: abandoned" in event.error
+
+
+@pytest.mark.parametrize("operation", ["capture", "check_end"])
+def test_a_capture_or_an_end_check_that_raises_a_base_exception_is_answered_too(operation):
+    clock, env, inbox, lanes = _lanes()
+
+    def cancelled():
+        raise RetryCancelled("abandoned")
+
+    setattr(env, operation, cancelled)
+    with clock.participant():
+        if operation == "capture":
+            lanes.capture(_frame)
+        else:
+            lanes.check_end(CheckEnd(1))
+        (event,) = [event for _, event in inbox.wait_for(1)]
+    lanes.close()
+    assert "RetryCancelled: abandoned" in event.error
+
+
+class _RunsOutAsTheGateComes:
+    """A clock whose next bounded wait for a turn runs out at the moment the gate comes to it:
+    ``let_go`` ends the operation holding the gate meanwhile."""
+
+    def __init__(self):
+        self.let_go = None
+
+    def event(self):
+        return threading.Event()
+
+    def wait(self, event, timeout):
+        if self.let_go is None:
+            return event.wait(timeout)
+        let_go, self.let_go = self.let_go, None
+        let_go()
+        return False
+
+
+def test_a_turn_the_gate_comes_to_as_its_wait_runs_out_is_taken():
+    """The wait ran out, but the gate came to the turn first: the turn is its own then, and its
+    operation runs and hands the gate on, which would otherwise be held for good."""
+    clock = _RunsOutAsTheGateComes()
+    gate = EnvGate(FakeEnv(FakeClock()), lambda event: None, clock)
+    holding, done = threading.Event(), threading.Event()
+    holder = threading.Thread(target=gate.call, args=(lambda: (holding.set(), done.wait(5.0)),))
+    holder.start()
+    assert holding.wait(5.0)
+    clock.let_go = lambda: (done.set(), holder.join(5.0))
+    assert gate.call(lambda: "snapshot", wait=1.0) == "snapshot"
+    assert gate.call(lambda: "next", wait=1.0) == "next"
+
+
+def test_an_action_waits_behind_an_end_check_that_waits():
+    """Only a capture goes past what waits to hold the gate alone, and only while an action holds
+    it: the action asked after the end check, which waits for the capture, goes after the check."""
+    clock, env, inbox, lanes = _lanes()
+    with clock.participant():
+        lanes.capture(_frame)
+        clock.sleep(0.0625)
+        lanes.check_end(CheckEnd(1))
+        clock.sleep(0.0625)
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        inbox.wait_for(3)
+    lanes.close()
+    assert env.intervals == [
+        ("capture", 0.0, 0.25),
+        ("check_end", 0.25, 0.75),
+        ("execute", 0.75, 2.75),
+    ]
+
+
+def test_the_snapshot_goes_right_after_an_action_still_waiting_for_the_gate():
+    """4.8: the action waits for the end check, and so does the capture asked after it; the snapshot
+    takes the place right after the action, so it goes before that capture. Once the action holds
+    the gate, the capture goes past the snapshot, which waits for the action anyway."""
+    clock, env, inbox, lanes = _lanes()
+    with clock.participant():
+        lanes.check_end(CheckEnd(1))
+        clock.sleep(0.125)
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        clock.sleep(0.125)
+        lanes.capture(_frame)
+        turn, _ = lanes.freeze_turn()
+        lanes.gate.call(env.task.evaluation_snapshot, turn=turn)
+        inbox.wait_for(3)
+    lanes.close()
+    assert env.intervals == [
+        ("check_end", 0.0, 0.5),
+        ("capture", 0.5, 0.75),
+        ("execute", 0.5, 2.5),
+        ("snapshot", 2.5, 3.0),
+    ]
 
 
 def test_a_lane_is_free_by_the_time_its_answer_is_posted():

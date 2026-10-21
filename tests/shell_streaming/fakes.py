@@ -89,7 +89,7 @@ class FakeEnv:
 
     def execute(self, action, *, release_at=None) -> str:
         self._operate("execute")
-        self._last_coordinate_trace = {"x": action.parameters["x"]}
+        self._last_coordinate_trace = {"x": action.parameters.get("x")}
         self._last_execution_result = {"executed": action.action_type.value}
         return "applied"
 
