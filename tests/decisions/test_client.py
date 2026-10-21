@@ -94,31 +94,48 @@ def _serve(status, body, headers=(), content_type="application/json"):
     return lambda index, received: Answer(status, data, content_type, headers)
 
 
-def _decide(api, answer, *, question=QUESTION):
-    """Ask one question; return the reply or the exception, and the stub."""
+class _Endpoint:
+    """The file's stub; each question sets what it answers."""
+
+    server: HttpStub
+    answer = None
+
+
+@pytest.fixture(scope="module")
+def endpoint():
+    """One stub for the file: stopping one waits out its half-second poll."""
+    endpoint = _Endpoint()
+    with HttpStub(lambda index, received: endpoint.answer(index, received)) as server:
+        endpoint.server = server
+        yield endpoint
+
+
+def _decide(endpoint, api, answer, *, question=QUESTION):
+    """Ask one question; return the reply or the exception, and the requests it sent."""
     client_type, model, upstream = APIS[api]
     state = LUNA_STATE if api == "luna" else JEV_STATE
-    with HttpStub(answer) as stub:
-        client = client_type(
-            ModelConfig(
-                adapter_type="openai_decisions" if api == "luna" else "jev_decisions",
-                model_name=model,
-                api_key=KEY,
-                api_base_url=stub.origin + "/api/alpha",
-                upstream_provider=upstream,
-            )
+    endpoint.answer = answer
+    first = len(endpoint.server.requests)
+    client = client_type(
+        ModelConfig(
+            adapter_type="openai_decisions" if api == "luna" else "jev_decisions",
+            model_name=model,
+            api_key=KEY,
+            api_base_url=endpoint.server.origin + "/api/alpha",
+            upstream_provider=upstream,
         )
-        client.bind_trace(_Trace())
+    )
+    client.bind_trace(_Trace())
 
-        async def run():
-            try:
-                return await client.decide(state, question)
-            except Exception as exc:  # noqa: BLE001 - the failure under test
-                return exc
-            finally:
-                await client.close()
+    async def run():
+        try:
+            return await client.decide(state, question)
+        except Exception as exc:  # noqa: BLE001 - the failure under test
+            return exc
+        finally:
+            await client.close()
 
-        return asyncio.run(run()), stub
+    return asyncio.run(run()), endpoint.server.requests[first:]
 
 
 # ---- The request -------------------------------------------------------------------------------
@@ -143,14 +160,14 @@ JEV_BODY = (
 
 
 @pytest.mark.parametrize("api, body", [("luna", LUNA_BODY), ("jev", JEV_BODY)], ids=list(APIS))
-def test_one_post_with_these_bytes(api, body):
+def test_one_post_with_these_bytes(endpoint, api, body):
     """Compact JSON, UTF-8 as is, keys in the order built, and Luna's route block last."""
-    reply, stub = _decide(api, _serve(200, _reply(api)))
+    reply, requests = _decide(endpoint, api, _serve(200, _reply(api)))
     assert reply.answer["choice"] == "a"
-    (received,) = stub.requests
+    (received,) = requests
     assert received.method == "POST" and received.path == "/api/alpha/decisions"
     assert received.body == body
-    port = stub.origin.rpartition(":")[2]
+    port = endpoint.server.origin.rpartition(":")[2]
     assert received.headers == [
         ("Host", f"127.0.0.1:{port}"),
         ("Accept", "*/*"),
@@ -173,10 +190,10 @@ def test_one_post_with_these_bytes(api, body):
     ],
     ids=["not_choice", "no_options", "options_not_a_mapping", "256_options"],
 )
-def test_a_question_the_api_cannot_take_is_not_sent(question):
-    error, stub = _decide("luna", _serve(200, _reply()), question=question)
+def test_a_question_the_api_cannot_take_is_not_sent(endpoint, question):
+    error, requests = _decide(endpoint, "luna", _serve(200, _reply()), question=question)
     assert type(error) is ValueError
-    assert stub.requests == []
+    assert requests == []
 
 
 # ---- The reply ---------------------------------------------------------------------------------
@@ -205,24 +222,24 @@ def test_a_question_the_api_cannot_take_is_not_sent(question):
         "more_answer_fields",
     ],
 )
-def test_a_valid_reply_comes_back_as_received(reply):
-    result, _ = _decide("luna", _serve(200, reply))
+def test_a_valid_reply_comes_back_as_received(endpoint, reply):
+    result, _ = _decide(endpoint, "luna", _serve(200, reply))
     assert result.response == reply
     assert result.answer == reply["answers"]["next_action"]
     assert result.usage == reply["usage"]
 
 
-def test_a_reply_is_parsed_as_json_loads_parses_it():
+def test_a_reply_is_parsed_as_json_loads_parses_it(endpoint):
     """A UTF-8 byte order mark is skipped (json.loads detects the encoding of bytes)."""
     reply = _reply()
-    result, _ = _decide("luna", _serve(200, b"\xef\xbb\xbf" + json.dumps(reply).encode()))
+    result, _ = _decide(endpoint, "luna", _serve(200, b"\xef\xbb\xbf" + json.dumps(reply).encode()))
     assert result.response == reply
 
 
-def test_jev_reply_names_its_upstream():
-    result, _ = _decide("jev", _serve(200, _reply("jev")))
+def test_jev_reply_names_its_upstream(endpoint):
+    result, _ = _decide(endpoint, "jev", _serve(200, _reply("jev")))
     assert result.answer["choice"] == "a"
-    error, _ = _decide("jev", _serve(200, _reply("jev", provider="openai")))
+    error, _ = _decide(endpoint, "jev", _serve(200, _reply("jev", provider="openai")))
     assert type(error) is ValueError
 
 
@@ -269,15 +286,15 @@ INVALID = {
 
 
 @pytest.mark.parametrize("reply", list(INVALID.values()), ids=list(INVALID))
-def test_an_invalid_reply_fails_the_question(reply):
+def test_an_invalid_reply_fails_the_question(endpoint, reply):
     """Rejected before the selection flow reads it; a retry would not change it."""
-    error, _ = _decide("luna", _serve(200, reply))
+    error, _ = _decide(endpoint, "luna", _serve(200, reply))
     assert isinstance(error, ValueError)
     assert OpenAIDecisionsClient.classify_question_error(error) == TransportFailure(FATAL)
 
 
-def test_a_body_that_is_not_json_fails_the_question():
-    error, _ = _decide("luna", _serve(200, b"<html>", content_type="text/html"))
+def test_a_body_that_is_not_json_fails_the_question(endpoint):
+    error, _ = _decide(endpoint, "luna", _serve(200, b"<html>", content_type="text/html"))
     assert isinstance(error, ValueError)
     assert OpenAIDecisionsClient.classify_question_error(error) == TransportFailure(FATAL)
 
@@ -336,11 +353,11 @@ ERRORS = {
 
 
 @pytest.mark.parametrize("served, expected", list(ERRORS.values()), ids=list(ERRORS))
-def test_an_error_status_is_classified(served, expected):
+def test_an_error_status_is_classified(endpoint, served, expected):
     """The replay baselines hold these messages (jev_transport_retries detail, invalid_detail)."""
     error_type, message, failure = expected
     status = served[0]
-    error, _ = _decide("luna", _serve(*served))
+    error, _ = _decide(endpoint, "luna", _serve(*served))
     if error_type is ChoiceContextLimitError:
         assert type(error) is ChoiceContextLimitError
         assert str(error) == message
@@ -352,7 +369,7 @@ def test_an_error_status_is_classified(served, expected):
     assert OpenAIDecisionsClient.classify_question_error(error) == failure
 
 
-def test_a_dropped_connection_is_transient():
-    error, _ = _decide("luna", lambda index, received: DROP)
+def test_a_dropped_connection_is_transient(endpoint):
+    error, _ = _decide(endpoint, "luna", lambda index, received: DROP)
     assert isinstance(error, httpx.TransportError)
     assert OpenAIDecisionsClient.classify_question_error(error) == TransportFailure(TRANSIENT)
