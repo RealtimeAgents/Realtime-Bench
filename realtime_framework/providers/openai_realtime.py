@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio as asyncio
 import base64 as base64
+import errno
 import logging as logging
 import os as os
 import socket
@@ -64,6 +65,14 @@ _CLIENT_ID_MAX_LENGTH = 32
 # What the trace links to an item create as its answers; the first is its acknowledgement. The
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
+# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
+_NETWORK_ERRNOS = {
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.ENETDOWN,
+    errno.EHOSTDOWN,
+    errno.ENETRESET,
+}
 
 
 def classify_realtime_message(direction: str, message: dict):
@@ -131,12 +140,21 @@ class _Session:
         """Read every event as it arrives until the connection ends, and hand each to the core
         with the time ``clock`` reads then (native streaming)."""
         self._clock, self._read_one = clock, asyncio.Event()
+        # The reader runs in the context of the call that starts it: the trace records every
+        # message it reads in that call's scope.
         self._reader = asyncio.create_task(self._read_all())
 
     async def _read_all(self) -> None:
-        while self.closed is None and self.failure is None:
-            await self._receive()
+        try:
+            while self.closed is None and self.failure is None:
+                await self._receive()
+                self._read_one.set()
+        except asyncio.CancelledError:
+            # Only a close that may have left the connection open cancels the reader: the
+            # session is over all the same for whoever waits on it.
+            self.failure = ConnectionError("OpenAI Realtime session closed")
             self._read_one.set()
+            raise
 
     async def stop_reading(self, *, closed: bool) -> None:
         """Once the connection is closed, wait for the reader to end; a connection that may
@@ -248,10 +266,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         only when it has received no output or usage for the failed turn, so rebuilding from
         canonical history cannot duplicate a completed action.
 
-        A connect attempt fails below HTTP with a ConnectionError (refused or reset), a failed
-        name lookup (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends
-        before the upgrade response, with websockets' InvalidMessage caused by EOFError; these
-        are transient. Another OSError is local (a permission, a missing file) and fatal.
+        A connect attempt fails below HTTP with a ConnectionError (refused or reset), an OSError
+        naming a network or host that is down or unreachable, a failed name lookup
+        (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends before the
+        upgrade response, with websockets' InvalidMessage caused by EOFError; these are
+        transient. Another OSError is local (a permission, a missing file, an address the host
+        lacks) and fatal.
         """
         transient = (
             ConnectionClosed,
@@ -267,7 +287,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             # A reconnect inside the turn already spent the shared retry budget.
             if isinstance(current, TransportFailureError):
                 return current.failure
-            if isinstance(current, transient):
+            if isinstance(current, transient) or (
+                isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS
+            ):
                 return TransportFailure(TRANSIENT)
             # A refused WebSocket upgrade (websockets InvalidStatus) carries its HTTP response.
             status = getattr(current, "status_code", None) or getattr(
@@ -446,7 +468,14 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         # The history is None when the runtime opens the episode's first session.
         if self.interaction_mode == "streaming":
             session.read_continuously(self.clock)
-            await self._send_all(session.core.replay_streaming(request.history))
+            replay = session.core.replay_streaming(request.history)
+            await self._send_all(replay)
+            # A fold anchors a frame on the item its confirmation says the server put it after:
+            # the session takes pushes once the replay's are settled.
+            pushed = [op for op in replay if op.event_id is not None]
+            await session.receive_until(lambda: all(map(session.core.settled, pushed)))
+            if not all(map(session.core.settled, pushed)):
+                raise session.closed
         else:
             await self._send_all(session.core.replay(request.history))
 
@@ -504,11 +533,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def push_frame(self, observation: ProviderObservation, history) -> None:
-        """Native streaming: push the frame the streaming history view ends with, after the
-        feedback it holds that the session lacks, and fold the frames the view folds
-        (decision 23). Returns once the server confirmed the frame; raises when the server
-        refused it, which loses that frame alone. A fold the server fails leaves the session
-        dirty, for the next ensure_ready to rebuild it from the view."""
+        """Native streaming: push the frame the streaming history view ends with, which the
+        session lacks, after the feedback the view holds that the session lacks too, and fold
+        the frames the view folds (decision 23). Returns once the server confirmed the frame;
+        raises when the server refused it, which loses that frame alone, or the connection
+        closed first. A fold the server fails leaves the session dirty, for the next
+        ensure_ready to rebuild it from the view."""
         session = self._connected_session()
         core = session.core
         pushes = core.push(history)
