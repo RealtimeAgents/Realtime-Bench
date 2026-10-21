@@ -15,7 +15,9 @@ Scripts:
 - the driver defaults, reached by a model id without a preset (evaluation/runner.py:1555-1562):
   realtime_input observations and native_tools history (live.py:55-67);
 - a resume that the server rejects, which falls back to replaying the history
-  (live.py:1252-1284).
+  (live.py:1252-1284);
+- the 3.1 Flash Live preset (live.py:203-212) on the driver-default script: blocking calls,
+  acknowledged without scheduling, and a goAway that replays the history.
 """
 
 from __future__ import annotations
@@ -40,7 +42,13 @@ from .build import Episode, build_episode
 from .frames import ReplayTask
 from .scenario import CLICK_AGREE, CLICK_NAME, LONG_SCENARIO, TASK_INSTRUCTION
 from .steps import Step
-from .ws_gemini_live import AWAIT_ACK, REALTIME_INPUT_ORDER, LiveStub, WireNormalizer
+from .ws_gemini_live import (
+    AWAIT_ACK,
+    REALTIME_INPUT_ORDER,
+    TRANSCRIPT_HEADER,
+    LiveStub,
+    WireNormalizer,
+)
 
 BASELINES = Path(__file__).parent / "baselines"
 API_KEY = "replay-dummy-key"
@@ -162,6 +170,9 @@ EXTENDED_THINKING = Preset(
     interaction_idle,
 )
 DRIVER_DEFAULT = Preset("driver-default", "replay-gemini-live", "native_tools", {}, turn_complete)
+# 3.1 Flash Live calls functions synchronously only and has no function scheduling
+# (live.py:203-212; providers/preflight.py _check_live_model_contract).
+FLASH_LIVE = Preset("flash-live", "gemini-live", "tool_transcript", {}, turn_complete)
 
 
 def turn_script(
@@ -544,6 +555,69 @@ def test_driver_default_short(live_env, tmp_path):
         "connection_close",
         "session_release",
         "video_ingestion",
+        "connection_close",
+    ]
+
+
+def test_flash_live_short(live_env, tmp_path):
+    """The 3.1 Flash Live preset (live.py:203-212) on the driver-default script. Every setup
+    declares the functions BLOCKING (live.py:413-424), and each acknowledgement is the queued
+    response alone, without scheduling or will_continue (gemini/session.py:213-219;
+    live.py:950-971). The goAway of decision 1 comes without a resumption handle, so the session
+    is replayed at once (gemini/session.py:366-371; live.py:1109-1120), and its tool transcript
+    holds each receipt as it was sent (live.py:972-981; harnesses/default/request.py:95-124)."""
+    preset = FLASH_LIVE
+    config = catalog_config(preset.model)
+    turns = [
+        turn_script(k, step, preset, resumable=k != 1, go_away=k == 1)
+        for k, step in enumerate(DEFAULT_SCENARIO)
+    ]
+    name = "flash-live-short"
+    records, results, stub = run_episode(
+        name, config, preset.model, DEFAULT_SCENARIO, turns, preset, live_env, tmp_path
+    )
+    steps = records[2:-1]
+    with matches_baseline(name, records, tmp_path / "run"):
+        check_session(stub, results)
+        setups = [setup for record in records[1:-1] for setup in client_messages(record, "setup")]
+        assert ["historyConfig" in setup for setup in setups] == [False, True]
+        for setup in setups:
+            (tool,) = setup["tools"]
+            assert {item["behavior"] for item in tool["functionDeclarations"]} == {"BLOCKING"}
+        acknowledged = [
+            message["functionResponses"]
+            for record in steps
+            for message in client_messages(record, "tool_response")
+        ]
+        assert [[response["id"] for response in responses] for responses in acknowledged] == [
+            ["call-0-0"],
+            ["call-1-0", "call-1-1"],
+            ["call-2-0"],
+        ]
+        for responses in acknowledged:
+            assert all(sorted(response) == ["id", "name", "response"] for response in responses)
+        sync = results[1]["realtime_runtime"]["history_sync"]
+        assert (sync["disposition"], sync["detail"]) == ("rebuilt", "go_away")
+        assert sync["session_connect_mode"] == "canonical_history_replay"
+        # The seed after the turn replays decisions 0 and 1, each call as model text.
+        texts = [
+            content["parts"][0]["text"]
+            for content in seed_contents(steps[1])
+            if content["role"] == "model"
+        ]
+        assert all(text.startswith(TRANSCRIPT_HEADER) for text in texts)
+        receipts = [
+            exchange["function_responses"]
+            for text in texts
+            for exchange in json.loads(text[len(TRANSCRIPT_HEADER) :])
+        ]
+        assert receipts == acknowledged[:2]
+    # The reads after the goAway wait for its deadline; the replay closes the connection and
+    # waits out the session release.
+    assert session_waits(tmp_path / "run") == [
+        "go_away_deadline",
+        "connection_close",
+        "session_release",
         "connection_close",
     ]
 
