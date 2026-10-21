@@ -43,7 +43,8 @@ def effective_detailed_history_policy() -> tuple[int, int]:
 
     At ``window + 1`` turns, the oldest ``drop_block_size`` complete detailed turns are archived
     together. With the maintained defaults, verbatim text/action context therefore cycles between
-    41 and 50 turns while older executed actions remain available through the compact ledger.
+    41 and 50 turns while older executed actions remain available through the compact ledger,
+    unless a request that does not fit leaves the earliest of them out.
     """
     window = int(
         os.environ.get(
