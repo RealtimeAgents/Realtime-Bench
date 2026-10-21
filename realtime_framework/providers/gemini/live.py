@@ -548,7 +548,7 @@ class GeminiLiveDriver(SessionLifecycle):
         if deadline is None:
             return await operation
         remaining = max(0.0, deadline - self.clock.monotonic())
-        self._record_wait("go_away_deadline", remaining)
+        self._record_wait("go_away_deadline", remaining, until=deadline)
         try:
             return await self.clock.wait_for(operation, remaining)
         except asyncio.TimeoutError:
