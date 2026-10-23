@@ -7,7 +7,7 @@ pushed (feedback placed in front of a frame goes into the frame's item), each af
 server put it after, a reply's items being the server's. From a history view it plans the item
 creates and deletes that bring the server there, and it records what became of each one, which
 the driver writes to the event log: unknown while it is written, sent once the write returned,
-acknowledged once the server confirmed it, refused if the server answered it with an error
+confirmed once the server acknowledged it, refused if the server answered it with an error
 naming its client event. Each server event the driver reads is handed to ``receive``, in the
 order the connection delivered it, which passes it to the state it belongs to: an acknowledgement
 or error settles the in-place edit waiting for it, an error about a block native streaming pushed
@@ -74,13 +74,13 @@ Operation = Create | Delete
 class Delivery(str, Enum):
     """What is known about one planned operation, in the Gemini Live core's terms
     (providers/gemini/session.py): unknown from the start of its write until the write returns,
-    sent after that, acknowledged once the server confirmed it. A write that fails leaves it
+    sent after that, confirmed once the server acknowledged it. A write that fails leaves it
     unknown: the server may or may not have it. A native-streaming push or an in-place edit's
     operation the server answered with an error naming its client event is refused: the server
     did not make it."""
 
     SENT = "sent"
-    ACKNOWLEDGED = "acknowledged"
+    CONFIRMED = "confirmed"
     UNKNOWN = "unknown"
     REFUSED = "refused"
 
@@ -557,7 +557,7 @@ class RealtimeSessionCore:
 
     def settled(self, operation: Operation | Push) -> bool:
         """Whether the server acknowledged an operation or a push's create, or refused it."""
-        return self.delivery.get(operation.key) in (Delivery.ACKNOWLEDGED, Delivery.REFUSED)
+        return self.delivery.get(operation.key) in (Delivery.CONFIRMED, Delivery.REFUSED)
 
     @property
     def edit_answered(self) -> bool:
@@ -691,7 +691,7 @@ class RealtimeSessionCore:
             if about_edit:
                 # The server did not make the operation the error names.
                 (refused,) = (op for op in edit.operations if op.event_id == event_id)
-                if self.delivery.get(refused.key) is not Delivery.ACKNOWLEDGED:
+                if self.delivery.get(refused.key) is not Delivery.CONFIRMED:
                     self.delivery[refused.key] = Delivery.REFUSED
                     self._on_delivery("refused", [(refused.key, refused.block)])
             taken = False
@@ -755,8 +755,8 @@ class RealtimeSessionCore:
         self._unconfirmed.discard(key)
         if key not in self.delivery:
             return False
-        if self.delivery[key] is not Delivery.ACKNOWLEDGED:
-            self.delivery[key] = Delivery.ACKNOWLEDGED
+        if self.delivery[key] is not Delivery.CONFIRMED:
+            self.delivery[key] = Delivery.CONFIRMED
             self._on_delivery("confirmed", [(key, self._blocks[key])])
         return True
 
