@@ -48,6 +48,7 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import RequestRetry
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.entity.model import classify_http_failure
@@ -68,11 +69,15 @@ _CLIENT_ID_MAX_LENGTH = 32
 # What the trace links to an item create as its answers; the first is its acknowledgement. The
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
-# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
 # How long a connection's close may take before the socket is dropped under it. A close stuck on
 # a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
 # fails both. Normal closes finish well within it, so it adds no observable wait.
 _CONNECTION_CLOSE_TIMEOUT_S = 10.0
+# How long an interrupt's cancel may wait to be written. It waits behind a write in progress, and
+# a streaming push stuck in one holds the connection's writes until the abort's close after the
+# interrupt drops the socket; the close needs no cancel to end the response.
+_INTERRUPT_TIMEOUT_S = 1.0
+# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
 _NETWORK_ERRNOS = {
     errno.ENETUNREACH,
     errno.EHOSTUNREACH,
@@ -149,10 +154,12 @@ class _Session:
 
     def read_continuously(self, clock, on_lost=lambda: None) -> None:
         """Read every event as it arrives until the connection ends, and hand each to the core
-        with the time ``clock`` reads then (native streaming). ``on_lost`` is called once if the
-        connection ends on its own, by a failed read or a close from the server, so the driver
-        can mark the session for rebuild; a close the driver started cancels the reader instead
-        and does not call it."""
+        with the time ``clock`` reads then (native streaming). ``on_lost`` is called once the
+        connection ended and the reader with it: by a failed read or a close from the server,
+        so the driver can mark the session for rebuild, or by a close of the driver's own that
+        went through, after which the driver opens the session anew or leaves it closed
+        anyway. A close that may have left the connection open cancels the reader instead,
+        which does not call it."""
         self._clock, self._read_one, self._on_lost = clock, asyncio.Event(), on_lost
         # The reader reads for the connection, whatever reply is in progress, not for the call
         # that opened it: in an empty context the trace records what it reads in no scope.
@@ -174,8 +181,9 @@ class _Session:
         except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
             self.failure = exc
             self._read_one.set()
-        # The connection ended on its own: a failed read, a core failure, or a close the server
-        # sent. The driver started none of these, so the session is left to be rebuilt.
+        # The connection ended: a failed read, a core failure, or a close from either side. The
+        # session is left to be rebuilt; after a close of the driver's own, the driver reopens
+        # it or leaves it closed anyway.
         self._on_lost()
 
     async def stop_reading(self, *, closed: bool) -> None:
@@ -189,7 +197,12 @@ class _Session:
 
     async def receive_until(self, ready) -> None:
         """Receive until ``ready()`` holds or the connection closes normally. A failed read
-        raises in every waiter, once it has taken what was received before."""
+        raises in every waiter, once it has taken what was received before.
+
+        It has no time bound: a waiter for an answer the server never sends, a confirmation or
+        a response event, waits until its operation is given up and the abort closes the
+        connection, by the harness's per-move cap or wall-clock deadline, by a streaming
+        watchdog of the kernel's, or else by the run's own timeout."""
         while not ready():
             if self.failure is not None:
                 raise self.failure
@@ -279,6 +292,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         self._cm = None
         self._conn = None
         self._send_lock = threading.Lock()
+        # Each close moves the epoch on. A handshake runs on a thread no cancellation stops: it
+        # keeps the connection it opened only if no close came since it began (open_session),
+        # and the lock keeps that check from interleaving with a close taking the connection.
+        self._epoch = 0
+        self._epoch_lock = threading.Lock()
         # The open connection's conversation and its receiver.
         self._session: _Session | None = None
 
@@ -418,9 +436,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise session.closed
 
     async def _close_current(self) -> None:
-        cm, self._cm = self._cm, None
+        with self._epoch_lock:
+            self._epoch += 1
+            cm, self._cm = self._cm, None
+            self._conn = None
         session, self._session = self._session, None
-        self._conn = None
         closed = True
         if cm is not None:
             try:
@@ -441,13 +461,20 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def _connect(self, request: ConnectRequest) -> None:
         await self._close_current()
 
-        def open_session():
+        def open_session(epoch):
             cm = self.client.realtime.connect(
                 model=request.seed.model_name,
                 websocket_connection_options={"create_connection": self._ws_connection},
             )
             conn = cm.__enter__()
-            self._cm, self._conn = cm, conn
+            with self._epoch_lock:
+                kept = self._epoch == epoch
+                if kept:
+                    self._cm, self._conn = cm, conn
+            if not kept:
+                # A close came during the handshake and found nothing to close.
+                cm.__exit__(None, None, None)
+                return
             conn.session.update(
                 session={
                     "type": "realtime",
@@ -458,9 +485,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             )
 
         async def send(attempt):
+            if attempt > 1:
+                self._backing_off(False)
             try:
                 with trace_scope(connect_attempt=attempt):
-                    await asyncio.to_thread(open_session)
+                    await asyncio.to_thread(open_session, self._epoch)
             except Exception:
                 await self._close_current()
                 raise
@@ -477,6 +506,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             if not retry_cancel_event().is_set():
                 with trace_scope(connect_attempt=attempt):
                     self._record_wait("connect_backoff", delay)
+                self._backing_off(True)
 
         # The session the connect resumes: the newest retained frame, or none at all.
         items = () if request.history is None else request.history.items
@@ -490,6 +520,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             clock=self.clock,
         )
         await retry.run_async(send)
+        if retry_cancel_event().is_set():
+            # Abandoned while the connection opened: nothing of the generation goes out on it,
+            # and the abort closes only what was open when it came.
+            await self._close_current()
+            raise RetryCancelled("generation abandoned while its session opened")
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
         # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``
@@ -573,12 +608,14 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def push_frame(self, observation: ProviderObservation, history) -> PushReceipt:
         """Native streaming: push the newest frame of the streaming history view, after the
         feedback the view holds that the session lacks, and fold the frames the view folds
-        (decision 23). A frame the session already holds, as a rebuild replayed it or
-        request_reply pushed it, is not pushed again. Returns once the server confirmed the
-        frame, with when it was written and when its confirmation came (decision N43); raises
-        when the server refused it, which loses that frame alone, or the connection closed
-        first. A fold the server fails leaves the session dirty, for the next ensure_ready to
-        rebuild it from the view.
+        (decision 23); as every push, it writes only what the session lacks. Returns once the
+        server confirmed the frame, with when it was written and when its confirmation came
+        (decision N43); raises when the server refused it, which loses that frame alone, or the
+        connection closed first. A fold the server fails leaves the session dirty, for the next
+        ensure_ready to rebuild it from the view. The folds go out before the server answered
+        the frame: one it refuses leaves the session with a frame folded that the agent's view,
+        without the refused frame, keeps whole, until the next push folds it there too or a
+        rebuild replays the view.
 
         It plans and writes holding the session as a connection operation does
         (SessionLifecycle), so its writes go to the session it planned them on once a connect
@@ -622,8 +659,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Native streaming: ask for a reply on the session as it is, after pushing what the
         streaming history view ``request.canonical`` holds that the session lacks: the feedback
-        accepted since the newest frame, and that frame when push_frame has not pushed it yet,
-        which then only waits for its confirmation. Its events come as a turn's do. A connection
+        accepted since the newest frame, which is in the agent's view only once push_frame put
+        it in. Its events come as a turn's do. A connection
         carries one reply at a time: asked for before the one in progress ended, it raises and
         writes nothing. It holds the session as push_frame's writes do, so the reply goes to the
         session it pushed to."""
@@ -782,7 +819,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs["event_id"] = cancel_event_id
         core_generation.cancel_event_id = cancel_event_id
         try:
-            await asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs)
+            await self.clock.wait_for(
+                asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs),
+                _INTERRUPT_TIMEOUT_S,
+            )
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
         except Exception as exc:  # noqa: BLE001 - provider control boundary
             return InterruptResult(

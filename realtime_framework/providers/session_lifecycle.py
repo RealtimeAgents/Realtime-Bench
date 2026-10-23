@@ -11,6 +11,8 @@ stateless driver the same way, so the runtime drives every driver alike.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 from collections.abc import Callable
 
 from realtime_framework.entity.events import ProviderHistoryState
@@ -30,6 +32,24 @@ from realtime_framework.entity.request import CanonicalRequest
 
 # How long close() waits for an abort's cleanup before it cancels it and closes all the same.
 _CLEANUP_WAIT_S = 10.0
+
+_CONNECT_BACKOFF: contextvars.ContextVar[Callable[[bool], None]] = contextvars.ContextVar(
+    "connect_backoff", default=lambda waiting: None
+)
+
+
+@contextlib.contextmanager
+def connect_backoff(observe: Callable[[bool], None]):
+    """Have the encoder's own retry of a connect, in the operations run in this context, tell
+    ``observe(True)`` as it starts waiting out the backoff before its next attempt, and
+    ``observe(False)`` as that attempt starts: a native-streaming push readying the session is
+    held for the kernel meanwhile (decision N48). Like retry_cancellation, the ContextVar
+    follows the call onto the execution thread."""
+    token = _CONNECT_BACKOFF.set(observe)
+    try:
+        yield
+    finally:
+        _CONNECT_BACKOFF.reset(token)
 
 
 class RenewalRequired(RuntimeError):
@@ -69,7 +89,8 @@ class SessionLifecycle:
     ensure_ready's wait for an abort's cleanup has no time bound and is not recorded.
     The encoder's own waits (_wait) end early once their generation is abandoned. A bound on an
     operation (a goAway deadline, a close) ends with the operation, and an abort's close ends the
-    operation.
+    operation. An encoder that retries a connect itself also tells the context's connect_backoff
+    when each backoff starts and when the attempt after it does (_backing_off).
 
     Whether the session can take the next generation is its state. What became of each content
     the encoder wrote, sent, confirmed or refused by the server, or unknown, its session core
@@ -80,7 +101,11 @@ class SessionLifecycle:
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
     is one, and ``interrupt(generation)``; ``capabilities``, with
     ``connection_renewal_reason()`` where they declare connection_renewal; ``clock``, the
-    operational clock; and ``_trace``, which bind_trace sets.
+    operational clock; and ``_trace``, which bind_trace sets. ``interrupt`` and
+    ``_close_current`` must each end within a bound, whatever a write in progress on the
+    connection does: the close fails a write stuck in it, and the interrupt, which the close
+    follows, does not wait for one. That is what ends an abort's cleanup, which ensure_ready
+    waits for without a bound.
     """
 
     _connected = False
@@ -208,10 +233,21 @@ class SessionLifecycle:
 
     async def abort(self, generation: GenerationHandle | None) -> None:
         """Interrupt ``generation`` (None when none had started), then close the connection, as
-        far as either works. The next ensure_ready waits for this to finish, close for at most
-        _CLEANUP_WAIT_S; a later abort takes its place as the one they wait for."""
-        self._cleanup = asyncio.ensure_future(self._interrupt_and_close(generation))
+        far as either works, once the cleanup of the abort before is done. The next ensure_ready
+        waits for this to finish, close for at most _CLEANUP_WAIT_S; a later abort takes its
+        place as the one they wait for."""
+        self._cleanup = asyncio.ensure_future(self._clean_up(self._cleanup, generation))
         await asyncio.wait({self._cleanup})
+
+    async def _clean_up(
+        self, before: asyncio.Task | None, generation: GenerationHandle | None
+    ) -> None:
+        """An abort's cleanup, once ``before``, the one it takes the place of, is done:
+        ensure_ready waits for the last cleanup alone, and the close of one still running would
+        close the session it opens."""
+        if before is not None:
+            await asyncio.wait({before})
+        await self._interrupt_and_close(generation)
 
     def _session_lock(self) -> asyncio.Lock:
         # Made on first use, on the execution thread's loop, which every operation runs on.
@@ -285,6 +321,12 @@ class SessionLifecycle:
         self._record_wait(wait, seconds)
         if await asyncio.to_thread(self.clock.wait, cancel, seconds):
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
+
+    @staticmethod
+    def _backing_off(waiting: bool) -> None:
+        """The encoder's own retry of a connect starts waiting out a backoff (``waiting``), or
+        starts its next attempt: tell the context's connect_backoff."""
+        _CONNECT_BACKOFF.get()(waiting)
 
     def _record_delivery(self, state: str, contents, connection: str | None) -> None:
         """What became of contents the session core wrote on the trace's ``connection``, which

@@ -309,6 +309,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._cm = None
         self._session = None
         self._opening: asyncio.Task | None = None  # a connect's _open, until it is done
+        self._opening_ws = None  # and its WebSocket, once google-genai returned the session
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._reading: asyncio.Task | None = None  # streaming: the task reading it
         self._reading_context: contextvars.Context | None = None  # and the context it runs in
@@ -316,8 +317,10 @@ class GeminiLiveDriver(SessionLifecycle):
         # read between replies, which the next reply's events() hands over.
         self._replies: dict[str, _StreamedReply] = {}
         self._cancelled_between: list[Orphan] = []
-        self._trace_connection: str | None = None  # the trace's id of the last connection opened
-        self._trace_connections: dict[int, str] = {}  # and of each one, by the core's number
+        # The WebSocket of the last connection opened, which the trace numbered
+        # (providers/capture.py), and of each one the core counted, by the core's number.
+        self._trace_connection = None
+        self._trace_connections: dict[int, Any] = {}
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
@@ -343,9 +346,8 @@ class GeminiLiveDriver(SessionLifecycle):
         """What became of writes the core recorded, on the trace's connection the core numbered
         ``connection``: also an acknowledgement an abandoned reply wrote late on a connection
         closed since. One being set up has no number yet: the connection opened last."""
-        self._record_delivery(
-            state, contents, self._trace_connections.get(connection, self._trace_connection)
-        )
+        socket = self._trace_connections.get(connection, self._trace_connection)
+        self._record_delivery(state, contents, socket.trace_connection_id)
 
     @staticmethod
     def _exception_chain(exc: BaseException):
@@ -546,7 +548,17 @@ class GeminiLiveDriver(SessionLifecycle):
         opening, self._opening = self._opening, None
         if opening is not None:
             opening.cancel()
-            await asyncio.wait({opening})
+            self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
+            try:
+                await self.clock.wait_for(asyncio.wait({opening}), _CONNECTION_CLOSE_TIMEOUT_S)
+            except TimeoutError:
+                # The connect closes its connection as it ends, and that close waits on a seed
+                # write that does not drain, as an open connection's does (below): drop the
+                # connection under both. Before google-genai returned the session, websockets'
+                # own close timeout bounds the close.
+                if self._opening_ws is not None:
+                    self._opening_ws.transport.abort()
+                await asyncio.wait({opening})
         cm, self._cm = self._cm, None
         reading, self._reading = self._reading, None
         session, self._session = self._session, None
@@ -639,12 +651,14 @@ class GeminiLiveDriver(SessionLifecycle):
     async def _open(self, cm, connect: Connect):
         """The session ``cm`` opens, once the server acknowledged its setup and it took
         ``connect``'s seed; one that fails on the way is closed again."""
+        self._opening_ws = None
         try:
             session = await cm.__aenter__()
+            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
+            self._opening_ws = session._ws
             if getattr(session, "setup_complete", None) is None:
                 raise RuntimeError("Gemini Live did not acknowledge session setup")
-            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
-            self._trace_connection = session._ws.trace_connection_id
+            self._trace_connection = session._ws
             # Seed history explicitly before either input transport. Merely leaving
             # turn_complete=False can cause historical model content to be echoed as new
             # output. HistoryConfig makes this a non-generating initialization boundary.
@@ -1175,12 +1189,17 @@ class GeminiLiveDriver(SessionLifecycle):
                 type(orphan.message).__name__,
                 orphan.cancelled,
                 received_at=orphan.at,
-                connection=orphan.connection,
+                connection=self._trace_connections[orphan.connection].trace_connection_number,
             )
         while True:
             received = await take()
             message = received.message
-            numbers = {"connection": received.connection, "generation": received.generation}
+            # The trace's number of the connection, as OpenAI Realtime's events carry; the core
+            # counts only the connections it set up and seeded.
+            numbers = {
+                "connection": self._trace_connections[received.connection].trace_connection_number,
+                "generation": received.generation,
+            }
             raw_type = type(message).__name__
             server = getattr(message, "server_content", None)
             turn = getattr(server, "model_turn", None)

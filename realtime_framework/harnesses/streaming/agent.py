@@ -11,7 +11,8 @@ renew, except a push while a reply is on the session: readying it then would clo
 connection, or rebuild the session without the reply's output. A push the session refuses until
 it is renewed, as Gemini Live's after a goAway, waits for that reply instead, at a gate of its
 own, between a PushHeld and a PushResumed to the kernel; whether it waits is decided on the
-execution thread, where the goAway is read.
+execution thread, where the goAway is read. A push is held the same way while it waits out a
+backoff between attempts to reopen the session, and while it waits for a reply readying it.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and once the
 driver put it into the session records it as sent and confirmed when the driver's receipt says it
@@ -107,7 +108,7 @@ from realtime_framework.harnesses.streaming.history import (
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
-from realtime_framework.providers.session_lifecycle import RenewalRequired
+from realtime_framework.providers.session_lifecycle import RenewalRequired, connect_backoff
 
 if TYPE_CHECKING:
     from realtime_framework.evaluation.kernel.events import Outcome
@@ -116,8 +117,13 @@ logger = logging.getLogger(__name__)
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
-# How long an abort or close waits on the execution thread: longer than the session waits for
-# an abort's cleanup, with time to close after (RealtimeRuntime.close).
+# How long the session may take to open as the episode starts, as a turn's first connect
+# (RealtimeRuntime.start).
+_OPEN_TIMEOUT_S = 60.0
+# How long an abort or close waits on the execution thread: longer than an abort takes, within
+# its interrupt's bound and its close's, and than the session waits for an abort's cleanup, with
+# time for a Gemini Live close after (RealtimeRuntime.close); an OpenAI Realtime close stuck on a
+# write may outlast it, and stopping the execution thread then ends the close.
 _SESSION_TIMEOUT_S = 15.0
 # The boundaries that end a reply, whose provider history state is the session's after it.
 _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
@@ -271,7 +277,10 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             view = self._view()
         with trace_scope(phase="initialize"):
-            self._execution.run(self.driver.connect(ConnectRequest(seed=self._seed, history=view)))
+            self._execution.run(
+                self.driver.connect(ConnectRequest(seed=self._seed, history=view)),
+                timeout=_OPEN_TIMEOUT_S,
+            )
 
     def discard_pending_observations(self):
         """No frame waits in the agent: a frame goes into the session only when pushed."""
@@ -407,8 +416,18 @@ class NativeStreamingAgent(VisionAgentBase):
         reader applies a goAway, and the gate opens once the reply is off (_off), whatever goes
         on the session after it; a goAway read while the push waits for the session, which
         refuses the frame unwritten (RenewalRequired), is taken the same way. The frames
-        captured meanwhile wait in the policy's slot, not counted as failed pushes."""
+        captured meanwhile wait in the policy's slot, not counted as failed pushes.
+
+        A push that waits for the session while a reply readies it, through the retries of a
+        reconnect as well, or asks for itself, waits for that reply, not stuck in the session:
+        the kernel is told it is held until it has the session (decision N48), and the reply's
+        own watchdog bounds the wait."""
+        held = self._readying.locked()
+        if held:
+            self._post(PushHeld(key))
         async with self._readying:
+            if held:
+                self._post(PushResumed(key))
             self._stop_if_closed()
             with self._lock:
                 view = self._view()
@@ -553,12 +572,17 @@ class NativeStreamingAgent(VisionAgentBase):
         so the next opens it again from ``view``.
 
         For the push of observation ``push``, the kernel is told it is held while it waits out
-        a backoff, and resumed as the next attempt starts (decision N48): the backoff is longer
+        a backoff, this retry's or one of the driver's own retry of its connect (OpenAI
+        Realtime's), and resumed as the next attempt starts (decision N48): the backoff is longer
         than the push watchdog, which still times each attempt."""
 
+        def hold(waiting: bool) -> None:
+            if push is not None:
+                self._post(PushHeld(push) if waiting else PushResumed(push))
+
         async def attempt(number: int) -> None:
-            if number > 1 and push is not None:
-                self._post(PushResumed(push))
+            if number > 1:
+                hold(False)
             await self.driver.ensure_ready(self._seed, view, self._record_session)
             if renew:
                 await self.driver.renew(self._seed, view, self._record_session)
@@ -571,17 +595,17 @@ class NativeStreamingAgent(VisionAgentBase):
             )
             if delay is None:
                 raise TransportFailureError(failure, exc, number - 1) from exc
-            if push is not None:
-                self._post(PushHeld(push))
+            hold(True)
 
         frames = [item.block.id for item in view.items if item.block.kind == "frame"]
-        await RequestRetry(
-            f"{frames[-1] if frames else 'empty'}:ready",
-            self.driver.classify_transport_error,
-            record,
-            cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
-            clock=self.clock,
-        ).run_async(attempt)
+        with connect_backoff(hold):
+            await RequestRetry(
+                f"{frames[-1] if frames else 'empty'}:ready",
+                self.driver.classify_transport_error,
+                record,
+                cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
+                clock=self.clock,
+            ).run_async(attempt)
 
     def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
         """One ModelAttemptFinished per readying attempt that failed, for the one that succeeded
