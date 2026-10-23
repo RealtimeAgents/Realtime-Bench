@@ -191,7 +191,7 @@ def _split(events: list[dict]) -> tuple[list[dict], dict]:
 
 def _is_placeholder(item: dict) -> bool:
     """A folded turn's user item carries only the placeholder text
-    (harnesses/default/request.py:155-161; openai_realtime.py OpenAIRealtimeDriver._send)."""
+    (harnesses/default/request.py _frame; openai_realtime.py OpenAIRealtimeDriver._send)."""
     return item["content"] == [{"type": "input_text", "text": FOLDED_VISUAL_PLACEHOLDER}]
 
 
@@ -317,7 +317,8 @@ def test_long_scenario(tmp_path):
         assert archived == (len(ARCHIVED) if k == ARCHIVE else 0)
 
     # The archive puts the ledger first, as a user item at root, one JSON line per archived
-    # action (context.py:35-50; openai_realtime_session.py RealtimeSessionCore._edit_batch).
+    # action (context.py executed_action_ledger; openai_realtime_session.py
+    # RealtimeSessionCore._edit_batch).
     lines = ledger.split("\n")
     assert lines[0] == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == 1 + len(ARCHIVED)
 
