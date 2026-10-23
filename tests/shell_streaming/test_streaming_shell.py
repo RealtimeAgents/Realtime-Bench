@@ -321,6 +321,51 @@ def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
     assert env._invalid_run == invalid
 
 
+class _SlowActionRows:
+    """An episode trace whose ActionExecution rows take ``seconds`` to write, as they do while a
+    checkpoint's sync holds the trace's lock; it keeps each row as (event, payload)."""
+
+    def __init__(self, clock, seconds: float):
+        self.clock, self.seconds = clock, seconds
+        self.rows: list[tuple] = []
+
+    def emit(self, event, payload, **fields):
+        if event == "ActionExecution":
+            self.clock.sleep(self.seconds)
+        self.rows.append((event, payload))
+
+    def checkpoint(self):
+        pass
+
+
+def test_an_action_finished_just_before_the_deadline_is_taken_in_before_it_however_slow_its_row():
+    """The click runs from 1.775 s to 4.995 s and ends the task, and its ActionExecution row
+    takes 10 ms to write. The lane posts the click's answer without waiting for the row, so the
+    read after the click settles it, and the task's end is dated at 4.995 s rather than the
+    deadline's at 5 s; the row still comes before the kernel's record of the answer."""
+    clock = FakeClock()
+    env = FakeEnv(clock, execute_s=3.22)
+    env.ends_at = 4.99
+    agent = FakeAgent(clock, [Reply(10.0, (Call(0.9, CLICK, "c0"),))])
+    trace = _SlowActionRows(clock, 0.01)
+    with clock.participant():
+        termination = run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=5.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+            trace=trace,
+        )
+    assert (termination.stop_reason, termination.ended_at) == ("goal", 4.995)
+    order = [
+        event if event != "KernelRecord" else payload["kind"]
+        for event, payload in trace.rows
+        if event == "ActionExecution" or payload.get("kind") == "ActionExecuted"
+    ]
+    assert order == ["ActionExecution", "ActionExecuted"]
+
+
 def test_a_stuck_reply_is_given_up_and_the_next_one_starts_once_its_abort_returned():
     """A reply that never ends is stuck after the 30 s watchdog (kernel/streaming.py); the shell
     aborts it on the abort lane, and the next reply starts once the abort returned."""
