@@ -967,8 +967,10 @@ def test_streaming_resumes_with_the_latest_resumable_handle():
 
 
 def test_the_latest_handle_is_the_open_connection_s():
-    """Closing a connection keeps its latest handle for the renewal that follows; a reply still
-    read from it once the next connection is up does not change the next one's."""
+    """The core keeps a closed connection's latest handle; the streaming driver drops it as it
+    closes a connection (GeminiLiveDriver._close_current), after a renewal picked the handle it
+    resumes with (_sync_history). A reply still read from the closed connection once the next
+    one is up does not change the next one's."""
     core = session_core(streaming=True)
     connected(core)
     clean_reply(core, "turn-0", "handle-0")
