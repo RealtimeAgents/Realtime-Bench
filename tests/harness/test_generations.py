@@ -260,21 +260,23 @@ def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
 
 
 def test_a_discarded_result_writes_no_history(tmp_path):
-    """Generation 2's result is back before the kernel gives up on it, as when the per-move cap
-    fires as the reply lands: the abort and DiscardResult follow. Nothing of it joins the
-    history; its provider usage is recorded as stale, its tool call as superseded, and its
-    trajectory row, written after the verdict, as discarded."""
+    """Generation 2's result is back and settled before the kernel gives up on it, as when the
+    per-move cap fires as the reply lands (tests/shell/test_timing.py
+    test_a_result_settled_across_the_cap_is_the_moves_only_record): the shell writes each
+    trajectory row as it settles the result, before the kernel's verdict (shell.py
+    _Shell._settle), and DiscardResult follows. Nothing of it joins the history; its provider
+    usage is recorded as stale and its tool call as superseded, while its row, written by then,
+    stays a decision's (U13, tests/differential/rules.py)."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
             accepted = _generate(episode, 1, 0)
-            agent.accept(1)
             agent.finalize_decision_audit(accepted.result)
+            agent.accept(1)
             pending = _generate(episode, 2, 1)
-            agent.abort(2)
-            agent.discard(2)
             agent.finalize_decision_audit(pending.result)
+            agent.discard(2)
             turns, history = agent._runtime.turns, list(agent.action_history)
             usage = agent.token_usage
         finally:
@@ -288,7 +290,7 @@ def test_a_discarded_result_writes_no_history(tmp_path):
     outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
     assert outcomes == ["completed", "superseded_by_timeout"]
     rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
-    assert rows == [(0, "decision"), (1, "decision_discarded")]
+    assert rows == [(0, "decision"), (1, "decision")]
 
 
 def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
@@ -546,27 +548,31 @@ def _tool_outcomes(run_dir) -> list:
 
 
 def test_the_generation_an_episode_ends_on_is_discarded_with_its_records(tmp_path):
-    """The episode ends as generation 2's reply lands: the kernel aborts it, whose worker has
-    returned, and dispatches nothing after Termination (kernel/core.py). The shell then discards
-    every generation that has not ended. Generation 2's provider usage is recorded stale, its
-    tool call superseded and its trajectory row discarded; its tokens stay out of token_usage."""
+    """The episode ends as generation 2's reply lands: its result is back and settled before
+    the deadline, and the kernel gets it only after (tests/shell/test_timing.py
+    test_a_result_settled_across_the_deadline_does_not_land). The shell has written its
+    trajectory row as it settled it (shell.py _Shell._settle); the kernel gives the generation
+    up and discards the result. Generation 2's provider usage is recorded stale and its tool call
+    superseded, its tokens stay out of token_usage, and its row stays a decision's (U13,
+    tests/differential/rules.py)."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
-            _generate(episode, 1, 0)
+            accepted = _generate(episode, 1, 0)
+            agent.finalize_decision_audit(accepted.result)
             agent.accept(1)
             usage = deepcopy(agent.token_usage)
             last = _generate(episode, 2, 1)
-            agent.abort(2)
-            agent.discard(2)
             agent.finalize_decision_audit(last.result)
+            agent.discard(2)
         finally:
             episode.finish()
     assert not last.cancelled and len(stub.requests) == 2
     assert _usage_rows(tmp_path) == [(0, False), (1, True)]
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
-    assert [r["type"] for r in _jsonl(tmp_path / "trajectory.jsonl")] == ["decision_discarded"]
+    rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
+    assert rows == [(0, "decision"), (1, "decision")]
     assert agent.token_usage == usage
 
 
@@ -590,27 +596,30 @@ def test_the_row_of_a_call_the_episodes_end_gave_up_on_names_why(tmp_path):
     assert "harness_abort_reason" not in rows[1]
 
 
-def test_close_discards_the_generation_no_one_settled(tmp_path):
-    """The episode ends as generation 2's reply lands: the kernel aborts it, whose worker has
-    returned, and Termination dispatches nothing more (kernel/core.py), so neither AcceptResult
-    nor DiscardResult comes for it. Closing the agent discards it: its provider usage is recorded
-    stale, its tool call superseded and its trajectory row marked discarded; its tokens stay out
-    of token_usage."""
+def test_close_discards_the_generation_the_kernel_gave_no_verdict(tmp_path):
+    """The episode ends as generation 2's reply lands: the shell settles its result, writing its
+    trajectory row (shell.py _Shell._settle), and the kernel gets it only after Termination,
+    which dispatches nothing more (kernel/core.py), so neither AcceptResult nor DiscardResult
+    comes for it. Closing the agent discards it: its provider usage is recorded stale and its
+    tool call superseded, its tokens stay out of token_usage, and its row stays a decision's
+    (U13, tests/differential/rules.py)."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:2])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
-            _generate(episode, 1, 0)
+            accepted = _generate(episode, 1, 0)
+            agent.finalize_decision_audit(accepted.result)
             agent.accept(1)
             usage = deepcopy(agent.token_usage)
             last = _generate(episode, 2, 1)
-            agent.abort(2)
+            agent.finalize_decision_audit(last.result)
         finally:
             episode.finish()
     assert not last.cancelled and len(stub.requests) == 2
     assert _usage_rows(tmp_path) == [(0, False), (1, True)]
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
-    assert last.result["_trajectory_entry"]["type"] == "decision_discarded"
+    rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
+    assert rows == [(0, "decision"), (1, "decision")]
     assert agent.token_usage == usage and agent._generations == []
 
 
