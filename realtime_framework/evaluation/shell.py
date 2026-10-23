@@ -17,7 +17,8 @@ since the episode origin, and ``ops`` is None: the two clocks are one. On the to
 paused, ``semantic`` is ``env.tick_index()``, environment ticks, and ``ops`` is operational seconds
 since the kernel started; it must be passed, or the kernel would time its watchdogs in ticks
 (kernel/core.py ``_read``). ``Execute.release_at`` and, on the wall clock,
-``FrameCaptured.timestamp`` are semantic seconds since the episode origin.
+``FrameCaptured.timestamp`` are semantic seconds since the episode origin; on the token clock
+``FrameCaptured.timestamp`` is the world's seconds (sandbox/actions.py ``capture``), not ticks.
 
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
 ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, with the

@@ -18,7 +18,7 @@ def token_environment(fps: float) -> tuple[GuestEnvironment, ClockTask]:
 @pytest.mark.parametrize("fps", [1.0, 2.0, 30.0, 60.0])
 def test_tap_holds_the_key_for_one_sixtieth_of_a_second(fps):
     """A tapped key stays down for 1/60 s of world time, one 60 Hz rAF
-    (sandbox/actions.py:510-514), whatever the environment rate. At 2 fps 1/60 tick would be
+    (sandbox/actions.py TAP_HOLD_S), whatever the environment rate. At 2 fps 1/60 tick would be
     1/120 s, which can hold no rendered frame (sandbox/browser/clock.py:428)."""
     env, task = token_environment(fps)
     assert env.execute(Action(ActionType.KEY, {"key": "space"})) == "applied"

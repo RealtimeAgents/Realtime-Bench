@@ -4,8 +4,9 @@ from __future__ import annotations
 """Deadlines for environment operations and the sandbox calls they make.
 
 An environment operation (executing an action, sending one key event under the token clock,
-capturing a frame, reading task state, advancing the token clock) runs synchronously on the loop
-thread, and the scored snapshot waits for it. It takes one absolute deadline when it starts. A CDP
+capturing a frame, reading task state, advancing the token clock) runs synchronously, on the
+shell's thread or under native streaming on an environment lane's (evaluation/env_lanes.py), and
+the scored snapshot waits for it. It takes one absolute deadline when it starts. A CDP
 call made inside it spends what is left on the lock wait, the connect and each receive, and a
 message that is not the awaited reply does not restart the timer; a guest request gets at most
 what is left for its connect and for each read, and a wait for the wall clock's key commands
