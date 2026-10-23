@@ -57,8 +57,9 @@ uv run rtbench run --model gpt-realtime-2 --include-task-name gh_javascript_pong
 ```
 
 The episode's own directory, which the checks read, is
-`temp/<UTC time>/<preset>/<task>/`. The job's copy under `temp/harbor-jobs/.../logs/agent/benchmark/`
-lacks `episode_blobs.pack`, which holds the message bodies.
+`temp/<UTC time>/<preset>/<task>/`. The job's copy under
+`temp/harbor-jobs/<job>/<trial>/agent/benchmark/` lacks `episode_blobs.pack`, which holds the
+message bodies.
 
 Or the runner directly (the same episode, without Harbor's report and verifier):
 
@@ -369,7 +370,9 @@ threshold should sit well above them.
 
 stream-wsrec. In streaming, a capture's DOM and AX probes use a CDP connection of their own to the
 page, so that they do not wait behind an action's. No record names the connection a probe used,
-so check it indirectly, on one streaming and one turn-based run of a web task:
+so check it indirectly, on one streaming and one turn-based run of a web task. The page's debug
+port is the task's `dbg_port`, offset by the lane: `pgrep -af remote-debugging-port` on the host
+shows it in the page's Chrome command line as `--remote-debugging-port=<debug port>`.
 
 1. During the run, `ss -tnp | grep ':<debug port>'` on the host shows two established
    connections to the page's debug port in streaming and one in turn-based (the sandbox runs on
