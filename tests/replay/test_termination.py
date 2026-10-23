@@ -7,6 +7,8 @@ clock step (kernel/turns.py _clock_stepped, shell.py _check_end), so a task whos
 at the horizon reports its reason before run_stream's tick limit, and that reason is the stop
 reason (kernel/core.py Kernel.end, Kernel._finish). The episodes run the openrouter agent in pause
 mode against the real GuestEnvironment on a task clock (token_env.py).
+
+An invalid run is an error, whatever its score says.
 """
 
 from __future__ import annotations
@@ -86,10 +88,32 @@ def test_task_end_at_the_horizon_is_a_timeout(monkeypatch, tmp_path, ends_at, ou
     assert episode_outcome(summary)["outcome"] == outcome
 
 
+def test_task_end_at_the_horizon_is_a_timeout_when_its_seconds_are_inexact():
+    """The horizon is compared with the record's end at the nine decimals the record keeps
+    (reporting._reached_horizon): 60 * 0.13 minutes is 7.800000000000001 in floating point, and a
+    task that ends itself at 7.8 s reached the horizon."""
+    termination = {
+        "stop_reason": HANDOVER,
+        "end_s": 7.8,
+        "snapshot_s": 7.8,
+        "snapshot_delay_s": 0.0,
+    }
+    summary = {
+        "invalid_run": None,
+        "solved": False,
+        "stop_reason": HANDOVER,
+        "termination": termination,
+        "world_time_s": 7.8,
+        "max_minutes": 0.13,
+    }
+    assert episode_outcome(summary)["outcome"] == "timeout"
+
+
 @pytest.mark.parametrize(
     ("stop_reason", "world_time_s", "outcome"),
     [
         ("time_limit", 3.0, "timeout"),
+        ("deadline_expired", 3.0, "timeout"),
         ("deadline_expired", 4.0, "timeout"),
         ("deadline_expired", 2.5, "fail"),
     ],
@@ -105,3 +129,22 @@ def test_a_summary_without_a_termination_record(stop_reason, world_time_s, outco
         "max_minutes": MAX_MINUTES,
     }
     assert episode_outcome(summary)["outcome"] == outcome
+
+
+@pytest.mark.parametrize("solved", [None, True, False])
+def test_an_invalid_run_is_an_error_of_its_own_category_whatever_its_score(solved):
+    """runner.main clears the score of an invalid run; the outcome does not rely on that, and
+    names what invalidated the run."""
+    summary = {
+        "invalid_run": {"category": "provider", "reason": "generation_error", "detail": "boom"},
+        "solved": solved,
+        "stop_reason": "invalid_run",
+        "termination": None,
+        "world_time_s": 3.0,
+        "max_minutes": MAX_MINUTES,
+    }
+    assert episode_outcome(summary) == {
+        "outcome": "error",
+        "error_category": "provider",
+        "error_reason": "generation_error",
+    }

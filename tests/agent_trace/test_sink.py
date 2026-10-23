@@ -184,6 +184,9 @@ def test_close_drops_late_captures_and_precedes_episode_finished(tmp_path):
 
 
 def test_writer_error_invalidates_the_run(tmp_path):
+    """What close_agent_trace returns after a writer error: an invalid run,
+    agent_trace_write_failed, whose detail names the error AgentTraceClosed records; or, for a
+    run that was invalid already, its earlier reason."""
     _, sink = _open(tmp_path)
 
     def fail(data):
@@ -204,6 +207,25 @@ def test_writer_error_invalidates_the_run(tmp_path):
     other._store = fail
     other.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
     assert close_agent_trace(other, earlier) is earlier
+
+
+def test_a_close_record_the_trace_cannot_write_is_an_agent_trace_write_failure(tmp_path):
+    """The writer wrote everything, but the trace refuses AgentTraceClosed itself: what
+    close_agent_trace returns is an invalid run, agent_trace_write_failed, naming that error."""
+    trace, sink = _open(tmp_path)
+    emit = trace.emit
+
+    def refuse_the_close(event, payload=None, **fields):
+        if event == TraceEvent.AGENT_TRACE_CLOSED:
+            raise OSError("disk full")
+        return emit(event, payload, **fields)
+
+    trace.emit = refuse_the_close
+    sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
+    invalid_run = close_agent_trace(sink, None)
+    assert invalid_run["category"] == "harness"
+    assert invalid_run["reason"] == "agent_trace_write_failed"
+    assert "disk full" in invalid_run["detail"]
 
 
 def test_a_long_write_error_keeps_its_exception_line(tmp_path):
@@ -242,3 +264,15 @@ def test_blocked_writer_times_out_and_never_emits_after_the_fence(tmp_path):
     events = _events(tmp_path)
     assert [e["event"] for e in events] == ["AgentTraceClosed", "EpisodeFinished"]
     assert events[0]["payload"]["pending_at_timeout"] == 2
+
+
+def test_a_flush_timeout_keeps_an_earlier_invalid_reason(tmp_path):
+    _, sink = _open(tmp_path)
+    entered, release = _block_writer(sink)
+    sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"a")
+    entered.wait()
+    earlier = {"category": "environment", "reason": "evaluation_snapshot_failed"}
+    invalid_run = close_agent_trace(sink, earlier, timeout=0.2)
+    release.set()
+    sink._writer.join(10)
+    assert invalid_run is earlier

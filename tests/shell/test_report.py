@@ -1,7 +1,9 @@
 """The report over what the kernel's shell leaves (evaluation/reporting.py report): its action
 lifecycle and its token accounting agree, also when the episode gave up on a generation whose
 decision goes unreported (K-a; shell.py _given_up). The token totals still count every
-generation, a synthesized record without usage leaving them incomplete (decision 48)."""
+generation, a synthesized record without usage leaving them incomplete (decision 48). A run whose
+lifecycle and token accounting disagree is not scored, nor is a run summary that contradicts
+itself (reporting.summary_ok)."""
 
 from __future__ import annotations
 
@@ -10,8 +12,15 @@ from pathlib import Path
 
 import pytest
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Action
-from realtime_framework.evaluation.reporting import episode_outcome, report
+from realtime_framework.entity.records import TraceEvent
+from realtime_framework.evaluation.reporting import (
+    EpisodeTrace,
+    episode_outcome,
+    report,
+    summarize_run_metrics,
+)
 from tests.config.test_interaction_mode import WEB, _report_root
 
 from .world import CLICK, Reply, World, run
@@ -249,3 +258,75 @@ def test_a_replayed_run_passes_the_reports_charged_token_check(tmp_path, name):
         horizon_s=60 * header["max_minutes"],
     )
     assert (task["status"], task.get("error")) == ("scored", None)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        # The recorded outcome is not the one its fields give.
+        pytest.param({"outcome": "fail"}, id="outcome"),
+        # An error is recorded, though the run is not marked invalid.
+        pytest.param({"error": "Traceback (most recent call last): ..."}, id="error"),
+        # The evaluation did not resolve the task the summary says is solved.
+        pytest.param(
+            {"verification": {"resolved": False, "evaluation_version": 1}}, id="verification"
+        ),
+    ],
+)
+def test_a_run_summary_that_contradicts_itself_is_not_scored(tmp_path, change):
+    """The scored run summary of a solved task (_report_root), with one field changed."""
+    root = _report_root(tmp_path, "turn_based")
+    path = root / "cell" / WEB / "run_summary.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), **change}))
+    (group,) = report(root)["groups"]
+    (task,) = group["tasks"]
+    assert (task["status"], task["error_reason"], task.get("error")) == (
+        "invalid",
+        "result_validation_failed",
+        "Unscored result or identity mismatch",
+    )
+
+
+def test_a_run_whose_trace_has_no_score_is_not_scored(tmp_path):
+    """The scored run summary of a solved task (_report_root), whose episode trace is intact and
+    ends with EpisodeFinished but has no ScoreProduced (reporting._episode_trace_ok)."""
+    root = _report_root(tmp_path, "turn_based")
+    run_dir = root / "cell" / WEB
+    (run_dir / "episode_trace.jsonl").unlink()
+    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=WEB, clock=SystemClock())
+    trace.emit(TraceEvent.EPISODE_STARTED, {"interaction_mode": "turn_based"})
+    trace.emit(TraceEvent.SNAPSHOT_FROZEN, {})
+    trace.emit(TraceEvent.EPISODE_FINISHED, {})
+    path = run_dir / "run_summary.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "episode_trace": trace.describe()}))
+    trace.close()
+    (group,) = report(root)["groups"]
+    (task,) = group["tasks"]
+    assert (task["status"], task["error_reason"], task.get("error")) == (
+        "invalid",
+        "result_validation_failed",
+        "Unscored result or identity mismatch",
+    )
+
+
+def test_a_decision_of_exactly_one_frame_of_tokens_does_not_cross_a_frame(tmp_path):
+    """On the token clock a decision crosses a frame when it is charged more than the B tokens of
+    one (reporting.summarize_run_metrics): of a decision charged B and one charged B + 1, only the
+    second does."""
+    path = tmp_path / "action_lifecycle.jsonl"
+    records = [
+        {"decision": 0, "clock_output_tokens": 64},
+        {"decision": 1, "clock_output_tokens": 65},
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    metrics = summarize_run_metrics(
+        path,
+        total_decisions=2,
+        solved=False,
+        clock_mode="token",
+        tokens_per_frame=64,
+        fps=1.0,
+        termination=None,
+        horizon_s=300.0,
+    )
+    assert (metrics["cross_frame_decisions"], metrics["cross_frame_rate"]) == (1, 0.5)
