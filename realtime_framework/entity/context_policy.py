@@ -8,11 +8,12 @@ one change (see CONTEXT_POLICY_VERSION), to one item, except version 2, which ch
 LiteLLM's reasoning and verbatim replay (items 6 and 7) together. A change that alters what some
 model is shown bumps the version (in phase 2 once, at its release: see CONTEXT_POLICY_VERSION);
 moving a preset from an API row to the model that needs it alters nothing shown and keeps it.
-The values count in the effective run config and therefore in its hash. Every item is read from
-here: retention, feedback placement, the ledger role, reasoning and verbatim replay, pressure
-archiving, the Decision history form, the tool-call replay format, the prompts (item 11) and the
-observation form (item 12); the encoders take their fixed texts (item 5) from here, and
-ContextPolicy.for_path takes Gemini's tool-call replay format from the model's provider_options.
+The values count in the effective run config and therefore in its hash. Every item but verbatim
+replay (item 7), which is off everywhere and only recorded, is read from here: retention,
+feedback placement, the ledger role, reasoning replay, pressure archiving, the Decision history
+form, the tool-call replay format, the prompts (item 11) and the observation form (item 12); the
+encoders take their fixed texts (item 5) from here, and ContextPolicy.for_path takes Gemini's
+tool-call replay format from the model's provider_options.
 
 An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
 then its own. A preset comes from one of two places. A row's applies to every model of its API:
@@ -23,10 +24,12 @@ resolved policy against what the API declares (providers/preflight.py check_cont
 
 Two values say what the policy allows, not what a run does. Pressure archiving (item 8) is on for
 every API, and it acts only where the encoder estimates its requests and the model config has a
-context window (ModelConfig.context_window_tokens). An encoder without roles (Luna, JEV) is given
-the ledger role (item 4) but places the ledger by position and header. Whether either takes
-effect is not recorded on its own: the driver code decides it, which the harness fingerprint (or
-an external driver's identity) covers, and so does the model config, which the run hash covers.
+context window (ModelConfig.context_window_tokens). Luna's encoder, which has no roles, is given
+the ledger role (item 4) but places the ledger by position and header; JEV's, which has none
+either, labels the ledger's entry with it (providers/decisions/history.py JEV_ROLES). Whether
+either takes effect is not recorded on its own: the driver code decides it, which the harness
+fingerprint (or an external driver's identity) covers, and so does the model config, which the
+run hash covers.
 """
 
 from collections.abc import Mapping
@@ -142,7 +145,9 @@ class PathPolicy:
     preset: str | None  # the PRESETS entry in effect: the model config's, else the row's
     visuals: Retention  # 1 screenshot retention
     turns: Retention  # 2 turn retention; archived actions form the ledger
-    feedback: Literal["separate_message", "frame_prefix", "digest"]  # 3 execution feedback
+    # 3 execution feedback; under the action digest (item 9) every turn's feedback is in the
+    # digest, whatever the value
+    feedback: Literal["separate_message", "frame_prefix", "digest"]
     # 4 role of the archived-action ledger; an encoder without roles places it by position and
     # header (RealtimeCapabilities.labels_instead_of_roles), and the value is at most a label
     # there (providers/decisions/history.py JEV_ROLES)
@@ -150,7 +155,7 @@ class PathPolicy:
     texts: FixedTexts  # 5 placeholder and fixed texts
     reasoning_replay: bool  # 6 send past reasoning back
     # 7 send the provider's own assistant message back; off: the reply is rebuilt from the model
-    # output, and no encoder can do otherwise
+    # output, and no encoder can do otherwise, so nothing reads the value
     verbatim_replay: bool
     # 8 before each request, archive the oldest turns while it exceeds the declared context
     # window, then, with no turn left, leave out the earliest archived actions, which stay out
@@ -158,11 +163,16 @@ class PathPolicy:
     # declares an estimate of its requests (RealtimeCapabilities.request_size_estimation) and
     # the model config has a window
     pressure_archive: bool
-    decision_history: DecisionHistory | None  # 9 Decision history form
+    # 9 Decision history form; the pre-run checks take only the form the API replays
+    # (RealtimeCapabilities.history_replay)
+    decision_history: DecisionHistory | None
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
-    # 11 task category -> InteractionProfile.name; None: the category is rejected
+    # 11 task category -> InteractionProfile.name; None: no profile for the category. The pre-run
+    # checks reject the one such pairing, a text-only choice model on a browser game, from the
+    # capabilities (providers/preflight.py check_choice_task)
     prompts: Mapping[str, str | None]
-    # 12 what one observation carries
+    # 12 what one observation carries; the pre-run checks take only the one the API's observation
+    # modality and action channel allow
     observation: Literal["som_screenshot", "observation_json_screenshot", "observation_json_text"]
 
     def to_record(self) -> dict:

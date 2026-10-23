@@ -253,7 +253,7 @@ UNSUPPORTED_TERMINAL_ACTION_FEEDBACK = (
     "executed. The environment determines when the episode ends."
 )
 
-# Notes on a decision of which no answer was accepted: the model never saw its frame.
+# Notes on a decision of which no answer was accepted: no turn of the history holds its frame.
 UNANSWERED_STEP_NOTES = {
     "skipped_timeout": "NOTE: a step timed out at the per-move cap before your answer arrived; no action was executed.",
 }
