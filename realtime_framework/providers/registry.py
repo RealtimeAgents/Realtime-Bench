@@ -708,7 +708,6 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     if fields.get("reasoning_effort") == "provider_default":
         fields["reasoning_effort"] = None
     if e.adapter_type == "chat_completions":
-        fields["api_key_env"] = e.key_env
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
         for field in (
@@ -720,8 +719,6 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
             value = os.environ.get("BENCHMARK_" + field.upper())
             if value:
                 fields[field] = value
-        if fields.get("reasoning_effort") == "provider_default":
-            fields["reasoning_effort"] = None
         for field, env_name in (
             ("chat_stream", "STREAM_CHAT_STREAM"),
             ("chat_include_usage", "STREAM_CHAT_INCLUDE_USAGE"),
