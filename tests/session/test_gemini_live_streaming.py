@@ -909,16 +909,13 @@ def test_an_abort_ends_a_connect_its_abandoned_generation_is_stuck_in(stuck, str
         await settle()
         cancel.set()
         await asyncio.wait_for(rig.driver.abort(None), 2)
-        ended = None
-        try:
-            await asyncio.wait_for(readying, 2)
-        except RetryCancelled as exc:
-            ended = exc
+        done, _ = await asyncio.wait({readying}, timeout=0.5)
+        assert done, "the connect still holds the session after the abort"
         rig.live.setup_stalls, rig.live.stall = False, None
         await asyncio.wait_for(rig.driver.ensure_ready(rig.seed, history, lambda *_, **__: None), 2)
         state = rig.driver.state
         await rig.driver.close()
-        return ended, state
+        return readying.exception(), state
 
     ended, state = asyncio.run(run())
     assert isinstance(ended, RetryCancelled)
@@ -926,6 +923,8 @@ def test_an_abort_ends_a_connect_its_abandoned_generation_is_stuck_in(stuck, str
 
 
 def test_a_close_ends_a_connect_still_opening():
+    """A close while a connect waits for the server's setupComplete ends that connect, which
+    holds the session meanwhile: the connect raises that the session closed while it opened."""
     rig = Rig()
     rig.live.setup_stalls = True
 
@@ -933,10 +932,9 @@ def test_a_close_ends_a_connect_still_opening():
         connecting = asyncio.ensure_future(rig.connect())
         await settle()
         await asyncio.wait_for(rig.driver.close(), 2)
-        try:
-            await asyncio.wait_for(connecting, 2)
-        except RuntimeError as exc:
-            return str(exc)
+        done, _ = await asyncio.wait({connecting}, timeout=0.5)
+        assert done, "the connect is still opening after the close"
+        return str(connecting.exception())
 
     assert asyncio.run(run()) == "Gemini Live session closed while it opened"
 
