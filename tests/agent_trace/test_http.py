@@ -322,6 +322,21 @@ def test_a_retry_after_reaches_the_retry_policy(api, tmp_path, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("api", sorted([*HOOKED, "litellm"]))
+def test_a_fixed_reasoning_effort_sends_no_reasoning_setting(api, tmp_path, monkeypatch):
+    """``fixed`` names a model whose reasoning is not configurable (providers/registry.py
+    api_reasoning_efforts): no LiteLLM path sends a reasoning parameter for it."""
+    answer, fields = (
+        (_openai_answer, GENERIC) if api == "litellm" else (HOOKED[api][1], HOOKED[api][2])
+    )
+    with HttpStub(answer) as stub:
+        config = _config(stub, fields, monkeypatch).model_copy(update={"reasoning_effort": "fixed"})
+        _run(config, stub, tmp_path, steps=STEPS[:1])
+    (wire,) = stub.requests
+    sent = json.loads(wire.body)
+    assert not {"reasoning_effort", "reasoning", "thinking", "output_config"} & sent.keys()
+
+
 def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     monkeypatch.setenv("REPLAY_TRACE_KEY", KEY)
     config = ModelConfig(
