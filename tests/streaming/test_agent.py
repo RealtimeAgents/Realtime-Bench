@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +24,7 @@ from realtime_framework.harnesses.default.frames import (
 from realtime_framework.harnesses.default.harness import action_text
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
+from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from realtime_framework.sandbox.observation.som import resolve_action_references
 from tests.fake_clock import FakeClock
 
@@ -1477,4 +1479,49 @@ def test_a_push_waiting_out_the_backoff_to_reopen_the_session_is_held_meanwhile(
     held, resumed = holds[0][2], holds[1][2]
     assert resumed - held > 0.5  # the first backoff, 1 s ± 25%
     assert agent.driver.calls[-1][:2] == ("push", "obs-3")
+    agent.close()
+
+
+class _OpenedOnce(OpenAIRealtimeDriver):
+    """OpenAI Realtime's driver, whose first connect, the agent's initialize, opens nothing."""
+
+    opened = False
+
+    async def _connect(self, request) -> None:
+        if not self.opened:
+            self.opened = True
+            return
+        await super()._connect(request)
+
+
+def test_a_push_waiting_out_the_drivers_own_connect_backoff_is_held_meanwhile(monkeypatch, clock):
+    """OpenAI Realtime's driver retries opening the connection itself, under the shared retry
+    policy (decision 39), so a push reopening the session through it waits out the backoffs
+    inside the driver: it is held for each all the same, and resumed as the next attempt starts
+    (decision N48, review-streaming 中-4). Every handshake is refused, so the driver's retry
+    gives up after its fourth attempt, and the push with it."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    agent = make_agent(monkeypatch, clock, _OpenedOnce, REALTIME)
+    posted, handshakes = [], []
+    agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
+    agent.abort(6)
+
+    def refuse(**kwargs):
+        handshakes.append(clock.monotonic())
+        raise ConnectionError("connection refused")
+
+    agent.driver.client = SimpleNamespace(realtime=SimpleNamespace(connect=refuse))
+    with pytest.raises(TransportFailureError):
+        agent.push(observation(clock, 1))
+    holds = [
+        (type(event).__name__, event.observation_id, at)
+        for event, at in posted
+        if isinstance(event, (PushHeld, PushResumed))
+    ]
+    assert [(name, observation_id) for name, observation_id, _ in holds] == [
+        ("PushHeld", "obs-1"),
+        ("PushResumed", "obs-1"),
+    ] * 3
+    assert [at for name, _, at in holds if name == "PushHeld"] == handshakes[:3]
+    assert [at for name, _, at in holds if name == "PushResumed"] == handshakes[1:]
     agent.close()
