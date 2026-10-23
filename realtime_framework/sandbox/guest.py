@@ -11,6 +11,7 @@ from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.actions import validate_action
 from realtime_framework.entity.actions import normalize_action
+from realtime_framework.entity.config import GUEST_REQUEST_S
 from realtime_framework.sandbox.budget import bounded
 
 
@@ -33,7 +34,7 @@ def action_timeout(action: Action, timeout: float) -> float:
 class GuestClient:
     """HTTP client for communicating with the guest agent server inside the sandbox."""
 
-    def __init__(self, host: str = "localhost", port: int = 5000, timeout: float = 10.0):
+    def __init__(self, host: str = "localhost", port: int = 5000, timeout: float = GUEST_REQUEST_S):
         self.base_url = f"http://{host}:{port}"
         self.timeout = timeout
 
