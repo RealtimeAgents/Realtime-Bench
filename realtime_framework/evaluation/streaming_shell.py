@@ -350,10 +350,10 @@ class _StreamingShell:
 
     def _abort(self, generation: int) -> GenerationAborted:
         """Give the reply up, on the abort lane (on the shell's thread in the wrap-up), and answer
-        whatever happens, as a command is answered (_run)."""
-        done = self._replies.get(generation)  # None when its StartGeneration raised
-        # Once its worker ended nothing runs to interrupt; the kernel discards the result.
-        if done is not None and not done.is_set():
+        whatever happens, as a command is answered (_run). Also a reply whose worker just ended:
+        the abort closes the session, which the policy gives a reply up for (kernel/streaming.py
+        ``_session_stuck``), and fails a push stuck in it."""
+        if generation in self._replies:  # not when its StartGeneration raised
             # Also a BaseException (entity/model.py RetryCancelled): the answer must come back,
             # or the kernel would wait for it.
             try:
@@ -485,8 +485,9 @@ class _StreamingShell:
         latched = getattr(self.env, "_invalid_run", None)
         first = self.kernel.invalid is None and latched is None
         try:
-            for generation in list(self._replies):
-                self._abort(generation)
+            for generation, done in list(self._replies.items()):
+                if not done.is_set():
+                    self._abort(generation)
             if self._frozen is None:
                 self._frozen = self.clocks.operational.event()
                 self._freezing()

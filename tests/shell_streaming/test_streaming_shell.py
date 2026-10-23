@@ -363,6 +363,42 @@ def test_the_next_reply_waits_for_a_slow_abort_and_the_episode_goes_on_meanwhile
     assert termination.invalid is None
 
 
+def test_a_reply_whose_worker_just_ended_is_aborted_all_the_same_to_close_the_session():
+    """The third push hangs until an abort closes the session. Its watchdog is due at 12.75 s,
+    while the wait's feedback holds the shell from 11.725 s to 12.825 s, and the reply ends at
+    12.7 s meanwhile: the shell aborts that reply all the same, which fails the push, and the
+    rebuilt session takes the next frames."""
+
+    def stuck_third_push(agent, clock):
+        closed = clock.event()
+        push, abort, commit = agent.push, agent.abort, agent.commit
+        pushes = []
+
+        def stuck(observation):
+            pushes.append(observation)
+            if len(pushes) == 3:
+                clock.wait(closed, None)
+                raise RuntimeError("the session was closed")
+            push(observation)
+
+        def closing(generation=None):
+            abort(generation)
+            closed.set()
+
+        def slow(outcome):
+            clock.sleep(1.1)
+            commit(outcome)
+
+        agent.push, agent.abort, agent.commit = stuck, closing, slow
+
+    replies = [Reply(11.825, (Call(10.85, Action.wait(0.5), "w"),))]
+    termination, _, agent = _episode(20.0, replies, agent_setup=stuck_third_push)
+    assert agent.ended[0] == (1, 12.7)
+    assert agent.aborted == [(1, 12.825), (2, 20.0)]
+    assert agent.started[1][2] == 12.825
+    assert termination.invalid is None
+
+
 def test_a_slow_abort_holds_up_neither_the_read_after_an_action_nor_the_snapshot():
     """The click executes from 30.05 to 31.05 s; the reply is stuck at 30.425 s and its abort
     takes 10 s. The read after the click, once the capture at 31 s alongside it is done, and the
