@@ -9,13 +9,20 @@ without a browser (tests/replay/clock_task.py) records what the environment push
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
 import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import Action, ActionType
-from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, TAP_HOLD_S, GuestEnvironment
+from realtime_framework.sandbox.actions import (
+    ENVIRONMENT_BUDGET,
+    TAP_HOLD_S,
+    WALL_RELEASE_MAX_ATTEMPTS,
+    WALL_RELEASE_RETRY_S,
+    GuestEnvironment,
+)
 from realtime_framework.sandbox.budget import BudgetExceeded
 
 from ..fake_clock import FakeClock
@@ -500,6 +507,46 @@ def test_a_wall_release_failure_in_a_run_already_invalid_tells_the_shell_nothing
     assert len([command for _, command in env.g.commands if "keyup" in command]) == 4
     assert told == []
     assert env._invalid_run["reason"] == "action_execution_failed"
+
+
+class _RacingGuest:
+    """In real time: the keydown of b takes KEYDOWN_S, and every keyup of b fails."""
+
+    KEYDOWN_S = 0.15
+
+    def __init__(self):
+        self.started = time.monotonic()
+        self.commands = []
+
+    def execute_command(self, command, timeout=30):
+        self.commands.append((time.monotonic() - self.started, command))
+        if command == "xdotool keydown -- b":
+            time.sleep(self.KEYDOWN_S)
+        if command == "xdotool keyup -- b":
+            return {"returncode": 1, "stderr": "cannot release"}
+        return {"returncode": 0}
+
+
+def test_a_release_timer_replaced_while_it_waited_for_a_keydown_leaves_one_retry_chain():
+    """a's lease ends while b's keydown is in flight: a's timer has fired and waits for the key
+    commands when the hold arms the next one. The replaced timer stands down, so b's keyup is
+    tried WALL_RELEASE_MAX_ATTEMPTS times WALL_RELEASE_RETRY_S apart, not twice as often. In real
+    time: the fake clock cannot tell a thread waiting for a lock from a busy one."""
+    env = GuestEnvironment(
+        _RacingGuest(), _WallTask(), clock_mode="wall", wall_start_time=time.time()
+    )
+    told = []
+    env.on_invalid = told.append
+    env.execute(Action.hold_key("a", 0.1))
+    time.sleep(0.05)
+    env.execute(Action.hold_key("b", 0.2))
+    time.sleep(0.25 + WALL_RELEASE_MAX_ATTEMPTS * WALL_RELEASE_RETRY_S)
+    keyups = [at for at, command in env.g.commands if command == "xdotool keyup -- b"]
+    assert len(keyups) == WALL_RELEASE_MAX_ATTEMPTS
+    assert min(later - earlier for earlier, later in zip(keyups, keyups[1:])) > (
+        WALL_RELEASE_RETRY_S - 0.1
+    )
+    assert [record["reason"] for record in told] == ["wall_key_release_failed"]
 
 
 # ---- the end checks inside a token key tap --------------------------------------------------

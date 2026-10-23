@@ -175,6 +175,7 @@ class GuestEnvironment:
         self._wall_lock = threading.RLock()
         self._wall_commands = threading.RLock()
         self._wall_timer = None
+        self._wall_timer_generation = 0
         self._wall_closed = False
         self._wall_release_failures = 0
         # Set by the kernel's shell: called with the invalid-run record when the release timer
@@ -754,12 +755,11 @@ class GuestEnvironment:
             for identity in selected:
                 self._wall_holds.pop(identity, None)
 
-    def _wall_release_due(self):
+    def _wall_release_due(self, generation):
         invalid = None
         with self._wall_commands:
             with self._wall_lock:
-                self._wall_timer = None
-                if self._wall_closed:
+                if self._wall_closed or generation != self._wall_timer_generation:
                     return
                 now = self.clocks.semantic.time()
                 expired = [
@@ -796,16 +796,21 @@ class GuestEnvironment:
             self.on_invalid(invalid)
 
     def _schedule_wall_release(self, min_delay=0.0):
-        """Arm one timer for the earliest outstanding wall lease (caller holds ``_wall_lock``)."""
+        """Arm one timer for the earliest outstanding wall lease (caller holds ``_wall_lock``).
+
+        A timer that fired already cannot be cancelled and may be waiting for _wall_commands: the
+        generation it was armed with tells it that it has been replaced."""
         if self._wall_timer is not None:
             self._wall_timer.cancel()
             self._wall_timer = None
+        self._wall_timer_generation += 1
         if self._wall_closed or not self._wall_holds:
             return
         clock = self.clocks.semantic
         earliest = min(item["expires_at"] for item in self._wall_holds.values())
         delay = max(float(min_delay), earliest - clock.time())
-        self._wall_timer = clock.timer(delay, self._wall_release_due)
+        generation = self._wall_timer_generation
+        self._wall_timer = clock.timer(delay, lambda: self._wall_release_due(generation))
 
     def _ensure_wall_autorepeat(self):
         """Pin the wall display's auto-repeat to the values the token clock emulates (once).
