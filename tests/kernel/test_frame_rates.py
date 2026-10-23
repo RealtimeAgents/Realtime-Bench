@@ -572,8 +572,8 @@ def test_the_wall_clock_observes_on_the_input_grid(rates, next_tick, dropped):
 )
 def test_wall_holds_and_waits_last_their_seconds(rates, second_frame):
     """On the wall clock durations are seconds at every rate: a 0.5 s hold pressed at 0.25 s is
-    released at 0.75 s by the environment's timer, and a 1 s WAIT that starts 0.25 s after the
-    next frame resolves 1 s later."""
+    released at 0.75 s by the simulated environment's timer, and a 1 s WAIT that starts 0.25 s
+    after the next frame resolves 1 s later."""
     hold, wait = Action.hold_key("a", 0.5), Action.wait(1.0)
     replies = [Reply(latency=0.25, action=hold), Reply(latency=0.25, action=wait), NEVER]
     sim = _run(_config("wall", rates, 5.0), replies)
