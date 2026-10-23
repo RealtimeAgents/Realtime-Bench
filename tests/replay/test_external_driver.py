@@ -312,6 +312,37 @@ def test_preflight_reads_the_external_declaration(external, capsys):
     assert capsys.readouterr().err.strip().endswith(f"The {TARGET} API requires a wall clock")
 
 
+REQUIRED_REASONING = '''
+from dataclasses import replace
+
+from rtb_ext.chat import ExternalChatDriver
+
+
+class RequiredReasoning(ExternalChatDriver):
+    capabilities = replace(ExternalChatDriver.capabilities, reasoning_replay="required")
+'''
+
+
+def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
+    """A driver that declares past reasoning required in later requests
+    (RealtimeCapabilities.reasoning_replay) runs only under a context policy that sends it back
+    (check_context_policy). No registered API declares it, so an external driver holds the rule:
+    the chat_completions row it gets sends none, and check_episode refuses it; with the kimi_k3
+    preset, which sends it, the same driver passes."""
+    (external.site / "rtb_ext" / "required.py").write_text(REQUIRED_REASONING)
+    api = "rtb_ext.required:RequiredReasoning"
+    write_model(external.models, api, key="ext-required")
+    config = catalog.to_model_config("ext-required", fps=1.0, reasoning_effort="low")
+    assert catalog.adapter_class(api).capabilities.reasoning_replay == "required"
+    fails(
+        lambda: check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=config.fps),
+        f"The {api} API requires past reasoning in later requests; its context policy sends none",
+    )
+    replayed = config.model_copy(update={"context_preset": "kimi_k3"})
+    assert current_context_policy().for_path(api, {}, "kimi_k3").reasoning_replay is True
+    check_episode(replayed, clock_mode="wall", task=ReplayTask(), env_fps=replayed.fps)
+
+
 # Refused at load: catalog.get is the first lookup of every entry point.
 
 
