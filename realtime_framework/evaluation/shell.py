@@ -416,20 +416,32 @@ class _Shell:
     def _write_handed(self) -> None:
         """Once the episode is finished: hand the kernel the agent records it has not taken, step
         it through what is still due, the records among it, and write them. The kernel handles
-        nothing after the end, so any other event's echo is only a KernelRecord."""
+        nothing after the end, so any other event's echo is only a KernelRecord. Should the
+        kernel raise meanwhile, the episode's verdict stands: that is logged, and the agent
+        records not written yet are written unnumbered."""
+        unwritten = ([] if self._given is None else [self._given]) + list(self._held_records)
         while self._held_records:
             self.post(self._held_records.popleft())
-        now = self._read()
-        while True:
-            commands = self._step(now)
-            if commands is None:
-                return
-            for command in commands:
-                entry = command.entry
-                if isinstance(entry.data, AgentRecord):
-                    self._emit(entry.kind, entry.data.data, entry)
-                else:
-                    self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
+        now = self._now
+        try:
+            now = self._read()
+            while True:
+                commands = self._step(now)
+                if commands is None:
+                    return
+                for command in commands:
+                    entry = command.entry
+                    if isinstance(entry.data, AgentRecord):
+                        unwritten = [record for record in unwritten if record is not entry.data]
+                        self._emit(entry.kind, entry.data.data, entry)
+                    else:
+                        self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
+        except Exception:  # noqa: BLE001 - the episode finished; only its last records are left
+            self.log(
+                "[default] numbering the agent's last records failed:\n" + traceback.format_exc()
+            )
+            for record in unwritten:
+                self._emit(record.kind, record.data, Entry(None, *now, record.kind, record))
 
     def _loop(self) -> None:
         self._now = self._read()
