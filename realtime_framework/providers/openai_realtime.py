@@ -588,12 +588,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def push_frame(self, observation: ProviderObservation, history) -> PushReceipt:
         """Native streaming: push the newest frame of the streaming history view, after the
         feedback the view holds that the session lacks, and fold the frames the view folds
-        (decision 23). A frame the session already holds, as a rebuild replayed it or
-        request_reply pushed it, is not pushed again. Returns once the server confirmed the
-        frame, with when it was written and when its confirmation came (decision N43); raises
-        when the server refused it, which loses that frame alone, or the connection closed
-        first. A fold the server fails leaves the session dirty, for the next ensure_ready to
-        rebuild it from the view.
+        (decision 23); as every push, it writes only what the session lacks. Returns once the
+        server confirmed the frame, with when it was written and when its confirmation came
+        (decision N43); raises when the server refused it, which loses that frame alone, or the
+        connection closed first. A fold the server fails leaves the session dirty, for the next
+        ensure_ready to rebuild it from the view.
 
         It plans and writes holding the session as a connection operation does
         (SessionLifecycle), so its writes go to the session it planned them on once a connect
@@ -637,8 +636,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Native streaming: ask for a reply on the session as it is, after pushing what the
         streaming history view ``request.canonical`` holds that the session lacks: the feedback
-        accepted since the newest frame, and that frame when push_frame has not pushed it yet,
-        which then only waits for its confirmation. Its events come as a turn's do. A connection
+        accepted since the newest frame, which is in the agent's view only once push_frame put
+        it in. Its events come as a turn's do. A connection
         carries one reply at a time: asked for before the one in progress ended, it raises and
         writes nothing. It holds the session as push_frame's writes do, so the reply goes to the
         session it pushed to."""
