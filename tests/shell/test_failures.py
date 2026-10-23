@@ -547,6 +547,23 @@ def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
     )
 
 
+def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
+    """Decision 33: the inputs are released once the outcome is latched and the snapshot frozen.
+    A release that raises is logged; the run stays valid and the summary has no error."""
+
+    def release_fails():
+        raise RuntimeError("the page is gone")
+
+    episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)], World(on_release=release_fails))
+    assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
+    assert episode.invalid is None
+    assert episode.env._stop_reason == "time_limit"
+    assert getattr(episode.env, "_loop_error", None) is None
+    (logged,) = [line for line in episode.logs if line.startswith("[cleanup]")]
+    assert logged.startswith("[cleanup] failed to release stateful inputs:")
+    assert "RuntimeError: the page is gone" in logged
+
+
 class _Cancelled(BaseException):
     """As entity/model.py RetryCancelled, which is not an Exception."""
 

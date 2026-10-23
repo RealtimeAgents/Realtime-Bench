@@ -1269,7 +1269,9 @@ RULES = (
     Rule(
         "X16",
         "a failed key release at cleanup leaves the run as it was",
-        seen="both loops run the same environment; no replayed release fails",
+        seen="not scripted: no replayed release fails; both loops only log one (legacy_loop.py"
+        " _finalize, shell.py _release_inputs), which tests/shell and tests/shell_streaming cover"
+        " for the shells",
     ),
 )
 ORDER = [rule.id for rule in RULES]
