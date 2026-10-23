@@ -117,8 +117,10 @@ logger = logging.getLogger(__name__)
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
-# How long an abort or close waits on the execution thread: longer than the session waits for
-# an abort's cleanup, with time to close after (RealtimeRuntime.close).
+# How long an abort or close waits on the execution thread: longer than an abort takes, within
+# its interrupt's bound and its close's, and than the session waits for an abort's cleanup, with
+# time for a Gemini Live close after (RealtimeRuntime.close); an OpenAI Realtime close stuck on a
+# write may outlast it, and stopping the execution thread then ends the close.
 _SESSION_TIMEOUT_S = 15.0
 # The boundaries that end a reply, whose provider history state is the session's after it.
 _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
