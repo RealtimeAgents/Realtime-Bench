@@ -233,10 +233,21 @@ class SessionLifecycle:
 
     async def abort(self, generation: GenerationHandle | None) -> None:
         """Interrupt ``generation`` (None when none had started), then close the connection, as
-        far as either works. The next ensure_ready waits for this to finish, close for at most
-        _CLEANUP_WAIT_S; a later abort takes its place as the one they wait for."""
-        self._cleanup = asyncio.ensure_future(self._interrupt_and_close(generation))
+        far as either works, once the cleanup of the abort before is done. The next ensure_ready
+        waits for this to finish, close for at most _CLEANUP_WAIT_S; a later abort takes its
+        place as the one they wait for."""
+        self._cleanup = asyncio.ensure_future(self._clean_up(self._cleanup, generation))
         await asyncio.wait({self._cleanup})
+
+    async def _clean_up(
+        self, before: asyncio.Task | None, generation: GenerationHandle | None
+    ) -> None:
+        """An abort's cleanup, once ``before``, the one it takes the place of, is done:
+        ensure_ready waits for the last cleanup alone, and the close of one still running would
+        close the session it opens."""
+        if before is not None:
+            await asyncio.wait({before})
+        await self._interrupt_and_close(generation)
 
     def _session_lock(self) -> asyncio.Lock:
         # Made on first use, on the execution thread's loop, which every operation runs on.
