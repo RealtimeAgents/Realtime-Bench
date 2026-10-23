@@ -309,6 +309,7 @@ class GeminiLiveDriver(SessionLifecycle):
         self._cm = None
         self._session = None
         self._opening: asyncio.Task | None = None  # a connect's _open, until it is done
+        self._opening_ws = None  # and its WebSocket, once google-genai returned the session
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._reading: asyncio.Task | None = None  # streaming: the task reading it
         self._reading_context: contextvars.Context | None = None  # and the context it runs in
@@ -547,7 +548,17 @@ class GeminiLiveDriver(SessionLifecycle):
         opening, self._opening = self._opening, None
         if opening is not None:
             opening.cancel()
-            await asyncio.wait({opening})
+            self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
+            try:
+                await self.clock.wait_for(asyncio.wait({opening}), _CONNECTION_CLOSE_TIMEOUT_S)
+            except TimeoutError:
+                # The connect closes its connection as it ends, and that close waits on a seed
+                # write that does not drain, as an open connection's does (below): drop the
+                # connection under both. Before google-genai returned the session, websockets'
+                # own close timeout bounds the close.
+                if self._opening_ws is not None:
+                    self._opening_ws.transport.abort()
+                await asyncio.wait({opening})
         cm, self._cm = self._cm, None
         reading, self._reading = self._reading, None
         session, self._session = self._session, None
@@ -640,11 +651,13 @@ class GeminiLiveDriver(SessionLifecycle):
     async def _open(self, cm, connect: Connect):
         """The session ``cm`` opens, once the server acknowledged its setup and it took
         ``connect``'s seed; one that fails on the way is closed again."""
+        self._opening_ws = None
         try:
             session = await cm.__aenter__()
+            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
+            self._opening_ws = session._ws
             if getattr(session, "setup_complete", None) is None:
                 raise RuntimeError("Gemini Live did not acknowledge session setup")
-            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
             self._trace_connection = session._ws
             # Seed history explicitly before either input transport. Merely leaving
             # turn_complete=False can cause historical model content to be echoed as new
