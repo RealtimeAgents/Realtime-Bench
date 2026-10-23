@@ -72,7 +72,8 @@ WEB_LONG = [
     decision("click_P1"),
     decision("select_all"),
     # Every edit operation once: a character, a code point by six hex digits, delete, a Unicode
-    # round left with Back, clear, then cancel, which yields WAIT (selection.py:356-414).
+    # round left with Back, clear, then cancel, which yields WAIT (selection.py
+    # ChoiceDecision._compose_text).
     decision(
         "compose_text",
         "char_000041",
@@ -115,7 +116,7 @@ WEB_LONG = [
     wait(),
     decision("pan_left_R1"),
     decision("click_P1"),
-    # 261 candidates: groups of 255 and 6, then their winners (selection.py:159-229)
+    # 261 candidates: groups of 255 and 6, then their winners (selection.py ChoiceDecision._choose)
     decision(SUGGESTED_NAME, "pan_up_R1", SUGGESTED_NAME),
     # 40-49
     decision("press_enter"),
@@ -272,7 +273,8 @@ def game_probe(frame: int, *, text_observation: bool = False) -> dict:
 GAME_SCENE = {"screenshot": game_screenshot, "probe": game_probe}
 
 # Pointer composition: x then y, each a coarse hundred and then the value within it, unless the
-# coarse choice is 1000 (selection.py:127-157). The model image is 768x432 (capture.py:315-325).
+# coarse choice is 1000 (selection.py ChoiceDecision._compose_pointer). The model image is 768x432
+# (capture.py:315-325).
 GAME_DECISIONS = [
     decision("game_pointer_screen_click", "400", "437", "200", "250"),  # click (336, 108)
     # (393, 13) in the model image is (982, 32) on the desktop (entity/actions.py:273-280), on the
@@ -289,7 +291,7 @@ GAME_DECISIONS = [
     decision("game_pointer_R1_mouse_down", "1000", "500", "512"),  # R1@1000,512
     decision("game_pointer_R1_move", "700", "750", "500", "500"),  # R1@750,500
     decision("game_mouse_release"),
-    # The second key's options keep the first pick's gap (selection.py:105-125)
+    # The second key's options keep the first pick's gap (selection.py ChoiceDecision._compose_hold)
     decision("game_hold_pair", "0", "2", "0.5"),  # ArrowLeft+Space for 0.5 s
     decision("game_key_1"),  # tap ArrowRight
     decision("game_hold_2_1.0"),  # hold Space for 1 s
@@ -299,7 +301,8 @@ GAME_DECISIONS = [
 
 
 # Failures -------------------------------------------------------------------------------------
-# One retry: a transient 503 on the second question of a composition (selection.py:313-354).
+# One retry: a transient 503 on the second question of a composition (selection.py
+# ChoiceDecision._decide_with_retries).
 RETRY = [
     decision("click_P1"),
     decision(

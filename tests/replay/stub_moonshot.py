@@ -1,15 +1,16 @@
 """Scripted Kimi endpoint for the moonshot API, reached through the official base URL.
 
-The moonshot API sends with the driver's own AsyncOpenAI client (providers/litellm.py:1139-1153,
-589-604) to the catalog's base URL https://api.moonshot.ai/v1 (configs/models/kimi-k3.yaml:5,
-providers/litellm.py:470-475). Kimi usage is normalized only for exactly that URL
-(providers/litellm.py:122-125, 906-908), so the base URL stays official and redirect_to_stub()
-moves every request to this stub at the HTTP transport.
+The moonshot API sends with the driver's own AsyncOpenAI client (providers/litellm.py
+MoonshotDriver, LiteLLMDriver._client) to the catalog's base URL https://api.moonshot.ai/v1
+(configs/models/kimi-k3.yaml:5, providers/litellm.py LiteLLMDriver.__init__). The base URL stays
+official, so each request is addressed as a run addresses it, and redirect_to_stub() moves every
+request to this stub at the HTTP transport.
 
 Replies are server-sent events: reasoning arrives as ``reasoning_content`` deltas, which the
-driver streams on the reasoning channel (providers/litellm.py:814-819, 886-904), and usage comes
-on the finishing chunk's choice instead of a separate usage chunk; the driver reads it there when
-a chunk has no top-level usage (providers/litellm.py:725-731).
+driver streams on the reasoning channel (providers/litellm.py LiteLLMDriver.events,
+LiteLLMDriver._delta_reasoning), and usage comes on the finishing chunk's choice instead of a
+separate usage chunk; the driver reads it there when a chunk has no top-level usage
+(providers/litellm.py LiteLLMDriver._observe_raw).
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ class ReceivedWithHeaders(Received):
 class KimiStub(ChatCompletionsStub):
     """ChatCompletionsStub answering with the stream above and keeping each request's headers.
 
-    The moonshot driver always streams (providers/litellm.py:380-396, 1139-1153), so every request
-    is answered with server-sent events.
+    The moonshot driver always streams (providers/litellm.py ChatProtocol, MoonshotDriver), so every
+    request is answered with server-sent events.
     """
 
     @property
@@ -64,7 +65,8 @@ class KimiStub(ChatCompletionsStub):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 reply = stub._next(self.path, body, tuple(self.headers.items()))
                 if reply is None:
-                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py:418-426).
+                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py
+                    # classify_http_failure).
                     self._send(400, "application/json", _error("request beyond the script"))
                     return
                 model = json.loads(body)["model"]
@@ -111,7 +113,7 @@ def _sse(reply: Reply, model: str, index: int) -> bytes:
 
 def kimi_replies(steps: list[Step]) -> list[Reply]:
     """scenario.replies plus a cache-write count, the prompt beyond the cached prefix, which
-    kimi_usage reports as 5-minute cache writes (providers/litellm.py:137-145)."""
+    kimi_usage reports as 5-minute cache writes (providers/litellm.py kimi_usage)."""
     out = []
     for reply in replies(steps):
         usage = copy.deepcopy(reply.usage)
@@ -142,8 +144,8 @@ class StubTransport(httpx.AsyncBaseTransport):
 def redirect_to_stub(driver, port: int) -> StubTransport:
     """Send the driver's requests to the stub while its base URL stays official.
 
-    The driver builds one AsyncOpenAI client and reuses it once set (providers/litellm.py:589-604),
-    and LiteLLM sends through a passed client instead of building its own
+    The driver builds one AsyncOpenAI client and reuses it once set (providers/litellm.py
+    LiteLLMDriver._client), and LiteLLM sends through a passed client instead of building its own
     (litellm/llms/openai/openai.py:381-472). The copy keeps every option of the client the driver
     built (openai/_client.py:1203-1289) and only replaces its HTTP client: the SDK's defaults
     (openai/_base_client.py:1464-1469) over this transport. An httpx client given a transport

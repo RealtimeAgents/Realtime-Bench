@@ -32,8 +32,8 @@ class Decision:
 
 def request_record(received) -> dict:
     """The baseline ignores key order, but a question's criteria order is the order of its
-    options, taken from the candidate order (providers/decisions/selection.py:165-177). It is
-    kept as a list beside the body."""
+    options, taken from the candidate order (providers/decisions/selection.py
+    ChoiceDecision._choose). It is kept as a list beside the body."""
     body = json.loads(received.body)
     return {
         "path": received.path,
@@ -76,7 +76,8 @@ def run_decisions(
                 "requests": [request_record(r) for r in stub.requests[first_request:]],
                 "result": result,
                 "commit": None if invalid else {"status": step.status, "detail": step.detail},
-                # A failed decision adds no action (harnesses/default/harness.py:1357-1397).
+                # A failed decision adds no action (harnesses/default/harness.py
+                # DefaultHarness._generate).
                 "action_history_entry": (
                     dict(agent.action_history[-1])
                     if len(agent.action_history) > history_length

@@ -7,7 +7,7 @@ frame budget B (None on the wall clock and in pause mode, runner.py main), and `
 the episode length in ticks, the duration_s run_stream receives times its env_fps (runner.py main,
 kernel/turns.py TurnConfig.max_ticks). The finite token clock changes the per-decision budget
 (kernel/turns.py _captured, episode_records.py decision_budget) and the clock prompt
-(harnesses/default/prompts.py:177-201).
+(harnesses/default/prompts.py budget_clock_prompt).
 """
 
 from __future__ import annotations

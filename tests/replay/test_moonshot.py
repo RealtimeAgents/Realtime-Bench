@@ -30,8 +30,8 @@ from .stub_moonshot import KimiStub, compared_headers, kimi_replies, redirect_to
 BASELINES = Path(__file__).parent / "baselines"
 MODEL_KEY = "kimi-k3"
 FPS = 1.0
-# The moonshot API requires a key (providers/litellm.py:494-500). Setting it also keeps the
-# repository .env from supplying one: load_project_secrets only fills unset names
+# The moonshot API requires a key (providers/litellm.py LiteLLMDriver._resolve_key). Setting it also
+# keeps the repository .env from supplying one: load_project_secrets only fills unset names
 # (providers/registry.py:38).
 DUMMY_KEY = "sk-replay-moonshot-dummy"
 ENDPOINT = DEFAULT_MOONSHOT_BASE_URL + "/chat/completions"
@@ -43,12 +43,13 @@ MAX_TICKS = 60
 # Decision k observes tick k (steps.py). On the finite clock its cap is
 # min(native, floor((MAX_TICKS - k) * B)) (kernel/turns.py _captured, episode_records.py
 # decision_budget). kimi-k3's native limit is 1048576 (LiteLLM's bundled moonshot/kimi-k3,
-# providers/registry.py:140-154), so with this B the native limit applies through decision 28 and
-# the remaining clock from decision 29 (1015808) down to decision 59 (32768).
+# providers/registry.py litellm_output_limit), so with this B the native limit applies through
+# decision 28 and the remaining clock from decision 29 (1015808) down to decision 59 (32768).
 TOKENS_PER_FRAME = 32768
-# As for chat_completions: the default policies (entity/config.py:35-38) fold the oldest 10
-# screenshots of a request holding 21 (harnesses/default/context.py:24-32) and archive the oldest
-# 10 turns of one holding 51 (context.py:295-305). Decision k carries k earlier turns.
+# As for chat_completions: the default policies (entity/config.py effective_visual_fold_policy,
+# effective_detailed_history_policy) fold the oldest 10 screenshots of a request holding 21
+# (harnesses/default/context.py apply_active_visual_budget) and archive the oldest 10 turns of one
+# holding 51 (context.py RealtimeRuntime._retained). Decision k carries k earlier turns.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 # Two reasoning replies (decisions 0 and 3), each replayed in a later request.
@@ -131,8 +132,9 @@ def _check_history_changes(records: list[dict]) -> None:
 
 def _check_reasoning_replay(records: list[dict], steps) -> None:
     """The Kimi K3 preset keeps reasoning (entity/context_policy.py PRESETS): the runtime stores it
-    with the turn (harnesses/default/context.py:587) and the next request carries it on the turn's
-    assistant message (harnesses/default/request.py:90-93, providers/litellm.py:356-363)."""
+    with the turn (harnesses/default/context.py RealtimeRuntime._run_turn) and the next request
+    carries it on the turn's assistant message (harnesses/default/request.py _turn_items,
+    providers/litellm.py chat_messages)."""
     reasoned = [k for k, step in enumerate(steps) if step.reasoning]
     assert reasoned
     for k in reasoned:
@@ -146,9 +148,9 @@ def _check_reasoning_replay(records: list[dict], steps) -> None:
 
 
 def _check_kimi_usage(records: list[dict]) -> None:
-    """kimi_usage ran on every reply (providers/litellm.py:122-152): it adds the undivided text
+    """kimi_usage ran on every reply (providers/litellm.py kimi_usage): it adds the undivided text
     input, the cached and 5-minute cache-write splits and a zero audio output, which the token
-    normalization then reports (entity/usage.py:77-78)."""
+    normalization then reports (entity/usage.py normalize_provider_token_usage)."""
     for record in records:
         result = record["result"]
         usage = result["usage"]
@@ -190,8 +192,9 @@ def _header(config, scenario: str, tokens_per_frame) -> dict:
 def test_long_scenario_finite_token_clock(tmp_path, monkeypatch):
     config, records = _run(tmp_path, monkeypatch, LONG_SCENARIO, tokens_per_frame=TOKENS_PER_FRAME)
     native = config.native_output_limit
-    # The driver names max_completion_tokens (providers/litellm.py:1152, 563-565); LiteLLM's
-    # moonshot config sends it as max_tokens (litellm/llms/moonshot/chat/transformation.py:141-142).
+    # The driver names max_completion_tokens (providers/litellm.py MoonshotDriver.compat,
+    # LiteLLMDriver._request_kwargs); LiteLLM's moonshot config sends it as max_tokens
+    # (litellm/llms/moonshot/chat/transformation.py:141-142).
     caps = [_body(r)["max_tokens"] for r in records]
     assert all("max_completion_tokens" not in _body(r) for r in records)
     assert caps == [min(native, (MAX_TICKS - k) * TOKENS_PER_FRAME) for k in range(len(records))]
@@ -210,8 +213,9 @@ def test_long_scenario_finite_token_clock(tmp_path, monkeypatch):
 def test_pause_mode_snapshot(tmp_path, monkeypatch):
     config, records = _run(tmp_path, monkeypatch, PAUSE_SCENARIO, tokens_per_frame=None)
     # Without a finite B no clock remainder caps a decision, the harness asks for no provider cap
-    # (episode_records.py decision_budget; harnesses/default/harness.py:983) and the driver sends
-    # the declared native limit (providers/litellm.py:528-537).
+    # (episode_records.py decision_budget; harnesses/default/harness.py
+    # DefaultHarness.supports_unbounded_output) and the driver sends the declared native limit
+    # (providers/litellm.py LiteLLMDriver.transport_output_token_cap).
     assert [_body(r)["max_tokens"] for r in records] == [config.native_output_limit] * len(records)
     _check_reasoning_replay(records, PAUSE_SCENARIO)
     _check_kimi_usage(records)

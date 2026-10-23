@@ -29,23 +29,25 @@ from realtime_framework.entity.actions import Action
 REAL_TIME = "<real time>"
 REAL_TIME_FIELDS = frozenset(
     {
-        # DefaultHarness.stream_generate (harnesses/default/harness.py:1168, 1500, 1515, 1569-1573)
+        # DefaultHarness._generate (harnesses/default/harness.py)
         "latency",
         "decision_wall_latency_s",
         "provider_call_wall_latency_s",
         "runtime_turn_wall_latency_s",
         "provider_ttft_s",
-        # the output collector's receive stamps (harnesses/default/harness.py:864-865)
+        # the output collector's receive stamps (harnesses/default/harness.py
+        # _GenerationOutputCollector.consume)
         "received_wall_time_ns",
         "received_monotonic_ns",
-        # RealtimeRuntime around the provider call (harnesses/default/context.py:516-528)
+        # RealtimeRuntime around the provider call (harnesses/default/context.py
+        # RealtimeRuntime._run_turn)
         "provider_call_started_monotonic_ns",
         "provider_call_started_wall_time_ns",
         "provider_stream_started_monotonic_ns",
         # ToolRuntime.inspect (sandbox/observation/som.py:677, 713, 728)
         "tool_execution_latency_s",
         # ChoiceDecision's candidate splits, question calls and text composition
-        # (providers/decisions/selection.py:198, 216, 413)
+        # (providers/decisions/selection.py ChoiceDecision._choose, ChoiceDecision._compose_text)
         "latency_s",
     }
 )
@@ -65,8 +67,9 @@ RANDOM_IDS = (
     # output item ids of the Realtime stub (tests/replay/ws_openai_realtime.py _respond)
     ("server_item", re.compile(r"item_srv_\d+")),
 )
-DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # providers/litellm.py:348
-# The trajectory's summary of the retained history (harnesses/default/harness.py:1557-1559).
+DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # providers/litellm.py chat_messages
+# The trajectory's summary of the retained history (harnesses/default/harness.py
+# DefaultHarness._generate).
 DIGESTED_FIELDS = frozenset({"input_prompt"})
 # Fields that hold the SHA-256 of an image's bytes.
 IMAGE_SHA256_FIELDS = frozenset(
@@ -161,7 +164,8 @@ class Normalizer:
 
 def trajectory(run_dir: Path) -> list[dict]:
     """The agent's trajectory rows, one record each in the order written
-    (harnesses/default/harness.py:163-223). The viewer and the reports read them
+    (harnesses/default/harness.py VisionAgentBase._log_entry,
+    VisionAgentBase.finalize_decision_audit). The viewer and the reports read them
     (evaluation/harbor_viewer.py:130, evaluation/reporting.py:1176)."""
     lines = (run_dir / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()
     return [{"record": "trajectory", "row": json.loads(line)} for line in lines]

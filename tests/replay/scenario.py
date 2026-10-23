@@ -10,7 +10,7 @@ reports for them under the wall clock: "applied" for executed GUI actions and "w
 (sandbox/actions.py:830-936), "rejected" with the environment's message when it refuses an
 action (shell.py _execute, kernel/turns.py _executed), and "not_applied_time_limit" past the
 deadline (kernel/turns.py _skipped). A reply that yields no valid action becomes WAIT
-(harnesses/default/parsing.py:640-744) and is reported as "wait".
+(harnesses/default/parsing.py resolve_action_output) and is reported as "wait".
 """
 
 from __future__ import annotations
