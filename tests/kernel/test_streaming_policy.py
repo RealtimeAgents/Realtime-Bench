@@ -786,6 +786,23 @@ def test_pushes_failing_in_a_row_rebuild_the_session_and_a_frame_that_goes_in_en
     assert sim.termination.invalid is None
 
 
+def test_the_frame_waiting_when_failed_pushes_rebuild_the_session_goes_in_after_the_abort():
+    """Pushes 2 to 4 fail, the last after 1.5 s, while the frame captured at 4 waits. The third
+    failure gives the reply up at 4.5, and the abort holds the shell until 15: the frame waiting
+    goes in then, with its whole watchdog from then, and the run goes on."""
+    errors = {2: "item rejected", 3: "item rejected", 4: "item rejected"}
+    world = World(push_errors=errors, push_times={4: 1.5}, abort_s=10.5)
+    sim = _run(world, 40.0)
+    assert sim.data("GenerationAbandoned") == [
+        {"generation": 1, "reason": "push_failed"},
+        {"generation": 2, "reason": "deadline"},
+    ]
+    assert sim.started == [(1, 0.0), (2, 15.0)]
+    armed = [e.data["at"] for e in sim.entries("TimerSet") if e.data["kind"] == "push_watchdog"]
+    assert armed[4] == 25.0
+    assert sim.termination.invalid is None
+
+
 def test_pushes_that_keep_failing_after_the_rebuild_invalidate_the_run():
     errors = {n: "item rejected" for n in range(2, 8)}
     sim = _run(World(push_errors=errors), 10.0)
