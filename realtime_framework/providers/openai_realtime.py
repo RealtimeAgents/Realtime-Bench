@@ -72,6 +72,10 @@ _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversat
 # a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
 # fails both. Normal closes finish well within it, so it adds no observable wait.
 _CONNECTION_CLOSE_TIMEOUT_S = 10.0
+# How long an interrupt's cancel may wait to be written. It waits behind a write in progress, and
+# a streaming push stuck in one holds the connection's writes until the abort's close after the
+# interrupt drops the socket; the close needs no cancel to end the response.
+_INTERRUPT_TIMEOUT_S = 1.0
 # The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
 _NETWORK_ERRNOS = {
     errno.ENETUNREACH,
@@ -782,7 +786,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs["event_id"] = cancel_event_id
         core_generation.cancel_event_id = cancel_event_id
         try:
-            await asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs)
+            await self.clock.wait_for(
+                asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs),
+                _INTERRUPT_TIMEOUT_S,
+            )
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
         except Exception as exc:  # noqa: BLE001 - provider control boundary
             return InterruptResult(
