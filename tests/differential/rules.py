@@ -1122,7 +1122,7 @@ def _kk(script: Script, p: Projection, notes: dict) -> None:
     asked before the deadline that answers at it or after leaves the decision
     not_applied_tick_limit; the kernel asks the deadline only (turns.py TurnPolicy._pre_checked,
     _past_deadline), and the deadline's timer settles the decision as not_applied_time_limit
-    (TurnPolicy.on_end, NOT_APPLIED)."""
+    (TurnPolicy.on_end; events.py END_CAUSES)."""
     if not _wall(script):
         return
     asked = _read_across(script, p, script.duration_s)
