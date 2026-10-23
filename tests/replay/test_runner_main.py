@@ -10,7 +10,6 @@ run_summary.json (runner.py main).
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import sys
@@ -24,7 +23,7 @@ from realtime_framework.clock import Clocks, FrameClock, SystemClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
-from realtime_framework.evaluation import runner
+from realtime_framework.evaluation import reporting, runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 
@@ -161,8 +160,8 @@ def run_main(
     clock; on the wall clock it is world time too, and under the token clock (in pause mode)
     world time is a FrameClock. With ``agent_trace`` the agent gets an AgentTraceSink on the
     episode trace, as ``agent.sink``, as set_up_agent makes one. ``seen`` gets the episode clocks
-    main() makes, the keyword arguments it calls set_up_agent with, and the environment and
-    keyword arguments it calls run_stream with."""
+    main() makes, the keyword arguments it calls set_up_agent with, the environment and keyword
+    arguments it calls run_stream with, and the code main() exits with (None when it returns)."""
     seen = {} if seen is None else seen
 
     def episode_clocks(clock_mode, fps):
@@ -202,11 +201,18 @@ def run_main(
         mock.patch.object(runner.custom_tasks, "get", lambda task_id: task),
         mock.patch.object(runner, "set_up_agent", set_up_agent),
         mock.patch.object(runner, "run_stream", run_stream),
-        # An unscored cell exits 1 after the summary is written (runner.py main).
-        contextlib.suppress(SystemExit),
     ):
-        runner.main()
+        seen["exit_code"] = None
+        try:
+            runner.main()
+        except SystemExit as exc:  # an unscored cell, after the summary is written
+            seen["exit_code"] = exc.code
     return json.loads((tmp_path / "run" / "run_summary.json").read_text())
+
+
+def scored(tmp_path) -> bool:
+    """Whether the report's own check scores the run main() wrote (reporting.py summary_ok)."""
+    return reporting.summary_ok(tmp_path / "run" / "run_summary.json", require_scored=True)
 
 
 @pytest.mark.parametrize(
@@ -217,10 +223,12 @@ def test_main_reports_the_termination_the_loop_latched(tmp_path, reason, solved,
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, reason, solved)
-    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    seen = {}
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest, seen=seen)
 
     assert clock.now - task.origin >= HORIZON_S  # teardown ran past the deadline
     assert summary["invalid_run"] is None
+    assert seen["exit_code"] is None and scored(tmp_path)
     assert summary["termination"] == {
         "stop_reason": reason,
         "end_s": END_S,
@@ -297,7 +305,7 @@ def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):
     guest = FakeGuest()
     task = FakeTask(clock, guest, "task_success", True)
     summary = run_main(tmp_path, task, RecordingAgent(clock), clock, guest, agent_trace=True)
-    assert summary["invalid_run"] is None
+    assert summary["invalid_run"] is None and scored(tmp_path)
     path = tmp_path / "run" / "episode_trace.jsonl"
     validate_episode_trace(path)
     records = [json.loads(line) for line in path.read_text().splitlines()]
@@ -309,6 +317,81 @@ def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):
     assert events.index("ModelRequestSent") < events.index("AgentTraceClosed")
     (closed,) = [record["payload"] for record in records if record["event"] == "AgentTraceClosed"]
     assert (closed["captures"], closed["written"], closed["error"]) == (1, 1, None)
+
+
+class TraceFailingAgent(FakeAgent):
+    """Its one request record cannot be stored, so its records fail only once the episode is
+    over, as main() closes them (agent_trace.close_agent_trace)."""
+
+    def stream_generate(self, tick: int) -> dict:
+        def fail(data):
+            raise OSError("disk full")
+
+        self.sink._store = fail
+        self.sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": tick}, body=b"{}")
+        return super().stream_generate(tick)
+
+
+def test_agent_records_that_fail_to_be_written_invalidate_a_solved_run(tmp_path):
+    """The task was solved, but the agent's records could not all be written: main() alone finds
+    the run invalid, so it is no scored result and exits 1, its summary says why, and the trace
+    has the one RunInvalidated that says so, before EpisodeFinished."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    seen = {}
+    summary = run_main(
+        tmp_path, task, TraceFailingAgent(clock), clock, guest, agent_trace=True, seen=seen
+    )
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("harness", "agent_trace_write_failed")
+    assert (summary["solved"], summary["stop_reason"], summary["outcome"]) == (
+        None, "invalid_run", "error",
+    )  # fmt: skip
+    assert seen["exit_code"] == 1 and not scored(tmp_path)
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "run" / "episode_trace.jsonl").read_text().splitlines()
+    ]
+    events = [record["event"] for record in records]
+    invalidated = [record["payload"] for record in records if record["event"] == "RunInvalidated"]
+    assert [payload["reason"] for payload in invalidated] == ["agent_trace_write_failed"]
+    assert events.index("RunInvalidated") < events.index("EpisodeFinished")
+    finished = records[events.index("EpisodeFinished")]["payload"]
+    assert (finished["stop_reason"], finished["resolved"]) == ("invalid_run", None)
+
+
+class TwoClickTask(FakeTask):
+    """Ends once the guest has been clicked twice."""
+
+    def episode_over(self):
+        self.clock.now += QUERY_S
+        return self.reason if len(self.guest.clicks) >= 2 else False
+
+
+class HalfReportingAgent(FakeAgent):
+    """Its first reply carries the provider's usage, its second none."""
+
+    def stream_generate(self, tick: int) -> dict:
+        reply = super().stream_generate(tick)
+        if not getattr(self, "reported", False):
+            self.reported = True
+            reply["usage"] = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+        return reply
+
+
+def test_token_usage_is_unknown_while_a_reply_reported_none(tmp_path):
+    """The summary's token usage is the token accounting's totals, which a reply without usage
+    leaves unknown; the part known is in the accounting alone."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = TwoClickTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, HalfReportingAgent(clock), clock, guest)
+    accounting = summary["token_accounting"]
+    assert accounting["responses"] == summary["token_usage"]["responses"] == 2
+    assert accounting["counts"]["provider_input_tokens"]["known_total"] == 10
+    assert summary["token_usage"]["input_tokens"] is None
+    assert summary["token_usage"]["output_tokens"] is None
 
 
 def test_main_records_the_kernel_s_inputs(tmp_path):
@@ -373,10 +456,12 @@ def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path):
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "deadline_expired", False)
-    summary = run_main(tmp_path, task, FailingAgent(clock), clock, guest)
+    seen = {}
+    summary = run_main(tmp_path, task, FailingAgent(clock), clock, guest, seen=seen)
 
     invalid = summary["invalid_run"]
     assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
+    assert seen["exit_code"] == 1
     error = summary["error"]
     assert error.startswith("Traceback (most recent call last):") and len(error) > 2000
     assert error.rstrip().endswith("RuntimeError: budget rejected")
@@ -397,10 +482,12 @@ def test_a_frame_the_agent_fails_to_take_is_its_generation_error(tmp_path):
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "deadline_expired", False)
-    summary = run_main(tmp_path, task, FailingPrefillAgent(clock), clock, guest)
+    seen = {}
+    summary = run_main(tmp_path, task, FailingPrefillAgent(clock), clock, guest, seen=seen)
 
     invalid = summary["invalid_run"]
     assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")
+    assert seen["exit_code"] == 1
     assert summary["error"] is None
     assert summary["outcome"] == "error"
     assert summary["termination"] == {
