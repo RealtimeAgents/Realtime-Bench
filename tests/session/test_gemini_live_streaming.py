@@ -1038,6 +1038,24 @@ def test_each_message_is_traced_under_the_reply_it_was_read_for():
     ]
 
 
+def test_a_message_read_before_the_first_reply_is_traced_under_no_scope():
+    """The reader runs in a context of its own, not in a copy of the connecting call's: a
+    message it reads before the connection's first reply, as a resumption update right after
+    the setup, is traced in no scope, not in that of the call that connected, which for a push
+    that rebuilt the session is the push's."""
+    rig = Rig()
+
+    async def run():
+        with trace_scope(phase="push", observation_id="obs-1"):
+            await rig.connect()
+        rig.socket.feed(update("handle-0"))
+        await settle()
+        await rig.driver.close()
+
+    asyncio.run(run())
+    assert rig.socket.read_scopes == [("sessionResumptionUpdate", None)]
+
+
 def test_nothing_read_after_a_reply_is_traced_under_it_however_it_ended():
     """What the reader reads after a reply is in no reply's scope, also when its events() was
     closed before its end, or when its trigger failed and it never came."""

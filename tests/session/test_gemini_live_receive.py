@@ -7,6 +7,7 @@ not a public API), so the driver reads server messages through the SDK's real re
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -26,6 +27,7 @@ from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
+    FATAL,
     CanonicalTurn,
     ConnectRequest,
     GenerationRequest,
@@ -453,6 +455,24 @@ def test_a_failed_reply_does_not_resume():
     ]
 
 
+def test_audio_without_an_audio_token_breakdown_fails_the_reply():
+    """A reply that carried model audio fails at its end when its usage gives no AUDIO response
+    tokens: the token clock does not charge spoken output, and without the breakdown it cannot
+    be told apart from the output it does charge."""
+    audio = {"mimeType": "audio/pcm;rate=24000", "data": base64.b64encode(bytes(960)).decode()}
+    spoken = {"serverContent": {"modelTurn": {"parts": [{"inlineData": audio}]}}}
+    rig = Rig("gemini-3.8-live", [[spoken, TURN_COMPLETE]])
+
+    async def run():
+        await rig.connect()
+        try:
+            await drain(rig.driver.events(await rig.start("turn-0")))
+        except RuntimeError as exc:
+            return str(exc)
+
+    assert asyncio.run(run()) == "Gemini returned audio without an AUDIO response token breakdown"
+
+
 def realtime_input_with(key: str):
     return lambda message: key in message.get("realtime_input", {})
 
@@ -684,6 +704,23 @@ def test_the_go_away_deadline_bounds_the_reply(script, stall):
 
     assert isinstance(asyncio.run(asyncio.wait_for(run(), 5)), live.GoAwayDeadlineExceeded)
     assert rig.driver._session is None and rig.driver._core.connection is None
+
+
+def test_a_reply_the_go_away_deadline_cut_short_is_not_retried():
+    """A reply still unfinished at the goAway deadline is FATAL to the shared retry: what of the
+    turn was generated can neither be replayed nor charged as zero. The failure the driver
+    raises chains to the deadline's timeout, which alone would classify as transient."""
+    rig = Rig("gemini-3.8-live", [[GO_AWAY_SOON, HANG]])
+
+    async def run():
+        await rig.connect()
+        try:
+            await drain(rig.driver.events(await rig.start("turn-0")))
+        except live.GoAwayDeadlineExceeded as exc:
+            return exc
+
+    failure = asyncio.run(asyncio.wait_for(run(), 5))
+    assert rig.driver.classify_transport_error(failure).kind == FATAL
 
 
 def test_an_acknowledgement_the_go_away_deadline_cut_short_is_unknown():

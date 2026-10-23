@@ -693,6 +693,18 @@ def test_go_away_resumes_after_a_clean_turn():
     assert core.last_turn_clean and not core.renewal_required
 
 
+def test_a_later_go_away_that_gives_more_time_leaves_the_earliest_deadline():
+    """Of a connection's goAways the earliest deadline holds, also when a later one gives more
+    time: the driver does not count on a later goAway to put off a close the server already
+    announced, and bounds the reply by the first."""
+    core = session_core()
+    connected(core)
+    start_turn(core, "turn-0")
+    receive(core, go_away("5s"), now=110.0)
+    receive(core, go_away("30s"), now=111.0)
+    assert core.go_away_deadline == 113.0
+
+
 def test_resume_failure_rebuilds():
     core = session_core()
     connected(core)
