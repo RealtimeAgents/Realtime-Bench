@@ -158,7 +158,6 @@ class _StreamingShell:
 
     def run(self) -> Termination:
         env = self.env
-        env.kernel_counts_reads = True
         env.on_invalid = self.lanes.gate.latched
         self.agent.bind_inbox(self.post, env.t0)
         try:

@@ -55,7 +55,6 @@ class FakeEnv:
         self.fail: set[str] = set()
         self.during: dict = {}  # name -> what an operation does halfway through
         self.released_at: float | None = None
-        self.kernel_counts_reads = False
         self.on_invalid = None
         self._invalid_run = None
         self._last_exec_error = None
