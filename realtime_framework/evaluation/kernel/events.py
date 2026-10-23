@@ -367,8 +367,9 @@ class Commit:
 class FreezeSnapshot:
     """Take the scorer's snapshot now; answer with SnapshotFrozen. The turn-based shell takes it
     on its own thread, after the operation that thread ran across the end; the streaming shell
-    takes it next after the action executing, waiting for it at most the action's budget
-    (evaluation/streaming_shell.py ``_freeze``)."""
+    takes it next after the action executing, waiting for it, and a capture alongside it, at most
+    the larger of the action's budget and a capture's (N32; evaluation/streaming_shell.py
+    ``_freeze``)."""
 
 
 @dataclass(frozen=True)

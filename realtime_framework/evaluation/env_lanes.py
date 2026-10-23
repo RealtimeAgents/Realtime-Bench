@@ -28,8 +28,9 @@ Sharing the gate is not sharing the browser's connection. A CDP call's timeout s
 its session's lock (sandbox/browser/cdp.py PersistentCDPClient), which the action's page barriers
 and focus check hold on the session every caller shares; so the capture's DOM and AX probes run on
 a session of their own on the same page (decision N33), which the lanes open. Still one at a time:
-the page runs the two sessions' scripts in turn, and the task's own check of a captured frame
-(``captured_frame_is_current``) stays on the shared session.
+the page runs the two sessions' scripts in turn. The task's own check of a captured frame
+(``captured_frame_is_current``) makes no CDP call: it reads the render fence of the task's last
+clock advance off the screenshot.
 
 A lane takes its place in the gate's line when it is given the command, so the environment runs
 the kernel's commands in the order the kernel sent them, also those it sent in one step to two
