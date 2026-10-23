@@ -868,7 +868,6 @@ from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
-from realtime_framework.entity.actions import action_has_target_references
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
@@ -1027,8 +1026,6 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
                     execution["reference_resolution"].update(
                         frame=frame.frame, observation_id=frame.observation_id
                     )
-            elif action_has_target_references(parsed):
-                parsed = None
         if parsed is not None:
             candidates.append((parsed, frame, reference, error))
         return parsed
