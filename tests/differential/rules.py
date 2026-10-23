@@ -307,7 +307,7 @@ def x12_plan(script: Script, probe: Projection) -> X12Plan:
     """The kernel counts failed reads in the order it handles them: end checks, and on the token
     clock the reads a key tap makes, before the check after it (turns.py TurnPolicy._executed). A
     read that succeeds resets the count, whatever it answers; the third failure in a row ends the
-    run. Today the first failure does (sandbox/actions.py GuestEnvironment.done)."""
+    run. Today the first failure does (legacy_environment.py LegacyStateReads.done)."""
     if _wall(script):
         return _x12_wall(script, probe)
     failing = {"check": set(script.check_errors), "tap": set(script.tap_check_errors)}
@@ -492,9 +492,10 @@ def _x12(script: Script, p: Projection, notes: dict) -> None:
 
 def _x12_tap(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: a failed read does not stop the kernel's tap; it goes on to its end, reading
-    after each step, until a read sees the end (W0's ShellEnvironment.kernel_counts_reads,
-    simulation.py Simulation._tap), and the run ends there. Today's tap stops at the failure
-    (sandbox/actions.py GuestEnvironment.wait_until_tick, _ended_after_step, done)."""
+    after each step, until a read sees the end (sandbox/actions.py
+    GuestEnvironment._ended_after_step; simulation.py Simulation._tap), and the run ends there.
+    Today's tap stops at the failure (legacy_environment.py LegacyStateReads._ended_after_step,
+    done)."""
     failed = [n for kind, n, answer in p.facts["reads"] if kind == "tap" and answer == "failed"]
     if not failed:
         return
@@ -900,7 +901,7 @@ def _kn(script: Script, p: Projection, notes: dict) -> None:
     """Wall clock: a failed read right before landing settles the decision as invalid_run
     (turns.py TurnPolicy._count_read, _resolve), now that the kernel reads there again (N26);
     today the environment's True reads as the task's end and the decision is
-    not_applied_terminal (sandbox/actions.py GuestEnvironment.done; legacy_loop.py
+    not_applied_terminal (legacy_environment.py LegacyStateReads.done; legacy_loop.py
     _land_action). The token clock's kernel reads on no tick read already (KF5b)."""
     invalid = p.episode["invalid"]
     if not _wall(script) or invalid is None or invalid["reason"] != "terminal_state_check_failed":

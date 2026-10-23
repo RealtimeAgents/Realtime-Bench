@@ -197,8 +197,8 @@ class WallEnvironment(_Latched, FakeEnvironment):
         kernels = self._kernels(asked)
         self._last_asked = asked
         if reads and kernels and self.script.read_fails_at(asked):
-            # GuestEnvironment latches a read that failed, once it has taken its time, and
-            # answers that the episode is over (sandbox/actions.py GuestEnvironment.done).
+            # Today's environment latches a read that failed, once it has taken its time, and
+            # answers that the episode is over (legacy_environment.py LegacyStateReads.done).
             self.clock.sleep(self.script.check_s)
             self._invalid_run = {
                 "category": "environment",
