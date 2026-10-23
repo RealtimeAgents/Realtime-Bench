@@ -490,6 +490,23 @@ def test_an_end_found_by_a_check_makes_a_result_back_during_it_stale():
     assert _ended(sim) == ("game_decided", "environment", 2.0, 2.25)
 
 
+def test_an_end_a_check_saw_goes_before_a_result_filed_at_the_same_reading():
+    # 2 fps. The read asked at 0.5 s takes 0.7 s; the reply, back at 1.1 s meanwhile, is filed at
+    # 1.2 s, when the kernel takes it in. The check due at 1 s comes before it, is asked at 1.2 s,
+    # sees the end the task reached at 1.15 s and answers at once: filed at its asking, with the
+    # result and after it. At one instant an end comes before a completion (EndChecked.priority):
+    # the result is discarded and no decision is reported.
+    world = World(
+        replies=[Reply(1.1, CLICK)], check_seconds={2: 0.7}, ends_at=1.15, end_reason="won"
+    )
+    sim = _episode(_wall(10.0, env_fps=2.0), world)
+    assert _asked(sim) == [0.0, 0.5, 1.2]
+    assert _data(sim, "GenerationAbandoned") == [{"generation": 1, "reason": "environment"}]
+    assert (sim.accepted, sim.discarded, sim.outcomes) == ([], [1], [])
+    assert _ended(sim) == ("won", "environment", 1.2, 1.2)
+    _assert_nothing_after_the_end(sim)
+
+
 def test_an_end_found_by_the_check_before_landing_leaves_the_action_unapplied():
     # The reply comes back at 4 s, on the frame boundary ahead of the periodic check due then:
     # frame 4 has not been read, so it is read before execution, and that read finds the end.
@@ -1169,15 +1186,14 @@ def test_fewer_than_three_failed_checks_in_a_row_leave_the_run_valid(failing):
     assert sim.termination.invalid is None
 
 
-def test_failed_reads_at_one_instant_count_in_the_order_they_were_made():
+def test_an_answer_between_failed_reads_at_one_instant_starts_the_count_over():
     # The click at 2.25 s is read before and after its execution, which takes no time: both at
-    # 2.25 s.
+    # 2.25 s. The later read is asked only once the earlier one's answer has been handled.
     world = World(replies=[Reply(2.25, CLICK), Reply(100.0)])
     asked = [0.0, 1.0, 2.0, 2.25, 2.25]
     # The reads before and after the last two at one instant fail, the earlier of those two
-    # answers and the later fails: failures in a row 1, 2, 0, 1, so the run stays valid. A failed
-    # read is no end and is handled in its turn, not ahead of an earlier answer (phase2.md,
-    # 时间和结束判定: in a row).
+    # answers and the later fails: failures in a row 1, 2, 0, 1, so the run stays valid
+    # (phase2.md, 时间和结束判定: in a row).
     failing = (len(asked) - 2, len(asked) - 3, len(asked))
     world.check_errors = _failing(*failing)
     sim = _episode(_wall(4.0), world)
@@ -1186,6 +1202,29 @@ def test_failed_reads_at_one_instant_count_in_the_order_they_were_made():
     assert requests == sorted(requests)
     assert sim.entries("RunInvalidated") == []
     assert _ended(sim)[:2] == ("time_limit", "deadline")
+
+
+def test_a_failed_read_is_handled_in_its_turn_behind_a_result_filed_before_it():
+    # Every read fails. The read asked at 1 s takes 1.3 s; the reply, back at 2.2 s meanwhile, is
+    # filed at 2.3 s, when the kernel takes it in. The check due at 2 s comes before it, is asked
+    # at 2.3 s and fails at once, the third failure in a row, filed at its asking, after the
+    # result. A failed read is no end and is handled in its turn (EndChecked.priority): the
+    # result is accepted first, until 2.35 s, and its landing finds the run invalid, which ends
+    # when the third read was asked (N44).
+    world = World(
+        replies=[Reply(2.2, CLICK)],
+        check_seconds={2: 1.3},
+        accept_s=0.05,
+        check_errors=_failing(1, 2, 3),
+    )
+    sim = _episode(_wall(10.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.3]
+    assert (sim.accepted, sim.discarded, sim.executed) == ([1], [], [])
+    assert [outcome.status for outcome in sim.outcomes] == ["invalid_run"]
+    assert _ended(sim) == pytest.approx(("invalid_run", "invalid", 2.3, 2.35))
+    assert sim.termination.invalid == Invalidated(
+        "environment", "terminal_state_check_failed", "state read 3 failed"
+    )
 
 
 def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_answers_after():
