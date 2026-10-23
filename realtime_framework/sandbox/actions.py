@@ -167,7 +167,8 @@ class GuestEnvironment:
         # reads: each (ended, reason, error) as check_end() answered or failed, (False, None, None)
         # also when the task has no end check.
         self.last_end_checks = ()
-        # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
+        # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)},
+        # and "stuck" once the release timer gave up on the key, left for the cleanup to release.
         # _wall_lock guards them and the release timer and is never held over a guest request,
         # so the key checks and the hold snapshot do not wait for one; _wall_commands serializes
         # the xdotool commands that press and release leased keys with the lease changes they make.
@@ -765,21 +766,22 @@ class GuestEnvironment:
                 expired = [
                     identity
                     for identity, item in self._wall_holds.items()
-                    if item["expires_at"] <= now + 1e-3
+                    if not item.get("stuck") and item["expires_at"] <= now + 1e-3
                 ]
             try:
                 self._wall_release(expired)
             except Exception as exc:
                 # A key the guest cannot release stays physically down (and auto-repeating). Retry
                 # briefly with a floor between attempts; then treat the stuck key as an
-                # environment failure instead of hammering the guest from this timer forever.
+                # environment failure instead of hammering the guest from this timer forever, and
+                # leave it to the cleanup.
                 with self._wall_lock:
                     self._wall_release_failures += 1
                     if self._wall_release_failures < WALL_RELEASE_MAX_ATTEMPTS:
                         self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
                         return
                     for identity in expired:
-                        self._wall_holds.pop(identity, None)
+                        self._wall_holds[identity]["stuck"] = True
                     if not getattr(self, "_invalid_run", None):
                         self._invalid_run = invalid = {
                             "category": "environment",
@@ -804,11 +806,11 @@ class GuestEnvironment:
             self._wall_timer.cancel()
             self._wall_timer = None
         self._wall_timer_generation += 1
-        if self._wall_closed or not self._wall_holds:
+        due = [item["expires_at"] for item in self._wall_holds.values() if not item.get("stuck")]
+        if self._wall_closed or not due:
             return
         clock = self.clocks.semantic
-        earliest = min(item["expires_at"] for item in self._wall_holds.values())
-        delay = max(float(min_delay), earliest - clock.time())
+        delay = max(float(min_delay), min(due) - clock.time())
         generation = self._wall_timer_generation
         self._wall_timer = clock.timer(delay, lambda: self._wall_release_due(generation))
 
