@@ -708,7 +708,7 @@ class GuestEnvironment:
             "extended_keys": [
                 self._held_keys[item]["wire"] for item in extended if item in self._held_keys
             ],
-            "hold_frames": duration / self.d,
+            "hold_ticks": duration / self.d,
             "duration_simulated_seconds": duration,
             "auto_repeat": {
                 "delay_seconds": AUTOREPEAT_DELAY_S,
