@@ -81,13 +81,14 @@ def abandoned_result(latency: float, reason: str) -> dict:
 
 def watchdog_result(latency: float, seconds: float) -> dict:
     """The result of a token-clock call the provider watchdog gave up on after ``seconds``: no
-    action, and a provider failure that makes the run invalid."""
+    action, no usage reported for it, and a provider failure that makes the run invalid."""
     return {
         "action": None,
         "latency": latency,
         "invalid_category": "provider",
         "invalid_reason": "generation_watchdog_timeout",
         "invalid_detail": f"generation exceeded {seconds:g}s",
+        "provider_usage_missing_reason": "generation_aborted_at_provider_watchdog",
     }
 
 
