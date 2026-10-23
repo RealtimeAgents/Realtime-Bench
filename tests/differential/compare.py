@@ -5,7 +5,6 @@ applied, in its requests, usage and trace records too."""
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 from . import drivers
@@ -17,10 +16,6 @@ from .simulated import simulate
 
 # Verdicts of the session, for the summary conftest.py prints.
 VERDICTS: list[tuple[Verdict, bool]] = []
-
-
-class ExpectationNotShown(UserWarning):
-    """A named script expects a difference it did not show."""
 
 
 def compare(script: Script, run_dir: Path) -> Verdict:
@@ -52,15 +47,13 @@ def _subdir(run_dir: Path, name: str) -> Path:
 
 
 def record(verdict: Verdict, *, named: bool) -> None:
-    """Keep the verdict for the summary. A random script may show any expected difference, so
-    only a named one warns about those it expects and did not show."""
+    """Keep the verdict for the summary."""
     VERDICTS.append((verdict, named))
-    if named and verdict.unused:
-        warnings.warn(
-            f"{verdict.script.name}: expected {', '.join(verdict.unused)}, not shown",
-            ExpectationNotShown,
-            stacklevel=2,
-        )
+
+
+def as_expected(verdict: Verdict) -> bool:
+    """A named script also shows every difference it expects; a random one may show any."""
+    return verdict.ok and not verdict.unused
 
 
 def describe(verdict: Verdict, limit: int = 40) -> str:
@@ -70,6 +63,8 @@ def describe(verdict: Verdict, limit: int = 40) -> str:
         lines += [f"  {problem}" for problem in verdict.apart[:limit]]
     if verdict.unexpected:
         lines.append(f"differences the script does not expect: {', '.join(verdict.unexpected)}")
+    if verdict.unused:
+        lines.append(f"differences the script expects, not shown: {', '.join(verdict.unused)}")
     if verdict.problems:
         lines.append(f"{len(verdict.problems)} difference(s) no rule explains:")
         lines += [f"  {problem}" for problem in verdict.problems[:limit]]
