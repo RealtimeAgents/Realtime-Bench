@@ -270,8 +270,9 @@ def test_a_release_skips_keys_that_are_not_held():
 
 def test_keys_released_together_go_up_in_the_order_they_were_pressed():
     """The kernel names them in the order of its leases (evaluation/kernel/turns.py), which can
-    differ from the order of the presses; the game gets the chord the legacy wait sends
-    (_release_expired_clock_keys), and its keyUp events (sandbox/browser/clock.py)."""
+    differ from the order of the presses; the task gets the chord the legacy wait sends
+    (_release_expired_clock_keys) in the order of the presses. The page's keyUp events for a
+    chord are cdp_key_event's (sandbox/browser/clock.py), tested with it."""
     env, task = _token()
     env.execute(Action.hold_key("shift+a", 1.0))
     env.release_keys(("a", "shift"))
