@@ -1794,7 +1794,11 @@ class DefaultHarness(VisionAgentBase):
                 "valid_action": False,
                 "action_text": None,
                 "protocol_failure": native_protocol_failure,
-                "parse_mode": "native_function_call_count",
+                "parse_mode": (
+                    None
+                    if output.token_fields.get("function_validation_error")
+                    else "native_function_call_count"
+                ),
                 "candidate_count": output.token_fields.get("function_call_count", 0),
             }
             action = self.interaction_profile.bind_action(

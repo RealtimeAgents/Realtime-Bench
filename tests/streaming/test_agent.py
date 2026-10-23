@@ -15,7 +15,11 @@ from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import CallsCancelled, PushHeld, PushResumed
-from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
+from realtime_framework.harnesses.default.frames import (
+    FRAME_NOT_IN_TABLE,
+    INVALID_GROUNDING_FRAME,
+    MISSING_FRAME,
+)
 from realtime_framework.harnesses.default.harness import action_text
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
@@ -221,6 +225,34 @@ def test_a_call_that_is_no_action_is_the_replys_protocol_failure_and_hands_nothi
     r = agent.generate(0, 0, frame, BUDGET).result
     assert [a.call_id for a in posted] == ["c2"]
     assert r["action_protocol"]["protocol_failure"] == "invalid_action_output"
+    agent.close()
+
+
+def test_a_call_its_function_schema_rejects_is_no_action_and_one_without_its_frame_is_refused(
+    monkeypatch, clock
+):
+    """As a turn's call (FunctionCallTurnCollector.finish): a call naming its frame whose
+    arguments its function's schema rejects, coordinates as strings here, is the reply's protocol
+    failure and hands nothing over, though the text parser would read it. A call without its
+    frame arrives refused for that, whatever else is wrong with it. The reply's output holds
+    both as they came."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    rejected = Call(0.25, "c1", "click", {"x": "10", "y": "20", "frame": 2})
+    unframed = Call(0.5, "c2", "key", {"keys": "enter"})
+    agent.driver.replies.append(Reply((rejected, unframed, _click("c3", 0.75, 2)), ends_at=1.0))
+    r = agent.generate(0, 0, frame, BUDGET).result
+    assert [(a.call_id, a.rejection, a.detail) for a in posted] == [
+        ("c2", INVALID_GROUNDING_FRAME, MISSING_FRAME),
+        ("c3", None, ""),
+    ]
+    assert r["action_protocol"]["protocol_failure"] == "invalid_action_output"
+    assert r["raw"].splitlines()[:2] == [
+        '{"action": "click", "x": "10", "y": "20", "frame": 2}',
+        '{"action": "key", "keys": "enter"}',
+    ]
     agent.close()
 
 
