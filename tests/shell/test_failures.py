@@ -597,9 +597,10 @@ def test_the_environment_keeps_its_reason_for_a_tap_whose_advance_failed():
 
 def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
     """Paused at tick 0, a 3 s wait: its second step fails and the environment latches
-    clock_advance_failed. The wait is a failed action, as the environment reports it
-    (sandbox/actions.py GuestEnvironment.execute; kernel/turns.py _step_failed): invalid_run,
-    an error for its execution record, no ActionApplied, and nothing escaped the loop."""
+    clock_advance_failed. The wait is a failed action, as the legacy loop's environment reports it
+    (tests/differential/legacy_environment.py LegacyStateReads.execute; kernel/turns.py
+    _step_failed): invalid_run, an error for its execution record, no ActionApplied, and nothing
+    escaped the loop."""
     world = World(advance_errors={2: "advance failed"})
     episode = run("token", 5.0, [Reply(0.0, Action.wait(3.0))], world)
     _finalized(episode, 1.0)

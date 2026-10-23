@@ -367,7 +367,7 @@ def test_a_wall_wait_the_tasks_end_cuts_short_lasts_until_the_end_is_dated():
 def test_a_token_wait_across_the_horizon_ends_at_the_horizon():
     """wait 跨过截止 (token): a 5 s WAIT lands at tick 1 with T = 3. It moves the clock only to the
     horizon, one tick per step with an end check after each, and records that the horizon cut it
-    (sandbox/actions.py GuestEnvironment.execute)."""
+    (tests/differential/legacy_environment.py LegacyStateReads.execute)."""
     wait = Action.wait(5.0)
     sim = _run(_token(3.0), World(replies=[Reply(latency=0.5, action=wait, output_tokens=100)]))
     assert sim.advances == [1.0, 1.0, 1.0]
