@@ -361,6 +361,30 @@ def test_agent_records_that_fail_to_be_written_invalidate_a_solved_run(tmp_path)
     assert (finished["stop_reason"], finished["resolved"]) == ("invalid_run", None)
 
 
+class UnhealthyTask(FakeTask):
+    """Its evaluator answers, but says its backend was not healthy."""
+
+    def evaluate_snapshot(self, snapshot):
+        return {**super().evaluate_snapshot(snapshot), "ok": False}
+
+
+def test_a_re_evaluation_judges_an_unscorable_evaluation_as_the_run_did(tmp_path, monkeypatch):
+    """The first evaluation (runner.py main) and a re-evaluation of the saved state
+    (reporting.reevaluate_main, its evaluator stubbed) give the same reason for not scoring it."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = UnhealthyTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    assert summary["invalid_run"]["reason"] == "evaluation_backend_unhealthy"
+    run_dir = tmp_path / "run"
+    verification = summary["verification"]
+    monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (verification, {}))
+    monkeypatch.setattr(sys, "argv", ["reevaluate", str(run_dir), "--replace-summary"])
+    reporting.reevaluate_main()
+    replaced = json.loads((run_dir / "run_summary.json").read_text())
+    assert replaced["invalid_run"]["reason"] == "evaluation_backend_unhealthy"
+
+
 class TwoClickTask(FakeTask):
     """Ends once the guest has been clicked twice."""
 
