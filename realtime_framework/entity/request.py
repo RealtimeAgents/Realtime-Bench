@@ -55,7 +55,9 @@ class ToolExchange:
 
 @dataclass(frozen=True)
 class ContentBlock:
-    # "system", "ledger", or "d{decision}.frame|prefix|output|feedback|tools"
+    # "system", "ledger", or "d{decision}.frame|prefix|output|feedback|tools"; the streaming view
+    # names a frame "f{frame}.frame" by its frame-table number, and the feedback on one call of
+    # a reply "d{decision}.{call_id}.feedback"
     id: str
     kind: BlockKind
     source: Source
@@ -67,7 +69,8 @@ class ContentBlock:
     text: str = ""
     image: FrameImage | None = None  # unfolded frames of screenshot observations only
     folded: bool = False
-    # frame: the existing frame number; digest feedback an older frame opened with: that frame's
+    # frame: its observation_id (not a frame-table number); digest feedback an older frame opened
+    # with: that frame's
     observation_id: str | None = None
     based_on: str | None = None  # output and tools: observation_id of the frame answered
     attached_to: str | None = None  # feedback: the output it reports, or the frame it prefixes

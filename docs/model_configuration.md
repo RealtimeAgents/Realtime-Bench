@@ -92,9 +92,9 @@ context window (`context_window_tokens`, from the driver's model defaults or
 a block at a time. With no turn left, the earliest archived actions give way to a note in the
 ledger, a block at a time, and stay out for the rest of the episode, as archived turns do. A
 request that does not fit with every archived action left out is not sent, and the run is
-invalid (`context_exceeded_before_request`). A driver without roles, as the Decisions APIs are,
-places the archived-action ledger by position and header, whatever ledger role the policy gives.
-Whether either takes effect is not recorded on its own: it follows from the driver code, which the
+invalid (`context_exceeded_before_request`). Luna's driver, which has no roles, places the
+archived-action ledger by position and header, whatever ledger role the policy gives; JEV's, which
+has none either, labels the ledger's entry with that role. Whether either takes effect is not recorded on its own: it follows from the driver code, which the
 harness fingerprint covers (an external driver's identity, for an external driver), and from the
 model configuration, which the run hash covers.
 
