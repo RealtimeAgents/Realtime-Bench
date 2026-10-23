@@ -12,6 +12,7 @@ compared with tests/replay/baselines/.
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -305,21 +306,62 @@ def test_whole_turn_retry_503(openrouter_env, tmp_path):
     assert kind == TransportFailure(TRANSIENT)
 
 
-def test_whole_turn_retry_429_with_retry_after(openrouter_env, tmp_path):
-    """HTTP 429 with ``Retry-After: 120``, as today's code handles it: retried after the normal
-    first backoff. The policy would not wait out a Retry-After above 30 s; it would end the
-    decision instead (entity/model.py:372-380). The header is lost because
-    classify_transport_error stops at the first exception in the chain that has a status
-    (providers/litellm.py:1064-1068): LiteLLM's RateLimitError, whose response has no Retry-After,
-    while exceptions further down the chain carry the 120 s."""
+def test_whole_turn_429_with_a_long_retry_after(openrouter_env, tmp_path):
+    """HTTP 429 with ``Retry-After: 120``. LiteLLM's RateLimitError, the first exception in the
+    chain, has no Retry-After on its response; the HTTP error it wraps does, and
+    classify_transport_error reads it from there (providers/litellm.py _retry_after). The shared
+    policy does not wait out a Retry-After above 30 s (entity/model.py TransportRetryPolicy): the
+    request is not sent again, and the decision fails as provider_rate_limited with nothing in
+    the history."""
+    sleeps = _Sleeps()
+    openrouter_env.setattr(model_module, "_backoff", sleeps)
     failure = Failure(
         429, {"error": {"message": "rate limited", "code": 429}}, (("Retry-After", "120"),)
     )
-    (kind, carried), key = _retry_scenario(openrouter_env, tmp_path, failure, "retry-429")
-    assert kind == TransportFailure(RATE_LIMITED)  # retry_after_s is None
+    with openrouter_episode(openrouter_env, tmp_path, [failure], **TOKEN_CLOCK) as (
+        stub,
+        config,
+        episode,
+    ):
+        classified = _spy_classifier(episode.agent.driver)
+        agent = episode.agent
+        observation = episode.frames.capture(0)
+        agent.configure_decision(episode.budget(observation.tick_number))
+        agent.stream_prefill(observation)
+        result = agent.stream_generate(tick=0)
+        agent.finalize_decision_audit(result)
+    ((kind, carried),) = classified
+    assert kind == TransportFailure(RATE_LIMITED, 120.0)
     assert carried[0] is None and 120.0 in carried
-    honored = TransportFailure(RATE_LIMITED, 120.0)
-    assert TRANSPORT_RETRY.delay_s(1, key, honored) is None
+    assert sleeps.calls == []
+    assert result["invalid_reason"] == "provider_rate_limited"
+    assert agent.action_history == []
+    records = [
+        {
+            "record": "step",
+            "step": 0,
+            "observation": {
+                "observation_id": observation.metadata["observation_id"],
+                "tick": observation.tick_number,
+                "timestamp": observation.timestamp,
+                "screenshot_sha256": observation.metadata["screenshot_sha256"],
+            },
+            "requests": [
+                {"path": received.path, "body": json.loads(received.body)}
+                for received in stub.requests
+            ],
+            "result": result,
+            "token_usage": agent.token_usage,
+        }
+    ]
+    with_headers(records, stub.requests)
+    actual = check_baseline(
+        "openrouter-retry-429.jsonl",
+        header_record(config, "retry-429", TOKEN_CLOCK),
+        records,
+        tmp_path,
+    )
+    check_one_session(actual)
 
 
 def test_an_error_recording_a_retry_propagates(openrouter_env, tmp_path):

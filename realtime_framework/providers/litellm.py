@@ -1083,8 +1083,7 @@ class LiteLLMDriver:
         for current in exception_chain(exc):
             status = getattr(current, "status_code", None)
             if isinstance(status, int) and status >= 400:
-                headers = getattr(getattr(current, "response", None), "headers", None)
-                return classify_http_failure(status, str(current), retry_after_seconds(headers))
+                return classify_http_failure(status, str(current), _retry_after(exc))
         for current in exception_chain(exc):
             if isinstance(current, litellm.RateLimitError):
                 return classify_http_failure(429, str(current))
@@ -1098,6 +1097,17 @@ class LiteLLMDriver:
         if any(kind in detail for kind in self._TRANSIENT_ERROR_TYPES):
             return TransportFailure(TRANSIENT)
         return TransportFailure(FATAL)
+
+
+def _retry_after(exc: BaseException) -> float | None:
+    """The first Retry-After along the exception chain. The exception LiteLLM raises keeps none
+    on its response; the HTTP client's error it wraps, further down the chain, does."""
+    for current in exception_chain(exc):
+        headers = getattr(getattr(current, "response", None), "headers", None)
+        retry_after = retry_after_seconds(headers)
+        if retry_after is not None:
+            return retry_after
+    return None
 
 
 # Registered chat APIs
