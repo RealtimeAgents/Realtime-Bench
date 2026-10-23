@@ -346,6 +346,7 @@ class _Shell:
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
         self._accepting: set[int] = set()  # the generations the batch being run accepts
+        self._batch_invalid = False  # the shell posted an invalid run during the batch being run
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -527,10 +528,16 @@ class _Shell:
 
     def _run_all(self, commands: list) -> None:
         self._accepting = {c.generation for c in commands if isinstance(c, AcceptResult)}
+        self._batch_invalid = False
         for command in commands:
             self._run(command)
 
     def _run(self, command) -> None:
+        if self._batch_invalid and isinstance(command, Execute | AdvanceClock | RenderFrame):
+            # The kernel takes the invalid run the shell posted only at its next step: what is
+            # left of the batch acts on the world no more, as the legacy loop executed nothing
+            # once _invalid_run was latched (legacy_loop.py _land_action).
+            return self.post(self._not_run(command))
         try:
             self._handle(command)
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
@@ -595,7 +602,13 @@ class _Shell:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
         finalizes."""
         self._escaped(failure)
-        self.post(Invalidated("runner", "run_exception", failure))
+        self._invalidate(Invalidated("runner", "run_exception", failure))
+
+    def _invalidate(self, invalid: Invalidated) -> None:
+        """Post an invalid run the shell found on its own thread; the rest of the batch it came
+        in runs nothing in the world (_run)."""
+        self._batch_invalid = True
+        self.post(invalid)
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
@@ -619,6 +632,20 @@ class _Shell:
                 return SnapshotFrozen(semantic, semantic if ops is None else ops, failure)
         return None
 
+    @staticmethod
+    def _not_run(command):
+        """The answer to a command left unrun for an invalid run the kernel has not taken yet. The
+        kernel takes that run first; an action left unrun, or one whose move to the action time
+        was, settles as invalid_run (kernel/turns.py _executed, _step_failed)."""
+        error = "not run: the run was invalidated earlier in this batch of commands"
+        match command:
+            case Execute(decision=decision):
+                return ActionExecuted(decision, error=error)
+            case AdvanceClock():
+                return ClockStepped(error)
+            case RenderFrame():
+                return FrameRendered(error=error)
+
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
         itself in an operation that returned goes to the kernel with its own reason before the
@@ -628,7 +655,7 @@ class _Shell:
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
         if invalid is not None and invalid is not latched:
-            self.post(_invalidated(invalid))
+            self._invalidate(_invalidated(invalid))
         return result
 
     def _failure(self, operation, *args) -> str | None:
@@ -899,12 +926,12 @@ class _Shell:
             # _executed): first, it settles the action where it ran, not after the snapshot read
             # the end asks for.
             self.post(answer)
-            self.post(_invalidated(invalid))
+            self._invalidate(_invalidated(invalid))
         else:
             # Latched for a step inside the action, such as a key tap's failed advance: first, it
             # keeps its reason, which the kernel would read from the answer as
             # action_execution_failed.
-            self.post(_invalidated(invalid))
+            self._invalidate(_invalidated(invalid))
             self.post(answer)
 
     def _commit(self, outcome: Outcome) -> None:
@@ -959,7 +986,7 @@ class _Shell:
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             failure = traceback.format_exc()
             self.log(f"[default] lifecycle audit write failed:\n{failure}")
-            self.post(Invalidated("harness", "action_lifecycle_write_failed", failure))
+            self._invalidate(Invalidated("harness", "action_lifecycle_write_failed", failure))
         self._checkpoint()
         t_k, tau, action = r["observation_tick"], outcome.action_clock_position, outcome.action
         # The token delay is in input frames; on the wall clock the delay is the decision's
@@ -1234,7 +1261,7 @@ class _Shell:
                     f"{held.result['latency']:g}s, settled past its {bound} — discarded"
                 )
             if held.invalid is not None and self.kernel.invalid is None:
-                self.post(held.invalid)
+                self._invalidate(held.invalid)
             return
         if bound is None:
             # It ran until the episode ended (decision 32), however late the shell got to it.
@@ -1269,7 +1296,7 @@ class _Shell:
             self.env._token_accounting.leave_unreported(r["token_accounting"])
         self._emit_inference(inference, entry)
         if result.invalid is not None and self.kernel.invalid is None:
-            self.post(result.invalid)  # its trajectory row could not be written
+            self._invalidate(result.invalid)  # its trajectory row could not be written
 
     def _emit_inference(self, inference: tuple[list[dict], dict], entry: Entry) -> None:
         chunks, completed = inference
@@ -1296,7 +1323,7 @@ class _Shell:
             if self._finished:  # the kernel handles nothing more (_write_handed)
                 self.agent_trace.fail(traceback.format_exc())
             else:
-                self.post(
+                self._invalidate(
                     Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
                 )
 
@@ -1308,6 +1335,6 @@ class _Shell:
             self.trace.checkpoint()
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             self._trace_failed = True
-            self.post(
+            self._invalidate(
                 Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
             )
