@@ -8,7 +8,7 @@ Entry points (each with its own defaults):
 - ``trial``: ``python -m realtime_framework.evaluation._trial --catalog-model M --task T``, which
   loads ``.env`` and execs the runner (evaluation/_trial.py main).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
-  job file). Harbor resolves the trial (evaluation/harbor.py:265-534) and starts ``_trial``.
+  job file). Harbor resolves the trial (evaluation/harbor.py) and starts ``_trial``.
 - ``identity``: ``python -m realtime_framework.evaluation.config`` with the runner's defaults; it
   prints the hash the runner should record.
 
@@ -18,9 +18,10 @@ runs its own main() up to the decision loop. Only its outside calls are replaced
 guest, the browser, the task server, the model driver and the recorder. The replaced driver keeps
 the repository .env load it performs today (harnesses/registry.py create_agent).
 
-The first catalog lookup of every entry point imports LiteLLM (providers/registry.py:133-134),
-which loads a .env and fetches LiteLLM's model cost map (litellm/__init__.py:29-30). The probes set
-LITELLM_LOCAL_MODEL_COST_MAP=true so nothing leaves the machine; no exported value reads that map.
+The first catalog lookup of every entry point imports LiteLLM (providers/registry.py
+_litellm_model_map), which loads a .env and fetches LiteLLM's model cost map
+(litellm/__init__.py:29-30). The probes set LITELLM_LOCAL_MODEL_COST_MAP=true so nothing leaves the
+machine; no exported value reads that map.
 
 Only non-secret setting variables are exported. Each value names the layer that set it last:
 ``shell`` (the environment given to the entry point), ``.env.local`` (Harbor), ``harbor``,
@@ -56,13 +57,13 @@ _EXTRA_VARIABLES = frozenset(
         "VNC_PORT", "NOVNC_PORT", "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
         # Interpreters, roots and gates.
         "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
-        # Model bridges (providers/registry.py:494-504, 612-639).
+        # Model bridges (providers/registry.py _load_entries, to_model_config).
         "BENCHMARK_MODEL", "BENCHMARK_BASE_URL", "BENCHMARK_MODEL_REVISION",
         "BENCHMARK_LITELLM_MODEL", "BENCHMARK_LITELLM_API_BASE", "BENCHMARK_LITELLM_KEY_ENV",
         "BENCHMARK_CONTEXT_WINDOW_TOKENS", "BENCHMARK_CONTEXT_COUNTER",
         "BENCHMARK_CONTEXT_IMAGE_TOKENS", "BENCHMARK_CONTEXT_RESERVE_TOKENS",
         "STREAM_CHAT_STREAM", "STREAM_CHAT_INCLUDE_USAGE", "STREAM_CHAT_API_KEY_ENV",
-        # Read at call time, not recorded (providers/litellm.py:634-637; gemini/live.py:204-212).
+        # Read at call time, not recorded (LiteLLMDriver._transport_kwargs, GeminiLiveDriver).
         "OPENROUTER_REFERER", "OPENROUTER_TITLE", "GEMINI_API_KEY_START_SLOT",
         "OPENAI_ORG_ID", "OPENAI_PROJECT_ID",
         # Whether importing LiteLLM loads a .env (litellm/__init__.py:29-30).
@@ -164,7 +165,8 @@ def _error(exc: BaseException) -> str:
 
 
 def _load_env_file(path, attribution: dict) -> set:
-    """The repository .env load (providers/registry.py:15-39) of the file the export names."""
+    """The repository .env load (providers/registry.py load_project_secrets) of the file the
+    export names."""
     from realtime_framework.providers.registry import load_project_secrets
 
     before = _snapshot()
@@ -176,8 +178,9 @@ def _load_env_file(path, attribution: dict) -> set:
 def _fresh_catalog(state: dict) -> None:
     """Make the next catalog lookup load it as a fresh process does.
 
-    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py:123-137). The
-    module stays imported after the first cell, so the load is repeated here for the later cells.
+    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py
+    _litellm_model_map). The module stays imported after the first cell, so the load is repeated
+    here for the later cells.
     """
     import realtime_framework.providers.registry as registry
 
@@ -587,7 +590,7 @@ def _probe_harbor(request: dict) -> dict:
             job = yaml.safe_load(Path(harbor_cli.run_arguments(arguments)[1]).read_text())
             if env_local is not None:
                 # Harbor's CLI loads it after rtbench rewrote the job (harbor/cli/jobs.py:1436-1437;
-                # evaluation/harbor_cli.py:414-415).
+                # evaluation/harbor_cli.py main).
                 before = _snapshot()
                 if env_local.exists():
                     dotenv.load_dotenv(env_local, override=False)
@@ -595,12 +598,12 @@ def _probe_harbor(request: dict) -> dict:
                 env_local = None
             (agent,) = job["agents"]
             options = RealtimeBenchAgent.parse_options(dict(agent.get("kwargs") or {}), {})
-            # RealtimeBenchAgent.run (evaluation/harbor.py:267-273)
+            # RealtimeBenchAgent.run (evaluation/harbor.py)
             name = agent["model_name"]
             harbor_request = {"model": name, "mode": "default", **options.model_dump()}
             if not (harbor_request["catalog_model"] or options.base_url or "/" in name):
                 harbor_request["catalog_model"] = name
-            # ApptainerEnvironment.__init__ and resolve (evaluation/harbor.py:323-326, 490-518)
+            # ApptainerEnvironment.__init__ and resolve (evaluation/harbor.py)
             environment = types.SimpleNamespace(
                 root=Path(os.environ.get("RTBENCH_ROOT", ".")).resolve(),
                 python=os.environ.get("RTBENCH_PYTHON") or sys.executable,
