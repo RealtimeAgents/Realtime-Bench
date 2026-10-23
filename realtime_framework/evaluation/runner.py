@@ -590,14 +590,12 @@ def main():
         else:
             wall_start_time = wall_start_time or clocks.semantic.time()
             deadline = wall_start_time + a.max_minutes * 60
-        # Game tasks ignore model failure declarations. Any task may expose episode_over for a
-        # server-owned terminal state; realtime tasks use it for irreversible failures.
-        is_game = (getattr(ctask, "category", None) == "browser_game") if ctask else False
+        # Any task may expose episode_over for a server-owned terminal state; realtime tasks use it
+        # for irreversible failures.
         env = GuestEnvironment(
             guest,
             ctask,
             frames_dir=frames_dir,
-            honor_fail=(not is_game),
             stop_check=(getattr(ctask, "episode_over", None) if ctask else None),
             scene_capture=scene_capture,
             action_audit_path=run_dir / "action_lifecycle.jsonl",
