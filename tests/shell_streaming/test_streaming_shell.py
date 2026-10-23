@@ -20,12 +20,12 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.env_lanes import EnvLanes
+from realtime_framework.evaluation.env_lanes import EnvLanes, Lane
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Invalidated, SnapshotFrozen, Termination
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.reporting import EpisodeTrace
-from realtime_framework.evaluation.streaming_shell import run_streaming_episode
+from realtime_framework.evaluation.streaming_shell import _StreamingShell, run_streaming_episode
 from tests.fake_clock import FakeClock
 
 from .fakes import Call, FakeAgent, FakeEnv, Reply
@@ -364,6 +364,86 @@ def test_an_action_finished_just_before_the_deadline_is_taken_in_before_it_howev
         if event == "ActionExecution" or payload.get("kind") == "ActionExecuted"
     ]
     assert order == ["ActionExecution", "ActionExecuted"]
+
+
+def test_an_action_answer_the_shell_takes_in_late_is_filed_when_the_action_finished():
+    """The click runs from 1.775 s to 4.995 s and ends the task; a wait arrives at 4.9 s, and its
+    feedback holds the shell's thread until 5.1 s, across the deadline at 5 s. The click's answer,
+    taken in then, is filed when the click finished, before the deadline (kernel/core.py step):
+    the read after it settles it, and the task's end is dated at 4.995 s."""
+    clock = FakeClock()
+    env = FakeEnv(clock, execute_s=3.22)
+    env.ends_at = 4.99
+    agent = FakeAgent(
+        clock, [Reply(10.0, (Call(0.9, CLICK, "c0"), Call(4.025, Action.wait(0.5), "w")))]
+    )
+    commit = agent.commit
+
+    def slow_wait_feedback(outcome):
+        if outcome.status == "wait":
+            clock.sleep(0.2)
+        commit(outcome)
+
+    agent.commit = slow_wait_feedback
+    with clock.participant():
+        termination = run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=5.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+    assert (termination.stop_reason, termination.ended_at) == ("goal", 4.995)
+
+
+def test_the_episode_finishes_once_the_action_outlasting_the_snapshots_wait_returned():
+    """The click executes for 200 s, past the deadline at 6 s and past the snapshot's wait for
+    it, 120 s, the larger of its budget and a capture's (N32): the snapshot fails and the run is
+    invalid, but the episode finishes only once the click returned and its outcome was committed."""
+
+    def endless_click(env, clock):
+        env.seconds["execute"] = 200.0
+
+    termination, _, agent = _episode(6.0, ONE_CLICK, env_setup=endless_click)
+    assert termination.invalid.reason == "evaluation_snapshot_failed"
+    ((committed_at, outcome),) = agent.committed
+    assert committed_at == 201.775
+    assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
+
+
+def _broken(*args, **kwargs):
+    raise RuntimeError("the shell broke")
+
+
+def _refuse_aborts(monkeypatch):
+    submit = Lane.submit
+
+    def refusing(self, command):
+        if self.name == "abort":
+            _broken()
+        return submit(self, command)
+
+    monkeypatch.setattr(Lane, "submit", refusing)
+
+
+@pytest.mark.parametrize(
+    "breaks",
+    [
+        lambda patch: patch.setattr(EnvLanes, "check_end", _broken),
+        lambda patch: patch.setattr(EnvLanes, "execute", _broken),
+        lambda patch: patch.setattr(_StreamingShell, "_commit", _broken),
+        _refuse_aborts,
+    ],
+    ids=["CheckEnd", "Execute", "Commit", "AbortGeneration"],
+)
+def test_a_command_the_shell_fails_to_run_is_answered_and_the_episode_finishes(monkeypatch, breaks):
+    """The kernel waits for the answer to each of these (kernel/core.py; GenerationAborted,
+    kernel/streaming.py): one whose run raises is answered with the failure, and the run is
+    invalid for the shell's exception."""
+    breaks(monkeypatch)
+    termination, env, _ = _episode(6.0, ONE_CLICK)
+    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
+    assert "the shell broke" in env._loop_error
 
 
 def test_a_stuck_reply_is_given_up_and_the_next_one_starts_once_its_abort_returned():
