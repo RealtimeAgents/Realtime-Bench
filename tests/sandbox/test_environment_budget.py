@@ -570,6 +570,29 @@ def test_a_call_that_ran_out_of_the_operation_s_budget_is_its_failure():
     assert env._invalid_run["detail"] == "clock advance took longer than 120 s"
 
 
+@pytest.mark.parametrize("seconds", [15.0, 121.0], ids=["within", "past"])
+def test_a_frame_render_has_a_clock_advance_s_budget(seconds):
+    """The kernel's shell asks for the action's frame without advancing the token clock
+    (sandbox/actions.py render_current_frame); its CDP calls share the 120 s of a clock advance,
+    and running past them invalidates the run."""
+    clock = FakeClock()
+    task = ClockTask(1.0)
+    task.render_current_frame = lambda: _sandbox_call(clock, seconds) or {"rendered": True}
+    env, _ = _timed(clock, task=task)
+    budget = actions.ENVIRONMENT_BUDGET.clock_advance_s
+    with clock.participant():
+        if seconds < budget:
+            assert env.render_current_frame() == {"rendered": True}
+        else:
+            with pytest.raises(TimeoutError):
+                env.render_current_frame()
+        assert clock.monotonic() == min(seconds, budget)
+    if seconds < budget:
+        assert getattr(env, "_invalid_run", None) is None
+    else:
+        _invalid(env, "frame_render_failed", "frame render", budget)
+
+
 def _raise_the_budget_s_words(clock: FakeClock) -> None:
     clock.sleep(2.0)
     raise RuntimeError("state read took longer than 1 s")
