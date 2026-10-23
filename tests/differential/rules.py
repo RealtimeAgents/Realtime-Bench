@@ -92,7 +92,8 @@ def check(script: Script, old: Projection, new: Projection) -> Verdict:
 
 def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
     """The whole requests and the usage (wave2-plan.md, P4 投影), over the decisions both sides
-    started, and the trace records the projection leaves out, decision by decision. The
+    started, the token accounting's subtotal of the reported decisions (U17), and the trace
+    records the projection leaves out, decision by decision. The
     decisions today's loop started after the kernel's end, which the rules left out, go with
     their replies and their requests: on the wall clock every request sent once the kernel's
     episode is over, a retry of the generation it gave up on too (K-a); on the token clock, where
@@ -118,6 +119,7 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
         if len(requests[0]) != len(requests[1]):
             problems.append(f"requests: {len(requests[0])} -> {len(requests[1])}")
         problems += differences(old.beyond["usage"], new.beyond["usage"], "usage")[0]
+    problems += differences(old.beyond["subtotal"], new.beyond["subtotal"], "subtotal")[0]
     synthesized = old.beyond["synthesized"]
     for kind, by_decision in old.beyond["trace"].items():
         other = new.beyond["trace"][kind]
@@ -1159,6 +1161,39 @@ def _u9(script: Script, p: Projection, notes: dict) -> None:
                         record["usage_before"][name] -= value
 
 
+def _u17(script: Script, p: Projection, notes: dict) -> None:
+    """The token accounting's subtotal of the reported decisions, which the report checks the
+    lifecycle against, leaves out the response of each decision the kernel gave up on
+    (clock.py TokenAccounting.leave_unreported; U17, N50; evaluation/shell.py _Shell._given_up),
+    and has none of a decision it never started (_give_up, _drop_after). Today's loop gives
+    none up, accounts one response for each decision it started (legacy_loop.py _decide), and
+    its subtotal is its totals."""
+    subtotal = p.beyond["subtotal"]
+    if subtotal is None:
+        return
+    counts = subtotal["clock_output_tokens"]
+    responses, counted, known = (
+        subtotal["responses"],
+        counts["responses_with_count"],
+        counts["known_total"] or 0,
+    )
+    given_up = notes.get("given_up", {})
+    for k, tokens in p.facts["output_tokens"].items():
+        if k in p.decisions and k not in given_up:
+            continue
+        responses -= 1
+        if tokens is not None:
+            counted, known = counted - 1, known - tokens
+    complete = bool(responses and counted == responses)
+    subtotal["responses"] = responses
+    counts.update(
+        total=known if complete else None,
+        known_total=known if counted else None,
+        responses_with_count=counted,
+        complete=complete,
+    )
+
+
 def _u2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel writes RunInvalidated for every failure (core.py Kernel.invalidate), also one the
     environment latched itself; today only the runner's own _invalidate writes it
@@ -1325,6 +1360,7 @@ RULES = (
         seen="not scripted: no replayed wall release fails while a frame is captured",
     ),
     Rule("U9", "a result settled past the per-move cap, or filed late, is skipped_timeout", _u9),
+    Rule("U17", "the reported decisions' token subtotal leaves out those given up on", _u17),
     Rule(
         "KF7",
         "a result back before the deadline and settled past it is discarded",

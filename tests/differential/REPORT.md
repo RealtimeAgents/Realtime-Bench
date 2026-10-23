@@ -62,7 +62,7 @@
     - 内核放弃了、外壳却没中止也没跑完的生成（应当没有）。
 - **旧循环对外壳**：
   - 旧投影按编号规则（`rules.py`）改写以后要和外壳一致。
-  - 另外整份比请求（按回放基线的归一化），比 agent 的用量，并按决策比投影外的四种轨迹记录：ObservationCaptured、InferenceStarted、OutputChunkReceived、InferenceCompleted。
+  - 另外整份比请求（按回放基线的归一化），比 agent 的用量和已回报决策的 token 小计（U17），并按决策比投影外的四种轨迹记录：ObservationCaptured、InferenceStarted、OutputChunkReceived、InferenceCompleted。
   - 第四轮新加两项：
     - 除 wait 以外每个动作的 `execution_result`；
     - token 下任务时钟收到的键事件。
@@ -173,6 +173,7 @@
 | U11 | 出现 | `wall-third-failed-read-during-a-reply` | — | 同上，判无效时放弃（`invalid_run`）。随机脚本不生成墙钟读失败 |
 | U13 | 不比 | — | — | p1b 第七轮：已整理、后被内核丢弃的结果，轨迹行类型是 `decision`。对跑不比轨迹行 |
 | U14 | 已由 N44 消掉 | `wall-a-failed-read-takes-time` 现在两边的结束和快照时刻相同 | — | 读失败判无效，内核原来记在读返回时、旧循环记在发问时；N44 以后内核也记在发问时（`98a60cd`） |
+| U17 | 出现 | 墙钟 15 个，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-third-failed-read-during-a-reply` | 未重扫 | 内核放弃的生成（截止、任务结束、判无效），回复不进已回报决策的 token 小计（`reported_decisions`，`TokenAccounting.leave_unreported`）；规则删掉的决策，内核没有开始。旧循环每个开始了的决策记一次回复，不写小计，小计就是总数。规则从旧的小计里减掉这些决策的回复和 `clock_output_tokens`。投影取 `summary()` 的 `reported_decisions`，没有就取整份，和 `reporting.py` 的读法一样。默认 25 个种子里也出现 |
 
 ## 6. 连跑 20 次和随机扫描
 
@@ -220,4 +221,5 @@
 - 一次点按不止一步（60 fps 以上）、有按住的键时点按内部读失败：只有具名脚本，或者没有。
 - 暂停模式下的 KF2、KF8：旧循环会死循环。
 - 投影不比的部分：timeline、日志、工具记录、agent 的事件日志（X8）、轨迹里除上面四种以外的记录。
+- token 账只比已回报决策的小计里的回复数和 `clock_output_tokens`（U17）。总数不比：任务结束、判无效时合成的记录，外壳的总数不算（N34），截止时合成的那条算（第 48 条），旧循环的总数算的是真实回复。其他计数和成本也不比。
 - 默认 25 个种子只触发一部分规则；靠具名脚本和 2016 个种子的扫描补足。

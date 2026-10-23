@@ -639,7 +639,26 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
     finally:
         env._drain_abandoned()
         env.usage = episode_records.usage_snapshot(agent)
+        env.subtotal = _subtotal(getattr(env, "_token_accounting", None))
         episode.finish()
+
+
+def _subtotal(accounting) -> dict | None:
+    """The clock counts of the reported decisions' responses, which the report checks the
+    lifecycle against (reporting.py report): the token accounting's own subtotal once a response
+    goes unreported, else its totals (clock.py TokenAccounting.summary; N50)."""
+    if accounting is None:
+        return None
+    summary = accounting.summary()
+    reported = summary.get("reported_decisions", summary)
+    counts = reported["counts"]["clock_output_tokens"]
+    return {
+        "responses": reported["responses"],
+        "clock_output_tokens": {
+            name: counts[name]
+            for name in ("total", "known_total", "responses_with_count", "complete")
+        },
+    }
 
 
 class _FrozenFrames:
@@ -923,9 +942,11 @@ def project(script: Script, env, side: str) -> Projection:
     # (rules._abandoned).
     # "key_events": token clock, what the task clock was told of the keys before the snapshot.
     # "results": each decision's execution_result but a wait's, as ActionResolved has it.
+    # "subtotal": the token accounting's clock counts of the reported decisions (_subtotal).
     beyond = {
         "requests": env.requests,
         "usage": env.usage,
+        "subtotal": env.subtotal,
         "trace": trace,
         "synthesized": {},
         "key_events": key_events if token else None,
