@@ -51,7 +51,7 @@ import threading
 import traceback
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -348,6 +348,7 @@ class _Shell:
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
         self._accepting: set[int] = set()  # the generations the batch being run accepts
         self._batch_invalid = False  # the shell posted an invalid run during the batch being run
+        self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -607,9 +608,13 @@ class _Shell:
 
     def _invalidate(self, invalid: Invalidated) -> None:
         """Post an invalid run the shell found on its own thread; the rest of the batch it came
-        in runs nothing in the world (_run)."""
+        in runs nothing in the world (_run). A kernel that finished in the step whose batch this
+        is takes no more events: the first such failure goes with its Finish (_finish)."""
         self._batch_invalid = True
-        self.post(invalid)
+        if self.kernel.termination is None:
+            self.post(invalid)
+        elif self._unheard is None:
+            self._unheard = invalid
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
@@ -1057,7 +1062,19 @@ class _Shell:
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
-        (legacy_loop.py ``_termination``); the token clock's are ticks."""
+        (legacy_loop.py ``_termination``); the token clock's are ticks. A failure the shell found
+        in this last batch, such as the termination record's own write, invalidates the run as
+        the kernel would have, at the same end (decision 32)."""
+        unheard = self._unheard
+        if unheard is not None and termination.invalid is None:
+            # The end of a traceback names the exception (legacy_loop.py _invalidate).
+            detail = None if unheard.detail is None else unheard.detail[-2000:]
+            invalid = Invalidated(unheard.category, unheard.reason, detail)
+            self.log(
+                f"[invalid-run] {invalid.category}:{invalid.reason}"
+                + (f" — {detail}" if detail else "")
+            )
+            termination = replace(termination, stop_reason="invalid_run", invalid=invalid)
         try:
             self._terminate(termination)
         finally:
