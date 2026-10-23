@@ -4,6 +4,7 @@ the view each connection operation is given."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from dataclasses import replace
@@ -11,9 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import TRANSIENT, TransportFailureError
-from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import CallsCancelled, PushHeld, PushResumed
 from realtime_framework.harnesses.default.frames import (
@@ -22,6 +24,8 @@ from realtime_framework.harnesses.default.frames import (
     MISSING_FRAME,
 )
 from realtime_framework.harnesses.default.harness import action_text
+from realtime_framework.harnesses.streaming import agent as agent_module
+from realtime_framework.harnesses.streaming.agent import NativeStreamingAgent
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
@@ -30,6 +34,7 @@ from tests.fake_clock import FakeClock
 
 from .fake_live import (
     BUDGET,
+    LIVE,
     REALTIME,
     Call,
     Cancel,
@@ -62,6 +67,28 @@ def test_the_session_opens_empty_on_an_encoder_built_for_streaming(monkeypatch, 
     agent = make_agent(monkeypatch, clock)
     assert agent.driver.streaming
     assert agent.driver.calls == [("connect", ("system",))]
+    agent.close()
+
+
+class _NeverOpens(FakeLiveDriver):
+    """The fake live encoder, whose connect never ends, as one to a server that took the
+    WebSocket and never acknowledges the setup."""
+
+    async def _connect(self, request) -> None:
+        await asyncio.Event().wait()
+
+
+def test_a_session_that_never_opens_fails_the_agents_initialize(monkeypatch, clock):
+    """The first connect has the bound a turn's first connect has (RealtimeRuntime.start): a
+    session that never opens fails the episode's initialize after 60 s, instead of holding it
+    until the run's own timeout (review-encoders 低 6)."""
+    monkeypatch.setattr(agent_module, "adapter_class", lambda adapter_type: _NeverOpens)
+    config = catalog.to_model_config(LIVE, fps=1.0, reasoning_effort="fixed")
+    agent = NativeStreamingAgent(config, None, trace=UNTRACED, clock=clock)
+    agent.task_category = "realtime"
+    with pytest.raises(TimeoutError):
+        agent.initialize("Click the button.", observation(clock, 0))
+    assert clock.monotonic() == 60.0
     agent.close()
 
 
