@@ -8,11 +8,11 @@ capturing a frame, reading task state, advancing the token clock) runs synchrono
 thread, and the scored snapshot waits for it. It takes one absolute deadline when it starts. A CDP
 call made inside it spends what is left on the lock wait, the connect and each receive, and a
 message that is not the awaited reply does not restart the timer; a guest request gets at most
-what is left for its connect and for each read.
-Waits that are not cut this way (a WebSocket send, the task runtimes' own HTTP requests, the wall
-clock's lock on its key holds) are caught when the operation ends: an operation that ends after
-its deadline fails. Task runtimes pass no budget; the clients read the current operation's
-deadline here.
+what is left for its connect and for each read, and a wait for the wall clock's key commands
+(sandbox/actions.py) what is left for the lock.
+Waits that are not cut this way (a WebSocket send, the task runtimes' own HTTP requests) are caught
+when the operation ends: an operation that ends after its deadline fails. Task runtimes pass no
+budget; the clients read the current operation's deadline here.
 
 A budget holds only on a real clock: the deadline is read on the operation's clock, but the
 clients wait for what is left of it as real seconds (socket, lock and request timeouts).

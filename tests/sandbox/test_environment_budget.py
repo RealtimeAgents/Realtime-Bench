@@ -217,49 +217,93 @@ def _until_the_release_is_in_flight(guest: FakeGuest) -> None:
         time.sleep(0.01)
 
 
-def test_a_wall_key_action_waiting_for_a_key_release_in_flight_fails(budgets):
-    # The release timer holds the lock on the wall holds during its guest request
-    # (sandbox/actions.py _wall_release_due), and the action reads the holds under that lock.
-    # The wait is not cut, but it spends the action's budget: no key reaches the guest after it.
+@pytest.mark.parametrize(
+    "action", [Action(ActionType.KEY, {"key": "c"}), CLICK], ids=["a-tap", "a-click"]
+)
+def test_a_wall_action_does_not_wait_for_a_key_release_in_flight(budgets, action):
+    """The release timer sends its keyup holding only _wall_commands (sandbox/actions.py
+    _wall_release_due): the action's checks and its hold snapshot read the leases without waiting
+    for it, and the key being released counts as held until the keyup returns."""
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 1.0)) == "applied"
-        guest.command_delay = 3 * BUDGET
+        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        guest.command_delay = 2 * SLACK
         _until_the_release_is_in_flight(guest)
         started = time.monotonic()
-        status = env.execute(Action(ActionType.KEY, {"key": "c"}))
+        status = env.execute(action)
         elapsed = time.monotonic() - started
+        holds = env._last_execution_result["active_holds"]
+        guest.command_delay = 0.0
+        env.release_inputs()
+    assert status == "applied"
+    assert getattr(env, "_invalid_run", None) is None
+    assert elapsed < BUDGET
+    assert len(guest.actions) == 1
+    assert [hold["key"] for hold in holds] == ["a"]
+
+
+@pytest.mark.parametrize(
+    ("held", "action", "keydowns"),
+    [
+        pytest.param(None, Action.hold_key("b", 1.0), ["a"], id="a-hold"),
+        pytest.param("b", Action(ActionType.KEY, {"key": "b"}), ["b", "a"], id="a-held-key-s-tap"),
+    ],
+)
+def test_a_wall_key_command_waits_for_a_key_release_in_flight_only_while_its_budget_lasts(
+    budgets, monkeypatch, held, action, keydowns
+):
+    """A hold's keydown, or the re-press after a tap of a held key, waits for the release timer's
+    keyup in flight (sandbox/actions.py _wall_commands): no longer than the action's budget, so
+    the freeze waits no longer either (user decision 18), and nothing is pressed after it."""
+    budgets(action_s=BUDGET)
+    # A hold's budget is its duration and 5 s (sandbox/guest.py action_timeout): shrunk too.
+    monkeypatch.setattr(actions, "action_timeout", lambda action, timeout: timeout)
+    with FakeGuest() as guest:
+        env = _wall_environment(guest)
+        if held is not None:
+            assert env.execute(Action.hold_key(held, MAX_ACTION_DURATION)) == "applied"
+        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        guest.command_delay = 2 * SLACK
+        _until_the_release_is_in_flight(guest)
+        started = time.monotonic()
+        status = env.execute(action)
+        elapsed = time.monotonic() - started
+        guest.command_delay = 0.0
         env.release_inputs()
     assert status == "failed"
-    _invalid(env, "action_execution_failed", "key action")
-    assert elapsed >= BUDGET
-    assert guest.actions == []
+    _invalid(env, "action_execution_failed", f"{action.action_type.value} action")
+    _spent_the_budget(elapsed)
+    pressed = [command["command"] for command in guest.commands if "keydown" in command["command"]]
+    assert pressed == [f"xdotool keydown -- {key}" for key in keydowns]
 
 
-def test_a_wall_shortcut_refused_after_its_budget_went_on_the_lock_is_still_refused(budgets):
-    """Coordinator's decision N19, as user decision 35: the wait for the lock is not the action's
-    fault, so the refusal is told to the model as usual, without the budget's words."""
+def test_a_wall_shortcut_is_refused_at_once_while_a_key_release_is_in_flight(budgets):
+    """The check waits for no guest request, so the runtime's refusal never comes after the
+    action's budget (coordinator's decision N19 no longer arises): the execution result has the
+    refusal's words only."""
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 1.0)) == "applied"
-        guest.command_delay = 3 * BUDGET
+        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        guest.command_delay = 2 * SLACK
         _until_the_release_is_in_flight(guest)
+        started = time.monotonic()
         status = env.execute(Action(ActionType.KEY, {"key": "ctrl+l"}))
+        elapsed = time.monotonic() - started
+        guest.command_delay = 0.0
         env.release_inputs()
     assert status == "failed"
+    assert elapsed < BUDGET
     assert env._last_rejected_by_guest is True
     assert getattr(env, "_invalid_run", None) is None
     assert env._last_exec_error.startswith("browser shortcut 'ctrl+l' is disabled")
-    assert env._last_execution_result["error"].startswith(
-        f"key action took longer than {BUDGET:g} s (ActionRejected: browser shortcut"
-    )
+    assert env._last_execution_result["error"] == env._last_exec_error
 
 
 def test_a_failed_wall_tap_counts_its_keys_as_held_only_while_its_budget_lasts(budgets):
     # The guest's request for the tap times out with the action's budget while the release
-    # timer holds the wall lock for its keyup; the keys the guest may have left down go
+    # timer holds the wall's key commands for its keyup; the keys the guest may have left down go
     # unrecorded rather than keep the action, and the freeze, waiting (the run is invalid).
     budgets(action_s=1.0)
     with FakeGuest() as guest:
@@ -276,25 +320,6 @@ def test_a_failed_wall_tap_counts_its_keys_as_held_only_while_its_budget_lasts(b
     _invalid(env, "action_execution_failed", "key action", 1.0)
     assert 1.0 - 0.05 <= elapsed < 1.0 + SLACK, elapsed
     assert not recorded
-
-
-def test_a_wall_action_waiting_for_the_lock_after_the_guest_answered_fails(budgets):
-    # The release timer sends its keyup while the guest runs the click; the hold snapshot the
-    # click's result carries then waits for the lock.
-    budgets(action_s=2.0)
-    with FakeGuest() as guest:
-        env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 0.5)) == "applied"
-        guest.command_delay = 2.0
-        guest.action_delay = 1.2
-        started = time.monotonic()
-        status = env.execute(CLICK)
-        elapsed = time.monotonic() - started
-        env.release_inputs()
-    assert status == "failed"
-    _invalid(env, "action_execution_failed", "click action", 2.0)
-    assert elapsed >= 2.0
-    assert len(guest.actions) == 1
 
 
 def test_a_wall_xdotool_command_gets_what_is_left_of_the_action_s_budget(budgets):

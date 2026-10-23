@@ -9,6 +9,7 @@ import shlex as shlex
 import string as string
 import threading as threading
 import traceback as traceback
+from contextlib import contextmanager as contextmanager
 from pathlib import Path as Path
 
 from realtime_framework.clock import episode_clocks
@@ -167,8 +168,12 @@ class GuestEnvironment:
         # also when the task has no end check.
         self.last_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)}.
+        # _wall_lock guards them and the release timer and is never held over a guest request,
+        # so the key checks and the hold snapshot do not wait for one; _wall_commands serializes
+        # the xdotool commands that press and release leased keys with the lease changes they make.
         self._wall_holds = {}
         self._wall_lock = threading.RLock()
+        self._wall_commands = threading.RLock()
         self._wall_timer = None
         self._wall_closed = False
         self._wall_release_failures = 0
@@ -724,43 +729,55 @@ class GuestEnvironment:
             raise RuntimeError(f"{argv[0]} {argv[1]} failed: {str(detail).strip()[:200]}")
         return result
 
+    @contextmanager
+    def _wall_commands_within_budget(self):
+        """Hold ``_wall_commands``. The release timer holds it during its guest request, which an
+        operation waits for no longer than its budget lasts."""
+        deadline = Deadline(None, "wall key commands")
+        left = deadline.remaining()
+        if not self._wall_commands.acquire(timeout=-1 if left is None else left):
+            raise deadline.exceeded()
+        try:
+            yield
+        finally:
+            self._wall_commands.release()
+
     def _wall_release(self, identities):
-        """Release the given wall-clock leases (caller holds ``_wall_lock``)."""
-        selected = [identity for identity in identities if identity in self._wall_holds]
+        """Release the given wall-clock leases (caller holds ``_wall_commands``)."""
+        with self._wall_lock:
+            selected = [identity for identity in identities if identity in self._wall_holds]
+            keysyms = [self._wall_holds[identity]["keysym"] for identity in selected]
         if not selected:
             return
-        self._wall_command(
-            [
-                "xdotool",
-                "keyup",
-                "--",
-                *(self._wall_holds[identity]["keysym"] for identity in selected),
-            ]
-        )
-        for identity in selected:
-            self._wall_holds.pop(identity, None)
+        self._wall_command(["xdotool", "keyup", "--", *keysyms])
+        with self._wall_lock:
+            for identity in selected:
+                self._wall_holds.pop(identity, None)
 
     def _wall_release_due(self):
         invalid = None
-        with self._wall_lock:
-            self._wall_timer = None
-            if self._wall_closed:
-                return
-            now = self.clocks.semantic.time()
-            expired = [
-                identity
-                for identity, item in self._wall_holds.items()
-                if item["expires_at"] <= now + 1e-3
-            ]
+        with self._wall_commands:
+            with self._wall_lock:
+                self._wall_timer = None
+                if self._wall_closed:
+                    return
+                now = self.clocks.semantic.time()
+                expired = [
+                    identity
+                    for identity, item in self._wall_holds.items()
+                    if item["expires_at"] <= now + 1e-3
+                ]
             try:
                 self._wall_release(expired)
-                self._wall_release_failures = 0
             except Exception as exc:
                 # A key the guest cannot release stays physically down (and auto-repeating). Retry
                 # briefly with a floor between attempts; then treat the stuck key as an
                 # environment failure instead of hammering the guest from this timer forever.
-                self._wall_release_failures += 1
-                if self._wall_release_failures >= WALL_RELEASE_MAX_ATTEMPTS:
+                with self._wall_lock:
+                    self._wall_release_failures += 1
+                    if self._wall_release_failures < WALL_RELEASE_MAX_ATTEMPTS:
+                        self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
+                        return
                     for identity in expired:
                         self._wall_holds.pop(identity, None)
                     if not getattr(self, "_invalid_run", None):
@@ -769,11 +786,12 @@ class GuestEnvironment:
                             "reason": "wall_key_release_failed",
                             "detail": str(exc),
                         }
-                else:
-                    self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
-                    return
-            self._schedule_wall_release()
-        # On this timer's thread and outside the lock: the callback is the shell's.
+            else:
+                with self._wall_lock:
+                    self._wall_release_failures = 0
+            with self._wall_lock:
+                self._schedule_wall_release()
+        # On this timer's thread and outside the locks: the callback is the shell's.
         if invalid is not None and self.on_invalid is not None:
             self.on_invalid(invalid)
 
@@ -828,12 +846,13 @@ class GuestEnvironment:
         keysyms = {identity: _xdotool_keysym(identity) for identity, _ in parts}
         if any(value is None for value in keysyms.values()):
             return None
-        with self._wall_lock:
+        with self._wall_commands_within_budget():
             autorepeat = self._ensure_wall_autorepeat()
             now = self.clocks.semantic.time()
-            new_parts = [
-                (identity, wire) for identity, wire in parts if identity not in self._wall_holds
-            ]
+            with self._wall_lock:
+                new_parts = [
+                    (identity, wire) for identity, wire in parts if identity not in self._wall_holds
+                ]
             if new_parts:
                 try:
                     self._wall_command(
@@ -853,14 +872,15 @@ class GuestEnvironment:
                 if release_at is None
                 else max(self.t0 + release_at, pressed_at + min(duration, TAP_HOLD_S))
             )
-            for identity, wire in parts:
-                current = self._wall_holds.get(identity)
-                self._wall_holds[identity] = {
-                    "wire": current["wire"] if current else wire,
-                    "keysym": keysyms[identity],
-                    "expires_at": max(current["expires_at"] if current else now, expires_at),
-                }
-            self._schedule_wall_release()
+            with self._wall_lock:
+                for identity, wire in parts:
+                    current = self._wall_holds.get(identity)
+                    self._wall_holds[identity] = {
+                        "wire": current["wire"] if current else wire,
+                        "keysym": keysyms[identity],
+                        "expires_at": max(current["expires_at"] if current else now, expires_at),
+                    }
+                self._schedule_wall_release()
             result = {
                 "status": "ok",
                 "timestamp": now,
@@ -891,24 +911,25 @@ class GuestEnvironment:
             parts, _ = self._key_chord(action)
         except ValueError:
             return
-        # The release timer may hold the lock for its guest request: wait no longer than the
+        # The release timer may hold _wall_commands for its guest request: wait no longer than the
         # action's budget lasts, and record nothing without it (the run is invalid already).
         try:
-            left = Deadline(None, "wall lock").remaining()
+            left = Deadline(None, "wall key commands").remaining()
         except BudgetExceeded:
             left = 0.0
-        if not self._wall_lock.acquire(timeout=-1 if left is None else left):
+        if not self._wall_commands.acquire(timeout=-1 if left is None else left):
             return
         try:
-            now = self.clocks.semantic.time()
-            for identity, wire in parts:
-                keysym = _xdotool_keysym(identity)
-                if keysym is not None:
-                    self._wall_holds.setdefault(
-                        identity, {"wire": wire, "keysym": keysym, "expires_at": now}
-                    )
+            with self._wall_lock:
+                now = self.clocks.semantic.time()
+                for identity, wire in parts:
+                    keysym = _xdotool_keysym(identity)
+                    if keysym is not None:
+                        self._wall_holds.setdefault(
+                            identity, {"wire": wire, "keysym": keysym, "expires_at": now}
+                        )
         finally:
-            self._wall_lock.release()
+            self._wall_commands.release()
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
@@ -917,25 +938,29 @@ class GuestEnvironment:
         in its chord; the token path re-presses such keys so the lease survives, and the wall
         path must do the same. Returns the wires pressed again, if any.
         """
-        if not self._wall_holds:
-            return []
         try:
             parts, _ = self._key_chord(action)
         except ValueError:
             return []
+        identities = [identity for identity, _ in parts]
+        # Only actions add leases and the release timer only ends them: a chord with no key held
+        # now has none to press again.
         with self._wall_lock:
-            selected = [identity for identity, _ in parts if identity in self._wall_holds]
+            if not any(identity in self._wall_holds for identity in identities):
+                return []
+        with self._wall_commands_within_budget():
+            with self._wall_lock:
+                selected = [
+                    self._wall_holds[identity]
+                    for identity in identities
+                    if identity in self._wall_holds
+                ]
             if not selected:
                 return []
             self._wall_command(
-                [
-                    "xdotool",
-                    "keydown",
-                    "--",
-                    *(self._wall_holds[identity]["keysym"] for identity in selected),
-                ]
+                ["xdotool", "keydown", "--", *(item["keysym"] for item in selected)]
             )
-            return [self._wall_holds[identity]["wire"] for identity in selected]
+            return [item["wire"] for item in selected]
 
     def _release_wall_holds(self):
         with self._wall_lock:
@@ -943,6 +968,7 @@ class GuestEnvironment:
             if self._wall_timer is not None:
                 self._wall_timer.cancel()
                 self._wall_timer = None
+        with self._wall_commands:
             self._wall_release(list(self._wall_holds))
 
     def _release_mouse_inputs(self):
@@ -968,17 +994,17 @@ class GuestEnvironment:
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
         unexpected parameters, ...) and answers 400 on /action. That is the model's action being
-        rejected, not an environment failure, so it must not invalidate the run. A refusal that
-        comes after the action's budget ran out is one too, and the BudgetExceeded keeps it as its
-        cause: the guest's late answer still shows that the guest works; the runtime's own
-        refusal comes late only after a wait for the wall lock, which is not the action's fault,
-        though it means the release timer's keyup was slow. A 4xx from another endpoint, such as
-        the /execute of the xdotool commands, does not show that the environment works, and the
-        run is invalid.
+        rejected, not an environment failure, so it must not invalidate the run. The guest's
+        refusal that comes after the action's budget ran out is one too, and the BudgetExceeded
+        keeps it as its cause: the late answer still shows that the guest works. The runtime's own
+        checks wait for nothing and refuse first. A 4xx from another endpoint, such as the
+        /execute of the xdotool commands, does not show that the environment works, and the run
+        is invalid.
         """
-        for error in (exc, exc.__cause__):
-            if isinstance(error, (ActionRejected, GuestRefused)):
-                return error
+        if isinstance(exc, (ActionRejected, GuestRefused)):
+            return exc
+        if isinstance(exc.__cause__, GuestRefused):
+            return exc.__cause__
         return None
 
     def _execution_failed(self, exc):
@@ -1065,10 +1091,10 @@ class GuestEnvironment:
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
             ):
-                # On the wall clock the key and scroll checks, the hold, the re-press after a guest
-                # tap and the hold snapshot below wait for _wall_lock, which the release timer
-                # holds during its guest request; after a failed guest request, counting its keys
-                # as held waits for it only while the budget lasts.
+                # On the wall clock the hold, the re-press after a guest tap and counting the keys
+                # of a failed guest request as held wait for the release timer's guest request in
+                # flight only while the budget lasts; the key and scroll checks and the hold
+                # snapshot below read the leases without waiting for it.
                 self._reject(action)
                 # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
                 focus_restored = action_type in (
