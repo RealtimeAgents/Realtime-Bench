@@ -1035,6 +1035,41 @@ def test_no_end_check_is_asked_once_the_deadline_has_passed(execute_s):
     assert _ended(sim) == ("time_limit", "deadline", 6.0, returned)
 
 
+@pytest.mark.parametrize(
+    ("world", "asked", "captures", "statuses"),
+    [
+        # The check before landing the click back at 2.9 s reads until 3.6 s.
+        (
+            World(replies=[Reply(2.9, CLICK)], check_seconds={4: 0.7}),
+            [0.0, 1.0, 2.0, 2.9],
+            [(0, 0.0)],
+            ["not_applied_time_limit"],
+        ),
+        # The loop starts at 2.9 s and its frame, tick 2, is captured until 3.6 s.
+        (
+            World(replies=[Reply(9.0, CLICK)], start_s=2.9, capture_s=0.7),
+            [2.9],
+            [(2, pytest.approx(3.6))],
+            [],
+        ),
+    ],
+    ids=["read", "capture"],
+)
+def test_a_check_due_before_a_deadline_off_the_frame_grid_is_not_asked_after_it(
+    world, asked, captures, statuses
+):
+    # T = 3.5 s, between frames 3 and 4. The command running from 2.9 s to 3.6 s, neither an
+    # execution nor a wait, holds back the check due at 3 s; due before the deadline, it fires
+    # first once the command returns, and asks nothing: the deadline has passed.
+    sim = _episode(_wall(3.5), world)
+    assert _fired(sim, "end_check")[-1] == (pytest.approx(3.6), 3.0)
+    assert _asked(sim) == asked
+    assert sim.captures == captures
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == statuses
+    assert _ended(sim) == pytest.approx(("time_limit", "deadline", 3.5, 3.6))
+
+
 # ---- the legacy caps --------------------------------------------------------------------------
 
 
