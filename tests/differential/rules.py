@@ -93,11 +93,12 @@ def check(script: Script, old: Projection, new: Projection) -> Verdict:
 def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
     """The whole requests and the usage (wave2-plan.md, P4 投影), over the decisions both sides
     started, the token accounting's subtotal of the reported decisions (U17), and the trace
-    records the projection leaves out, decision by decision. The
-    decisions today's loop started after the kernel's end, which the rules left out, go with
-    their replies and their requests: on the wall clock every request sent once the kernel's
-    episode is over, a retry of the generation it gave up on too (K-a); on the token clock, where
-    time stands still while a generation runs, the last ones, those decisions' attempts."""
+    records the projection leaves out, decision by decision; of a generation given up on, the
+    reply records are those of a call given up on (_abandoned). The decisions today's loop
+    started after the kernel's end, which the rules left out, go with their replies and their
+    requests: on the wall clock every request sent once the kernel's episode is over, a retry of
+    the generation it gave up on too (K-a); on the token clock, where time stands still while a
+    generation runs, the last ones, those decisions' attempts."""
     started = _started(old) & _started(new)
     gone = sorted(set(old.facts["started_at"]) - _started(old))
     end = old.episode["termination"]["end_s"]
@@ -123,7 +124,9 @@ def _beyond(script: Script, old: Projection, new: Projection) -> list[str]:
     synthesized = old.beyond["synthesized"]
     for kind, by_decision in old.beyond["trace"].items():
         other = new.beyond["trace"][kind]
-        for k in sorted(started - set(synthesized)):
+        # A generation given up on had its frame and its start written before.
+        before = kind in ("ObservationCaptured", "InferenceStarted")
+        for k in sorted(started if before else started - set(synthesized)):
             records = other.get(k, [])
             problems += differences(by_decision.get(k, []), records, f"trace.{kind}[{k}]")[0]
     for k in sorted(started & set(synthesized)):
