@@ -532,3 +532,50 @@ def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
         tmp_path,
     )
     check_one_session(actual)
+
+
+def test_a_route_to_another_upstream_fails_the_decision(openrouter_env, tmp_path):
+    """OpenRouter names the provider that served the request in the route metadata that comes
+    with the usage (LiteLLMDriver._route_metadata). A provider other than the pinned upstream
+    fails the attempt (LiteLLMDriver._check_route), though the reply came complete, and the
+    classifier takes the error as FATAL. The action text was already read, so the decision is
+    provider_stream_interrupted (DefaultHarness stream_generate, ``received_output``): it is not
+    sent again and takes no action."""
+    (reply,) = replies(LONG_SCENARIO[:1])
+    bedrock = route_metadata("anthropic/claude-opus-5", "Amazon Bedrock")
+    with OpenRouterStub([reply], route=bedrock) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = build_episode(
+            openrouter_config(),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=MODEL_KEY,
+            **TOKEN_CLOCK,
+        )
+        try:
+            agent = episode.agent
+            observation = episode.frames.capture(0)
+            agent.configure_decision(episode.budget(observation.tick_number))
+            agent.stream_prefill(observation)
+            result = agent.stream_generate(tick=0)
+        finally:
+            episode.finish()
+    assert len(stub.requests) == 1 and stub.unused_replies == 0
+    error = repr(RuntimeError("OpenRouter selected 'Amazon Bedrock'; expected pinned 'anthropic'"))
+    assert result["action"] is None and result["output_chunks"]
+    assert result["invalid_reason"] == "provider_stream_interrupted"
+    assert result["invalid_detail"] == error
+    events = map(json.loads, (tmp_path / "episode_trace.jsonl").read_text().splitlines())
+    (attempt,) = [
+        e["payload"]
+        for e in events
+        if e["event"] == "ModelAttemptFinished" and e["payload"]["kind"] == "generation"
+    ]
+    assert (attempt["outcome"], attempt["failure_kind"], attempt["error"]) == (
+        "failed",
+        "fatal",
+        error,
+    )
+    assert attempt["received_output"] is True
+
