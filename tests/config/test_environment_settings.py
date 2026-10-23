@@ -50,3 +50,16 @@ def test_fields_match_the_replaced_reads(environ):
     # The effective config exports the runner's timing as the runner has it, no more.
     exported = {f for group, f, *_ in effective_config._IMPORT_SETTINGS if group == "runner_timing"}
     assert exported == set(vars(timing))
+
+
+def test_the_run_hash_records_every_setting_read_at_import():
+    """A run that sets one of these variables is told apart by its runtime-config hash, which
+    records them as found when it is computed (evaluation/config.py effective_run_config)."""
+    from realtime_framework.evaluation.config import _RUNTIME_ENV_KEYS
+
+    read = {
+        variable
+        for group in (FrameEncodingConfig, RunnerTimingConfig)
+        for variable, _ in group.ENVIRONMENT.values()
+    }
+    assert read <= _RUNTIME_ENV_KEYS
