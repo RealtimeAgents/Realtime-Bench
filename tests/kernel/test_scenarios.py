@@ -536,6 +536,30 @@ def test_a_frozen_stream_invalidates_the_run(config, reply, ended_at, ops_at):
     assert (termination.ops_ended_at, termination.ops_snapshot_at) == (ops_at, ops_at)
 
 
+def test_identical_frames_while_operational_time_stands_still_are_not_a_frozen_stream():
+    """画面冻结 needs operational time to move on: N identical identities "with a progressing wall
+    clock" (legacy_loop.py ObservationStreamWatchdog). From the second capture on the producer
+    repeats one frame. The first three calls and every command take no time, so the second to
+    fourth captures, three identical frames, all come at ops 0 and the run goes on. The fourth
+    call takes 0.5 s: the fifth capture, the fourth identical frame, invalidates the run before a
+    fifth generation starts. Decisions land at ticks 1, 2, 2 and 2 (from the second on they
+    observe the frozen tick 1)."""
+    zero = Reply(latency=0.0, action=CLICK, output_tokens=100)
+    slow = Reply(latency=0.5, action=CLICK, output_tokens=100)
+    sim = _run(_token(10.0), World(replies=[zero, zero, zero, slow], frozen_from=1))
+    assert len(sim.captures) == 5
+    assert [entry.ops for entry in sim.entries("InferenceStarted")] == [0.0] * 4
+    assert [at for _, at, _ in sim.executed] == [1, 2, 2, 2]
+    assert [outcome.status for outcome in sim.outcomes] == ["applied"] * 4
+    termination = sim.termination
+    assert termination.invalid.reason == "observation_stream_frozen"
+    assert (termination.stop_reason, termination.ended_at, termination.ops_ended_at) == (
+        "invalid_run",
+        2.0,
+        0.5,
+    )
+
+
 # ---- 一次生成跨过好几帧, 恰好落在帧边界 ---------------------------------------------------------------
 
 
