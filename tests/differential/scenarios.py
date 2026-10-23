@@ -369,6 +369,30 @@ PER_RULE = [
         expect=frozenset({"X2", "X4", "X6"}),
         name="wall-per-move-cap",
     ),
+    # A move over the per-move cap that also runs out the think budget is skipped_timeout: no
+    # action comes before over the budget (turns.py TurnPolicy._skipped, legacy_loop.py
+    # _land_action). Every 1.5 s reply is over the 1 s cap and costs the cap; decision 1 brings
+    # the spend to 2 s, past the 1.5 s budget.
+    Script(
+        "wall",
+        10.0,
+        _timed(["click"] * 4, [1.5] * 4),
+        per_move_cap_s=1.0,
+        think_budget_s=1.5,
+        expect=frozenset({"X6"}),
+        name="wall-over-the-cap-and-the-think-budget",
+    ),
+    # The same on the token clock, B = 256: 768 tokens are 3 s, over the 1 s cap.
+    Script(
+        "token",
+        10.0,
+        _tokens([("click", 768), ("click", 768), ("click", 50)]),
+        tokens_per_frame=256,
+        per_move_cap_s=1.0,
+        think_budget_s=1.5,
+        expect=frozenset({"KF5"}),
+        name="token-over-the-cap-and-the-think-budget",
+    ),
     # K-f: decision 1's reply reports no usage on the finite token clock.
     Script(
         "token",
