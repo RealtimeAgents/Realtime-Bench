@@ -206,7 +206,7 @@
 
 ## 8. 怎么跑
 
-- 默认集合：`pytest tests/differential`。会话结束时打印每个脚本触发了哪些规则。
+- 默认集合：`pytest tests/differential`。会话结束时打印每个脚本触发了哪些规则。具名脚本预期的差异没有出现，这个脚本就失败（随机脚本不要求）。
 - 放大随机种子：
   - `DIFF_SEEDS=500` 跑种子 0–499，`DIFF_SEEDS=500:1000` 跑一段；
   - 写错或者得到空集合，`test_the_seeds_are_given_right` 会失败；

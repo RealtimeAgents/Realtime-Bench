@@ -1,12 +1,13 @@
 """The named scripts (scenarios.py) three ways: the shell agrees with the kernel's simulation,
-and today's loop with the shell once the expected differences a script names are applied. No
-named script has an instant where the fake clock's threads tie (simulated.ties)."""
+and today's loop with the shell once the expected differences a script names are applied, each
+of which it shows. No named script has an instant where the fake clock's threads tie
+(simulated.ties)."""
 
 from __future__ import annotations
 
 import pytest
 
-from .compare import compare, describe, record
+from .compare import as_expected, compare, describe, record
 from .scenarios import NAMED, PENDING
 from .simulated import ties
 
@@ -25,4 +26,4 @@ def test_named_script(script, tmp_path):
     assert not ties(script), ties(script)
     verdict = compare(script, tmp_path)
     record(verdict, named=True)
-    assert verdict.ok, describe(verdict)
+    assert as_expected(verdict), describe(verdict)
