@@ -194,7 +194,7 @@
 
 - 墙钟回放替身 `WallEnvironment.done()` 原来先锁存读失败、再花读的时间，已经改成和旧循环的环境（`LegacyStateReads.done()`）一样读完才锁存。这只影响 `tests/differential`。
 - `tests/differential/legacy_loop.py` 是主线原样搬来的，`ruff check` 报 43 处（行长等）。本分支没改它，lint 只查框架自己的文件。
-- 生产 `GuestEnvironment.execute` 在 `honor_fail` 时，把 DONE、FAIL 记成 `_done`，现在只有 `LegacyStateReads.done()` 读它。内核把 DONE 当 wait 跑，不交给环境（`turns.py`），所以外壳下走不到这一段。它属于 `execute`，不在这次搬的范围内，留着没动。
+- 生产 `GuestEnvironment.execute` 原来在 `honor_fail` 时把 DONE、FAIL 记成 `_done`，只有 `LegacyStateReads.done()` 读它。内核把 DONE、FAIL 当 wait 跑，不交给环境（`turns.py` `_accept`、`streaming.py` `_arrived`），旧循环也在 `_decide` 里先把它换成 wait，所以哪边都走不到这一段。它已经连同 `honor_fail`、`_done`、`_terminal_action` 和 `GuestClient` 里 WAIT、DONE、FAIL 的分支删掉，`LegacyStateReads.done()` 也不再读 `_done`。
 
 ## 8. 怎么跑
 

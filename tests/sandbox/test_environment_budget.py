@@ -120,7 +120,6 @@ def _environment(guest: FakeGuest, task: Task | None = None, **options):
     return actions.GuestEnvironment(
         GuestClient(host="127.0.0.1", port=guest.port),
         task or _token_clock(Task()),
-        honor_fail=False,
         clock_mode="token",
         **options,
     )
@@ -139,7 +138,6 @@ def _wall_environment(guest: FakeGuest) -> actions.GuestEnvironment:
     return actions.GuestEnvironment(
         GuestClient(host="127.0.0.1", port=guest.port),
         _WallTask(),
-        honor_fail=False,
         clock_mode="wall",
         wall_start_time=now,
     )
@@ -732,7 +730,6 @@ def test_a_4xx_from_the_guest_s_command_endpoint_is_an_environment_failure(secon
     env = actions.GuestEnvironment(
         _MissingCommandEndpoint(clock, seconds),
         _WallTask(),
-        honor_fail=False,
         clock_mode="wall",
         wall_start_time=1_000.0,
         clocks=Clocks(clock, clock),
@@ -910,7 +907,6 @@ def _wall_on(clock: FakeClock, guest) -> actions.GuestEnvironment:
     return actions.GuestEnvironment(
         guest,
         _WallTask(),
-        honor_fail=False,
         clock_mode="wall",
         wall_start_time=1_000.0,
         clocks=Clocks(clock, clock),

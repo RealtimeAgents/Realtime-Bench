@@ -126,7 +126,6 @@ class GuestEnvironment:
         guest,
         task,
         frames_dir=None,
-        honor_fail=True,
         stop_check=None,
         scene_capture=None,
         action_audit_path=None,
@@ -186,16 +185,13 @@ class GuestEnvironment:
         self._wall_autorepeat = None
         self._held_mouse_buttons = set()
         self.scene_capture = scene_capture
-        self._done = False
         self.actions = 0
         self.frames_dir = frames_dir
         self.fi = 0
         self._fi_lock = threading.Lock()
-        self.honor_fail = honor_fail
         self.stop_check = stop_check
         self._episode_over = False
         self._terminal_reason = None
-        self._terminal_action = None
         self.failed = 0
         self._last_exec_error = None
         self.capture_latencies = []
@@ -1048,12 +1044,6 @@ class GuestEnvironment:
         self.last_held_keys = ()
         self.last_end_checks = ()
         action_type = action.action_type
-        if action_type in (ActionType.DONE, ActionType.FAIL):
-            if self.honor_fail:
-                self._done = True
-                self._terminal_action = action_type
-                return "terminal"
-            return "terminal_ignored"
         try:
             if (
                 self.clock_mode == "token"

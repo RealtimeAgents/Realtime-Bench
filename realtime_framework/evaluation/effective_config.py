@@ -383,7 +383,6 @@ def _probe_runner(request: dict) -> dict:
                 "task_id": env.task.task_id,
                 "category": env.task.category,
                 "seed": env.task.seed,
-                "honor_fail": env.honor_fail,
                 "task_clock": env.task.clock_snapshot(),
                 "system_prompt_sha256": _sha256(adapter.system_prompt_override),
                 "instruction_sha256": _sha256(env.task.description()),

@@ -127,8 +127,6 @@ class LegacyStateReads:
     def done(self):
         if getattr(self, "_invalid_run", None):
             return True
-        if self._done:
-            return True
         if self.stop_check is not None:
             try:
                 with operation_budget(
