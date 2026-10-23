@@ -365,20 +365,10 @@ def normalize_action(action: Action) -> tuple[Action, dict]:
 
     geometry = FrameGeometry.from_dict(action.coordinate_transform)
     params = dict(source)
-    if space in {"model_image_px", "model_tool_px"}:
+    if space == "model_image_px":
         for x_key, y_key in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
             if _finite(params.get(x_key)) and _finite(params.get(y_key)):
                 params[x_key], params[y_key] = geometry.image_to_screen_point(
-                    params[x_key], params[y_key]
-                )
-    elif space in {"normalized_0_999", "normalized_0_1000"}:
-        maximum = 999.0 if space.endswith("999") else 1000.0
-        normalized_geometry = FrameGeometry(
-            (round(maximum), round(maximum)), geometry.screen_size, geometry.capture_bbox_screen
-        )
-        for x_key, y_key in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
-            if _finite(params.get(x_key)) and _finite(params.get(y_key)):
-                params[x_key], params[y_key] = normalized_geometry.image_to_screen_point(
                     params[x_key], params[y_key]
                 )
     else:
@@ -395,58 +385,6 @@ def normalize_action(action: Action) -> tuple[Action, dict]:
 
 def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _parse_pair(value: str) -> tuple[int, int]:
-    import argparse as argparse
-
-    parts = value.lower().replace("x", ",").split(",")
-    if len(parts) != 2:
-        raise argparse.ArgumentTypeError("expected WIDTHxHEIGHT")
-    return int(parts[0]), int(parts[1])
-
-
-def _parse_bbox(value: str) -> tuple[float, float, float, float]:
-    import argparse as argparse
-
-    parts = value.split(",")
-    if len(parts) != 4:
-        raise argparse.ArgumentTypeError("expected X1,Y1,X2,Y2")
-    return tuple(float(item) for item in parts)
-
-
-def main() -> None:
-    """Print deterministic landmark mappings for a GUI coordinate contract."""
-    import argparse as argparse
-
-    parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument("--image-size", type=_parse_pair, required=True)
-    parser.add_argument("--screen-size", type=_parse_pair, default=DESKTOP_SIZE)
-    parser.add_argument("--capture-bbox-screen", type=_parse_bbox, default=None)
-    args = parser.parse_args()
-
-    geometry = FrameGeometry(args.image_size, args.screen_size, args.capture_bbox_screen)
-    width, height = geometry.image_size
-    landmarks = {
-        "top_left": (0, 0),
-        "center": (width / 2, height / 2),
-        "bottom_right": (width - 1, height - 1),
-    }
-    print(
-        json.dumps(
-            {
-                **geometry.to_dict(),
-                "landmarks": {
-                    name: {
-                        "image": list(point),
-                        "screen": list(geometry.image_to_screen_point(*point)),
-                    }
-                    for name, point in landmarks.items()
-                },
-            },
-            indent=2,
-        )
-    )
 
 
 # Grounding
@@ -879,7 +817,3 @@ def canonical_function_action(
     if not valid:
         raise ValueError(reason)
     return {"action": name, **arguments}
-
-
-if __name__ == "__main__":
-    main()
