@@ -801,8 +801,33 @@ def config_fingerprint(config: dict) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def apply_run_defaults(args) -> None:
+    """Fill in what the runner's arguments ``args`` leave to its defaults, as runner.main() runs
+    and records the run: the token clock, the protocol of the clock, the environment frame rate
+    for the model-input rate, the model's reasoning effort (its catalog default, "low" for a raw
+    backend id) and, in the environment the runtime-config hash reads (_RUNTIME_ENV_KEYS), the
+    desktop's graphics mode and recording encoder. The hash the run's report expects
+    (reporting.prepare_episode_report, on main()'s arguments) and the one identity_main prints
+    are then the one the run records."""
+    import realtime_framework.providers.registry as catalog
+
+    args.clock = args.clock or "token"
+    args.protocol = args.protocol or (
+        "wall-clock" if args.clock == "wall" else "time-aware-token-v1"
+    )
+    if args.model_input_fps is None:
+        args.model_input_fps = args.fps
+    if catalog.has(args.model):
+        if args.reasoning_effort is None:
+            args.reasoning_effort = catalog.get(args.model).defaults["reasoning_effort"]
+    else:
+        args.reasoning_effort = args.reasoning_effort or "low"
+    os.environ["SANDBOX_GRAPHICS_MODE"] = args.graphics_mode
+    os.environ["SCREEN_RECORDING_ENCODER"] = args.recording_encoder
+
+
 def identity_main(argv=None) -> int:
-    """Print the effective runtime-config hash expected by the maintained streaming runner."""
+    """Print the runtime-config hash runner.main() records for the same arguments."""
     import argparse as argparse
 
     parser = argparse.ArgumentParser(description=identity_main.__doc__)
@@ -815,7 +840,7 @@ def identity_main(argv=None) -> int:
         "--interaction-mode", choices=("turn_based", "streaming"), default="turn_based"
     )
     parser.add_argument("--max-minutes", type=float, required=True)
-    parser.add_argument("--protocol", required=True)
+    parser.add_argument("--protocol")
     parser.add_argument("--think-budget-s", type=float)
     parser.add_argument("--per-move-cap-s", type=float)
     parser.add_argument("--clock", choices=("wall", "token"))
@@ -823,8 +848,18 @@ def identity_main(argv=None) -> int:
     from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 
     parser.add_argument("--tokens-per-frame", default=str(DEFAULT_TOKENS_PER_FRAME))
+    parser.add_argument(
+        "--graphics-mode",
+        choices=("cpu", "gpu"),
+        default=os.environ.get("SANDBOX_GRAPHICS_MODE", "cpu"),
+    )
+    parser.add_argument(
+        "--recording-encoder",
+        choices=("cpu", "gpu"),
+        default=os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
+    )
     args = parser.parse_args(argv)
-    args.clock = args.clock or "token"
+    apply_run_defaults(args)
 
     import realtime_framework.providers.registry as catalog
     import realtime_tasks.registry as registry
@@ -842,9 +877,8 @@ def identity_main(argv=None) -> int:
     if tokens_per_frame is not None and tokens_per_frame <= 0:
         parser.error("--tokens-per-frame must be positive")
     entry = catalog.get(args.model)
-    reasoning_effort = args.reasoning_effort or entry.defaults["reasoning_effort"]
     try:
-        catalog.validate_reasoning_effort(args.model, reasoning_effort)
+        catalog.validate_reasoning_effort(args.model, args.reasoning_effort)
     except ValueError as exc:
         parser.error(str(exc))
     from realtime_framework.providers.preflight import UnsupportedTokenBudget, check_token_budget
@@ -862,9 +896,7 @@ def identity_main(argv=None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     config = catalog.to_model_config(
-        args.model,
-        fps=args.fps if args.model_input_fps is None else args.model_input_fps,
-        reasoning_effort=reasoning_effort,
+        args.model, fps=args.model_input_fps, reasoning_effort=args.reasoning_effort
     )
     effective = effective_run_config(
         seed=args.seed,
