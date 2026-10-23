@@ -64,6 +64,7 @@ class FedSocket:
     order, each once fed; an exception fed is raised by the read that takes it."""
 
     def __init__(self, number: int):
+        self.trace_connection_number = number
         self.trace_connection_id = f"gemini_live.ws-{number}"
         self.sent: list[dict] = []
         self.read_scopes: list[tuple] = []  # each server message's kind and its trace scope
@@ -938,6 +939,41 @@ def test_a_close_ends_a_connect_still_opening():
             return str(exc)
 
     assert asyncio.run(run()) == "Gemini Live session closed while it opened"
+
+
+class _SetupEnded(_Opened):
+    """A connection whose setup the server ends, once its WebSocket opened."""
+
+    async def __aenter__(self):
+        raise server_closed(1011, "setup failed")
+
+
+def test_events_carry_the_number_the_trace_gives_their_connection():
+    """A connection whose setup failed counts in the trace, not in the session core, which counts
+    the connections it set up: the events of the next one carry the trace's number, as OpenAI
+    Realtime's do and as the delivery records name the connection (review-encoders 设计 8)."""
+    rig = Rig()
+    connect = rig.live.connect
+
+    def setup_ends_first(*, model, config):
+        opened = connect(model=model, config=config)
+        return opened if len(rig.live.sockets) > 1 else _SetupEnded(opened._session, opened._socket)
+
+    rig.live.connect = setup_ends_first
+
+    async def run():
+        with pytest.raises(ConnectionClosedError):
+            await rig.connect()
+        await rig.connect()
+        request = GenerationRequest("turn-1", None, "inf", "wall", canonical=rig.view([]))
+        rig.socket.answer("activityEnd", call("call-1"), TURN_COMPLETE)
+        events = await drain(rig.driver.events(await rig.driver.request_reply(request)))
+        await rig.driver.close()
+        return events
+
+    events = asyncio.run(run())
+    assert {(event.connection, event.generation) for event in events} == {(2, 1)}
+    assert rig.driver._core.connection is None and len(rig.live.sockets) == 2
 
 
 def test_each_message_is_traced_under_the_reply_it_was_read_for():

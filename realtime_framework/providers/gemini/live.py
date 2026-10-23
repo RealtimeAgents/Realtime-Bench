@@ -316,8 +316,10 @@ class GeminiLiveDriver(SessionLifecycle):
         # read between replies, which the next reply's events() hands over.
         self._replies: dict[str, _StreamedReply] = {}
         self._cancelled_between: list[Orphan] = []
-        self._trace_connection: str | None = None  # the trace's id of the last connection opened
-        self._trace_connections: dict[int, str] = {}  # and of each one, by the core's number
+        # The WebSocket of the last connection opened, which the trace numbered
+        # (providers/capture.py), and of each one the core counted, by the core's number.
+        self._trace_connection = None
+        self._trace_connections: dict[int, Any] = {}
         self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
@@ -343,9 +345,8 @@ class GeminiLiveDriver(SessionLifecycle):
         """What became of writes the core recorded, on the trace's connection the core numbered
         ``connection``: also an acknowledgement an abandoned reply wrote late on a connection
         closed since. One being set up has no number yet: the connection opened last."""
-        self._record_delivery(
-            state, contents, self._trace_connections.get(connection, self._trace_connection)
-        )
+        socket = self._trace_connections.get(connection, self._trace_connection)
+        self._record_delivery(state, contents, socket.trace_connection_id)
 
     @staticmethod
     def _exception_chain(exc: BaseException):
@@ -644,7 +645,7 @@ class GeminiLiveDriver(SessionLifecycle):
             if getattr(session, "setup_complete", None) is None:
                 raise RuntimeError("Gemini Live did not acknowledge session setup")
             # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
-            self._trace_connection = session._ws.trace_connection_id
+            self._trace_connection = session._ws
             # Seed history explicitly before either input transport. Merely leaving
             # turn_complete=False can cause historical model content to be echoed as new
             # output. HistoryConfig makes this a non-generating initialization boundary.
@@ -1175,12 +1176,17 @@ class GeminiLiveDriver(SessionLifecycle):
                 type(orphan.message).__name__,
                 orphan.cancelled,
                 received_at=orphan.at,
-                connection=orphan.connection,
+                connection=self._trace_connections[orphan.connection].trace_connection_number,
             )
         while True:
             received = await take()
             message = received.message
-            numbers = {"connection": received.connection, "generation": received.generation}
+            # The trace's number of the connection, as OpenAI Realtime's events carry; the core
+            # counts only the connections it set up and seeded.
+            numbers = {
+                "connection": self._trace_connections[received.connection].trace_connection_number,
+                "generation": received.generation,
+            }
             raw_type = type(message).__name__
             server = getattr(message, "server_content", None)
             turn = getattr(server, "model_turn", None)
