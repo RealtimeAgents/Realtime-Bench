@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
+import realtime_framework.entity.model as model_module
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
@@ -157,6 +158,13 @@ HOOKED = {
         },
     ),
 }
+# The generic API, which LiteLLM's logger callback records instead of a hooked client.
+GENERIC = {
+    "adapter_type": "litellm",
+    "model_name": "openai/replay-vlm",
+    "api_base_url": "/v1",
+    "chat_stream": False,
+}
 
 
 def _config(stub: HttpStub, fields: dict, monkeypatch) -> ModelConfig:
@@ -223,14 +231,8 @@ def test_hooked_paths_record_the_wire(api, tmp_path, monkeypatch):
 
 
 def test_generic_litellm_api_is_recorded_from_the_logger(tmp_path, monkeypatch):
-    fields = {
-        "adapter_type": "litellm",
-        "model_name": "openai/replay-vlm",
-        "api_base_url": "/v1",
-        "chat_stream": False,
-    }
     with HttpStub(_openai_answer) as stub:
-        events = _run(_config(stub, fields, monkeypatch), stub, tmp_path)
+        events = _run(_config(stub, GENERIC, monkeypatch), stub, tmp_path)
     pack = tmp_path / "episode_blobs.pack"
     sent = _payloads(events, "ModelRequestSent")
     received = _payloads(events, "ModelResponseReceived")
@@ -283,6 +285,41 @@ def test_connection_error_resend_is_a_second_request_in_the_same_attempt(tmp_pat
         assert cut["request_seq"] == resent["capture_seq"] and not cut["complete"]
         assert attempts[0]["outcome"] == "retry" and len(sent) == 3
     _assert_no_key(tmp_path)
+
+
+@pytest.mark.parametrize("api", sorted([*HOOKED, "litellm"]))
+def test_a_retry_after_reaches_the_retry_policy(api, tmp_path, monkeypatch):
+    """HTTP 429 with ``Retry-After: 120`` on every LiteLLM path. The exception LiteLLM raises has
+    no Retry-After on its response; the HTTP error it wraps does, and the driver's classifier
+    reads it from there (providers/litellm.py _retry_after). The shared policy does not wait out
+    more than 30 s (entity/model.py TransportRetryPolicy), so the first attempt is final."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    fields = GENERIC if api == "litellm" else HOOKED[api][2]
+    body = json.dumps({"error": {"message": "rate limited", "code": 429}}).encode()
+    limited = Answer(429, body, headers=(("Retry-After", "120"),))
+    with HttpStub(lambda index, received: limited) as stub:
+        episode = build_episode(
+            _config(stub, fields, monkeypatch),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key="replay-model",
+        )
+        try:
+            observation = episode.frames.capture(0)
+            episode.agent.configure_decision(episode.budget(observation.tick_number))
+            episode.agent.stream_prefill(observation)
+            result = episode.agent.stream_generate(tick=0)
+        finally:
+            assert episode.finish() is None
+    assert len(stub.requests) == 1
+    assert result["invalid_reason"] == "provider_rate_limited"
+    (attempt,) = _payloads(_events(tmp_path), "ModelAttemptFinished")
+    assert (attempt["outcome"], attempt["failure_kind"], attempt["retry_delay_s"]) == (
+        "failed",
+        "rate_limited",
+        None,
+    )
 
 
 def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
