@@ -48,6 +48,7 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import RequestRetry
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.entity.model import classify_http_failure
@@ -519,6 +520,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             clock=self.clock,
         )
         await retry.run_async(send)
+        if retry_cancel_event().is_set():
+            # Abandoned while the connection opened: nothing of the generation goes out on it,
+            # and the abort closes only what was open when it came.
+            await self._close_current()
+            raise RetryCancelled("generation abandoned while its session opened")
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
         # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``

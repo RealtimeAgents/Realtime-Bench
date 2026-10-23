@@ -873,6 +873,48 @@ def _hold_handshakes(driver: OpenAIRealtimeDriver) -> tuple[threading.Event, thr
     return handshaking, finish
 
 
+@pytest.mark.parametrize("closed", [False, True], ids=["close-to-come", "closed-meanwhile"])
+def test_openai_realtime_replays_nothing_once_its_generation_is_abandoned_during_the_handshake(
+    closed,
+):
+    """The generation is abandoned while ensure_ready's reopen is in its opening handshake, past
+    the connect retry's last check; the abort's close has not come yet, or came during the
+    handshake and found nothing open. Nothing more of an abandoned generation goes out: the
+    connection that opens is closed again before the history is replayed onto it (after a close
+    meanwhile, before its session.update even), so no delivery is recorded. The reopen raises
+    RetryCancelled, as an abandoned one does instead of failing, unrecorded; the handshake itself
+    succeeded and is recorded so."""
+    driver, log = _openai()
+    trace = _Trace()
+    driver.bind_trace(trace)
+    records = _Records()
+    abandoned = threading.Event()
+    handshaking, finish = _hold_handshakes(driver)
+
+    async def run():
+        with retry_cancellation(abandoned):
+            ready = asyncio.ensure_future(driver.ensure_ready(SEED, view([turn(0, "a0")]), records))
+        try:
+            await asyncio.to_thread(handshaking.wait, 5)
+            abandoned.set()
+            if closed:
+                await driver.abort(None)
+        finally:
+            finish.set()
+        with pytest.raises(RetryCancelled) as raised:
+            await ready
+        return raised.value
+
+    cancelled = asyncio.run(run())
+    assert _sent(log) == ([] if closed else [(1, "session.update")]) + [(1, "close")]
+    assert [(event, payload.get("outcome")) for event, payload, _ in trace.events] == [
+        (TraceEvent.MODEL_ATTEMPT_FINISHED, "ok")
+    ]
+    assert str(cancelled) == "generation abandoned while its session opened"
+    assert records.calls == []
+    assert not driver._connected and driver._session is None and driver._cm is None
+
+
 def test_openai_realtime_closes_a_connection_whose_handshake_outlived_its_connect():
     """RealtimeRuntime.start bounds the first connect (harnesses/default/context.py), but the
     opening handshake runs on a thread the bound cannot stop. The close that follows finds
