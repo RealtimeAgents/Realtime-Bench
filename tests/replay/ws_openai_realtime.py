@@ -1,40 +1,48 @@
 """Scripted OpenAI Realtime WebSocket server on 127.0.0.1, and the replay step loop for it.
 
 The openai_realtime driver reaches the server through the OpenAI SDK's synchronous realtime
-client (providers/openai_realtime.py:162-168, 304-318). With ``ModelConfig.api_base_url`` set to
-``base_url``, the SDK connects to ``ws://127.0.0.1:<port>/v1/realtime?model=<model>``
-(openai/resources/realtime/realtime.py:1151-1200). The server runs on the websockets library the
-SDK uses, without a message size limit: client frames carry base64 screenshots.
+client (providers/openai_realtime.py OpenAIRealtimeDriver.__init__,
+OpenAIRealtimeDriver._connect.open_session). With ``ModelConfig.api_base_url`` set to ``base_url``,
+the SDK connects to ``ws://127.0.0.1:<port>/v1/realtime?model=<model>``
+(openai/resources/realtime/realtime.py:1151-1200). The server runs on the websockets library the SDK
+uses, without a message size limit: client frames carry base64 screenshots.
 
 Each connection keeps an ordered item list and answers the client events the driver sends:
-- session.update gets session.updated; the driver never reads either (openai_realtime.py:304-318).
+- session.update gets session.updated; the driver never reads either (openai_realtime.py
+  OpenAIRealtimeDriver._connect.open_session).
 - conversation.item.create inserts the item at the end, at the start (``previous_item_id``
   "root") or right after its anchor, and gets conversation.item.added and conversation.item.done.
-  The in-place compaction waits for ``.done`` (openai_realtime_session.py:25, 393-394).
-- conversation.item.delete removes the item and gets conversation.item.deleted (395-396).
+  The in-place compaction waits for ``.done`` (openai_realtime_session.py _CREATE_ACKS,
+  RealtimeSessionCore._acknowledged).
+- conversation.item.delete removes the item and gets conversation.item.deleted
+  (RealtimeSessionCore._acknowledged).
 - response.create gets the next scripted reply as one assistant text item. The usage always
   carries both token-detail objects, which the harness reads with ``.get``
-  (harnesses/default/harness.py:120-126).
-Acks carry only the item id and role: the driver reads nothing else from them (394, 396).
+  (harnesses/default/harness.py VisionAgentBase._accumulate_usage).
+Acks carry only the item id and role: the driver reads nothing else from them
+(RealtimeSessionCore._acknowledged).
 
 Before a create or delete is applied it is checked: a unique item id of at most 32 characters
-(openai_realtime.py:53), an existing anchor, content parts the SDK allows for the role
-(openai/types/realtime/realtime_conversation_item_{user,system,assistant}_message.py) minus
-audio, since the session is text only (openai_realtime.py:311-318), and an existing delete
-target. A failed check is a violation; the tests assert there are none.
+(openai_realtime.py _CLIENT_ID_MAX_LENGTH), an existing anchor, content parts the SDK allows for the
+role (openai/types/realtime/realtime_conversation_item_{user,system,assistant}_message.py) minus
+audio, since the session is text only (openai_realtime.py
+OpenAIRealtimeDriver._connect.open_session), and an existing delete target. A failed check is a
+violation; the tests assert there are none.
 
 Errors always echo the client event they answer. The driver treats an error without one as fatal
 for the generation that reads it, and as a failure of any in-place edit it is waiting for
-(openai_realtime_session.py:366-367, 397-410; openai_realtime.py:396-411). After any error the stub
-sends nothing more on that connection but keeps recording. The client sends a whole edit batch
-before it reads; acks it never reads would fill its receive queue, stop its reader and stall its
-close handshake for the close timeout (websockets/sync/connection.py:87-95, 811, 989-993).
+(openai_realtime_session.py RealtimeSessionCore.finish_edit, RealtimeSessionCore.receive;
+openai_realtime.py OpenAIRealtimeDriver.events). After any error the stub sends nothing more on that
+connection but keeps recording. The client sends a whole edit batch before it reads; acks it never
+reads would fill its receive queue, stop its reader and stall its close handshake for the close
+timeout (websockets/sync/connection.py:87-95, 811, 989-993).
 
 Scripted faults:
 - ``drop_responses``: answer these response.create calls (1-based, over the session) with
   response.created and then close the connection with 1011, before any output or usage.
 - ``edit_error_on_delete``: answer the n-th delete that carries an event_id with an error.
-  Only the in-place compaction sends deletes with an event_id (openai_realtime_session.py:281-309).
+  Only the in-place compaction sends deletes with an event_id (openai_realtime_session.py
+  RealtimeSessionCore._edit_batch).
 - ``reject_upgrades``: refuse these WebSocket upgrades (1-based, over the stub) with HTTP
   ``reject_status``, 503 unless given.
 
@@ -58,7 +66,8 @@ from websockets.sync.server import serve
 from .build import Episode
 from .steps import Step
 
-CLIENT_ID_MAX_LENGTH = 32  # the driver's client id limit (providers/openai_realtime.py:53)
+# the driver's client id limit (providers/openai_realtime.py _CLIENT_ID_MAX_LENGTH)
+CLIENT_ID_MAX_LENGTH = 32
 CONTENT_TYPES = {
     "user": {"input_text", "input_image"},
     "system": {"input_text"},
@@ -107,9 +116,10 @@ class Connection:
 
 def replies(steps: list[Step]) -> list[Reply]:
     """The stub's reply for each step, with usage sized like scenario.replies. Output tokens
-    include reasoning (entity/usage.py:55-58, 99-100). The SDK's usage model has no
-    reasoning_tokens; the key survives its model_dump (providers/litellm.py:97-107), and the
-    harness and the usage normalization read it (harness.py:126; entity/usage.py:66)."""
+    include reasoning (entity/usage.py normalize_provider_token_usage). The SDK's usage model has no
+    reasoning_tokens; the key survives its model_dump (providers/litellm.py object_dict), and the
+    harness and the usage normalization read it (harness.py VisionAgentBase._accumulate_usage;
+    entity/usage.py normalize_provider_token_usage)."""
     out = []
     for k, step in enumerate(steps):
         reasoning_tokens = len(step.reasoning) // 4
@@ -234,8 +244,9 @@ class RealtimeStub:
             return events, self.responses[responses:]
 
     def wait_for_session_update(self) -> None:
-        """Each connect sends session.update and reads no reply (openai_realtime.py:304-318),
-        so initialize() can return before the stub has recorded it."""
+        """Each connect sends session.update and reads no reply (openai_realtime.py
+        OpenAIRealtimeDriver._connect.open_session), so initialize() can return before the stub has
+        recorded it."""
         with self._lock:
             recorded = self._lock.wait_for(
                 lambda: any(e["type"] == "session.update" for e in self.connections[-1].events),
@@ -412,7 +423,8 @@ class RealtimeStub:
             return [created], 1011
         if not self._replies:
             # Like the chat stub's HTTP 400: a FATAL failure ends the decision without a retry
-            # (openai_realtime.py:204-212, 439-457; entity/model.py:367-388).
+            # (openai_realtime.py OpenAIRealtimeDriver.classify_transport_error,
+            # OpenAIRealtimeDriver.events; entity/model.py TransportRetryPolicy, TRANSPORT_RETRY).
             self.unscripted += 1
             entry["status"] = "failed"
             failed = {

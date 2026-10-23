@@ -3,18 +3,21 @@
 This API has no request body. A baseline holds the client events of each decision in the order
 they were sent, per connection; the stub's conversation at each response.create; and the parsed
 action, usage and reported execution result of each decision. GenerationRequest.canonical is
-built every turn (harnesses/default/context.py:480-487) but the driver takes only its newest
-frame's id from it (providers/openai_realtime.py:355-357), and the trajectory's input_prompt
-shows the archived action ledger as a user message (harnesses/default/harness.py:1127-1133;
-providers/litellm.py chat_messages), the role the wire item has had since context policy version 3
-(openai_realtime_session.py:205-221, 292-297; version 1 sent a system item). The canonical
-request is not recorded; the trajectory rows are, with input_prompt as a digest (baseline.py).
+built every turn (harnesses/default/context.py RealtimeRuntime._run_turn) but the driver takes only
+its newest frame's id from it (providers/openai_realtime.py OpenAIRealtimeDriver.start_generation),
+and the trajectory's input_prompt shows the archived action ledger as a user message
+(harnesses/default/harness.py DefaultHarness._request_messages; providers/litellm.py chat_messages),
+the role the wire item has had since context policy version 3 (openai_realtime_session.py
+RealtimeSessionCore._ledger_create, RealtimeSessionCore._edit_batch; version 1 sent a system item).
+The canonical request is not recorded; the trajectory rows are, with input_prompt as a digest
+(baseline.py).
 
 All scripts run on the finite token clock with B=1024 and 61 ticks: decision k may emit
 min(32000, (61 - k) * 1024) tokens (evaluation/kernel/turns.py _captured,
 evaluation/episode_records.py decision_budget). That is the native limit up to decision 29 and
 less from decision 30 on. The driver sends any cap above 4096 as "inf"
-(openai_realtime.py:214-220), so the last three response.create calls carry 4096, 3072, 2048.
+(openai_realtime.py OpenAIRealtimeDriver.transport_output_token_cap), so the last three
+response.create calls carry 4096, 3072, 2048.
 
 Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay``; without it
 the run is compared with tests/replay/baselines/.
@@ -63,11 +66,12 @@ MODEL_KEY = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml
 STUB_API_KEY = "sk-replay-stub"  # a placeholder; every handshake must carry it
 TOKENS_PER_FRAME, MAX_TICKS = 1024, 61
 
-# With the default policies (entity/config.py:35-38) a decision that would hold 21 screenshots
-# folds the oldest 10 (harnesses/default/context.py:24-32), and one that would hold 51 turns
-# archives the oldest 10 (context.py:295-305). Decision k holds k earlier turns plus its own, so
-# decision 50 archives turns 0-9 and also folds turns 30-39. Counted from 1, these are steps 21,
-# 31, 41 and 51.
+# With the default policies (entity/config.py effective_visual_fold_policy,
+# effective_detailed_history_policy) a decision that would hold 21 screenshots folds the oldest 10
+# (harnesses/default/context.py apply_active_visual_budget), and one that would hold 51 turns
+# archives the oldest 10 (context.py RealtimeRuntime._retained). Decision k holds k earlier turns
+# plus its own, so decision 50 archives turns 0-9 and also folds turns 30-39. Counted from 1, these
+# are steps 21, 31, 41 and 51.
 FOLDS = {20: range(0, 10), 30: range(10, 20), 40: range(20, 30), 50: range(30, 40)}
 ARCHIVE, ARCHIVED = 50, range(0, 10)
 
@@ -75,7 +79,7 @@ ARCHIVE, ARCHIVED = 50, range(0, 10)
 def realtime_config(base_url: str) -> ModelConfig:
     """The runner's ModelConfig for the catalog key (evaluation/runner.py main), pointed at
     the stub. The placeholder key keeps any OPENAI_API_KEY in the environment or the .env from
-    being used (providers/openai_realtime.py:161-162)."""
+    being used (providers/openai_realtime.py OpenAIRealtimeDriver.__init__)."""
     config = catalog.to_model_config(
         MODEL_KEY, fps=1.0, reasoning_effort="low", api_key=STUB_API_KEY
     )
@@ -129,7 +133,8 @@ def _run(stub: RealtimeStub, steps, tmp_path: Path, scenario: str) -> list[dict]
         assert result.get("invalid_reason") is None, result.get("invalid_detail")
         assert result["inspection"]["valid"]
         # Each decision ends with response.create; its cap is the transport cap the runner
-        # bound (openai_realtime.py:364-371; episode_records.py decision_budget).
+        # bound (openai_realtime.py OpenAIRealtimeDriver._create_response; episode_records.py
+        # decision_budget).
         response = record["client_events"][-1]["events"][-1]
         assert response["type"] == "response.create"
         assert response["response"] == {
@@ -186,7 +191,7 @@ def _split(events: list[dict]) -> tuple[list[dict], dict]:
 
 def _is_placeholder(item: dict) -> bool:
     """A folded turn's user item carries only the placeholder text
-    (harnesses/default/request.py:155-161; openai_realtime.py:245-258)."""
+    (harnesses/default/request.py:155-161; openai_realtime.py OpenAIRealtimeDriver._send)."""
     return item["content"] == [{"type": "input_text", "text": FOLDED_VISUAL_PLACEHOLDER}]
 
 
@@ -197,7 +202,7 @@ def _is_feedback(item: dict) -> bool:
 
 def _is_ledger(item: dict) -> bool:
     """The archived-action ledger item: a user item opened by the ledger header (context policy
-    version 3; openai_realtime_session.py:205-221)."""
+    version 3; openai_realtime_session.py RealtimeSessionCore._ledger_create)."""
     if not item["content"][0]["text"].startswith(ARCHIVED_ACTION_LEDGER_HEADER + "\n"):
         return False
     assert item["role"] == "user"
@@ -207,7 +212,8 @@ def _is_ledger(item: dict) -> bool:
 def _applied_fold_pairs(stub: RealtimeStub) -> int:
     """Count in-place folds the stub applied, asserting each one put the placeholder where the
     deleted item was. A fold deletes the user item, then creates the placeholder after the item
-    before it (openai_realtime_session.py:308-318); ids are not reused, so it is a new item."""
+    before it (openai_realtime_session.py RealtimeSessionCore._edit_batch); ids are not reused, so
+    it is a new item."""
     pairs = 0
     for connection in stub.connections:
         events, positions = connection.events, connection.positions
@@ -267,8 +273,10 @@ def test_long_scenario(tmp_path):
             expected += [("delete", user_items[j]), ("placeholder", anchor)]
         actual = []
         for event in batch:
-            # in-place edits are waited for by id (openai_realtime.py:284-289, 549;
-            # openai_realtime_session.py:263-270, 388-422)
+            # in-place edits are waited for by id (openai_realtime.py
+            # OpenAIRealtimeDriver._wait_for_item_edits, OpenAIRealtimeDriver._compact_in_place;
+            # openai_realtime_session.py RealtimeSessionCore.begin_edit,
+            # RealtimeSessionCore.receive)
             assert "event_id" in event
             if event["type"] == "conversation.item.delete":
                 actual.append(("delete", event["item_id"]))
@@ -309,7 +317,7 @@ def test_long_scenario(tmp_path):
         assert archived == (len(ARCHIVED) if k == ARCHIVE else 0)
 
     # The archive puts the ledger first, as a user item at root, one JSON line per archived
-    # action (context.py:35-50; openai_realtime_session.py:288-297).
+    # action (context.py:35-50; openai_realtime_session.py RealtimeSessionCore._edit_batch).
     lines = ledger.split("\n")
     assert lines[0] == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == 1 + len(ARCHIVED)
 
@@ -344,7 +352,7 @@ def test_long_scenario(tmp_path):
     assert last_view[-1][1:3] == ("user", prompts[-1]) and len(last_view) == 149
 
     # The runtime cap falls below the native limit at decision 30; the wire shows a number once
-    # the cap is at most 4096 (openai_realtime.py:214-220).
+    # the cap is at most 4096 (openai_realtime.py OpenAIRealtimeDriver.transport_output_token_cap).
     native = records[0]["config"]["native_output_limit"]
     runtime_caps = [r["budget"]["runtime_output_tokens"] for r in steps]
     assert runtime_caps[29] == native > runtime_caps[30]
@@ -357,10 +365,12 @@ def test_long_scenario(tmp_path):
 
 def test_dropped_response_reconnects(tmp_path):
     """A close with 1011 after response.created, before any output or usage, is a transient
-    failure (openai_realtime.py:182-199). The harness retries the decision because nothing was
-    received (harness.py:1284-1340). The runtime rebuilds the session on a new connection through
-    connect(), replays canonical history (context.py:394-407; openai_realtime.py:301-344;
-    openai_realtime_session.py:223-243) and sends the same observation again under a new item id."""
+    failure (openai_realtime.py OpenAIRealtimeDriver.classify_transport_error). The harness retries
+    the decision because nothing was received (harness.py DefaultHarness._generate). The runtime
+    rebuilds the session on a new connection through connect(), replays canonical history
+    (context.py RealtimeRuntime.run_turn; openai_realtime.py
+    OpenAIRealtimeDriver._connect.open_session; openai_realtime_session.py
+    RealtimeSessionCore.replay) and sends the same observation again under a new item id."""
     steps = LONG_SCENARIO[:4]
     with RealtimeStub(replies(steps), drop_responses=(3,)) as stub:
         records = _run(stub, steps, tmp_path, "dropped-response")
@@ -401,8 +411,8 @@ def test_dropped_response_reconnects(tmp_path):
 
 def test_dropped_response_after_archive_replays_ledger(tmp_path):
     """The same drop at decision 51, after the first archive. The rebuild replays the ledger
-    first, as a user item without an anchor (openai_realtime_session.py:229-231), then the
-    retained turns 10-50, the folded ones as placeholders (233-236). Decisions 0-50 repeat the long
+    first, as a user item without an anchor (openai_realtime_session.py RealtimeSessionCore.replay),
+    then the retained turns 10-50, the folded ones as placeholders. Decisions 0-50 repeat the long
     scenario and are compared there; this baseline records decisions 51 and 52."""
     steps = LONG_SCENARIO[:53]
     with RealtimeStub(replies(steps), drop_responses=(52,)) as stub:
@@ -429,7 +439,8 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
     assert [_is_placeholder(item) for item in frames] == [True] * 30 + [False] * 11
     assert len(users) - len(frames) == 41  # every retained turn's feedback, the folded ones' too
     # Turn 14's empty output is an item on the first connection but not in the replay
-    # (harnesses/default/request.py:91-93; openai_realtime_session.py:195-198, 437), so the rebuilt
+    # (harnesses/default/request.py _turn_items; openai_realtime_session.py
+    # RealtimeSessionCore._output_create, RealtimeSessionCore._response_event), so the rebuilt
     # conversation is one item shorter.
     assert outputs == [step.reply for step in steps[10:51] if step.reply]
     assert [len(r["context"]) for r in steps_records[51]["server_responses"]] == [125, 124]
@@ -442,8 +453,9 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
 
 def test_rejected_upgrade_retries_connect(tmp_path):
     """connect()'s retry: a refused upgrade (HTTP 503, TRANSIENT through its response's status,
-    providers/openai_realtime.py:257-263) fails one open_session attempt, and connect() tries a
-    new connection after the shared backoff (providers/openai_realtime.py:435-454)."""
+    providers/openai_realtime.py OpenAIRealtimeDriver.classify_transport_error) fails one
+    open_session attempt, and connect() tries a new connection after the shared backoff
+    (providers/openai_realtime.py OpenAIRealtimeDriver._connect)."""
     steps = LONG_SCENARIO[:2]
     with RealtimeStub(replies(steps), reject_upgrades=(1,)) as stub:
         records = _run(stub, steps, tmp_path, "rejected-upgrade")
@@ -655,10 +667,12 @@ def test_only_a_network_failure_below_http_is_transient(error, kind):
 
 def test_session_edit_error_rebuilds(tmp_path):
     """An error that echoes the first delete of the first in-place edit fails that edit
-    (openai_realtime_session.py:366-367, 397-406). The driver falls back to a rebuild on a second
-    connection (openai_realtime.py:517-532, 551-552) that replays the retained turns with the new
-    folds (openai_realtime_session.py:229-242). Later edits anchor on the item ids that replay
-    created (235-242, 319-321)."""
+    (openai_realtime_session.py RealtimeSessionCore.finish_edit, RealtimeSessionCore.receive). The
+    driver falls back to a rebuild on a second connection (openai_realtime.py
+    OpenAIRealtimeDriver._fallback_from_in_place, OpenAIRealtimeDriver._compact_in_place) that
+    replays the retained turns with the new folds (openai_realtime_session.py
+    RealtimeSessionCore.replay). Later edits anchor on the item ids that replay created
+    (RealtimeSessionCore.replay, RealtimeSessionCore._edit_batch)."""
     steps = LONG_SCENARIO[:31]
     with RealtimeStub(replies(steps), edit_error_on_delete=1) as stub:
         records = _run(stub, steps, tmp_path, "edit-error")
@@ -668,13 +682,15 @@ def test_session_edit_error_rebuilds(tmp_path):
     assert fold_pairs == len(FOLDS[30])  # the refused batch on connection 1 never took effect
     steps_records = _steps(records)
     first, _ = records[-1]["connections"]
-    # the rebuild closes it first (openai_realtime.py:291-299, 302)
+    # the rebuild closes it first (openai_realtime.py OpenAIRealtimeDriver._close_current,
+    # OpenAIRealtimeDriver._connect)
     assert first["close"] == {"received": 1000, "sent": 1000}
     used = [_connections_used(r) for r in steps_records]
     assert used == [[1]] * 20 + [[1, 2]] + [[2]] * 10
 
     abandoned, rebuilt = steps_records[20]["client_events"]
-    batch = abandoned["events"]  # sent whole before any ack is read (openai_realtime.py:547-549)
+    # sent whole before any ack is read (openai_realtime.py OpenAIRealtimeDriver._compact_in_place)
+    batch = abandoned["events"]
     assert [event["type"] for event in batch] == [
         "conversation.item.delete",
         "conversation.item.create",
@@ -699,8 +715,8 @@ def test_session_edit_error_rebuilds(tmp_path):
     ]
     outputs = [e["item"]["content"][0]["text"] for e in replay if e["item"]["role"] == "assistant"]
     assert [_is_placeholder(item) for item in frames] == [True] * 10 + [False] * 10
-    # A rebuild skips empty outputs (harnesses/default/request.py:91-93;
-    # openai_realtime_session.py:195-198); decision 14 replied "".
+    # A rebuild skips empty outputs (harnesses/default/request.py _turn_items;
+    # openai_realtime_session.py RealtimeSessionCore._output_create); decision 14 replied "".
     assert outputs == [step.reply for step in steps[:20] if step.reply]
 
     # Decision 30 folds turns 10-19 on connection 2. Each placeholder follows the previous turn's
