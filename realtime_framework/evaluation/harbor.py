@@ -289,6 +289,7 @@ class RealtimeBenchAgent(BaseAgent):
             "suite_version": request["task"]["suite_version"],
             "model_revision": request["model_revision"],
             "mode": request["mode"],
+            "interaction_mode": request["task"]["interaction_mode"],
         }
         try:
             await environment.run_benchmark(request, self.extra_env)

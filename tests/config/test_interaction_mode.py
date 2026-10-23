@@ -905,6 +905,45 @@ def test_a_job_reports_its_mode(tmp_path, recorded, reported):
     assert report["interaction_mode"] == reported
 
 
+@pytest.mark.parametrize("interaction_mode", ["turn_based", "streaming"])
+def test_a_trial_s_metadata_names_its_mode(tmp_path, interaction_mode):
+    """The metadata Harbor records for a trial (RealtimeBenchAgent.run), here of a trial whose
+    episode exported nothing, and the metadata of an episode's ATIF export
+    (harbor_viewer.export_episode), which replaces it, both name the trial's mode."""
+    import asyncio
+
+    from harbor.models.agent.context import AgentContext
+
+    from realtime_framework.evaluation.harbor import RealtimeBenchAgent
+    from realtime_framework.evaluation.harbor_viewer import export_episode
+
+    request = {**_trial_identity(interaction_mode)[1], "model_revision": None}
+
+    class Environment:
+        async def resolve(self, request_, extra_env):
+            return request
+
+        async def run_benchmark(self, request_, extra_env):
+            pass
+
+        async def download_dir(self, source, target):
+            raise FileNotFoundError(source)
+
+    agent = RealtimeBenchAgent(
+        logs_dir=tmp_path, model_name=GEMINI, interaction_mode=interaction_mode
+    )
+    context = AgentContext()
+    asyncio.run(agent.run("instruction", Environment(), context))
+    assert context.metadata["interaction_mode"] == interaction_mode
+
+    run = tmp_path / "run" / GEMINI / WEB
+    run.mkdir(parents=True)
+    exported = export_episode(run, tmp_path / "logs", request)
+    trajectory = json.loads((tmp_path / "logs" / "trajectory.json").read_text())
+    assert exported["metadata"]["interaction_mode"] == interaction_mode
+    assert trajectory["extra"]["interaction_mode"] == interaction_mode
+
+
 def test_a_streaming_run_records_the_live_api_settings():
     """OpenAI Realtime's retained frames and Gemini Live's compression thresholds apply only to
     streaming, so only a streaming run's configuration (and its hash) records them."""
