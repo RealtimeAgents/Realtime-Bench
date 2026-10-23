@@ -109,8 +109,9 @@ class ShellEnvironment(Protocol):
     shell reads as the runner does (legacy_loop.py ``_land_action``, ``_apply``). The environment
     may also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
     ``clock_advance_failed`` from a tap; for an operation that returns, the shell posts that as
-    Invalidated before the command's answer. One that raises is answered with its error, and the run
-    is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
+    Invalidated before the command's answer, after it when the answer is an action's that
+    carries that same failure (``_execute``). One that raises is answered with its error, and the
+    run is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
     ``_rendered``)."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
@@ -189,7 +190,9 @@ class KernelAgent(Protocol):
         """Commit: report the outcome of decision ``outcome.decision`` as its feedback."""
 
     def abort(self, generation: int | None = None) -> None:
-        """AbortGeneration: interrupt the generation; None interrupts whichever is active."""
+        """AbortGeneration: interrupt the generation; None interrupts whichever is active. The
+        shell aborts every generation the kernel gives up on, one whose worker has returned too,
+        before it discards that one's result."""
 
 
 # ---- the shell --------------------------------------------------------------------------------

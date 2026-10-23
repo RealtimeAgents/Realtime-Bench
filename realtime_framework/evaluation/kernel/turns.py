@@ -257,7 +257,8 @@ class TurnPolicy:
             kernel.end("deadline", timer.at)
         elif timer.kind == "end_check":
             # A check a synchronous command delayed past the deadline is not asked: the deadline
-            # comes first, as in sandbox/actions.py GuestEnvironment.done. Nor is one an execution
+            # comes first, as in the legacy loop's environment (tests/differential/
+            # legacy_environment.py LegacyWallClock.done). Nor is one an execution
             # delayed: the check right after the action reads at that reading, or, for an action
             # refused, which gets none, the check made in its place (_executed).
             if kernel.semantic < self.config.duration_s:
