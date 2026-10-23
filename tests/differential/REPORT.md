@@ -97,7 +97,7 @@
 
 - **随机脚本**：只有读快照有耗时，其余操作都不耗时。
 - **具名脚本**：
-  - `scenarios.TIMED` 的 6 个墙钟脚本：读状态 0.01 或 0.05 秒，采帧 0.02 秒；
+  - `scenarios.TIMED` 的 7 个墙钟脚本：读状态 0.01 或 0.05 秒，采帧 0.02 秒；
   - `scenarios.ACROSS` 的 10 个墙钟脚本：截止落在落地前那次读、动作后那次读、采帧、执行里，执行跨过帧开头的定时读；
   - K-rel 的 2 个：动作 0.125、0.2 秒；
   - 读快照有耗时的若干个。
@@ -125,7 +125,7 @@
 |---|---|---|---|---|
 | K-a | 出现 | `frame_rates-wall-*`、`runner-late_reply`、`runner-done_reply`、`runner-bounded_call_timeout`、`runner-long`、`wall-result-at-the-deadline`、`wall-retry-across-the-deadline`、`wall-reads-and-captures-take-time` | 313 | 截止放弃的生成，外壳合成一条 `timed_out` 的记录（第 48 条），和旧循环有界等待超时写的一样，逐字段比。旧循环在宽限期内等到了回复的，那条回复的记录由 K-a 换成"放弃的调用"。采帧跨过截止时，旧循环在截止以后还开始生成，内核不开始（`wall-a-capture-runs-past-the-deadline`） |
 | K-b | 出现 | `wall-ends-during-a-reply`、`wall-ends-while-pacing`、`wall-wait-cut-by-the-end`、`wall-a-reply-back-during-a-periodic-read`、`wall-ends-during-a-reply-and-reads-take-time` | 120 | 按 N29 扩写：结果回来时一次定时读正在进行，就等它读完再接纳，再在新读数上读一次才落地。动作、帧龄、动作时刻比旧循环晚"读完时刻 − 回来时刻"，最多一次读的耗时。执行跨过帧开头时，那一帧的定时读推迟到执行返回，由动作后那次读（被拒时补的那次读）来做，所以不在帧开头找到结束（`wall-*-runs-into-the-next-frame-and-the-end`，两边相同） |
-| K-c | 出现 | `wall-wait-cut-by-the-end` | 12 | 已并入 KF3 和 KF3 补充 |
+| K-c | 出现 | `wall-wait-cut-by-the-end`、`wall-a-wait-cut-by-the-end-and-reads-take-time` | 12 | 已并入 KF3 和 KF3 补充。wait 从交给环境的时刻算起，落地前那次读有耗时就晚一次读 |
 | K-d | 出现 | `token-skipped-decision-after-the-end`、`token-think-budget-and-the-end` | 9 | |
 | K-e | 出现 | `token-advance-fails-while-approaching`、`token-advance-fails-while-pacing` | 33 | |
 | K-f | 出现 | `token-missing-usage` | 47 | |

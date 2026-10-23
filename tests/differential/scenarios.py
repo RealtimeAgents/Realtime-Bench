@@ -790,6 +790,17 @@ TIMED = [
         expect=frozenset({"X2"}),
         name="wall-a-hold-and-reads-that-take-time",
     ),
+    # wall-wait-cut-by-the-end with reads of 0.01 s: the wait starts once the read before landing
+    # has returned, at 0.27 s, and the check at 2 s cuts it after 1.73 s (K-c).
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(["wait:2.5", "click", "click"], [0.25] * 3),
+        ends_at_s=1.5,
+        check_s=0.01,
+        expect=frozenset({"K-b", "K-c", "K-g", "X1", "X2"}),
+        name="wall-a-wait-cut-by-the-end-and-reads-take-time",
+    ),
     # wall-ends-during-a-reply with reads and captures that take time: the periodic read asked at
     # 2.25 s finds the end, dated then, and the snapshot is read when it has returned (K-b, K-g).
     Script(
