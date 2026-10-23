@@ -426,9 +426,9 @@ def test_a_token_hold_expiring_between_frames_splits_the_step():
 
 def test_a_wall_hold_is_released_by_the_environments_timer_between_frames():
     """按键在两帧之间到期 (wall): a 1 s hold pressed at 0.25 s is due up at 1.25 s, between the frames
-    at 1 s and 2 s. The press carries its release time to the environment, whose own timer lifts
-    the key on time though the shell is busy reporting the outcome from 1 s to 1.5 s; the kernel
-    hears nothing of a release that worked."""
+    at 1 s and 2 s. The press carries its release time to the environment, whose own timer (here
+    the simulation's) lifts the key on time though the shell is busy reporting the outcome from
+    1 s to 1.5 s; the kernel hears nothing of a release that worked."""
     hold = Action.hold_key("a", 1.0)
     replies = [Reply(latency=0.25, action=hold), Reply(latency=5.0, action=CLICK)]
     sim = _run(_wall(2.0), World(replies=replies, commit_s=0.5))

@@ -61,9 +61,11 @@ from realtime_framework.evaluation.kernel.events import (
     StartGeneration,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
-from realtime_framework.sandbox.actions import WALL_RELEASE_MAX_ATTEMPTS, WALL_RELEASE_RETRY_S
-
-TAP_HOLD_S = 1.0 / 60.0  # sandbox/actions.py TAP_HOLD_S: how long a token key tap holds its key
+from realtime_framework.sandbox.actions import (
+    TAP_HOLD_S,
+    WALL_RELEASE_MAX_ATTEMPTS,
+    WALL_RELEASE_RETRY_S,
+)
 
 
 @dataclass(frozen=True)

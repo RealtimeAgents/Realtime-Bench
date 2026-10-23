@@ -959,7 +959,7 @@ def test_the_end_cuts_a_wait_short_and_it_stays_a_wait(
 # ---- held keys --------------------------------------------------------------------------------
 
 
-def test_each_hold_carries_the_end_of_its_own_lease_and_the_shell_keeps_the_later_one():
+def test_each_hold_carries_the_end_of_its_own_lease_and_the_simulation_keeps_the_later_one():
     replies = [
         Reply(1.25, Action.hold_key("a", 3.0)),
         Reply(1.25, Action.hold_key("a+b", 2.0)),
@@ -973,26 +973,29 @@ def test_each_hold_carries_the_end_of_its_own_lease_and_the_shell_keeps_the_late
     assert [(d["decision"], d["at"]) for d in _data(sim, "KeyReleaseScheduled")] == expected
     executes = [c for c in sim.commands if isinstance(c, Execute)]
     assert [(c.decision, c.release_at) for c in executes] == expected
-    # The shell, as Execute asks of it, keeps a held key down until its later end
-    # (sandbox/actions.py GuestEnvironment._execute_wall_hold); the environment's timer lifts "a"
-    # at max(4.25, 5.25, 4.75) = 5.25, together with "b", and the kernel hears nothing of it.
+    # Execute asks the environment to keep a held key down until its later end; the simulation's
+    # does (the production one, sandbox/actions.py GuestEnvironment._execute_wall_hold, is held to
+    # it in tests/sandbox). Its timer lifts "a" at max(4.25, 5.25, 4.75) = 5.25, together with
+    # "b", and the kernel hears nothing of it.
     assert sim.key_events == [(5.25, "up", ("a",)), (5.25, "up", ("b",))]
     assert "KeysReleased" not in sim.kinds()
 
 
-def test_the_shell_releases_a_key_on_time_while_a_long_execution_runs():
+def test_the_lease_of_a_hold_runs_from_its_execution_start_into_a_long_execution_after_it():
     replies = [Reply(1.25, Action.hold_key("a", 3.5)), Reply(0.25, CLICK), Reply(10.0, CLICK)]
     sim = _episode(_wall(9.0), World(replies=replies, execute_s=2.0))
     assert [(decision, at) for decision, at, _ in sim.executed] == [(0, 1.25), (1, 3.5)]
     # The hold's execution returns at 3.25, but its lease runs from the start: 1.25 + 3.5 = 4.75,
-    # inside the click's execution from 3.5 to 5.5.
+    # inside the click's execution from 3.5 to 5.5. The simulation's release timer, standing in
+    # for the environment's, lifts the key then.
     assert _data(sim, "KeyReleaseScheduled") == [{"decision": 0, "at": 4.75}]
     assert sim.key_events == [(4.75, "up", ("a",))]
 
 
-def test_a_hold_longer_to_execute_than_to_last_is_released_on_time():
-    # The hold's own execution takes 2 s; the environment's timer, armed right after the press,
-    # releases the key at 1.25 + 0.5 while the execution is still running.
+def test_a_hold_longer_to_execute_than_to_last_ends_its_lease_inside_its_execution():
+    # The hold's own execution takes 2 s; its lease ends at 1.25 + 0.5 while the execution is
+    # still running, when the simulation's timer, armed right after the press as the
+    # environment's is, releases the key.
     replies = [Reply(1.25, Action.hold_key("a", 0.5)), Reply(10.0, CLICK)]
     sim = _episode(_wall(6.0), World(replies=replies, execute_s=2.0))
     assert _data(sim, "KeyReleaseScheduled") == [{"decision": 0, "at": 1.75}]
@@ -1000,10 +1003,10 @@ def test_a_hold_longer_to_execute_than_to_last_is_released_on_time():
 
 
 def test_a_release_the_environments_timer_fails_invalidates_the_run():
-    # The environment's timer cannot lift "a" at 1.25 s, during the second generation: it tries
-    # again every 0.5 s, gives up after its fourth attempt, at 2.75 s, and reports the invalid
-    # run through on_invalid, which the shell posts (sandbox/actions.py
-    # GuestEnvironment._wall_release_due; shell.py).
+    # The simulation's release timer cannot lift "a" at 1.25 s, during the second generation: as
+    # the environment's does (sandbox/actions.py GuestEnvironment._wall_release_due), it tries
+    # again every 0.5 s, gives up after its fourth attempt, at 2.75 s, and posts the invalid run,
+    # as the shell posts what the environment's on_invalid reports (shell.py).
     replies = [Reply(0.25, Action.hold_key("a", 1.0)), Reply(5.0, CLICK)]
     world = World(replies=replies, release_errors={1: "xdotool keyup failed"})
     sim = _episode(_wall(3.0), world)
