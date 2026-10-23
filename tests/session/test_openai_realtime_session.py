@@ -290,7 +290,7 @@ def test_fold_in_place_waits_for_every_ack_in_any_order():
     assert core.edit_answered
 
     assert core.finish_edit() is batch
-    assert all(core.delivery[op.key] == Delivery.ACKNOWLEDGED for op in batch.operations)
+    assert all(core.delivery[op.key] == Delivery.CONFIRMED for op in batch.operations)
     assert {k: (f.user_item_id, f.folded) for k, f in core.frames.items()} == {
         "d0.frame": (create0.item_id, True),
         "d1.frame": (create1.item_id, True),
@@ -388,7 +388,7 @@ def test_the_edit_operation_an_error_names_is_refused(named):
     else:
         assert heard == []
         assert core.delivery[last.key] is Delivery.SENT
-    assert core.delivery[first.key] is Delivery.ACKNOWLEDGED
+    assert core.delivery[first.key] is Delivery.CONFIRMED
 
 
 def test_an_error_about_another_event_leaves_the_edit_waiting():
@@ -609,8 +609,8 @@ def test_delivery_is_unknown_while_written_then_sent_then_acknowledged():
     core.sent(written)
     # The write of ``failed`` never returned.
     assert [core.delivery[op.key] for op in (acknowledged, early, failed, written)] == [
-        Delivery.ACKNOWLEDGED,
-        Delivery.ACKNOWLEDGED,
+        Delivery.CONFIRMED,
+        Delivery.CONFIRMED,
         Delivery.UNKNOWN,
         Delivery.SENT,
     ]
@@ -891,7 +891,7 @@ def test_a_push_names_its_client_event():
     sent(core, [frame, feedback])
     assert core.receive(done(frame.item_id))
     assert (core.delivery[frame.key], core.delivery[feedback.key]) == (
-        Delivery.ACKNOWLEDGED,
+        Delivery.CONFIRMED,
         Delivery.SENT,
     )
 
@@ -1098,7 +1098,7 @@ def test_a_push_is_settled_once_acknowledged_or_refused():
     core.receive(done(acknowledged.item_id))
     core.receive(error(refused.event_id))
     assert (core.delivery[acknowledged.key], core.delivery[refused.key]) == (
-        Delivery.ACKNOWLEDGED,
+        Delivery.CONFIRMED,
         Delivery.REFUSED,
     )
     assert core.settled(acknowledged) and core.settled(refused)
@@ -1256,8 +1256,8 @@ def test_a_fold_while_a_reply_streams_loses_no_event():
         assert core.arrived(event, 0.0)
     assert list(reply.events) == [created, added, text, finished]
     assert core.edit_answered and core.finish_edit() is fold
-    assert core.delivery[pushed.key] == Delivery.ACKNOWLEDGED
-    assert all(core.delivery[op.key] == Delivery.ACKNOWLEDGED for op in fold.operations)
+    assert core.delivery[pushed.key] == Delivery.CONFIRMED
+    assert all(core.delivery[op.key] == Delivery.CONFIRMED for op in fold.operations)
     assert (core.frames["f1.frame"].user_item_id, core.frames["f1.frame"].folded) == (
         fold.operations[1].item_id,
         True,

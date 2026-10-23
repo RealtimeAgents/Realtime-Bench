@@ -190,7 +190,7 @@ def test_an_edit_during_a_response_keeps_both():
     sent = [json.loads(message)["type"] for message in connection.received]
     assert sent[-2:] == ["conversation.item.delete", "conversation.item.create"]
     assert core.frames["d0.frame"].folded
-    assert set(core.delivery.values()) == {Delivery.ACKNOWLEDGED}
+    assert set(core.delivery.values()) == {Delivery.CONFIRMED}
     # The response's output item joins the frame it answered, whichever of the two ended first.
     assert core.frames["d1.frame"].assistant_item_ids == ["srv_item_2"]
 
@@ -295,7 +295,7 @@ async def _repaired(driver: OpenAIRealtimeDriver):
         # The repair does not wait for its acknowledgements; the stub records a message before
         # it answers it, so once they are in, the stub has the delete and the create.
         session = driver._session
-        acknowledged = {Delivery.ACKNOWLEDGED}
+        acknowledged = {Delivery.CONFIRMED}
         await session.receive_until(lambda: set(session.core.delivery.values()) == acknowledged)
         return received, sync, session.core
     finally:
