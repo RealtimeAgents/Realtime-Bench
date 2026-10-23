@@ -16,7 +16,7 @@ own and goes ahead of those waiting, after those holding the lock (``EnvLanes.fr
 shell bounds that wait by the larger of the action's budget and the capture's (N32), which no
 script here runs into. Unlike the gate, a capture does not go past what waits to hold the lock
 alone while an action holds it: the policy never sends one then. Commit runs on the shell's own
-thread and occupies it.
+thread and occupies it; an abort runs on a lane of its own, off the lock.
 
 Every command is checked as it runs (one generation in flight at most; nothing captured, pushed,
 started, asked or executed at or after the deadline or after the end, but the read after an action
@@ -67,6 +67,7 @@ from realtime_framework.evaluation.kernel.streaming import (
     ActionArrived,
     CallsCancelled,
     FramePushed,
+    GenerationAborted,
     PushFrame,
     PushHeld,
     PushResumed,
@@ -143,7 +144,7 @@ class World:
     check_s: float = 0.0
     execute_s: float = 0.0
     commit_s: float = 0.0
-    # The shell's own thread runs an abort this long, until the agent closed the session.
+    # An abort runs this long on its lane, until the agent closed the session.
     abort_s: float = 0.0
     snapshot_s: float = 0.0
     # The nth (1-based) capture, push or end check -> its own duration, or its fault.
@@ -526,8 +527,8 @@ class Simulation:
 
     def _abort(self, generation: int) -> None:
         """An interruptible reply stops handing anything over at once, and hands back its result
-        once the abort returned, ``abort_s`` later on the shell's thread. Closing the session at
-        the end of it fails a push stuck in it."""
+        once the abort returned, ``abort_s`` later on its lane. Closing the session at the end of
+        it fails a push stuck in it; then the abort is answered."""
         self.aborted.append((generation, self.ops))
         if self._in_flight == generation:
             self._in_flight = None
@@ -535,14 +536,18 @@ class Simulation:
         if interruptible:
             for entry in self._posts[generation]:
                 entry[2] = lambda: None
-        self._spend(self.world.abort_s)
-        if self._stuck_push is not None:
-            observation_id, self._stuck_push = self._stuck_push, None
-            self._busy.discard("push")
-            self.kernel.post(FramePushed(observation_id, self.ops, "the session was closed"))
-        self._off(generation)
-        if interruptible and generation not in self._finished:
-            self._later(self.ops, lambda: self._finish(generation, GenerationResult()))
+
+        def returned() -> None:
+            if self._stuck_push is not None:
+                observation_id, self._stuck_push = self._stuck_push, None
+                self._busy.discard("push")
+                self.kernel.post(FramePushed(observation_id, self.ops, "the session was closed"))
+            self._off(generation)
+            if interruptible and generation not in self._finished:
+                self._later(self.ops, lambda: self._finish(generation, GenerationResult()))
+            self.kernel.post(GenerationAborted(generation))
+
+        self._lane("abort", self.world.abort_s, returned)
 
     def _execute(self, decision: int, action: Action, release_at: float | None) -> None:
         """The action presses once it has the gate; its answer says when it took the gate and
@@ -618,6 +623,9 @@ class Simulation:
                     command.generation,
                 )
         assert not set(self.accepted) & set(self.discarded)
+        # Every abort is answered before the episode finishes.
+        aborts = [c.generation for c in commands if isinstance(c, AbortGeneration)]
+        assert [entry.data.generation for entry in self.entries("GenerationAborted")] == aborts
         # The policy sends a read only while no capture or action is out, and neither while a
         # read is out: each takes the lock when it is asked, so it acts in the world before the
         # deadline, as asked, and no read overlaps a capture or an action.

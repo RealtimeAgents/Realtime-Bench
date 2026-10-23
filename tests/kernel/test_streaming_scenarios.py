@@ -107,6 +107,7 @@ def test_a_deadline_during_an_execution_freezes_once_the_action_finishes():
     assert _from(sim, "EpisodeEnded") == [
         "EpisodeEnded",
         "GenerationAbandoned",
+        "GenerationAborted",
         "GenerationFinished",
         "ResultDiscarded",
         "ActionExecuted",
@@ -241,6 +242,7 @@ def test_a_reply_that_ends_at_the_deadline_is_discarded():
         "GenerationFinished",
         "ResultDiscarded",
         "SnapshotFrozen",
+        "GenerationAborted",
         "Termination",
     ]
     assert (sim.accepted, sim.discarded) == ([], [1])

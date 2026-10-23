@@ -37,12 +37,22 @@ ONE_CLICK = [Reply(1.6, (Call(0.9, CLICK, "c0"),))]
 
 
 def _episode(
-    duration_s, replies, *, tmp_path=None, env_setup=None, log=None, logs=None, wall_origin=0.0
+    duration_s,
+    replies,
+    *,
+    tmp_path=None,
+    env_setup=None,
+    agent_setup=None,
+    log=None,
+    logs=None,
+    wall_origin=0.0,
 ):
     clock = FakeClock(wall_origin)
     env, agent = FakeEnv(clock), FakeAgent(clock, replies)
     if env_setup is not None:
         env_setup(env, clock)
+    if agent_setup is not None:
+        agent_setup(agent, clock)
     trace = (
         None
         if tmp_path is None
@@ -311,14 +321,69 @@ def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
     assert env._invalid_run == invalid
 
 
-def test_a_stuck_reply_is_given_up_on_the_shells_thread_and_the_next_one_starts():
+def test_a_stuck_reply_is_given_up_and_the_next_one_starts_once_its_abort_returned():
     """A reply that never ends is stuck after the 30 s watchdog (kernel/streaming.py); the shell
-    aborts it, and the next reply starts in the same step."""
+    aborts it on the abort lane, and the next reply starts once the abort returned."""
     termination, _, agent = _episode(32.0, [])
     assert agent.aborted[0] == (1, 30.875)
     assert agent.started[:2] == [(1, "obs-1", 0.875), (2, agent.started[1][1], 30.875)]
     assert 1 in agent.discarded
     assert termination.stop_reason == "time_limit"
+
+
+def _slow_abort(seconds: float):
+    def agent_setup(agent, clock):
+        abort = agent.abort
+
+        def slow(generation=None):
+            clock.sleep(seconds)
+            abort(generation)
+
+        agent.abort = slow
+
+    return agent_setup
+
+
+def test_the_next_reply_waits_for_a_slow_abort_and_the_episode_goes_on_meanwhile():
+    """The stuck reply's abort takes 3 s: the next reply starts once it returned, and meanwhile
+    the state is read and frames are captured, which wait for the rebuilt session."""
+    termination, env, agent = _episode(36.0, [], agent_setup=_slow_abort(3.0))
+    assert agent.aborted[0] == (1, 33.875)
+    assert agent.started[1][2] == 33.875
+    during = [(name, start) for name, start, _ in env.intervals if 30.875 < start < 33.875]
+    assert during == [
+        ("check_end", 31.0),
+        ("capture", 31.5),
+        ("check_end", 32.0),
+        ("capture", 32.5),
+        ("check_end", 33.0),
+        ("capture", 33.5),
+    ]
+    assert all(not 30.875 < at < 33.875 for _, at in agent.pushed)
+    assert termination.invalid is None
+
+
+def test_a_slow_abort_holds_up_neither_the_read_after_an_action_nor_the_snapshot():
+    """The click executes from 30.05 to 31.05 s; the reply is stuck at 30.425 s and its abort
+    takes 10 s. The read after the click, once the capture at 31 s alongside it is done, and the
+    reads on the grid go on meanwhile and find no end, so the task's end at 38 s comes past the
+    deadline at 37.5 s: the deadline ends the episode, and the snapshot is taken right after it,
+    not once the abort returned."""
+
+    def env_setup(env, clock):
+        env.seconds["check_end"] = 0.05
+        env.ends_at = 38.0
+        env.durations[("execute", 1)] = 1.0
+
+    replies = [Reply(calls=(Call(29.575, CLICK, "c0"),))]
+    termination, env, agent = _episode(
+        37.5, replies, env_setup=env_setup, agent_setup=_slow_abort(10.0)
+    )
+    reads = [start for name, start, _ in env.intervals if name == "check_end" and start > 30]
+    assert reads[:3] == [31.25, 32.0, 33.0]
+    assert termination == Termination("time_limit", "deadline", 37.5, 38.0, 37.5, 38.0, None)
+    assert env._termination["snapshot_delay_s"] == 0.5
+    assert agent.aborted == [(1, 40.425)]
 
 
 def test_the_shells_own_failure_on_a_lane_invalidates_the_run_as_a_run_exception(monkeypatch):

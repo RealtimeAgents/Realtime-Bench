@@ -16,13 +16,14 @@ the provider cancels is withdrawn while its action waits; one that executed is r
 A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
 is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
 a push its watchdog finds stuck, or pushes failing in a row. A push the agent holds until the
-session is renewed (PushHeld) is not stuck, and its watchdog waits. The shell runs the abort, which
-returns once the agent has cleaned the session up and closed it, which fails a push stuck in it;
-the next reply starts at the first reading after that and rebuilds the session from the accepted
-history (phase2.md, 什么时候触发生成). The rebuilt session starts afresh: the pushes failed before
-count no more, nor does the one the abort fails, and its watchdogs count from then. A session that
-still takes no frame after that, or one that takes none before the first reply, when there is none
-to give up, invalidates the run.
+session is renewed (PushHeld) is not stuck, and its watchdog waits. The shell runs the abort on a
+lane of its own while the episode goes on, and answers it (GenerationAborted) once the agent has
+cleaned the session up and closed it, which fails a push stuck in it. Meanwhile no frame goes in
+and no reply starts; then the next reply starts and rebuilds the session from the accepted history
+(phase2.md, 什么时候触发生成). The rebuilt session starts afresh: the pushes failed before count no
+more, nor does the one the abort fails, and its watchdogs count from then. A session that still
+takes no frame after that, or one that takes none before the first reply, when there is none to
+give up, invalidates the run.
 Only a watchdog finds a session stuck, so one that stops taking frames less than a watchdog before
 the end, or whose rebuilt session has not had a watchdog's time when the end comes, leaves the run
 valid.
@@ -51,7 +52,9 @@ reports when an action really held the environment, and the records keep that.
 The kernel freezes the snapshot at the first end signal. An action executing then finishes first,
 and a capture out with it: the shell takes the snapshot next after them, bounded by the larger of
 the action's budget and the capture's (N32), as the turn-based shell takes it right after the
-action on its one thread (evaluation/streaming_shell.py ``_freeze``).
+action on its one thread (evaluation/streaming_shell.py ``_freeze``). An abort out holds nothing of
+that up; the episode finishes once it is answered, so that the agent is done with it before it is
+closed.
 """
 
 from __future__ import annotations
@@ -184,6 +187,17 @@ class PushResumed:
 
 
 @dataclass(frozen=True)
+class GenerationAborted:
+    """The shell ran the abort of a reply given up (AbortGeneration), which the streaming shell
+    answers, unlike the turn-based one: the agent cleaned the session up and closed it, or gave
+    up trying."""
+
+    generation: int
+
+    priority: ClassVar[Priority] = Priority.COMPLETION
+
+
+@dataclass(frozen=True)
 class ActionArrived:
     """One action of a reply, handed over as soon as it appears: a function call message, or the
     completed text its JSON is parsed from. A reply may hand over several, in order. The agent
@@ -259,7 +273,9 @@ class StreamingPolicy:
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
         self._failed_pushes = 0  # in a row, on this session
         self._stale_push = False  # the push out was put into a session since given up
-        self._restart = False  # a reply was given up; the next starts once the abort returned
+        # The reply whose abort the shell runs, one at a time. Until the shell answers it no frame
+        # goes in, and the next reply waits for it unless the episode is over by then.
+        self._aborting: int | None = None
         self._rebuilt = False  # the session was given up for its frames, and none went in since
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
         # The reads, captures and the action waiting that came due while they could not run,
@@ -277,9 +293,14 @@ class StreamingPolicy:
     @property
     def settled(self) -> bool:
         """Nothing is out whose answer can still change the run: an action executing, a capture
-        or an end check whose failure invalidates it, or feedback. A push changes nothing then."""
+        or an end check whose failure invalidates it, or feedback; nor an abort, which the agent
+        is to be done with before it is closed. A push changes nothing then."""
         return (
-            self.current is None and not self._capturing and not self._asked and not self._commits
+            self.current is None
+            and not self._capturing
+            and not self._asked
+            and not self._commits
+            and self._aborting is None
         )
 
     # ---- kernel callbacks -------------------------------------------------------------------
@@ -304,6 +325,8 @@ class StreamingPolicy:
                 self._pushed(event)
             case PushHeld() | PushResumed():
                 self._held(event)
+            case GenerationAborted():
+                self._aborted()
             case ActionArrived():
                 self._arrived(event)
             case CallsCancelled():
@@ -372,27 +395,15 @@ class StreamingPolicy:
                     "frame_push_stuck",
                     f"a frame push did not answer in {config.push_watchdog_s:g}s",
                 )
-        elif timer.kind == "aborted" and not self._stopped():
-            # The first reading after the shell ran the abort: the next reply starts now, and it
-            # and a push still out, or the frame that waited for the abort, have their whole
-            # watchdogs from now.
-            if self._restart:
-                self._restart = False
-                self._start_reply()
-            if self._pushing is not None and self._push_watchdog is None and not self._push_held:
-                self._arm_push_watchdog()
-            elif self._pushing is None and self._queued is not None:
-                queued, self._queued = self._queued, None
-                self._push(queued)
         self._report()
 
     def on_end(self) -> None:
-        """The reply in flight was given up and the action waiting will not execute; an action
-        whose read was due is the episode's last, and one executing settles when its answer
-        arrives."""
+        """The reply in flight was given up, and the shell runs its abort; the action waiting will
+        not execute; an action whose read was due is the episode's last, and one executing
+        settles when its answer arrives."""
         if self.generation is not None:
             self.abandoned.add(self.generation)
-            self.generation = None
+            self._aborting, self.generation = self.generation, None
         self._reply_watchdog = self._push_watchdog = None
         if self._queued is not None:
             self._drop(self._queued.observation_id, "ended")
@@ -464,7 +475,7 @@ class StreamingPolicy:
         if self._stopped():
             self._drop(event.observation_id, "ended")
             return self._proceed()
-        if self._pushing is None:
+        if self._pushing is None and self._aborting is None:
             self._push(event)
         else:
             if self._queued is not None:
@@ -510,8 +521,9 @@ class StreamingPolicy:
         if event.error is None:
             self._latest = frame
             self._failed_pushes, self._rebuilt = 0, False
-            # The first reply waits for the first frame; later ones follow each other.
-            if self.generation is None:
+            # The first reply waits for the first frame; later ones follow each other, or the
+            # abort of the one given up.
+            if self.generation is None and self._aborting is None:
                 self._start_reply()
         elif not stale:
             self._failed_pushes += 1
@@ -522,14 +534,14 @@ class StreamingPolicy:
                     "push_failed", "frame_push_failed", f"{limit} pushes failed: {event.error}"
                 )
         # A frame waiting when the session is given up goes into the rebuilt one, once the abort
-        # returned (on_timer "aborted").
-        if self._queued is not None and not self._restart and not self._stopped():
+        # returned (_aborted).
+        if self._queued is not None and self._aborting is None and not self._stopped():
             queued, self._queued = self._queued, None
             self._push(queued)
 
     def _held(self, event: PushHeld | PushResumed) -> None:
         """The push out waits for the session's renewal, which is no push stuck: its watchdog
-        waits too, and counts afresh once the push goes on."""
+        waits too, and counts afresh once the push goes on, or once an abort out returned."""
         pushing = self._pushing
         if pushing is None or pushing.observation_id != event.observation_id:
             return
@@ -537,7 +549,7 @@ class StreamingPolicy:
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
         self._push_held = isinstance(event, PushHeld)
-        if not self._push_held and not self._stopped():
+        if not self._push_held and self._aborting is None and not self._stopped():
             self._arm_push_watchdog()
 
     def _session_stuck(self, reason: str, invalid_reason: str, detail: str) -> None:
@@ -565,11 +577,10 @@ class StreamingPolicy:
         )
 
     def _stuck(self, reason: str) -> None:
-        """Give the reply in flight up and start the next, which rebuilds the session: no push has
-        failed on it yet, and a push still out went into the old one. The shell runs the abort
-        before it handles anything more, which may take a while: the next reply starts at the
-        first reading after it, unless the deadline has passed by then, and the watchdog of a
-        push still out counts from then too."""
+        """Give the reply in flight up, so that the next rebuilds the session: no push has failed
+        on it yet, and a push still out went into the old one. The abort may take a while: the
+        next reply starts once it returned (_aborted), unless the deadline has passed by then,
+        and the watchdog of a push still out counts from then too."""
         if self._stopped():
             return
         generation = self._abandon(reason)
@@ -580,14 +591,11 @@ class StreamingPolicy:
             self.waiting = None
             self._resolve(waiting, CANCELLED_GENERATION)
         self._failed_pushes, self._stale_push = 0, self._pushing is not None
-        self._restart = True
-        kernel = self.kernel
-        kernel.cancel_timer(self._push_watchdog)
+        self.kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
-        kernel.set_timer("aborted", Clock.OPS, kernel.ops, Priority.CONTROL)
 
     def _abandon(self, reason: str) -> int | None:
-        """Give the reply in flight up, if one is; its generation."""
+        """Give the reply in flight up, if one is, and have the shell abort it; its generation."""
         generation = self.generation
         if generation is None:
             return None
@@ -597,7 +605,22 @@ class StreamingPolicy:
         kernel.cancel_timer(self._reply_watchdog)
         self._reply_watchdog = None
         kernel.abandon_generation(reason)
+        self._aborting = generation
         return generation
+
+    def _aborted(self) -> None:
+        """The abort returned: the next reply starts now, and it and a push still out, or the
+        frame that waited for the abort, have their whole watchdogs from now."""
+        self._aborting = None
+        if self._stopped():
+            return
+        self._start_reply()
+        if self._pushing is not None:
+            if not self._push_held:
+                self._arm_push_watchdog()
+        elif self._queued is not None:
+            queued, self._queued = self._queued, None
+            self._push(queued)
 
     # ---- actions ----------------------------------------------------------------------------
 
