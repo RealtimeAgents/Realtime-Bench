@@ -120,12 +120,12 @@ def capture_generation_artifact(
 ) -> dict:
     """Capture the model's output/state before verifier code runs.
 
-    `snapshot`, when given, is the evaluation snapshot ALREADY taken by the caller at the exact
-    inference boundary; it is written verbatim so the saved artifact and the run summary score the
+    `snapshot` is the evaluation snapshot ALREADY taken by the caller at the exact inference
+    boundary; it is written verbatim so the saved artifact and the run summary score the
     identical frozen state (re-sampling here would fold a second, later live read and let the two
-    disagree). Returns the manifest that is also atomically written to
-    generation_artifact/manifest.json; its capture time is read on ``clock``, the episode's
-    operational clock.
+    disagree). Without one, the run froze nothing, and the artifact has no state. Returns the
+    manifest that is also atomically written to generation_artifact/manifest.json; its capture
+    time is read on ``clock``, the episode's operational clock.
     """
     artifact_dir = Path(run_dir) / "generation_artifact"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -153,10 +153,9 @@ def capture_generation_artifact(
         "runtime_config": runtime_config,
     }
 
-    if ctask is not None and hasattr(ctask, "evaluation_snapshot"):
-        snap = snapshot if snapshot is not None else ctask.evaluation_snapshot()
+    if snapshot is not None:
         state_file = artifact_dir / "task_state.json"
-        state_file.write_text(json.dumps(snap, indent=2, default=str))
+        state_file.write_text(json.dumps(snapshot, indent=2, default=str))
         manifest["payload"] = {
             "kind": "task_state",
             "state": state_file.name,

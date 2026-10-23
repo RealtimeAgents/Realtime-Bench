@@ -361,6 +361,45 @@ def test_agent_records_that_fail_to_be_written_invalidate_a_solved_run(tmp_path)
     assert (finished["stop_reason"], finished["resolved"]) == ("invalid_run", None)
 
 
+class FailingSnapshotTask(FakeTask):
+    """The snapshot read at the freeze fails; any later read would succeed, as after a passing
+    failure of the state backend."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.reads = 0
+
+    def evaluation_snapshot(self):
+        self.reads += 1
+        if self.reads == 1:
+            self.clock.now += SNAPSHOT_S
+            raise RuntimeError("snapshot read failed")
+        return super().evaluation_snapshot()
+
+    def verify(self):
+        self.reads += 1
+        return self.evaluate_snapshot(super().evaluation_snapshot())
+
+
+def test_a_run_whose_snapshot_failed_scores_no_state_read_after_it(tmp_path):
+    """The freeze's snapshot read fails: the run is invalid for it, and main() reads the task's
+    state no more once the inputs are released. Nothing is scored or saved as the run's state,
+    and the evaluation says why."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FailingSnapshotTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    assert summary["invalid_run"]["reason"] == "evaluation_snapshot_failed"
+    assert (task.reads, summary["verification"]) == (1, None)
+    run_dir = tmp_path / "run"
+    trace = (run_dir / "episode_trace.jsonl").read_text().splitlines()
+    assert "ScoreProduced" not in [json.loads(line)["event"] for line in trace]
+    evaluation = json.loads((run_dir / "evaluation.json").read_text())
+    assert evaluation == {"evaluation": None, "error": "no frozen snapshot"}
+    manifest = json.loads((run_dir / "generation_artifact" / "manifest.json").read_text())
+    assert manifest["payload"] == {"kind": "none"}
+
+
 class UnhealthyTask(FakeTask):
     """Its evaluator answers, but says its backend was not healthy."""
 
