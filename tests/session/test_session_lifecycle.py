@@ -850,6 +850,52 @@ def test_openai_realtime_recovers_after_an_abandoned_rebuild():
     assert records.calls[0][0].reason == "runtime_recovery"
 
 
+def _hold_handshakes(driver: OpenAIRealtimeDriver) -> tuple[threading.Event, threading.Event]:
+    """Each opening handshake on ``driver``'s fake SDK sets the first event, then lasts until the
+    second one is set."""
+    handshaking, finish = threading.Event(), threading.Event()
+    realtime = driver.client.realtime
+    connect = realtime.connect
+
+    class Held:
+        def __init__(self, manager):
+            self.manager = manager
+
+        def __enter__(self):
+            handshaking.set()
+            finish.wait(5)
+            return self.manager.__enter__()
+
+        def __exit__(self, *exc):
+            self.manager.__exit__(*exc)
+
+    realtime.connect = lambda **arguments: Held(connect(**arguments))
+    return handshaking, finish
+
+
+def test_openai_realtime_closes_a_connection_whose_handshake_outlived_its_connect():
+    """RealtimeRuntime.start bounds the first connect (harnesses/default/context.py), but the
+    opening handshake runs on a thread the bound cannot stop. The close that follows finds
+    nothing open yet; the connection the handshake opens after it is closed at once instead of
+    being kept, open for good, by a driver that was closed."""
+    driver, log = _openai()
+    handshaking, finish = _hold_handshakes(driver)
+
+    async def run():
+        connecting = asyncio.ensure_future(driver.connect(ConnectRequest(seed=SEED)))
+        try:
+            await asyncio.to_thread(handshaking.wait, 5)
+            connecting.cancel()  # the bound passed
+            await asyncio.wait({connecting})
+            await driver.close()
+        finally:
+            finish.set()
+
+    asyncio.run(run())  # returns once the executor's threads, the handshake's too, have ended
+    assert _sent(log) == [(1, "close")]
+    assert driver._cm is None and driver._conn is None and driver._session is None
+
+
 # ---- Gemini Live on google-genai's session over a scripted socket ---------------------------
 
 
