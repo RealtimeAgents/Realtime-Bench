@@ -43,6 +43,7 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import (
+    END_CAUSES,
     ActionExecuted,
     AdvanceClock,
     Capture,
@@ -62,13 +63,6 @@ from realtime_framework.evaluation.kernel.events import (
     ReleaseKeys,
     RenderFrame,
 )
-
-# Status of an action that was not landed because the episode ended before it could, by the
-# end's cause (legacy_loop.py _land_action). The token horizon ends an episode only at the loop top.
-NOT_APPLIED = {
-    "deadline": "not_applied_time_limit",
-    "environment": "not_applied_terminal",
-}
 
 # The run is invalid once this many state reads in a row have failed; a read that answers starts
 # the count over (phase2.md, 时间和结束判定). A failed read short of it answers "not over".
@@ -506,7 +500,7 @@ class TurnPolicy:
         if d.over_budget:
             return "skipped_budget"
         if kernel.ending is not None:
-            return NOT_APPLIED[kernel.ending.cause]
+            return END_CAUSES[kernel.ending.cause].not_applied
         return None
 
     def _pre_checked(self) -> None:
@@ -515,7 +509,7 @@ class TurnPolicy:
         # The horizon ends the episode at the next loop top, as today (legacy_loop.py _land_action,
         # run_stream).
         if self.token and self._horizon_reached():
-            return self._resolve("not_applied_tick_limit")
+            return self._resolve(END_CAUSES["horizon"].not_applied)
         d, kernel = self.decision, self.kernel
         d.execute_at = kernel.semantic
         if d.action.action_type is ActionType.WAIT:
