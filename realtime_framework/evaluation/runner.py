@@ -129,6 +129,7 @@ from realtime_framework.evaluation.config import OUTPUT_CLOCK_POLICY
 from realtime_framework.evaluation.config import INTERACTABLES_PROTOCOL
 from realtime_framework.evaluation.config import INTERACTABLES_REPRESENTATION
 from realtime_framework.evaluation.config import INTERACTABLES_SCHEMA
+from realtime_framework.evaluation.config import apply_run_defaults
 from realtime_framework.evaluation.config import config_fingerprint
 from realtime_framework.evaluation.config import effective_run_config
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
@@ -325,10 +326,9 @@ def main():
         help="Screen recording encoder: cpu uses libx264; gpu uses NVENC.",
     )
     a = p.parse_args()
-    os.environ["SANDBOX_GRAPHICS_MODE"] = a.graphics_mode
-    os.environ["SCREEN_RECORDING_ENCODER"] = a.recording_encoder
     a.mode = DEFAULT_MODE  # fixed identity field; the runner has one decision loop
-    a.clock = a.clock or "token"
+    # prepare_episode_report reads the run's identity from the arguments
+    apply_run_defaults(a)
     if a.clock == "wall" or a.tokens_per_frame == "unlimited":
         tokens_per_frame = None
     else:
@@ -338,11 +338,9 @@ def main():
             p.error("--tokens-per-frame must be a positive integer or 'unlimited'")
         if tokens_per_frame <= 0:
             p.error("--tokens-per-frame must be positive")
-    protocol = a.protocol or ("wall-clock" if a.clock == "wall" else "time-aware-token-v1")
+    protocol = a.protocol
     if not 0 < a.fps < float("inf") or not 0 < a.max_minutes < float("inf"):
         p.error("--fps and --max-minutes must be finite and positive")
-    if a.model_input_fps is None:
-        a.model_input_fps = a.fps  # prepare_episode_report reads it from the arguments
     if not 0 < a.model_input_fps < float("inf"):
         p.error("--model-input-fps must be finite and positive")
     # --fps is the environment's frame rate (task clock, ticks, loop, scored world time);
@@ -364,18 +362,12 @@ def main():
         p.error(str(exc))
     requested_model_identity = _model_identity(a.model, a.adapter)
     catalog_entry = catalog.get(a.model) if catalog.has(a.model) else None
+    reasoning_effort = a.reasoning_effort
     if catalog_entry is not None:
-        reasoning_effort = (
-            a.reasoning_effort
-            if a.reasoning_effort is not None
-            else catalog_entry.defaults["reasoning_effort"]
-        )
         try:
             catalog.validate_reasoning_effort(a.model, reasoning_effort)
         except ValueError as exc:
             p.error(str(exc))
-    else:
-        reasoning_effort = a.reasoning_effort or "low"
     benchmark_cell_eligible = bool(
         catalog_entry.benchmark_eligible if catalog_entry is not None else True
     )

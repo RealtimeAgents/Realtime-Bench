@@ -598,35 +598,46 @@ def test_a_reevaluation_compares_the_model_input_rate(tmp_path, monkeypatch):
     assert json.loads(summary.read_text())["solved"] is True
 
 
-def test_identity_main_hashes_the_model_input_rate(capsys):
-    """identity_main prints the runtime-config hash runner.main() records for the same rates;
-    --model-input-fps defaults to --fps."""
-    from realtime_framework.evaluation.config import (
-        config_fingerprint,
-        effective_run_config,
-        identity_main,
-    )
+@pytest.mark.parametrize(
+    "rates", [["--fps", "2", "--model-input-fps", "1"], ["--fps", "1"]], ids=["2/1", "1"]
+)
+def test_identity_main_prints_the_hash_runner_main_records(tmp_path, monkeypatch, capsys, rates):
+    """identity_main prints the runtime-config hash runner.main() records in run_config.json for
+    the same arguments, with neither the protocol, the reasoning effort, the model-input rate
+    nor the desktop's graphics mode and recording encoder given: both take the runner's
+    defaults (config.apply_run_defaults)."""
+    from realtime_framework.evaluation import runner
+    from realtime_framework.evaluation.config import identity_main
 
-    def printed(*rates):
-        argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--protocol", "wall-clock"]
-        assert identity_main([*argv, "--max-minutes", "5", "--seed", "42", *rates]) == 0
-        return capsys.readouterr().out.strip()
+    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--max-minutes", "5", *rates]
+    _main_in_process(monkeypatch, tmp_path, argv, lambda adapter, env, **loop: [])
+    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
+        monkeypatch.delenv(name)
+    assert identity_main(argv) == 0
+    printed = capsys.readouterr().out.strip()
+    with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
+        runner.main()
+    recorded = json.loads((tmp_path / "run" / "run_config.json").read_text())
+    assert printed == recorded["runtime_config_hash"]
 
-    split = config_fingerprint(
-        effective_run_config(
-            model_config=gemini_config(1.0),
-            fps=2.0,
-            max_minutes=5.0,
-            protocol="wall-clock",
-            think_budget_s=None,
-            per_move_cap_s=None,
-            mode="default",
-            clock_mode="wall",
-            seed=42,
-        )
-    )
-    assert printed("--fps", "2", "--model-input-fps", "1") == split
-    assert printed("--fps", "2") != split
+
+def test_the_hash_a_local_report_expects_is_the_one_the_run_records(tmp_path, monkeypatch):
+    """runner.main() with --report-root records the identity its report expects before the run
+    (reporting.prepare_episode_report) from its arguments as it runs them: without --protocol
+    and --reasoning-effort the expected hash is the one the run records in run_config.json."""
+    from realtime_framework.evaluation import runner
+    from realtime_framework.sandbox import apptainer
+
+    monkeypatch.setattr(apptainer, "build_image", lambda name: None)
+    argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1, "--report-root", str(tmp_path)]
+    _main_in_process(monkeypatch, tmp_path, argv, lambda adapter, env, **loop: [])
+    with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
+        runner.main()
+    (expected,) = json.loads((tmp_path / "summary.json").read_text())["runs"]
+    recorded = json.loads((tmp_path / "run" / "run_config.json").read_text())
+    assert expected["runtime_config_hash"] == recorded["runtime_config_hash"]
+    effort = catalog.get(GEMINI).defaults["reasoning_effort"]
+    assert (expected["protocol"], expected["reasoning_effort"]) == ("wall-clock", effort)
 
 
 def _job(path, request):
