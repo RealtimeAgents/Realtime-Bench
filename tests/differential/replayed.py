@@ -109,7 +109,7 @@ def _ended(script: Script, reached: bool, applied: int):
 
 class _Latched:
     """Logs when the run's invalid-run value is first latched, by the environment itself or by
-    the runner (evaluation/runner.py _invalidate)."""
+    today's loop (legacy_loop.py _invalidate)."""
 
     @property
     def _invalid_run(self):
@@ -667,7 +667,7 @@ def _subtotal(accounting) -> dict | None:
 class _FrozenFrames:
     """The frame source, repeating one frame's identity (observation id, tick, screenshot) from
     capture ``frozen_from`` on, each stamped when it is captured: a producer replaying one frame
-    (evaluation/runner.py ObservationStreamWatchdog)."""
+    (legacy_loop.py ObservationStreamWatchdog)."""
 
     def __init__(self, frames, frozen_from: int):
         self._frames = frames
