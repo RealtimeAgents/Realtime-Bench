@@ -724,6 +724,33 @@ def test_resume_failure_short(live_env, tmp_path):
     ]
 
 
+def test_a_call_its_function_schema_rejects_executes_wait(live_env, tmp_path):
+    """Decision 0 calls click with its coordinates as strings, which the declared schema
+    rejects, though the text parser would read them. The call is no action
+    (FunctionCallTurnCollector.finish): the harness executes WAIT and tells the model its response
+    was not exactly one valid action. The output stays the call as the model made it."""
+    preset = TOOL_TRANSCRIPT
+    config = catalog_config(preset.model)
+    call = '{"action": "click", "x": "384", "y": "130"}'
+    scenario = [Step(call, status="wait"), Step(CLICK_NAME)]
+    turns = [turn_script(k, step, preset) for k, step in enumerate(scenario)]
+    records, results, stub = run_episode(
+        "schema-rejected-call", config, preset.model, scenario, turns, preset, live_env, tmp_path
+    )
+    check_session(stub, results)
+    rejected = results[0]
+    assert rejected["action"].action_type.value == "wait"
+    assert rejected["raw"] == call
+    assert "must both be numeric" in rejected["function_validation_error"]
+    protocol = rejected["action_protocol"]
+    assert (protocol["protocol_failure"], protocol["parse_mode"]) == ("invalid_action_output", None)
+    steps = records[2:-1]
+    assert steps[0]["action_history_entry"]["requested"] == "invalid_action"
+    feedback, _ = observation_texts(steps[1])
+    assert feedback.startswith("EXECUTION RESULT: actual=wait(); requested=invalid_action;")
+    assert feedback.endswith("(invalid_action_output)")
+
+
 def test_interrupted_empty_turn_retry_keeps_its_usage(live_env, tmp_path):
     """The server interrupts decision 1 before any output and reports only its prompt. The
     collector raises EmptyInterruptedToolTurnError (harnesses/default/parsing.py

@@ -756,14 +756,16 @@ class NativeStreamingAgent(VisionAgentBase):
             if event.kind == "turn_complete":
                 reply.terminal_usage = bool(event.metadata.get("terminal_usage_received"))
         elif isinstance(event, FunctionCall):
-            try:
-                action = canonical_function_action(
-                    event.name, event.arguments, frame_reference=True
-                )
-            except ValueError:
-                # The parser takes it as no action, as a turn's call (FunctionCallTurnCollector).
-                action = {"action": event.name, **event.arguments}
+            action = {"action": event.name, **event.arguments}
             reply.calls.append(json.dumps(action, ensure_ascii=False))
+            # A call without its frame is refused for that (frames.MISSING_FRAME); one its
+            # function's schema rejects is no action, as a turn's call (FunctionCallTurnCollector).
+            if "frame" in action:
+                try:
+                    canonical_function_action(event.name, event.arguments, frame_reference=True)
+                except ValueError:
+                    reply.protocol_failure = reply.protocol_failure or "invalid_action_output"
+                    return
             self._arrived(reply, reply.calls[-1], event.call_id, event.received_at)
         elif isinstance(event, FunctionCallsCancelled):
             # By the generation each call came in, which may be an earlier reply's.
