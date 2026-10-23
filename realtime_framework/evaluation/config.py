@@ -417,6 +417,8 @@ import os as os
 from pathlib import Path as Path
 
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
+from realtime_framework.entity.config import FrameEncodingConfig
+from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import validate_model_interaction
@@ -433,15 +435,14 @@ DEFAULT_MODE = "default"
 OUTPUT_CLOCK_POLICY = "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16"
 GUI_ACTION_PROTOCOL = "single_unambiguous_gui_action_transport_envelopes_quoted_shorthand_v7"
 
-# Non-secret environment settings outside the STREAM_/FRAME_ namespaces that change the effective
-# model transport, visual input, or runtime policy.  Secrets are deliberately excluded, but endpoint
-# selection is identity-bearing: two services advertising the same model id are not necessarily the
-# same backend.
+# Non-secret environment settings that change the effective model transport, visual input, or
+# runtime policy: those the frame encoding and the runner's timing read at import, and the rest.
+# Secrets are deliberately excluded, but endpoint selection is identity-bearing: two services
+# advertising the same model id are not necessarily the same backend.
 _RUNTIME_ENV_KEYS = frozenset(
     {
-        "FRAME_IMAGE_DETAIL",
-        "FRAME_JPEG_QUALITY",
-        "FRAME_MAX_DIM",
+        *(variable for variable, _ in FrameEncodingConfig.ENVIRONMENT.values()),
+        *(variable for variable, _ in RunnerTimingConfig.ENVIRONMENT.values()),
         "SANDBOX_IMAGE",
         "RT_SUITE_IMAGE",
         "SANDBOX_GRAPHICS_MODE",
@@ -449,13 +450,10 @@ _RUNTIME_ENV_KEYS = frozenset(
         "OPENAI_BASE_URL",
         "OPENROUTER_BASE_URL",
         "MOONSHOT_BASE_URL",
-        "STREAM_ABANDONED_DRAIN_S",
         "STREAM_ACTIVE_VISUAL_BUDGET",
         "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
         "STREAM_DETAILED_HISTORY_TURNS",
         "STREAM_MIN_REQUEST_INTERVAL",
-        "STREAM_OBSERVATION_FREEZE_N",
-        "STREAM_PROVIDER_WATCHDOG_S",
         "STREAM_VISUAL_FOLD_BLOCK_SIZE",
     }
 )
