@@ -107,7 +107,7 @@ from realtime_framework.harnesses.streaming.history import (
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
-from realtime_framework.providers.session_lifecycle import RenewalRequired
+from realtime_framework.providers.session_lifecycle import RenewalRequired, connect_backoff
 
 if TYPE_CHECKING:
     from realtime_framework.evaluation.kernel.events import Outcome
@@ -553,12 +553,17 @@ class NativeStreamingAgent(VisionAgentBase):
         so the next opens it again from ``view``.
 
         For the push of observation ``push``, the kernel is told it is held while it waits out
-        a backoff, and resumed as the next attempt starts (decision N48): the backoff is longer
+        a backoff, this retry's or one of the driver's own retry of its connect (OpenAI
+        Realtime's), and resumed as the next attempt starts (decision N48): the backoff is longer
         than the push watchdog, which still times each attempt."""
 
+        def hold(waiting: bool) -> None:
+            if push is not None:
+                self._post(PushHeld(push) if waiting else PushResumed(push))
+
         async def attempt(number: int) -> None:
-            if number > 1 and push is not None:
-                self._post(PushResumed(push))
+            if number > 1:
+                hold(False)
             await self.driver.ensure_ready(self._seed, view, self._record_session)
             if renew:
                 await self.driver.renew(self._seed, view, self._record_session)
@@ -571,17 +576,17 @@ class NativeStreamingAgent(VisionAgentBase):
             )
             if delay is None:
                 raise TransportFailureError(failure, exc, number - 1) from exc
-            if push is not None:
-                self._post(PushHeld(push))
+            hold(True)
 
         frames = [item.block.id for item in view.items if item.block.kind == "frame"]
-        await RequestRetry(
-            f"{frames[-1] if frames else 'empty'}:ready",
-            self.driver.classify_transport_error,
-            record,
-            cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
-            clock=self.clock,
-        ).run_async(attempt)
+        with connect_backoff(hold):
+            await RequestRetry(
+                f"{frames[-1] if frames else 'empty'}:ready",
+                self.driver.classify_transport_error,
+                record,
+                cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
+                clock=self.clock,
+            ).run_async(attempt)
 
     def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
         """One ModelAttemptFinished per readying attempt that failed, for the one that succeeded
