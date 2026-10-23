@@ -131,7 +131,7 @@
 | K-f | 出现 | `token-missing-usage` | 47 | |
 | K-g | 出现 | 墙钟 16 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束或第三次读失败的那次读返回以后（结束记在发问时刻，N44）；截止落在一次读、采帧或执行里时，那次操作返回以后 |
 | K-h | 出现 | `wall-frozen-stream`、`token-frozen-stream` | 19 | |
-| K-i | 出现 | `wall-think-budget-and-the-end`、`token-think-budget-and-the-end` | 4 | |
+| K-i | 出现 | `wall-think-budget-and-the-end`、`wall-think-budget-at-the-deadline`、`token-think-budget-and-the-end` | 4 | 思考预算用完和任务结束、墙钟截止相撞时，先到的那个定停止原因。预算的结束两边都记在超预算那个决策回报时，在它等到下一帧之后；这段等待撞上截止时，内核记 `time_limit`，决策在手上（X2） |
 | K-j | 出现 | `token-lease-ends-inside-a-tap` | 4 | |
 | K-k | 出现 | `wall-the-read-before-landing-runs-past-the-deadline`、`wall-the-read-before-landing-answers-at-the-deadline` | — | 墙钟下总帧数在截止处用完。落地前那次读在截止前发问、在截止当刻或之后答回时，旧循环读前问截止（还没到）、读完数帧，记 `not_applied_tick_limit`；内核只问截止，由截止的定时器记 `not_applied_time_limit` |
 | K-l | 不可观察 | — | — | 回放里采帧到开始生成之间没有时间流逝 |

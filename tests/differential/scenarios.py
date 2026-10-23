@@ -349,6 +349,16 @@ PER_RULE = [
         expect=frozenset({"K-g", "K-i", "X2"}),
         name="wall-think-budget-and-the-end",
     ),
+    # K-i with the deadline: decision 3's reply at 3.5 s runs out the think budget, and its pacing
+    # to the next frame runs into the deadline at 3.75 s, which comes before the budget's end.
+    Script(
+        "wall",
+        SHORT_S,
+        _timed(FORM, [0.5] * 4),
+        think_budget_s=1.9,
+        expect=frozenset({"K-i", "X2"}),
+        name="wall-think-budget-at-the-deadline",
+    ),
     # The per-move cap gives up on a 0.5 s reply after 0.4 s. K-l does not show: no time passes
     # between the capture and the generation's start (rules.py).
     Script(

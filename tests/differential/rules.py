@@ -624,8 +624,11 @@ def _kc(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _ki(script: Script, p: Projection, notes: dict) -> None:
-    """When the think budget runs out and the task ends, the first signal names the reason
-    (core.py Kernel.end); today the budget always wins (runner.py _finalize)."""
+    """When the think budget runs out and the task ends, or on the wall clock the deadline
+    passes, the first signal names the reason (core.py Kernel.end); today the budget always wins
+    (legacy_loop.py _finalize). Both date the budget's end where the decision over it is reported
+    (TurnPolicy._committed; legacy_loop.py _decide), after its pacing; the deadline that pacing
+    ran into comes first, with the decision in hand (X2)."""
     termination = p.episode["termination"]
     if termination["stop_reason"] != "think_budget":
         return
@@ -635,6 +638,9 @@ def _ki(script: Script, p: Projection, notes: dict) -> None:
         return
     found = _kernel_end(script, p, notes)
     if found is None:
+        if not earlier(termination["end_s"], script.duration_s):
+            termination["stop_reason"] = "time_limit"
+            termination["end_s"] = round(script.duration_s, 9)
         return
     at, k = found
     notes["ended"], notes["read_end"] = (at, k), True
@@ -1221,7 +1227,7 @@ RULES = (
         seen="no longer: the kernel reads before landing on a new reading (N26 (b))",
     ),
     Rule("K-c", "a wall wait is a timer the end interrupts", _kc),
-    Rule("K-i", "think budget and the task's end: the first names the reason", _ki),
+    Rule("K-i", "think budget and the task's end or the deadline: the first names the reason", _ki),
     Rule("K-d", "nothing advances after the first end signal", _kd),
     Rule("K-a", "the wall deadline is a timer without grace", _ka),
     Rule("D47", "a result back during a read the deadline falls in is filed after it", _d47),
