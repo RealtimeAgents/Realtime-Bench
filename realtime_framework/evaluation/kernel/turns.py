@@ -767,7 +767,9 @@ class TurnPolicy:
         """Ask whether the episode is over; ``then`` runs when it is not. A check right after an
         action always reads; any other is not asked when it would read what was read already
         (_read_already), and ``then`` runs once that read has answered: at once, or when its
-        answer is handled, should another event due earlier have come first."""
+        answer is handled, should another event due earlier have come first. Should a periodic
+        check read again before that answer is handled, ``then`` waits for the later read's
+        answer (_end_checked)."""
         if then is not None and self._past_deadline():
             return
         if not after_action and self._read_already(before_landing=before_landing):
@@ -803,6 +805,11 @@ class TurnPolicy:
         if self._awaited is not None and self._awaited[0] == event.request:
             then = self._awaited[1]
             self._awaited = None
+            # A periodic check has read since: what waits goes on from that later read's answer,
+            # which may be the end, and nothing lands after the end.
+            if self._unanswered is not None:
+                self._awaited = (self._unanswered, then)
+                return
             then()
 
     def _count_read(self, error: str | None, asked_at: float | None = None) -> bool:

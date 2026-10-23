@@ -662,6 +662,67 @@ def test_an_action_does_not_land_before_the_answer_to_a_read_made_at_its_reading
     assert _ended(sim)[:3] == ("won", "environment", 3.3)
 
 
+_SLOW_CHECK_BEFORE_LANDING = {
+    "replies": [Reply(1.945, CLICK), Reply(30.0)],
+    "accept_s": 0.01,
+    "check_s": 0.05,
+    "check_seconds": {3: 1.2},
+}
+
+
+@pytest.mark.parametrize(
+    ("config", "world", "status", "ended"),
+    [
+        # The click is back at 1.995 s and accepted until 2.005 s, where the check before landing
+        # reads for 1.2 s. The periodic check due at 2 s comes before that answer, filed at its
+        # asking, and reads at 3.205 s: the task ended at 3.1 s. The older "not over" is handled
+        # first and leaves the click to the later read, which ends the episode.
+        (
+            _wall(10.0),
+            World(**_SLOW_CHECK_BEFORE_LANDING, ends_at=3.1, end_reason="won"),
+            "not_applied_terminal",
+            ("won", "environment", 3.205, 3.255),
+        ),
+        # The same reads, the second to the fourth failing: the later read is the third failure
+        # in a row and invalidates the run before the click could land.
+        (
+            _wall(10.0),
+            World(**_SLOW_CHECK_BEFORE_LANDING, check_errors={2: "x", 3: "x", 4: "x"}),
+            "invalid_run",
+            ("invalid_run", "invalid", 3.205, 3.255),
+        ),
+        # 60 fps, reads 20 ms: the first reply comes to no action and its commit, one frame,
+        # ends at 2.0567 s, where the loop top reads. The periodic check due at 2.05 s comes
+        # before that answer and reads at 2.0767 s, after the task ended at 2.074 s. The loop
+        # top's "not over" is handled first and captures no frame.
+        (
+            _wall(10.0, env_fps=60.0, input_fps=1.0),
+            World(
+                replies=[Reply(1.3), Reply(30.0)],
+                check_s=0.02,
+                commit_s=1 / 60,
+                ends_at=2.074,
+                end_reason="won",
+            ),
+            "none",
+            ("won", "environment", 2.0767, 2.0967),
+        ),
+    ],
+    ids=["before-landing", "third-failure", "loop-top"],
+)
+def test_what_waits_on_a_read_goes_on_from_a_later_read_made_before_its_answer(
+    config, world, status, ended
+):
+    # Nothing lands, and nothing is captured, after the end a later read found (phase2.md,
+    # 时间和结束判定).
+    sim = _episode(config, world)
+    assert len(sim.captures) == 1
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == [status]
+    assert _ended(sim) == pytest.approx(ended, abs=1e-4)
+    _assert_nothing_after_the_end(sim)
+
+
 def test_an_end_due_with_the_landing_is_handled_before_it():
     # Driven by hand. The reply comes back at 1 s and is accepted at once, which leaves its
     # landing due at 1 s; another thread's invalidation is filed at that same reading. An end

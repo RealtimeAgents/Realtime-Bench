@@ -131,6 +131,19 @@ def test_an_end_a_check_saw_before_the_deadline_is_the_tasks_though_it_answers_a
     assert episode.env._termination["end_s"] == pytest.approx(4.21)
 
 
+def test_an_action_does_not_land_on_an_older_read_once_a_later_one_saw_the_end():
+    """The result is back at 1.995 s and accepting it takes 10 ms; the check before landing,
+    asked at 2.005 s, takes 1.2 s. The periodic check due at 2 s reads from 3.205 s and sees the
+    end the task reached at 3.23 s. The older "not over" is handled first; the click waits for
+    the later read and is not executed (phase2.md, 时间和结束判定)."""
+    world = World(check_s=0.05, slow_checks=[(2.0, 2.1, 1.2)], ends_at=3.23, end_reason="won")
+    episode = run("wall", 10.0, [Reply(1.945), Reply(30.0)], world, agent_type=_SlowAccept)
+    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+    assert episode.statuses() == ["not_applied_terminal"]
+    assert episode.env._termination["stop_reason"] == "won"
+    assert episode.env._termination["end_s"] == pytest.approx(3.205)
+
+
 def test_a_result_settled_across_the_deadline_does_not_land():
     """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after it;
     the kernel gets it at the reading taken after the settling. The deadline came first, and
