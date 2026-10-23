@@ -1,7 +1,8 @@
 """A streaming action is interpreted against the frame it names: that frame's marks and geometry,
 however many frames came after it and wherever its elements are now. An action whose frame is
 missing, not an integer or not in the frame table is rejected, never executed. Every grounded
-action records its frame's age. Turn-based actions keep their format and the newest frame."""
+action records its frame's age. Turn-based actions keep their format and the newest frame. A
+model-image point becomes the screen pixel nearest it, half to even, kept on the screen."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ import json
 
 from PIL import Image
 
-from realtime_framework.entity.actions import normalize_action
+from realtime_framework.entity.actions import FrameGeometry, normalize_action
 from realtime_framework.evaluation.episode_records import action_record
 from realtime_framework.evaluation.reporting import (
     _action_inspection,
@@ -91,6 +92,20 @@ def test_an_action_uses_the_marks_and_geometry_of_the_frame_it_names(tmp_path):
     assert by_coordinates.coordinate_transform == first.geometry
     desktop, _ = normalize_action(by_coordinates)
     assert (desktop.parameters["x"], desktop.parameters["y"]) == (750, 375)  # scale 2.5 x 1.875
+
+
+def test_a_model_point_maps_to_a_screen_pixel_rounded_half_to_even_and_clamped():
+    """FrameGeometry.image_to_screen_point on a 768x432 model image of the 1920x1080 desktop
+    (scale 2.5): a point is rounded with Python's round, half to even, and kept on the screen.
+    The image's own far edge (768, 432) and anything past it land on the last pixel,
+    (1919, 1079), not one past it; a negative coordinate lands on 0."""
+    geometry = FrameGeometry((768, 432), (1920, 1080))
+    assert geometry.image_to_screen_point(0, 0) == (0, 0)
+    assert geometry.image_to_screen_point(1, 3) == (2, 8)  # 2.5 and 7.5, half to even
+    assert geometry.image_to_screen_point(0.3, 0.3) == (1, 1)  # 0.75 rounds up
+    assert geometry.image_to_screen_point(767, 431) == (1918, 1078)  # 1917.5 and 1077.5
+    assert geometry.image_to_screen_point(768, 432) == (1919, 1079)
+    assert geometry.image_to_screen_point(5000, -40) == (1919, 0)
 
 
 def test_an_action_on_an_older_frame_is_traced_and_drawn_on_that_frame(tmp_path):
