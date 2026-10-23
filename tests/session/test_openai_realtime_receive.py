@@ -16,6 +16,7 @@ import asyncio
 import json
 import queue
 import threading
+from types import SimpleNamespace
 
 import pytest
 from websockets.exceptions import ConnectionClosedOK
@@ -503,6 +504,40 @@ def test_events_end_when_the_connection_closes():
     assert [type(event) for event in events] == [GenerationBoundary, ProviderError]
     assert events[1].fatal
     assert {(event.connection, event.generation) for event in events} == {(3, 1)}
+
+
+class _CancellingConnection(_FakeConnection):
+    """The fake connection, which also takes each response.cancel written on it."""
+
+    def __init__(self):
+        super().__init__()
+        self.cancels: list[dict] = []
+        self.response = SimpleNamespace(cancel=lambda **kwargs: self.cancels.append(kwargs))
+
+
+def test_an_error_naming_the_interrupt_s_cancel_is_not_fatal():
+    """An error naming the response.cancel an interrupt sent is a cancel race: the response had
+    ended, or not begun, when the cancel came. It is reported as a non-fatal error, which the
+    runtime notes and goes on from; a fatal one would fail the generation for an interrupt that
+    came late."""
+    connection = _CancellingConnection()
+    core = opened([turn(0)])
+    generation = core.start_generation("d0.frame")
+    session = _Session(3, connection, core)
+    driver = _offline_driver()
+    driver._session = session
+    handle = GenerationHandle("turn-0", opaque=(session, generation))
+
+    async def collect():
+        await driver.interrupt(handle)
+        (cancel,) = connection.cancels
+        for event in (error(cancel["event_id"]), _clean_close()):
+            connection.queue.put(event)
+        return [event async for event in driver.events(handle)]
+
+    events = _within(collect())
+    assert [type(event) for event in events] == [ProviderError]
+    assert not events[0].fatal
 
 
 def test_an_operation_whose_send_fails_is_unknown():
