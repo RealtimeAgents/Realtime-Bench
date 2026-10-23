@@ -612,7 +612,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         server confirmed the frame, with when it was written and when its confirmation came
         (decision N43); raises when the server refused it, which loses that frame alone, or the
         connection closed first. A fold the server fails leaves the session dirty, for the next
-        ensure_ready to rebuild it from the view.
+        ensure_ready to rebuild it from the view. The folds go out before the server answered
+        the frame: one it refuses leaves the session with a frame folded that the agent's view,
+        without the refused frame, keeps whole, until the next push folds it there too or a
+        rebuild replays the view.
 
         It plans and writes holding the session as a connection operation does
         (SessionLifecycle), so its writes go to the session it planned them on once a connect
