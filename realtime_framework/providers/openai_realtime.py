@@ -153,10 +153,12 @@ class _Session:
 
     def read_continuously(self, clock, on_lost=lambda: None) -> None:
         """Read every event as it arrives until the connection ends, and hand each to the core
-        with the time ``clock`` reads then (native streaming). ``on_lost`` is called once if the
-        connection ends on its own, by a failed read or a close from the server, so the driver
-        can mark the session for rebuild; a close the driver started cancels the reader instead
-        and does not call it."""
+        with the time ``clock`` reads then (native streaming). ``on_lost`` is called once the
+        connection ended and the reader with it: by a failed read or a close from the server,
+        so the driver can mark the session for rebuild, or by a close of the driver's own that
+        went through, after which the driver opens the session anew or leaves it closed
+        anyway. A close that may have left the connection open cancels the reader instead,
+        which does not call it."""
         self._clock, self._read_one, self._on_lost = clock, asyncio.Event(), on_lost
         # The reader reads for the connection, whatever reply is in progress, not for the call
         # that opened it: in an empty context the trace records what it reads in no scope.
@@ -178,8 +180,9 @@ class _Session:
         except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
             self.failure = exc
             self._read_one.set()
-        # The connection ended on its own: a failed read, a core failure, or a close the server
-        # sent. The driver started none of these, so the session is left to be rebuilt.
+        # The connection ended: a failed read, a core failure, or a close from either side. The
+        # session is left to be rebuilt; after a close of the driver's own, the driver reopens
+        # it or leaves it closed anyway.
         self._on_lost()
 
     async def stop_reading(self, *, closed: bool) -> None:
