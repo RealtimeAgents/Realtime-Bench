@@ -581,9 +581,10 @@ class NativeStreamingAgent(VisionAgentBase):
         ).run_async(attempt)
 
     def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
-        """One ModelAttemptFinished per readying attempt after the first, as a connect's
-        (OpenAIRealtimeDriver._connect_finished): each that failed, the one that succeeded after
-        them, and one a cancellation stopped."""
+        """One ModelAttemptFinished per readying attempt that failed, for the one that succeeded
+        after them, and for one a cancellation stopped. A readying that succeeds at once leaves
+        none, unlike a connect, which records every attempt
+        (OpenAIRealtimeDriver._connect_finished)."""
         with trace_scope(ready_attempt=number):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
