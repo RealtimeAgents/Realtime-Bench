@@ -554,9 +554,9 @@ class TurnPolicy:
             return self._resolve("invalid_run")
         if event.rejection is not None:
             # A refused action skips the check after execution (legacy_loop.py _land_action), but
-            # not a periodic check its execution delayed.
+            # not a periodic check its execution delayed, unless the episode ended meanwhile.
             d.detail = event.rejection
-            if self._periodic_owed:
+            if self._periodic_owed and kernel.ending is None:
                 self._check_end(None)
             return self._resolve("rejected")
         if self.token and event.held_keys:
