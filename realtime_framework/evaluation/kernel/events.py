@@ -86,7 +86,9 @@ class EndChecked:
 
 @dataclass(frozen=True)
 class FrameCaptured:
-    """One captured frame: its tick, its timestamp on the semantic clock and its identity."""
+    """One captured frame: its tick, its timestamp and its identity. The timestamp is semantic
+    seconds since the episode origin on the wall clock and world seconds on the token clock,
+    whose readings are ticks (evaluation/shell.py)."""
 
     observation_id: str | None = None
     tick: float = 0.0

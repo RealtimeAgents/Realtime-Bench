@@ -3,7 +3,8 @@ from __future__ import annotations
 # Clock
 """The time of one episode. Framework code reads the time and waits only through a Clock, except
 in the files pyproject.toml exempts from the clock rule (TID251) and on lines marked
-``# noqa: TID251``.
+``# noqa: TID251``; the timeouts it gives sockets, locks and HTTP requests are real seconds
+(sandbox/budget.py).
 
 An episode has two clocks (phase2.md, 时钟). The semantic clock is world time: deadlines, the
 frame grid and action timing read it. The operational clock times watchdogs, retry backoff,
@@ -124,8 +125,9 @@ class SystemClock:
 
 class FrameClock:
     """World time under the token clock and in pause mode: the frames the environment has
-    advanced. Only the environment moves it (GuestEnvironment.wait_until_tick), so the world stands
-    still while a model generates. It can only be read; nothing waits on it."""
+    advanced. Only the environment moves it (GuestEnvironment._advance_clock, for the kernel's
+    shell's step_clock and a key tap's frame), so the world stands still while a model generates.
+    It can only be read; nothing waits on it."""
 
     def __init__(self, fps: float):
         self.frame_seconds = 1.0 / fps

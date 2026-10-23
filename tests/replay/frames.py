@@ -1,11 +1,11 @@
 """Deterministic synthetic frames, captured through the runner's own BrowserSceneCapture.
 
 The runner builds every observation with BrowserSceneCapture.capture (evaluation/runner.py main,
-set_up_agent; sandbox/actions.py:190-203). Here that class runs unchanged with its probe override
-(sandbox/observation/capture.py:100, 144-145), a guest that returns synthetic PNGs, and a clock
-that reads a fixed stamp for each capture (capture.py:272). Observation ids, screenshot hashes,
-frame geometry and the canonical interactables therefore come from production code, built from
-inputs that are a pure function of the frame index.
+set_up_agent; sandbox/actions.py GuestEnvironment.capture). Here that class runs unchanged with its
+probe override (sandbox/observation/capture.py ``probe``, ``_probe``), a guest that returns
+synthetic PNGs, and a clock that reads a fixed stamp for each capture (capture.py ``captured_at``).
+Observation ids, screenshot hashes, frame geometry and the canonical interactables therefore come
+from production code, built from inputs that are a pure function of the frame index.
 
 The probe returns what the CDP extractor returns for a screenshot model (scene, binding,
 controls, canvases, metrics: sandbox/browser/cdp_interactables.py:424-440, 470-484, 569-583;

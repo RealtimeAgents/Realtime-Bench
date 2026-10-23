@@ -1,12 +1,13 @@
 """A game task's token clock without the browser, for GuestEnvironment on the token clock.
 
 The runner configures the task clock with the environment fps before anything else
-(evaluation/runner.py main), and GuestEnvironment takes its tick from it (sandbox/actions.py:130).
-On the token clock GuestEnvironment pushes time into the task with advance_clock and sends key
-input with clock_key_event (sandbox/actions.py:214-249, 495-605), as it does for a game
-(realtime_tasks/game/runtime.py:177-214). Here the frame counter of realtime_tasks/types.py
-advances unchanged, and every advance, key event and evaluation snapshot is appended to
-``events`` with the task's world time, and passed to ``on_event`` when one is set.
+(evaluation/runner.py main), and GuestEnvironment takes its tick from it (sandbox/actions.py
+GuestEnvironment.__init__). On the token clock GuestEnvironment pushes time into the task with
+advance_clock and sends key input with clock_key_event (sandbox/actions.py _advance_clock,
+_execute_clock_key), as it does for a game (realtime_tasks/game/runtime.py advance_clock,
+clock_key_event). Here the frame counter of realtime_tasks/types.py advances unchanged, and every
+advance, key event and evaluation snapshot is appended to ``events`` with the task's world time,
+and passed to ``on_event`` when one is set.
 """
 
 from __future__ import annotations
