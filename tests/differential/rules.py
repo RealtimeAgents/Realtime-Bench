@@ -1116,6 +1116,49 @@ def _kk(script: Script, p: Projection, notes: dict) -> None:
                 record["status"] = "not_applied_time_limit"
 
 
+def _u9(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock, reads taking time: a result back before its per-move cap, during a periodic
+    read the cap falls in, is filed once that read has returned, after the cap (N29;
+    evaluation/shell.py _Shell._settle_returned). The kernel has given the generation up and
+    skips the move at the cap's cost (turns.py TurnPolicy.on_timer); the result's records are the
+    call's own, its usage counted nowhere, since the agent counts the usage of accepted results
+    only (decision 37), and it leaves no exchange in the history (X6). Its lifecycle record gives
+    the result's own latency as model_latency_s and no harness_timeout_reason, where a result back
+    past the cap gives the cap and per_move_cap: under a 1.5 s cap, a 1.4 s reply is 1.4 and None,
+    a later one 1.5 and per_move_cap. The projection compares neither field. Today's loop takes the
+    result as it comes."""
+    cap = script.per_move_cap_s
+    if not _wall(script) or cap is None or not script.check_s:
+        return
+    facts, trace = p.facts, p.beyond["trace"]
+    for k in sorted(p.decisions):
+        started, back = facts["started_at"].get(k), facts["finished_at"].get(k)
+        if started is None or back is None:
+            continue
+        asked = _read_under_way(script, started + cap)
+        if asked is None or earlier(back, asked) or not earlier(back, started + cap):
+            continue
+        notes.setdefault("capped", set()).add(k)
+        d = p.decisions[k]
+        d["proposed"], d["applied"], d["executed"] = None, False, []
+        for record in (d["resolved"], d["commit"], d["outcome"]):
+            record["status"] = "skipped_timeout"
+        if not any(not earlier(at, started) for at in facts["aborted_at"]):
+            p.episode["aborts"] += 1
+        p.beyond["results"].pop(k, None)
+        usage: dict[str, int] = {}
+        for record in trace["InferenceCompleted"].get(k, []):
+            for name, value in (record["frame_usage"] or {}).items():
+                p.beyond["usage"][name] -= value
+                usage[name] = usage.get(name, 0) + value
+                record["frame_usage"][name] = 0
+        for later, records in trace["InferenceStarted"].items():
+            if later > k:
+                for record in records:
+                    for name, value in usage.items():
+                        record["usage_before"][name] -= value
+
+
 def _u2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel writes RunInvalidated for every failure (core.py Kernel.invalidate), also one the
     environment latched itself; today only the runner's own _invalidate writes it
@@ -1146,12 +1189,13 @@ def _x6(script: Script, p: Projection, notes: dict) -> None:
     """Wall clock: a move the per-move cap gave up on changes no earlier record; its feedback,
     which names no action, opens every next frame until a result is accepted (H3; decision 10;
     harnesses/default/harness.py DefaultHarness.commit). Today the report goes to the newest
-    record, and with none it is lost (DefaultHarness.commit_action). Only moves with no accepted
-    result before them are rewritten here, as in the named script."""
+    record, and with none it is lost (DefaultHarness.commit_action). A move U9 skipped, whose
+    result today's loop accepted, leaves no exchange in the history either. Only moves with no
+    accepted result before them are rewritten here, as in the named scripts."""
     if not _wall(script):
         return
     note = f"EXECUTION RESULT: status=skipped_timeout. {UNANSWERED_STEP_NOTES['skipped_timeout']}\n"
-    skipped = {
+    skipped = notes.get("capped", set()) | {
         k
         for k, reason in p.facts["timeout_reasons"].items()
         if reason == "per_move_cap" and p.decisions[k]["commit"]["status"] == "skipped_timeout"
@@ -1162,7 +1206,9 @@ def _x6(script: Script, p: Projection, notes: dict) -> None:
         unanswered = sum(1 for j in range(k) if j in skipped)
         if unanswered != k or not unanswered:
             continue
-        frame = next(m for m in reversed(request["body"]["messages"]) if m["role"] == "user")
+        messages = request["body"]["messages"]
+        frame = next(m for m in reversed(messages) if m["role"] == "user")
+        request["body"]["messages"] = [m for m in messages if m["role"] == "system"] + [frame]
         frame["content"][0]["text"] = note * unanswered + frame["content"][0]["text"]
 
 
@@ -1278,12 +1324,7 @@ RULES = (
         "a frozen frame after another invalidation is written as captured",
         seen="not scripted: no replayed wall release fails while a frame is captured",
     ),
-    Rule(
-        "U9",
-        "a result settled past the per-move cap, or filed late, is skipped_timeout",
-        seen="not scripted: the replay settles a result in no time, and no named script has a"
-        " read under way when the cap falls (D47 covers the deadline)",
-    ),
+    Rule("U9", "a result settled past the per-move cap, or filed late, is skipped_timeout", _u9),
     Rule(
         "KF7",
         "a result back before the deadline and settled past it is discarded",

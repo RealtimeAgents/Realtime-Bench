@@ -767,6 +767,20 @@ TIMED = [
         expect=frozenset({"D47", "K-g", "X4"}),
         name="wall-the-deadline-falls-during-a-read",
     ),
+    # U9: decision 0 is asked at 0.05 s with a 0.47 s per-move cap, due at 0.52 s; its reply is
+    # back at 0.51 s, during the periodic read asked at 0.5 s. The shell files it once the read
+    # has returned, at 0.55 s, after the cap: the kernel skips the move, and the next request
+    # opens with the timeout's note (X6). Today's loop lands the click.
+    Script(
+        "wall",
+        2.0,
+        _timed(["click"] * 4, [0.46, 0.3, 0.3, 0.3]),
+        env_fps=4.0,
+        check_s=0.05,
+        per_move_cap_s=0.47,
+        expect=frozenset({"K-b", "U9", "X2", "X4", "X6"}),
+        name="wall-the-per-move-cap-falls-during-a-read",
+    ),
     # wall-third-failed-read-is-todays-first with reads of 0.01 s: the third failed read, the one
     # after decision 1's click at 1.46 s, invalidates the run dated when it was asked, and the
     # snapshot is read when it has returned, as today's loop dates and reads them (N44).

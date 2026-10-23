@@ -113,7 +113,7 @@
 - **覆盖不到的**：
   - 结果晚于帧边界才回来，或 wait 结束在帧中间：旧循环在循环开头多读一次（内核在已读过的帧里不读，KF5c），耗时会带进下一个决策。没写规则，也没进具名脚本。
   - 读一次比一帧长：60 fps 下读 0.05 秒。另外，墙钟替身在格点上取 tick 会差一个 ulp（`1024.05 - 1024` 乘 60 得 2.999…）。
-  - 单步上限落在一次读状态期间（p1b 的 U9）：会牵动之后的请求历史和用量。只钉住了截止那一种（D47）。
+  - 单步上限落在一次读状态期间（p1b 的 U9）：只写了前面的决策都没有被接纳的结果时的情形（`wall-the-per-move-cap-falls-during-a-read`），和 X6 一样；截止那一种是 D47。
   - 整理结果、accept、回报有耗时（KF7、KF10）：回放里这些都不花时间。
   - 生产环境 `GuestEnvironment` 的墙钟代码：墙钟回放用的是 `FakeEnvironment`，所以 X13 的 10 秒上限、按住键的租约在这里看不到，靠 `tests/sandbox` 守着。
 
@@ -167,7 +167,8 @@
 | U3 | 在清单内（N5），就是 KF5a | 见 KF5 | — | |
 | U4、U5 | 去掉了（N6） | `token-a-wait-whose-own-step-fails`、`wall-a-failed-action-settles-after-the-snapshot-read`，按旧循环的结局断言，通过 | — | p1c `3f7fcb8` |
 | U6 | 消掉了 | `wall-frozen-stream`、`token-frozen-stream` | — | p1b `e9d5a9d` |
-| U7、U8、U9、U12 | 没有脚本 | — | — | p1b 第四到六轮的编号，依次要这些情形，回放里都不会发生：轨迹行写失败、采帧期间松键失败、整理跨过单步上限、内核或读数抛错 |
+| U7、U8、U12 | 没有脚本 | — | — | p1b 第四到六轮的编号，依次要这些情形，回放里都不会发生：轨迹行写失败、采帧期间松键失败、内核或读数抛错 |
+| U9 | 出现一半 | `wall-the-per-move-cap-falls-during-a-read` | — | 结果在单步上限之前回来，但正赶上一次定时读、上限落在这次读里：外壳读完才整理，已过上限，内核放弃这次生成，记 `skipped_timeout`，按上限扣思考预算。结果的记录是这次调用自己的，用量哪里都不计（第 37 条），历史里也没有这次往来（X6）。lifecycle 的 `model_latency_s` 是结果自己的耗时、`harness_timeout_reason` 为空；结果晚于上限回来的，记上限和 `per_move_cap`。上限 1.5 秒时，1.4 秒回来的记 1.4 和空，更晚回来的记 1.5 和 `per_move_cap`。投影不比这两个字段。另一半"整理本身跨过上限"没有脚本：回放里整理不花时间 |
 | U10 | 出现 | `wall-ends-during-a-reply`、`wall-ends-during-a-reply-and-reads-take-time` | 91 | 任务结束时放弃的生成，外壳合成"放弃的调用"记录（`stale`，`harness_abort_reason: task_end`，缺用量原因 `generation_aborted_at_task_end`，不进 token 统计）；旧循环那条是真实回复（N10、N34） |
 | U11 | 出现 | `wall-third-failed-read-during-a-reply` | — | 同上，判无效时放弃（`invalid_run`）。随机脚本不生成墙钟读失败 |
 | U13 | 不比 | — | — | p1b 第七轮：已整理、后被内核丢弃的结果，轨迹行类型是 `decision`。对跑不比轨迹行 |
