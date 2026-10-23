@@ -208,6 +208,28 @@ def test_an_abort_its_caller_gives_up_on_still_cleans_up():
     ]
 
 
+def test_a_second_abort_cleans_up_once_the_first_is_done():
+    """An abort whose caller gave up on it goes on (its interrupt takes 5 s), and a second abort
+    comes meanwhile: its cleanup starts once the first one's is done, so that the next
+    ensure_ready, which waits for the last cleanup, reopens the session after both, and the
+    first one's close does not close what it opened (review-encoders 低 15)."""
+    with _rig() as rig:
+        rig.encoder.interrupt_s = 5.0
+        with pytest.raises(TimeoutError):
+            rig.thread.run(rig.encoder.abort(GENERATION), timeout=2.0)
+        rig.run(rig.encoder.abort(None))
+        rig.run(rig.ensure_ready())
+        rig.run(rig.clock.sleep_async(10.0))
+        state = rig.encoder.state
+    assert rig.encoder.log == [
+        ("interrupt", "turn-0"),
+        ("close", 5.0),
+        ("close", 5.0),
+        ("connect", HISTORY, 5.0),
+    ]
+    assert state == RuntimeState.READY
+
+
 def test_the_next_use_reopens_the_session_once_the_abort_is_done():
     """The abort is submitted first and its interrupt takes 1 s: the next ensure_ready, submitted
     right after it, reconnects only once the abort has closed the connection."""
