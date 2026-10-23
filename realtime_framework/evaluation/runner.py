@@ -919,6 +919,26 @@ def main():
         else (latched or ("setup_error" if env is None else "unknown"))
     )
     world_time_s = termination["end_s"] if termination is not None else None
+    # The trace holds every record the episode wrote, checkpointed above. A streaming section
+    # that cannot be read leaves the run unscored, as the run metrics below then count it.
+    streaming = None
+    if a.interaction_mode == "streaming":
+        try:
+            streaming = summarize_streaming(
+                run_dir / "episode_trace.jsonl",
+                (runtime_config or {}).get("streaming"),
+                attempt_id=episode_trace.attempt_id,
+            )
+        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
+        except json.JSONDecodeError:
+            invalid_run = invalid_run or {
+                "category": "harness",
+                "reason": "streaming_summary_failed",
+                "detail": traceback.format_exc(),
+            }
+            solved = None
+            run_status = "invalid"
+            stop_reason = "invalid_run"
     try:
         run_metrics = summarize_run_metrics(
             run_dir / "action_lifecycle.jsonl",
@@ -952,25 +972,6 @@ def main():
             validate_decision_count=False,
         )
         run_metrics["run_metrics_error"] = metrics_error
-    # The trace holds every record the episode wrote, checkpointed above.
-    streaming = None
-    if a.interaction_mode == "streaming":
-        try:
-            streaming = summarize_streaming(
-                run_dir / "episode_trace.jsonl",
-                (runtime_config or {}).get("streaming"),
-                attempt_id=episode_trace.attempt_id,
-            )
-        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
-        except json.JSONDecodeError:
-            invalid_run = invalid_run or {
-                "category": "harness",
-                "reason": "streaming_summary_failed",
-                "detail": traceback.format_exc(),
-            }
-            solved = None
-            run_status = "invalid"
-            stop_reason = "invalid_run"
     effective_model_identity = {
         "adapter": cfg.adapter_type if cfg else requested_model_identity["adapter"],
         "model": requested_model_identity["model"],

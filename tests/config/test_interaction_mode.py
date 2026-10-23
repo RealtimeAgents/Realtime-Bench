@@ -157,7 +157,8 @@ def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
 ):
     """A trace record written in part, with the next one after it on its line
     (reporting.py EpisodeTrace.emit), keeps the trace's rows from being read (reporting.rows): the
-    run is invalid for it, and the rest of its summary stands."""
+    run is invalid for it, its run metrics count it unscored although its snapshot is solved, and
+    the rest of its summary stands."""
     termination = {"stop_reason": "time_limit", "end_s": 300.0, "snapshot_s": 300.5,
                    "snapshot_delay_s": 0.5}  # fmt: skip
 
@@ -177,6 +178,8 @@ def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
     assert (invalid["category"], invalid["reason"]) == ("harness", "streaming_summary_failed")
     assert "JSONDecodeError" in invalid["detail"]
     assert (summary["stop_reason"], summary["termination"]) == ("invalid_run", termination)
+    assert summary["verification"]["resolved"] is True and summary["solved"] is None
+    assert (summary["task_success_rate"], summary["normalized_time_to_success"]) == (None, None)
     assert summary["streaming"] is None
 
 
