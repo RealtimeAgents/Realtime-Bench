@@ -190,9 +190,11 @@ def test_a_snapshot_waits_for_a_slow_capture_alongside_the_action():
     assert termination == Termination("time_limit", "deadline", 3.0, 32.5, 3.0, 32.5, None)
 
 
-def test_a_snapshot_waits_for_a_long_hold_within_the_holds_own_budget():
-    """4.8: a hold's budget is its duration and 5 s (sandbox/guest.py action_timeout), past a
-    capture's; the snapshot waits for the 150 s hold executing at the deadline."""
+def test_a_snapshot_waits_for_an_action_whose_budget_is_past_a_capture_s():
+    """4.8, N32: the snapshot waits for the larger of the executing action's budget and a
+    capture's. No valid action's is larger (a timed action has at most 20 s, text input as long
+    as a capture, 120 s); a 150 s hold, whose budget is its duration and 5 s (sandbox/guest.py
+    action_timeout), stands in for one."""
     hold = Action(ActionType.HOLD_KEY, {"key": "space", "duration": 150.0})
 
     def long_hold(env, clock):
