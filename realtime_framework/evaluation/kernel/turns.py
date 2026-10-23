@@ -313,12 +313,11 @@ class TurnPolicy:
 
     def _past_deadline(self) -> bool:
         """Wall clock: an answer filed before the deadline can be handled after it, behind a
-        synchronous command that ran across it. Then the deadline ends the episode before the
-        answer leads to anything in the world; nothing lands after the end."""
-        if self.token or self.kernel.semantic < self.config.duration_s:
-            return False
-        self.kernel.end("deadline", self.config.duration_s)
-        return True
+        synchronous command that ran across it. Then the answer leads to nothing in the world,
+        and nothing lands after the end: the deadline's timer, due by now, ends the episode once
+        what is filed before it has been handled, an end a check asked before the deadline saw
+        among it (phase2.md, 时间和结束判定)."""
+        return not self.token and self.kernel.semantic >= self.config.duration_s
 
     def _guarded(self) -> None:
         if self._past_deadline():

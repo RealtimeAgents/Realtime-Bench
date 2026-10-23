@@ -454,6 +454,32 @@ def test_an_end_found_by_a_check_asked_before_the_deadline_is_the_tasks_end(
     _assert_nothing_after_the_end(sim)
 
 
+def test_an_end_a_check_saw_before_the_deadline_goes_before_an_earlier_landing_handled_after_it():
+    # 60 fps, every read 1.05 s, T = 5. The reply, back at 2.16 s during the read asked at
+    # 2.11 s, is taken in at 3.16 s, behind the periodic check due at 2.1167 s, whose read runs
+    # until 4.21 s. Then it is accepted (5 ms), so its landing is due at 4.21 s, and the periodic
+    # check due at 3.1667 s is asked at 4.215 s: it sees the end the task reached at 4.2 s and
+    # answers at 5.265 s, past the deadline. The landing, dated earlier, is handled first and
+    # lands nothing there; the answer, dated before the deadline, ends the episode by the task's
+    # reason (phase2.md, 时间和结束判定), not the deadline.
+    world = World(
+        replies=[Reply(0.05, CLICK), Reply(30.0)],
+        ends_at=4.2,
+        end_reason="won",
+        check_s=1.05,
+        capture_s=0.01,
+        accept_s=0.005,
+    )
+    sim = _episode(_wall(5.0, env_fps=60.0, input_fps=1.0), world)
+    assert _asked(sim) == pytest.approx([0.0, 1.06, 2.11, 3.16, 4.215])
+    assert _fired(sim, "landing") == [(pytest.approx(5.265), pytest.approx(4.21))]
+    assert sim.executed == []
+    assert [outcome.status for outcome in sim.outcomes] == ["not_applied_terminal"]
+    assert _fired(sim, "deadline") == []
+    assert _ended(sim) == pytest.approx(("won", "environment", 4.215, 5.265))
+    _assert_nothing_after_the_end(sim)
+
+
 def test_an_end_found_by_a_check_makes_a_result_back_during_it_stale():
     # The check at 2 s finds the end (from 1.5 s) and answers at 2.25 s; the reply came back at
     # 2.15 s meanwhile. The end is dated 2 s, before the result, which is discarded.
