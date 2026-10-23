@@ -161,6 +161,9 @@ class _Reply:
     interrupted: bool = False
     text_done: bool = False  # its text action was parsed, when its text was completed
     protocol_failure: str | None = None  # the first
+    # Each parsed call's id and grounding (parse_grounded_action), in order; the grounding is
+    # None where nothing was resolved against a frame.
+    grounding: list[dict] = field(default_factory=list)
     based_on: str | None = None  # the observation id of the frame its first action names
     # Where in the blocks its output began, which its output goes to once accepted: before the
     # feedback on its actions and the frames pushed since.
@@ -784,6 +787,7 @@ class NativeStreamingAgent(VisionAgentBase):
         action, protocol = parse_grounded_action(
             self, text, reply.own.execution, arrived, reply.own.record
         )
+        reply.grounding.append({"call_id": call_id, "grounding": protocol.get("grounding")})
         if protocol["protocol_failure"] is not None:
             reply.protocol_failure = reply.protocol_failure or protocol["protocol_failure"]
             return
@@ -910,6 +914,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 "model_output": reply.output,
                 "thinking": "".join(reply.reasoning),
                 "protocol_failure": reply.protocol_failure,
+                "grounding": reply.grounding,
                 "usage": reply.usage,
             }
         )
