@@ -516,8 +516,8 @@ def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path):
     """The real run_stream on a 0.5 s wall-clock episode. Decision 0's request never comes back;
     at the deadline the kernel gives the generation up, the shell aborts the agent (shell.py
     _abort) and the episode ends without reporting the decision. The abort closes the request
-    and ends the epoch, so the abandoned worker does not send it again: the stub sees one
-    request, and neither a turn nor an action is left behind."""
+    and sets the generation's cancel event, so the abandoned worker does not send it again: the
+    stub sees one request, and neither a turn nor an action is left behind."""
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     env_box = []
     with (

@@ -51,12 +51,14 @@ APIS = {
     "jev_decisions": ("jev-1.13", "typesafe"),
 }
 
-# With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
-# oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
-# (context.py:295-305). Decision k carries k earlier turns plus its own frame.
+# With the default policies (entity/config.py effective_visual_fold_policy,
+# effective_detailed_history_policy) a request holding 21 screenshots folds the oldest 10
+# (harnesses/default/context.py apply_active_visual_budget), and one holding 51 turns archives the
+# oldest 10 (context.py RealtimeRuntime._retained). Decision k carries k earlier turns plus its own
+# frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
-# entity/context_policy.py:30
+# entity/context_policy.py JEV_LEDGER_HEADER
 JEV_LEDGER_HEADER = "ARCHIVED EXECUTED ACTIONS (JEV lossless consecutive runs;"
 
 
@@ -135,7 +137,7 @@ def _check_requests(api: str, records: list[dict]) -> None:
 
 def _check_composition(records: list[dict]) -> None:
     """Decision 1 composes the name; decision 15 uses every other edit and cancels
-    (selection.py:356-414)."""
+    (selection.py ChoiceDecision._compose_text)."""
     typed = records[1]
     assert typed["result"]["raw"] == '{"action": "type", "text": "Ada Lovelace"}'
     composed = _runtime(typed)["jev_text_composition"]
@@ -165,7 +167,7 @@ def _check_composition(records: list[dict]) -> None:
 
 def _check_grouping(records: list[dict]) -> None:
     """261 candidates: groups of 255 and 6 with the group note, then their two winners
-    (selection.py:165-229)."""
+    (selection.py ChoiceDecision._choose)."""
     grouped = records[script.GROUPED_DECISION]
     assert len(grouped["requests"]) == 3
     assert _criteria_sizes(grouped) == [255, 6, 2]
@@ -188,7 +190,8 @@ def _check_history_counters(records: list[dict]) -> None:
 
 def _check_luna_history(records: list[dict]) -> None:
     """The transcript drops a folded turn's image and keeps a placeholder observation; the ledger
-    joins the first string (decisions/history.py:54-79; default/request.py:53-55, 155-161)."""
+    joins the first string (decisions/history.py render_transcript; default/request.py
+    build_request, _frame)."""
     states = [_bodies(r)[0]["state"] for r in records]
     images = [sum(isinstance(entry, dict) for entry in state) for state in states]
     placeholders = [
@@ -210,9 +213,10 @@ def _check_luna_history(records: list[dict]) -> None:
 
 def _check_jev_history(records: list[dict]) -> None:
     """JEV's digest reads only each older turn's observation id, action and feedback
-    (default/request.py:138-141; decisions/history.py:113-126), and a fold keeps the observation id
-    (entity/model.py:146-170). A fold therefore changes no request, and only the runtime counter
-    shows it. The ledger is compacted into its own message (decisions/history.py:102-112)."""
+    (default/request.py _digest_items; decisions/history.py render_digest), and a fold keeps the
+    observation id (entity/model.py CanonicalTurn.fold_visual). A fold therefore changes no request,
+    and only the runtime counter shows it. The ledger is compacted into its own message
+    (decisions/history.py render_digest)."""
     for record in records:
         for body in _bodies(record):
             text = json.dumps(body, ensure_ascii=False)
@@ -277,15 +281,17 @@ def test_luna_game_snapshot(tmp_path):
         {"action": "mouse_down", "target": "R1@1000,512"},
     ]
     assert raws[5] == {"action": "hold_key", "key": "ArrowLeft+Space", "duration": 0.5}
-    # The environment's refusal reaches the next request (harnesses/default/harness.py:1612-1614).
+    # The environment's refusal reaches the next request (harnesses/default/harness.py
+    # DefaultHarness._report).
     assert records[1]["commit"]["detail"] == OUTSIDE_PAGE
     assert OUTSIDE_PAGE in json.dumps(_bodies(records[2])[0]["state"], ensure_ascii=False)
     _settle("game", header, records, tmp_path)
 
 
 def test_luna_question_retry(tmp_path):
-    """A transient failure is retried for that question alone (selection.py:313-354); the
-    decision-level retry never runs for Decisions (providers/decisions/driver.py:45-51)."""
+    """A transient failure is retried for that question alone (selection.py
+    ChoiceDecision._decide_with_retries); the decision-level retry never runs for Decisions
+    (providers/decisions/driver.py DecisionEncoder.classify_transport_error)."""
     header, records = _play(
         "openai_decisions", script.RETRY, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION
     )

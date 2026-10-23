@@ -1,7 +1,7 @@
 """Replay baselines for the anthropic_messages API: LiteLLM's Anthropic Messages transport.
 
 The cell is claude-opus-5-anthropic (configs/models/claude-opus-5-anthropic.yaml). The driver
-builds chat messages (providers/litellm.py:317-366); LiteLLM turns them into Messages API
+builds chat messages (providers/litellm.py chat_messages); LiteLLM turns them into Messages API
 turns before they leave the process, and the baselines hold those wire messages as the stub
 received them. On this wire:
 
@@ -9,13 +9,14 @@ received them. On this wire:
   (litellm/litellm_core_utils/prompt_templates/factory.py:2493-2595). The execution feedback
   shares a turn with the next frame, the archived-action ledger shares one with the oldest
   folded placeholder, and a step without output adds no assistant message
-  (harnesses/default/request.py:91-93), so its frame, its feedback and the next frame share
+  (harnesses/default/request.py _turn_items), so its frame, its feedback and the next frame share
   one turn;
 - string content becomes text blocks (factory.py:2571-2584, 2798-2816), a data URL becomes a
   base64 image source (factory.py:2501-2531), and the system message moves to the top-level
   ``system`` field (litellm/llms/anthropic/chat/transformation.py:2052-2059);
 - thinking is never sent back: its context policy replays no reasoning
-  (entity/context_policy.py:148, 169; harnesses/default/request.py:90).
+  (entity/context_policy.py STANDARD, current_context_policy; harnesses/default/request.py
+  _turn_items).
 
 Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay/test_anthropic_messages.py``;
 without it the run is compared with tests/replay/baselines/.
@@ -57,9 +58,11 @@ BASELINES = Path(__file__).parent / "baselines"
 MODEL_KEY = "claude-opus-5-anthropic"
 DUMMY_KEY = "replay-dummy-anthropic-key"
 
-# With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
-# oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
-# (context.py:295-305). Decision k carries k earlier turns plus its own frame.
+# With the default policies (entity/config.py effective_visual_fold_policy,
+# effective_detailed_history_policy) a request holding 21 screenshots folds the oldest 10
+# (harnesses/default/context.py apply_active_visual_budget), and one holding 51 turns archives the
+# oldest 10 (context.py RealtimeRuntime._retained). Decision k carries k earlier turns plus its own
+# frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 
@@ -74,9 +77,10 @@ MAX_TICKS = 540
 FIRST_CAPPED = 41
 
 # Pause mode (--tokens-per-frame unlimited, runner.py main): nothing bounds a decision, the
-# harness accepts unbounded output (harness.py:983), and the driver then sends the native limit
-# (providers/litellm.py:528-537). The first four decisions of the long scenario, two of them with a
-# thinking block.
+# harness accepts unbounded output (harness.py DefaultHarness.supports_unbounded_output), and the
+# driver then sends the native limit (providers/litellm.py
+# LiteLLMDriver.transport_output_token_cap). The first four decisions of the long scenario, two of
+# them with a thinking block.
 PAUSE_STEPS = LONG_SCENARIO[:4]
 
 
@@ -85,9 +89,10 @@ def anthropic_config(base_url: str) -> ModelConfig:
     URL moved to the stub before create_agent (runner.py set_up_agent).
 
     This is the only redirect: the deployment reads no base-URL variable
-    (providers/litellm.py:1164-1172, 471-475), the driver always passes api_base, which LiteLLM
-    prefers to ANTHROPIC_API_BASE (providers/litellm.py:626-627; litellm/main.py:2914-2921), and
-    to_model_config takes no api_base_url override (providers/registry.py:642-647).
+    (providers/litellm.py AnthropicMessagesDriver.deployment, LiteLLMDriver.__init__), the driver
+    always passes api_base, which LiteLLM prefers to ANTHROPIC_API_BASE (providers/litellm.py
+    LiteLLMDriver._transport_kwargs; litellm/main.py:2914-2921), and to_model_config takes no
+    api_base_url override (providers/registry.py to_model_config).
     """
     effort = catalog.get(MODEL_KEY).defaults["reasoning_effort"]
     config = catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort=effort)
@@ -97,7 +102,7 @@ def anthropic_config(base_url: str) -> ModelConfig:
 
 def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, max_ticks):
     # The cell's key variable; the driver refuses to start without a key
-    # (providers/litellm.py:494-500).
+    # (providers/litellm.py LiteLLMDriver._resolve_key).
     monkeypatch.setenv("ANTHROPIC_API_KEY", DUMMY_KEY)
     scripted = replies(steps)
     with AnthropicMessagesStub(scripted) as stub:
@@ -127,7 +132,7 @@ def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, max_ticks):
 def _add_wire_details(records: list[dict], stub: AnthropicMessagesStub) -> None:
     """Give each request its compared headers, and store each image by its pixel digest.
 
-    run_steps lists every step's requests in arrival order (steps.py:33, 49-52). Images travel as
+    run_steps lists every step's requests in arrival order (steps.py run_steps). Images travel as
     base64 sources rather than data URLs, which baseline.Normalizer digests.
     """
     received = iter(stub.requests)
@@ -162,14 +167,17 @@ def _check_requests(records: list[dict], clock_text: str) -> None:
         body = request["body"]
         assert request["path"] == "/v1/messages"
         assert body["stream"] is True
-        assert clock_text in body["system"][0]["text"]  # harnesses/default/prompts.py:169-201
-        # The catalog effort "low" keeps adaptive thinking (providers/litellm.py:269-287, 576-577).
+        # harnesses/default/prompts.py budget_clock_prompt
+        assert clock_text in body["system"][0]["text"]
+        # The catalog effort "low" keeps adaptive thinking (providers/litellm.py anthropic_thinking,
+        # LiteLLMDriver._request_kwargs).
         assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert body["output_config"] == {"effort": "low"}
         # No thinking block is sent back, only text and images.
         kinds = {block["type"] for turn in body["messages"] for block in turn["content"]}
         assert kinds <= {"text", "image"}
-        # One breakpoint, on the last block of the newest turn (providers/litellm.py:299-308).
+        # One breakpoint, on the last block of the newest turn (providers/litellm.py
+        # _mark_cache_breakpoint).
         marked = [
             (i, j)
             for i, turn in enumerate(body["messages"])
@@ -179,13 +187,15 @@ def _check_requests(records: list[dict], clock_text: str) -> None:
         newest = body["messages"][-1]
         assert marked == [(len(body["messages"]) - 1, len(newest["content"]) - 1)]
         assert newest["content"][-1]["cache_control"] == {"type": "ephemeral"}
-        # The newest image is the SoM-marked frame its inspection bound (harness.py:918-948).
+        # The newest image is the SoM-marked frame its inspection bound (harness.py
+        # bind_observation).
         marked_image = record["result"]["inspection"]["marked_image_sha256"]
         assert newest["content"][-1]["source"]["data"] == baseline.registered_image(marked_image)
 
 
 def _check_usage(records: list[dict], scripted: list[Reply]) -> None:
-    """Usage merges message_start and message_delta (providers/litellm.py:178-266, 850-868)."""
+    """Usage merges message_start and message_delta (providers/litellm.py anthropic_usage,
+    LiteLLMDriver.events)."""
     for record, reply in zip(records, scripted):
         result = record["result"]
         native = result["usage"]["raw_native_usage"]
@@ -285,7 +295,8 @@ def test_long_scenario_token_clock(tmp_path, monkeypatch):
     _check_usage(records, scripted)
     _check_history_changes(records)
     _check_merged_turns(records)
-    # max_tokens is the decision's transport cap (providers/litellm.py:528-537, 563-565).
+    # max_tokens is the decision's transport cap (providers/litellm.py
+    # LiteLLMDriver.transport_output_token_cap, LiteLLMDriver._request_kwargs).
     caps = [r["requests"][0]["body"]["max_tokens"] for r in records]
     native = config.native_output_limit
     assert caps[:FIRST_CAPPED] == [native] * FIRST_CAPPED

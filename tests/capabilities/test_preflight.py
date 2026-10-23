@@ -286,7 +286,7 @@ def test_text_only_choice_model_on_game():
 
 def test_output_limit_required():
     # An anthropic_messages YAML for a model LiteLLM's map does not list, without
-    # endpoint.native_output_limit (providers/registry.py:157-166).
+    # endpoint.native_output_limit (providers/registry.py resolve_output_limit).
     config = ModelConfig(
         adapter_type="anthropic_messages", model_name="claude-unlisted",
         api_key_env="ANTHROPIC_API_KEY", reasoning_effort="low",
@@ -299,7 +299,7 @@ def test_output_limit_required():
 
 
 def test_context_reserve():
-    os.environ["BENCHMARK_CONTEXT_WINDOW_TOKENS"] = "4096"  # providers/registry.py:621-629
+    os.environ["BENCHMARK_CONTEXT_WINDOW_TOKENS"] = "4096"  # providers/registry.py to_model_config
     fails(lambda: episode(preset("my-model")), "Context capacity must exceed generation reserve")
 
 

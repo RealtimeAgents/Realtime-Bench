@@ -1,13 +1,14 @@
 """Scripted Anthropic Messages endpoint on 127.0.0.1 with an OS-assigned port.
 
 The anthropic_messages API sends through LiteLLM's Anthropic provider on LiteLLM's own
-AsyncHTTPHandler (providers/litellm.py:605-610, 626-630), which posts to ``{api_base}/v1/messages``
-(litellm/main.py:2914-2927). Each request is answered with the next scripted reply as server-sent
-events in the order the Messages API streams them: message_start carrying the input usage, a
-thinking block when the step has reasoning, a text block when it has visible output,
-message_delta carrying the stop reason and the output usage, and message_stop. The driver takes
-usage only from message_start and message_delta (providers/litellm.py:714-723, 850-868). Every
-request is kept in arrival order with its path, headers and raw body.
+AsyncHTTPHandler (providers/litellm.py LiteLLMDriver._client, LiteLLMDriver._transport_kwargs),
+which posts to ``{api_base}/v1/messages`` (litellm/main.py:2914-2927). Each request is answered with
+the next scripted reply as server-sent events in the order the Messages API streams them:
+message_start carrying the input usage, a thinking block when the step has reasoning, a text block
+when it has visible output, message_delta carrying the stop reason and the output usage, and
+message_stop. The driver takes usage only from message_start and message_delta (providers/litellm.py
+LiteLLMDriver._observe_raw, LiteLLMDriver.events). Every request is kept in arrival order with its
+path, headers and raw body.
 """
 
 from __future__ import annotations
@@ -122,8 +123,9 @@ class AnthropicMessagesStub:
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 reply = stub._next(Received(self.path, tuple(self.headers.items()), body))
                 if reply is None:
-                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py:418-426), so
-                    # an extra request fails its decision at once instead of being retried.
+                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py
+                    # classify_http_failure), so an extra request fails its decision at once instead
+                    # of being retried.
                     self._send(400, "application/json", _error("request beyond the script"))
                     return
                 model = json.loads(body)["model"]

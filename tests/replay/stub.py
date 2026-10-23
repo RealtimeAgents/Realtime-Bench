@@ -1,11 +1,11 @@
 """Scripted OpenAI chat completions endpoint on 127.0.0.1 with an OS-assigned port.
 
 The chat_completions API reaches it through LiteLLM's OpenAI provider with an AsyncOpenAI client
-(providers/litellm.py:1176-1199, 592-604), which posts to ``{base_url}/chat/completions``. Each
-request is answered with the next scripted reply: a JSON body when the request sets
-``stream: false``, otherwise server-sent events ending in a usage chunk and ``[DONE]``; a Failure
-is answered with its HTTP status, headers and JSON error body. Every raw request body is kept in
-arrival order.
+(providers/litellm.py ChatCompletionsDriver, LiteLLMDriver._client), which posts to
+``{base_url}/chat/completions``. Each request is answered with the next scripted reply: a JSON body
+when the request sets ``stream: false``, otherwise server-sent events ending in a usage chunk and
+``[DONE]``; a Failure is answered with its HTTP status, headers and JSON error body. Every raw
+request body is kept in arrival order.
 
 Given a fake clock (tests/fake_clock.py), the stub serves on one of the clock's threads, so a
 reply's scripted latency is a sleep on that clock, and it waits on the clock for a held request's
@@ -118,8 +118,9 @@ class ChatCompletionsStub:
                     stub.held.append(self._wait_for_close())
                     return
                 if reply is None:
-                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py:418-426), so
-                    # an extra request fails its decision at once instead of being retried.
+                    # HTTP 400 is FATAL for the shared retry policy (entity/model.py
+                    # classify_http_failure), so an extra request fails its decision at once instead
+                    # of being retried.
                     self._send(400, "application/json", _error("request beyond the script"))
                     return
                 if isinstance(reply, Failure):

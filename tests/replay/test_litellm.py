@@ -1,10 +1,10 @@
 """Replay baseline for the generic litellm API: wall clock only, non-streaming.
 
 The model is set up the way a ``--model provider/model-id`` run does it: the Harbor trial worker
-puts the endpoint into BENCHMARK_LITELLM_* (evaluation/harbor.py:443-479;
-evaluation/_trial.py:111-128), the catalog's bridge key ``litellm-vlm`` reads them when the
-catalog loads (providers/registry.py:500-505), and the runner builds the config from that key
-(evaluation/runner.py main).
+puts the endpoint into BENCHMARK_LITELLM_* (evaluation/harbor.py
+ApptainerEnvironment._runner_command; evaluation/_trial.py main), the catalog's bridge key
+``litellm-vlm`` reads them when the catalog loads (providers/registry.py _load_entries), and the
+runner builds the config from that key (evaluation/runner.py main).
 
 What this API's driver class (providers/litellm.py DirectLiteLLMDriver) and context policy
 (entity/context_policy.py, the standard values) change against chat_completions:
@@ -48,21 +48,26 @@ from .stub_litellm import LiteLLMStub
 BASELINE = Path(__file__).parent / "baselines" / "litellm-nonstream-long.jsonl"
 # The runner records the catalog key as the model (runner.py _model_identity).
 MODEL_KEY = "litellm-vlm"
-LITELLM_MODEL = "openai/replay-vlm"  # no bundled native limit: no max_tokens (registry.py:142-156)
+# no bundled native limit: no max_tokens (registry.py litellm_output_limit)
+LITELLM_MODEL = "openai/replay-vlm"
 # A model LiteLLM's bundled map lists: its max_output_tokens becomes the native limit
-# (registry.py:159-168, 507-508), which every request sends as max_tokens when no token clock
-# bounds it (build.py:63-79). The value is the locked LiteLLM's, so an upgrade that changes the
-# map row fails test_mapped_model_output_limit. The deepseek-v4.1-flash preset declares its own.
+# (registry.py resolve_output_limit, _load_entries), which every request sends as max_tokens when no
+# token clock bounds it (build.py Episode.budget). The value is the locked LiteLLM's, so an upgrade
+# that changes the map row fails test_mapped_model_output_limit. The deepseek-v4.1-flash preset
+# declares its own.
 MAPPED_MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 MAPPED_OUTPUT_LIMIT = 943718
 API_KEY_ENV = "REPLAY_LITELLM_API_KEY"
 API_KEY = "replay-dummy-key"
-REASONING_EFFORT = "low"  # as --reasoning-effort low; sent top-level (providers/litellm.py:578-582)
+# as --reasoning-effort low; sent top-level (providers/litellm.py LiteLLMDriver._request_kwargs)
+REASONING_EFFORT = "low"
 
-# With the default policies (entity/config.py:35-38) a request holding 21 screenshots folds the
-# oldest 10 (harnesses/default/context.py:24-32), and one holding 51 turns archives the oldest 10
-# into the ledger that becomes messages[1] (context.py:295-305; harnesses/default/request.py:53-55;
-# providers/litellm.py chat_messages). Decision k carries k earlier turns plus its own frame.
+# With the default policies (entity/config.py effective_visual_fold_policy,
+# effective_detailed_history_policy) a request holding 21 screenshots folds the oldest 10
+# (harnesses/default/context.py apply_active_visual_budget), and one holding 51 turns archives the
+# oldest 10 into the ledger that becomes messages[1] (context.py RealtimeRuntime._retained;
+# harnesses/default/request.py build_request; providers/litellm.py chat_messages). Decision k
+# carries k earlier turns plus its own frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 
@@ -74,13 +79,15 @@ CLEARED_PREFIXES = (
     "OPENAI_",
 )
 CLEARED = (
-    "BENCHMARK_MODEL_REVISION",  # the bridge key's model_revision (providers/registry.py:612-613)
+    # the bridge key's model_revision (providers/registry.py to_model_config)
+    "BENCHMARK_MODEL_REVISION",
     "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER",  # another OpenAI handler (litellm/main.py:2660)
     # httpx in place of LiteLLM's aiohttp transport (litellm/llms/custom_httpx/http_handler.py:
     # 1230-1259)
     "DISABLE_AIOHTTP_TRANSPORT",
     "LITELLM_HTTP2",
-    "STREAM_MIN_REQUEST_INTERVAL",  # a sleep before each request (providers/litellm.py:69-78, 914)
+    # a sleep before each request (providers/litellm.py pace_request)
+    "STREAM_MIN_REQUEST_INTERVAL",
 )
 
 
@@ -100,7 +107,8 @@ def litellm_environment(monkeypatch):
     # when set it sends every openai/ request to the Responses API (litellm/main.py:1102-1104).
     monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", False)
     yield monkeypatch
-    # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py:514-517).
+    # Drop the catalog entries built from this test's BENCHMARK_LITELLM_* (registry.py
+    # _catalog_entries).
     catalog._catalog_entries.cache_clear()
 
 
@@ -112,7 +120,7 @@ def litellm_vlm_config(monkeypatch, base_url: str, model: str = LITELLM_MODEL):
     monkeypatch.setenv("BENCHMARK_LITELLM_KEY_ENV", API_KEY_ENV)
     monkeypatch.setenv(API_KEY_ENV, API_KEY)
     # The bridge key reads BENCHMARK_LITELLM_* when the catalog first loads, and the catalog is
-    # cached (providers/registry.py:500-505, 514-517).
+    # cached (providers/registry.py _load_entries, _catalog_entries).
     catalog._catalog_entries.cache_clear()
     catalog.validate_reasoning_effort(MODEL_KEY, REASONING_EFFORT)  # runner.py main
     return catalog.to_model_config(MODEL_KEY, fps=1.0, reasoning_effort=REASONING_EFFORT)
@@ -149,7 +157,8 @@ def _check_history_changes(records: list[dict]) -> None:
 
 def _check_rejection_feedback(records: list[dict]) -> None:
     """A rejected action's detail reaches the model as its own message in the next request
-    (harnesses/default/request.py:98-99; providers/litellm.py:364-365; harness.py:1612-1622)."""
+    (harnesses/default/request.py _turn_items; providers/litellm.py chat_messages; harness.py
+    DefaultHarness._report)."""
     rejected = [k for k, r in enumerate(records) if r["commit"]["detail"]]
     assert rejected
     for k in rejected:
