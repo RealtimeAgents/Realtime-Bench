@@ -447,6 +447,57 @@ def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
     assert env._last_execution_result["lease_seconds"] == 1.0
 
 
+# ---- the wall's key commands ----------------------------------------------------------------
+
+
+class _TappingGuest(_Guest):
+    """Also takes the guest's own key actions, which press and release their keys."""
+
+    def execute_action(self, action):
+        self.commands.append((self.clock.monotonic(), f"tap {action.parameters['key']}"))
+        return {"status": "ok"}
+
+
+def test_a_wall_hold_of_a_held_key_only_extends_its_lease():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    with clock.participant():
+        env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
+        env.execute(Action.hold_key("arrowleft", 3.0), release_at=3.0)
+        clock.sleep(5.0)
+    assert _xdotool(env) == [(0.0, "xdotool keydown -- Left"), (3.0, "xdotool keyup -- Left")]
+
+
+def test_a_wall_hold_of_a_digit_goes_through_xdotool():
+    """xdotool names letters and digits as they are (sandbox/actions.py _xdotool_keysym); the
+    guest's own hold would block the action for the hold's duration."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    with clock.participant():
+        assert env.execute(Action.hold_key("1", 1.0), release_at=1.0) == "applied"
+        clock.sleep(5.0)
+    assert _xdotool(env) == [(0.0, "xdotool keydown -- 1"), (1.0, "xdotool keyup -- 1")]
+
+
+def test_a_tap_of_a_wall_held_key_presses_it_again_by_its_x_keysym():
+    """The guest's tap releases the held key; the lease goes on with the key down again."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _TappingGuest(clock)
+    with clock.participant():
+        env.execute(Action.hold_key("left", 3.0), release_at=3.0)
+        clock.sleep(1.0)
+        assert env.execute(Action(ActionType.KEY, {"key": "left"})) == "applied"
+        clock.sleep(5.0)
+    assert env._last_execution_result["restored_wall_holds"] == ["left"]
+    assert [entry for entry in env.g.commands if not entry[1].startswith("xset")] == [
+        (0.0, "xdotool keydown -- Left"),
+        (1.0, "tap left"),
+        (1.0, "xdotool keydown -- Left"),
+        (3.0, "xdotool keyup -- Left"),
+    ]
+
+
 # ---- on_invalid -----------------------------------------------------------------------------
 
 
@@ -515,6 +566,39 @@ def test_the_shell_is_told_outside_the_wall_locks():
         env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
         clock.sleep(5.0)
     assert owned == [(False, False)]
+
+
+class _FlakyGuest(_Guest):
+    """A guest whose keyup succeeds at every third try."""
+
+    def execute_command(self, command, timeout=30):
+        super().execute_command(command, timeout)
+        tries = sum("keyup" in entry for _, entry in self.commands)
+        if "keyup" in command and tries % 3:
+            return {"returncode": 1, "stderr": "cannot release"}
+        return {"returncode": 0}
+
+
+def test_a_wall_release_that_succeeds_starts_the_count_of_failed_tries_over():
+    """Each lease's keyup fails twice before it goes through: four failures in all, but never
+    WALL_RELEASE_MAX_ATTEMPTS in a row."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _FlakyGuest(clock)
+    told = []
+    env.on_invalid = told.append
+    with clock.participant():
+        env.execute(Action.hold_key("a", 1.0), release_at=1.0)
+        clock.sleep(2.5)
+        env.execute(Action.hold_key("b", 0.5), release_at=3.0)
+        clock.sleep(5.0)
+    keyups = [(at, command) for at, command in env.g.commands if "keyup" in command]
+    assert keyups == [
+        *((at, "xdotool keyup -- a") for at in (1.0, 1.5, 2.0)),
+        *((at, "xdotool keyup -- b") for at in (3.0, 3.5, 4.0)),
+    ]
+    assert told == [] and getattr(env, "_invalid_run", None) is None
+    assert env._wall_holds == {}
 
 
 def test_a_wall_release_failure_in_a_run_already_invalid_tells_the_shell_nothing():
