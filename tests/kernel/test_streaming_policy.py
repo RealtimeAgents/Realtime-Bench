@@ -9,6 +9,8 @@ every operation takes no time unless a test says otherwise.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from realtime_framework.entity.actions import Action, ActionType
@@ -787,6 +789,20 @@ def test_a_push_held_for_the_renewal_has_its_whole_watchdog_once_it_goes_on():
     sim = _run(world, 30.0)
     assert sim.aborted[0] == (2, 24.0)
     assert sim.data("GenerationAbandoned")[0] == {"generation": 2, "reason": "push_watchdog"}
+
+
+def test_a_push_held_through_a_backoff_has_no_watchdog_from_when_an_abort_returned():
+    """The second push is held from 1 through a 15 s backoff. The first reply never ends and is
+    given up at 3, and its abort returns at once; the held push gets no watchdog then, but once
+    it goes on at 16, so the next reply is not given up for it."""
+    world = World(replies=[Reply(math.inf)] + [Reply(1.0)] * 40, backoff_pushes={2: 15.0})
+    sim = _run(world, 30.0, reply_watchdog_s=3.0)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "reply_watchdog"}
+    assert "push_watchdog" not in [data["reason"] for data in sim.data("GenerationAbandoned")]
+    # Each push's as it starts, the second's cancelled as it is held; then the second's again.
+    armed = [e for e in sim.entries("TimerSet") if e.data["kind"] == "push_watchdog"]
+    assert [e.semantic for e in armed[:3]] == [0.0, 1.0, 16.0]
+    assert sim.termination.invalid is None
 
 
 def test_a_push_stuck_before_the_first_reply_invalidates_the_run():

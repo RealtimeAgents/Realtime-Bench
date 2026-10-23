@@ -158,6 +158,9 @@ class World:
     # The nth push waits for the session's renewal, which waits for the reply on it to end or be
     # given up, and says so (PushHeld, then PushResumed), as the agent does after a goAway.
     renewal_pushes: set[int] = field(default_factory=set)
+    # The nth push is held this long, as through the backoff between attempts to reopen the
+    # session, which no abort ends, and says so (agent.py _ready).
+    backoff_pushes: dict[int, float] = field(default_factory=dict)
     check_errors: dict[int, str] = field(default_factory=dict)
     commit_errors: dict[int, str] = field(default_factory=dict)  # the nth Commit -> fault
     # Key -> the fault that makes the environment's release timer invalidate the run, which the
@@ -447,6 +450,10 @@ class Simulation:
         if frame in world.renewal_pushes and self._in_flight is not None:
             self.kernel.post(PushHeld(observation_id))
             self._held_push = (self._in_flight, resume)
+            return
+        if frame in world.backoff_pushes:
+            self.kernel.post(PushHeld(observation_id))
+            self._later(self.ops + world.backoff_pushes[frame], resume)
             return
         go()
 
