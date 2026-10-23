@@ -1244,6 +1244,23 @@ def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_ans
     )
 
 
+def test_a_failed_read_handled_once_the_episode_is_over_counts_for_nothing():
+    # Budget 2 s: the reply back at 2.5 s is over it and skipped, and the episode ends once its
+    # decision is reported (legacy_loop.py _decide). The next frame is max(0 + 1, ceil(2.5)) = 3;
+    # the commit runs from 3 s to 4.2 s, across the check due at 4 s, which comes before the
+    # commit's answer and is asked at 4.2 s. The reads at 2 and 3 s fail, and that one fails at
+    # once, the third in a row, filed at its asking behind the commit's answer, which ends the
+    # episode first. A read handled after the end counts toward nothing: the run stays valid.
+    world = World(replies=[Reply(2.5, CLICK)], commit_s=1.2, check_errors=_failing(3, 4, 5))
+    sim = _episode(_wall(10.0, think_budget_s=2.0), world)
+    assert _asked(sim) == [0.0, 1.0, 2.0, 3.0, 4.2]
+    assert [outcome.status for outcome in sim.outcomes] == ["skipped_budget"]
+    assert "EndChecked" in [c.entry.kind for c in _from_end(sim) if isinstance(c, Record)]
+    assert sim.entries("RunInvalidated") == []
+    assert _ended(sim) == ("think_budget", "think_budget", 4.2, 4.2)
+    assert sim.termination.invalid is None
+
+
 def test_an_invalidation_posted_during_a_generation_ends_the_episode_at_once():
     # Another thread's failure, such as the wall key-release timer's, arrives through the inbox.
     invalid = Invalidated("environment", "wall_key_release_failed", "keyup failed")
