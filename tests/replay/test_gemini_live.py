@@ -4,20 +4,23 @@ Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay
 run is compared with tests/replay/baselines/.
 
 The harness builds a canonical request for this API on every turn, but the driver sends only part
-of it (harnesses/default/harness.py:1257-1266; providers/gemini/live.py:667-752): the model sees
-the session's setup, the history replayed on each new connection and one observation per decision.
-The baseline is therefore what reaches the WebSocket, the client frames of every connection in
-arrival order, plus each decision's parsed action, usage and commit.
+of it (harnesses/default/harness.py DefaultHarness._generate; providers/gemini/live.py
+GeminiLiveDriver.send_observation): the model sees the session's setup, the history replayed on each
+new connection and one observation per decision. The baseline is therefore what reaches the
+WebSocket, the client frames of every connection in arrival order, plus each decision's parsed
+action, usage and commit.
 
 Scripts:
-- the long scenario for the two maintained presets (live.py:70-76, 162-177), which differ in
-  the completion signal and the tool acknowledgement;
+- the long scenario for the two maintained presets (live.py _CLIENT_CONTENT_TOOLS, _TOOL_TRANSCRIPT,
+  GeminiLiveDriver.model_defaults), which differ in the completion signal and the tool
+  acknowledgement;
 - the driver defaults, reached by a model id without a preset (evaluation/runner.py main):
-  realtime_input observations and native_tools history (live.py:55-67);
+  realtime_input observations and native_tools history (live.py LIVE_PROTOCOL_OPTIONS,
+  LIVE_HISTORY_OPTIONS);
 - a resume that the server rejects, which falls back to replaying the history
-  (live.py:1252-1284);
-- the 3.1 Flash Live preset (live.py:203-212) on the driver-default script: blocking calls,
-  acknowledged without scheduling, and a goAway that replays the history.
+  (live.py GeminiLiveDriver._sync_history);
+- the 3.1 Flash Live preset (live.py GeminiLiveDriver.model_defaults) on the driver-default script:
+  blocking calls, acknowledged without scheduling, and a goAway that replays the history.
 """
 
 from __future__ import annotations
@@ -55,11 +58,12 @@ from .ws_gemini_live import (
 BASELINES = Path(__file__).parent / "baselines"
 API_KEY = "replay-dummy-key"
 
-# The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py:146-154,
-# providers/preflight.py:139-144): B is --tokens-per-frame (entity/config.py:33,
-# evaluation/runner.py main) and the episode has --max-minutes 5 * 60 * fps ticks (runner.py main,
-# kernel/turns.py TurnConfig.max_ticks). The catalog's native limit for these models is LiteLLM's
-# 65536 (providers/registry.py:140-166), so the runtime cap min(65536, (N - t_k) * B)
+# The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py
+# GeminiLiveDriver.capabilities, providers/preflight.py check_fps): B is --tokens-per-frame
+# (entity/config.py DEFAULT_TOKENS_PER_FRAME, evaluation/runner.py main) and the episode has
+# --max-minutes 5 * 60 * fps ticks (runner.py main, kernel/turns.py TurnConfig.max_ticks). The
+# catalog's native limit for these models is LiteLLM's 65536 (providers/registry.py
+# litellm_output_limit, resolve_output_limit), so the runtime cap min(65536, (N - t_k) * B)
 # (kernel/turns.py _captured, episode_records.py decision_budget) falls below it from t_k = 45 on
 # and is 61696 at the last decision.
 FPS = 1.0
@@ -68,16 +72,18 @@ MAX_TICKS = 300
 FIRST_CAPPED_STEP = 45
 
 # Decision k (0-based) holds k earlier turns plus its own frame. A 21st active screenshot folds the
-# oldest 10 (entity/config.py:35-36; harnesses/default/context.py:24-32) and a 51st turn archives
-# the oldest 10 (config.py:37-38; context.py:295-305). Either change rebuilds the session, because a
-# persistent Gemini session cannot be edited in place (context.py:444-454; live.py:146-154). Counted
-# from 1, these are decisions 21, 31, 41 and 51.
+# oldest 10 (entity/config.py effective_visual_fold_policy; harnesses/default/context.py
+# apply_active_visual_budget) and a 51st turn archives the oldest 10 (config.py
+# effective_detailed_history_policy; context.py RealtimeRuntime._retained). Either change rebuilds
+# the session, because a persistent Gemini session cannot be edited in place (context.py
+# RealtimeRuntime._run_turn; live.py GeminiLiveDriver.capabilities). Counted from 1, these are
+# decisions 21, 31, 41 and 51.
 REBUILD_STEPS = (20, 30, 40, 50)
 FOLDED = 10
 ARCHIVE_STEP, ARCHIVED = 50, 10
 
 # Replies in LONG_SCENARIO written as a call, and the declared function each one names
-# (entity/actions.py:712-847).
+# (entity/actions.py gui_function_declarations).
 CALL_SYNTAX = {
     'click(target="P3")': ("click", {"target": "P3"}),
     'press_key("tab")': ("key", {"key": "tab"}),
@@ -87,8 +93,9 @@ AUDIO_MIME = "audio/pcm;rate=24000"
 
 def native_reply(reply: str) -> tuple[list[tuple[str, dict]], str]:
     """A scenario reply as Gemini gives it on the function_call channel, where only native calls
-    can carry an action (harness.py:1268-1272; parsing.py:837-955): the calls it makes, or what
-    it says when the reply holds no action."""
+    can carry an action (harness.py DefaultHarness._generate; parsing.py
+    FunctionCallTurnCollector.finish): the calls it makes, or what it says when the reply holds no
+    action."""
     text = reply
     if text.startswith("```"):  # a fenced action
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -108,7 +115,8 @@ def native_reply(reply: str) -> tuple[list[tuple[str, dict]], str]:
 
 def usage_metadata(k: int, step: Step, speech: str) -> dict:
     """Usage in the scale of scenario.replies. Speech is the forced AUDIO output, which the token
-    clock does not charge (live.py:754-914). Zero counts are omitted, as in the protobuf JSON."""
+    clock does not charge (live.py GeminiLiveDriver._usage_dict). Zero counts are omitted, as in the
+    protobuf JSON."""
     prompt = 1500 + 260 * k
     response = 4 + len(step.reply) // 4
     thoughts = len(step.reasoning) // 4
@@ -127,7 +135,8 @@ def usage_metadata(k: int, step: Step, speech: str) -> dict:
 
 
 def turn_complete(k: int, usage: dict) -> list[dict]:
-    """completion_signal=turn_complete ends the turn at turnComplete (live.py:935-939)."""
+    """completion_signal=turn_complete ends the turn at turnComplete (gemini/session.py
+    SessionCore.received)."""
     return [
         {"serverContent": {"generationComplete": True}},
         {"serverContent": {"turnComplete": True}, "usageMetadata": usage},
@@ -136,7 +145,7 @@ def turn_complete(k: int, usage: dict) -> list[dict]:
 
 def interaction_idle(k: int, usage: dict) -> list[dict]:
     """completion_signal=interaction_idle spans intermediate turnComplete messages until
-    interactionStatus is IDLE (live.py:941-965). The SDK ends its receive iterator at a bare
+    interactionStatus is IDLE (live.py _Receiver). The SDK ends its receive iterator at a bare
     turnComplete, so the driver reopens it, and continues it past an IN_PROGRESS status
     (google/genai/live.py:87-99, 471-475); alternate decisions take each shape."""
     intermediate = {"turnComplete": True}
@@ -153,11 +162,14 @@ class Preset:
     name: str
     model: str  # catalog key, or the model id of a model without a preset
     history_format: str
-    ack_options: dict  # what each queued acknowledgement adds (live.py:368-374)
+    # what each queued acknowledgement adds (gemini/session.py SessionCore.tool_response_options)
+    ack_options: dict
     completion: Callable[[int, dict], list[dict]]
 
 
-# The two maintained presets (live.py:70-76, 162-177) and the driver defaults (live.py:55-67).
+# The two maintained presets (live.py _CLIENT_CONTENT_TOOLS, _TOOL_TRANSCRIPT,
+# GeminiLiveDriver.model_defaults) and the driver defaults (live.py LIVE_PROTOCOL_OPTIONS,
+# LIVE_HISTORY_OPTIONS).
 TOOL_TRANSCRIPT = Preset(
     "tool-transcript",
     "gemini-3.8-live",
@@ -174,7 +186,7 @@ EXTENDED_THINKING = Preset(
 )
 DRIVER_DEFAULT = Preset("driver-default", "replay-gemini-live", "native_tools", {}, turn_complete)
 # 3.1 Flash Live calls functions synchronously only and has no function scheduling
-# (live.py:203-212; providers/preflight.py _check_live_model_contract).
+# (live.py GeminiLiveDriver.model_defaults; providers/preflight.py _check_live_model_contract).
 FLASH_LIVE = Preset("flash-live", "gemini-live", "tool_transcript", {}, turn_complete)
 
 
@@ -183,8 +195,9 @@ def turn_script(
 ) -> list:
     """The server's reply to decision k: speech or calls, a resumption update, then completion.
 
-    ``resumable=False`` withholds the resumption handle (live.py:969-974); ``go_away`` asks the
-    client to reconnect after the turn (live.py:980-1003; context.py:592-602).
+    ``resumable=False`` withholds the resumption handle (gemini/session.py SessionCore._control);
+    ``go_away`` asks the client to reconnect after the turn (gemini/session.py SessionCore._control;
+    context.py RealtimeRuntime._run_turn).
     """
     calls, speech = native_reply(step.reply)
     script = []
@@ -222,9 +235,10 @@ def turn_script(
 @pytest.fixture
 def live_env(monkeypatch):
     """Client settings for the stub, set explicitly so that a repository .env cannot fill them
-    (create_agent loads it with setdefault: harnesses/registry.py:10, providers/registry.py:15-39)."""
-    monkeypatch.setenv("GEMINI_API_KEY", API_KEY)  # key slot 1 (live.py:186-197)
-    monkeypatch.setenv("GEMINI_API_KEY_START_SLOT", "1")  # live.py:204-214
+    (create_agent loads it with setdefault: harnesses/registry.py create_agent,
+    providers/registry.py load_project_secrets)."""
+    monkeypatch.setenv("GEMINI_API_KEY", API_KEY)  # key slot 1 (live.py GeminiLiveDriver.__init__)
+    monkeypatch.setenv("GEMINI_API_KEY_START_SLOT", "1")  # live.py GeminiLiveDriver.__init__
     # Either would switch the client to Vertex AI (google/genai/_api_client.py:655-681).
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "")
     monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "")
@@ -277,7 +291,8 @@ def run_live_steps(
                 "transport_output_tokens": budget.transport_output_tokens,
             },
             "action": result["action"],
-            # A failed decision has no action protocol (harnesses/default/harness.py:1385-1397).
+            # A failed decision has no action protocol (harnesses/default/harness.py
+            # DefaultHarness._generate).
             "action_protocol": result.get("action_protocol"),
             "usage": result["usage"],
             # What the runner charges the token clock with (episode_records.py clock_output_tokens).
@@ -415,9 +430,10 @@ def client_messages(record: dict, key: str) -> list[dict]:
 
 def seed_and_observations(record: dict) -> tuple[list[dict], list[dict]]:
     """A decision's client_content split into the history seeded after a setup with
-    historyConfig, up to the message completing it (live.py:602-611), and the observations
-    (live.py:686-697). A rebuild seeds before the observation, a replay after the turn seeds
-    after it (harnesses/default/context.py:444-456, 592-602)."""
+    historyConfig, up to the message completing it (live.py GeminiLiveDriver._open), and the
+    observations (live.py GeminiLiveDriver.send_observation). A rebuild seeds before the
+    observation, a replay after the turn seeds after it (harnesses/default/context.py
+    RealtimeRuntime._run_turn)."""
     seed, observations, seeding = [], [], False
     for frame in record["frames"]:
         message = frame["msg"]
@@ -514,16 +530,18 @@ def test_long_scenario(preset, live_env, tmp_path):
 
 DEFAULT_SCENARIO = [
     Step(CLICK_NAME),
-    Step(f"{CLICK_NAME} {CLICK_AGREE}", status="wait"),  # two calls: WAIT (parsing.py:883-891)
+    # two calls: WAIT (parsing.py FunctionCallTurnCollector.finish)
+    Step(f"{CLICK_NAME} {CLICK_AGREE}", status="wait"),
     Step(CLICK_AGREE),
 ]
 
 
 def test_driver_default_short(live_env, tmp_path):
-    """A model id without a preset runs on the driver defaults (live.py:55-67, 96-102). The goAway
-    of decision 1 comes without a resumption handle, so the session is replayed at once
-    (live.py:1242-1284), in the native_tools format with the thought-signature sentinel
-    (live.py:37-41, 485-490)."""
+    """A model id without a preset runs on the driver defaults (live.py LIVE_PROTOCOL_OPTIONS,
+    LIVE_HISTORY_OPTIONS, live_options). The goAway of decision 1 comes without a resumption handle,
+    so the session is replayed at once (live.py GeminiLiveDriver._sync_history), in the native_tools
+    format with the thought-signature sentinel (gemini/session.py REPLAY_THOUGHT_SIGNATURE,
+    SessionCore._tool_contents)."""
     preset = DRIVER_DEFAULT
     config = ModelConfig(  # runner.py main for --adapter gemini_live --model <id>
         adapter_type="gemini_live", model_name=preset.model, fps=FPS, reasoning_effort="low"
@@ -566,12 +584,14 @@ def test_driver_default_short(live_env, tmp_path):
 
 
 def test_flash_live_short(live_env, tmp_path):
-    """The 3.1 Flash Live preset (live.py:203-212) on the driver-default script. Every setup
-    declares the functions BLOCKING (live.py:413-424), and each acknowledgement is the queued
-    response alone, without scheduling or will_continue (gemini/session.py:213-219;
-    live.py:950-971). The goAway of decision 1 comes without a resumption handle, so the session
-    is replayed at once (gemini/session.py:366-371; live.py:1109-1120), and its tool transcript
-    holds each receipt as it was sent (live.py:972-981; harnesses/default/request.py:95-124)."""
+    """The 3.1 Flash Live preset (live.py GeminiLiveDriver.model_defaults) on the driver-default
+    script. Every setup declares the functions BLOCKING (live.py
+    GeminiLiveDriver._function_declarations), and each acknowledgement is the queued response alone,
+    without scheduling or will_continue (gemini/session.py SessionCore.tool_response_options;
+    live.py GeminiLiveDriver._events). The goAway of decision 1 comes without a resumption handle,
+    so the session is replayed at once (gemini/session.py SessionCore._tool_contents; live.py
+    GeminiLiveDriver._sync_history), and its tool transcript holds each receipt as it was sent
+    (live.py GeminiLiveDriver._events; harnesses/default/request.py _turn_items)."""
     preset = FLASH_LIVE
     config = catalog_config(preset.model)
     turns = [
@@ -629,8 +649,9 @@ def test_flash_live_short(live_env, tmp_path):
 
 
 class _SleepRecordingClock(SystemClock):
-    """The driver's clock, whose waits (live.py:500, 606-618) only advance its monotonic time
-    and are recorded; everything else is real time."""
+    """The driver's clock, whose waits (live.py GeminiLiveDriver._connect,
+    GeminiLiveDriver.send_observation) only advance its monotonic time and are recorded; everything
+    else is real time."""
 
     def __init__(self):
         self.now = 0.0
@@ -647,9 +668,9 @@ class _SleepRecordingClock(SystemClock):
 
 def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
     """On the realtime_input transport (the driver defaults) one video frame follows the last by
-    at least one model-input frame interval (live.py:603-609): 4 s at 0.25 fps. Each video is
-    followed by the 1 s ingestion wait (live.py:617-618), so the wait before the next video is
-    the other 3 s."""
+    at least one model-input frame interval (live.py GeminiLiveDriver.send_observation): 4 s at 0.25
+    fps. Each video is followed by the 1 s ingestion wait (live.py
+    GeminiLiveDriver.send_observation), so the wait before the next video is the other 3 s."""
     clock = _SleepRecordingClock()
     preset = DRIVER_DEFAULT
     config = ModelConfig(
@@ -685,7 +706,8 @@ def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
 
 def test_resume_failure_short(live_env, tmp_path):
     """After a goAway the driver resumes with the promoted handle; the server rejects it, and the
-    driver replays the full history on a new session instead (live.py:1252-1284)."""
+    driver replays the full history on a new session instead (live.py
+    GeminiLiveDriver._sync_history)."""
     preset = TOOL_TRANSCRIPT
     config = catalog_config(preset.model)
     scenario = LONG_SCENARIO[:3]
