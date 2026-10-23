@@ -752,6 +752,30 @@ def test_a_late_abandoned_generation_leaves_the_next_its_action_cap(tmp_path):
     assert agent._frame_action_max_tokens == native_output_limit(limit, 222)
 
 
+def test_a_generation_aborted_before_it_starts_leaves_the_next_its_action_cap(tmp_path):
+    """Generation 1 is aborted before its worker calls generate(); generation 2 opens and
+    returns, and only then does generation 1's worker call generate(), with a different cap. The
+    runner audits generation 2's result after that (episode_records.py audit_output_caps): the
+    agent still keeps generation 2's cap, and its decision for abort()'s trace."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        try:
+            first, second = episode.frames.capture(0), episode.frames.capture(1)
+            agent.abort(1)
+            accepted = agent.generate(2, 1, second, DecisionBudget(None, 222, None, "wall"))
+            late = agent.generate(1, 0, first, DecisionBudget(None, 111, None, "wall"))
+            kept = (agent._frame_action_max_tokens, agent._trace_decision)
+            agent.accept(2)
+            agent.discard(1)
+        finally:
+            episode.finish()
+    assert late.cancelled and not accepted.cancelled
+    limit = agent.config.native_output_limit
+    assert native_output_limit(limit, 111) != native_output_limit(limit, 222)
+    assert kept == (native_output_limit(limit, 222), 1)
+
+
 def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
     """AcceptResult writes decisions 0 and 1 before Commit reports either. Each outcome goes to
     its own decision's action record and turn, not to the newest, and the next request carries

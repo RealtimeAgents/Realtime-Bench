@@ -1338,7 +1338,9 @@ class DefaultHarness(VisionAgentBase):
     ) -> _Generation:
         """Start a generation's state; abort() reaches it until the generation ends. The agent
         keeps the newest generation's decision, for abort()'s trace, and its action cap, which
-        the runner audits against the decision's allowance once the result is back."""
+        the runner audits against the decision's allowance once the result is back. A
+        generation aborted before its worker got here keeps neither: it may open after the next
+        one did."""
         generation = _Generation(
             number,
             decision,
@@ -1351,15 +1353,16 @@ class DefaultHarness(VisionAgentBase):
             if number in self._cancelled_early:
                 self._cancelled_early.remove(number)
                 generation.cancel.set()
+            else:
+                self._trace_decision = decision
+                self._frame_action_max_tokens = native_output_limit(
+                    self.config.native_output_limit, provider_output_tokens
+                )
             if number in self._discarded_early:
                 self._discarded_early.remove(number)
                 generation.discarded = True
             else:
                 self._generations.append(generation)
-        self._trace_decision = decision
-        self._frame_action_max_tokens = native_output_limit(
-            self.config.native_output_limit, provider_output_tokens
-        )
         return generation
 
     def _close(
