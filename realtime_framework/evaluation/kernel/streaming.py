@@ -15,8 +15,8 @@ over or past its deadline, its reply was given up, or the frame it names cannot 
 the provider cancels is withdrawn while its action waits; one that executed is recorded as it ran.
 A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
 is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
-a push its watchdog finds stuck, or pushes failing in a row. A push the agent holds until the
-session is renewed (PushHeld) is not stuck, and its watchdog waits. The shell runs the abort on a
+a push its watchdog finds stuck, or pushes failing in a row. A push the agent holds while it waits
+for the session (PushHeld) is not stuck, and its watchdog waits. The shell runs the abort on a
 lane of its own while the episode goes on, and answers it (GenerationAborted) once the agent has
 cleaned the session up and closed it, which fails a push stuck in it. Meanwhile no frame goes in
 and no reply starts; then the next reply starts and rebuilds the session from the accepted history
@@ -149,8 +149,11 @@ class FramePushed:
 class PushHeld:
     """The push waits for the session instead of going in, and is not stuck in it: a session the
     provider asked to renew takes no frame until the reply on it has ended, as Gemini Live's after
-    a goAway (harnesses/streaming/agent.py ``_push``). Its watchdog waits too, until PushResumed;
-    the reply's own watchdog bounds the wait."""
+    a goAway (harnesses/streaming/agent.py ``_push``); a reply readies the session or asks for
+    itself, which the push waits for; or the push waits out a backoff between attempts to reopen
+    the session, of the agent's retry or the encoder's own (decision N48). Its watchdog waits too,
+    until PushResumed; the reply's own watchdog bounds a wait for a reply, and the shared retry
+    policy a backoff."""
 
     observation_id: str | None
 
@@ -249,7 +252,7 @@ class StreamingPolicy:
         self._latest: FrameCaptured | None = None  # the newest frame pushed
         self._capturing = False
         self._pushing: FrameCaptured | None = None
-        self._push_held = False  # it waits for the session's renewal (PushHeld)
+        self._push_held = False  # it waits for the session (PushHeld)
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
         self._failed_pushes = 0  # in a row, on this session
         self._stale_push = False  # the push out was put into a session since given up
