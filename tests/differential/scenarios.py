@@ -85,7 +85,7 @@ FRAME_RATES = [
         3.75,
         _timed(["click", "type:Ada", "click"], [0.5, 1.25, 0.875]),
         env_fps=60.0,
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="frame_rates-wall-60_1",
     ),
     # The replay's 0.2 s for decision 1 is 0.21 s here: back at 11/30 s, the kernel's landing
@@ -97,7 +97,7 @@ FRAME_RATES = [
         _timed(["click", "type:Ada", "click", "click"], [0.1, 0.21, 0.05, 0.5]),
         env_fps=30.0,
         input_fps=7.0,
-        expect=frozenset({"K-a", "K-g", "X4"}),
+        expect=frozenset({"K-a", "K-g", "U17", "X4"}),
         name="frame_rates-wall-30_7",
     ),
     Script(
@@ -106,7 +106,7 @@ FRAME_RATES = [
         _timed(["click", "type:Ada", "click"], [0.25, 0.75, 0.5]),
         env_fps=2.0,
         input_fps=2.0,
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="frame_rates-wall-2_2",
     ),
 ]
@@ -120,14 +120,14 @@ RUNNER_LOOP = [
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, LATE_REPLY_S]),
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="runner-late_reply",
     ),
     Script(
         "wall",
         SHORT_S,
         _timed(["click", "done", "click", "click"], [0.5, 0.5, 0.5, LATE_REPLY_S]),
-        expect=frozenset({"K-a", "K-g", "X1", "X7"}),
+        expect=frozenset({"K-a", "K-g", "U17", "X1", "X7"}),
         name="runner-done_reply",
     ),
     Script(
@@ -151,7 +151,7 @@ RUNNER_LOOP = [
         "wall",
         SHORT_S,
         _timed(FORM[:3], [0.5, 0.5, 0.5]) + (Turn("click", attempts=HANG),),
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="runner-bounded_call_timeout",
     ),
     Script(
@@ -197,7 +197,7 @@ LONG = Script(
         Turn(word, attempts=(Attempt(latency),), rejected=LONG_REJECTED.get(k))
         for k, (word, latency) in enumerate(zip(LONG_WORDS, LONG_LATENCIES, strict=True))
     ),
-    expect=frozenset({"K-a", "K-g", "X1"}),
+    expect=frozenset({"K-a", "K-g", "U17", "X1"}),
     name="runner-long",
 )
 
@@ -209,7 +209,7 @@ MISSING = [
         "wall",
         SHORT_S,
         _timed(FORM, [0.5, 0.5, 0.5, 0.75]),
-        expect=frozenset({"K-a"}),
+        expect=frozenset({"K-a", "U17"}),
         name="wall-result-at-the-deadline",
     ),
     # Decision 2 starts a 5 s wait at 2.5 s; the deadline cuts it at 3.75 s.
@@ -228,7 +228,7 @@ MISSING = [
         SHORT_S,
         _timed(FORM[:3], [0.5] * 3)
         + (Turn("click", attempts=(Attempt(0.0, 503), Attempt(0.0, 503), Attempt(0.5))),),
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="wall-retry-across-the-deadline",
     ),
     # A 0.5 s hold pressed at 0.25 s is released at 0.75 s, between the frames at 0 and 1 s.
@@ -280,7 +280,7 @@ PER_RULE = [
         _timed(FORM, [0.5] * 4),
         env_fps=4.0,
         ends_at_s=2.25,
-        expect=frozenset({"K-b", "K-g", "U10"}),
+        expect=frozenset({"K-b", "K-g", "U10", "U17"}),
         name="wall-ends-during-a-reply",
     ),
     # K-b: the check at 0.75 s finds the end while decision 0 paces to the frame at 1 s.
@@ -618,7 +618,7 @@ X12 = [
         _timed(FORM, [0.5] * 4),
         env_fps=8.0,
         failing_reads_s=((1.1, 1.45),),
-        expect=frozenset({"K-g", "U11", "X12"}),
+        expect=frozenset({"K-g", "U11", "U17", "X12"}),
         name="wall-third-failed-read-during-a-reply",
     ),
     # Two failed periodic reads, a successful one at 1.375 s, then the one after decision 1's
@@ -739,7 +739,7 @@ TIMED = [
         _timed(FORM, [0.5, 0.5, 0.5, LATE_REPLY_S]),
         check_s=0.01,
         capture_s=0.02,
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="wall-reads-and-captures-take-time",
     ),
     # At 4 fps a read takes 0.05 s. Decision 0's reply is back at 0.52 s, during the periodic read
@@ -764,7 +764,7 @@ TIMED = [
         _timed(["click", "click"], [0.5, 0.71]),
         env_fps=4.0,
         check_s=0.05,
-        expect=frozenset({"D47", "K-g", "X4"}),
+        expect=frozenset({"D47", "K-g", "U17", "X4"}),
         name="wall-the-deadline-falls-during-a-read",
     ),
     # U9: decision 0 is asked at 0.05 s with a 0.47 s per-move cap, due at 0.52 s; its reply is
@@ -825,7 +825,7 @@ TIMED = [
         ends_at_s=2.25,
         check_s=0.01,
         capture_s=0.02,
-        expect=frozenset({"K-b", "K-g", "U10"}),
+        expect=frozenset({"K-b", "K-g", "U10", "U17"}),
         name="wall-ends-during-a-reply-and-reads-take-time",
     ),
 ]
@@ -897,7 +897,7 @@ ACROSS = [
         env_fps=4.0,
         input_fps=4.0,
         capture_s=0.3,
-        expect=frozenset({"K-a", "K-g"}),
+        expect=frozenset({"K-a", "K-g", "U17"}),
         name="wall-a-capture-runs-past-the-deadline",
     ),
     # Decision 0's click executes from 0.8 to 1.1 s, across the periodic read due at 1.0 s, which
