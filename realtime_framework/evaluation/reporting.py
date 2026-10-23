@@ -972,6 +972,29 @@ def episode_outcome(summary: dict) -> dict:
     return {"outcome": outcome, "error_category": None, "error_reason": None}
 
 
+def invalid_evaluation(result):
+    """Why an evaluator's result is not safe to score, or None when it is: the first evaluation
+    (runner.py main), a re-evaluation (reevaluate_main) and the check of a scored summary
+    (summary_ok) judge it alike."""
+    if not isinstance(result, dict):
+        return "evaluation_not_an_object"
+    if result.get("error"):
+        return "evaluation_error"
+    if result.get("evaluation_valid") is False:
+        return "evaluation_declared_invalid"
+    if result.get("ok") is False:
+        return "evaluation_backend_unhealthy"
+    if result.get("invalid_reasons"):
+        return "evaluation_invalid_reasons"
+    if result.get("baseline_suspect") is True:
+        return "evaluation_baseline_suspect"
+    if type(result.get("resolved")) is not bool:
+        return "evaluation_missing_boolean_resolved"
+    if type(result.get("evaluation_version")) is not int:
+        return "evaluation_missing_version"
+    return None
+
+
 def _episode_trace_ok(summary_path, summary) -> bool:
     declared = summary.get("episode_trace")
     if not isinstance(declared, dict) or declared.get("schema") != EPISODE_TRACE_SCHEMA:
@@ -1045,14 +1068,8 @@ def summary_ok(
             return False
         verification = summary.get("verification")
         if (
-            not isinstance(verification, dict)
-            or verification.get("resolved") is not summary.get("solved")
-            or type(verification.get("evaluation_version")) is not int
-            or verification.get("error")
-            or verification.get("evaluation_valid") is False
-            or verification.get("ok") is False
-            or verification.get("invalid_reasons")
-            or verification.get("baseline_suspect") is True
+            invalid_evaluation(verification) is not None
+            or verification["resolved"] is not summary["solved"]
         ):
             return False
         if not _episode_trace_ok(path, summary):
@@ -2049,24 +2066,6 @@ def sha(path):
     return h.hexdigest()
 
 
-def _invalid_evaluation(result):
-    if not isinstance(result, dict):
-        return "evaluation_not_an_object"
-    if result.get("error"):
-        return "evaluation_error"
-    if result.get("evaluation_valid") is False or result.get("ok") is False:
-        return "evaluation_declared_invalid"
-    if result.get("invalid_reasons"):
-        return "evaluation_invalid_reasons"
-    if result.get("baseline_suspect") is True:
-        return "evaluation_baseline_suspect"
-    if type(result.get("resolved")) is not bool:
-        return "evaluation_missing_boolean_resolved"
-    if type(result.get("evaluation_version")) is not int:
-        return "evaluation_missing_version"
-    return None
-
-
 def _registry_for_manifest(manifest, *, allow_suite_hash_mismatch=False):
     """Select and validate the artifact's suite before importing its registry."""
     suite_id = manifest.get("suite_id")
@@ -2131,7 +2130,7 @@ def reevaluate_main():
     result, manifest = reeval(a.run_dir, allow_suite_hash_mismatch=a.allow_suite_hash_mismatch)
     import realtime_tasks.registry as registry
 
-    invalid_reason = _invalid_evaluation(result)
+    invalid_reason = invalid_evaluation(result)
     reported_invalid_reason = invalid_reason
     record = {
         # Outside any episode: a finished run, re-evaluated from its saved state.

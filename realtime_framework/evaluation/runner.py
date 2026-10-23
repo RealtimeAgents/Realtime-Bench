@@ -122,6 +122,7 @@ from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
 from realtime_framework.sandbox.actions import GuestEnvironment
 from realtime_framework.evaluation.reporting import capture_generation_artifact
+from realtime_framework.evaluation.reporting import invalid_evaluation
 from realtime_framework.evaluation.reporting import resolve_run_identity
 from realtime_framework.evaluation.reporting import save_evaluation
 from realtime_framework.evaluation.reporting import summarize_cost
@@ -202,27 +203,6 @@ def _atomic_write_json(path, obj):
 
 class EnvironmentInvalidError(RuntimeError):
     """Startup health checks failed; the result must not be attributed to the model."""
-
-
-def _invalid_evaluation(result):
-    """Return a structured reason when an evaluator response is not safe to score."""
-    if not isinstance(result, dict):
-        return "evaluation_not_an_object"
-    if result.get("error"):
-        return "evaluation_error"
-    if result.get("evaluation_valid") is False:
-        return "evaluation_declared_invalid"
-    if result.get("ok") is False:
-        return "evaluation_backend_unhealthy"
-    if result.get("invalid_reasons"):
-        return "evaluation_invalid_reasons"
-    if result.get("baseline_suspect") is True:
-        return "evaluation_baseline_suspect"
-    if type(result.get("resolved")) is not bool:
-        return "evaluation_missing_boolean_resolved"
-    if type(result.get("evaluation_version")) is not int:
-        return "evaluation_missing_version"
-    return None
 
 
 def _invalid_snapshot(snapshot):
@@ -625,9 +605,6 @@ def main():
             wall_start_time=wall_start_time,
             clocks=clocks,
         )
-        start_episode = getattr(agent, "start_episode", None)
-        if callable(start_episode):
-            start_episode(wall_start_time, a.max_minutes * 60)
 
         # -------- run the streaming loop --------
         _loop_t0 = clocks.operational.time()
@@ -783,7 +760,7 @@ def main():
                 verification = ctask.evaluate_snapshot(frozen_snapshot)
             else:
                 verification = ctask.verify()
-            evaluation_invalid_reason = _invalid_evaluation(verification)
+            evaluation_invalid_reason = invalid_evaluation(verification)
             if evaluation_invalid_reason:
                 invalid_run = invalid_run or {
                     "category": "evaluator",
