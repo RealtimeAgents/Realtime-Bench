@@ -437,6 +437,41 @@ class FailingOnceAfterTheEnd(Trace):
         super().emit(event, payload, **fields)
 
 
+def test_a_kernel_that_raises_numbering_the_last_records_leaves_the_finished_episode_as_it_was(
+    tmp_path, monkeypatch
+):
+    """As test_records_handed_over_as_the_episode_finishes_are_written_before_it_ends, but the
+    kernel raises as the shell steps it through the burst after its Finish. The episode is over
+    and its verdict stands: it is not wrapped up again, and the burst is written unnumbered."""
+    original = Kernel.step
+
+    def broken(kernel, semantic, ops=None):
+        if kernel.termination is not None:
+            raise RuntimeError("step broke")
+        return original(kernel, semantic, ops)
+
+    monkeypatch.setattr(Kernel, "step", broken)
+    BurstAgent.made.clear()
+    world = World(ends_at=0.5, on_release=lambda: _handed(BurstAgent.made[0].sink, 200))
+    episode = run(
+        "wall",
+        1.0,
+        [Reply(0.5)],
+        world,
+        agent_type=BurstAgent,
+        agent_trace_pack=tmp_path / "episode_blobs.pack",
+    )
+    assert episode.invalid is None
+    assert episode.env._stop_reason == "game_decided"
+    assert [call for call, _, _ in episode.env.calls].count("release_inputs") == 1
+    assert getattr(episode.env, "_loop_error", None) is None
+    records = _agent_records(episode.trace)
+    assert [record["payload"]["index"] for record in records] == list(range(200))
+    assert [record["kernel_seq"] for record in records] == [None] * 200
+    assert any("numbering the agent's last records failed" in line for line in episode.logs)
+    assert close_agent_trace(episode.agent.sink, episode.invalid) is None
+
+
 def test_a_record_that_fails_to_be_written_after_the_end_invalidates_the_run(tmp_path):
     """As test_records_handed_over_as_the_episode_finishes_are_written_before_it_ends, but the
     first of the burst written after the termination fails. The kernel handles nothing more, so
