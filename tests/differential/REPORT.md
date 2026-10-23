@@ -71,6 +71,8 @@
     - `timed_out` 和 `stale`、`usage` 为空、`frame_usage` 全 0；
     - 缺用量的原因、`harness_abort_reason` 按放弃原因区分；
     - 没有输出块。
+
+    它的 ObservationCaptured、InferenceStarted 在放弃以前写，和别的决策一样整条比。`latency` 不比，由 `tests/shell/test_commands.py` 钉住。
 - **读状态按内核的读法编号**（决定 31、N26）：
   - token 下，内核同一 tick 最多读一次，动作执行完再读一次；点按里读到结束就结束（决定 27）。
   - 墙钟下，内核也做旧循环的这几次读：执行后那次、落地前在新读数上那次、每帧开头的第一次，只有它们按时间窗失败。旧循环在帧中间的循环开头多读的那次不编号，哪里也不失败。
