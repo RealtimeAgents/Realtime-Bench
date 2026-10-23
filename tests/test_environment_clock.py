@@ -1,6 +1,6 @@
 """GuestEnvironment on the episode clocks (sandbox/actions.py). On the wall clock the fake clock
-times its waits and its key releases; under the token clock its tick is the semantic FrameClock,
-which only advancing the environment moves."""
+times its key releases; under the token clock its tick is the semantic FrameClock, which only
+advancing the environment moves."""
 
 from __future__ import annotations
 
@@ -45,18 +45,6 @@ def _wall(clock, **kwargs):
         clocks=Clocks(clock, clock),
         **kwargs,
     )
-
-
-def test_wall_wait_takes_the_time_it_asks_for():
-    """The deadline is the kernel's (kernel/turns.py); the legacy loop's environment cut the wait
-    at it (tests/differential/legacy_environment.py)."""
-    clock = FakeClock(wall_origin=ORIGIN)
-    env = _wall(clock)
-    with clock.participant():
-        clock.sleep(1.25)
-        assert env.execute(Action.wait(5.0)) == "wait"
-        assert clock.monotonic() == 6.25
-        assert env._last_execution_result["duration_simulated_seconds"] == 5.0
 
 
 def test_wall_hold_is_released_by_a_timer_on_the_clock():

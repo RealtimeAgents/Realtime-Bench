@@ -836,18 +836,18 @@ def test_each_key_event_of_a_repeated_tap_has_its_own_budget():
 
 
 def test_a_lease_s_release_past_its_budget_invalidates_the_run():
-    """The legacy loop's advance releases a key whose lease ended (sandbox/actions.py
-    wait_until_tick)."""
+    """The kernel steps the clock to the end of the lease and releases its key (sandbox/actions.py
+    step_clock, release_keys)."""
     clock = FakeClock()
     env, task = _timed(clock)
     env.execute(Action.hold_key("a", 0.5))
+    env.step_clock(0.5)
     _slow_key_event(clock, task, 0, 60.0)
     budget = actions.ENVIRONMENT_BUDGET.key_event_s
-    with clock.participant():
-        assert env.execute(Action.wait(1.0)) == "failed"
-        assert clock.monotonic() == budget
+    with clock.participant(), pytest.raises(BudgetExceeded):
+        env.release_keys(env.last_held_keys)
+    assert clock.monotonic() == budget
     _invalid(env, "clock_key_release_failed", "key release", budget)
-    assert env.tick_index() == 0.5
 
 
 @pytest.mark.parametrize(
@@ -860,9 +860,11 @@ def test_a_key_whose_release_failed_stays_held_and_the_cleanup_releases_it_again
     clock = FakeClock()
     env, task = _timed(clock)
     env.execute(Action.hold_key("a", 0.5))
+    env.step_clock(0.5)
     _slow_key_event(clock, task, 0, 60.0, delivered=delivered)
     with clock.participant():
-        assert env.execute(Action.wait(1.0)) == "failed"
+        with pytest.raises(BudgetExceeded):
+            env.release_keys(env.last_held_keys)
         assert list(env._held_keys) == ["a"]
         env.release_inputs()
     assert [event["key"] for event in task.events if event["event"] == "keyUp"] == keyups

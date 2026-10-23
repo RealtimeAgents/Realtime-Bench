@@ -228,12 +228,8 @@ def test_a_token_hold_that_extends_a_held_key_reports_it_too():
 def test_only_a_token_hold_that_lasts_reports_held_keys():
     env, _ = _token()
     env.execute(Action.hold_key("a", 1.0))
-    for action in (
-        Action.hold_key("b", 0.0),
-        Action(ActionType.KEY, {"key": "c"}),
-        Action.wait(1.0),
-    ):
-        assert env.execute(action) in {"applied", "wait"}
+    for action in (Action.hold_key("b", 0.0), Action(ActionType.KEY, {"key": "c"})):
+        assert env.execute(action) == "applied"
         assert env.last_held_keys == ()
 
 

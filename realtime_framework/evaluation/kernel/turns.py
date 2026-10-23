@@ -27,8 +27,8 @@ grid at the first environment tick at or after each grid point, and the horizon 
 ticks. With both rates equal to 1 every expression reduces to the runner's.
 
 Written from the runner's loop (legacy_loop.py _run_stream_legacy, _decide) and the environment
-clock (sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute), not shared
-with them, so that the two can be compared.
+clock (sandbox/actions.py GuestEnvironment.wait_until_tick; legacy_environment.py
+LegacyStateReads.execute), not shared with them, so that the two can be compared.
 """
 
 from __future__ import annotations
@@ -584,8 +584,8 @@ class TurnPolicy:
             self.leases[key] = max(self.leases.get(key, start), end)
 
     def _start_wait(self) -> None:
-        """A wait action is time passing: token ticks under end checks (sandbox/actions.py
-        GuestEnvironment.execute), or a wall timer that any end interrupts, where today's sleep
+        """A wait action is time passing: token ticks under end checks (legacy_environment.py
+        LegacyStateReads.execute), or a wall timer that any end interrupts, where today's sleep
         stops only at the deadline."""
         d = self.decision
         duration = float(d.action.parameters.get("duration", 0.0))
@@ -601,7 +601,7 @@ class TurnPolicy:
         d, config = self.decision, self.config
         if d.failed is not None:
             # The environment reports a wait whose step failed as a failed action
-            # (sandbox/actions.py GuestEnvironment.execute; legacy_loop.py _land_action).
+            # (legacy_environment.py LegacyStateReads.execute; legacy_loop.py _land_action).
             d.execution_result = {"error": d.failed}
             return self._resolve("invalid_run")
         started, duration = d.wait
@@ -623,8 +623,8 @@ class TurnPolicy:
         )
         by_horizon = horizon_truncates and self._horizon_reached()
         # The wall deadline cuts a wait as today's sleep does, which flags neither truncation
-        # (sandbox/actions.py GuestEnvironment.execute); the task's end or an invalidation cuts it
-        # on either clock.
+        # (legacy_environment.py LegacyWallClock.execute); the task's end or an invalidation cuts
+        # it on either clock.
         by_deadline = ending is not None and ending.cause == "deadline"
         d.execution_result = {
             "duration_simulated_seconds": elapsed,

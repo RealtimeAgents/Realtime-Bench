@@ -5,10 +5,11 @@ LegacyWallClock is the wall-clock half: the deadline the environment was built w
 itself against, in its waits, its WAIT, done() and the optional deadline hooks. The kernel judges
 the deadline itself (kernel/turns.py), so production's GuestEnvironment takes none.
 
-LegacyStateReads is the rest: done(), the legacy loop's end check, and the end check after each
-token step through it, which invalidates the run at the first failed read, while the kernel's
-shell, which counts the reads itself, has not set kernel_counts_reads. Production's
-GuestEnvironment answers check_end() only.
+LegacyStateReads is the rest: done(), the legacy loop's end check; the end check after each token
+step through it, which invalidates the run at the first failed read, while the kernel's shell,
+which counts the reads itself, has not set kernel_counts_reads; and the token clock's WAIT, which
+steps the clock under those checks. Production's GuestEnvironment answers check_end() only, and
+the kernel lets a wait's time pass itself (kernel/turns.py _start_wait).
 """
 
 from __future__ import annotations
@@ -91,6 +92,37 @@ class LegacyStateReads:
         if not self.kernel_counts_reads:
             return self.done()
         return super()._ended_after_step()
+
+    def execute(self, action, *, release_at=None):
+        if self.clock_mode != "token" or action.action_type != ActionType.WAIT:
+            return super().execute(action, release_at=release_at)
+        self.last_held_keys = ()
+        self.last_end_checks = ()
+        try:
+            duration = float(action.parameters.get("duration", 0.0))
+            started_at = self._logical_tick
+            requested_target = started_at + duration / self.d
+            horizon_truncates = (
+                self._episode_horizon_tick is not None
+                and requested_target > self._episode_horizon_tick + 1e-9
+            )
+            if duration > 0:
+                self.wait_until_tick(requested_target)
+            elapsed = round(max(0.0, (self._logical_tick - started_at) * self.d), 9)
+            by_horizon = (
+                horizon_truncates and self._logical_tick >= self._episode_horizon_tick - 1e-9
+            )
+            self._last_execution_result = {
+                "duration_simulated_seconds": elapsed,
+                "requested_duration_simulated_seconds": duration,
+                "truncated_by_episode_horizon": by_horizon,
+                "truncated_by_terminal_condition": elapsed + 1e-9 < duration and not by_horizon,
+                "active_holds": self._active_hold_snapshot(),
+                "active_mouse_buttons": sorted(self._held_mouse_buttons),
+            }
+            return "wait"
+        except Exception as exc:  # noqa: BLE001 - a failed wait fails the action
+            return self._execution_failed(exc)
 
     def done(self):
         if getattr(self, "_invalid_run", None):
