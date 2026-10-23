@@ -1262,7 +1262,8 @@ RULES = (
     ),
     Rule(
         "X15",
-        "waiting for the wall lock is spent from the action's budget",
+        "a wait for the wall's key commands ends with the action's budget; key checks and hold"
+        " snapshots do not wait for them",
         seen="both loops run the same environment; no replayed lock is contended",
     ),
     Rule(

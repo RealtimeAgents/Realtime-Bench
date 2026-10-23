@@ -125,16 +125,16 @@ class EnvironmentBudgetConfig:
     The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in the
     shells (evaluation/shell.py, evaluation/streaming_shell.py) and the legacy loop
     (tests/differential/legacy_loop.py). Running past a budget fails the operation and, as a rule,
-    invalidates the run. The exceptions: a refusal of the model's action that comes after the
-    action's budget is still a refusal, the guest's or the runtime's own after a wait for the
-    wall lock; a state read the kernel counts fails only that read, and three failed reads in a
-    row invalidate the run; at the cleanup after the outcome is latched (release_inputs), where
-    only a game's key releases under the token clock have a budget, a failure is only logged.
+    invalidates the run. The exceptions: the guest's refusal of the model's action that comes
+    after the action's budget is still a refusal; a state read the kernel counts fails only that
+    read, and three failed reads in a row invalidate the run; at the cleanup after the outcome is
+    latched (release_inputs), where only a game's key releases under the token clock have a
+    budget, a failure is only logged.
     """
 
     # Execute one action through the guest or xdotool, from its checks to the page's action
-    # barrier and the hold snapshot; the wall clock's key lock is waited for whole and judged at
-    # the end. Text input gets the guest's longer request timeout (sandbox/guest.py
+    # barrier and the hold snapshot, a wait for the wall clock's key commands in flight included.
+    # Text input gets the guest's longer request timeout (sandbox/guest.py
     # action_timeout); a valid timed action, at most 10 s, stays within 20 s. A game's key action
     # under the token clock goes over CDP and is timed per key event instead.
     action_s: float = 20.0

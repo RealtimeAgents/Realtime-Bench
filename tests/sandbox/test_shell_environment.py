@@ -471,18 +471,20 @@ def test_a_wall_release_that_keeps_failing_tells_the_shell_from_the_timer_s_thre
     assert env._invalid_run["reason"] == "wall_key_release_failed"
 
 
-def test_the_shell_is_told_outside_the_wall_lock():
+def test_the_shell_is_told_outside_the_wall_locks():
     """The callback is the shell's (sandbox/actions.py _wall_release_due): told outside the
-    environment's lock, it cannot hold up an action waiting for that lock."""
+    environment's locks, it cannot hold up an action waiting for one."""
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
     env.g = _StuckGuest(clock)
     owned = []
-    env.on_invalid = lambda record: owned.append(env._wall_lock._is_owned())
+    env.on_invalid = lambda record: owned.append(
+        (env._wall_lock._is_owned(), env._wall_commands._is_owned())
+    )
     with clock.participant():
         env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
         clock.sleep(5.0)
-    assert owned == [False]
+    assert owned == [(False, False)]
 
 
 def test_a_wall_release_failure_in_a_run_already_invalid_tells_the_shell_nothing():
