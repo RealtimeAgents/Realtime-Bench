@@ -137,15 +137,16 @@ def test_a_bound_past_a_start_that_raised_gives_up_a_generation_that_never_start
     duration, config
 ):
     """StartGeneration raises 0.2 s in, past the bound, which the kernel handles before the
-    run_exception: it gives up a generation that never started. (Over the cap, the kernel then
-    reports the move skipped, and that commit has no result to record.)"""
+    run_exception: it gives up a generation that never started. Over the cap, the kernel then
+    reports the move, invalid by then, with no result and no lifecycle record: that failure is
+    the only one."""
     episode = run("wall", duration, [Reply(0.5)], agent_type=_SlowNoTransportCap, **config)
     assert episode.invalid["reason"] == "run_exception"
     raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
+    assert len(raised) == 1
     assert "adapter transport output cap" in raised[0]
-    assert not any("in _given_up" in line for line in raised)
-    if not config:
-        assert len(raised) == 1
+    assert episode.statuses() == ([] if not config else ["invalid_run"])
+    assert episode.env.lifecycle == []
 
 
 def test_a_generation_that_raises_is_an_unusable_result():

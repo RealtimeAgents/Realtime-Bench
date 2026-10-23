@@ -963,7 +963,7 @@ class _Shell:
         # The loop has no terminal actions: the record of a proposed DONE or FAIL says so, also
         # when the move went over the per-move cap and the kernel named no protocol failure
         # (kernel/turns.py _accept).
-        proposed = r.get("action")
+        proposed = None if r is None else r.get("action")
         if proposed is not None and proposed.action_type in (ActionType.DONE, ActionType.FAIL):
             r["action_protocol"] = episode_records.terminal_wait_protocol(
                 r.get("action_protocol") or {}
@@ -978,6 +978,10 @@ class _Shell:
             self.post(OutcomeCommitted(outcome.decision, failure))
         else:
             self.post(OutcomeCommitted(outcome.decision))
+        if r is None:
+            # A move given up on at the cap whose StartGeneration raised has no result to record;
+            # that raise invalidated the run.
+            return
         resolved = decision.resolved
         try:
             self._env(
