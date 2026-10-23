@@ -1054,7 +1054,7 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
     return action, action_protocol
 
 
-def _action_text(action: Action) -> str:
+def action_text(action: Action) -> str:
     """An action as the action record and the feedback name it."""
     return action.action_type.value + (f" {action.parameters}" if action.parameters else "")
 
@@ -1826,7 +1826,7 @@ class DefaultHarness(VisionAgentBase):
         if action is None:  # a rejected streaming action
             executed = "none"
         else:
-            executed = _action_text(action)
+            executed = action_text(action)
         generation.staged = _Staged(
             feedback,
             unattached,
@@ -2021,7 +2021,7 @@ class DefaultHarness(VisionAgentBase):
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
         replaced = replacement is not None and status in landed_statuses
         if replaced:
-            executed = _action_text(replacement)
+            executed = action_text(replacement)
         if entry is not None:
             entry["applied"] = status == "applied"
             entry["result"] = status

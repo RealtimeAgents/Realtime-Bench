@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from realtime_framework.entity.actions import Action
 from realtime_framework.harnesses.default.context import action_result_note
 from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
@@ -21,6 +20,7 @@ from realtime_framework.harnesses.default.frames import (
     INVALID_GROUNDING_FRAME,
     MISSING_FRAME,
 )
+from realtime_framework.harnesses.default.harness import action_text
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
 
 if TYPE_CHECKING:
@@ -61,11 +61,6 @@ _FRAME_ERRORS = {
     INVALID_FRAME_SYNTAX: "is not an integer",
     FRAME_NOT_IN_TABLE: "names no frame that was sent",
 }
-
-
-def action_text(action: Action) -> str:
-    """An action as the action record writes it (harnesses/default/harness.py _action_text)."""
-    return action.action_type.value + (f" {action.parameters}" if action.parameters else "")
 
 
 def execution_feedback(outcome: Outcome, requested: str) -> str:

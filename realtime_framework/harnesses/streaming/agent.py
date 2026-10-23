@@ -94,11 +94,12 @@ from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
 from realtime_framework.harnesses.default.harness import (
     INTERACTION_PROFILES,
     VisionAgentBase,
+    action_text,
     bind_observation,
     parse_grounded_action,
 )
 from realtime_framework.harnesses.default.request import system_block
-from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
+from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.harnesses.streaming.history import (
     feedback_block,
     frame_block,
@@ -660,8 +661,9 @@ class NativeStreamingAgent(VisionAgentBase):
                 with self._lock:
                     view = self._view()
                 await self._ready(view, renew=True)
-                # A push may have reopened the session for the reply after it was given up:
-                # asked for then, it would run beside the next one (context.py _run_turn).
+                # Given up while its session was readied, which ensure_ready looks at only as it
+                # reopens or rebuilds the session (SessionLifecycle): asked for then, it would
+                # run beside the next one (context.py _run_turn).
                 if reply.cancel.is_set():
                     raise RetryCancelled("generation abandoned before its reply")
                 try:
