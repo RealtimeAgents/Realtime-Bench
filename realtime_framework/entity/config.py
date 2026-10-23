@@ -118,6 +118,11 @@ class EnvironmentConfig(BaseModel):
     display_number: int = SANDBOX_DISPLAY_NUMBER
 
 
+# One request to the guest agent (sandbox/guest.py GuestClient), the key action of the wall clock
+# among them, and so one key event of the token clock (user decision 34).
+GUEST_REQUEST_S = 10.0
+
+
 @dataclass(frozen=True)
 class EnvironmentBudgetConfig:
     """Overall time budget in seconds of each environment operation (sandbox/budget.py).
@@ -140,8 +145,8 @@ class EnvironmentBudgetConfig:
     action_s: float = 20.0
     # Send one key event of a game under the token clock over CDP, a press or a release: an
     # action's, a lease's end or the cleanup's. A tap's frame between its press and its release is
-    # a clock advance. The same 10 s the wall clock gives the guest's request for a key.
-    key_event_s: float = 10.0
+    # a clock advance. As long as the wall clock gives the guest's request for a key.
+    key_event_s: float = GUEST_REQUEST_S
     # Capture one observation: the page probes, the guest's screenshots and the wait for the render
     # fence. As long as one CDP call may take by default.
     capture_s: float = 120.0

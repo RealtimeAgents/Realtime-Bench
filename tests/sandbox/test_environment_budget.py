@@ -181,8 +181,11 @@ def test_an_action_budget_extends_only_for_text_input():
 
 
 def test_the_freeze_s_snapshot_read_has_16_s_and_a_token_key_event_10_s():
+    """A token key event has as long as the guest's request for a key on the wall clock (user
+    decision 34)."""
     assert actions.ENVIRONMENT_BUDGET.snapshot_read_s == 16.0
     assert actions.ENVIRONMENT_BUDGET.key_event_s == 10.0
+    assert GuestClient().timeout == actions.ENVIRONMENT_BUDGET.key_event_s
 
 
 def test_a_run_within_its_budgets_reads_acts_captures_and_freezes(game, monkeypatch):
