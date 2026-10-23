@@ -858,10 +858,15 @@ class _Shell:
         self._emit_inference((chunks, completed), held.echo)
 
     def _abort(self, generation: int) -> None:
+        """Interrupt a generation the kernel gave up on. One whose worker came back is aborted
+        too, before its result is discarded: a session that holds its reply rebuilds from the
+        accepted history, as the runner aborted every call it gave up on (legacy_loop.py
+        _bounded_call)."""
         held = self._generations.get(generation)  # None when its StartGeneration raised
-        if held is None or held.done.is_set():
-            return  # nothing is running to interrupt; the kernel discards the result
-        self._abandoned.append(held)
+        if held is None:
+            return
+        if not held.done.is_set():
+            self._abandoned.append(held)
         try:
             self.agent.abort(generation)
         except Exception:  # noqa: BLE001 - interrupting is best effort, as in the runner

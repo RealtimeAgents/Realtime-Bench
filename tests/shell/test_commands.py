@@ -558,8 +558,9 @@ def test_a_result_back_while_the_shell_was_busy_at_the_deadline_is_recorded_as_i
     """The end check asked at 2 s takes 1.5 s, and the reply comes back during it; when the
     check is over, the 3 s deadline goes first (decision 47), ends the episode and the result is
     discarded. One back before the deadline is settled and its records are its own, as when the
-    shell was idle; one back after it is never settled, and the records are those of the call
-    the deadline gave up on (decision 48). (That one reaches the kernel only after the end.)"""
+    shell was idle, and it is aborted before it is discarded; one back after it is never settled,
+    and the records are those of the call the deadline gave up on (decision 48). (That one
+    reaches the kernel only after the end.)"""
     world = World(slow_checks=[(2.0, 2.5, 1.5)])
     episode = run("wall", 3.0, [Reply(seconds)], world)
     assert episode.statuses() == []
@@ -568,7 +569,7 @@ def test_a_result_back_while_the_shell_was_busy_at_the_deadline_is_recorded_as_i
     payloads = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p["timed_out"], p["latency_s"]) for p in payloads] == [completed]
     if seconds < 3.0:
-        assert episode.agent.calls == [("discard", 1)]
+        assert episode.agent.calls == [("abort", 1), ("discard", 1)]
     assert episode.env._termination["stop_reason"] == "time_limit"
 
 

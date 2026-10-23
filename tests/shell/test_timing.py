@@ -147,15 +147,16 @@ def test_an_action_does_not_land_on_an_older_read_once_a_later_one_saw_the_end()
 def test_a_result_settled_across_the_deadline_does_not_land():
     """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after it;
     the kernel gets it at the reading taken after the settling. The deadline came first, and
-    nothing lands after it (phase2.md, 时间和结束判定): the generation is given up and the decision
-    goes unreported. The call did come back in time, so its records are written, once."""
+    nothing lands after it (phase2.md, 时间和结束判定): the generation is given up, aborted and
+    discarded, and the decision goes unreported. The call did come back in time, so its records
+    are written, once."""
     episode = run("wall", 3.0, [Reply(2.995)], agent_type=_SlowTrajectory)
     assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
     assert episode.statuses() == []
     assert "ActionProposed" not in episode.trace.events()
     assert [p["decision"] for p in episode.trace.payloads("InferenceCompleted")] == [0]
     assert len(episode.agent.trajectory) == 1
-    assert episode.agent.calls == [("discard", 1)]
+    assert episode.agent.calls == [("abort", 1), ("discard", 1)]
     assert episode.env._termination["stop_reason"] == "time_limit"
     line = "[default] k=0 generation back in 2.995s, settled past its wall_deadline — discarded"
     assert line in episode.logs
@@ -167,10 +168,13 @@ def test_a_result_settled_across_the_cap_is_the_moves_only_record():
     """The result comes back 5 ms before the 1.5 s cap and settling it ends 5 ms after it; the
     kernel gets it after the cap and reports the move skipped. Its records are the call's own,
     once, written when the cap gives it up, before the move's: none is made up for a call given
-    up on."""
+    up on. The generation is aborted before its result is discarded, so a session that holds the
+    reply rebuilds from the accepted history for the next move."""
     replies = [Reply(1.495), Reply(0.5)]
     episode = run("wall", 3.0, replies, agent_type=_SlowTrajectory, per_move_cap_s=1.5)
     assert episode.statuses() == ["skipped_timeout", "applied"]
+    assert episode.agent.calls[:2] == [("abort", 1), ("discard", 1)]
+    assert ("accept", 2) in episode.agent.calls
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p["timed_out"]) for p in completed] == [(0, False), (1, False)]
     events = episode.trace.events()
