@@ -117,6 +117,9 @@ logger = logging.getLogger(__name__)
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
+# How long the session may take to open as the episode starts, as a turn's first connect
+# (RealtimeRuntime.start).
+_OPEN_TIMEOUT_S = 60.0
 # How long an abort or close waits on the execution thread: longer than an abort takes, within
 # its interrupt's bound and its close's, and than the session waits for an abort's cleanup, with
 # time for a Gemini Live close after (RealtimeRuntime.close); an OpenAI Realtime close stuck on a
@@ -274,7 +277,10 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             view = self._view()
         with trace_scope(phase="initialize"):
-            self._execution.run(self.driver.connect(ConnectRequest(seed=self._seed, history=view)))
+            self._execution.run(
+                self.driver.connect(ConnectRequest(seed=self._seed, history=view)),
+                timeout=_OPEN_TIMEOUT_S,
+            )
 
     def discard_pending_observations(self):
         """No frame waits in the agent: a frame goes into the session only when pushed."""
