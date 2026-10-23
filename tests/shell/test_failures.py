@@ -22,7 +22,7 @@ from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.evaluation.kernel.turns import TurnPolicy
 
-from .world import CLICK, Agent, Environment, Reply, World, run
+from .world import CLICK, Agent, Environment, Reply, Trace, World, run
 
 TAP = Action(ActionType.KEY, {"key": "a"})
 
@@ -72,6 +72,43 @@ def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes()
     assert "execute" not in [call for call, _, _ in episode.env.calls]
     assert episode.env.lifecycle[0]["model_latency_s"] == 0.5  # the result it accepted
     assert [p["decision"] for p in episode.trace.payloads("InferenceCompleted")] == [0]
+
+
+@pytest.mark.parametrize(
+    ("tokens", "fails", "skipped", "status", "reason"),
+    [
+        # Paused, the accept, the action's record and its execution come in one batch.
+        (None, None, "execute", "invalid_run", "run_exception"),
+        (None, "ActionProposed", "execute", "invalid_run", "episode_trace_write_failed"),
+        # 50 tokens at B = 100: the move to the action time follows the action's record.
+        (50, "ActionProposed", "step_clock", "invalid_run", "episode_trace_write_failed"),
+        # ... and the execution follows the record of that move once it got there.
+        (50, "ClockAdvanced", "execute", "invalid_run", "episode_trace_write_failed"),
+        # 100 tokens: the action ends on the next frame, so the render barrier follows its
+        # records at once.
+        (100, "ActionApplied", "render", "applied", "episode_trace_write_failed"),
+    ],
+    ids=["accept-raises", "record-fails", "before-the-move", "before-execution", "before-render"],
+)
+def test_a_token_batch_runs_nothing_in_the_world_after_the_shell_invalidated_the_run(
+    tokens, fails, skipped, status, reason
+):
+    """On the token clock the kernel's commands that act on the world can follow, in one batch,
+    the one whose failure invalidates the run. The kernel takes that failure only at its next
+    step, so the shell runs none of them, as the legacy loop executed nothing once the run was
+    invalid (legacy_loop.py _land_action), and the kernel settles the decision for it."""
+    episode = run(
+        "token",
+        3.0,
+        [Reply(0.5, CLICK, output_tokens=tokens), Reply(0.5)],
+        tokens_per_frame=None if tokens is None else 100,
+        agent_type=_RaisingAccept if fails is None else Agent,
+        trace=Trace(fail_on=fails),
+    )
+    assert skipped not in [call for call, _, _ in episode.env.calls]
+    assert episode.statuses() == [status]
+    assert episode.invalid["reason"] == reason
+    assert episode.env._stop_reason == "invalid_run"
 
 
 def test_a_decision_budget_the_adapter_refuses_invalidates_the_run_before_the_generation():
