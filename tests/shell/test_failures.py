@@ -621,6 +621,34 @@ def test_a_call_started_after_the_read_that_invalidated_the_run_was_asked_ran_no
     assert episode.agent.trajectory[1]["latency"] == 0.0
 
 
+class _TerminationUnwritable(Trace):
+    """The kernel's termination record cannot be written."""
+
+    def emit(self, event, payload=None, **fields) -> None:
+        if event == "KernelRecord" and payload["kind"] == "Termination":
+            raise OSError("trace disk full")
+        super().emit(event, payload, **fields)
+
+
+@pytest.mark.parametrize("clock_mode", ["wall", "token"])
+def test_a_termination_record_that_cannot_be_written_invalidates_the_run(clock_mode):
+    """The kernel writes its termination record in the batch of its Finish and takes no event
+    after it. A write that fails there still invalidates the run, as any other does: the shell
+    carries it into the termination, which keeps its end (decision 32)."""
+    world, replies = World(ends_at=1.2, end_reason="won"), [Reply(0.5)] * 3
+    control = run(clock_mode, 3.0, replies, World(ends_at=1.2, end_reason="won"))
+    episode = run(clock_mode, 3.0, replies, world, trace=_TerminationUnwritable())
+    assert control.env._termination["stop_reason"] == "won"
+    assert episode.invalid["reason"] == "episode_trace_write_failed"
+    assert "OSError: trace disk full" in episode.invalid["detail"]
+    assert episode.env._stop_reason == "invalid_run"
+    termination = episode.env._termination
+    assert termination == {**control.env._termination, "stop_reason": "invalid_run"}
+    assert any(
+        line.startswith("[invalid-run] harness:episode_trace_write_failed") for line in episode.logs
+    )
+
+
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
     """The kernel raises, and the environment refuses the termination record: run_episode
     still returns, and the failure is logged."""
