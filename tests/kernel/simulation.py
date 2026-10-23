@@ -386,9 +386,9 @@ class Simulation:
         one tick at most per step, and the end is checked after each step, within the action's
         time; a check that sees the end stops the tap (sandbox/actions.py
         GuestEnvironment._execute_clock_key, GuestEnvironment.wait_until_tick). A failed check
-        does not, as in the environment once the kernel counts its reads (shell.py
-        kernel_counts_reads; under the legacy loop done() stops the tap). Each read goes to the
-        kernel in ActionExecuted.end_checks as (ended, reason, error)."""
+        does not, as in the environment, whose reads the kernel counts
+        (GuestEnvironment._ended_after_step; under the legacy loop done() stops the tap). Each
+        read goes to the kernel in ActionExecuted.end_checks as (ended, reason, error)."""
         world, reads = self.world, []
         target = min(self.tick + TAP_HOLD_S / (1.0 / self.config.env_fps), self.config.max_ticks)
         while self.tick + 1e-9 < target:

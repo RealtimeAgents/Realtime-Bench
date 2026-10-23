@@ -39,5 +39,8 @@ def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> lis
 
 def shell(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
     """run_episode (evaluation/shell.py). Until P2 the agent's kernel methods are the defaults
-    that run the legacy turn (entity/harness.py StreamingAgent.generate)."""
+    that run the legacy turn (entity/harness.py StreamingAgent.generate). The kernel counts the
+    failed state reads, so the world's environment passes them on as production's does
+    (legacy_environment.py LegacyStateReads, replayed.py WallEnvironment)."""
+    env.kernel_counts_reads = True
     return run_episode(agent, env, config, clocks=clocks, log=log, trace=trace)

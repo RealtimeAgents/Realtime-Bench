@@ -28,7 +28,7 @@
   - 外壳 `run_episode`（`drivers.shell`）；
   - 旧循环 `legacy_loop._run_stream_legacy`（`drivers.legacy`，参数照切换前的 `main()` 传）。
 
-  外壳和旧循环用同一个回放世界：真 agent、回放桩，墙钟下是 `FakeEnvironment` 的子类，token 和暂停下是混入了 `LegacyStateReads` 的 `GuestEnvironment` 子类（外壳设了 `kernel_counts_reads`，走生产的那条路）。墙钟下每局一个新的假时钟。
+  外壳和旧循环用同一个回放世界：真 agent、回放桩，墙钟下是 `FakeEnvironment` 的子类，token 和暂停下是混入了 `LegacyStateReads` 的 `GuestEnvironment` 子类（`drivers.shell` 给它设了 `kernel_counts_reads`，走生产的那条路）。墙钟下每局一个新的假时钟。
 - **范围**：只覆盖 HTTP 类 API。墙钟下是 chat_completions，token 和暂停下是 openrouter；live 编码器不进对跑（R15）。
 
 ## 2. 结论
