@@ -31,7 +31,10 @@ Wall clock only: ``semantic`` is ``clocks.semantic.time() - env.t0``, and the tw
 Records. Every kernel record goes into the episode trace with ``kernel_seq``, ``semantic`` and
 ``ops``: RunInvalidated under its name, as the turn-based shell writes it, and every other one as
 ``KernelRecord`` ``{"kind", "data"}``. When each action held the gate and when it returned, with
-its coordinate trace, as the action lane read them, are written as ActionExecution.
+its coordinate trace, as the action lane read them, are written as ActionExecution, on the
+shell's thread ahead of the next kernel record: the lane posts the action's answer without
+waiting for the trace, whose writers share a lock and which a checkpoint holds while it syncs,
+so that an action finished just before the deadline is not taken in after it.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ import contextlib
 import heapq
 import threading
 import traceback
+from collections import deque
 from collections.abc import Callable
 from typing import Protocol
 
@@ -142,6 +146,7 @@ class _StreamingShell:
         # The frames captured from the newest one a reply started on, in capture order.
         self._frames: dict[str | None, Observation] = {}
         self._frames_lock = threading.Lock()
+        self._executions: deque[Executed] = deque()  # from the action lane, not written yet
         self._replies: dict[int, threading.Event] = {}  # generation -> set once its worker ended
         self._frozen: threading.Event | None = None  # set once the snapshot FreezeSnapshot took
         self._frozen_at: float | None = None  # the reading it was frozen at
@@ -367,16 +372,23 @@ class _StreamingShell:
     # ---- actions ------------------------------------------------------------------------------
 
     def _executed(self, record: Executed) -> None:
-        """On the action lane, before its answer."""
-        self._write(
-            "ActionExecution",
-            {
-                "decision": record.decision,
-                "started_unix_s": record.started_at,
-                "finished_unix_s": record.finished_at,
-                "coordinate_trace": record.coordinate_trace,
-            },
-        )
+        """On the action lane, before its answer: kept for the shell's thread to write."""
+        self._executions.append(record)
+
+    def _write_executions(self) -> None:
+        """The ActionExecution rows the action lane handed over, on the shell's thread: before
+        the kernel record of an answer, which the lane posts after handing its row over."""
+        while self._executions:
+            record = self._executions.popleft()
+            self._write(
+                "ActionExecution",
+                {
+                    "decision": record.decision,
+                    "started_unix_s": record.started_at,
+                    "finished_unix_s": record.finished_at,
+                    "coordinate_trace": record.coordinate_trace,
+                },
+            )
 
     def _commit(self, outcome: Outcome) -> None:
         try:
@@ -493,6 +505,7 @@ class _StreamingShell:
                 self._freezing()
             else:
                 self.clocks.operational.wait(self._frozen, None)
+            self._write_executions()  # of an action the kernel did not take the answer of
             self._handle(ReleaseInputs())
             termination = _escaped_termination(
                 self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
@@ -520,6 +533,7 @@ class _StreamingShell:
     # ---- the episode trace --------------------------------------------------------------------
 
     def _record(self, entry: Entry) -> None:
+        self._write_executions()
         if entry.kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**entry.data)
             if invalid.reason == "observation_stream_frozen":
