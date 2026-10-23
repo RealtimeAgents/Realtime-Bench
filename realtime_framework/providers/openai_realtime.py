@@ -291,6 +291,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         self._cm = None
         self._conn = None
         self._send_lock = threading.Lock()
+        # Each close moves the epoch on. A handshake runs on a thread no cancellation stops: it
+        # keeps the connection it opened only if no close came since it began (open_session),
+        # and the lock keeps that check from interleaving with a close taking the connection.
+        self._epoch = 0
+        self._epoch_lock = threading.Lock()
         # The open connection's conversation and its receiver.
         self._session: _Session | None = None
 
@@ -430,9 +435,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise session.closed
 
     async def _close_current(self) -> None:
-        cm, self._cm = self._cm, None
+        with self._epoch_lock:
+            self._epoch += 1
+            cm, self._cm = self._cm, None
+            self._conn = None
         session, self._session = self._session, None
-        self._conn = None
         closed = True
         if cm is not None:
             try:
@@ -453,13 +460,20 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     async def _connect(self, request: ConnectRequest) -> None:
         await self._close_current()
 
-        def open_session():
+        def open_session(epoch):
             cm = self.client.realtime.connect(
                 model=request.seed.model_name,
                 websocket_connection_options={"create_connection": self._ws_connection},
             )
             conn = cm.__enter__()
-            self._cm, self._conn = cm, conn
+            with self._epoch_lock:
+                kept = self._epoch == epoch
+                if kept:
+                    self._cm, self._conn = cm, conn
+            if not kept:
+                # A close came during the handshake and found nothing to close.
+                cm.__exit__(None, None, None)
+                return
             conn.session.update(
                 session={
                     "type": "realtime",
@@ -474,7 +488,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 self._backing_off(False)
             try:
                 with trace_scope(connect_attempt=attempt):
-                    await asyncio.to_thread(open_session)
+                    await asyncio.to_thread(open_session, self._epoch)
             except Exception:
                 await self._close_current()
                 raise
