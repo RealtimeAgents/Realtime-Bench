@@ -23,6 +23,7 @@ from realtime_framework.entity.model import (
     RATE_LIMITED,
     REFUSED,
     TRANSIENT,
+    TRANSPORT_RETRY,
     ChoiceContextLimitError,
     TransportFailure,
 )
@@ -457,6 +458,23 @@ def test_an_error_status_is_classified(endpoint, served, expected, api):
     if isinstance(failure, str):
         failure = TransportFailure(failure)
     assert APIS[api][0].classify_question_error(error) == failure
+
+
+@pytest.mark.parametrize("api", list(APIS))
+@pytest.mark.parametrize(
+    "retry_after, delay", [("30", 30.0), ("30.0001", None)], ids=["at_the_cap", "above_the_cap"]
+)
+def test_a_retry_after_is_waited_out_up_to_the_cap(endpoint, retry_after, delay, api):
+    """The per-question retry (selection.py _decide_with_retries) takes its delay from the shared
+    policy (TransportRetryPolicy.delay_s). A Retry-After of max_retry_after_s is waited out in
+    full, in place of the shorter backoff; a longer one is not waited for, and the question fails
+    as if its retries were spent."""
+    served = (503, _error("Busy", 503), (("Retry-After", retry_after),))
+    error, _ = _decide(endpoint, api, _serve(*served))
+    failure = APIS[api][0].classify_question_error(error)
+    assert failure == TransportFailure(TRANSIENT, float(retry_after))
+    assert TRANSPORT_RETRY.max_retry_after_s == 30.0
+    assert TRANSPORT_RETRY.delay_s(1, "obs-1:0", failure) == delay
 
 
 @pytest.mark.parametrize("api", list(APIS))
