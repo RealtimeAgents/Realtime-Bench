@@ -322,7 +322,8 @@ def _trajectory(tmp_path, rows: list[dict]):
 
 def test_the_model_timing_leaves_out_a_call_the_episodes_end_gave_up_on(tmp_path):
     """N34: that call has no provider timing, and the model timing of the calls made stays
-    complete. One the deadline gave up on still leaves it partial (decision 48)."""
+    complete. One the deadline gave up on still leaves it partial, with no wall or busy time
+    (decision 48)."""
     called = {
         "decision": 0,
         "realtime_runtime": {"provider_call_started_monotonic_ns": 1_000_000_000},
@@ -333,6 +334,7 @@ def test_the_model_timing_leaves_out_a_call_the_episodes_end_gave_up_on(tmp_path
     assert (timing["status"], timing["call_count"], timing["wall_time_s"]) == ("complete", 1, 0.5)
     timing = _trajectory(tmp_path, [called, {"decision": 1}])
     assert (timing["status"], timing["unfinished_calls"]) == ("partial", 1)
+    assert timing["wall_time_s"] is None and timing["busy_time_s"] is None
 
 
 def test_a_result_without_a_count_charges_nothing():
