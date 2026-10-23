@@ -922,6 +922,40 @@ def test_an_abort_ends_a_connect_its_abandoned_generation_is_stuck_in(stuck, str
     assert state == RuntimeState.READY and len(rig.live.sockets) == 2
 
 
+def test_an_abort_drops_a_connect_whose_close_waits_on_its_stuck_seed_write(monkeypatch):
+    """A connect that gives up a seed write that does not drain closes its connection, and the
+    close waits on the same write, as websockets' close waits for its buffer to drain first. The
+    abort of the generation it readies the session for waits for the connect only until the
+    connection-close bound, then drops the connection under both: the abort returns and the
+    connect ends, where it would otherwise hold the session until the peer read again."""
+    monkeypatch.setattr(live, "_CONNECTION_CLOSE_TIMEOUT_S", 0.05)
+    rig = Rig()
+    rig.live.stall = lambda message: wire(message) == "client_content"
+
+    async def run():
+        cancel = threading.Event()
+        with retry_cancellation(cancel):
+            readying = asyncio.ensure_future(
+                rig.driver.ensure_ready(rig.seed, rig.view([pushed(1)]), lambda *_, **__: None)
+            )
+        await settle()
+        socket = rig.socket
+        socket.close_stalls = True
+        cancel.set()
+        aborting = asyncio.ensure_future(rig.driver.abort(None))
+        done, _ = await asyncio.wait({aborting, readying}, timeout=0.5)
+        dropped = socket._dropped.is_set()
+        # A connect the abort left in its write would take asyncio.run's one cancel there and
+        # then wait in its close for good.
+        socket.transport.abort()
+        return aborting in done, readying.exception() if readying in done else None, dropped
+
+    aborted, ended, dropped = asyncio.run(run())
+    assert aborted
+    assert isinstance(ended, RetryCancelled)
+    assert dropped
+
+
 def test_a_close_ends_a_connect_still_opening():
     """A close while a connect waits for the server's setupComplete ends that connect, which
     holds the session meanwhile: the connect raises that the session closed while it opened."""
