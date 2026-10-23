@@ -348,3 +348,28 @@ def test_the_check_before_landing_is_not_asked_past_the_deadline():
     checks = [time for call, time, _ in episode.env.calls if call == "check_end"]
     assert checks == [0.0, 1.0, 2.0]
     assert episode.statuses() == ["not_applied_time_limit"]
+
+
+def test_a_record_handed_over_during_a_step_is_taken_without_waiting_for_a_timer(monkeypatch):
+    """The sink's writer hands an agent record over from its own thread, at any time, here while
+    the shell is in a step that found nothing due. The shell does not sleep through it to the next
+    timer, the end check due at 2 s: the kernel numbers the record at the reading of that step,
+    1 s."""
+    step, handed = shell._Shell._step, []
+
+    def stepping(self, now):
+        commands = step(self, now)
+        if commands is None and not handed and now[0] >= 1.0:
+            handed.append(now[0])
+            record = shell.AgentRecord("SessionStateChanged", {"index": 0})
+            writer = threading.Thread(target=self._hand_over, args=(record,))
+            writer.start()
+            writer.join()
+        return commands
+
+    monkeypatch.setattr(shell._Shell, "_step", stepping)
+    episode = run("wall", 3.0, [Reply(2.5)])
+    assert handed == [1.0]
+    records = [r for r in episode.trace.records if r["event"] == "SessionStateChanged"]
+    assert [(r["semantic"], r["payload"]) for r in records] == [(1.0, {"index": 0})]
+    assert episode.statuses() == ["applied"]
