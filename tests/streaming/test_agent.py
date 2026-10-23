@@ -728,6 +728,28 @@ def test_a_reply_aborted_while_a_push_reopens_the_session_is_never_asked_for(mon
     agent.close()
 
 
+def test_a_reply_given_up_while_its_session_was_readied_is_never_asked_for(monkeypatch, clock):
+    """The abort's cancellation lands while the session is readied for the reply, after the
+    session was found ready as it was: the reply is not asked for, as a turn is not once
+    abandoned (context.py _run_turn)."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    ensure_ready = agent.driver.ensure_ready
+
+    async def readied_as_it_is_given_up(*args):
+        readied = await ensure_ready(*args)
+        # What abort() does first, from the shell's thread, before it closes the session.
+        agent._replies[7].cancel.set()
+        return readied
+
+    agent.driver.ensure_ready = readied_as_it_is_given_up
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    assert agent.generate(7, 3, frame, BUDGET).cancelled
+    assert not [call for call in agent.driver.calls if call[0] == "reply"]
+    agent.close()
+
+
 def test_a_replys_output_comes_before_the_feedback_committed_before_it_was_accepted(
     monkeypatch, clock
 ):
