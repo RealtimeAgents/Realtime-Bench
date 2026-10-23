@@ -1713,7 +1713,8 @@ def _streaming_totals(scored) -> dict:
 
 
 def prepare_episode_report(args):
-    """Record expected identity before execution, independently of the resulting summary."""
+    """Record expected identity before execution, independently of the resulting summary, from
+    runner.main()'s arguments with its defaults filled in (config.apply_run_defaults)."""
     from realtime_framework.evaluation.config import config_fingerprint, effective_run_config
     from realtime_framework.providers import registry as catalog
 
