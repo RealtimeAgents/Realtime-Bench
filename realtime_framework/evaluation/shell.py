@@ -1214,7 +1214,8 @@ class _Shell:
         incomplete (decision 48). One the task's end or an invalidation gave up on is recorded
         so too, named for what ended the episode (N10), as a synthesized record the token
         totals and the model timing leave out (N34). Only the move over the cap is reported, as
-        skipped (kernel/turns.py on_timer); the others end the episode and their decision goes
+        skipped (kernel/turns.py on_timer), its record naming the cap also when it keeps a result
+        settled before the cap was handled; the others end the episode and their decision goes
         unreported (K-a): the token accounting leaves a result settled before, or one the totals
         count, out of its subtotal of reported decisions, which the report checks the lifecycle
         against (reporting.py report)."""
@@ -1228,6 +1229,7 @@ class _Shell:
             self._emit_inference(held.inference, entry)
             held.inference = None  # its echo writes nothing more
             if reason == "per_move_cap":
+                held.result["harness_timeout_reason"] = "per_move_cap"
                 self._decision.result = held.result
             else:
                 self.env._token_accounting.leave_unreported(held.result["token_accounting"])
