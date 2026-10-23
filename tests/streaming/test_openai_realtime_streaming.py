@@ -255,14 +255,18 @@ class _FailingManager:
 
 
 class _StuckConnection:
-    """A connection whose writes block on a socket that does not drain, until it is closed; its
-    close_socket() closes it, which fails every write stuck in it."""
+    """An SDK connection whose writes block on a socket that does not drain, until it is closed;
+    its close_socket() closes it, which fails every write stuck in it."""
 
     def __init__(self) -> None:
         self._open = threading.Event()
         self._connection = self
+        self.writing = threading.Event()
+        self.conversation = SimpleNamespace(item=SimpleNamespace(create=self.write))
+        self.response = SimpleNamespace(cancel=self.write)
 
-    def write(self) -> None:
+    def write(self, **kwargs) -> None:
+        self.writing.set()
         if not self._open.wait(timeout=5):
             raise AssertionError("the socket was never closed")
         raise ConnectionClosedError(None, None)
@@ -281,27 +285,27 @@ class _StuckManager:
         self.connection._open.wait(timeout=5)
 
 
-def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatch):
-    """A push stuck in a write that does not drain holds the session. An abort's close waits on
-    the same write until its bound, then drops the socket under it: the push fails, the close
-    returns, and the session is freed for the next ensure_ready to rebuild."""
+@pytest.mark.parametrize("on_reply", [False, True])
+def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatch, on_reply):
+    """A push stuck in a write that does not drain holds the session and the connection's
+    writes. An abort of the reply on the session, as the kernel's push watchdog gives one up,
+    writes its cancel behind that write, and gives the cancel up at its bound (review-encoders
+    中 1); the abort's close then waits on the same write until its own bound and drops the
+    socket under it: the push fails, the close returns, and the session is freed for the next
+    ensure_ready to rebuild."""
     monkeypatch.setattr(openai_realtime, "_CONNECTION_CLOSE_TIMEOUT_S", 0.05)
-
-    writing = threading.Event()
-
-    def stuck_write(conn, operation):
-        writing.set()
-        conn.write()
+    monkeypatch.setattr(openai_realtime, "_INTERRUPT_TIMEOUT_S", 0.05)
 
     async def scenario():
         driver, connection = _offline_driver(streaming=True), _StuckConnection()
         session = _Session(1, connection, new_core())
         driver._session, driver._conn, driver._cm = session, connection, _StuckManager(connection)
-        driver._send = stuck_write
         view = streaming_view(stream("F"))
         push = asyncio.ensure_future(driver.push_frame(_observation(1), view))
-        await until(writing.is_set)
-        await driver.abort(None)
+        await until(connection.writing.is_set)
+        reply = session.core.start_reply() if on_reply else None
+        handle = GenerationHandle("streaming-1", opaque=(session, reply)) if on_reply else None
+        await asyncio.wait_for(driver.abort(handle), 2)
         (failure,) = await asyncio.gather(push, return_exceptions=True)
         return failure, driver._session, driver._connected
 

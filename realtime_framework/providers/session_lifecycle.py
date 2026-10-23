@@ -80,7 +80,11 @@ class SessionLifecycle:
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
     is one, and ``interrupt(generation)``; ``capabilities``, with
     ``connection_renewal_reason()`` where they declare connection_renewal; ``clock``, the
-    operational clock; and ``_trace``, which bind_trace sets.
+    operational clock; and ``_trace``, which bind_trace sets. ``interrupt`` and
+    ``_close_current`` must each end within a bound, whatever a write in progress on the
+    connection does: the close fails a write stuck in it, and the interrupt, which the close
+    follows, does not wait for one. That is what ends an abort's cleanup, which ensure_ready
+    waits for without a bound.
     """
 
     _connected = False
