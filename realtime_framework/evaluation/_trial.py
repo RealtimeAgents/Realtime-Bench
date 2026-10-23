@@ -24,6 +24,38 @@ def positive(value):
     return number
 
 
+def runner_arguments(plan):
+    """The runner arguments for the one model and task of ``plan``, except its output paths."""
+    runtime = plan["runtime"]
+    (model,) = plan["models"]
+    (task,) = plan["tasks"]
+    tokens_per_frame = runtime["tokens_per_frame"]
+    return [
+        "--model",
+        model["key"],
+        "--task",
+        task,
+        "--clock",
+        runtime["clock_mode"],
+        "--tokens-per-frame",
+        str(tokens_per_frame) if tokens_per_frame is not None else "unlimited",
+        "--fps",
+        str(runtime["fps"]),
+        "--model-input-fps",
+        str(runtime["model_input_fps"]),
+        "--interaction-mode",
+        runtime["interaction_mode"],
+        "--max-minutes",
+        str(runtime["duration_minutes"]),
+        "--seed",
+        str(runtime["seed"]),
+        "--reasoning-effort",
+        model["reasoning_effort"],
+        "--protocol",
+        runtime["protocol"],
+    ]
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
@@ -318,28 +350,7 @@ def main(argv=None):
         entry.python_env,
         "-m",
         "realtime_framework.evaluation.runner",
-        "--model",
-        key,
-        "--task",
-        selected[0],
-        "--clock",
-        args.clock,
-        "--tokens-per-frame",
-        env["TOKENS_PER_FRAME"],
-        "--fps",
-        str(args.fps),
-        "--model-input-fps",
-        str(model_input_fps),
-        "--interaction-mode",
-        args.interaction_mode,
-        "--max-minutes",
-        str(args.duration_minutes),
-        "--seed",
-        str(args.seed),
-        "--reasoning-effort",
-        effort,
-        "--protocol",
-        protocol,
+        *runner_arguments(plan),
         "--results-dir",
         str(result_root / key),
         "--run-id",

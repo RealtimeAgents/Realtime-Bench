@@ -397,7 +397,6 @@ def test_each_step_passes_streaming_on(
     """The same steps in this interpreter, where a driver can declare streaming: the value each
     step receives is the one it hands on, not its default."""
     from realtime_framework.evaluation import _trial, harbor_cli
-    from realtime_framework.evaluation.effective_config import _trial_command
     from realtime_framework.evaluation.harbor import ApptainerEnvironment, RealtimeBenchOptions
 
     plan = tmp_path / "streaming.yaml"
@@ -425,7 +424,7 @@ def test_each_step_passes_streaming_on(
     assert _trial.main([*trial_argv, "--dry-run"]) == 0
     settings = json.loads(capsys.readouterr().out)
     assert settings["plan"]["runtime"]["interaction_mode"] == "streaming"
-    runner_argv, _ = _trial_command(settings["plan"])
+    runner_argv = _trial.runner_arguments(settings["plan"])
     assert runner_argv[runner_argv.index("--interaction-mode") + 1] == "streaming"
 
 
