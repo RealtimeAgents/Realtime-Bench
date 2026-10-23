@@ -289,20 +289,23 @@ def anthropic_usage(start_usage, delta_usage, *, stop_reason: str | None = None)
 def anthropic_thinking(reasoning_effort: str | None) -> dict:
     """Map the catalog's model-native ``reasoning_effort`` onto Messages API parameters.
 
-    ``none`` explicitly disables thinking and sends no effort. Every other accepted value keeps
-    adaptive thinking and sets ``output_config.effort``. Omitting the effort keeps the provider's
-    default adaptive thinking. ``display`` only controls whether a thinking summary is returned for
-    the audit trail; billing and the token clock are unaffected.
+    ``none`` explicitly disables thinking and sends no effort. ``fixed``, a model whose reasoning
+    is not configurable, sends neither parameter. Every other accepted value keeps adaptive
+    thinking and sets ``output_config.effort``. Omitting the effort keeps the provider's default
+    adaptive thinking. ``display`` only controls whether a thinking summary is returned for the
+    audit trail; billing and the token clock are unaffected.
     """
     adaptive = {"type": "adaptive", "display": "summarized"}
     if reasoning_effort is None:
         return {"thinking": adaptive}
+    if reasoning_effort == "fixed":
+        return {}
     if reasoning_effort == "none":
         return {"thinking": {"type": "disabled"}}
     if reasoning_effort in ANTHROPIC_EFFORT_LEVELS:
         return {"thinking": adaptive, "output_config": {"effort": reasoning_effort}}
     raise ValueError(
-        f"Anthropic reasoning_effort must be one of {('none', *ANTHROPIC_EFFORT_LEVELS)}, "
+        f"Anthropic reasoning_effort must be one of {('none', 'fixed', *ANTHROPIC_EFFORT_LEVELS)}, "
         f"got {reasoning_effort!r}"
     )
 
@@ -596,7 +599,7 @@ class LiteLLMDriver:
             }
         if protocol.reasoning_param == "anthropic_thinking":
             kwargs.update(anthropic_thinking(effort))
-        elif effort is not None:
+        elif effort not in (None, "fixed"):  # `fixed`: the model's reasoning is not configurable
             if protocol.reasoning_param == "openrouter" and upstream:
                 extra_body["reasoning"] = {"effort": effort, "exclude": False}
             else:
