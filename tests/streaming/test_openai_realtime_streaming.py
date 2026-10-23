@@ -452,8 +452,9 @@ def test_a_fold_the_server_fails_leaves_the_session_dirty():
 
 
 def test_a_push_of_a_frame_the_session_holds_waits_for_its_confirmation():
-    """A frame a rebuild replayed, or request_reply pushed before push_frame came, is not pushed
-    again: push_frame returns once it is confirmed, and raises when it was refused."""
+    """A push writes only what the session lacks: a frame the session holds already is not
+    pushed again, and push_frame returns once it is confirmed, and raises when it was refused.
+    The agent pushes each frame before any view holds it, so this is the core's planning alone."""
 
     async def scenario():
         driver, connection = await answering(Server(), stream("FF"))
