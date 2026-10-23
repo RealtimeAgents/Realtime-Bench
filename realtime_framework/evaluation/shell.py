@@ -640,7 +640,7 @@ class _Shell:
     def _failure(self, operation, *args) -> str | None:
         """Run one synchronous environment operation; its error, None when it returned. The
         legacy loop let it escape, except a token wait's own step, which ran inside execute()
-        and failed the action (sandbox/actions.py GuestEnvironment.execute)."""
+        and failed the action (tests/differential/legacy_environment.py LegacyStateReads)."""
         try:
             self._env(operation, *args)
         except Exception:  # noqa: BLE001 - the command's answer carries it

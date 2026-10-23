@@ -1,7 +1,8 @@
 """GuestEnvironment as the legacy loop had it (legacy_environment.py): on the wall clock it
 compares the deadline it was built with in its waits, its WAIT and done(); on either clock done()
-reads the task, and a token step's end check goes through it unless the kernel counts the reads.
-Production's takes no deadline and has no done()."""
+reads the task, and a token step's end check goes through it unless the kernel counts the reads;
+on the token clock its WAIT takes such steps. Production's takes no deadline, has no done() and
+runs no WAIT."""
 
 from __future__ import annotations
 
@@ -59,6 +60,16 @@ def test_production_s_environment_has_no_deadline():
     assert "deadline" not in inspect.signature(GuestEnvironment).parameters
     assert not hasattr(GuestEnvironment, "time_remaining")
     assert not hasattr(GuestEnvironment, "past_deadline")
+
+
+def test_wall_wait_short_of_the_deadline_takes_the_time_it_asks_for():
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _legacy(clock, 10.0)
+    with clock.participant():
+        clock.sleep(1.25)
+        assert env.execute(Action.wait(5.0)) == "wait"
+        assert clock.monotonic() == 6.25
+        assert env._last_execution_result["duration_simulated_seconds"] == 5.0
 
 
 def test_wall_wait_is_cut_at_the_deadline():
@@ -221,3 +232,36 @@ def test_the_legacy_loop_s_tap_reads_the_game_and_samples_its_score(monkeypatch)
     assert len(reads) == 1
     assert task._score_start == task._score_best == 3.0
     assert env.last_end_checks == ()
+
+
+# ---- the token clock's WAIT ---------------------------------------------------------------------
+
+
+def test_a_token_wait_steps_under_done_and_stops_at_the_end_a_step_sees():
+    """One tick at most per step, done() after each (sandbox/actions.py wait_until_tick): the read
+    at tick 2 sees the end, and the record says the terminal condition cut the wait."""
+    env, _ = _legacy_token(stop_check=_answers(False, "task_success"))
+    env.last_held_keys = ("a",)
+    assert env.execute(Action.wait(3.0)) == "wait"
+    assert env.last_held_keys == env.last_end_checks == ()
+    assert env.tick_index() == 2
+    assert env._last_execution_result == {
+        "duration_simulated_seconds": 2.0,
+        "requested_duration_simulated_seconds": 3.0,
+        "truncated_by_episode_horizon": False,
+        "truncated_by_terminal_condition": True,
+        "active_holds": [],
+        "active_mouse_buttons": [],
+    }
+    assert env._episode_over and env._terminal_reason == "task_success"
+
+
+def test_a_token_wait_across_the_horizon_ends_there_and_says_so():
+    env, _ = _legacy_token()
+    env.set_episode_horizon(1.5)
+    assert env.execute(Action.wait(3.0)) == "wait"
+    assert env.tick_index() == 1.5
+    result = env._last_execution_result
+    assert result["duration_simulated_seconds"] == 1.5
+    assert result["truncated_by_episode_horizon"] is True
+    assert result["truncated_by_terminal_condition"] is False

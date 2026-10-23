@@ -125,7 +125,7 @@ class WallEnvironment(_Latched, FakeEnvironment):
     """FakeEnvironment with the script's operation times, end and frozen stream, and the parts
     of GuestEnvironment's wall clock the kernel sees: holds released by a timer when their lease
     ends (sandbox/actions.py GuestEnvironment._execute_wall_hold, _schedule_wall_release,
-    _wall_release_due) and the wait record (actions.py GuestEnvironment.execute).
+    _wall_release_due) and the wait record (legacy_environment.py LegacyWallClock.execute).
 
     A capture reads its tick when it starts and is stamped when it returns, an end check reads
     the task when it is asked and returns after its time, and an action takes its time before it
@@ -354,12 +354,13 @@ class _Guest:
         return {"status": "ok"}
 
 
-class TokenWorld(_Latched, LegacyStateReads, TokenEnvironment):
+class TokenWorld(_Latched, TokenEnvironment, LegacyStateReads, GuestEnvironment):
     """TokenEnvironment with the script's end, failed state reads and advances, refusals and
     faults, and a log of every end check and key release with the tick it happened at. The step,
     the end check and the releases a tap makes inside execute (sandbox/actions.py
     GuestEnvironment._execute_clock_key) are logged apart and not counted: the kernel's world moves
-    the tick of a tap without them."""
+    the tick of a tap without them. LegacyStateReads comes after TokenEnvironment, whose log of the
+    runner's calls takes in the legacy loop's WAIT too."""
 
     def __init__(self, frames, task: _Task, script: Script):
         self.script = script

@@ -211,8 +211,9 @@ class FakeEnvironment:
             execution["release_at"] = release_at
         self.executions.append({"decision": self.decision, **execution})
         if action.action_type == ActionType.WAIT:
-            # The wall clock sleeps out the wait, cut short at the deadline (actions.py execute);
-            # of its execution result, the fields that carry the duration.
+            # The wall clock sleeps out the wait, cut short at the deadline
+            # (legacy_environment.py LegacyWallClock.execute); of its execution result, the fields
+            # that carry the duration.
             duration = float(action.parameters.get("duration", 0.0))
             started_at = self.clock_position()
             if duration > 0:
