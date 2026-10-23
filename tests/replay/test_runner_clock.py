@@ -278,3 +278,6 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     assert (timeline, agent.outcomes) == ([], [])
     line = f"[default] k=0 generation TIMED OUT (>{expected}s, provider_watchdog) — discarded"
     assert line in logs
+    # The call's token record names the watchdog for its missing usage.
+    missing = env._token_accounting.summary()["provider_usage_missing_reasons"]
+    assert missing == {"generation_aborted_at_provider_watchdog": 1}
