@@ -812,6 +812,24 @@ def test_a_periodic_check_an_execution_delayed_is_made_when_the_action_is_refuse
     assert sim.termination.ended_at == pytest.approx(2.8)
 
 
+def test_no_check_is_made_for_a_refused_action_once_an_invalidation_ended_the_episode():
+    # The click landing at 0.5 s executes until 1.5 s and is refused; the periodic check due at
+    # 1 s is left to it. Meanwhile, at 1.25 s, another thread invalidates the run, which ends
+    # the episode before the refusal is handled: the snapshot is taken, and nothing is read
+    # after it.
+    world = World(
+        replies=[Reply(0.5, CLICK), Reply(9.0)],
+        execute_s=1.0,
+        rejections={0: "click outside the page"},
+        invalidations=((1.25, Invalidated("environment", "wall_key_release_failed", "x")),),
+    )
+    sim = _episode(_wall(10.0), world)
+    assert _asked(sim) == [0.0, 0.5]
+    assert [outcome.status for outcome in sim.outcomes] == ["rejected"]
+    assert _ended(sim) == ("invalid_run", "invalid", 1.5, 1.5)
+    _assert_nothing_after_the_end(sim)
+
+
 def test_end_checks_stay_on_the_frame_grid_when_an_execution_delays_one():
     world = World(replies=[Reply(2.25, CLICK), Reply(10.0, CLICK)], execute_s=2.5)
     sim = _episode(_wall(8.0), world)
