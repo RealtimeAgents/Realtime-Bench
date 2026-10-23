@@ -1404,7 +1404,9 @@ if __name__ == "__main__":
     except SystemExit as e:  # main() raises SystemExit(1) for an unscored benchmark cell
         _code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
     except KeyboardInterrupt:
-        # main() ran its finalizers; an interrupted episode is never a scored result.
+        # main()'s cleanup closed the recorder, the agent and its trace, but the episode froze no
+        # snapshot, released no held input and wrote no run summary: an interrupted episode is
+        # never a scored result.
         print(
             "INTERRUPTED — episode did not complete",
             flush=True,
