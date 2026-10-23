@@ -126,6 +126,14 @@ class ShellEnvironment(Protocol):
     # step of its advance; one that sees the end stops that advance, a failed one does not. The
     # shell passes them as ActionExecuted.end_checks.
     last_end_checks: tuple[tuple[bool, str | None, str | None], ...]
+    # What the last execute() left for the shell: its execution record and coordinate trace,
+    # which the shell clears before each, and when it returned "failed" its error and whether
+    # the guest refused the action.
+    _last_execution_result: Any
+    _last_coordinate_trace: Any
+    _last_exec_error: str | None
+    _last_rejected_by_guest: bool
+    frame_ages: list[float]  # each reported decision's frame age, which the shell appends
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
     # key-release timer, on its own thread, invalidates the run.
     on_invalid: Callable[[dict], None] | None
@@ -161,6 +169,9 @@ class ShellEnvironment(Protocol):
 
     def release_inputs(self) -> None:
         """Release every held key and mouse button, after the snapshot."""
+
+    def record_lifecycle(self, record: dict) -> None:
+        """Write one reported decision's action-lifecycle record."""
 
     def tick_index(self) -> float: ...
 
