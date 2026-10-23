@@ -154,6 +154,7 @@ class WallEnvironment(_Latched, FakeEnvironment):
         )
         self.deadline = self.t0 + script.duration_s
         self.script = script
+        self.kernel_counts_reads = False  # drivers.shell sets it
         self._after_action = False  # the next read follows an executed action
         self._landing = False  # the next read is the one before landing: a frame was captured
         self._last_asked: float | None = None  # when the last state read was asked

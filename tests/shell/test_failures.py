@@ -716,7 +716,7 @@ def test_the_reads_a_tap_makes_count_toward_three_failed_reads_in_a_row(tap_chec
     answered starts over."""
     world = World(tap_checks={0: tap_checks}, check_errors={2: "state read 2"})
     episode = run("token", 1.0, [Reply(0.0, TAP)], world)
-    assert episode.env.kernel_counts_reads is True
+    assert not hasattr(episode.env, "kernel_counts_reads")
     if invalid:
         assert episode.invalid["reason"] == "terminal_state_check_failed"
         assert "RuntimeError: state read 2" in episode.invalid["detail"]

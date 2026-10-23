@@ -6,8 +6,8 @@ itself against, in its waits, its WAIT, done() and the optional deadline hooks. 
 the deadline itself (kernel/turns.py), so production's GuestEnvironment takes none.
 
 LegacyStateReads is the rest: done(), the legacy loop's end check; the end check after each token
-step through it, which invalidates the run at the first failed read, while the kernel's shell,
-which counts the reads itself, has not set kernel_counts_reads; and the token clock's WAIT, which
+step through it, which invalidates the run at the first failed read, unless the kernel counts the
+reads itself and drivers.py shell has set kernel_counts_reads; and the token clock's WAIT, which
 steps the clock under those checks. Production's GuestEnvironment answers check_end() only, and
 the kernel lets a wait's time pass itself (kernel/turns.py _start_wait).
 """
@@ -82,10 +82,10 @@ class LegacyStateReads:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Set by the kernel's shell, which counts failed state reads: the end checks a key tap
-        # makes go to last_end_checks, each (ended, reason, error) as check_end() answered or
-        # failed, (False, None, None) also when the task has no end check, instead of done(),
-        # which invalidates the run at the first failure.
+        # Set under the kernel's shell (drivers.py shell), which counts failed state reads: the
+        # end checks a key tap makes go to last_end_checks, each (ended, reason, error) as
+        # check_end() answered or failed, (False, None, None) also when the task has no end check,
+        # instead of done(), which invalidates the run at the first failure.
         self.kernel_counts_reads = False
 
     def _ended_after_step(self):

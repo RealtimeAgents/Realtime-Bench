@@ -1196,9 +1196,10 @@ def test_the_third_failed_read_in_a_row_invalidates_the_run(
 
 def test_a_failed_read_inside_a_tap_does_not_stop_it():
     # Paused at 120 fps, a tap at tick 0 is two ticks; its read at tick 1 fails and the tap goes
-    # on to 2, where the task ends, as the environment does once the kernel counts its reads
-    # (shell.py kernel_counts_reads). The read at 2 saw the end: the episode ends there, with no
-    # check after execution; the loop top read tick 0, which is not read again before the tap.
+    # on to 2, where the task ends, as the environment does, whose reads the kernel counts
+    # (sandbox/actions.py GuestEnvironment._ended_after_step). The read at 2 saw the end: the
+    # episode ends there, with no check after execution; the loop top read tick 0, which is not
+    # read again before the tap.
     sim = _run(
         _token(10, None, env_fps=120, input_fps=120),
         Reply(action=TAP),

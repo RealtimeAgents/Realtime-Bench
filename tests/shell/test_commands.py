@@ -111,7 +111,7 @@ def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     assert env._think_spent == 1.5
     assert env._dropped_intermediate_frames == 0
     assert getattr(env, "_invalid_run", None) is None
-    assert env.kernel_counts_reads is True
+    assert not hasattr(env, "kernel_counts_reads")
     assert agent._clock_mode == "wall"
     assert env.horizon is None
     assert episode.trace.checkpoints == 3

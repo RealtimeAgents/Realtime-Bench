@@ -38,10 +38,9 @@ Failed state reads. The run is invalid once three state reads in a row have fail
 answers starts the count over. The kernel keeps the count (kernel/turns.py READ_FAILURE_LIMIT),
 over every read that decides whether the episode is over: ``check_end()``, which answers CheckEnd,
 and on the token clock the reads a key tap makes inside ``execute()``, which the shell passes on as
-``ActionExecuted.end_checks``. The shell sets ``kernel_counts_reads``, and then the environment
-invalidates the run for a failed read on neither path; under the legacy loop it stays unset, and
-the legacy loop's environment (tests/differential/legacy_environment.py) invalidates the run at
-the first failed read.
+``ActionExecuted.end_checks``. The environment invalidates the run for a failed read on neither
+path; the legacy loop's environment (tests/differential/legacy_environment.py) invalidates the run
+at the first failed read.
 """
 
 from __future__ import annotations
@@ -126,10 +125,6 @@ class ShellEnvironment(Protocol):
     # step of its advance; one that sees the end stops that advance, a failed one does not. The
     # shell passes them as ActionExecuted.end_checks.
     last_end_checks: tuple[tuple[bool, str | None, str | None], ...]
-    # Set by the shell before the episode: the kernel counts failed state reads, so a failed read
-    # inside execute() goes to last_end_checks instead of latching the run invalid. The legacy
-    # loop leaves it False.
-    kernel_counts_reads: bool
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
     # key-release timer, on its own thread, invalidates the run.
     on_invalid: Callable[[dict], None] | None
@@ -363,7 +358,6 @@ class _Shell:
             # Under the kernel's own horizon, a safety net for every advance.
             env.set_episode_horizon(self.config.max_ticks)
         self.agent._clock_mode = self.config.clock_mode
-        env.kernel_counts_reads = True
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
         # A replay aid, opened and closed apart from the episode, which goes on without it.
