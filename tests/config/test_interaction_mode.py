@@ -183,6 +183,21 @@ def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
     assert summary["streaming"] is None
 
 
+def test_a_streaming_run_saves_its_mode_with_its_state(tmp_path, monkeypatch):
+    """The generation artifact main() saves with the snapshot the shell froze records the run's
+    mode, which reevaluate --replace-summary compares with the run summary's
+    (reporting.reevaluate_main)."""
+
+    def loop(env, trace):
+        env._termination_snapshot, env._termination_snapshot_captured = {"state": {}}, True
+        return []
+
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming", loop=loop)
+    manifest = tmp_path / "run" / "generation_artifact" / "manifest.json"
+    assert json.loads(manifest.read_text())["interaction_mode"] == summary["interaction_mode"]
+    assert summary["interaction_mode"] == "streaming"
+
+
 @pytest.mark.parametrize(
     "interaction_mode, reason",
     [("turn_based", "no_inference_responses"), ("streaming", "not_accounted_streaming")],
@@ -338,6 +353,28 @@ def test_the_report_compares_the_mode(tmp_path):
     path.write_text(json.dumps({"stop_reason": "terminal", "interaction_mode": "turn_based"}))
     assert summary_ok(path, expected_interaction_mode="turn_based")
     assert not summary_ok(path, expected_interaction_mode="streaming")
+
+
+def test_a_reevaluation_compares_the_mode(tmp_path, monkeypatch):
+    """reevaluate --replace-summary refuses a run summary whose mode is not the saved artifact's
+    (reporting.reevaluate_main); the re-evaluation itself is stubbed."""
+    import sys
+
+    from realtime_framework.evaluation import reporting
+
+    identity = {"suite_id": "public", "task_id": WEB, "interaction_mode": "streaming"}
+    evaluation = {"resolved": True, "evaluation_version": 1}
+    monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (evaluation, identity))
+    monkeypatch.setattr(sys, "argv", ["reevaluate", str(tmp_path), "--replace-summary"])
+    summary = tmp_path / "run_summary.json"
+    summary.write_text(
+        json.dumps({**identity, "interaction_mode": "turn_based", "stop_reason": "terminal"})
+    )
+    with pytest.raises(RuntimeError, match="identity mismatch for interaction_mode"):
+        reporting.reevaluate_main()
+    summary.write_text(json.dumps({**identity, "stop_reason": "terminal"}))
+    reporting.reevaluate_main()
+    assert json.loads(summary.read_text())["solved"] is True
 
 
 PLAN = """\
@@ -658,6 +695,26 @@ def test_only_a_streaming_report_has_a_streaming_section(tmp_path):
         },
         "actions": {"arrived": 1, "outcomes": {"applied": 1}},
         "replies": {"started": 2, "abandoned": {"deadline": 1}},
+    }  # fmt: skip
+
+
+def test_a_streaming_group_sums_the_counts_of_all_its_tasks(tmp_path):
+    """Two runs of one identity are one group (reporting.report), whose counts are both runs'."""
+    from realtime_framework.evaluation.reporting import report
+
+    root = tmp_path / "report"
+    for cell in ("first", "second"):
+        _report_root(root, "streaming", cell=cell)
+    (group,) = report(root)["groups"]
+    assert group["scored"] == 2
+    assert group["streaming"] == {
+        "context_control": "approximate",
+        "frames": {
+            "captured": 6, "pushed": 4, "push_failed": 2, "dropped": 2, "confirmed": 0,
+            "refused": 0, "dropped_by_reason": {"push_failed": 2},
+        },
+        "actions": {"arrived": 2, "outcomes": {"applied": 2}},
+        "replies": {"started": 4, "abandoned": {"deadline": 2}},
     }  # fmt: skip
 
 
