@@ -594,6 +594,33 @@ def test_a_token_call_the_runs_invalidation_gave_up_on_ran_operational_seconds()
     ]
 
 
+class _SlowSecondCapture(Environment):
+    """The second capture takes 1.2 s."""
+
+    def capture(self) -> Observation:
+        if self.decision == 0:
+            self.clock.sleep(1.2)
+        return super().capture()
+
+
+def test_a_call_started_after_the_read_that_invalidated_the_run_was_asked_ran_no_time():
+    """Reads take 0.1 s and the third to the fifth fail. The second capture runs from 1.1 s to
+    2.3 s, and the fifth read, the third failure in a row, is asked at its end, which dates the
+    invalid run (N44). Its answer comes after the frame's, so the second call starts first, at
+    2.4 s, and is given up at once: it ran no time, not -0.1 s."""
+    world = World(check_s=0.1, check_errors={3: "x", 4: "x", 5: "x"})
+    replies = [Reply(0.2, CLICK), Reply(hang=True)]
+    episode = run("wall", 6.0, replies, world, env_type=_SlowSecondCapture)
+    assert episode.invalid["reason"] == "terminal_state_check_failed"
+    assert episode.env._termination["end_s"] == pytest.approx(2.3)
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p.get("harness_abort_reason"), p["latency_s"]) for p in completed] == [
+        (0, None, pytest.approx(0.2)),
+        (1, "invalid_run", 0.0),
+    ]
+    assert episode.agent.trajectory[1]["latency"] == 0.0
+
+
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
     """The kernel raises, and the environment refuses the termination record: run_episode
     still returns, and the failure is logged."""
