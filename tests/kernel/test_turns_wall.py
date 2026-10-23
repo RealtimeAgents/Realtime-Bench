@@ -1117,13 +1117,21 @@ def test_the_per_move_cap_is_at_least_a_tenth_of_a_second():
     assert _ended(sim) == ("time_limit", "deadline", 3.0, 3.0)
 
 
-def test_a_call_over_the_per_move_cap_costs_the_cap_against_the_think_budget():
-    # Budget 1.5 s, cap 1 s: each call outlasts the cap and costs 1 s (legacy_loop.py _charge). The
-    # second brings the spend to 2 s >= 1.5 s, and the episode ends once it is reported, at 2 s.
-    world = World(replies=[Reply(5.0, CLICK)] * 3)
-    sim = _episode(_wall(10.0, per_move_cap_s=1.0, think_budget_s=1.5), world)
-    assert [outcome.status for outcome in sim.outcomes] == ["skipped_timeout", "skipped_timeout"]
-    assert _ended(sim) == ("think_budget", "think_budget", 2.0, 2.0)
+@pytest.mark.parametrize(
+    ("reply", "abandoned"),
+    [(Reply(5.0, CLICK), [1, 2, 3]), (Reply(0.75, CLICK, agent_latency=1.25), [])],
+    ids=["cut-at-the-cap", "back-before-the-cap"],
+)
+def test_a_call_over_the_per_move_cap_costs_the_cap_against_the_think_budget(reply, abandoned):
+    # Budget 2.25 s, cap 1 s. Each call is over the cap: cut by its timer, or back after 0.75 s
+    # but 1.25 s long by its own latency. Either way it places no action and costs the cap, 1 s
+    # (legacy_loop.py _charge), not 1.25 s, which would end the episode after the second call.
+    # The third brings the spend to 3 s >= 2.25 s, and the episode ends once it is reported, at 3 s.
+    world = World(replies=[reply] * 4)
+    sim = _episode(_wall(10.0, per_move_cap_s=1.0, think_budget_s=2.25), world)
+    assert [data["generation"] for data in _data(sim, "GenerationAbandoned")] == abandoned
+    assert [outcome.status for outcome in sim.outcomes] == ["skipped_timeout"] * 3
+    assert _ended(sim) == ("think_budget", "think_budget", 3.0, 3.0)
 
 
 def test_the_think_budget_skips_the_decision_then_ends_after_its_commit():
