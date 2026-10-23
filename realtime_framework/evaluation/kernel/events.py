@@ -34,6 +34,26 @@ class Priority(IntEnum):
 
 
 @dataclass(frozen=True)
+class EndCause:
+    """What one cause of an episode's end comes to."""
+
+    stop_reason: str | None  # None for the task's own end, whose reason the task names
+    not_applied: str | None  # the status of an action it keeps from landing; None if none can be
+
+
+# By the end causes of the kernel (core.py Kernel.end), in the runner's names (legacy_loop.py
+# _finalize, _land_action). The horizon keeps an action from landing before it ends the episode,
+# at the next loop top; the think budget ends it only once the decision is reported.
+END_CAUSES = {
+    "environment": EndCause(None, "not_applied_terminal"),
+    "deadline": EndCause("time_limit", "not_applied_time_limit"),
+    "horizon": EndCause("tick_limit", "not_applied_tick_limit"),
+    "think_budget": EndCause("think_budget", None),
+    "invalid": EndCause("invalid_run", "invalid_run"),
+}
+
+
+@dataclass(frozen=True)
 class Entry:
     """One episode-log record. ``seq`` is assigned by the kernel only, in handling order."""
 

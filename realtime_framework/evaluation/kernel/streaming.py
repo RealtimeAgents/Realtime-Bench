@@ -66,6 +66,7 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import (
+    END_CAUSES,
     ActionExecuted,
     Capture,
     CheckEnd,
@@ -80,13 +81,12 @@ from realtime_framework.evaluation.kernel.events import (
     Priority,
 )
 from realtime_framework.evaluation.kernel.turns import (
-    NOT_APPLIED,
     READ_FAILURE_LIMIT,
     _floor,
     _FrozenStream,
 )
 
-# Outcomes of an action that never executed, besides the end's (turns.NOT_APPLIED, invalid_run) and
+# Outcomes of an action that never executed, besides the end's (events.END_CAUSES) and
 # a frame that cannot be found (harnesses/default/frames.py INVALID_GROUNDING_FRAME).
 SUPERSEDED = "superseded"  # a newer action took its place in the waiting slot
 CANCELLED_GENERATION = "cancelled_generation"  # its reply was given up
@@ -725,7 +725,9 @@ class StreamingPolicy:
     def _ended(self) -> str:
         """The status of an action the end keeps from executing."""
         kernel = self.kernel
-        return "invalid_run" if kernel.invalid is not None else NOT_APPLIED[kernel.ending.cause]
+        if kernel.invalid is not None:
+            return END_CAUSES["invalid"].not_applied
+        return END_CAUSES[kernel.ending.cause].not_applied
 
     def _fields(self, a: _Action) -> dict:
         arrival = a.arrival

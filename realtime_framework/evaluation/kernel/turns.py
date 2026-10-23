@@ -43,6 +43,7 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import (
+    END_CAUSES,
     ActionExecuted,
     AdvanceClock,
     Capture,
@@ -62,13 +63,6 @@ from realtime_framework.evaluation.kernel.events import (
     ReleaseKeys,
     RenderFrame,
 )
-
-# Status of an action that was not landed because the episode ended before it could, by the
-# end's cause (legacy_loop.py _land_action). The token horizon ends an episode only at the loop top.
-NOT_APPLIED = {
-    "deadline": "not_applied_time_limit",
-    "environment": "not_applied_terminal",
-}
 
 # The run is invalid once this many state reads in a row have failed; a read that answers starts
 # the count over (phase2.md, 时间和结束判定). A failed read short of it answers "not over".
@@ -257,7 +251,8 @@ class TurnPolicy:
             kernel.end("deadline", timer.at)
         elif timer.kind == "end_check":
             # A check a synchronous command delayed past the deadline is not asked: the deadline
-            # comes first, as in sandbox/actions.py GuestEnvironment.done. Nor is one an execution
+            # comes first, as in the legacy loop's environment (tests/differential/
+            # legacy_environment.py LegacyWallClock.done). Nor is one an execution
             # delayed: the check right after the action reads at that reading, or, for an action
             # refused, which gets none, the check made in its place (_executed).
             if kernel.semantic < self.config.duration_s:
@@ -313,12 +308,11 @@ class TurnPolicy:
 
     def _past_deadline(self) -> bool:
         """Wall clock: an answer filed before the deadline can be handled after it, behind a
-        synchronous command that ran across it. Then the deadline ends the episode before the
-        answer leads to anything in the world; nothing lands after the end."""
-        if self.token or self.kernel.semantic < self.config.duration_s:
-            return False
-        self.kernel.end("deadline", self.config.duration_s)
-        return True
+        synchronous command that ran across it. Then the answer leads to nothing in the world,
+        and nothing lands after the end: the deadline's timer, due by now, ends the episode once
+        what is filed before it has been handled, an end a check asked before the deadline saw
+        among it (phase2.md, 时间和结束判定)."""
+        return not self.token and self.kernel.semantic >= self.config.duration_s
 
     def _guarded(self) -> None:
         if self._past_deadline():
@@ -506,7 +500,7 @@ class TurnPolicy:
         if d.over_budget:
             return "skipped_budget"
         if kernel.ending is not None:
-            return NOT_APPLIED[kernel.ending.cause]
+            return END_CAUSES[kernel.ending.cause].not_applied
         return None
 
     def _pre_checked(self) -> None:
@@ -515,7 +509,7 @@ class TurnPolicy:
         # The horizon ends the episode at the next loop top, as today (legacy_loop.py _land_action,
         # run_stream).
         if self.token and self._horizon_reached():
-            return self._resolve("not_applied_tick_limit")
+            return self._resolve(END_CAUSES["horizon"].not_applied)
         d, kernel = self.decision, self.kernel
         d.execute_at = kernel.semantic
         if d.action.action_type is ActionType.WAIT:
@@ -555,9 +549,9 @@ class TurnPolicy:
             return self._resolve("invalid_run")
         if event.rejection is not None:
             # A refused action skips the check after execution (legacy_loop.py _land_action), but
-            # not a periodic check its execution delayed.
+            # not a periodic check its execution delayed, unless the episode ended meanwhile.
             d.detail = event.rejection
-            if self._periodic_owed:
+            if self._periodic_owed and kernel.ending is None:
                 self._check_end(None)
             return self._resolve("rejected")
         if self.token and event.held_keys:
@@ -768,7 +762,9 @@ class TurnPolicy:
         """Ask whether the episode is over; ``then`` runs when it is not. A check right after an
         action always reads; any other is not asked when it would read what was read already
         (_read_already), and ``then`` runs once that read has answered: at once, or when its
-        answer is handled, should another event due earlier have come first."""
+        answer is handled, should another event due earlier have come first. Should a periodic
+        check read again before that answer is handled, ``then`` waits for the later read's
+        answer (_end_checked)."""
         if then is not None and self._past_deadline():
             return
         if not after_action and self._read_already(before_landing=before_landing):
@@ -804,6 +800,11 @@ class TurnPolicy:
         if self._awaited is not None and self._awaited[0] == event.request:
             then = self._awaited[1]
             self._awaited = None
+            # A periodic check has read since: what waits goes on from that later read's answer,
+            # which may be the end, and nothing lands after the end.
+            if self._unanswered is not None:
+                self._awaited = (self._unanswered, then)
+                return
             then()
 
     def _count_read(self, error: str | None, asked_at: float | None = None) -> bool:

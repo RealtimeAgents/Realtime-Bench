@@ -51,7 +51,7 @@ import threading
 import traceback
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -109,8 +109,9 @@ class ShellEnvironment(Protocol):
     shell reads as the runner does (legacy_loop.py ``_land_action``, ``_apply``). The environment
     may also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
     ``clock_advance_failed`` from a tap; for an operation that returns, the shell posts that as
-    Invalidated before the command's answer. One that raises is answered with its error, and the run
-    is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
+    Invalidated before the command's answer, after it when the answer is an action's that
+    carries that same failure (``_execute``). One that raises is answered with its error, and the
+    run is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
     ``_rendered``)."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
@@ -125,6 +126,14 @@ class ShellEnvironment(Protocol):
     # step of its advance; one that sees the end stops that advance, a failed one does not. The
     # shell passes them as ActionExecuted.end_checks.
     last_end_checks: tuple[tuple[bool, str | None, str | None], ...]
+    # What the last execute() left for the shell: its execution record and coordinate trace,
+    # which the shell clears before each, and when it returned "failed" its error and whether
+    # the guest refused the action.
+    _last_execution_result: Any
+    _last_coordinate_trace: Any
+    _last_exec_error: str | None
+    _last_rejected_by_guest: bool
+    frame_ages: list[float]  # each reported decision's frame age, which the shell appends
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
     # key-release timer, on its own thread, invalidates the run.
     on_invalid: Callable[[dict], None] | None
@@ -161,6 +170,9 @@ class ShellEnvironment(Protocol):
     def release_inputs(self) -> None:
         """Release every held key and mouse button, after the snapshot."""
 
+    def record_lifecycle(self, record: dict) -> None:
+        """Write one reported decision's action-lifecycle record."""
+
     def tick_index(self) -> float: ...
 
     def set_episode_horizon(self, max_tick: float) -> None: ...
@@ -189,7 +201,9 @@ class KernelAgent(Protocol):
         """Commit: report the outcome of decision ``outcome.decision`` as its feedback."""
 
     def abort(self, generation: int | None = None) -> None:
-        """AbortGeneration: interrupt the generation; None interrupts whichever is active."""
+        """AbortGeneration: interrupt the generation; None interrupts whichever is active. The
+        shell aborts every generation the kernel gives up on, one whose worker has returned too,
+        before it discards that one's result."""
 
 
 # ---- the shell --------------------------------------------------------------------------------
@@ -256,6 +270,7 @@ class _Generation:
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
     escaped: str | None = None  # the traceback of a failure that escaped the legacy loop
     echo: Entry | None = None  # the kernel's record of the result, which those are written under
+    given_up: bool = False  # the kernel gave it up, and its records are written (_given_up)
 
 
 @dataclass
@@ -346,6 +361,8 @@ class _Shell:
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
         self._accepting: set[int] = set()  # the generations the batch being run accepts
+        self._batch_invalid = False  # the shell posted an invalid run during the batch being run
+        self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self._snapshot_read = False
         self._trace_failed = False
         self._loop_error: str | None = None
@@ -413,20 +430,32 @@ class _Shell:
     def _write_handed(self) -> None:
         """Once the episode is finished: hand the kernel the agent records it has not taken, step
         it through what is still due, the records among it, and write them. The kernel handles
-        nothing after the end, so any other event's echo is only a KernelRecord."""
+        nothing after the end, so any other event's echo is only a KernelRecord. Should the
+        kernel raise meanwhile, the episode's verdict stands: that is logged, and the agent
+        records not written yet are written unnumbered."""
+        unwritten = ([] if self._given is None else [self._given]) + list(self._held_records)
         while self._held_records:
             self.post(self._held_records.popleft())
-        now = self._read()
-        while True:
-            commands = self._step(now)
-            if commands is None:
-                return
-            for command in commands:
-                entry = command.entry
-                if isinstance(entry.data, AgentRecord):
-                    self._emit(entry.kind, entry.data.data, entry)
-                else:
-                    self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
+        now = self._now
+        try:
+            now = self._read()
+            while True:
+                commands = self._step(now)
+                if commands is None:
+                    return
+                for command in commands:
+                    entry = command.entry
+                    if isinstance(entry.data, AgentRecord):
+                        unwritten = [record for record in unwritten if record is not entry.data]
+                        self._emit(entry.kind, entry.data.data, entry)
+                    else:
+                        self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
+        except Exception:  # noqa: BLE001 - the episode finished; only its last records are left
+            self.log(
+                "[default] numbering the agent's last records failed:\n" + traceback.format_exc()
+            )
+            for record in unwritten:
+                self._emit(record.kind, record.data, Entry(None, *now, record.kind, record))
 
     def _loop(self) -> None:
         self._now = self._read()
@@ -527,10 +556,16 @@ class _Shell:
 
     def _run_all(self, commands: list) -> None:
         self._accepting = {c.generation for c in commands if isinstance(c, AcceptResult)}
+        self._batch_invalid = False
         for command in commands:
             self._run(command)
 
     def _run(self, command) -> None:
+        if self._batch_invalid and isinstance(command, Execute | AdvanceClock | RenderFrame):
+            # The kernel takes the invalid run the shell posted only at its next step: what is
+            # left of the batch acts on the world no more, as the legacy loop executed nothing
+            # once _invalid_run was latched (legacy_loop.py _land_action).
+            return self.post(self._not_run(command))
         try:
             self._handle(command)
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
@@ -595,7 +630,17 @@ class _Shell:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
         finalizes."""
         self._escaped(failure)
-        self.post(Invalidated("runner", "run_exception", failure))
+        self._invalidate(Invalidated("runner", "run_exception", failure))
+
+    def _invalidate(self, invalid: Invalidated) -> None:
+        """Post an invalid run the shell found on its own thread; the rest of the batch it came
+        in runs nothing in the world (_run). A kernel that finished in the step whose batch this
+        is takes no more events: the first such failure goes with its Finish (_finish)."""
+        self._batch_invalid = True
+        if self.kernel.termination is None:
+            self.post(invalid)
+        elif self._unheard is None:
+            self._unheard = invalid
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
@@ -619,6 +664,20 @@ class _Shell:
                 return SnapshotFrozen(semantic, semantic if ops is None else ops, failure)
         return None
 
+    @staticmethod
+    def _not_run(command):
+        """The answer to a command left unrun for an invalid run the kernel has not taken yet. The
+        kernel takes that run first; an action left unrun, or one whose move to the action time
+        was, settles as invalid_run (kernel/turns.py _executed, _step_failed)."""
+        error = "not run: the run was invalidated earlier in this batch of commands"
+        match command:
+            case Execute(decision=decision):
+                return ActionExecuted(decision, error=error)
+            case AdvanceClock():
+                return ClockStepped(error)
+            case RenderFrame():
+                return FrameRendered(error=error)
+
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
         itself in an operation that returned goes to the kernel with its own reason before the
@@ -628,7 +687,7 @@ class _Shell:
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
         if invalid is not None and invalid is not latched:
-            self.post(_invalidated(invalid))
+            self._invalidate(_invalidated(invalid))
         return result
 
     def _failure(self, operation, *args) -> str | None:
@@ -831,10 +890,15 @@ class _Shell:
         self._emit_inference((chunks, completed), held.echo)
 
     def _abort(self, generation: int) -> None:
+        """Interrupt a generation the kernel gave up on. One whose worker came back is aborted
+        too, before its result is discarded: a session that holds its reply rebuilds from the
+        accepted history, as the runner aborted every call it gave up on (legacy_loop.py
+        _bounded_call)."""
         held = self._generations.get(generation)  # None when its StartGeneration raised
-        if held is None or held.done.is_set():
-            return  # nothing is running to interrupt; the kernel discards the result
-        self._abandoned.append(held)
+        if held is None:
+            return
+        if not held.done.is_set():
+            self._abandoned.append(held)
         try:
             self.agent.abort(generation)
         except Exception:  # noqa: BLE001 - interrupting is best effort, as in the runner
@@ -899,12 +963,12 @@ class _Shell:
             # _executed): first, it settles the action where it ran, not after the snapshot read
             # the end asks for.
             self.post(answer)
-            self.post(_invalidated(invalid))
+            self._invalidate(_invalidated(invalid))
         else:
             # Latched for a step inside the action, such as a key tap's failed advance: first, it
             # keeps its reason, which the kernel would read from the answer as
             # action_execution_failed.
-            self.post(_invalidated(invalid))
+            self._invalidate(_invalidated(invalid))
             self.post(answer)
 
     def _commit(self, outcome: Outcome) -> None:
@@ -913,7 +977,7 @@ class _Shell:
         # The loop has no terminal actions: the record of a proposed DONE or FAIL says so, also
         # when the move went over the per-move cap and the kernel named no protocol failure
         # (kernel/turns.py _accept).
-        proposed = r.get("action")
+        proposed = None if r is None else r.get("action")
         if proposed is not None and proposed.action_type in (ActionType.DONE, ActionType.FAIL):
             r["action_protocol"] = episode_records.terminal_wait_protocol(
                 r.get("action_protocol") or {}
@@ -928,6 +992,10 @@ class _Shell:
             self.post(OutcomeCommitted(outcome.decision, failure))
         else:
             self.post(OutcomeCommitted(outcome.decision))
+        if r is None:
+            # A move given up on at the cap whose StartGeneration raised has no result to record;
+            # that raise invalidated the run.
+            return
         resolved = decision.resolved
         try:
             self._env(
@@ -959,7 +1027,7 @@ class _Shell:
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             failure = traceback.format_exc()
             self.log(f"[default] lifecycle audit write failed:\n{failure}")
-            self.post(Invalidated("harness", "action_lifecycle_write_failed", failure))
+            self._invalidate(Invalidated("harness", "action_lifecycle_write_failed", failure))
         self._checkpoint()
         t_k, tau, action = r["observation_tick"], outcome.action_clock_position, outcome.action
         # The token delay is in input frames; on the wall clock the delay is the decision's
@@ -1024,7 +1092,19 @@ class _Shell:
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
-        (legacy_loop.py ``_termination``); the token clock's are ticks."""
+        (legacy_loop.py ``_termination``); the token clock's are ticks. A failure the shell found
+        in this last batch, such as the termination record's own write, invalidates the run as
+        the kernel would have, at the same end (decision 32)."""
+        unheard = self._unheard
+        if unheard is not None and termination.invalid is None:
+            # The end of a traceback names the exception (legacy_loop.py _invalidate).
+            detail = None if unheard.detail is None else unheard.detail[-2000:]
+            invalid = Invalidated(unheard.category, unheard.reason, detail)
+            self.log(
+                f"[invalid-run] {invalid.category}:{invalid.reason}"
+                + (f" — {detail}" if detail else "")
+            )
+            termination = replace(termination, stop_reason="invalid_run", invalid=invalid)
         try:
             self._terminate(termination)
         finally:
@@ -1098,9 +1178,33 @@ class _Shell:
                         semantic=semantic,
                         ops=ops,
                     )
+            self._record_unfinished(termination, semantic, ops)
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[default] wrapping up the episode failed:\n" + traceback.format_exc())
         self._finished = True
+
+    def _record_unfinished(self, termination: Termination, semantic: float, ops) -> None:
+        """The records of the generations the kernel neither accepted nor discarded, unnumbered,
+        as for one an invalidation gave up on (_given_up, N10): a settled result keeps its own,
+        out of the reported decisions' subtotal; any other is recorded as a call given up on for
+        the invalid run, from its start to the episode's end. The agent's close() settles them,
+        as it settles the generation an episode the kernel finished ended on."""
+        for held in list(self._generations.values()):
+            if held.given_up:
+                continue
+            data = {"generation": held.generation, "reason": "invalid"}
+            entry = Entry(None, semantic, ops, "GenerationAbandoned", data)
+            if held.inference is not None:
+                self._emit_inference(held.inference, entry)
+                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
+                continue
+            seconds = (
+                termination.ops_ended_at - held.started_ops
+                if self.token
+                else termination.ended_at - held.started_semantic
+            )
+            r = episode_records.abandoned_result(round(max(0.0, seconds), 2), "invalid_run")
+            self._emit_inference(self._settle(held, r)[1], entry)
 
     # ---- the episode trace --------------------------------------------------------------------
 
@@ -1217,6 +1321,7 @@ class _Shell:
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
+        held.given_up = True
         bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
         if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
             bound = "provider_watchdog"
@@ -1234,16 +1339,18 @@ class _Shell:
                     f"{held.result['latency']:g}s, settled past its {bound} — discarded"
                 )
             if held.invalid is not None and self.kernel.invalid is None:
-                self.post(held.invalid)
+                self._invalidate(held.invalid)
             return
         if bound is None:
-            # It ran until the episode ended (decision 32), however late the shell got to it.
+            # It ran until the episode ended (decision 32), however late the shell got to it. A
+            # read's failure ends it when the read was asked (N44), which can be before a
+            # generation started while that read's answer waited: that one ran no time.
             ended = {"environment": "task_end", "invalid": "invalid_run"}.get(reason, reason)
             ending = self.kernel.ending
             seconds = (
                 ending.ops - held.started_ops if self.token else ending.at - held.started_semantic
             )
-            r = episode_records.abandoned_result(round(seconds, 2), ended)
+            r = episode_records.abandoned_result(round(max(0.0, seconds), 2), ended)
         elif bound == "provider_watchdog":
             seconds = held.bound_at - held.started_ops
             r = episode_records.watchdog_result(round(seconds, 2), seconds)
@@ -1269,7 +1376,7 @@ class _Shell:
             self.env._token_accounting.leave_unreported(r["token_accounting"])
         self._emit_inference(inference, entry)
         if result.invalid is not None and self.kernel.invalid is None:
-            self.post(result.invalid)  # its trajectory row could not be written
+            self._invalidate(result.invalid)  # its trajectory row could not be written
 
     def _emit_inference(self, inference: tuple[list[dict], dict], entry: Entry) -> None:
         chunks, completed = inference
@@ -1296,7 +1403,7 @@ class _Shell:
             if self._finished:  # the kernel handles nothing more (_write_handed)
                 self.agent_trace.fail(traceback.format_exc())
             else:
-                self.post(
+                self._invalidate(
                     Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
                 )
 
@@ -1308,6 +1415,6 @@ class _Shell:
             self.trace.checkpoint()
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             self._trace_failed = True
-            self.post(
+            self._invalidate(
                 Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
             )
