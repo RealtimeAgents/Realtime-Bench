@@ -868,7 +868,6 @@ from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
-from realtime_framework.entity.actions import action_has_target_references
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
@@ -1003,8 +1002,12 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
     streaming = agent.interaction_mode == "streaming"
     # (action, its frame, its frame field, why no frame was found) of each parsed candidate.
     candidates = []
+    # The resolution this output made: under streaming ``execution`` is the frame's, which
+    # holds the last resolution of any call on the frame.
+    grounding = None
 
     def parse_and_ground(body):
+        nonlocal grounding
         if streaming:
             parsed, reference = agent.interaction_profile.parse_framed_action(agent, body)
             frame, error = frames.locate(reference)
@@ -1017,13 +1020,12 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
             runtime = getattr(agent, "tool_runtime", None)
             if runtime is not None and execution is not None:
                 parsed = runtime.resolve_action(parsed, frame.marks, execution)
+                grounding = execution["reference_resolution"]
                 if streaming:
                     # The decision's inspection row names the frame whose marks resolved it.
                     execution["reference_resolution"].update(
                         frame=frame.frame, observation_id=frame.observation_id
                     )
-            elif action_has_target_references(parsed):
-                parsed = None
         if parsed is not None:
             candidates.append((parsed, frame, reference, error))
         return parsed
@@ -1050,7 +1052,7 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
         resolution.action, FrameGeometry.from_dict(frame.geometry)
     )
     if execution is not None:
-        action_protocol["grounding"] = execution.get("reference_resolution")
+        action_protocol["grounding"] = grounding
     return action, action_protocol
 
 
@@ -1062,8 +1064,7 @@ def action_text(action: Action) -> str:
 @dataclass
 class _Staged:
     """What accepting a generation's result writes into the history. Discarding it writes no
-    history: it ends the tool calls, records the usage of a result that came back and marks the
-    trajectory row discarded."""
+    history: it ends the tool calls and records the usage of a result that came back."""
 
     feedback: str  # the pending feedback when it started
     unattached: str  # and the part of it that no turn carries
@@ -1071,8 +1072,6 @@ class _Staged:
     result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
-    # Its trajectory row, which finalize_decision_audit writes from the result.
-    audit: dict | None = None
 
 
 @dataclass
@@ -1333,7 +1332,9 @@ class DefaultHarness(VisionAgentBase):
     ) -> _Generation:
         """Start a generation's state; abort() reaches it until the generation ends. The agent
         keeps the newest generation's decision, for abort()'s trace, and its action cap, which
-        the runner audits against the decision's allowance once the result is back."""
+        the runner audits against the decision's allowance once the result is back. A
+        generation aborted before its worker got here keeps neither: it may open after the next
+        one did."""
         generation = _Generation(
             number,
             decision,
@@ -1346,15 +1347,16 @@ class DefaultHarness(VisionAgentBase):
             if number in self._cancelled_early:
                 self._cancelled_early.remove(number)
                 generation.cancel.set()
+            else:
+                self._trace_decision = decision
+                self._frame_action_max_tokens = native_output_limit(
+                    self.config.native_output_limit, provider_output_tokens
+                )
             if number in self._discarded_early:
                 self._discarded_early.remove(number)
                 generation.discarded = True
             else:
                 self._generations.append(generation)
-        self._trace_decision = decision
-        self._frame_action_max_tokens = native_output_limit(
-            self.config.native_output_limit, provider_output_tokens
-        )
         return generation
 
     def _close(
@@ -1468,8 +1470,6 @@ class DefaultHarness(VisionAgentBase):
             self._record_provider_usage(
                 staged.result, staged.observation, generation.decision, stale=True
             )
-        if staged.audit is not None:
-            staged.audit["type"] = "decision_discarded"
         self._end_tool_calls(staged, "superseded_by_timeout")
 
     def _end_tool_calls(self, staged: _Staged, outcome: str) -> None:
@@ -1794,7 +1794,11 @@ class DefaultHarness(VisionAgentBase):
                 "valid_action": False,
                 "action_text": None,
                 "protocol_failure": native_protocol_failure,
-                "parse_mode": "native_function_call_count",
+                "parse_mode": (
+                    None
+                    if output.token_fields.get("function_validation_error")
+                    else "native_function_call_count"
+                ),
                 "candidate_count": output.token_fields.get("function_call_count", 0),
             }
             action = self.interaction_profile.bind_action(
@@ -1971,8 +1975,6 @@ class DefaultHarness(VisionAgentBase):
                     "invalid_detail": sync.detail,
                 }
             )
-        # A result the kernel discards only after it came back is discarded on its row too.
-        generation.staged.audit = log_entry
         return result, runtime_result.cancelled
 
     def commit_action(self, status: str, detail: str = ""):

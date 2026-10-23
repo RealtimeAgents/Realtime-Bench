@@ -161,6 +161,9 @@ class _Reply:
     interrupted: bool = False
     text_done: bool = False  # its text action was parsed, when its text was completed
     protocol_failure: str | None = None  # the first
+    # Each parsed call's id and grounding (parse_grounded_action), in order; the grounding is
+    # None where nothing was resolved against a frame.
+    grounding: list[dict] = field(default_factory=list)
     based_on: str | None = None  # the observation id of the frame its first action names
     # Where in the blocks its output began, which its output goes to once accepted: before the
     # feedback on its actions and the frames pushed since.
@@ -756,14 +759,16 @@ class NativeStreamingAgent(VisionAgentBase):
             if event.kind == "turn_complete":
                 reply.terminal_usage = bool(event.metadata.get("terminal_usage_received"))
         elif isinstance(event, FunctionCall):
-            try:
-                action = canonical_function_action(
-                    event.name, event.arguments, frame_reference=True
-                )
-            except ValueError:
-                # The parser takes it as no action, as a turn's call (FunctionCallTurnCollector).
-                action = {"action": event.name, **event.arguments}
+            action = {"action": event.name, **event.arguments}
             reply.calls.append(json.dumps(action, ensure_ascii=False))
+            # A call without its frame is refused for that (frames.MISSING_FRAME); one its
+            # function's schema rejects is no action, as a turn's call (FunctionCallTurnCollector).
+            if "frame" in action:
+                try:
+                    canonical_function_action(event.name, event.arguments, frame_reference=True)
+                except ValueError:
+                    reply.protocol_failure = reply.protocol_failure or "invalid_action_output"
+                    return
             self._arrived(reply, reply.calls[-1], event.call_id, event.received_at)
         elif isinstance(event, FunctionCallsCancelled):
             # By the generation each call came in, which may be an earlier reply's.
@@ -782,6 +787,7 @@ class NativeStreamingAgent(VisionAgentBase):
         action, protocol = parse_grounded_action(
             self, text, reply.own.execution, arrived, reply.own.record
         )
+        reply.grounding.append({"call_id": call_id, "grounding": protocol.get("grounding")})
         if protocol["protocol_failure"] is not None:
             reply.protocol_failure = reply.protocol_failure or protocol["protocol_failure"]
             return
@@ -908,6 +914,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 "model_output": reply.output,
                 "thinking": "".join(reply.reasoning),
                 "protocol_failure": reply.protocol_failure,
+                "grounding": reply.grounding,
                 "usage": reply.usage,
             }
         )
