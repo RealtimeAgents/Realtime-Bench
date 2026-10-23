@@ -13,8 +13,10 @@ free by then.
   long action, and an end check, on a lane of its own (stream-plan 4.9), holds it alone.
 - A frame goes into the session on the push lane. A reply runs on a worker until it ends; the agent
   posts its actions, and the calls the provider cancels, as they appear.
-- Feedback, accepting or discarding a reply and giving one up run on the shell's thread. Giving up
-  returns once the agent has cleaned the session up, so the next reply rebuilds it.
+- Feedback and accepting or discarding a reply run on the shell's thread. Giving a reply up runs
+  on the abort lane, for as long as the agent takes to clean the session up and close it, and is
+  answered then (GenerationAborted), so that the next reply rebuilds the session; the episode goes
+  on meanwhile.
 - A frame the capture cannot keep up with is skipped and counted by the policy (4.10), which never
   hands the capture lane a second capture.
 - At the end the snapshot is taken on a thread of its own, next after the action executing and
@@ -75,6 +77,7 @@ from realtime_framework.evaluation.kernel.events import (
 )
 from realtime_framework.evaluation.kernel.streaming import (
     FramePushed,
+    GenerationAborted,
     PushFrame,
     StreamingConfig,
     StreamingPolicy,
@@ -132,6 +135,7 @@ class _StreamingShell:
         clock = clocks.operational
         self.lanes = EnvLanes(env, self.post, clock, raised=self._raised)
         self._push_lane = Lane("push", self.post, clock)
+        self._abort_lane = Lane("abort", self.post, clock)
         self._wake = clock.event()
         self._now = 0.0  # the reading of the last step
         self._timers: list[float] = []  # heap of when the timers the kernel set come due
@@ -230,7 +234,7 @@ class _StreamingShell:
             case StartGeneration():
                 self._start_reply(command)
             case AbortGeneration(generation=generation):
-                self._abort(generation)
+                self._abort_lane.submit(lambda: self._abort(generation))
             case AcceptResult(generation=generation):
                 self.agent.accept(generation)
             case DiscardResult(generation=generation):
@@ -262,6 +266,8 @@ class _StreamingShell:
                 return FrameCaptured(error=failure)
             case PushFrame(observation_id=observation_id):
                 return FramePushed(observation_id, error=failure)
+            case AbortGeneration(generation=generation):
+                return GenerationAborted(generation)
             case Execute(decision=decision):
                 return ActionExecuted(decision, error=failure)
             case Commit(outcome=outcome):
@@ -342,14 +348,21 @@ class _StreamingShell:
         done.set()
         self.post(GenerationFinished(command.generation, result))
 
-    def _abort(self, generation: int) -> None:
-        done = self._replies.get(generation)  # None when its StartGeneration raised
-        if done is None or done.is_set():
-            return  # nothing runs to interrupt; the kernel discards the result
-        try:
-            self.agent.abort(generation)
-        except Exception:  # noqa: BLE001 - interrupting is best effort, as in the runner
-            self.log(f"[streaming] abort of reply {generation} failed:\n{traceback.format_exc()}")
+    def _abort(self, generation: int) -> GenerationAborted:
+        """Give the reply up, on the abort lane (on the shell's thread in the wrap-up), and answer
+        whatever happens, as a command is answered (_run). Also a reply whose worker just ended:
+        the abort closes the session, which the policy gives a reply up for (kernel/streaming.py
+        ``_session_stuck``), and fails a push stuck in it."""
+        if generation in self._replies:  # not when its StartGeneration raised
+            # Also a BaseException (entity/model.py RetryCancelled): the answer must come back,
+            # or the kernel would wait for it.
+            try:
+                self.agent.abort(generation)
+            except BaseException:  # noqa: BLE001 - interrupting is best effort, as in the runner
+                self._say(
+                    f"[streaming] abort of reply {generation} failed:\n{traceback.format_exc()}"
+                )
+        return GenerationAborted(generation)
 
     # ---- actions ------------------------------------------------------------------------------
 
@@ -460,6 +473,7 @@ class _StreamingShell:
         finally:
             self.lanes.close()
             self._push_lane.close()
+            self._abort_lane.close()
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell
@@ -471,8 +485,9 @@ class _StreamingShell:
         latched = getattr(self.env, "_invalid_run", None)
         first = self.kernel.invalid is None and latched is None
         try:
-            for generation in list(self._replies):
-                self._abort(generation)
+            for generation, done in list(self._replies.items()):
+                if not done.is_set():
+                    self._abort(generation)
             if self._frozen is None:
                 self._frozen = self.clocks.operational.event()
                 self._freezing()
