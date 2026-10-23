@@ -25,11 +25,11 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.shell import run_episode
+from realtime_framework.sandbox.actions import TAP_HOLD_S
 
 from ..fake_clock import FakeClock
 
 ORIGIN = 1_048_576.0  # the fake clock's Unix time at monotonic 0; a power of two keeps sums exact
-TAP_HOLD_S = 1.0 / 60.0  # a token key tap advances this long (sandbox/actions.py TAP_HOLD_S)
 CLICK = Action.click(10, 20)
 
 
