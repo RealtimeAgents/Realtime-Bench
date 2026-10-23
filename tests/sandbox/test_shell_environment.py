@@ -478,6 +478,29 @@ def test_a_wall_release_that_keeps_failing_tells_the_shell_from_the_timer_s_thre
     assert env._invalid_run["reason"] == "wall_key_release_failed"
 
 
+def test_the_cleanup_releases_a_key_the_release_timer_gave_up_on():
+    """The key may still be down, as with a failed token-clock release (coordinator's decisions
+    N20, N23): the timer stops trying it, also with a later lease's keyup, and the cleanup tries
+    once more."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _StuckGuest(clock)
+    with clock.participant():
+        env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
+        clock.sleep(3.0)
+        env.execute(Action.hold_key("a", 1.0), release_at=4.0)
+        clock.sleep(2.0)
+        with pytest.raises(RuntimeError, match="cannot release"):
+            env.release_inputs()
+    assert _xdotool(env) == [
+        (0.0, "xdotool keydown -- Left"),
+        *((at, "xdotool keyup -- Left") for at in (1.0, 1.5, 2.0, 2.5)),
+        (3.0, "xdotool keydown -- a"),
+        (4.0, "xdotool keyup -- a"),
+        (5.0, "xdotool keyup -- Left a"),
+    ]
+
+
 def test_the_shell_is_told_outside_the_wall_locks():
     """The callback is the shell's (sandbox/actions.py _wall_release_due): told outside the
     environment's locks, it cannot hold up an action waiting for one."""
