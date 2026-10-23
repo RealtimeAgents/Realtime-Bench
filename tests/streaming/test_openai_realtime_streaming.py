@@ -314,6 +314,54 @@ def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatc
     assert left_session is None and connected is False
 
 
+class _ClockedStuckConnection(_StuckConnection):
+    """_StuckConnection on the fake clock: a write stuck in it and a close stuck on it wait on
+    the clock, which so moves on while they are stuck, for at most 30 s."""
+
+    def __init__(self, clock: FakeClock) -> None:
+        self._clock = clock
+        self._open = clock.event()
+        self._connection = self
+        self.writing = clock.event()
+
+    def write(self) -> None:
+        self.writing.set()
+        if not self._clock.wait(self._open, 30):
+            raise AssertionError("the socket was never closed")
+        raise ConnectionClosedError(None, None)
+
+
+class _ClockedStuckManager(_StuckManager):
+    def __exit__(self, *exc_info) -> None:
+        self.connection._clock.wait(self.connection._open, 30)
+
+
+def test_an_abort_drops_a_socket_its_close_is_stuck_on_after_ten_seconds():
+    """A close stuck on a write that does not drain is bounded at 10 s on the driver's clock
+    (decision N49): the abort drops the socket then, which fails the push stuck in the same
+    write. Until then the abort holds up the session, and the next reply with it."""
+    clock = FakeClock()
+
+    async def scenario():
+        driver, connection = _offline_driver(streaming=True), _ClockedStuckConnection(clock)
+        driver.clock = clock
+        session = _Session(1, connection, new_core())
+        driver._session, driver._conn = session, connection
+        driver._cm = _ClockedStuckManager(connection)
+        driver._send = lambda conn, operation: conn.write()
+        view = streaming_view(stream("F"))
+        push = asyncio.ensure_future(driver.push_frame(_observation(1), view))
+        await asyncio.to_thread(clock.wait, connection.writing, None)
+        await driver.abort(None)
+        aborted = clock.monotonic()
+        (failure,) = await asyncio.gather(push, return_exceptions=True)
+        return aborted, failure
+
+    aborted, failure = run_on_fake_clock(clock, scenario())
+    assert aborted == 10.0
+    assert isinstance(failure, ConnectionClosedError)
+
+
 class _SocketConnection(_FakeConnection):
     """The fake connection as the SDK holds websockets' (``_connection``), whose
     close_socket() ends the read in flight, as websockets' does."""
@@ -818,6 +866,46 @@ def test_a_rebuild_whose_connection_closes_before_its_replay_is_confirmed_raises
         driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
+
+
+# A dirty session is rebuilt on a second connection, which the server closes at 0.3 s before it
+# confirmed the replay.
+REBUILD_CLOSED_BEFORE_CONFIRMED = [
+    {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+    c2s(SESSION_UPDATE),
+    {"conn": 1, "dir": "close", "at": None, "msg": {"by": "client", "code": 1000}},
+    {"conn": 2, "dir": "open", "at": 0.0, "msg": None},
+    *({**record, "conn": 2} for record in (c2s(SESSION_UPDATE), push(1, 1, 1))),
+    {"conn": 2, "dir": "close", "at": 0.3, "msg": {"by": "server", "code": 1000, "reason": "bye"}},
+]
+
+
+def test_a_rebuild_raises_a_retryable_failure_as_it_is_for_the_retry_around_it():
+    """A rebuild whose connection closes before the server confirmed its replay raises that
+    close as it is (decision 39): the retry around readying the session reads a transient
+    failure off it and reopens. A BROKEN result would come out of ensure_ready as a
+    RuntimeError that only names the close."""
+    clock, table = FakeClock(), FrameTable()
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+    observation = _observation(1)
+    record = table.register(observation.observation_id, 0.0, {}, None)
+    history = streaming_view([frame_block(record, observation)], frames=2)
+
+    async def scenario(driver):
+        await driver.connect(ConnectRequest(seed=seed))
+        driver.mark_dirty()
+        with pytest.raises(ConnectionClosedOK) as raised:
+            await driver.ensure_ready(seed, history, lambda *args, **kwargs: None)
+        await driver.close()
+        return raised.value
+
+    with CassetteServer(REBUILD_CLOSED_BEFORE_CONFIRMED, clock) as server:
+        driver = driver_for(server.port, clock, UNTRACED, streaming=True)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        failure = run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+    assert driver.classify_transport_error(failure).retryable
 
 
 def test_a_connect_retries_under_the_newest_frame_of_its_history(monkeypatch):
