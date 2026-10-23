@@ -196,7 +196,12 @@ class _Session:
 
     async def receive_until(self, ready) -> None:
         """Receive until ``ready()`` holds or the connection closes normally. A failed read
-        raises in every waiter, once it has taken what was received before."""
+        raises in every waiter, once it has taken what was received before.
+
+        It has no time bound: a waiter for an answer the server never sends, a confirmation or
+        a response event, waits until its operation is given up and the abort closes the
+        connection, by the harness's per-move cap or wall-clock deadline, by a streaming
+        watchdog of the kernel's, or else by the run's own timeout."""
         while not ready():
             if self.failure is not None:
                 raise self.failure
