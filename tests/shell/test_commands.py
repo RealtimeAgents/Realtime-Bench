@@ -597,6 +597,20 @@ def test_a_generation_the_deadline_gave_up_on_is_recorded_as_the_runner_records_
     assert summary["counts"]["provider_output_tokens"]["known_total"] == 40
 
 
+def test_a_result_the_per_move_cap_overtook_is_recorded_as_skipped_at_the_cap():
+    """The first reply is back at 0.9 s, under the 1 s cap, while an end check from 0.5 s to
+    1.1 s holds the shell: the cap is handled first (decision 47), and the decision is reported
+    skipped with the result it had, its tokens and latency. Its record names the cap, as that of
+    a call the cap cut does."""
+    world = World(slow_checks=[(0.5, 0.6, 0.6)])
+    replies = [Reply(0.9, output_tokens=40), Reply(0.3)]
+    episode = run("wall", 2.0, replies, world, fps=2.0, per_move_cap_s=1.0)
+    assert episode.statuses()[0] == "skipped_timeout"
+    skipped = episode.env.lifecycle[0]
+    assert (skipped["model_latency_s"], skipped["clock_output_tokens"]) == (0.9, 40)
+    assert skipped["harness_timeout_reason"] == "per_move_cap"
+
+
 def test_a_paused_decision_lands_on_its_frame_and_moves_one_frame_on():
     episode = run("token", 2.0, [Reply(0.25), Reply(0.25)])
     assert episode.statuses() == ["applied", "applied"]
