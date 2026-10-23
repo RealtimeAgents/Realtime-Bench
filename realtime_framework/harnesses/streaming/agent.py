@@ -94,11 +94,12 @@ from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
 from realtime_framework.harnesses.default.harness import (
     INTERACTION_PROFILES,
     VisionAgentBase,
+    action_text,
     bind_observation,
     parse_grounded_action,
 )
 from realtime_framework.harnesses.default.request import system_block
-from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
+from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.harnesses.streaming.history import (
     feedback_block,
     frame_block,

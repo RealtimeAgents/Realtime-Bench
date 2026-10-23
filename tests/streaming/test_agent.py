@@ -16,7 +16,8 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import CallsCancelled, PushHeld, PushResumed
 from realtime_framework.harnesses.default.frames import FRAME_NOT_IN_TABLE, INVALID_GROUNDING_FRAME
-from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
+from realtime_framework.harnesses.default.harness import action_text
+from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
 from tests.fake_clock import FakeClock
 
