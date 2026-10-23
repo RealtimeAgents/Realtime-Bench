@@ -1045,3 +1045,28 @@ def test_a_key_release_at_cleanup_that_fails_leaves_the_run_as_it_was(slow):
         assert clock.monotonic() == (budget if slow else 0.0)
     assert getattr(env, "_invalid_run", None) is None
     assert guest.actions == [ActionType.MOUSE_DOWN, ActionType.MOUSE_UP]
+
+
+def test_the_cleanup_releases_every_held_mouse_button_when_one_fails():
+    """The first release fails, whichever button it is; the others are still released, and the
+    failure is raised for the caller to log."""
+
+    class FirstReleaseFails(_ClockGuest):
+        def execute_action(self, action: Action) -> dict:
+            first_release = (
+                action.action_type == ActionType.MOUSE_UP and ActionType.MOUSE_UP not in self.actions
+            )
+            super().execute_action(action)
+            if first_release:
+                raise RuntimeError("the guest is gone")
+            return {"status": "ok"}
+
+    guest = FirstReleaseFails()
+    env, _ = _timed(FakeClock(), guest)
+    for button in ("left", "right", "middle"):
+        assert env.execute(Action(ActionType.MOUSE_DOWN, {"button": button})) == "applied"
+    with pytest.raises(ExceptionGroup) as raised:
+        env.release_inputs()
+    assert [str(error) for error in raised.value.exceptions] == ["the guest is gone"]
+    assert guest.actions == [ActionType.MOUSE_DOWN] * 3 + [ActionType.MOUSE_UP] * 3
+    assert len(env._held_mouse_buttons) == 1

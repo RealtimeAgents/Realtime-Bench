@@ -979,9 +979,18 @@ class GuestEnvironment:
             self._wall_release(list(self._wall_holds))
 
     def _release_mouse_inputs(self):
+        """Release each held mouse button on its own: one that fails stays held, and the failures
+        are raised together once every button was tried."""
+        errors = []
         for button in list(self._held_mouse_buttons):
-            self.g.execute_action(Action(ActionType.MOUSE_UP, {"button": button}))
-            self._held_mouse_buttons.discard(button)
+            try:
+                self.g.execute_action(Action(ActionType.MOUSE_UP, {"button": button}))
+            except Exception as exc:  # noqa: BLE001 - the other buttons are still released
+                errors.append(exc)
+            else:
+                self._held_mouse_buttons.discard(button)
+        if errors:
+            raise ExceptionGroup("held mouse buttons were not released", errors)
 
     def release_inputs(self):
         """Best-effort episode cleanup for every stateful input primitive. It runs once the
