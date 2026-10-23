@@ -120,12 +120,12 @@ def capture_generation_artifact(
 ) -> dict:
     """Capture the model's output/state before verifier code runs.
 
-    `snapshot`, when given, is the evaluation snapshot ALREADY taken by the caller at the exact
-    inference boundary; it is written verbatim so the saved artifact and the run summary score the
+    `snapshot` is the evaluation snapshot ALREADY taken by the caller at the exact inference
+    boundary; it is written verbatim so the saved artifact and the run summary score the
     identical frozen state (re-sampling here would fold a second, later live read and let the two
-    disagree). Returns the manifest that is also atomically written to
-    generation_artifact/manifest.json; its capture time is read on ``clock``, the episode's
-    operational clock.
+    disagree). Without one, the run froze nothing, and the artifact has no state. Returns the
+    manifest that is also atomically written to generation_artifact/manifest.json; its capture
+    time is read on ``clock``, the episode's operational clock.
     """
     artifact_dir = Path(run_dir) / "generation_artifact"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -153,10 +153,9 @@ def capture_generation_artifact(
         "runtime_config": runtime_config,
     }
 
-    if ctask is not None and hasattr(ctask, "evaluation_snapshot"):
-        snap = snapshot if snapshot is not None else ctask.evaluation_snapshot()
+    if snapshot is not None:
         state_file = artifact_dir / "task_state.json"
-        state_file.write_text(json.dumps(snap, indent=2, default=str))
+        state_file.write_text(json.dumps(snapshot, indent=2, default=str))
         manifest["payload"] = {
             "kind": "task_state",
             "state": state_file.name,
@@ -1897,12 +1896,14 @@ def report(root):
                     known = [value for value in tokens if value is not None]
                     accounting = summary.get("token_accounting") or {}
                     # A decision the kernel gave up on has no lifecycle record, and its response
-                    # no place in the reported decisions' subtotal (clock.py TokenAccounting).
+                    # no place in the reported decisions' subtotal (clock.py TokenAccounting),
+                    # whose responses are then the lifecycle's records.
                     reported = accounting.get("reported_decisions", accounting)
                     counts = (reported.get("counts") or {}).get("clock_output_tokens", {})
                     complete = bool(tokens and len(known) == len(tokens))
                     if (
-                        counts.get("responses_with_count", 0) != len(known)
+                        (reported is not accounting and reported["responses"] != len(records))
+                        or counts.get("responses_with_count", 0) != len(known)
                         or (known and sum(known) != counts.get("known_total", counts.get("total")))
                         or (not known and counts.get("known_total") not in (None, 0))
                         or (counts.get("complete", False) != complete)

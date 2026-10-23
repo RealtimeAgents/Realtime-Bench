@@ -664,45 +664,40 @@ def main():
         # before it releases held keys or mouse buttons. Consume that exact snapshot here, before
         # agent close or verifier work. The same value is stored in the artifact
         # so python -m realtime_framework.evaluation.reporting reevaluate agrees with the summary.
-        if ctask is not None and hasattr(ctask, "evaluation_snapshot"):
-            try:
-                snapshot_error = getattr(env, "_termination_snapshot_error", None)
-                if snapshot_error:
-                    raise RuntimeError(snapshot_error)
-                if getattr(env, "_termination_snapshot_captured", False):
-                    frozen_snapshot = getattr(env, "_termination_snapshot", None)
-                else:
-                    # Compatibility fallback for an alternate environment implementation that does
-                    # not expose the pre-cleanup snapshot contract.
-                    frozen_snapshot = ctask.evaluation_snapshot()
-                snapshot_invalid_reason = _invalid_snapshot(frozen_snapshot)
-                if snapshot_invalid_reason:
-                    invalid_run = {
-                        "category": "environment",
-                        "reason": snapshot_invalid_reason,
-                        "detail": json.dumps(frozen_snapshot, default=str)[:2000],
-                    }
-                episode_trace.emit(
-                    TraceEvent.SNAPSHOT_FROZEN,
-                    {
-                        "kind": (frozen_snapshot or {}).get("kind"),
-                        "snapshot_sha256": canonical_sha256(frozen_snapshot),
-                        "artifact": "generation_artifact/task_state.json",
-                        "valid": snapshot_invalid_reason is None,
-                        "invalid_reason": snapshot_invalid_reason,
-                        "environment_tick": env.tick_index() if env is not None else None,
-                    },
-                )
-                episode_trace.checkpoint()
-            except Exception:
-                detail = traceback.format_exc()
+        try:
+            snapshot_error = getattr(env, "_termination_snapshot_error", None)
+            if snapshot_error:
+                raise RuntimeError(snapshot_error)
+            if getattr(env, "_termination_snapshot_captured", False):
+                frozen_snapshot = getattr(env, "_termination_snapshot", None)
+            snapshot_invalid_reason = _invalid_snapshot(frozen_snapshot)
+            if snapshot_invalid_reason:
                 invalid_run = {
                     "category": "environment",
-                    "reason": "evaluation_snapshot_failed",
-                    "detail": detail,
+                    "reason": snapshot_invalid_reason,
+                    "detail": json.dumps(frozen_snapshot, default=str)[:2000],
                 }
-                episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
-                print("[invalid-run] evaluation snapshot failed:\n" + detail, flush=True)
+            episode_trace.emit(
+                TraceEvent.SNAPSHOT_FROZEN,
+                {
+                    "kind": (frozen_snapshot or {}).get("kind"),
+                    "snapshot_sha256": canonical_sha256(frozen_snapshot),
+                    "artifact": "generation_artifact/task_state.json",
+                    "valid": snapshot_invalid_reason is None,
+                    "invalid_reason": snapshot_invalid_reason,
+                    "environment_tick": env.tick_index() if env is not None else None,
+                },
+            )
+            episode_trace.checkpoint()
+        except Exception:
+            detail = traceback.format_exc()
+            invalid_run = {
+                "category": "environment",
+                "reason": "evaluation_snapshot_failed",
+                "detail": detail,
+            }
+            episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+            print("[invalid-run] evaluation snapshot failed:\n" + detail, flush=True)
         try:
             generation_artifact = capture_generation_artifact(
                 run_dir,
@@ -750,48 +745,45 @@ def main():
             }
 
         run_stage = "evaluation"
-        try:
-            if (
-                ctask is not None
-                and frozen_snapshot is not None
-                and hasattr(ctask, "evaluate_snapshot")
-            ):
+        if frozen_snapshot is None:
+            # The run is invalid for its snapshot already, and nothing read since is its state.
+            evaluation_path = str(save_evaluation(run_dir, None, error="no frozen snapshot"))
+        else:
+            try:
                 # score the FROZEN snapshot (== the artifact), not a fresh post-cleanup live read
                 verification = ctask.evaluate_snapshot(frozen_snapshot)
-            else:
-                verification = ctask.verify()
-            evaluation_invalid_reason = invalid_evaluation(verification)
-            if evaluation_invalid_reason:
+                evaluation_invalid_reason = invalid_evaluation(verification)
+                if evaluation_invalid_reason:
+                    invalid_run = invalid_run or {
+                        "category": "evaluator",
+                        "reason": evaluation_invalid_reason,
+                        "detail": json.dumps(verification, default=str)[:2000],
+                    }
+                    solved = None
+                else:
+                    solved = verification["resolved"]
+                evaluation_path = str(save_evaluation(run_dir, verification))
+                episode_trace.emit(
+                    TraceEvent.SCORE_PRODUCED,
+                    {
+                        "valid": evaluation_invalid_reason is None,
+                        "invalid_reason": evaluation_invalid_reason,
+                        "resolved": solved,
+                        "verification": verification,
+                        "artifact": "evaluation.json",
+                    },
+                )
+                episode_trace.checkpoint()
+            except Exception:
+                _eval_error = traceback.format_exc()
                 invalid_run = invalid_run or {
                     "category": "evaluator",
-                    "reason": evaluation_invalid_reason,
-                    "detail": json.dumps(verification, default=str)[:2000],
+                    "reason": "evaluation_exception",
+                    "detail": _eval_error,
                 }
-                solved = None
-            else:
-                solved = verification["resolved"]
-            evaluation_path = str(save_evaluation(run_dir, verification))
-            episode_trace.emit(
-                TraceEvent.SCORE_PRODUCED,
-                {
-                    "valid": evaluation_invalid_reason is None,
-                    "invalid_reason": evaluation_invalid_reason,
-                    "resolved": solved,
-                    "verification": verification,
-                    "artifact": "evaluation.json",
-                },
-            )
-            episode_trace.checkpoint()
-        except Exception:
-            _eval_error = traceback.format_exc()
-            invalid_run = invalid_run or {
-                "category": "evaluator",
-                "reason": "evaluation_exception",
-                "detail": _eval_error,
-            }
-            episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
-            evaluation_path = str(save_evaluation(run_dir, None, error=_eval_error))
-            print("[invalid-run] evaluator exception:\n" + _eval_error, flush=True)
+                episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+                evaluation_path = str(save_evaluation(run_dir, None, error=_eval_error))
+                print("[invalid-run] evaluator exception:\n" + _eval_error, flush=True)
     except Exception:
         error = traceback.format_exc()
         invalid_run = (
@@ -927,6 +919,26 @@ def main():
         else (latched or ("setup_error" if env is None else "unknown"))
     )
     world_time_s = termination["end_s"] if termination is not None else None
+    # The trace holds every record the episode wrote, checkpointed above. A streaming section
+    # that cannot be read leaves the run unscored, as the run metrics below then count it.
+    streaming = None
+    if a.interaction_mode == "streaming":
+        try:
+            streaming = summarize_streaming(
+                run_dir / "episode_trace.jsonl",
+                (runtime_config or {}).get("streaming"),
+                attempt_id=episode_trace.attempt_id,
+            )
+        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
+        except json.JSONDecodeError:
+            invalid_run = invalid_run or {
+                "category": "harness",
+                "reason": "streaming_summary_failed",
+                "detail": traceback.format_exc(),
+            }
+            solved = None
+            run_status = "invalid"
+            stop_reason = "invalid_run"
     try:
         run_metrics = summarize_run_metrics(
             run_dir / "action_lifecycle.jsonl",
@@ -960,25 +972,6 @@ def main():
             validate_decision_count=False,
         )
         run_metrics["run_metrics_error"] = metrics_error
-    # The trace holds every record the episode wrote, checkpointed above.
-    streaming = None
-    if a.interaction_mode == "streaming":
-        try:
-            streaming = summarize_streaming(
-                run_dir / "episode_trace.jsonl",
-                (runtime_config or {}).get("streaming"),
-                attempt_id=episode_trace.attempt_id,
-            )
-        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
-        except json.JSONDecodeError:
-            invalid_run = invalid_run or {
-                "category": "harness",
-                "reason": "streaming_summary_failed",
-                "detail": traceback.format_exc(),
-            }
-            solved = None
-            run_status = "invalid"
-            stop_reason = "invalid_run"
     effective_model_identity = {
         "adapter": cfg.adapter_type if cfg else requested_model_identity["adapter"],
         "model": requested_model_identity["model"],
@@ -1412,7 +1405,9 @@ if __name__ == "__main__":
     except SystemExit as e:  # main() raises SystemExit(1) for an unscored benchmark cell
         _code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
     except KeyboardInterrupt:
-        # main() ran its finalizers; an interrupted episode is never a scored result.
+        # main()'s cleanup closed the recorder, the agent and its trace, but the episode froze no
+        # snapshot, released no held input and wrote no run summary: an interrupted episode is
+        # never a scored result.
         print(
             "INTERRUPTED — episode did not complete",
             flush=True,
