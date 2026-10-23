@@ -6,12 +6,12 @@ the points where the rules turn: whole input frames, half and quarter frames, th
 its multiples. On the token clock they fail runs of end checks and reads inside taps, which X12
 counts. They leave out what the rules do not compare one by one: retries, wall reads that fail
 (where the kernel's periodic reads and today's fall at one instant, the order is not today's to
-show; named scripts cover them), wall operations that take time but reading the evaluation
-snapshot (scenarios.TIMED gives them time), and wall replies near the deadline plus today's 2 s
-grace or the per-move
-cap, where today's bounded wait and the reply would fall due at one instant (wave2-plan.md, R13);
-the cap and the think budget appear on the token clock only. Random scripts may show any expected
-difference; only what no rule explains fails them.
+show; named scripts cover them), wall captures that take time (scenarios.TIMED gives them time),
+wall state reads that take time where that moves a decision to other frames than today's
+(generate), and wall replies near the deadline plus today's 2 s grace or the per-move cap, where
+today's bounded wait and the reply would fall due at one instant (wave2-plan.md, R13). On the
+wall clock the per-move cap gives up on the first moves only (_capped). Random scripts may show
+any expected difference; only what no rule explains fails them.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from dataclasses import replace
 
 from .rules import ORDER
 from .script import Attempt, Script, Turn, parse
-from .simulated import ties
+from .simulated import ties, timed_apart
 
 RATES = ((1.0, 1.0), (60.0, 1.0), (30.0, 7.0), (2.0, 2.0))
 BUDGETS = (64, 100, 160, 256)
@@ -31,10 +31,16 @@ BUDGETS = (64, 100, 160, 256)
 
 def generate(seed: int) -> Script:
     """The script of a seed: the first the seed's draws give that no instant ties on the wall
-    clock's threads (simulated.ties)."""
+    clock's threads (simulated.ties). Its state reads, and then its actions, take time only where
+    today's loop reads no other end than the kernel's and keeps its decisions in the kernel's
+    frames (simulated.timed_apart)."""
     rng = random.Random(seed)
     while True:
         script = _draw(rng, seed)
+        if timed_apart(script):
+            script = script.but(check_s=0.0)
+        if timed_apart(script):
+            script = script.but(execute_s=0.0)
         if not ties(script):
             return script
 
@@ -58,6 +64,22 @@ def _draw(rng: random.Random, seed: int) -> Script:
     if clock == "wall":
         if rng.random() < 0.3:
             fields["snapshot_s"] = rng.choice((0.25, 0.5, 1.5))
+        # A read shorter than a frame of either rate (REPORT.md section 4). The other times fall
+        # on eighths of an environment frame (or of 30/56 of one at 30/7); sums of under twenty
+        # of these reads and actions fall on none, where the tick a side reads is the float's.
+        shortest = min(frame, 1.0 / env_fps)
+        if rng.random() < 0.2:
+            fields["check_s"] = rng.choice((0.143, 0.317)) * shortest
+        if rng.random() < 0.2:
+            fields["execute_s"] = rng.choice((0.121, 0.269)) * shortest
+        # Off the replies' latencies, so that none comes back at the cap.
+        if rng.random() < 0.08:
+            cap = fields["per_move_cap_s"] = rng.choice((0.6, 0.85, 1.1)) * frame
+            over = rng.randint(0, len(turns))
+            turns = tuple(_capped(turn, cap, frame, k < over) for k, turn in enumerate(turns))
+        # Off the sums of the latencies and the cap, so that no move spends it exactly.
+        if rng.random() < 0.08:
+            fields["think_budget_s"] = rng.choice((1.3, 2.3, 2.9)) * frame
     else:
         if rng.random() < 0.1:
             start = rng.randint(1, 12)
@@ -88,6 +110,18 @@ def _draw(rng: random.Random, seed: int) -> Script:
         name=f"random-{seed}",
         **fields,
     )
+
+
+def _capped(turn: Turn, cap: float, frame: float, over: bool) -> Turn:
+    """A wall turn under the per-move cap: one of the first moves, the cap gives up on it, and no
+    later one, as X6 rewrites the requests only while no result was accepted (rules.py _x6). The
+    stub answers one request at a time, so a reply let run past the cap would hold up the next
+    request (tests/replay/stub.py); it is held instead, and let go when the client gives up."""
+    if over:
+        return replace(turn, attempts=(Attempt(hang=True),))
+    if turn.hangs or turn.attempts[0].latency_s > cap:
+        return replace(turn, attempts=(Attempt(frame / 2),))
+    return turn
 
 
 def _turn(rng: random.Random, clock: str, frame: float, tokens_per_frame: int | None) -> Turn:
@@ -175,6 +209,8 @@ def _smaller(script: Script):
         ("check_s", 0.0),
         ("execute_s", 0.0),
         ("commit_s", 0.0),
+        ("per_move_cap_s", None),
+        ("think_budget_s", None),
     ):
         if getattr(script, name) != plain:
             yield script.but(**{name: plain})

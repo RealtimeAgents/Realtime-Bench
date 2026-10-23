@@ -15,18 +15,20 @@ numbers decision 31, KF5 and KF5d here, X18, and the token clock's ticks turned 
 X17.
 
 The old side's times come from its facts: when each generation started and returned, when each
-decision was resolved, executed and committed, and every end check with its answer. The random
-scripts' operations take no time, but for reading the evaluation snapshot. Named scripts give
-captures, state reads and actions their time (scenarios.TIMED, ACROSS; N29), and the rules for it
-(K-a, K-b, K-k, D47, K-g and X2) hold where a read is shorter than an environment frame, no reply
-comes back at the instant a read is asked, and each decision paces to its next frame: what
-today's extra reads delay is not carried into the next decision. A deadline or a periodic read
-that falls due during one of the shell's operations is handled once it has returned.
+decision was resolved, executed and committed, and every end check with its answer. Named
+scripts give captures, state reads and actions their time (scenarios.TIMED, ACROSS; N29), random
+wall ones the snapshot's read, state reads and actions (generate.py _draw), and the rules for it
+(K-a, K-b, K-k, D47, K-g and X2) hold where a read is shorter than an environment frame, no
+reply comes back at the instant a read is asked, and each decision paces to its next frame: what
+today's extra reads delay is not carried into the next decision, and they find no end the
+kernel finds later (simulated.timed_apart). A deadline or a periodic read that falls due during
+one of the shell's operations is handled once it has returned.
 """
 
 from __future__ import annotations
 
 import copy
+import itertools
 import math
 import re
 from collections.abc import Callable
@@ -780,11 +782,14 @@ def _u11(script: Script, p: Projection, notes: dict) -> None:
 
 def _ended_by_the_deadline(script: Script, p: Projection, notes: dict) -> bool:
     """Today's wall episode ran into the deadline: nothing else ended it first. A failed
-    snapshot read turns its stop reason into invalid_run afterwards (runner.py _finalize)."""
+    snapshot read turns its stop reason into invalid_run afterwards (legacy_loop.py _finalize),
+    also where the think budget ran out before the deadline, which ends the episode then."""
     if not _wall(script) or "ended" in notes:
         return False
     termination, ended_by = p.episode["termination"], p.facts["ended_by"]
-    return termination["stop_reason"] != "think_budget" and ended_by in (None, "deadline")
+    if termination["stop_reason"] == "think_budget" or ended_by not in (None, "deadline"):
+        return False
+    return not (p.facts["think_exhausted"] and earlier(termination["end_s"], script.duration_s))
 
 
 def _read_ended(p: Projection) -> bool:
@@ -801,11 +806,12 @@ def _kg(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot at the first end signal, so on the wall clock it is read
     then (core.py Kernel.end), and the record dates the end at that signal even when the read fails
     (core.py Kernel._finish); today the snapshot is read once the loop has exited, and a failed
-    read dates the end itself (runner.py _finalize, _termination). The signal is handled, and the
-    snapshot read, once the shell is free: an end a state read found, or the failed read that
-    invalidates the run, is dated when it was asked and handled when the read has returned
-    (turns.py TurnPolicy._end_checked, _count_read; N44), and the deadline once the operation under
-    way at it has returned (_deadline_handled)."""
+    read dates the end itself (legacy_loop.py _finalize, _termination), so a key that went up
+    while the loop ran on is not the wind-down's there (projection.key_releases). The signal is
+    handled, and the snapshot read, once the shell is free: an end a state read found, or the
+    failed read that invalidates the run, is dated when it was asked and handled when the read
+    has returned (turns.py TurnPolicy._end_checked, _count_read; N44), and the deadline once the
+    operation under way at it has returned (_deadline_handled)."""
     termination = p.episode["termination"]
     if not _wall(script):
         return
@@ -814,7 +820,9 @@ def _kg(script: Script, p: Projection, notes: dict) -> None:
             handled = _deadline_handled(script, p)
         else:
             read_end = notes.get("read_end", "ended" not in notes and _read_ended(p))
-            handled = termination["end_s"] + (script.check_s if read_end else 0.0)
+            # The end before it was rounded, where a rule dated it, so that it is rounded once.
+            ended = notes["ended"][0] if "ended" in notes else termination["end_s"]
+            handled = ended + (script.check_s if read_end else 0.0)
         termination["snapshot_s"] = round(handled + script.snapshot_s, 9)
         return
     if "ended" in notes:
@@ -823,6 +831,8 @@ def _kg(script: Script, p: Projection, notes: dict) -> None:
         termination["end_s"] = round(script.duration_s, 9)
     elif p.facts["ended_at"] is not None:
         termination["end_s"] = round(p.facts["ended_at"], 9)
+    end = termination["end_s"]
+    p.episode["key_ups"] = [up for up in p.episode["key_ups"] if not earlier(end, up["at"])]
 
 
 def _kh(script: Script, p: Projection, notes: dict) -> None:
@@ -1229,25 +1239,41 @@ def _x6(script: Script, p: Projection, notes: dict) -> None:
     harnesses/default/harness.py DefaultHarness.commit). Today the report goes to the newest
     record, and with none it is lost (DefaultHarness.commit_action). A move U9 skipped, whose
     result today's loop accepted, leaves no exchange in the history either. Only moves with no
-    accepted result before them are rewritten here, as in the named scripts."""
+    accepted result before them are rewritten here, as in the named scripts and the random ones
+    (generate.py _capped); the first frame whose result is accepted keeps their feedback in the
+    history after it, while its turn is kept (harnesses/default/context.py
+    RealtimeRuntime._retained)."""
     if not _wall(script):
         return
     note = f"EXECUTION RESULT: status=skipped_timeout. {UNANSWERED_STEP_NOTES['skipped_timeout']}\n"
+    # A move given up on that the episode's end leaves unreported opens no frame.
     skipped = notes.get("capped", set()) | {
         k
         for k, reason in p.facts["timeout_reasons"].items()
-        if reason == "per_move_cap" and p.decisions[k]["commit"]["status"] == "skipped_timeout"
+        if reason == "per_move_cap"
+        and (p.decisions[k]["commit"] or {}).get("status") == "skipped_timeout"
     }
     if not skipped or min(skipped) != 0:
         return
+    first = next(k for k in itertools.count() if k not in skipped)
+    framed = None  # the text of the first accepted frame, as its own request sent it
     for request, (k, _) in zip(p.beyond["requests"], p.facts["requested"], strict=True):
-        unanswered = sum(1 for j in range(k) if j in skipped)
-        if unanswered != k or not unanswered:
-            continue
         messages = request["body"]["messages"]
+        if k > first:
+            replies = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
+            if framed is None or len(replies) != k - first:
+                continue
+            turn = messages[replies[0] - 1]
+            if turn["role"] == "user" and turn["content"][0]["text"] == framed:
+                turn["content"][0]["text"] = note * first + framed
+            continue
         frame = next(m for m in reversed(messages) if m["role"] == "user")
+        if k == first:
+            framed = frame["content"][0]["text"]
+        if not k:
+            continue
         request["body"]["messages"] = [m for m in messages if m["role"] == "system"] + [frame]
-        frame["content"][0]["text"] = note * unanswered + frame["content"][0]["text"]
+        frame["content"][0]["text"] = note * k + frame["content"][0]["text"]
 
 
 def _x7(script: Script, p: Projection, notes: dict) -> None:

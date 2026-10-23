@@ -71,13 +71,14 @@ def _usage(output_tokens: int | None) -> dict | None:
 
 
 def _replies(script: Script) -> list:
-    """One stub entry per request, in order: a turn's failed attempts, then its reply."""
+    """One stub entry per request, in order: a turn's failed attempts, then its reply. A held
+    request uses none (stub.py ChatCompletionsStub._next)."""
     out = []
     for turn in script.turns:
         for attempt in turn.attempts:
             if attempt.status is not None:
                 out.append(Failure(attempt.status, {"error": {"message": "scripted failure"}}))
-            else:
+            elif not attempt.hang:
                 out.append(Reply(reply_text(turn.action), _usage(turn.output_tokens)))
     return out
 
@@ -130,7 +131,8 @@ class WallEnvironment(_Latched, FakeEnvironment):
     A capture reads its tick when it starts and is stamped when it returns, an end check reads
     the task when it is asked and returns after its time, and an action takes its time before it
     takes effect, so a hold's lease starts after it
-    (actions.py GuestEnvironment._execute_wall_hold)."""
+    (actions.py GuestEnvironment._execute_wall_hold). A wait, DONE and FAIL go to no guest and
+    take none (actions.py GuestEnvironment.execute)."""
 
     def __init__(self, frames, clock, script: Script):
         super().__init__(
@@ -233,7 +235,8 @@ class WallEnvironment(_Latched, FakeEnvironment):
             at=self.now(),
             action=action_key(action.action_type.value, action.parameters),
         )
-        self.clock.sleep(self.script.execute_s)
+        if action.action_type not in (ActionType.WAIT, ActionType.DONE, ActionType.FAIL):
+            self.clock.sleep(self.script.execute_s)
         refused = self.decision in self.rejections or self.decision in self.failures
         if action.action_type is ActionType.HOLD_KEY and not refused:
             self._hold(action, release_at)
@@ -934,6 +937,9 @@ def project(script: Script, env, side: str) -> Projection:
         "ended_at": ended_at,
         "ended_before_commit": ended_before_commit,
         "loop_error": getattr(env, "_loop_error", None),
+        # Today's loop: whether the think budget ran out, which a failed snapshot read leaves out
+        # of its stop reason (legacy_loop.py _finalize).
+        "think_exhausted": getattr(env, "_think_exhausted", False),
         # Wall clock: the decision each request belongs to and when it reached the stub.
         "requested": requested,
     }

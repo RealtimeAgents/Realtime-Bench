@@ -37,7 +37,7 @@
    - 墙钟下每次读状态的时刻和答案；
    - 内核放弃的生成，外壳有没有中止；
    - 每个决策的记录有没有写两遍。
-2. **外壳对旧循环：除了清单内的差异，没有清单外的差异。** `b3288a2` 那次签字剩下的 U14 已由 N44 消掉（第 7 节）。
+2. **外壳对旧循环：除了清单内的差异，没有清单外的差异。** `b3288a2` 那次签字剩下的 U14 已由 N44 消掉（第 7 节）。这一轮多抽了执行耗时，又发现一处疑似内核问题，只影响记录，用 PENDING 脚本钉住（第 7 节）。
 3. **清单本身的变化**：
    - U4、U5 去掉了：p1c 按 N6 修了外壳，两个具名脚本按旧循环的结局断言，不再标 xfail。
    - `55b0082` 那次签字时自编的 U7（`frame_usage` 全为 0）在 `73ca9a3` 以后消失了，这个编号现在是 p1b 的。
@@ -47,6 +47,9 @@
    - 补了 N29 要的读状态、采帧有耗时的具名脚本：K-b 扩写的推迟、D47 都有脚本钉住。耗时覆盖到哪见第 4 节。
 4. **连跑 20 次**：同时跑 20 次、依次跑 20 次，都没有偶发失败（第 6 节）。
 5. **全量 rtest**：`RTEST TOTAL: 2346 passed, 0 failed or errored`，等于本地 `pytest --collect-only` 收集到的 2346 个。
+6. **kernel-fix 审查修复这一轮**：
+   - 具名脚本 78 个：77 个通过；1 个记在 `scenarios.PENDING` 里，按旧循环的结局断言，xfail strict（第 7 节）。
+   - 随机生成器在墙钟下加了读状态和执行的耗时、单步上限、思考预算（第 4 节）。种子 0–999 本地全部通过（第 6 节）。
 
 ## 3. 怎么比
 
@@ -97,10 +100,19 @@
 
 ## 4. 操作耗时覆盖到哪（N29）
 
-- **随机脚本**：只有读快照有耗时，其余操作都不耗时。
+- **随机脚本**：
+  - 读快照有耗时；
+  - 墙钟下各有两成的局，读状态花 0.143 或 0.317 个环境帧，执行花 0.121 或 0.269 个环境帧。采帧不耗时。这几个数和回复耗时、wait 时长（都在八分之一帧的格点上，30/7 下是 30/56 帧的格点）加起来，二十次操作以内落不到环境帧的格点上。落在格点上时，两边取 tick 差一个 ulp。原来取 0.1、0.3 帧时，五次操作就会落上去（种子 499）。
+  - wait、DONE、FAIL 不交给客体，不花执行时间（`GuestEnvironment.execute`），墙钟替身照这个做。
+  - 耗时会让旧循环在内核以外的时刻读到结局时，这一局先把读状态改回不耗时，还不行再把执行也改回不耗时（`simulated.timed_apart`）。包括三种情形：
+    - 读状态有耗时，决策在帧中间回报；
+    - 执行有耗时，被拒的动作执行完已过任务结束的时刻，决策在帧中间回报（种子 754）；
+    - 结果碰上一次定时读，读完时已经进了下一个输入帧。
+
+    这几种都列在下面"覆盖不到的"里。
 - **具名脚本**：
   - `scenarios.TIMED` 的 7 个墙钟脚本：读状态 0.01 或 0.05 秒，采帧 0.02 秒；
-  - `scenarios.ACROSS` 的 10 个墙钟脚本：截止落在落地前那次读、动作后那次读、采帧、执行里，执行跨过帧开头的定时读；
+  - `scenarios.ACROSS` 的 11 个墙钟脚本：截止落在落地前那次读、动作后那次读、采帧、执行里，执行跨过帧开头的定时读；其中 1 个是第 7 节的 PENDING；
   - K-rel 的 2 个：动作 0.125、0.2 秒；
   - 读快照有耗时的若干个。
 - **规则成立的前提**：
@@ -113,25 +125,28 @@
   - 快照在那次操作返回时读（K-g）；动作后那次读在截止前发问的，内核先回报再冻结快照（X2）；
   - 执行跨过帧开头，那一帧的定时读由动作后那次读、或被拒时补的那次读来做，在执行返回时（K-b）。
 - **覆盖不到的**：
-  - 结果晚于帧边界才回来，或 wait 结束在帧中间：旧循环在循环开头多读一次（内核在已读过的帧里不读，KF5c），耗时会带进下一个决策。没写规则，也没进具名脚本。
+  - 结果晚于帧边界才回来，或 wait 结束在帧中间：旧循环在循环开头多读一次（内核在已读过的帧里不读，KF5c），耗时会带进下一个决策。执行有耗时的话，这次读还可能先于内核读到任务结束：被拒的动作执行完已过结束时刻，两边都不在执行后读，内核要到下一帧开头才读到。没写规则，也没进具名脚本；随机脚本避开（种子 82、754）。
+  - 结果碰上一次定时读，K-b 推迟的接纳跨进下一个输入帧：内核从那一帧起等下一帧，旧循环从回来的那一帧起，之后的决策整体错开。没写规则；随机脚本避开（种子 245）。
+  - 动作执行跨过截止、读快照有耗时：疑似内核问题，见第 7 节；随机脚本避开。
   - 读一次比一帧长：60 fps 下读 0.05 秒。另外，墙钟替身在格点上取 tick 会差一个 ulp（`1024.05 - 1024` 乘 60 得 2.999…）。
   - 单步上限落在一次读状态期间（p1b 的 U9）：只写了前面的决策都没有被接纳的结果时的情形（`wall-the-per-move-cap-falls-during-a-read`），和 X6 一样；截止那一种是 D47。
+  - 墙钟随机脚本的单步上限只放弃开头的几步，它们的回复改成挂住、客户端放弃时才放开（`generate._capped`）。回放桩一次只答一个请求（`tests/replay/stub.py`），放弃以后才回来的回复会拖住下一次请求，这是替身的局限，不是两边的差异。
   - 整理结果、accept、回报有耗时（KF7、KF10）：回放里这些都不花时间。
   - 生产环境 `GuestEnvironment` 的墙钟代码：墙钟回放用的是 `FakeEnvironment`，所以 X13 的 10 秒上限、按住键的租约在这里看不到，靠 `tests/sandbox` 守着。
 
 ## 5. 逐条
 
-"出现"是指对跑里观察到，而且规则改写以后两边一致。随机一栏是种子 0–2015 里触发的个数。
+"出现"是指对跑里观察到，而且规则改写以后两边一致。随机一栏是种子 0–2015 里触发的个数，那是审查修复以前的扫描；这一轮种子 0–999 的计数见第 6 节。
 
 | 编号 | 结果 | 触发它的具名脚本 | 随机 | 说明 |
 |---|---|---|---|---|
 | K-a | 出现 | `frame_rates-wall-*`、`runner-late_reply`、`runner-done_reply`、`runner-bounded_call_timeout`、`runner-long`、`wall-result-at-the-deadline`、`wall-retry-across-the-deadline`、`wall-reads-and-captures-take-time` | 313 | 截止放弃的生成，外壳合成一条 `timed_out` 的记录（第 48 条），和旧循环有界等待超时写的一样，逐字段比。旧循环在宽限期内等到了回复的，那条回复的记录由 K-a 换成"放弃的调用"。采帧跨过截止时，旧循环在截止以后还开始生成，内核不开始（`wall-a-capture-runs-past-the-deadline`） |
-| K-b | 出现 | `wall-ends-during-a-reply`、`wall-ends-while-pacing`、`wall-wait-cut-by-the-end`、`wall-a-reply-back-during-a-periodic-read`、`wall-ends-during-a-reply-and-reads-take-time` | 120 | 按 N29 扩写：结果回来时一次定时读正在进行，就等它读完再接纳，再在新读数上读一次才落地。动作、帧龄、动作时刻比旧循环晚"读完时刻 − 回来时刻"，最多一次读的耗时。执行跨过帧开头时，那一帧的定时读推迟到执行返回，由动作后那次读（被拒时补的那次读）来做，所以不在帧开头找到结束（`wall-*-runs-into-the-next-frame-and-the-end`，两边相同） |
+| K-b | 出现 | `wall-ends-during-a-reply`、`wall-ends-while-pacing`、`wall-wait-cut-by-the-end`、`wall-a-reply-back-during-a-periodic-read`、`wall-ends-during-a-reply-and-reads-take-time`、`wall-a-wait-cut-by-the-end-and-reads-take-time`、`wall-the-per-move-cap-falls-during-a-read` | 120 | 按 N29 扩写：结果回来时一次定时读正在进行，就等它读完再接纳，再在新读数上读一次才落地。动作、帧龄、动作时刻比旧循环晚"读完时刻 − 回来时刻"，最多一次读的耗时。执行跨过帧开头时，那一帧的定时读推迟到执行返回，由动作后那次读（被拒时补的那次读）来做，所以不在帧开头找到结束（`wall-*-runs-into-the-next-frame-and-the-end`，两边相同） |
 | K-c | 出现 | `wall-wait-cut-by-the-end`、`wall-a-wait-cut-by-the-end-and-reads-take-time` | 12 | 已并入 KF3 和 KF3 补充。wait 从交给环境的时刻算起，落地前那次读有耗时就晚一次读 |
 | K-d | 出现 | `token-skipped-decision-after-the-end`、`token-think-budget-and-the-end` | 9 | |
 | K-e | 出现 | `token-advance-fails-while-approaching`、`token-advance-fails-while-pacing` | 33 | |
 | K-f | 出现 | `token-missing-usage` | 47 | |
-| K-g | 出现 | 墙钟 16 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束或第三次读失败的那次读返回以后（结束记在发问时刻，N44）；截止落在一次读、采帧或执行里时，那次操作返回以后 |
+| K-g | 出现 | 墙钟 18 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束或第三次读失败的那次读返回以后（结束记在发问时刻，N44）；截止落在一次读、采帧或执行里时，那次操作返回以后 |
 | K-h | 出现 | `wall-frozen-stream`、`token-frozen-stream` | 19 | |
 | K-i | 出现 | `wall-think-budget-and-the-end`、`wall-think-budget-at-the-deadline`、`token-think-budget-and-the-end` | 4 | 思考预算用完和任务结束、墙钟截止相撞时，先到的那个定停止原因。预算的结束两边都记在超预算那个决策回报时，在它等到下一帧之后；这段等待撞上截止时，内核记 `time_limit`，决策在手上（X2） |
 | K-j | 出现 | `token-lease-ends-inside-a-tap` | 4 | |
@@ -145,17 +160,17 @@
 | KF2 | 出现 | `token-horizon-a-few-ulps-past-a-tick` | — | 依据：kernel-fix 第一轮第 13 条让内核像环境时钟一样把 1e-9 内的时限吸附到整 tick，同一报告第 5 节列成 KF2；旧循环没改 |
 | KF3 | 并入 K-c | `wall-wait-cut-by-the-end` | — | |
 | KF4 | 出现 | `token-the-end-seen-inside-a-tap`、`token-no-read-after-the-end-seen-inside-a-tap` | 1 | |
-| KF5（a、b、c、f） | 出现 | token 24 个脚本，例如 `frame_rates-token-60_1` | 1292 | p1c 记作 X18。U3 并进 KF5a（N5）。墙钟上只剩 KF5c（kernel-fix 第七轮 KF9） |
+| KF5（a、b、c、f） | 出现 | token 25 个脚本，例如 `frame_rates-token-60_1` | 1292 | p1c 记作 X18。U3 并进 KF5a（N5）。墙钟上只剩 KF5c（kernel-fix 第七轮 KF9） |
 | KF5d、KF5e | 作废 | `wall-a-wait-lands-after-the-end`、`wall-a-refused-action-lands-after-the-end`、`runner-environment_done_during_reply` 现在两边相同 | — | N26 (b)：落地前在新读数上照读 |
 | KF6、KF7、KF8 | 没有脚本 | — | — | KF6 要 accept 抛异常；KF7 要整理结果有耗时；KF8 下旧循环暂停模式会死循环 |
 | KF10 | 不可观察 | — | — | N25：落地在 accept 之后的读数上；回放里 accept 不耗时，`landing` 定时记录是 KernelRecord |
 | D47 | 出现 | `wall-the-deadline-falls-during-a-read` | — | 截止落在一次读期间，期间回来的结果在读完以后才整理，已过截止。外壳不回报这一步，记录是这次调用自己的，`frame_usage` 为 0，用量不计（第 37 条）。旧循环照常落地 |
 | X1 | 出现 | `frame_rates-token-*`、`runner-done_reply`、`runner-long`、`wall-wait-across-the-deadline`、`wall-wait-cut-by-the-end`、`token-a-wait-whose-own-step-fails` | 1083 | |
-| X2 | 出现 | 33 个，例如 `runner-environment_done`、`wall-hold-between-frames` | 801 | |
+| X2 | 出现 | 43 个，例如 `runner-environment_done`、`wall-hold-between-frames`；另有第 7 节那个 PENDING 脚本 | 801 | |
 | X3 | 不再出现 | — | — | 外壳给每个放弃的生成都合成记录（第 48 条、N10），归 K-a、U10、U11 |
-| X4 | 出现 | `frame_rates-wall-30_7`、`wall-per-move-cap`、`token-horizon-a-few-ulps-past-a-tick` 等 6 个 | 51 | |
+| X4 | 出现 | `frame_rates-wall-30_7`、`wall-per-move-cap`、`token-horizon-a-few-ulps-past-a-tick` 等 7 个 | 51 | |
 | X5 | 归一化 | — | — | |
-| X6 | 出现 | `wall-per-move-cap` | — | 只写了超时前没有已接纳记录的情形 |
+| X6 | 出现 | `wall-per-move-cap`、`wall-over-the-cap-and-the-think-budget`、`wall-the-per-move-cap-falls-during-a-read` | 见第 6 节 | 只写了开头几步被上限放弃、之前没有已接纳结果的情形：每一步的反馈开下一帧，请求只留系统消息和这一帧；第一个被接纳的帧，在它之后的请求里还带着这些反馈，它的回合保留在历史里（`RealtimeRuntime._retained`） |
 | X7 | 出现 | `runner-done_reply` | 252 | |
 | X8 | 不比 | — | — | agent 自己的事件日志 |
 | X9 | 这次看不到 | — | — | P1d |
@@ -188,9 +203,23 @@
 
 > KF5 1292、X1 1083、X2 801、K-g 385、K-a 313、X7 252、U2 157、X12 122、K-b 120、U10 91、X4 51、K-f 47、K-e 33、K-h 19、K-c 12、K-d 9、K-j 4、K-i 4、KF4 1；15 个种子没有任何差异。
 
+kernel-fix 审查修复这一轮：
+
+- 默认集合 120 个：78 个具名脚本（其中 1 个 PENDING，xfail），其余同上。在 VM 上跑一次：`119 passed, 1 xfailed in 159.57s`。修复以前是 `104 passed`，151.89–158.55 s。
+- 默认 25 个种子：本地修复以前 29.33 s，以后 29.38–31.83 s。
+- 随机种子 0–999 在本地全部通过（`1004 passed in 1058.56s`）。335 个墙钟局里，抽到的耗时和限制保留下来的局数：读状态有耗时 36 个，执行有耗时 75 个，单步上限 25 个，思考预算 30 个。各规则触发的次数：
+
+> KF5 634、X1 540、X2 408、U17 200、K-g 180、K-a 163、X7 112、U2 77、X12 64、X4 54、K-b 46、U10 37、K-f 30、K-i 19、K-e 18、X6 17、K-rel 15、K-h 8、K-c 4、K-d 3、KF4 1；8 个种子没有任何差异。
+
+  K-i、X6、K-rel 是随机脚本第一次触发。
+
 ## 7. 清单外的差异
 
-一条不剩。
+`b3288a2` 那次签字时一条不剩。这一轮随机脚本多抽了执行耗时，发现一处，疑似内核问题，没有写成规则：
+
+- **动作执行跨过截止，读快照又有耗时**：回合制外壳交给内核的 `ActionExecuted` 不填 `finished_at`。截止的定时器先到期，内核先结束这一局、冻结快照，快照读完才归档这次执行的回答。所以 `ActionResolved` 的 `environment_tick` 和 outcome 的 `next_observation_tick` 取的是快照读完时的 tick，越过了时限。旧循环取的是执行返回时的 tick。
+- 流式那一半的 `core.py` 已经按 `finished_at` 归档动作的回答（第 1 节开头）。
+- 只影响记录，不影响结局和快照。具名脚本 `wall-an-action-runs-past-the-deadline-and-the-snapshot-takes-time`（0.2 秒的点击 1.9 秒落地，截止 2.0 秒，读快照 1.5 秒）记在 `scenarios.PENDING` 里：旧循环记 tick 2，内核记 3。随机脚本避开这种情形（`simulated.timed_apart`）。
 
 - 前几次签字的清单外差异的去向：
   - U2、U3、U6 由 N5 收进清单；
@@ -203,6 +232,10 @@
 另外要知道的：
 
 - 墙钟回放替身 `WallEnvironment.done()` 原来先锁存读失败、再花读的时间，已经改成和旧循环的环境（`LegacyStateReads.done()`）一样读完才锁存。这只影响 `tests/differential`。
+- 这一轮随机脚本抽到执行耗时、单步上限以后，替身又改了几处，都只影响 `tests/differential`：
+  - `WallEnvironment.execute` 原来给 wait、DONE、FAIL 也花执行耗时，现在照生产的 `GuestEnvironment.execute` 不花；
+  - 回放桩的回复表里，挂住的请求不再占一条回复（`stub.py ChatCompletionsStub._next`）；
+  - 投影的 facts 多了 `think_exhausted`：读快照失败把停止原因改成 `invalid_run` 以后，规则据此认出这一局其实是思考预算先用完，不是撞上截止。
 - `tests/differential/legacy_loop.py` 是主线原样搬来的，`ruff check` 报 43 处（行长等）。本分支没改它，lint 只查框架自己的文件。
 - 生产 `GuestEnvironment.execute` 原来在 `honor_fail` 时把 DONE、FAIL 记成 `_done`，只有 `LegacyStateReads.done()` 读它。内核把 DONE、FAIL 当 wait 跑，不交给环境（`turns.py` `_accept`、`streaming.py` `_arrived`），旧循环也在 `_decide` 里先把它换成 wait，所以哪边都走不到这一段。它已经连同 `honor_fail`、`_done`、`_terminal_action` 和 `GuestClient` 里 WAIT、DONE、FAIL 的分支删掉，`LegacyStateReads.done()` 也不再读 `_done`。
 
@@ -218,8 +251,9 @@
 
 - 操作耗时的一般情形，见第 4 节。
 - X12 补充 b、补充 d。
-- X6 只写了"超时前没有已接纳记录"的情形。
-- 重试、墙钟读状态失败、墙钟下的思考预算和单步上限：随机脚本不生成，只有具名脚本。
+- X6 只写了"开头几步被上限放弃、之前没有已接纳结果"的情形；墙钟随机脚本的单步上限也只放在开头几步（第 4 节）。
+- 重试、墙钟读状态失败：随机脚本不生成，只有具名脚本。
+- 动作执行跨过截止、读快照有耗时：只有 PENDING 的那个具名脚本（第 7 节）。
 - 一次点按不止一步（60 fps 以上）、有按住的键时点按内部读失败：只有具名脚本，或者没有。
 - 暂停模式下的 KF2、KF8：旧循环会死循环。
 - 投影不比的部分：timeline、日志、工具记录、agent 的事件日志（X8）、轨迹里除上面四种以外的记录。

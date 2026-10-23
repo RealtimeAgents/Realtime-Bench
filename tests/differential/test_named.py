@@ -26,4 +26,4 @@ def test_named_script(script, tmp_path):
     assert not ties(script), ties(script)
     verdict = compare(script, tmp_path)
     record(verdict, named=True)
-    assert as_expected(verdict), describe(verdict)
+    assert as_expected(verdict), describe(verdict, named=True)
