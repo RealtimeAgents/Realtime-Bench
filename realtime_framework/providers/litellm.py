@@ -139,10 +139,8 @@ def validate_endpoint(url: str | None) -> str:
 
 
 # Usage
-def kimi_usage(usage: dict, base_url: str) -> dict:
+def kimi_usage(usage: dict) -> dict:
     """Expose Kimi's default 5m cache and undivided input to cost accounting."""
-    if base_url.rstrip("/") != DEFAULT_MOONSHOT_BASE_URL:
-        return usage
     usage = copy.deepcopy(usage)
     details = usage.get("prompt_tokens_details") or {}
     if not isinstance(details, dict):
@@ -929,7 +927,7 @@ class LiteLLMDriver:
 
     def _normalize_usage(self, usage: dict) -> dict:
         if self.protocol.usage == "kimi":
-            return kimi_usage(usage, str(self.base_url))
+            return kimi_usage(usage)
         return usage
 
     # ---- complete responses ----------------------------------------------------------------

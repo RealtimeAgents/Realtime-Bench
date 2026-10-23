@@ -4,8 +4,8 @@ Record a baseline with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay
 run is compared with tests/replay/baselines/.
 
 The ModelConfig is the catalog's (runner.py main) and keeps the official base URL
-(configs/models/kimi-k3.yaml:5), so the driver normalizes Kimi usage (providers/litellm.py:122-152,
-906-908); stub_moonshot.redirect_to_stub sends the requests to the local stub. The long scenario
+(configs/models/kimi-k3.yaml), and the driver normalizes Kimi usage (providers/litellm.py
+kimi_usage); stub_moonshot.redirect_to_stub sends the requests to the local stub. The long scenario
 runs on a finite frame budget B, the short snapshot in pause mode (B unlimited).
 """
 
@@ -221,6 +221,27 @@ def test_pause_mode_snapshot(tmp_path, monkeypatch):
         records,
         tmp_path,
     )
+
+
+def test_kimi_usage_at_another_address(monkeypatch):
+    """A moonshot driver addressed elsewhere than the official API (the YAML's base_url or
+    MOONSHOT_BASE_URL) reads the usage as Kimi's all the same: the API decides it
+    (providers/litellm.py ChatProtocol.usage, kimi_usage), not the address."""
+    monkeypatch.setenv("MOONSHOT_API_KEY", DUMMY_KEY)
+    config = catalog.to_model_config(MODEL_KEY, fps=FPS).model_copy(
+        update={"api_base_url": "https://kimi-gateway.example/v1"}
+    )
+    driver = catalog.adapter_class(config.adapter_type)(config)
+    (reply,) = kimi_replies(LONG_SCENARIO[:1])
+    usage = driver._normalize_usage(reply.usage)
+    details = usage["prompt_tokens_details"]
+    assert details["text_tokens"] == usage["prompt_tokens"]
+    assert details["cached_tokens_details"] == {"text_tokens": details["cached_tokens"]}
+    assert details["cache_write_tokens_details"] == {
+        "ephemeral_5m_tokens": details["cache_write_tokens"],
+        "ephemeral_1h_tokens": 0,
+    }
+    assert usage["completion_tokens_details"]["audio_tokens"] == 0
 
 
 def test_model_without_a_preset(tmp_path, monkeypatch):
