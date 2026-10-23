@@ -681,6 +681,31 @@ def test_an_episode_whose_termination_record_raises_still_ends(monkeypatch, kern
         assert any(line.startswith("[streaming] wrapping up the episode failed") for line in logs)
 
 
+def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
+    """Decision 33, as on the turn-based shell: the inputs are released once the outcome is
+    latched and the snapshot read. A release that raises is logged; the run stays valid and the
+    summary has no error."""
+
+    def release_fails(env, clock):
+        release = env.release_inputs
+
+        def release_inputs():
+            release()
+            raise RuntimeError("the page is gone")
+
+        env.release_inputs = release_inputs
+
+    logs: list[str] = []
+    termination, env, _ = _episode(6.0, ONE_CLICK, env_setup=release_fails, logs=logs)
+    assert env.released_at == 6.5
+    assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
+    assert (env._stop_reason, env._invalid_run) == ("time_limit", None)
+    assert getattr(env, "_loop_error", None) is None
+    (logged,) = [line for line in logs if line.startswith("[cleanup]")]
+    assert logged.startswith("[cleanup] failed to release stateful inputs:")
+    assert "RuntimeError: the page is gone" in logged
+
+
 def _log_raising_on(prefix: str):
     """A log whose stdout is gone for the lines that start with ``prefix``."""
 
