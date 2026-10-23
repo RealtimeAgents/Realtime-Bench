@@ -4,15 +4,15 @@
 Each rule rewrites the old side's projection into what the new side shows; the rules run in
 order and what is left must match exactly. A rule triggers when it changed something. A script's
 ``expect`` names the rules it may trigger: one it did not name fails the comparison, one it named
-that did not trigger is reported. Rules without a rewrite cannot show between today's loop and the
-simulation; ``seen`` says where they can.
+that did not trigger fails a named script (compare.as_expected). Rules without a rewrite cannot
+show between today's loop and the simulation; ``seen`` says where they can.
 
 U-numbered rules are differences found after the plan's list: U2 by this framework, put on the
 list by N5 (with U3 and U6, which KF5 and p1b's fix of L3 took up); U7 to U13 by p1b, U10 and U11
 recorded by N10 and N34; U14 by this framework, gone since N44 dated a failed read's end as an end
-a read found (K-g). KF-numbered ones are kernel-fix's, D47 is p1b's name for decision 47; p1c
-numbers decision 31, KF5 and KF5d here, X18, and the token clock's ticks turned into equal floats
-X17.
+a read found (K-g); U17 is the plan's (fix-h1), U18 the kernel audit's (低 7). KF-numbered ones
+are kernel-fix's, D47 is p1b's name for decision 47; p1c numbers decision 31, KF5 and KF5d here,
+X18, and the token clock's ticks turned into equal floats X17.
 
 The old side's times come from its facts: when each generation started and returned, when each
 decision was resolved, executed and committed, and every end check with its answer. Named
@@ -189,7 +189,7 @@ def _frames(script: Script, ticks: float) -> float:
 
 
 def _dropped(script: Script, t_k: float, reached: float) -> int:
-    """Input frames a decision crossed but one (runner.py _apply)."""
+    """Input frames a decision crossed but one (legacy_loop.py _apply)."""
     crossed = max(0, _floor(_frames(script, reached)) - _floor(_frames(script, t_k)))
     return max(0, crossed - 1)
 
@@ -401,7 +401,7 @@ def _x4(script: Script, p: Projection, notes: dict) -> None:
 
 def _kf2(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: a horizon within 1e-9 above a whole tick is that tick to the kernel
-    (kernel/turns.py TurnConfig); today's loop runs to the float main() computes (runner.py main,
+    (kernel/turns.py TurnConfig); today's loop runs to the float main() computed (drivers.py legacy,
     max_minutes * 60 * env_fps). There an action landing on that tick is applied and checked
     after, the loop captures once more, and the episode completes instead of reaching the tick
     limit. kernel-fix 第一轮 第 13 条 made the kernel snap as the environment's clock does and its
@@ -444,7 +444,7 @@ def _kf5(script: Script, p: Projection, notes: dict) -> None:
 def _kf4(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: a tap's read that saw the end ends the episode where the tap stopped, by the
     task's reason (turns.py TurnPolicy._executed); today the loop asks once more after the
-    action (runner.py _land_action)."""
+    action (legacy_loop.py _land_action)."""
     _cut_checks(script, p, ("tap_end",))
 
 
@@ -555,7 +555,8 @@ def _kernel_end(script: Script, p: Projection, notes: dict) -> tuple[float, int 
 def _kb(script: Script, p: Projection, notes: dict) -> None:
     """The wall clock checks the end every 1/env_fps s, during generations, waits and pacing too
     (turns.py TurnPolicy.start, _schedule_end_check); an end found so is dated at the asking. Today
-    only the loop top and the checks around landing ask (runner.py run_stream, _land_action)."""
+    only the loop top and the checks around landing ask (legacy_loop.py _run_stream_legacy,
+    _land_action)."""
     found = _kernel_end(script, p, notes)
     if found is None:
         return
@@ -659,7 +660,8 @@ def _kd(script: Script, p: Projection, notes: dict) -> None:
     """Token clock: nothing advances after the first end signal (turns.py TurnPolicy._resolve,
     on_end). Today a decision skipped before landing (no action, over the budget) skips the check
     before landing, so after an end found while moving to its action time it still paces to the
-    next frame (runner.py _land_action, _apply), and the end is dated where that pacing stopped."""
+    next frame (legacy_loop.py _land_action, _apply), and the end is dated where that pacing
+    stopped."""
     ended_at = p.facts["ended_at"]
     if _wall(script) or ended_at is None:
         return
@@ -682,14 +684,18 @@ def _kd(script: Script, p: Projection, notes: dict) -> None:
 
 
 def _ka(script: Script, p: Projection, notes: dict) -> None:
-    """The wall deadline is a timer without today's grace (runner.py _move_timeout): at the
+    """The wall deadline is a timer without today's grace (legacy_loop.py _move_timeout): at the
     deadline the kernel freezes the snapshot and gives up on the generation in flight, whose
     decision is not reported; a result back exactly at the deadline is discarded
     (turns.py TurnPolicy.on_timer, core.py). The shell records that call as one given up at the
     deadline (decision 48), as today's loop records a bounded wait it gave up; where today's
     loop waited out its grace for the reply instead, that reply's records are gone
     (_abandoned). A frame whose capture returned at the deadline or after starts no generation:
-    the kernel handles the deadline first (_deadline_handled); today's loop starts one."""
+    the kernel handles the deadline first (_deadline_handled); today's loop starts one. Today's
+    loop also charges the seconds it waited for the call it gave up to the think budget
+    (legacy_loop.py _run_step, _charge); the kernel charges accepted results only
+    (turns.py TurnPolicy._accept), so the summary's think_spent_s leaves that call out
+    (runner.py, from env._think_spent). Neither side's projection has it."""
     if not _ended_by_the_deadline(script, p, notes):
         return
     deadline, facts = script.duration_s, p.facts
@@ -838,7 +844,7 @@ def _kg(script: Script, p: Projection, notes: dict) -> None:
 def _kh(script: Script, p: Projection, notes: dict) -> None:
     """A frozen stream invalidates the run without aborting the agent
     (turns.py TurnPolicy._captured); today the watchdog also calls adapter.abort()
-    (runner.py _accept_observation)."""
+    (legacy_loop.py _accept_observation)."""
     invalid = p.episode["invalid"]
     if invalid is not None and invalid["reason"] == "observation_stream_frozen":
         p.episode["aborts"] -= 1
@@ -856,7 +862,7 @@ UNUSABLE = {
 def _kf(script: Script, p: Projection, notes: dict) -> None:
     """An unusable result still resolves the action it proposed, as invalid_run
     (turns.py TurnPolicy._unusable); today _apply returns before it is resolved
-    (runner.py _apply)."""
+    (legacy_loop.py _apply)."""
     invalid = p.episode["invalid"]
     if invalid is None or invalid["reason"] not in UNUSABLE:
         return
@@ -907,10 +913,10 @@ def _kn(script: Script, p: Projection, notes: dict) -> None:
 
 def _ke(script: Script, p: Projection, notes: dict) -> None:
     """An environment fault that escapes today's loop leaves the decision in hand unreported
-    (runner.py run_stream); the kernel ends the episode on it and reports that decision after the
-    snapshot (turns.py TurnPolicy.on_end). A failed token step while pacing reports the decision
-    with its own status and the boundary it reached, as today's loop would have written them
-    (runner.py _apply)."""
+    (legacy_loop.py _run_stream_legacy); the kernel ends the episode on it and reports that
+    decision after the snapshot (turns.py TurnPolicy.on_end). A failed token step while pacing
+    reports the decision with its own status and the boundary it reached, as today's loop would
+    have written them (legacy_loop.py _apply)."""
     invalid = p.episode["invalid"]
     if (
         p.facts["loop_error"] is None
@@ -931,7 +937,7 @@ def _ke(script: Script, p: Projection, notes: dict) -> None:
     if d["resolved"] is None:
         # The step to the action time failed: the action is not landed (turns.py
         # TurnPolicy._approached).
-        tau = t_k + delay * frame_ticks  # runner.py _apply
+        tau = t_k + delay * frame_ticks  # legacy_loop.py _apply
         d["approach"] = {"from": t_k, "requested": min(tau, script.max_ticks), "to": reached}
         d["resolved"] = {
             "status": "invalid_run",
@@ -1210,7 +1216,7 @@ def _u17(script: Script, p: Projection, notes: dict) -> None:
 def _u2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel writes RunInvalidated for every failure (core.py Kernel.invalidate), also one the
     environment latched itself; today only the runner's own _invalidate writes it
-    (runner.py _invalidate). On the list by N5."""
+    (legacy_loop.py _invalidate). On the list by N5."""
     if p.episode["invalid"] is not None and p.episode["invalidation_records"] == 0:
         p.episode["invalidation_records"] = 1
 
@@ -1218,7 +1224,7 @@ def _u2(script: Script, p: Projection, notes: dict) -> None:
 def _x2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot before it reports the decision in hand (core.py Kernel.end,
     turns.py TurnPolicy.on_end); today the decision is reported first and the snapshot read after
-    the loop (runner.py _apply, run_stream)."""
+    the loop (legacy_loop.py _apply, _finalize)."""
     k = notes["in_hand"] if "in_hand" in notes else _old_in_hand(script, p, notes)
     if k is not None and k in p.decisions and p.decisions[k]["commit"] is not None:
         p.episode["snapshot_after"] -= 1
@@ -1404,6 +1410,15 @@ RULES = (
         "U12",
         "the records of an exception the shell caught",
         seen="not scripted: no replayed kernel, policy or state reading raises",
+    ),
+    Rule(
+        # The shell runs them on its thread and records what they raise (shell.py _Shell._run,
+        # _raised); today they run inside stream_generate on the bounded call's worker, where an
+        # accept's failure is the generation's (legacy_loop.py _bounded_call, _run_step) and one of
+        # a worker given up on is read by no one.
+        "U18",
+        "an agent accept or discard that raises is runner:run_exception",
+        seen="not scripted: no replayed agent's accept or discard raises",
     ),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
     Rule(

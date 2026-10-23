@@ -140,7 +140,7 @@
 
 | 编号 | 结果 | 触发它的具名脚本 | 随机 | 说明 |
 |---|---|---|---|---|
-| K-a | 出现 | `frame_rates-wall-*`、`runner-late_reply`、`runner-done_reply`、`runner-bounded_call_timeout`、`runner-long`、`wall-result-at-the-deadline`、`wall-retry-across-the-deadline`、`wall-reads-and-captures-take-time` | 313 | 截止放弃的生成，外壳合成一条 `timed_out` 的记录（第 48 条），和旧循环有界等待超时写的一样，逐字段比。旧循环在宽限期内等到了回复的，那条回复的记录由 K-a 换成"放弃的调用"。采帧跨过截止时，旧循环在截止以后还开始生成，内核不开始（`wall-a-capture-runs-past-the-deadline`） |
+| K-a | 出现 | `frame_rates-wall-*`、`runner-late_reply`、`runner-done_reply`、`runner-bounded_call_timeout`、`runner-long`、`wall-result-at-the-deadline`、`wall-retry-across-the-deadline`、`wall-reads-and-captures-take-time` | 313 | 截止放弃的生成，外壳合成一条 `timed_out` 的记录（第 48 条），和旧循环有界等待超时写的一样，逐字段比。旧循环在宽限期内等到了回复的，那条回复的记录由 K-a 换成"放弃的调用"。采帧跨过截止时，旧循环在截止以后还开始生成，内核不开始（`wall-a-capture-runs-past-the-deadline`）。旧循环把等这次调用的秒数计进思考预算（`_charge`），内核只计接纳的结果（`TurnPolicy._accept`），所以 summary 的 `think_spent_s` 少这一次；投影不比这个字段 |
 | K-b | 出现 | `wall-ends-during-a-reply`、`wall-ends-while-pacing`、`wall-wait-cut-by-the-end`、`wall-a-reply-back-during-a-periodic-read`、`wall-ends-during-a-reply-and-reads-take-time`、`wall-a-wait-cut-by-the-end-and-reads-take-time`、`wall-the-per-move-cap-falls-during-a-read` | 120 | 按 N29 扩写：结果回来时一次定时读正在进行，就等它读完再接纳，再在新读数上读一次才落地。动作、帧龄、动作时刻比旧循环晚"读完时刻 − 回来时刻"，最多一次读的耗时。执行跨过帧开头时，那一帧的定时读推迟到执行返回，由动作后那次读（被拒时补的那次读）来做，所以不在帧开头找到结束（`wall-*-runs-into-the-next-frame-and-the-end`，两边相同） |
 | K-c | 出现 | `wall-wait-cut-by-the-end`、`wall-a-wait-cut-by-the-end-and-reads-take-time` | 12 | 已并入 KF3 和 KF3 补充。wait 从交给环境的时刻算起，落地前那次读有耗时就晚一次读 |
 | K-d | 出现 | `token-skipped-decision-after-the-end`、`token-think-budget-and-the-end` | 9 | |
@@ -191,6 +191,7 @@
 | U13 | 不比 | — | — | p1b 第七轮：已整理、后被内核丢弃的结果，轨迹行类型是 `decision`。对跑不比轨迹行 |
 | U14 | 已由 N44 消掉 | `wall-a-failed-read-takes-time` 现在两边的结束和快照时刻相同 | — | 读失败判无效，内核原来记在读返回时、旧循环记在发问时；N44 以后内核也记在发问时（`98a60cd`） |
 | U17 | 出现 | 墙钟 15 个，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-third-failed-read-during-a-reply` | 未重扫 | 内核放弃的生成（截止、任务结束、判无效），回复不进已回报决策的 token 小计（`reported_decisions`，`TokenAccounting.leave_unreported`）；规则删掉的决策，内核没有开始。旧循环每个开始了的决策记一次回复，不写小计，小计就是总数。规则从旧的小计里减掉这些决策的回复和 `clock_output_tokens`。投影取 `summary()` 的 `reported_decisions`，没有就取整份，和 `reporting.py` 的读法一样。默认 25 个种子里也出现 |
+| U18 | 没有脚本 | — | — | agent 的 accept、discard 抛错：外壳在自己的线程上跑它们，经 `_raised` 记成 `runner:run_exception`；旧循环在有界调用的工作线程上、`stream_generate` 里跑（`_write`、`_drop`），accept 那一半抛错记成 `provider:generation_error`，已被放弃的工作线程上抛的没人读，这一局有效。回放里 agent 不抛错（审查低 7） |
 
 ## 6. 连跑 20 次和随机扫描
 
@@ -253,6 +254,7 @@ kernel-fix 审查修复这一轮：
 - X12 补充 b、补充 d。
 - X6 只写了"开头几步被上限放弃、之前没有已接纳结果"的情形；墙钟随机脚本的单步上限也只放在开头几步（第 4 节）。
 - 重试、墙钟读状态失败：随机脚本不生成，只有具名脚本。
+- U18（accept、discard 抛错）：没有脚本。
 - 动作执行跨过截止、读快照有耗时：只有 PENDING 的那个具名脚本（第 7 节）。
 - 一次点按不止一步（60 fps 以上）、有按住的键时点按内部读失败：只有具名脚本，或者没有。
 - 暂停模式下的 KF2、KF8：旧循环会死循环。
