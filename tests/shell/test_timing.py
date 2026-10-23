@@ -116,6 +116,21 @@ def test_the_check_before_landing_is_asked_once_the_result_is_accepted():
     assert episode.env._termination["end_s"] == pytest.approx(3.005)
 
 
+def test_an_end_a_check_saw_before_the_deadline_is_the_tasks_though_it_answers_after():
+    """60 fps, every end check 1.05 s, the task ends at 4.5 s, T = 5. The second result is back
+    at 4.2 s and accepting it takes 10 ms, so its landing is due at 4.2 s; the check asked at
+    4.21 s sees the end and answers at 5.26 s. The landing comes first, past the deadline, and
+    lands nothing; the end, asked before the deadline, is the task's (phase2.md, 时间和结束判定;
+    decision 4)."""
+    world = World(check_s=1.05, ends_at=4.5, end_reason="won")
+    replies = [Reply(0.05, CLICK), Reply(30.0)]
+    episode = run("wall", 5.0, replies, world, fps=60.0, input_fps=1.0, agent_type=_SlowAccept)
+    assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
+    assert episode.statuses() == ["not_applied_terminal"]
+    assert episode.env._termination["stop_reason"] == "won"
+    assert episode.env._termination["end_s"] == pytest.approx(4.21)
+
+
 def test_a_result_settled_across_the_deadline_does_not_land():
     """The result comes back 5 ms before the 3 s deadline and settling it ends 5 ms after it;
     the kernel gets it at the reading taken after the settling. The deadline came first, and
