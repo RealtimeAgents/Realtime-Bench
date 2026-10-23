@@ -27,6 +27,7 @@ from .fake_live import (
     Cancel,
     Error,
     Fail,
+    FakeLiveDriver,
     GoAway,
     Hang,
     RecordingToolRuntime,
@@ -1102,6 +1103,131 @@ def test_a_session_that_fails_to_reopen_for_good_is_not_tried_again(monkeypatch,
     with pytest.raises(TransportFailureError):
         agent.generate(7, 3, frame, BUDGET)
     assert agent.driver.connect_attempts == 2
+    agent.close()
+
+
+def _reply_attempts(trace) -> list[tuple]:
+    return [
+        (r["outcome"], r["failure_kind"])
+        for r in trace.of(TraceEvent.MODEL_ATTEMPT_FINISHED)
+        if r["kind"] == "reply"
+    ]
+
+
+DROPPED = ConnectionError("1011 internal error")
+
+
+def test_a_reply_whose_connection_drops_before_it_said_anything_is_asked_for_again(
+    monkeypatch, clock
+):
+    """Nothing of the reply came before its connection dropped, which the encoder takes as
+    transient, so none of its actions went to the kernel: it is asked for again on the session
+    rebuilt from the view after the shared backoff, as a turn is, and its click goes in then."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [Reply((Fail(0.05, DROPPED),)), Reply((_click("c1", 0.5, 2),), 1.0)]
+    pending = agent.generate(7, 3, frame, BUDGET)
+    assert not pending.cancelled
+    assert [call[:2] for call in agent.driver.calls[-4:]] == [
+        ("reply", 7),
+        ("close",),
+        ("sync", "runtime_recovery"),
+        ("reply", 7),
+    ]
+    assert [a.call_id for a in posted] == ["c1"]
+    assert _reply_attempts(trace) == [("retry", TRANSIENT), ("ok", None)]
+    agent.close()
+
+
+def test_a_reply_whose_connection_drops_after_a_call_is_not_asked_for_again(monkeypatch, clock):
+    """Its click went to the kernel already: asking again could execute it twice."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [Reply((_click("c1", 0.25, 2), Fail(0.5, DROPPED))), Reply(ends_at=1)]
+    with pytest.raises(ConnectionError):
+        agent.generate(7, 3, frame, BUDGET)
+    assert [call[0] for call in agent.driver.calls].count("reply") == 1
+    assert _reply_attempts(trace) == [("failed", TRANSIENT)]
+    agent.close()
+
+
+def test_a_reply_whose_connection_keeps_dropping_fails_once_the_retries_are_spent(
+    monkeypatch, clock
+):
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [Reply((Fail(0.05, DROPPED),))] * 4
+    with pytest.raises(ConnectionError):
+        agent.generate(7, 3, frame, BUDGET)
+    assert _reply_attempts(trace) == [("retry", TRANSIENT)] * 3 + [("failed", TRANSIENT)]
+    agent.close()
+
+
+def test_a_reply_given_up_while_it_waits_to_be_asked_for_again_is_not(monkeypatch, clock):
+    """The kernel gives the reply up during the backoff, as its watchdog or the deadline does:
+    the wait ends and the reply is not asked for again."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [Reply((Fail(0.05, DROPPED),)), Reply(ends_at=1.0)]
+    replied, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.abort(7)
+    assert clock.wait(replied, 1.0)
+    assert out["value"].cancelled
+    assert [call[0] for call in agent.driver.calls].count("reply") == 1
+    assert _reply_attempts(trace) == [("retry", TRANSIENT), ("cancelled", None)]
+    agent.close()
+
+
+def test_an_abort_that_drops_a_replys_connection_is_no_failure_of_the_reply(monkeypatch, clock):
+    """Closing the session fails the reply's stream, as Gemini Live's reader does: the reply was
+    given up, not failed, and nothing is tried again or recorded as an attempt."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply(ends_at=10.0))
+    replied, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.abort(7)
+    assert clock.wait(replied, 1.0)
+    assert out["value"].cancelled
+    assert _reply_attempts(trace) == []
+    agent.close()
+
+
+class _CauseReadingDriver(FakeLiveDriver):
+    """Classifies a failure by the exceptions it was raised from too, as Gemini Live's encoder
+    does (GeminiLiveDriver._is_transient)."""
+
+    def classify_transport_error(self, exc):
+        while exc is not None and not isinstance(exc, ConnectionError):
+            exc = exc.__cause__
+        return super().classify_transport_error(exc)
+
+
+def test_a_reply_whose_session_could_not_be_reopened_is_not_asked_for_again(monkeypatch, clock):
+    """Reopening the session spent the shared retries already: the reply fails with them, and
+    its own retry does not try reopening four times more."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, driver=_CauseReadingDriver, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.abort(6)
+    agent.driver.connect_failures = [ConnectionError("down")] * 8
+    with pytest.raises(TransportFailureError):
+        agent.generate(7, 3, frame, BUDGET)
+    assert agent.driver.connect_attempts == 5  # the episode's first, then the four of the retry
+    assert _reply_attempts(trace) == [("failed", TRANSIENT)]
     agent.close()
 
 

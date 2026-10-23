@@ -26,9 +26,10 @@ seconds from the episode's origin; one whose frame cannot be found arrives refus
 action is the reply's protocol failure. Where the model answers in text, the action is parsed once
 the text is complete, and arrived then; once the reply ended where no text completed. A call the
 provider cancels, of this reply or an earlier one, is withdrawn under the generation it came in,
-once its action was posted. A reply ends as a turn does: a provider fault fails it, a session it
-leaves other than exact is rebuilt before it is used again, and a function call reply must
-complete.
+once its action was posted. A reply ends as a turn does: a provider fault fails it, but for one
+the encoder takes as transient that came before the model said anything, which has the reply
+asked for again under the shared retry policy; a session it leaves other than exact is rebuilt
+before it is used again, and a function call reply must complete.
 
 An accepted reply's output joins the view where the output began, so that a rebuilt session shows
 the model its actions before their results; a discarded one adds nothing. Each outcome the kernel
@@ -167,6 +168,14 @@ class _Reply:
     @property
     def output(self) -> str:
         return "\n".join(self.calls) if self.calls else "".join(self.text)
+
+    @property
+    def said_anything(self) -> bool:
+        """Text, reasoning, a call or usage came, as a turn's received output
+        (harnesses/default/harness.py)."""
+        return bool(
+            self.text or self.reasoning or self.calls or self.usage is not None or self.text_done
+        )
 
 
 class NativeStreamingAgent(VisionAgentBase):
@@ -591,46 +600,106 @@ class NativeStreamingAgent(VisionAgentBase):
             raise RuntimeError("the streaming agent is closed")
 
     async def _reply(self, reply: _Reply, budget: DecisionBudget) -> None:
-        try:
-            async with self._readying:
-                self._stop_if_closed()
-                while reply.handle is None:
-                    with self._lock:
-                        view = self._view()
-                    await self._ready(view, renew=True)
-                    # A push may have reopened the session for the reply after it was given up:
-                    # asked for then, it would run beside the next one (context.py _run_turn).
-                    if reply.cancel.is_set():
-                        raise RetryCancelled("generation abandoned before its reply")
-                    try:
-                        reply.handle = await self.driver.request_reply(
-                            GenerationRequest(
-                                generation_id=f"streaming-{reply.generation}",
-                                provider_output_token_cap=budget.provider_output_tokens,
-                                transport_output_token_cap=budget.transport_output_tokens,
-                                clock_mode="wall",
-                                canonical=view,
-                                generation=reply.generation,
-                            )
-                        )
-                    except RenewalRequired:
-                        # A goAway read while the trigger waited for the session, after the
-                        # renewal check: nothing went out, so renew and ask again.
-                        continue
+        """Ask for the reply and read it to its end. One that fails before the model said
+        anything, as when its connection drops, is asked for again on the session readied afresh
+        from the view, under the shared retry policy (decision 39), as a turn is
+        (harnesses/default/harness.py, ``replayable``): none of its actions went to the kernel.
+        Each failed attempt is recorded, and one that succeeded or was given up after them."""
+
+        async def attempt(number: int) -> None:
+            # Each attempt reads a stream of its own, to its own boundaries.
+            reply.handle = None
+            reply.terminal, reply.complete = ProviderHistoryState.UNKNOWN, False
+            reply.terminal_usage = reply.interrupted = False
+            try:
+                await self._ask(reply, budget)
+            except Exception:
+                # The session may hold some of the reply, which the view does not: the next push
+                # or reply rebuilds it (SessionLifecycle.ensure_ready). The encoder's goAway
+                # deadline passing during the reply raises too: an incomplete reply is no result.
+                self.driver.mark_dirty()
                 with self._lock:
-                    self._on_session.add(reply.generation)
-            async for event in self.driver.events(reply.handle):
-                self._take(reply, event)
-            if not reply.cancel.is_set():
-                self._ended(reply)
-        except Exception:
-            # The session may hold some of the reply, which the view does not: the next push or
-            # reply rebuilds it (SessionLifecycle.ensure_ready). The encoder's goAway deadline
-            # passing during the reply raises too: an incomplete reply is no result.
-            self.driver.mark_dirty()
+                    self._off(reply.generation)
+                if reply.cancel.is_set():
+                    # The abort closed the connection under it: no failure of the reply's.
+                    raise RetryCancelled("generation abandoned during its reply") from None
+                raise
+            if number > 1:
+                self._reply_finished(number, "ok")
+
+        def classify(exc):
+            # Readying the session spent the shared retry budget already (_ready).
+            if isinstance(exc, TransportFailureError):
+                return exc.failure
+            return self.driver.classify_transport_error(exc)
+
+        def record(number, exc, failure, delay):
+            self._reply_finished(
+                number, "failed" if delay is None else "retry", exc, failure, delay
+            )
+
+        def cancelled(number, exc):
+            if number > 1:
+                self._reply_finished(number, "cancelled", exc)
+
+        await RequestRetry(
+            f"{reply.own.value.observation_id}:reply",
+            classify,
+            record,
+            cancelled=cancelled,
+            replayable=lambda exc: not reply.said_anything,
+            clock=self.clock,
+        ).run_async(attempt)
+
+    async def _ask(self, reply: _Reply, budget: DecisionBudget) -> None:
+        """One attempt: ask for the reply on the session readied from the view, and take its
+        messages until it ended."""
+        async with self._readying:
+            self._stop_if_closed()
+            while reply.handle is None:
+                with self._lock:
+                    view = self._view()
+                await self._ready(view, renew=True)
+                # A push may have reopened the session for the reply after it was given up:
+                # asked for then, it would run beside the next one (context.py _run_turn).
+                if reply.cancel.is_set():
+                    raise RetryCancelled("generation abandoned before its reply")
+                try:
+                    reply.handle = await self.driver.request_reply(
+                        GenerationRequest(
+                            generation_id=f"streaming-{reply.generation}",
+                            provider_output_token_cap=budget.provider_output_tokens,
+                            transport_output_token_cap=budget.transport_output_tokens,
+                            clock_mode="wall",
+                            canonical=view,
+                            generation=reply.generation,
+                        )
+                    )
+                except RenewalRequired:
+                    # A goAway read while the trigger waited for the session, after the
+                    # renewal check: nothing went out, so renew and ask again.
+                    continue
             with self._lock:
-                self._off(reply.generation)
-            raise
+                self._on_session.add(reply.generation)
+        async for event in self.driver.events(reply.handle):
+            self._take(reply, event)
+        if not reply.cancel.is_set():
+            self._ended(reply)
+
+    def _reply_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
+        """One ModelAttemptFinished per attempt of a reply that failed, as a readying attempt's
+        (_ready_finished)."""
+        with trace_scope(reply_attempt=number):
+            self._trace.capture(
+                TraceEvent.MODEL_ATTEMPT_FINISHED,
+                {
+                    "kind": "reply",
+                    "outcome": outcome,
+                    "failure_kind": failure.kind if failure is not None else None,
+                    "error": repr(error)[:500] if error is not None else None,
+                    "retry_delay_s": delay,
+                },
+            )
 
     def _ended(self, reply: _Reply) -> None:
         """The reply's stream ended, as a turn's does (RealtimeRuntime._run_turn): a session it

@@ -382,10 +382,12 @@ def test_the_agent_on_gemini_live_over_a_replayed_session(tmp_path):
     assert summary["frames"]["confirmed"] == 0
 
 
-def test_a_session_that_departs_from_its_cassette_ends_the_episode_invalid(tmp_path):
+def test_a_session_that_departs_from_its_cassette_is_closed_with_the_departure(tmp_path):
     """The cassette has the second frame go in at 1.5 s; the agent pushes it as it is captured,
-    at 1 s. The server closes the connection over it, which fails that push and the reply
-    running, and the run is invalid then."""
+    at 1 s. The server closes the connection over it with the departure, which fails that push
+    and the reply running. That reply had said nothing yet, so it is asked for again, as a turn
+    would be; the server takes no other connection, and the deadline ends the episode while the
+    session is being reopened."""
     episode = run_e2e(
         realtime_agent(tmp_path / "agent"), realtime_cassette(frame_2_at=1.5), tmp_path,
         duration_s=3.0, normalizer=RealtimeWire(),
@@ -393,11 +395,15 @@ def test_a_session_that_departs_from_its_cassette_ends_the_episode_invalid(tmp_p
     assert episode.problems == [
         "conn 1 record 16: c2s conversation.item.create at t=1, recorded at t=1.5"
     ]
-    env = episode.env
-    assert (env._stop_reason, env._termination["end_s"]) == ("invalid_run", 1.0)
-    invalid = env._invalid_run
-    assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")
-    assert "received 1011 (internal error) conn 1 record 16" in invalid["detail"]
     assert episode.kernel("FrameDropped", "observation_id", "reason") == [
         (FRAMES[1], "push_failed")
     ]
+    retried = next(
+        payload
+        for payload in _agent_records(episode, TraceEvent.MODEL_ATTEMPT_FINISHED)
+        if payload["kind"] == "reply"
+    )
+    assert (retried["outcome"], retried["failure_kind"]) == ("retry", "transient")
+    assert "code=1011, reason='conn 1 record 16" in retried["error"]
+    env = episode.env
+    assert (env._stop_reason, env._termination["end_s"]) == ("time_limit", 3.0)
