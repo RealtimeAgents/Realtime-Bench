@@ -227,6 +227,28 @@ def test_a_decision_recorded_twice_is_not_scored(tmp_path):
     )
 
 
+@pytest.mark.parametrize("left_out", [1, -1], ids=["one-more", "one-fewer"])
+def test_a_subtotal_of_another_number_of_decisions_is_not_scored(tmp_path, left_out):
+    """The second reply reports no usage, and the deadline cuts the third generation: the
+    lifecycle reports two decisions, one without a count, and so does the subtotal of reported
+    decisions. A subtotal that left one decision more or fewer out, its counts as they are, is
+    refused: with a decision without a count, the counts alone cannot tell."""
+    replies = [Reply(0.5, CLICK, fields=USAGE), Reply(0.5, CLICK), Reply(hang=True)]
+    episode = run("wall", 3.0, replies, World())
+    env = episode.env
+    accounting = env._token_accounting.summary()
+    reported = accounting["reported_decisions"]
+    assert [record["clock_output_tokens"] for record in env.lifecycle] == [40, None]
+    assert reported["responses"] == 2
+    reported["responses"] -= left_out
+    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0)
+    assert (task["status"], task["outcome"], task.get("error")) == (
+        "invalid",
+        "error",
+        "Charged-token accounting mismatch",
+    )
+
+
 def _baselines() -> list[str]:
     """The replay baselines of a valid run that record its token accounting (tests/replay/loop.py
     records): the real adapter and the shell left them."""

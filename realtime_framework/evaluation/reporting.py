@@ -1896,12 +1896,14 @@ def report(root):
                     known = [value for value in tokens if value is not None]
                     accounting = summary.get("token_accounting") or {}
                     # A decision the kernel gave up on has no lifecycle record, and its response
-                    # no place in the reported decisions' subtotal (clock.py TokenAccounting).
+                    # no place in the reported decisions' subtotal (clock.py TokenAccounting),
+                    # whose responses are then the lifecycle's records.
                     reported = accounting.get("reported_decisions", accounting)
                     counts = (reported.get("counts") or {}).get("clock_output_tokens", {})
                     complete = bool(tokens and len(known) == len(tokens))
                     if (
-                        counts.get("responses_with_count", 0) != len(known)
+                        (reported is not accounting and reported["responses"] != len(records))
+                        or counts.get("responses_with_count", 0) != len(known)
                         or (known and sum(known) != counts.get("known_total", counts.get("total")))
                         or (not known and counts.get("known_total") not in (None, 0))
                         or (counts.get("complete", False) != complete)
