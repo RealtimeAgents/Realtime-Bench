@@ -124,7 +124,7 @@ class EnvironmentBudgetConfig:
 
     The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in the
     shells (evaluation/shell.py, evaluation/streaming_shell.py) and the legacy loop
-    (evaluation/runner.py). Running past a budget fails the operation and, as a rule,
+    (tests/differential/legacy_loop.py). Running past a budget fails the operation and, as a rule,
     invalidates the run. The exceptions: a refusal of the model's action that comes after the
     action's budget is still a refusal, the guest's or the runtime's own after a wait for the
     wall lock; a state read the kernel counts fails only that read, and three failed reads in a
@@ -201,7 +201,7 @@ class ModelConfig(BaseModel):
 # Settings read from the environment. Each field names its variable and parser; an unset variable
 # keeps the field default. The module that uses a group reads it once, at its import, so the
 # process environment at that moment decides the value (the runtime-config hash reads the same
-# variables again when it is computed: evaluation/config.py:678-680, 720).
+# variables again when it is computed: evaluation/config.py effective_run_config).
 from typing import ClassVar as ClassVar
 
 
