@@ -126,7 +126,6 @@ class GuestEnvironment:
         guest,
         task,
         frames_dir=None,
-        honor_fail=True,
         stop_check=None,
         scene_capture=None,
         action_audit_path=None,
@@ -186,16 +185,13 @@ class GuestEnvironment:
         self._wall_autorepeat = None
         self._held_mouse_buttons = set()
         self.scene_capture = scene_capture
-        self._done = False
         self.actions = 0
         self.frames_dir = frames_dir
         self.fi = 0
         self._fi_lock = threading.Lock()
-        self.honor_fail = honor_fail
         self.stop_check = stop_check
         self._episode_over = False
         self._terminal_reason = None
-        self._terminal_action = None
         self.failed = 0
         self._last_exec_error = None
         self.capture_latencies = []
@@ -1048,54 +1044,6 @@ class GuestEnvironment:
         self.last_held_keys = ()
         self.last_end_checks = ()
         action_type = action.action_type
-        if action_type in (ActionType.DONE, ActionType.FAIL):
-            if self.honor_fail:
-                self._done = True
-                self._terminal_action = action_type
-                return "terminal"
-            return "terminal_ignored"
-        if action_type == ActionType.WAIT:
-            try:
-                duration = float(action.parameters.get("duration", 0.0))
-                started_at = self.clock_position()
-                requested_target = (
-                    self._logical_tick + duration / self.d if self.clock_mode == "token" else None
-                )
-                horizon_truncates = bool(
-                    requested_target is not None
-                    and self._episode_horizon_tick is not None
-                    and requested_target > self._episode_horizon_tick + 1e-9
-                )
-                if duration > 0:
-                    if self.clock_mode == "token":
-                        self.wait_until_tick(self._logical_tick + duration / self.d)
-                    else:
-                        self.clocks.semantic.sleep(duration)
-                elapsed = round(
-                    max(0.0, (self.clock_position() - started_at) * self.d),
-                    9,
-                )
-                self._last_execution_result = {
-                    "duration_simulated_seconds": elapsed,
-                    "requested_duration_simulated_seconds": duration,
-                    "truncated_by_episode_horizon": bool(
-                        horizon_truncates
-                        and self._logical_tick >= self._episode_horizon_tick - 1e-9
-                    ),
-                    "truncated_by_terminal_condition": bool(
-                        self.clock_mode == "token"
-                        and elapsed + 1e-9 < duration
-                        and not (
-                            horizon_truncates
-                            and self._logical_tick >= self._episode_horizon_tick - 1e-9
-                        )
-                    ),
-                    "active_holds": self._active_hold_snapshot(),
-                    "active_mouse_buttons": sorted(self._held_mouse_buttons),
-                }
-                return "wait"
-            except Exception as exc:
-                return self._execution_failed(exc)
         try:
             if (
                 self.clock_mode == "token"

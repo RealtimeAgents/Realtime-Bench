@@ -55,20 +55,6 @@ class GuestClient:
         valid, reason = validate_action(action)
         if not valid:
             raise ValueError(f"invalid GUI action: {reason}")
-        # Not in an episode: GuestEnvironment.execute (sandbox/actions.py) applies WAIT, DONE and
-        # FAIL itself and never sends them here.
-        if action.action_type == ActionType.WAIT:
-            duration = float(action.parameters.get("duration", 0.0))
-            if duration:
-                time.sleep(duration)  # noqa: TID251
-            return {
-                "status": "ok",
-                "timestamp": time.time(),  # noqa: TID251
-                "duration_seconds": duration,
-            }
-        if action.action_type in (ActionType.DONE, ActionType.FAIL):
-            return {"status": "ok", "timestamp": time.time()}  # noqa: TID251
-
         desktop_action, coordinate_trace = normalize_action(action)
         payload = {
             "action_type": desktop_action.action_type.value,
