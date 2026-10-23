@@ -59,7 +59,6 @@ closed.
 
 from __future__ import annotations
 
-import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, ClassVar, Literal
 
@@ -80,17 +79,18 @@ from realtime_framework.evaluation.kernel.events import (
     OutcomeCommitted,
     Priority,
 )
-from realtime_framework.evaluation.kernel.turns import NOT_APPLIED, READ_FAILURE_LIMIT
+from realtime_framework.evaluation.kernel.turns import (
+    NOT_APPLIED,
+    READ_FAILURE_LIMIT,
+    _floor,
+    _FrozenStream,
+)
 
 # Outcomes of an action that never executed, besides the end's (turns.NOT_APPLIED, invalid_run) and
 # a frame that cannot be found (harnesses/default/frames.py INVALID_GROUNDING_FRAME).
 SUPERSEDED = "superseded"  # a newer action took its place in the waiting slot
 CANCELLED_GENERATION = "cancelled_generation"  # its reply was given up
 CANCELLED_CALL = "cancelled_call"  # the provider cancelled its call while it waited
-
-
-def _floor(value: float) -> int:
-    return math.floor(value + 1e-9)
 
 
 @dataclass(frozen=True)
@@ -121,26 +121,6 @@ class StreamingConfig:
             raise ValueError("push_failure_limit must be at least 1")
         if self.clock_mode != "wall":
             raise ValueError(f"native streaming runs on the wall clock, not {self.clock_mode!r}")
-
-
-class _FrozenStream:
-    """The same producer identity ``threshold`` times while time moves on: the stream is replaying
-    one frame instead of advancing (legacy_loop.py ObservationStreamWatchdog)."""
-
-    def __init__(self, threshold: int) -> None:
-        self.threshold = max(2, int(threshold))
-        self._fingerprint = None
-        self._first_seen_at: float | None = None
-        self._count = 0
-
-    def observe(self, fingerprint: tuple, now: float) -> bool:
-        if fingerprint != self._fingerprint:
-            self._fingerprint = fingerprint
-            self._first_seen_at = now
-            self._count = 1
-            return False
-        self._count += 1
-        return self._count >= self.threshold and now > self._first_seen_at
 
 
 # ---- streaming's own events and commands -------------------------------------------------------
@@ -866,7 +846,8 @@ class StreamingPolicy:
 
     def _stopped(self) -> bool:
         """Whether nothing more may be done in the world: the deadline has passed, whether it has
-        ended the episode yet or not."""
+        ended the episode yet or not. Asking ends the episode at a deadline that has passed, once
+        nothing it waits for is out (_apply_deadline)."""
         self._apply_deadline()
         kernel = self.kernel
         return (
