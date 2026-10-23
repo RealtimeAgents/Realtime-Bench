@@ -91,6 +91,12 @@ class FakeCDP:
             websocket.close()
         self._thread.join()
 
+    def drop(self) -> None:
+        """Close every open connection from the page's side, as Chrome drops a DevTools client;
+        each close returns once its closing handshake is done."""
+        for websocket in list(self._open):
+            websocket.close()
+
     def _process_request(self, connection, request):
         if request.path == "/json":
             self._stop.wait(self.json_delay)

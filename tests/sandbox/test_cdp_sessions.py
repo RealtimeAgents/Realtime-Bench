@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+from websockets.exceptions import ConnectionClosed
+
 from realtime_framework.sandbox.browser import cdp
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 
@@ -44,6 +47,42 @@ def test_a_named_session_has_a_connection_and_a_lock_of_its_own():
             prober.join(ROOMY)
             cdp.close_port(fake.port)
         assert fake.connections == 2
+
+
+@pytest.mark.parametrize(
+    "meet",
+    [
+        lambda client: client.evaluate("1", timeout=ROOMY),
+        lambda client: client.wait_event("Page.loadEventFired", timeout=ROOMY),
+    ],
+    ids=["call", "event-wait"],
+)
+def test_a_connection_the_page_dropped_fails_one_call_and_the_next_call_reconnects(meet):
+    """The session lasts the episode: were the closed connection kept, every later call on it
+    would fail too."""
+    with FakeCDP(values={"1": 1}) as fake:
+        client = cdp.client_for(fake.port)
+        try:
+            assert client.evaluate("1", timeout=ROOMY) == 1
+            fake.drop()
+            with pytest.raises(ConnectionClosed):
+                meet(client)
+            assert client.evaluate("1", timeout=ROOMY) == 1
+        finally:
+            cdp.close_port(fake.port)
+        assert fake.connections == 2
+
+
+def test_a_client_asked_for_by_target_leaves_the_default_client_on_its_page():
+    """The capture probes each page target by id (cdp.py _probe_one); the clock and the task's
+    state reads ask for the default client, which must stay on the page it found."""
+    with FakeCDP(values={"1": 1}) as fake:
+        default = cdp.client_for(fake.port)
+        try:
+            cdp.client_for(fake.port, target_id="popup-2")
+            assert cdp.client_for(fake.port) is default
+        finally:
+            cdp.close_port(fake.port)
 
 
 def test_the_probes_of_a_capture_ask_for_its_session(monkeypatch):
