@@ -17,10 +17,11 @@ X17.
 The old side's times come from its facts: when each generation started and returned, when each
 decision was resolved, executed and committed, and every end check with its answer. The random
 scripts' operations take no time, but for reading the evaluation snapshot. Named scripts give
-captures and state reads their time (scenarios.TIMED; N29), and the rules for it (K-b, D47 and
-K-g) hold where a read is shorter than an environment frame, no reply comes back at the instant a
-read is asked, and each decision paces to its next frame: what today's extra reads delay is not
-carried into the next decision.
+captures, state reads and actions their time (scenarios.TIMED, ACROSS; N29), and the rules for it
+(K-a, K-b, K-k, D47, K-g and X2) hold where a read is shorter than an environment frame, no reply
+comes back at the instant a read is asked, and each decision paces to its next frame: what
+today's extra reads delay is not carried into the next decision. A deadline or a periodic read
+that falls due during one of the shell's operations is handled once it has returned.
 """
 
 from __future__ import annotations
@@ -228,16 +229,27 @@ def _drop_after(p: Projection, k: int) -> None:
         del p.decisions[later]
 
 
-def _grid_check(script: Script, at: float) -> float | None:
+def _grid_check(script: Script, p: Projection, at: float) -> tuple[float, bool] | None:
     """The first periodic wall end check at or after ``at``: the kernel asks at j / env_fps,
-    j >= 1, while the episode lasts (turns.py TurnPolicy.on_timer, _schedule_end_check)."""
+    j >= 1, while the episode lasts (turns.py TurnPolicy.on_timer, _schedule_end_check), and
+    whether an action executing then put it off. One put off is owed to the read after the
+    action, or for a refused action made in its place, both once the execution has returned
+    (TurnPolicy.on_timer, _executed)."""
     fps = script.env_fps
     j = max(1, math.ceil(at * fps))
     while j > 1 and (j - 1) / fps >= at:
         j -= 1
     while j / fps < at:
         j += 1
-    return j / fps if j / fps < script.duration_s else None
+    due = j / fps
+    if due >= script.duration_s:
+        return None
+    for d in p.decisions.values():
+        for executed in d["executed"]:
+            returned = executed["at"] + script.execute_s
+            if earlier(executed["at"], due) and earlier(due, returned):
+                return (returned, True) if earlier(returned, script.duration_s) else None
+    return due, False
 
 
 def _in_hand_at(p: Projection, at: float) -> int | None:
@@ -510,11 +522,16 @@ def _kernel_end(script: Script, p: Projection, notes: dict) -> tuple[float, int 
     if not _wall(script) or script.ends_at_s is None or "ended" in notes:
         return None
     end_s = p.episode["termination"]["end_s"]
-    found = _grid_check(script, script.ends_at_s)
-    if found is None or earlier(end_s, found):
+    check = _grid_check(script, p, script.ends_at_s)
+    if check is None or earlier(end_s, check[0]):
         return None
+    found, put_off = check
     k = _in_hand_at(p, found)
     if _same(found, end_s):
+        if put_off:
+            # Today's loop reads there too: after the action, or for a refused one at the next
+            # loop top, when its pacing has nothing left to wait.
+            return None
         # Both find it at the same instant; that is a periodic check only when the decision is
         # still pacing then: the check due there was set one environment frame earlier, before
         # the landing set the wake (agenda order, kernel/agenda.py). At one instant a landing
@@ -658,10 +675,14 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
     (turns.py TurnPolicy.on_timer, core.py). The shell records that call as one given up at the
     deadline (decision 48), as today's loop records a bounded wait it gave up; where today's
     loop waited out its grace for the reply instead, that reply's records are gone
-    (_abandoned)."""
+    (_abandoned). A frame whose capture returned at the deadline or after starts no generation:
+    the kernel handles the deadline first (_deadline_handled); today's loop starts one."""
     if not _ended_by_the_deadline(script, p, notes):
         return
     deadline, facts = script.duration_s, p.facts
+    late = [k for k in p.decisions if not earlier(facts["started_at"].get(k, math.inf), deadline)]
+    if late:
+        _drop_after(p, min(late) - 1)
     for k in sorted(p.decisions):
         finished = facts["finished_at"].get(k)
         if earlier(facts["started_at"].get(k, math.inf), deadline) and (
@@ -685,7 +706,6 @@ def _d47(script: Script, p: Projection, notes: dict) -> None:
     asked = _read_under_way(script, deadline)
     if asked is None:
         return
-    notes["deadline_handled"] = asked + script.check_s
     for k in sorted(p.decisions):
         back = p.facts["finished_at"].get(k)
         if back is None or earlier(back, asked) or not earlier(back, deadline):
@@ -773,16 +793,17 @@ def _kg(script: Script, p: Projection, notes: dict) -> None:
     read dates the end itself (runner.py _finalize, _termination). The signal is handled, and the
     snapshot read, once the shell is free: an end a state read found, or the failed read that
     invalidates the run, is dated when it was asked and handled when the read has returned
-    (turns.py TurnPolicy._end_checked, _count_read; N44), and a deadline that falls during a read
-    is handled after it (D47)."""
+    (turns.py TurnPolicy._end_checked, _count_read; N44), and the deadline once the operation under
+    way at it has returned (_deadline_handled)."""
     termination = p.episode["termination"]
     if not _wall(script):
         return
     if termination["snapshot_s"] is not None:
-        read_end = notes.get("read_end", "ended" not in notes and _read_ended(p))
-        handled = notes.get(
-            "deadline_handled", termination["end_s"] + (script.check_s if read_end else 0.0)
-        )
+        if _ended_by_the_deadline(script, p, notes):
+            handled = _deadline_handled(script, p)
+        else:
+            read_end = notes.get("read_end", "ended" not in notes and _read_ended(p))
+            handled = termination["end_s"] + (script.check_s if read_end else 0.0)
         termination["snapshot_s"] = round(handled + script.snapshot_s, 9)
         return
     if "ended" in notes:
@@ -973,6 +994,38 @@ def _read_under_way(script: Script, at: float) -> float | None:
     return asked
 
 
+def _read_across(script: Script, p: Projection, at: float) -> float | None:
+    """Wall clock: when today's state read asked before ``at`` and answered at it or after was
+    asked, of those the kernel makes too (WallEnvironment._kernels); None if none was."""
+    for asked, _, kernels in p.facts["reads"]:
+        if kernels and earlier(asked, at) and not earlier(asked + script.check_s, at):
+            return asked
+    return None
+
+
+def _deadline_handled(script: Script, p: Projection) -> float:
+    """Wall clock: when the kernel handles the deadline, once the shell's synchronous operation
+    under way at it has returned (evaluation/shell.py _Shell._loop runs a step's commands before
+    the next step): its periodic read (D47), a read today's loop makes too, a capture, or an
+    action's execution."""
+    deadline = script.duration_s
+    asked = _read_under_way(script, deadline)
+    if asked is None:
+        asked = _read_across(script, p, deadline)
+    if asked is not None:
+        return asked + script.check_s
+    for capture in p.episode["captures"]:
+        returned = capture["timestamp"]
+        if earlier(returned - script.capture_s, deadline) and not earlier(returned, deadline):
+            return returned
+    for d in p.decisions.values():
+        for executed in d["executed"]:
+            returned = executed["at"] + script.execute_s
+            if earlier(executed["at"], deadline) and not earlier(returned, deadline):
+                return returned
+    return deadline
+
+
 def _move_landing(script: Script, p: Projection, k: int, landed: float, delta: float) -> None:
     """Decision k's action, today landed at ``landed``, lands ``delta`` s later, and what runs from
     its landing with it: the hold's lease (K-rel), a wait the deadline cuts, and an end found at
@@ -1034,6 +1087,27 @@ def _kb_landing(script: Script, p: Projection, notes: dict) -> None:
         landed = p.facts["executed_at"].get(k)
         if landed is not None:
             _move_landing(script, p, k, landed, delay)
+
+
+def _kk(script: Script, p: Projection, notes: dict) -> None:
+    """On the wall clock the frame count runs out at the deadline. After the read before landing
+    today's loop asks the deadline, then the frame count (legacy_loop.py _land_action), so a read
+    asked before the deadline that answers at it or after leaves the decision
+    not_applied_tick_limit; the kernel asks the deadline only (turns.py TurnPolicy._pre_checked,
+    _past_deadline), and the deadline's timer settles the decision as not_applied_time_limit
+    (TurnPolicy.on_end, NOT_APPLIED)."""
+    if not _wall(script):
+        return
+    asked = _read_across(script, p, script.duration_s)
+    if asked is None:
+        return
+    for k, d in p.decisions.items():
+        resolved = d["resolved"]
+        if resolved is None or resolved["status"] != "not_applied_tick_limit":
+            continue
+        if _same(p.facts["finished_at"][k], asked):
+            for record in (resolved, d["commit"], d["outcome"]):
+                record["status"] = "not_applied_time_limit"
 
 
 def _u2(script: Script, p: Projection, notes: dict) -> None:
@@ -1109,7 +1183,10 @@ def _x7(script: Script, p: Projection, notes: dict) -> None:
 
 def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
     """The decision today's loop committed after the first end signal: an end or a failure found
-    before its commit, or the wall deadline passing while it paced or waited."""
+    before its commit, or the wall deadline passing while it paced or waited, or while an
+    operation before its resolution was under way. One whose read after the action was asked
+    before the deadline the kernel reports first: the answer is filed at its asking
+    (core.py Kernel.step), and no pacing follows it past the deadline."""
     committed = p.facts["committed_at"]
     if not committed:
         return None
@@ -1117,7 +1194,10 @@ def _old_in_hand(script: Script, p: Projection, notes: dict) -> int | None:
     if p.facts["ended_before_commit"].get(last):
         return last
     if _ended_by_the_deadline(script, p, notes) and not earlier(committed[last], script.duration_s):
-        return last
+        asked = _read_across(script, p, script.duration_s)
+        executed = p.facts["executed_at"].get(last)
+        if asked is None or executed is None or earlier(asked, executed):
+            return last
     return None
 
 
@@ -1165,11 +1245,7 @@ RULES = (
         "a failed wall read invalidates the run when it returns, not when asked",
         seen="no longer: N44 dates the invalidation by the read's asking, as today's loop does",
     ),
-    Rule(
-        "K-k",
-        "the wall clock does not compare the frame count separately",
-        seen="not observable: on the wall the frame count is the deadline's",
-    ),
+    Rule("K-k", "the wall clock does not compare the frame count separately", _kk),
     Rule(
         "K-l",
         "the per-move cap runs from StartGeneration",
