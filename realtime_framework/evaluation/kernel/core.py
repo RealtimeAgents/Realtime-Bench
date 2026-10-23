@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.agenda import Agenda, Inbox
 from realtime_framework.evaluation.kernel.events import (
+    END_CAUSES,
     AbortGeneration,
     AcceptResult,
     ActionExecuted,
@@ -53,14 +54,6 @@ from realtime_framework.evaluation.kernel.events import (
     Termination,
     Timer,
 )
-
-# Stop reasons of the end causes that are not the environment's own (legacy_loop.py _finalize).
-STOP_REASONS = {
-    "invalid": "invalid_run",
-    "think_budget": "think_budget",
-    "deadline": "time_limit",
-    "horizon": "tick_limit",
-}
 
 
 @dataclass(frozen=True)
@@ -257,11 +250,11 @@ class Kernel:
     def _finish(self) -> None:
         ending = self.ending
         if self.invalid is not None:
-            stop_reason = STOP_REASONS["invalid"]
+            stop_reason = END_CAUSES["invalid"].stop_reason
         elif ending.cause == "environment":
             stop_reason = ending.reason or "game_decided"
         else:
-            stop_reason = STOP_REASONS[ending.cause]
+            stop_reason = END_CAUSES[ending.cause].stop_reason
         snapshot_at, ops_snapshot_at = self._snapshot or (None, None)
         self.termination = Termination(
             stop_reason=stop_reason,
