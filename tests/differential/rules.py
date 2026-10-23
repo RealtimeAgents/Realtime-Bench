@@ -611,7 +611,7 @@ def _kc(script: Script, p: Projection, notes: dict) -> None:
     at, k = ended
     d, facts = p.decisions[k], p.facts
     record = d["wait_record"]
-    landed, resolved = facts["finished_at"].get(k), facts["resolved_at"].get(k)
+    landed, resolved = facts["executed_at"].get(k), facts["resolved_at"].get(k)
     if record is None or landed is None or earlier(at, landed) or not earlier(at, resolved):
         return
     record["duration_simulated_seconds"] = round(max(0.0, at - landed), 9)
