@@ -287,6 +287,7 @@ def export_episode(run_dir, logs_dir, request):
         "suite_version": request["task"].get("suite_version"),
         "task_id": request["task"]["task_id"],
         "mode": request["mode"],
+        "interaction_mode": request["task"]["interaction_mode"],
         "model_revision": request.get("model_revision"),
         "reasoning_effort": summary.get("reasoning_effort"),
         "configuration_sha256": request.get("configuration_sha256"),
