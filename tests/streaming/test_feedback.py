@@ -15,8 +15,9 @@ from realtime_framework.harnesses.default.frames import (
     INVALID_FRAME_SYNTAX,
     MISSING_FRAME,
 )
+from realtime_framework.harnesses.default.harness import action_text
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
-from realtime_framework.harnesses.streaming.feedback import action_text, execution_feedback
+from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from tests.kernel.streaming_simulation import Call, Reply, Simulation, World
 
 CLICK = Action.click(10, 20)
