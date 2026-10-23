@@ -442,8 +442,13 @@ class _StreamingShell:
         env = self.env
         try:
             env._stop_reason = termination.stop_reason
-            if termination.invalid is not None:
-                env._invalid_run = _invalid_record(termination.invalid)
+            invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
+            # The record of a failure the environment latched itself is its own, the detail whole.
+            if invalid is not None and (
+                latched is None
+                or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
+            ):
+                env._invalid_run = _invalid_record(invalid)
             end_s = termination.ended_at
             snapshot_s = termination.snapshot_at if self._snapshot_read else None
             env._termination = {

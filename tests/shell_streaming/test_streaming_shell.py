@@ -293,6 +293,24 @@ def test_an_invalid_run_the_release_timer_reports_is_posted_once(tmp_path):
     assert [r["payload"] for r in records if r["event"] == "RunInvalidated"] == [invalid]
 
 
+def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
+    """The kernel keeps the end of a long detail (kernel/core.py invalidate); the record main()
+    reads stays the environment's, whole, as on the turn-based shell."""
+    detail = "x" * 3000
+    invalid = {"category": "environment", "reason": "wall_key_release_failed", "detail": detail}
+
+    def release_fails(env, clock):
+        def latch():
+            env._invalid_run = invalid
+            clock.start_thread(lambda: env.on_invalid(invalid), name="release-timer")
+
+        env.during["execute"] = latch
+
+    termination, env, _ = _episode(6.0, ONE_CLICK, env_setup=release_fails)
+    assert termination.invalid.detail == detail[-2000:]
+    assert env._invalid_run == invalid
+
+
 def test_a_stuck_reply_is_given_up_on_the_shells_thread_and_the_next_one_starts():
     """A reply that never ends is stuck after the 30 s watchdog (kernel/streaming.py); the shell
     aborts it, and the next reply starts in the same step."""
