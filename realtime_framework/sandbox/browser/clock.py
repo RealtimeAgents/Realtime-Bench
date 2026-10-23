@@ -424,7 +424,10 @@ def cdp_advance_rendered_frame(dbg_port, seconds, raf_hz=60.0, key_events=()):
         # the reached timestamp. Segmenting a simulated second around an action therefore cannot add,
         # remove, or phase-shift physics updates. Scheduled key events land before the first frame
         # whose timestamp is at or after them, so the game processes them in the frame a real
-        # keyboard would have delivered them to.
+        # keyboard would have delivered them to. The token clock sends an auto-repeat that falls
+        # on an advance's end with the next advance (sandbox/actions.py _pending_repeat_events):
+        # when that end is a frame's timestamp, this advance renders that frame first, and the
+        # repeat lands before the frame after it.
         while float(next_frame) <= target + 1e-7:
             dispatch_due_key_events(float(next_frame))
             advance_virtual_time(max(0.0, float(next_frame) - float(current)))

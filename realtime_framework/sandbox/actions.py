@@ -458,6 +458,9 @@ class GuestEnvironment:
         Repeat k fires at ``origin + delay + k * interval``; computing every tick from the press
         instead of accumulating an interval keeps a repeat that sits on an advance boundary from
         drifting a few ulps below the next advance's start (which the frame scheduler rejects).
+        A repeat on the end of this advance goes with the next one. When that end is on the page's
+        frame grid this advance renders the frame there, and the game sees the repeat a frame later
+        than a keyboard would deliver it (sandbox/browser/clock.py cdp_advance_rendered_frame).
         """
         item = self._held_keys.get(self._repeat_key) if self._repeat_key else None
         if not item or "repeat_origin_tick" not in item:
