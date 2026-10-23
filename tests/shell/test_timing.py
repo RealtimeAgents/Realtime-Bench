@@ -337,3 +337,14 @@ def test_the_shell_stops_once_the_kernel_finishes(steps):
     assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
     assert episode.trace.records[-1]["payload"]["kind"] == "Termination"
     assert steps[-1][2] is True  # the step that finished was the last
+
+
+def test_the_check_before_landing_is_not_asked_past_the_deadline():
+    """The result comes back 5 ms before the 3 s deadline and accepting it ends 5 ms after it.
+    The action is due to land at the reading after the accept, past the deadline: it does not
+    land, and the check before landing is not asked either. The environment is read at the loop
+    top at 0 s and by the periodic checks at 1 s and 2 s only (phase2.md, 时间和结束判定)."""
+    episode = run("wall", 3.0, [Reply(2.995)], agent_type=_SlowAccept)
+    checks = [time for call, time, _ in episode.env.calls if call == "check_end"]
+    assert checks == [0.0, 1.0, 2.0]
+    assert episode.statuses() == ["not_applied_time_limit"]
