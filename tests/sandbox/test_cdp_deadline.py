@@ -15,6 +15,7 @@ import pytest
 
 from realtime_framework.sandbox.browser import cdp
 from realtime_framework.sandbox.browser.cdp import PersistentCDPClient, ensure_page_focus
+from realtime_framework.sandbox.budget import operation_budget
 
 from ..fake_clock import FakeClock
 from .fakes import FakeCDP
@@ -108,6 +109,18 @@ def test_the_lookup_and_the_handshake_share_one_timeout():
     with FakeCDP(json_delay=0.3, handshake_delay=0.3) as fake:
         _times_out(_evaluate(_client(fake)))
         assert fake.commands == []
+
+
+def test_the_first_lookup_of_a_ports_page_spends_the_operations_deadline():
+    """client_for looks the page up itself before its client makes any call; inside an operation
+    the lookup gets what is left of the operation (budget.py bounded), not its own 3 s."""
+    with FakeCDP(json_delay=5) as fake:
+
+        def state_read():
+            with operation_budget("state read", TIMEOUT):
+                cdp.client_for(fake.port)
+
+        _times_out(state_read)
 
 
 class _UnfocusedPage:
