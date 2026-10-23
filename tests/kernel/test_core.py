@@ -300,7 +300,7 @@ def test_termination_records_the_rule_time_and_the_snapshot_time():
     ids=["deadline", "environment", "horizon", "think-budget"],
 )
 def test_an_invalidation_after_the_end_still_makes_the_run_invalid(cause, reason):
-    # The invalid run comes before every other stop reason, the task's own included (runner.py
+    # The invalid run comes before every other stop reason, the task's own included (legacy_loop.py
     # _finalize).
     kernel, _ = _kernel()
     kernel.end(cause, 300.0, reason=reason)

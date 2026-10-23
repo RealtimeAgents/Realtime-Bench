@@ -9,9 +9,10 @@ never past the horizon. The skip order, key leases, waits, the finite-B allowanc
 operational watchdog decide the rest, and the command stream keeps the four turn-based limits.
 
 Every expected value is worked out by hand: from today's runner where the kernel keeps its rules
-(evaluation/runner.py, sandbox/actions.py) and from phase2.md (事件内核; 帧率; 时间和结束判定) where it
-changes them. Times are environment ticks; env_fps = input_fps = 1 and B = 256 unless a test says
-otherwise, so a frame is a tick and n tokens are n/256 ticks.
+(tests/differential/legacy_loop.py and legacy_environment.py, sandbox/actions.py) and from
+phase2.md (事件内核; 帧率; 时间和结束判定) where it changes them. Times are environment ticks;
+env_fps = input_fps = 1 and B = 256 unless a test says otherwise, so a frame is a tick and n tokens
+are n/256 ticks.
 """
 
 from __future__ import annotations
@@ -264,7 +265,7 @@ def test_a_response_past_the_allowance_lands_at_the_horizon_though_the_allowance
 
 def test_an_end_reported_at_the_horizon_beats_the_tick_limit():
     # The task ends from tick 20 = T on: the read after the approach's step to 20 finds it before
-    # anything tests the horizon, so the environment's reason is the stop reason (runner.py
+    # anything tests the horizon, so the environment's reason is the stop reason (legacy_loop.py
     # _land_action, _finalize).
     sim = _run(
         _token(20),
@@ -361,7 +362,7 @@ def test_the_next_frame_is_the_first_boundary_after_the_action(
 
 
 def test_the_next_frame_never_passes_the_horizon():
-    # T = 5.5, n = 1344: tau = 5.25, boundary 6, next = min(max(1, 6), 5.5) = 5.5 (runner.py
+    # T = 5.5, n = 1344: tau = 5.25, boundary 6, next = min(max(1, 6), 5.5) = 5.5 (legacy_loop.py
     # _apply); dropped = floor(5.5 + 1e-9) - 0 - 1 = 4. The loop top at 5.5, a frame read after
     # its step, ends at the horizon.
     sim = _run(_token(5.5), Reply(action=CLICK, output_tokens=1344))
@@ -801,8 +802,8 @@ def test_a_wait_whose_own_step_fails_settles_on_that_answer_though_the_run_ended
 
 
 def test_a_wait_cut_short_by_a_third_failed_read_stays_a_wait():
-    # A failed read is no failed step: the wait stops as at an end it sees, and today's
-    # environment reports it a wait cut short (sandbox/actions.py GuestEnvironment.done). The
+    # A failed read is no failed step: the wait stops as at an end it sees, and the legacy
+    # environment reports it a wait cut short (legacy_environment.py LegacyStateReads.done). The
     # reads after the approach's step to 1 and the wait's steps to 2 and 3 fail.
     errors = {check: f"check {check} failed" for check in (2, 3, 4)}
     sim = _run(_token(10), Reply(action=Action.wait(3.0), output_tokens=256), check_errors=errors)
@@ -1060,8 +1061,8 @@ def test_an_execution_failure_invalidates_the_run_and_is_still_reported():
 
 def test_a_failed_clock_advance_invalidates_the_run_and_settles_the_decision():
     # The first approach step fails (sandbox/actions.py GuestEnvironment.wait_until_tick). The
-    # decision in hand is settled by the skip order, whose first test is the invalid run (runner.py
-    # _land_action), and committed.
+    # decision in hand is settled by the skip order, whose first test is the invalid run
+    # (legacy_loop.py _land_action), and committed.
     sim = _run(
         _token(10),
         Reply(action=CLICK, output_tokens=384),
@@ -1106,9 +1107,9 @@ def test_no_frame_is_rendered_after_a_failed_clock_advance():
 def test_a_move_over_the_per_move_cap_is_skipped_but_still_moves_the_clock(
     tokens, status, next_tick, dropped, rendered, executed
 ):
-    # On the token clock the legacy cap is held against token-derived seconds n/B/env_fps (runner.py
-    # _move_timeout, _charge): 1.5 s > 1 s drops the action, which was still proposed, and the clock
-    # still goes to tau = 1.5 and on to next = 2.
+    # On the token clock the legacy cap is held against token-derived seconds n/B/env_fps
+    # (legacy_loop.py _move_timeout, _charge): 1.5 s > 1 s drops the action, which was still
+    # proposed, and the clock still goes to tau = 1.5 and on to next = 2.
     tau = tokens / B
     sim = _run(
         _token(10, per_move_cap_s=1.0),

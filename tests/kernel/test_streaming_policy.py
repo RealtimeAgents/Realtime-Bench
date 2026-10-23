@@ -285,7 +285,7 @@ def test_an_action_the_environment_fails_on_invalidates_the_run():
     )
 
 
-def test_a_wall_hold_is_released_by_the_shell_timer():
+def test_a_wall_hold_is_released_by_the_environments_timer():
     calls = (Call(0.5, Action.hold_key("a", 1.5), execute_s=0.25),)
     sim = _run(World(replies=[Reply(3.0, calls=calls)]))
     (execute,) = [c for c in sim.commands if isinstance(c, Execute)]
