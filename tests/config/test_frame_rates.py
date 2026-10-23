@@ -198,8 +198,9 @@ def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch)
 
     argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1]
     videos = _main_in_process(monkeypatch, tmp_path, argv, run_stream)
-    with pytest.raises(SystemExit):  # an invalid run is not a scored result
+    with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
         runner.main()
+    assert exited.value.code == 1
     summary = _run_summary(tmp_path)
     assert summary["error"].strip().endswith("RuntimeError: decision loop failed")
     assert (summary["fps"], summary["model_input_fps"]) == (2.0, 1.0)
@@ -290,8 +291,9 @@ def test_main_refuses_a_model_input_rate_above_the_environment_rate(tmp_path, mo
         return create_agent(config, **kwargs)
 
     monkeypatch.setattr(runner, "create_agent", recording_create_agent)
-    with pytest.raises(SystemExit):  # an invalid run is not a scored result
+    with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
         runner.main()
+    assert exited.value.code == 1
     summary = _run_summary(tmp_path)
     error = summary["error"].strip()
     assert error.endswith(

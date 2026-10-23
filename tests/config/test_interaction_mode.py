@@ -128,8 +128,9 @@ def run_main(
     argv = ["--model", GEMINI, "--task", WEB, *clock_argv, *argv]
     argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
-    with pytest.raises(SystemExit):  # an invalid run is not a scored result
+    with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
         runner.main()
+    assert exited.value.code == 1
     return json.loads((tmp_path / "run" / "run_summary.json").read_text())
 
 
