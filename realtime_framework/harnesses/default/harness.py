@@ -1064,8 +1064,7 @@ def action_text(action: Action) -> str:
 @dataclass
 class _Staged:
     """What accepting a generation's result writes into the history. Discarding it writes no
-    history: it ends the tool calls, records the usage of a result that came back and marks the
-    trajectory row discarded."""
+    history: it ends the tool calls and records the usage of a result that came back."""
 
     feedback: str  # the pending feedback when it started
     unattached: str  # and the part of it that no turn carries
@@ -1073,8 +1072,6 @@ class _Staged:
     result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
-    # Its trajectory row, which finalize_decision_audit writes from the result.
-    audit: dict | None = None
 
 
 @dataclass
@@ -1473,8 +1470,6 @@ class DefaultHarness(VisionAgentBase):
             self._record_provider_usage(
                 staged.result, staged.observation, generation.decision, stale=True
             )
-        if staged.audit is not None:
-            staged.audit["type"] = "decision_discarded"
         self._end_tool_calls(staged, "superseded_by_timeout")
 
     def _end_tool_calls(self, staged: _Staged, outcome: str) -> None:
@@ -1980,8 +1975,6 @@ class DefaultHarness(VisionAgentBase):
                     "invalid_detail": sync.detail,
                 }
             )
-        # A result the kernel discards only after it came back is discarded on its row too.
-        generation.staged.audit = log_entry
         return result, runtime_result.cancelled
 
     def commit_action(self, status: str, detail: str = ""):
