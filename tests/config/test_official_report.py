@@ -10,10 +10,11 @@ import json
 import pytest
 import yaml
 
-from realtime_framework.evaluation import harbor
+from realtime_framework.evaluation import config, harbor
 
 WEB = "rt_accessible_trip_dispatch"
 SUITE_HASH = "0" * 64
+HARNESS_HASH = "1" * 64
 
 
 def _job(tmp_path, monkeypatch, harness_version: str):
@@ -31,7 +32,7 @@ def _job(tmp_path, monkeypatch, harness_version: str):
     monkeypatch.setattr(harbor, "ROOT", tmp_path / "checkout")
     task = {
         "suite_id": "private", "suite_version": "1.0", "suite_hash": SUITE_HASH,
-        "harness_version": harness_version, "harness_hash": "1" * 64, "task_id": WEB,
+        "harness_version": harness_version, "harness_hash": HARNESS_HASH, "task_id": WEB,
         "category": "web", "fps": 1.0, "model_input_fps": 1.0,
         "interaction_mode": "turn_based", "duration_minutes": 5.0, "seed": 42,
     }  # fmt: skip
@@ -46,12 +47,27 @@ def _job(tmp_path, monkeypatch, harness_version: str):
 
 
 def test_an_official_report_refuses_an_unreleased_harness(tmp_path, monkeypatch):
-    job = _job(tmp_path, monkeypatch, "1.0+dev")
+    job = _job(tmp_path, monkeypatch, config.harness_version(HARNESS_HASH))
     with pytest.raises(ValueError) as refused:
         harbor.aggregate(job, official=True)
     assert str(refused.value) == (
         "Official evaluation requires a released harness, not harness@1.0+dev, whose framework "
         "sources or runtime dependencies differ from the release pyproject.toml locks"
+    )
+
+
+def test_an_official_report_needs_the_whole_released_suite(tmp_path, monkeypatch):
+    """The job's request names one task of the suite, which its trial ran; the suite's released
+    manifest in this checkout lists a second (harbor.official_suite)."""
+    job = _job(tmp_path, monkeypatch, "1.0")
+    path = tmp_path / "checkout" / "realtime_tasks" / "sets" / "private.yaml"
+    manifest = yaml.safe_load(path.read_text())
+    manifest["categories"][0]["task_ids"].append("rt_waitlist_fit")
+    path.write_text(yaml.safe_dump(manifest))
+    with pytest.raises(ValueError) as refused:
+        harbor.aggregate(job, official=True)
+    assert str(refused.value) == (
+        "Official evaluation requires the entire released private@1.0 suite"
     )
 
 

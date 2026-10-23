@@ -380,7 +380,7 @@ def test_a_run_plan_carries_the_mode_to_the_runner(tmp_path):
 
 @pytest.fixture
 def environment():
-    """_trial.main writes os.environ (evaluation/_trial.py:107-108)."""
+    """_trial.main writes os.environ (providers/registry.py load_project_secrets)."""
     saved = dict(os.environ)
     yield
     os.environ.clear()
@@ -447,13 +447,14 @@ def _trial_launch(capsys, interaction_mode) -> dict:
 
 
 def test_a_streaming_trial_hashes_the_streaming_settings_its_run_records(
-    environment, monkeypatch, capsys
+    environment, monkeypatch, tmp_path, capsys
 ):
     """Harbor's verify and aggregate compare the configuration hash (evaluation/config.py
     configuration_sha256): a streaming trial's holds the settings its run records
     (effective_run_config), so a job that runs two of them shows it; a turn-based trial's launch
     and hash are as they were (N47)."""
     from realtime_framework.evaluation.config import configuration_sha256
+    from realtime_framework.evaluation.harbor import aggregate, verify
 
     turn_based = _trial_launch(capsys, "turn_based")
     assert "streaming" not in turn_based
@@ -477,6 +478,19 @@ def test_a_streaming_trial_hashes_the_streaming_settings_its_run_records(
     assert edited["streaming"] == {**streaming["streaming"], "compression_target_tokens": 16_384}
     assert edited["model_config"] == streaming["model_config"] == turn_based["model_config"]
     assert configuration_sha256(edited) != configuration_sha256(streaming)
+
+    task, request, report = _trial_identity("streaming")
+    report["integration"]["configuration_sha256"] = configuration_sha256(edited)
+    request["configuration_sha256"] = configuration_sha256(edited)
+    assert verify(report, task, request) == {"reward": 1.0}
+    resolved = {**request, "configuration_sha256": configuration_sha256(streaming)}
+    with pytest.raises(ValueError, match="Model configuration changed after resolution"):
+        verify(report, task, resolved)
+    suite_tasks = {WEB: "web", GAME: "game"}
+    _job(tmp_path, {**request, "suite_tasks": suite_tasks})
+    _job(tmp_path, {**resolved, "task": {**task, "task_id": GAME}, "suite_tasks": suite_tasks})
+    with pytest.raises(ValueError, match="Cannot aggregate different .* configurations"):
+        aggregate(tmp_path)
 
 
 def _trial_identity(interaction_mode) -> tuple[dict, dict, dict]:
@@ -768,11 +782,55 @@ def test_harbor_verify_compares_the_mode():
         verify(report, task, request)
 
 
+def test_harbor_verify_compares_the_harness():
+    from realtime_framework.evaluation.harbor import verify
+
+    task, request, report = _trial_identity("turn_based")
+    assert verify(report, task, request) == {"reward": 1.0}
+    report["groups"][0]["harness_hash"] = "9" * 64
+    with pytest.raises(ValueError, match="Report harness_hash mismatch"):
+        verify(report, task, request)
+
+
 def _job(path, request):
-    trial = path / f"{WEB}__trial" / "agent"
+    trial = path / f"{request['task']['task_id']}__trial" / "agent"
     trial.mkdir(parents=True)
     (trial / "request.json").write_text(json.dumps(request))
     return path
+
+
+def test_a_job_on_two_harnesses_is_not_scored(tmp_path):
+    """Each trial's task.json records the harness it ran on (evaluation/harbor.py resolve); a job
+    whose two trials ran on two harnesses is refused, not scored (harbor.aggregate)."""
+    from realtime_framework.evaluation.harbor import aggregate
+
+    task, request, _ = _trial_identity("turn_based")
+    request["suite_tasks"] = {WEB: "web", GAME: "game"}
+    _job(tmp_path, request)
+    _job(tmp_path, {**request, "task": {**task, "task_id": GAME, "harness_hash": "9" * 64}})
+    with pytest.raises(ValueError, match="The job mixes benchmark versions, suites or runtime"):
+        aggregate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "recorded, status, outcome",
+    [(1.0, "scored", "pass"), (0.0, "error", "error")],
+    ids=["as-reported", "unlike-the-report"],
+)
+def test_a_trial_is_scored_on_the_reward_its_verifier_recorded(tmp_path, recorded, status, outcome):
+    """harbor.aggregate grades each trial's report again (harbor.verify) and scores the trial only
+    if its verifier recorded that reward: a report worth 1 beside a recorded 0 is an error."""
+    from realtime_framework.evaluation.harbor import aggregate
+
+    _, request, report = _trial_identity("turn_based")
+    trial = _job(tmp_path, request) / f"{WEB}__trial"
+    (trial / "artifacts/logs/artifacts").mkdir(parents=True)
+    (trial / "artifacts/logs/artifacts/report.json").write_text(json.dumps(report))
+    (trial / "verifier").mkdir()
+    (trial / "verifier/reward.json").write_text(json.dumps({"reward": recorded}))
+    (trial / "result.json").write_text(json.dumps({"exception_info": None}))
+    (row,) = aggregate(tmp_path)["tasks"]
+    assert (row["status"], row["outcome"]) == (status, outcome)
 
 
 @pytest.mark.parametrize(
@@ -871,3 +929,57 @@ def test_a_leaderboard_submission_is_turn_based(tmp_path):
     assert str(caught.value) == (
         f"{tmp_path / 'streaming' / 'run1'}: interaction_mode is 'streaming', expected 'turn_based'"
     )
+
+
+def test_a_leaderboard_submission_refuses_an_unreleased_harness(tmp_path):
+    """A run records the version of the harness hash it ran on, +dev for any hash pyproject.toml
+    does not lock (evaluation/config.py harness_version); rtbench upload takes only a release."""
+    from realtime_framework.evaluation.config import harness_version
+    from realtime_framework.evaluation.submission import SubmissionError, check_runs
+
+    task, request, _ = _trial_identity("turn_based")
+    task["harness_version"] = harness_version(task["harness_hash"])
+    jobs = [_job(tmp_path / f"run{run}", request) for run in (1, 2, 3)]
+    with pytest.raises(SubmissionError) as caught:
+        check_runs(jobs)
+    assert str(caught.value) == f"{tmp_path / 'run1'}: harness_version '1.0+dev' is not a release"
+
+
+def test_a_leaderboard_submission_refuses_one_job_given_three_times(tmp_path):
+    from realtime_framework.evaluation.submission import SubmissionError, check_runs
+
+    job = _job(tmp_path, _trial_identity("turn_based")[1])
+    with pytest.raises(SubmissionError, match="Give 3 different job directories, one per run"):
+        check_runs([job, job, job])
+
+
+def test_a_leaderboard_submission_refuses_the_token_clock(tmp_path):
+    from realtime_framework.evaluation.submission import SubmissionError, check_runs
+
+    request = {**_trial_identity("turn_based")[1], "clock": "token"}
+    jobs = [_job(tmp_path / f"run{run}", request) for run in (1, 2, 3)]
+    with pytest.raises(SubmissionError) as caught:
+        check_runs(jobs)
+    assert str(caught.value) == f"{tmp_path / 'run1'}: clock is 'token', expected 'wall'"
+
+
+def test_an_upload_carries_no_request_or_reply_body(tmp_path):
+    """Every body goes to episode_blobs.pack next to the trace, which is exported and uploaded
+    while the pack is neither (evaluation/agent_trace.py): Harbor downloads the trial's export into
+    the job (harbor_viewer.export_episode), and rtbench upload archives the job
+    (submission.build_archive)."""
+    import tarfile
+
+    from realtime_framework.evaluation.harbor_viewer import export_episode
+    from realtime_framework.evaluation.submission import build_archive
+
+    run = _report_root(tmp_path / "report", "turn_based") / "cell" / WEB
+    (run / "episode_blobs.pack").write_bytes(bytes(64))
+    job = tmp_path / "job"
+    export_episode(run, job / f"{WEB}__trial" / "agent", _trial_identity("turn_based")[1])
+    archive = tmp_path / "submission.tar.gz"
+    build_archive([job], [{}], archive)
+    with tarfile.open(archive) as members:
+        names = {os.path.basename(name) for name in members.getnames()}
+    assert "episode_trace.jsonl" in names
+    assert "episode_blobs.pack" not in names
