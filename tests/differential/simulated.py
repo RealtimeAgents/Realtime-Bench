@@ -9,6 +9,7 @@ environment operation takes its script's time. Turn k is the reply to decision k
 from __future__ import annotations
 
 import itertools
+import math
 
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
@@ -179,6 +180,46 @@ def ties(script: Script) -> list[str]:
             found.append("a key goes up as the episode ends")
         if _near(at, executed):
             found.append("a key goes up as an action runs")
+    return found
+
+
+def timed_apart(script: Script) -> list[str]:
+    """Wall clock, reads and actions taking time: where today's loop then reads the task at other
+    times than the kernel and finds what no rule follows: the end before it, or a decision moved
+    to other frames, as all that comes after moves too (REPORT.md section 4); and where an action
+    returns past the end into a snapshot read that takes time, which the shell is still to fix.
+    What each is, for each found."""
+    if script.clock != "wall" or not (script.check_s or script.execute_s):
+        return []
+    found = []
+    started: dict[int, float] = {}
+    ended = False
+    for entry in _run(script).records:
+        ended = ended or entry.kind == "EpisodeEnded"
+        if ended:
+            if entry.kind == "ActionExecuted" and script.snapshot_s:
+                # Filed after the snapshot read, and resolved at the tick then (scenarios.PENDING).
+                found.append(f"decision {entry.data.decision}'s action returns past the end")
+            continue
+        if entry.kind == "InferenceStarted":
+            started[entry.data["decision"]] = entry.semantic
+        ticks = entry.semantic * script.env_fps
+        if entry.kind == "OutcomeCommitted" and abs(ticks - round(ticks)) > 1e-9:
+            # Today's loop reads the task at its loop's top then, a read the kernel does not
+            # make between frames (KF5c): the next decision starts that much later, and an end
+            # the action's time ran past is found there, by the kernel only at its next frame.
+            past = script.ends_at_s is not None and entry.semantic >= script.ends_at_s - SAME_S
+            if script.check_s or past:
+                found.append(f"decision {entry.data.decision} is committed between frames")
+        if entry.kind == "ActionProposed":
+            k = entry.data["decision"]
+            back = started[k] + script.turns[k].latency_s
+            if math.floor(back * script.input_fps + 1e-9) != math.floor(
+                entry.semantic * script.input_fps + 1e-9
+            ):
+                # The kernel takes it once a periodic read under way has returned (K-b), in the
+                # next input frame, and paces on from there.
+                found.append(f"decision {k}'s result is taken a frame after it came back")
     return found
 
 

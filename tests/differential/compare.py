@@ -56,14 +56,14 @@ def as_expected(verdict: Verdict) -> bool:
     return verdict.ok and not verdict.unused
 
 
-def describe(verdict: Verdict, limit: int = 40) -> str:
+def describe(verdict: Verdict, limit: int = 40, *, named: bool = False) -> str:
     lines = [f"{verdict.script.name or verdict.script!r}"]
     if verdict.apart:
         lines.append(f"{len(verdict.apart)} difference(s) between the shell and the simulation:")
         lines += [f"  {problem}" for problem in verdict.apart[:limit]]
     if verdict.unexpected:
         lines.append(f"differences the script does not expect: {', '.join(verdict.unexpected)}")
-    if verdict.unused:
+    if named and verdict.unused:
         lines.append(f"differences the script expects, not shown: {', '.join(verdict.unused)}")
     if verdict.problems:
         lines.append(f"{len(verdict.problems)} difference(s) no rule explains:")
