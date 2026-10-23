@@ -7,6 +7,7 @@ import concurrent.futures
 import threading
 
 from realtime_framework.clock import Clock
+from realtime_framework.entity.model import RetryCancelled, retry_cancel_event
 
 
 class ExecutionThread:
@@ -57,7 +58,9 @@ class ExecutionThread:
 
     def run(self, coroutine, timeout: float | None = None):
         """Run ``coroutine`` on the thread and return its result. After ``timeout`` seconds on
-        the clock it is cancelled and TimeoutError raised."""
+        the clock it is cancelled and TimeoutError raised. One that stop() cancelled raises
+        RetryCancelled once the generation it runs for was abandoned (retry_cancellation), as
+        the harness abandons those under way before it stops the thread."""
         future = self.submit(coroutine)
         if not self.clock.wait(future, timeout):
             if not future.done():
@@ -65,7 +68,12 @@ class ExecutionThread:
             raise TimeoutError(
                 f"an operation on the execution thread exceeded {timeout:g}s"
             ) from None
-        return future.result()
+        try:
+            return future.result()
+        except concurrent.futures.CancelledError:
+            if retry_cancel_event().is_set():
+                raise RetryCancelled("generation abandoned while its operation ran") from None
+            raise
 
     def stop(self, timeout: float = 5.0) -> None:
         """Cancel the coroutines still pending, let their cleanup end on the loop within
@@ -74,7 +82,8 @@ class ExecutionThread:
         closed loop would be finalized wherever the garbage collector frees it, and the cleanup
         in its finally clauses would run on that thread: there an asyncio.to_thread can take the
         executor lock that thread already holds, and the thread waits forever. A cleanup that
-        does not end in time is left pending."""
+        does not end in time is left pending. A loop still blocked in a call after both timeouts
+        stops once the call returns, and the thread takes no coroutine meanwhile."""
         if not self.running:
             return
         loop = self._loop
@@ -85,7 +94,9 @@ class ExecutionThread:
             if thread.is_alive():
                 loop.call_soon_threadsafe(loop.stop)
                 thread.join(timeout=timeout)
-        if not loop.is_running():
+        if loop.is_running():
+            self._loop = None
+        else:
             loop.close()
 
 

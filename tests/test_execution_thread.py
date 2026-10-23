@@ -8,7 +8,13 @@ import threading
 
 import pytest
 
-from realtime_framework.entity.model import RequestRetry, RetryCancelled, retry_cancellation
+from realtime_framework.entity.model import (
+    FATAL,
+    RequestRetry,
+    RetryCancelled,
+    TransportFailure,
+    retry_cancellation,
+)
 from realtime_framework.entity.records import current_trace_scope, trace_scope
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 
@@ -185,6 +191,70 @@ def test_stop_leaves_a_cleanup_that_does_not_end_pending():
     assert coroutine.cr_frame is not None
     assert thread._loop.is_closed() and not thread._thread.is_alive()
     coroutine.close()
+
+
+def test_an_operation_stop_cancels_for_an_abandoned_generation_stops_its_request_unit():
+    """The harness abandons the generations under way before it stops the thread, which cancels
+    the operations still pending: a request unit whose operation was so cancelled stops as an
+    abandoned one does, and its attempt is recorded cancelled, not failed (review-encoders 低
+    14)."""
+    clock = FakeClock()
+    abandoned, seen, ended = clock.event(), [], clock.event()
+
+    with clock.participant():
+        thread = _started(clock)
+
+        def send(attempt):
+            return thread.run(asyncio.Event().wait())
+
+        retry = RequestRetry(
+            "unit",
+            lambda exc: TransportFailure(FATAL),
+            lambda attempt, exc, failure, delay: seen.append(("failed", type(exc))),
+            cancelled=lambda attempt, exc: seen.append(("cancelled", type(exc))),
+        )
+
+        def generation():
+            try:
+                with retry_cancellation(abandoned):
+                    retry.run(send)
+            except BaseException as exc:  # noqa: BLE001 - the test reads it
+                seen.append(("raised", type(exc)))
+            finally:
+                ended.set()
+
+        clock.start_thread(generation)
+        thread.run(asyncio.sleep(0))  # the operation is waiting
+        abandoned.set()
+        thread.stop()
+        assert clock.wait(ended, 1.0)
+    assert seen == [("cancelled", RetryCancelled), ("raised", RetryCancelled)]
+
+
+def test_a_thread_whose_loop_stays_blocked_through_stop_takes_no_more_work():
+    """A loop blocked in a synchronous call past both of stop's timeouts stops only once that
+    call returns. The thread counts as stopped meanwhile, so that a later run refuses at once
+    instead of waiting, for good without a timeout, on a loop that runs nothing (review-encoders
+    低 14)."""
+    clock = FakeClock()
+    blocking, release = threading.Event(), threading.Event()
+
+    async def block():
+        blocking.set()
+        release.wait()
+
+    with clock.participant():
+        thread = _started(clock)
+        thread.submit(block())
+        assert blocking.wait(5)
+        try:
+            thread.stop(timeout=0.1)
+            assert not thread.running
+            coroutine = asyncio.sleep(0)
+            with pytest.raises(RuntimeError, match="^the execution thread is not running$"):
+                thread.run(coroutine)
+        finally:
+            release.set()
 
 
 def test_a_stopped_thread_refuses_work():
