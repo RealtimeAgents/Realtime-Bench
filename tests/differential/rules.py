@@ -585,7 +585,7 @@ def _cut(script: Script, p: Projection, notes: dict, k: int, at: float, reason: 
 def _kc(script: Script, p: Projection, notes: dict) -> None:
     """A wall wait is a kernel timer that the end interrupts, and the record says the terminal
     condition cut it (turns.py TurnPolicy._waited); today the environment sleeps it out, cut only at
-    the deadline, which neither side flags (sandbox/actions.py GuestEnvironment.execute)."""
+    the deadline, which neither side flags (legacy_environment.py LegacyWallClock.execute)."""
     if not _wall(script):
         return
     ended = notes.get("ended")

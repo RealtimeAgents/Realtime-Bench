@@ -786,7 +786,7 @@ def test_a_wait_is_a_timer_and_the_environment_is_asked_during_it():
     ),
     [
         # The deadline cuts it as today's sleep(min(duration, remaining)) does, and today's record
-        # flags neither truncation (sandbox/actions.py GuestEnvironment.execute).
+        # flags neither truncation (legacy_environment.py LegacyWallClock.execute).
         (
             6.0,
             None,

@@ -604,9 +604,10 @@ def test_a_lease_that_ended_during_a_key_tap_is_released_by_the_kernel_after_the
 
 def test_a_wait_passes_its_time_in_checked_steps_without_reaching_the_environment():
     # n = 256: the wait starts at tau = 1 and lets 2.5 s pass, 2.5 ticks at env_fps 1, in steps of
-    # at most one tick with a check after each (sandbox/actions.py GuestEnvironment.execute,
-    # GuestEnvironment.wait_until_tick), and is read once more as it ends at 3.5; next =
-    # max(1, ceil(3.5)) = 4 and dropped = 4 - 0 - 1 = 3. Tick 1 is not read again before the wait.
+    # at most one tick with a check after each (legacy_environment.py LegacyStateReads.execute,
+    # sandbox/actions.py GuestEnvironment.wait_until_tick), and is read once more as it ends at
+    # 3.5; next = max(1, ceil(3.5)) = 4 and dropped = 4 - 0 - 1 = 3. Tick 1 is not read again
+    # before the wait.
     sim = _run(_token(10), Reply(action=Action.wait(2.5), output_tokens=256), _idle(6))
     assert sim.executed == []
     assert sim.advances[:5] == [1.0, 1.0, 1.0, 0.5, 0.5]
@@ -627,8 +628,9 @@ def test_a_wait_passes_its_time_in_checked_steps_without_reaching_the_environmen
 
 def test_a_wait_cut_short_by_the_end_reports_the_terminal_condition():
     # The task ends from tick 3 on: the wait from 1 stops at the check at 3, after 2 of its 2.5 s
-    # (sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute). The action
-    # ended the episode: nothing is paced and no further check is asked.
+    # (sandbox/actions.py GuestEnvironment.wait_until_tick, legacy_environment.py
+    # LegacyStateReads.execute). The action ended the episode: nothing is paced and no further
+    # check is asked.
     sim = _run(
         _token(10),
         Reply(action=Action.wait(2.5), output_tokens=256),
@@ -673,10 +675,10 @@ def test_a_wait_cut_short_by_the_end_reports_the_terminal_condition():
     ids=["advance", "release"],
 )
 def test_a_wait_whose_own_step_fails_is_a_failed_action(replies, fault, reason, failed_at):
-    # The environment lets a wait's time pass inside execute(), which reports a failed step as a
-    # failed action: invalid_run, only the error as the execution record, nothing applied, not
-    # paced, and still reported (sandbox/actions.py GuestEnvironment.execute; runner.py
-    # _land_action).
+    # The legacy loop's environment lets a wait's time pass inside execute(), which reports a
+    # failed step as a failed action: invalid_run, only the error as the execution record, nothing
+    # applied, not paced, and still reported (legacy_environment.py LegacyStateReads.execute;
+    # legacy_loop.py _land_action).
     sim = _run(_token(10), *replies, **fault)
     wait = len(replies) - 1
     resolved = _record(sim, "ActionResolved", wait)
@@ -779,7 +781,7 @@ def test_a_wait_whose_own_step_fails_settles_on_that_answer_though_the_run_ended
     # The wait from 1 steps to 2; the step to 3, the third advance, takes 0.5 s and fails, and
     # meanwhile another thread invalidates the run. The end leaves the wait to settle on its
     # step's answer, as an execution does (kernel/core.py), so the wait is still the failed
-    # action the environment reports (sandbox/actions.py GuestEnvironment.execute).
+    # action the legacy loop's environment reports (legacy_environment.py LegacyStateReads.execute).
     trace_lost = Invalidated("harness", "episode_trace_write_failed", "disk full")
     sim = _run(
         _token(10),
@@ -823,8 +825,9 @@ def test_a_wait_cut_short_by_a_third_failed_read_stays_a_wait():
 
 def test_a_wait_cut_short_by_the_horizon_reports_the_horizon():
     # T = 5, n = 1024: the wait starts at tau = 4 and asks for 4 + 2.5 > T, so it stops at 5 after
-    # 1 s (sandbox/actions.py GuestEnvironment.wait_until_tick, GuestEnvironment.execute). The
-    # read after it still runs; nothing is paced past T, and the next loop top ends at the horizon.
+    # 1 s (sandbox/actions.py GuestEnvironment.wait_until_tick, legacy_environment.py
+    # LegacyStateReads.execute). The read after it still runs; nothing is paced past T, and the
+    # next loop top ends at the horizon.
     sim = _run(_token(5), Reply(action=Action.wait(2.5), output_tokens=1024))
     assert _asked(sim) == [0, 1, 2, 3, 4, 5, 5]
     assert sim.advances == [1.0] * 5
@@ -842,7 +845,7 @@ def test_a_wait_cut_short_by_the_horizon_reports_the_horizon():
 
 def test_a_wait_ending_exactly_on_the_horizon_is_not_cut_short():
     # T = 3: a 2 s wait from tau = 1 asks for exactly T, which no horizon cuts
-    # (sandbox/actions.py GuestEnvironment.execute: past T + 1e-9 only).
+    # (legacy_environment.py LegacyStateReads.execute: past T + 1e-9 only).
     sim = _run(_token(3), Reply(action=Action.wait(2.0), output_tokens=256))
     assert _record(sim, "ActionResolved", 0)["execution_result"] == {
         "duration_simulated_seconds": 2.0,
@@ -855,9 +858,9 @@ def test_a_wait_ending_exactly_on_the_horizon_is_not_cut_short():
 
 @pytest.mark.parametrize("wait", [Action.wait(), Action.wait(0.0)], ids=["no-duration", "zero"])
 def test_a_wait_of_zero_seconds_does_not_move_the_clock(wait):
-    # A wait of 0 s lets no time pass (sandbox/actions.py GuestEnvironment.execute); tau = 1 = next,
-    # and a wait is never rendered (legacy_loop.py _apply). Tick 1 is read after the step there and
-    # after the wait, then the next decision steps to 2.
+    # A wait of 0 s lets no time pass (legacy_environment.py LegacyStateReads.execute); tau = 1 =
+    # next, and a wait is never rendered (legacy_loop.py _apply). Tick 1 is read after the step
+    # there and after the wait, then the next decision steps to 2.
     sim = _run(_token(10), Reply(action=wait, output_tokens=256), _idle(9))
     assert sim.advances == [1.0] * 10
     assert _asked(sim)[:4] == [0, 1, 1, 2]
