@@ -27,7 +27,9 @@ compared with tests/replay/baselines/litellm-nonstream-long.jsonl.
 
 from __future__ import annotations
 
+import json
 import os
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -233,3 +235,28 @@ def test_mapped_model_output_limit(litellm_environment, tmp_path):
     )
     caps = [r["requests"][0]["body"]["max_tokens"] for r in records]
     assert caps == [MAPPED_OUTPUT_LIMIT] * len(steps)
+
+
+def test_mapped_output_limit_is_read_from_the_bundled_map(litellm_environment):
+    """The native limit is the row of the map file bundled with the locked LiteLLM
+    (registry._litellm_model_map), not of litellm.model_cost, which LiteLLM's import replaces with
+    a map fetched over the network unless LITELLM_LOCAL_MODEL_COST_MAP is set. Here the loaded map
+    gives the model another limit; the config still takes the bundled file's."""
+    import litellm
+
+    bundled = json.loads(
+        files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text()
+    )
+    row = bundled[MAPPED_MODEL]
+    fetched = {**litellm.model_cost, MAPPED_MODEL: {**row, "max_output_tokens": 1}}
+    litellm_environment.setattr(litellm, "model_cost", fetched)
+    catalog._litellm_model_map.cache_clear()
+    try:
+        config = litellm_vlm_config(litellm_environment, "http://127.0.0.1:9/v1", MAPPED_MODEL)
+    finally:
+        catalog._litellm_model_map.cache_clear()
+    assert row["litellm_provider"] == "openrouter" and row["max_output_tokens"] > 1
+    assert (config.native_output_limit, config.native_output_limit_source) == (
+        row["max_output_tokens"],
+        "litellm",
+    )
