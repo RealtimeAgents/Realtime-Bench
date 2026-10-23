@@ -1072,8 +1072,10 @@ class LiteLLMDriver:
             except Exception:  # noqa: BLE001, S110 - logging cleanup must not mask shutdown
                 pass
 
-    # Provider error types that are transient regardless of the HTTP status they arrive with. A
-    # streamed request can fail after the 200 response header with an SSE ``error`` event.
+    # Provider error types read from the error's text when no exception in the chain has an HTTP
+    # status. LiteLLM gives one to every error it maps, a stream's SSE error event included, but
+    # not to a complete response whose 200 body is an error object without a numeric code, as a
+    # gateway forwards an upstream error.
     _TRANSIENT_ERROR_TYPES = ("overloaded_error", "api_error", "timeout_error")
 
     def classify_transport_error(self, exc: BaseException) -> TransportFailure:
