@@ -579,3 +579,43 @@ def test_a_route_to_another_upstream_fails_the_decision(openrouter_env, tmp_path
     )
     assert attempt["received_output"] is True
 
+
+@pytest.mark.parametrize(
+    "key, provider, marked",
+    [("gemini-3.8-flash", "Google AI Studio", True), ("gpt-5.6-sol", "OpenAI", False)],
+    ids=["google", "openai"],
+)
+def test_cache_breakpoint_by_model_prefix(key, provider, marked, openrouter_env, tmp_path):
+    """Behind OpenRouter, google/ models get the explicit breakpoint anthropic/ ones get, on the
+    last content part of the newest message (ChatCompat cache_breakpoint "model_prefix",
+    LiteLLMDriver._request_kwargs); openai/ models cache implicitly and get none. The stub
+    reports each catalog entry's pinned upstream as the provider that served it."""
+    steps = LONG_SCENARIO[:2]
+    entry = catalog.get(key)
+    route = route_metadata(entry.model_name, provider)
+    with OpenRouterStub(replies(steps), route=route) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        config = catalog.to_model_config(
+            key, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]
+        )
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=key
+        )
+        try:
+            records = run_steps(episode, steps, stub)
+        finally:
+            episode.agent.close()
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert all(r["result"]["inspection"]["valid"] for r in records)
+    assert [r["requests"][0]["body"]["model"] for r in records] == [entry.model_name] * 2
+    if marked:
+        check_cache_breakpoints(records)
+    else:
+        parts = [
+            part
+            for record in records
+            for message in record["requests"][0]["body"]["messages"]
+            if isinstance(message["content"], list)
+            for part in message["content"]
+        ]
+        assert parts and not any("cache_control" in part for part in parts)
