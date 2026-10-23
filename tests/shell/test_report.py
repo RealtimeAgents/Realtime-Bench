@@ -102,6 +102,17 @@ EPISODES = [
         1,
         id="won-settled-then-discarded",
     ),
+    # The task is lost from 0.5 s, which the end check at 1 s sees, while the only generation
+    # would take 2 s: the task's end gives it up. Its synthesized record stays out of the totals
+    # (N34), which count no response, and no decision is reported.
+    pytest.param(
+        [Reply(2.0, CLICK, fields=USAGE)],
+        World(ends_at=0.5, end_reason="lost"),
+        False,
+        "fail",
+        0,
+        id="task-end-during-the-first-generation",
+    ),
 ]
 
 
@@ -118,6 +129,93 @@ def test_a_wall_clock_episode_is_scored_whatever_became_of_its_last_generation(
     )
     assert (task["status"], task["outcome"], task.get("error")) == ("scored", outcome, None)
     assert task["charged_tokens"] == [40] * len(env.lifecycle)
+
+
+def test_a_move_over_the_per_move_cap_leaves_a_valid_run_scored(tmp_path):
+    """The second generation, asked at 1 s, hangs past the 1 s per-move cap: its move is reported
+    as skipped, with no usage and so no clock count (episode_records.timed_out_result), and the
+    third decision is applied. No decision goes unreported, and the totals the lifecycle is
+    checked against have a known total but no total."""
+    replies = [Reply(0.5, CLICK, fields=USAGE), Reply(hang=True), Reply(0.5, CLICK, fields=USAGE)]
+    episode = run("wall", 3.0, replies, World(), per_move_cap_s=1.0)
+    env = episode.env
+    accounting = env._token_accounting.summary()
+    assert episode.statuses() == ["applied", "skipped_timeout", "applied"]
+    assert [record["clock_output_tokens"] for record in env.lifecycle] == [40, None, 40]
+    clock = accounting["counts"]["clock_output_tokens"]
+    assert "reported_decisions" not in accounting
+    assert (clock["total"], clock["known_total"]) == (None, 80)
+    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0)
+    assert (task["status"], task["outcome"], task.get("error")) == ("scored", "timeout", None)
+    assert (task["charged_tokens"], task["charged_tokens_complete"]) == ([], False)
+
+
+def test_a_move_skipped_with_its_settled_result_leaves_a_valid_run_scored(tmp_path):
+    """At 2 fps with a 1 s per-move cap, the first generation is back at 0.9 s, during the end
+    check asked at 0.5 s, which takes 0.6 s: the kernel handles the cap first and skips the move
+    with that result (decision 47). Three decisions are applied after it, and the deadline cuts
+    the fifth generation. The skipped move is reported, with its count, so it stays in the
+    subtotal of reported decisions; only the generation the deadline cut goes unreported."""
+    replies = [Reply(0.9, CLICK, fields=USAGE)] + [Reply(0.3, CLICK, fields=USAGE)] * 3
+    replies.append(Reply(hang=True))
+    world = World(slow_checks=[(0.5, 0.6, 0.6)])
+    episode = run("wall", 4.0, replies, world, fps=2.0, per_move_cap_s=1.0)
+    env = episode.env
+    accounting = env._token_accounting.summary()
+    assert episode.statuses() == ["skipped_timeout", "applied", "applied", "applied"]
+    assert accounting["responses"] == 5
+    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=4.0)
+    assert (task["status"], task["outcome"], task.get("error")) == ("scored", "timeout", None)
+    assert task["charged_tokens"] == [40] * 4
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        pytest.param(None, id="no-subtotal"),
+        pytest.param({"known_total": 41}, id="known-total"),
+        pytest.param({"complete": False}, id="complete"),
+        pytest.param({"responses_with_count": 2}, id="responses-with-count"),
+    ],
+)
+def test_a_token_accounting_unlike_the_lifecycle_is_not_scored(tmp_path, counts):
+    """The deadline cuts the second generation: the lifecycle reports the first decision, with
+    its 40 tokens, and so does the token accounting's subtotal of reported decisions. Without
+    that subtotal, or with one of its counts changed, the report refuses the run."""
+    episode = run("wall", 3.0, [Reply(0.5, CLICK, fields=USAGE), Reply(hang=True)], World())
+    env = episode.env
+    accounting = env._token_accounting.summary()
+    subtotal = accounting["reported_decisions"]["counts"]["clock_output_tokens"]
+    assert subtotal == {
+        "total": 40, "known_total": 40, "responses_with_count": 1, "complete": True,
+    }  # fmt: skip
+    if counts is None:
+        del accounting["reported_decisions"]
+    else:
+        subtotal.update(counts)
+    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0)
+    assert (task["status"], task["outcome"], task.get("error")) == (
+        "invalid",
+        "error",
+        "Charged-token accounting mismatch",
+    )
+
+
+def test_a_decision_recorded_twice_is_not_scored(tmp_path):
+    """Three decisions are reported, each with its 40 tokens, and the token accounting agrees
+    with their records; but the lifecycle has the first decision's record twice and none of the
+    second's."""
+    replies = [Reply(0.5, CLICK, fields=USAGE)] * 2 + [Reply(0.5, Action.wait(5.0), fields=USAGE)]
+    episode = run("wall", 3.0, replies, World())
+    env = episode.env
+    first, _, third = env.lifecycle
+    accounting = env._token_accounting.summary()
+    task = _task(tmp_path, [first, first, third], accounting, env._termination, horizon_s=3.0)
+    assert (task["status"], task["outcome"], task.get("error")) == (
+        "invalid",
+        "error",
+        "Decision count mismatch",
+    )
 
 
 def _baselines() -> list[str]:
