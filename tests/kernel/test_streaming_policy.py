@@ -750,6 +750,26 @@ def test_the_reply_after_a_slow_abort_has_its_whole_watchdog():
     assert sim.started == [(1, 0.0), (2, 7.0)]
 
 
+def test_the_episode_goes_on_while_an_abort_runs():
+    """No reply ends. The first is given up at 4 and its abort runs until 14, past the deadline at
+    12. Meanwhile the state is read and frames are captured on their grids; the frames wait for
+    the abort, each dropping the one before, and the snapshot is frozen at the deadline. The
+    episode finishes once the abort returned."""
+    sim = _run(World(abort_s=10.0), 12.0, reply_watchdog_s=4.0)
+    assert sim.aborted == [(1, 4.0)]
+    assert sim.started == [(1, 0.0)]
+    assert sim.checks == [float(second) for second in range(12)]
+    assert sim.captures == [float(second) for second in range(12)]
+    assert [observation for observation, _ in sim.pushes] == ["obs-0", "obs-1", "obs-2", "obs-3"]
+    assert [(d["observation_id"], d["reason"]) for d in sim.data("FrameDropped")] == [
+        *((f"obs-{n}", "superseded") for n in range(4, 11)),
+        ("obs-11", "ended"),
+    ]
+    assert sim.snapshots == [12.0]
+    assert sim.termination == Termination("time_limit", "deadline", 12.0, 12.0, 12.0, 12.0, None)
+    assert sim.records[-1].semantic == 14.0
+
+
 def test_a_push_held_for_the_sessions_renewal_is_not_stuck():
     """The session is to be renewed from 1, so the push of the frame captured then waits for the
     reply on it, which runs until 14, and says it is held. Its watchdog does not give that reply up:
