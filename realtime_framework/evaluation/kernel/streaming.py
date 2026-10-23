@@ -374,12 +374,16 @@ class StreamingPolicy:
                 )
         elif timer.kind == "aborted" and not self._stopped():
             # The first reading after the shell ran the abort: the next reply starts now, and it
-            # and a push still out have their whole watchdogs from now.
+            # and a push still out, or the frame that waited for the abort, have their whole
+            # watchdogs from now.
             if self._restart:
                 self._restart = False
                 self._start_reply()
             if self._pushing is not None and self._push_watchdog is None and not self._push_held:
                 self._arm_push_watchdog()
+            elif self._pushing is None and self._queued is not None:
+                queued, self._queued = self._queued, None
+                self._push(queued)
         self._report()
 
     def on_end(self) -> None:
@@ -517,7 +521,9 @@ class StreamingPolicy:
                 self._session_stuck(
                     "push_failed", "frame_push_failed", f"{limit} pushes failed: {event.error}"
                 )
-        if self._queued is not None and not self._stopped():
+        # A frame waiting when the session is given up goes into the rebuilt one, once the abort
+        # returned (on_timer "aborted").
+        if self._queued is not None and not self._restart and not self._stopped():
             queued, self._queued = self._queued, None
             self._push(queued)
 
