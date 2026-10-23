@@ -310,7 +310,8 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     the snapshot, releases the inputs and writes the termination record itself, as the runner
     wrapped up a loop that raised (tests/differential/legacy_loop.py _run_stream_legacy). The
     run is invalid: run_exception, its traceback the summary's error, recorded as the runner
-    records it."""
+    records it. The call it interrupts, from 1 s, is recorded, unnumbered, as one an invalidation
+    gives up on (N10)."""
     _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 2.0)
     episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])
     _wrapped_up(episode, 2.0)
@@ -323,16 +324,39 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     assert any(line.startswith("[invalid-run] runner:run_exception") for line in episode.logs)
     (written,) = episode.trace.payloads("RunInvalidated")
     assert written["reason"] == "run_exception"
+    completed = [r for r in episode.trace.records if r["event"] == "InferenceCompleted"]
+    assert [
+        (r["payload"]["decision"], r["payload"].get("harness_abort_reason"), r["kernel_seq"])
+        for r in completed
+    ] == [(0, None, completed[0]["kernel_seq"]), (1, "invalid_run", None)]
+    assert completed[1]["payload"]["latency_s"] == 1.0
+    rows = episode.agent.trajectory
+    assert [(row["decision"], row.get("harness_abort_reason")) for row in rows] == [
+        (0, None),
+        (1, "invalid_run"),
+    ]
+    assert episode.env._token_accounting.summary()["responses"] == 1
 
 
 def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
     """The policy raises as it takes the second result, back at 1.5 s, inside the kernel's
-    step: the same as the kernel raising."""
+    step: the same as the kernel raising. That result was settled before the kernel got it, and
+    the agent never accepted it: it keeps its own records, written in the wrap-up, out of the
+    reported decisions' subtotal."""
     _breaks(monkeypatch, TurnPolicy, "_accept", lambda policy, *_: policy.decisions == 1)
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)])
     _wrapped_up(episode, 1.5)
     assert episode.invalid["reason"] == "run_exception"
     assert "RuntimeError: _accept broke" in episode.env._loop_error
+    assert ("accept", 2) not in episode.agent.calls
+    completed = episode.trace.payloads("InferenceCompleted")
+    assert [(p["decision"], p.get("harness_abort_reason")) for p in completed] == [
+        (0, None),
+        (1, None),
+    ]
+    assert [row["decision"] for row in episode.agent.trajectory] == [0, 1]
+    accounting = episode.env._token_accounting.summary()
+    assert (accounting["responses"], accounting["reported_decisions"]["responses"]) == (2, 1)
 
 
 class _BrokenTicks(Environment):

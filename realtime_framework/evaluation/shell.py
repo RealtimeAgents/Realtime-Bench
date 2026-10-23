@@ -256,6 +256,7 @@ class _Generation:
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
     escaped: str | None = None  # the traceback of a failure that escaped the legacy loop
     echo: Entry | None = None  # the kernel's record of the result, which those are written under
+    given_up: bool = False  # the kernel gave it up, and its records are written (_given_up)
 
 
 @dataclass
@@ -1130,9 +1131,33 @@ class _Shell:
                         semantic=semantic,
                         ops=ops,
                     )
+            self._record_unfinished(termination, semantic, ops)
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[default] wrapping up the episode failed:\n" + traceback.format_exc())
         self._finished = True
+
+    def _record_unfinished(self, termination: Termination, semantic: float, ops) -> None:
+        """The records of the generations the kernel neither accepted nor discarded, unnumbered,
+        as for one an invalidation gave up on (_given_up, N10): a settled result keeps its own,
+        out of the reported decisions' subtotal; any other is recorded as a call given up on for
+        the invalid run, from its start to the episode's end. The agent's close() settles them,
+        as it settles the generation an episode the kernel finished ended on."""
+        for held in list(self._generations.values()):
+            if held.given_up:
+                continue
+            data = {"generation": held.generation, "reason": "invalid"}
+            entry = Entry(None, semantic, ops, "GenerationAbandoned", data)
+            if held.inference is not None:
+                self._emit_inference(held.inference, entry)
+                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
+                continue
+            seconds = (
+                termination.ops_ended_at - held.started_ops
+                if self.token
+                else termination.ended_at - held.started_semantic
+            )
+            r = episode_records.abandoned_result(round(max(0.0, seconds), 2), "invalid_run")
+            self._emit_inference(self._settle(held, r)[1], entry)
 
     # ---- the episode trace --------------------------------------------------------------------
 
@@ -1249,6 +1274,7 @@ class _Shell:
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
+        held.given_up = True
         bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
         if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
             bound = "provider_watchdog"
