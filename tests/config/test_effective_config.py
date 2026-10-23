@@ -24,9 +24,9 @@ def test_runner_and_trial_reach_the_decision_loop():
     runner = exported["entries"]["runner"]["models"][MODEL]
     trial = exported["entries"]["trial"]["models"][MODEL]
     assert runner["error"] is None and trial["error"] is None
-    # Each entry point keeps its own default clock (runner.py main; _trial.py:59).
+    # Each entry point keeps its own default clock (runner.py main; _trial.py main).
     assert runner["run"]["clock_mode"] == "token" and trial["run"]["clock_mode"] == "wall"
-    # The hash _trial's runner records before the episode (reporting.py:1503-1531) and after setup
-    # (runner.py main) agree.
+    # The hash _trial's runner records before the episode (reporting.py prepare_episode_report)
+    # and after setup (runner.py main) agree.
     assert trial["expected_runtime_config_hash"] == trial["runtime_config_hash"]
     assert KEY not in json.dumps(exported), "the export must not contain secrets"

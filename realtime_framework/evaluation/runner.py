@@ -625,9 +625,6 @@ def main():
             wall_start_time=wall_start_time,
             clocks=clocks,
         )
-        start_episode = getattr(agent, "start_episode", None)
-        if callable(start_episode):
-            start_episode(wall_start_time, a.max_minutes * 60)
 
         # -------- run the streaming loop --------
         _loop_t0 = clocks.operational.time()

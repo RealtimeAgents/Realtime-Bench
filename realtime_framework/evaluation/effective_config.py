@@ -6,7 +6,7 @@ Entry points (each with its own defaults):
 
 - ``runner``: ``python -m realtime_framework.evaluation.runner --model M --task T``.
 - ``trial``: ``python -m realtime_framework.evaluation._trial --catalog-model M --task T``, which
-  loads ``.env`` and execs the runner (evaluation/_trial.py:99-325).
+  loads ``.env`` and execs the runner (evaluation/_trial.py main).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
   job file). Harbor resolves the trial (evaluation/harbor.py:265-534) and starts ``_trial``.
 - ``identity``: ``python -m realtime_framework.evaluation.config`` with the runner's defaults; it
@@ -16,7 +16,7 @@ Each process an entry point starts is reproduced in a fresh interpreter with the
 would receive, so values read at import are the values that process would use. The runner process
 runs its own main() up to the decision loop. Only its outside calls are replaced: containers, the
 guest, the browser, the task server, the model driver and the recorder. The replaced driver keeps
-the repository .env load it performs today (harnesses/registry.py:10).
+the repository .env load it performs today (harnesses/registry.py create_agent).
 
 The first catalog lookup of every entry point imports LiteLLM (providers/registry.py:133-134),
 which loads a .env and fetches LiteLLM's model cost map (litellm/__init__.py:29-30). The probes set
@@ -47,10 +47,10 @@ SCHEMA = "rtbench-effective-config.v1"
 CLOCK_ORIGIN = 1_760_000_000.0  # fixed task origin for the replaced task server
 
 # Non-secret variables the framework or its SDKs read, besides the ones the hash records
-# (evaluation/config.py:423-445).
+# (evaluation/config.py _RUNTIME_ENV_KEYS).
 _EXTRA_VARIABLES = frozenset(
     {
-        # Lane and child-process settings written by _trial (evaluation/_trial.py:273-291).
+        # Lane and child-process settings written by _trial (evaluation/_trial.py main).
         "PYTHONPATH", "TASK_SUITE", "SEED", "CLOCK_MODE", "TOKENS_PER_FRAME", "TASK_PORT_OFFSET",
         "SANDBOX_DISPLAY_NUMBER", "SANDBOX_CONTAINER", "RT_SUITE_CONTAINER", "GUEST_AGENT_PORT",
         "VNC_PORT", "NOVNC_PORT", "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
@@ -346,7 +346,7 @@ def _probe_runner(request: dict) -> dict:
     def create_agent(config, log_dir=None, *, trace=None, clock=None, interaction_mode=None):
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
-        # (harnesses/default/harness.py:1003).
+        # (harnesses/default/harness.py DefaultHarness._setup_backend).
         policy = current_context_policy().for_path(
             config.adapter_type, config.provider_options, config.context_preset
         )
@@ -447,7 +447,7 @@ def _recorded_vs_used(config: dict, settings: dict, agent_setup: dict) -> list[d
     """Settings whose recorded value implies something other than the value used.
 
     The hash records the import-time variables as found when it is computed
-    (evaluation/config.py:678-680, 720), not the values the modules read at import.
+    (evaluation/config.py effective_run_config), not the values the modules read at import.
     """
     recorded = config["environment_overrides"]
     differences = [
@@ -483,7 +483,7 @@ def _probe_trial(request: dict) -> dict:
     load = registry.load_project_secrets
     state = {}
 
-    def load_project_secrets(path=None):  # called by _trial.main (evaluation/_trial.py:99-101)
+    def load_project_secrets(path=None):  # called by _trial.main
         before = _snapshot()
         if request.get("env_file"):
             load(Path(request["env_file"]))
@@ -517,7 +517,7 @@ def _probe_trial(request: dict) -> dict:
 
 def _trial_command(plan: dict) -> tuple[list[str], str]:
     """The runner argv and interpreter _trial execs, after writing the runner's environment into
-    os.environ (evaluation/_trial.py:272-325)."""
+    os.environ (evaluation/_trial.py main)."""
     import realtime_framework.providers.registry as catalog
 
     runtime = plan["runtime"]
@@ -652,7 +652,7 @@ def _probe_harbor(request: dict) -> dict:
 
 
 def _probe_identity(request: dict) -> dict:
-    """The hash identity_main prints for the runner's defaults (evaluation/config.py:794-862)."""
+    """The hash identity_main prints (evaluation/config.py), with the runner's defaults."""
     from realtime_framework.evaluation.config import identity_main
 
     argparse.ArgumentParser.error = _reject
