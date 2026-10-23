@@ -518,6 +518,7 @@ def _probe_trial(request: dict) -> dict:
 def _trial_command(plan: dict) -> tuple[list[str], str]:
     """The runner argv and interpreter _trial execs, after writing the runner's environment into
     os.environ (evaluation/_trial.py main)."""
+    import realtime_framework.evaluation._trial as trial
     import realtime_framework.providers.registry as catalog
 
     runtime = plan["runtime"]
@@ -546,21 +547,8 @@ def _trial_command(plan: dict) -> tuple[list[str], str]:
         }
     )
     (model,) = plan["models"]
-    (task,) = plan["tasks"]
-    argv = [
-        "--model", model["key"],
-        "--task", task,
-        "--clock", runtime["clock_mode"],
-        "--tokens-per-frame", os.environ["TOKENS_PER_FRAME"],
-        "--fps", str(runtime["fps"]),
-        "--model-input-fps", str(runtime["model_input_fps"]),
-        "--interaction-mode", runtime["interaction_mode"],
-        "--max-minutes", str(runtime["duration_minutes"]),
-        "--seed", str(runtime["seed"]),
-        "--reasoning-effort", model["reasoning_effort"],
-        "--protocol", runtime["protocol"],
-        "--report-root", "<results>",
-    ]  # --results-dir and --run-id only name output paths
+    # --results-dir and --run-id only name output paths
+    argv = [*trial.runner_arguments(plan), "--report-root", "<results>"]
     return argv, catalog.get(model["key"]).python_env
 
 
