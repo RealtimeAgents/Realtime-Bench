@@ -771,6 +771,126 @@ TIMED = [
     ),
 ]
 
+# ---- 7. an operation under way at the deadline or at a frame's start ---------------------------
+
+ACROSS = [
+    # Decision 0's reply is back at 1.95 s, and the read before landing returns at 2.05 s, past
+    # the deadline: today's loop leaves it not_applied_tick_limit, the kernel's deadline
+    # not_applied_time_limit (K-k). Both read the snapshot once the read has returned; the kernel
+    # reports the decision after it (X2).
+    Script(
+        "wall",
+        2.0,
+        _timed(["click", "click"], [1.85, 0.5]),
+        check_s=0.1,
+        expect=frozenset({"K-k", "X2"}),
+        name="wall-the-read-before-landing-runs-past-the-deadline",
+    ),
+    # The same read answers exactly at the deadline, 1.875 + 0.125 s.
+    Script(
+        "wall",
+        2.0,
+        _timed(["click", "click"], [1.75, 0.5]),
+        check_s=0.125,
+        expect=frozenset({"K-k", "X2"}),
+        name="wall-the-read-before-landing-answers-at-the-deadline",
+    ),
+    # The task ended at 1.92 s, and the read before landing, 1.95 to 2.05 s, finds it: the end is
+    # the task's, on both sides.
+    Script(
+        "wall",
+        2.0,
+        _timed(["click", "click"], [1.85, 0.5]),
+        check_s=0.1,
+        ends_at_s=1.92,
+        expect=frozenset({"X2"}),
+        name="wall-the-read-before-landing-finds-the-end-past-the-deadline",
+    ),
+    # Decision 0's click executes at 1.95 s, and the read after it returns at 2.02 s: the kernel
+    # took its answer, filed at 1.95 s, before the deadline and reports the decision before the
+    # snapshot, as today's loop does.
+    Script(
+        "wall",
+        2.0,
+        _timed(["click", "click"], [1.81, 0.5]),
+        check_s=0.07,
+        expect=frozenset(),
+        name="wall-the-read-after-an-action-runs-past-the-deadline",
+    ),
+    # Decision 0's click executes from 1.9 to 2.1 s: both read the snapshot once it has returned;
+    # the kernel reports the decision after it (X2).
+    Script(
+        "wall",
+        2.0,
+        _timed(["click", "click"], [1.9, 0.5]),
+        execute_s=0.2,
+        expect=frozenset({"X2"}),
+        name="wall-an-action-runs-past-the-deadline",
+    ),
+    # At 4 fps decision 0 lands at 1.6 s and paces to 1.75 s; decision 1's capture runs to 2.05 s,
+    # past the deadline. The kernel handles the deadline once it has returned and starts no
+    # generation; today's loop starts one, settles it after its reply at 2.55 s and reads the
+    # snapshot then (K-a, K-g).
+    Script(
+        "wall",
+        2.0,
+        _timed(["click"] * 3, [1.3, 0.5, 0.5]),
+        env_fps=4.0,
+        input_fps=4.0,
+        capture_s=0.3,
+        expect=frozenset({"K-a", "K-g"}),
+        name="wall-a-capture-runs-past-the-deadline",
+    ),
+    # Decision 0's click executes from 0.8 to 1.1 s, across the periodic read due at 1.0 s, which
+    # the read after the action makes (turns.py TurnPolicy.on_timer).
+    Script(
+        "wall",
+        3.0,
+        _timed(["click"] * 3, [0.8, 0.3, 0.3]),
+        execute_s=0.3,
+        expect=frozenset({"X2"}),
+        name="wall-an-action-runs-into-the-next-frame",
+    ),
+    # The guest refuses it: the read due at 1.0 s is made when the refusal has come back
+    # (TurnPolicy._executed).
+    Script(
+        "wall",
+        3.0,
+        (
+            Turn("click", attempts=(Attempt(0.8),), rejected="the guest refused the action"),
+            *_timed(["click", "click"], [0.3, 0.3]),
+        ),
+        execute_s=0.3,
+        expect=frozenset({"X2"}),
+        name="wall-a-refused-action-runs-into-the-next-frame",
+    ),
+    # The task ends at 0.9 s, during the click: the read after it finds the end at 1.1 s, not
+    # the periodic read due at 1.0 s (K-b).
+    Script(
+        "wall",
+        3.0,
+        _timed(["click"] * 3, [0.8, 0.3, 0.3]),
+        execute_s=0.3,
+        ends_at_s=0.9,
+        expect=frozenset({"X2"}),
+        name="wall-an-action-runs-into-the-next-frame-and-the-end",
+    ),
+    # Refused, the end is found at 1.1 s by the read made in the periodic one's place, and the
+    # decision, its pacing already past 1.0 s, is reported before the snapshot.
+    Script(
+        "wall",
+        3.0,
+        (
+            Turn("click", attempts=(Attempt(0.8),), rejected="the guest refused the action"),
+            *_timed(["click", "click"], [0.3, 0.3]),
+        ),
+        execute_s=0.3,
+        ends_at_s=0.9,
+        expect=frozenset(),
+        name="wall-a-refused-action-runs-into-the-next-frame-and-the-end",
+    ),
+]
+
 NAMED = (
     FRAME_RATES
     + RUNNER_LOOP
@@ -783,4 +903,5 @@ NAMED = (
     + HORIZON
     + EARLY_END
     + TIMED
+    + ACROSS
 )

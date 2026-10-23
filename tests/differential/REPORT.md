@@ -98,12 +98,18 @@
 - **随机脚本**：只有读快照有耗时，其余操作都不耗时。
 - **具名脚本**：
   - `scenarios.TIMED` 的 6 个墙钟脚本：读状态 0.01 或 0.05 秒，采帧 0.02 秒；
+  - `scenarios.ACROSS` 的 10 个墙钟脚本：截止落在落地前那次读、动作后那次读、采帧、执行里，执行跨过帧开头的定时读；
   - K-rel 的 2 个：动作 0.125、0.2 秒；
   - 读快照有耗时的若干个。
 - **规则成立的前提**：
   - 读一次比一帧短；
   - 没有回复恰好在一次读发问的同一刻回来；
   - 每个决策落地后等到下一帧。
+- **截止或帧开头落在一次同步操作里**：外壳做完手上的读、采帧或执行，内核才处理截止或到期的定时读。规则照这个改写：
+  - 截止落在落地前那次读里（答回在截止当刻或之后），旧循环记 `not_applied_tick_limit`，内核记 `not_applied_time_limit`（K-k）；
+  - 截止落在采帧里，旧循环在截止后开始生成，内核不开始（K-a）；
+  - 快照在那次操作返回时读（K-g）；动作后那次读在截止前发问的，内核先回报再冻结快照（X2）；
+  - 执行跨过帧开头，那一帧的定时读由动作后那次读、或被拒时补的那次读来做，在执行返回时（K-b）。
 - **覆盖不到的**：
   - 结果晚于帧边界才回来，或 wait 结束在帧中间：旧循环在循环开头多读一次（内核在已读过的帧里不读，KF5c），耗时会带进下一个决策。没写规则，也没进具名脚本。
   - 读一次比一帧长：60 fps 下读 0.05 秒。另外，墙钟替身在格点上取 tick 会差一个 ulp（`1024.05 - 1024` 乘 60 得 2.999…）。
@@ -117,17 +123,17 @@
 
 | 编号 | 结果 | 触发它的具名脚本 | 随机 | 说明 |
 |---|---|---|---|---|
-| K-a | 出现 | `frame_rates-wall-*`、`runner-late_reply`、`runner-done_reply`、`runner-bounded_call_timeout`、`runner-long`、`wall-result-at-the-deadline`、`wall-retry-across-the-deadline`、`wall-reads-and-captures-take-time` | 313 | 截止放弃的生成，外壳合成一条 `timed_out` 的记录（第 48 条），和旧循环有界等待超时写的一样，逐字段比。旧循环在宽限期内等到了回复的，那条回复的记录由 K-a 换成"放弃的调用" |
-| K-b | 出现 | `wall-ends-during-a-reply`、`wall-ends-while-pacing`、`wall-wait-cut-by-the-end`、`wall-a-reply-back-during-a-periodic-read`、`wall-ends-during-a-reply-and-reads-take-time` | 120 | 按 N29 扩写：结果回来时一次定时读正在进行，就等它读完再接纳，再在新读数上读一次才落地。动作、帧龄、动作时刻比旧循环晚"读完时刻 − 回来时刻"，最多一次读的耗时 |
+| K-a | 出现 | `frame_rates-wall-*`、`runner-late_reply`、`runner-done_reply`、`runner-bounded_call_timeout`、`runner-long`、`wall-result-at-the-deadline`、`wall-retry-across-the-deadline`、`wall-reads-and-captures-take-time` | 313 | 截止放弃的生成，外壳合成一条 `timed_out` 的记录（第 48 条），和旧循环有界等待超时写的一样，逐字段比。旧循环在宽限期内等到了回复的，那条回复的记录由 K-a 换成"放弃的调用"。采帧跨过截止时，旧循环在截止以后还开始生成，内核不开始（`wall-a-capture-runs-past-the-deadline`） |
+| K-b | 出现 | `wall-ends-during-a-reply`、`wall-ends-while-pacing`、`wall-wait-cut-by-the-end`、`wall-a-reply-back-during-a-periodic-read`、`wall-ends-during-a-reply-and-reads-take-time` | 120 | 按 N29 扩写：结果回来时一次定时读正在进行，就等它读完再接纳，再在新读数上读一次才落地。动作、帧龄、动作时刻比旧循环晚"读完时刻 − 回来时刻"，最多一次读的耗时。执行跨过帧开头时，那一帧的定时读推迟到执行返回，由动作后那次读（被拒时补的那次读）来做，所以不在帧开头找到结束（`wall-*-runs-into-the-next-frame-and-the-end`，两边相同） |
 | K-c | 出现 | `wall-wait-cut-by-the-end` | 12 | 已并入 KF3 和 KF3 补充 |
 | K-d | 出现 | `token-skipped-decision-after-the-end`、`token-think-budget-and-the-end` | 9 | |
 | K-e | 出现 | `token-advance-fails-while-approaching`、`token-advance-fails-while-pacing` | 33 | |
 | K-f | 出现 | `token-missing-usage` | 47 | |
-| K-g | 出现 | 墙钟 16 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束或第三次读失败的那次读返回以后（结束记在发问时刻，N44）；截止落在一次读期间时，那次读完以后 |
+| K-g | 出现 | 墙钟 16 个脚本，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-the-deadline-falls-during-a-read` | 385 | 快照在内核处理结束时读：读到结束或第三次读失败的那次读返回以后（结束记在发问时刻，N44）；截止落在一次读、采帧或执行里时，那次操作返回以后 |
 | K-h | 出现 | `wall-frozen-stream`、`token-frozen-stream` | 19 | |
 | K-i | 出现 | `wall-think-budget-and-the-end`、`token-think-budget-and-the-end` | 4 | |
 | K-j | 出现 | `token-lease-ends-inside-a-tap` | 4 | |
-| K-k | 不可观察 | — | — | 墙钟下总帧数就是截止 |
+| K-k | 出现 | `wall-the-read-before-landing-runs-past-the-deadline`、`wall-the-read-before-landing-answers-at-the-deadline` | — | 墙钟下总帧数在截止处用完。落地前那次读在截止前发问、在截止当刻或之后答回时，旧循环读前问截止（还没到）、读完数帧，记 `not_applied_tick_limit`；内核只问截止，由截止的定时器记 `not_applied_time_limit` |
 | K-l | 不可观察 | — | — | 回放里采帧到开始生成之间没有时间流逝 |
 | K-m | 被 K-a 吸收 | — | — | |
 | K-n | 又出现了 | `wall-third-failed-read-is-todays-first`、`wall-a-failed-read-takes-time` | — | N26 以后墙钟落地前又读了；这次读失败，内核记 `invalid_run`，旧循环记 `not_applied_terminal`。随机脚本不生成墙钟读失败 |
