@@ -1295,13 +1295,15 @@ class _Shell:
                 self._invalidate(held.invalid)
             return
         if bound is None:
-            # It ran until the episode ended (decision 32), however late the shell got to it.
+            # It ran until the episode ended (decision 32), however late the shell got to it. A
+            # read's failure ends it when the read was asked (N44), which can be before a
+            # generation started while that read's answer waited: that one ran no time.
             ended = {"environment": "task_end", "invalid": "invalid_run"}.get(reason, reason)
             ending = self.kernel.ending
             seconds = (
                 ending.ops - held.started_ops if self.token else ending.at - held.started_semantic
             )
-            r = episode_records.abandoned_result(round(seconds, 2), ended)
+            r = episode_records.abandoned_result(round(max(0.0, seconds), 2), ended)
         elif bound == "provider_watchdog":
             seconds = held.bound_at - held.started_ops
             r = episode_records.watchdog_result(round(seconds, 2), seconds)
