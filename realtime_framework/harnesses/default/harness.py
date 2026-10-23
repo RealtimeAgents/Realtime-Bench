@@ -1003,8 +1003,12 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
     streaming = agent.interaction_mode == "streaming"
     # (action, its frame, its frame field, why no frame was found) of each parsed candidate.
     candidates = []
+    # The resolution this output made: under streaming ``execution`` is the frame's, which
+    # holds the last resolution of any call on the frame.
+    grounding = None
 
     def parse_and_ground(body):
+        nonlocal grounding
         if streaming:
             parsed, reference = agent.interaction_profile.parse_framed_action(agent, body)
             frame, error = frames.locate(reference)
@@ -1017,6 +1021,7 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
             runtime = getattr(agent, "tool_runtime", None)
             if runtime is not None and execution is not None:
                 parsed = runtime.resolve_action(parsed, frame.marks, execution)
+                grounding = execution["reference_resolution"]
                 if streaming:
                     # The decision's inspection row names the frame whose marks resolved it.
                     execution["reference_resolution"].update(
@@ -1050,7 +1055,7 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
         resolution.action, FrameGeometry.from_dict(frame.geometry)
     )
     if execution is not None:
-        action_protocol["grounding"] = execution.get("reference_resolution")
+        action_protocol["grounding"] = grounding
     return action, action_protocol
 
 

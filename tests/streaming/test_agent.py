@@ -23,6 +23,7 @@ from realtime_framework.harnesses.default.frames import (
 from realtime_framework.harnesses.default.harness import action_text
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
+from realtime_framework.sandbox.observation.som import resolve_action_references
 from tests.fake_clock import FakeClock
 
 from .fake_live import (
@@ -889,6 +890,46 @@ def test_a_frames_inspection_is_finished_once_with_every_reply_on_it(monkeypatch
     assert runtime.rows[1] == ("obs-1", "completed", outputs, 2.0)
     agent.close()
     assert runtime.rows[2:] == [("obs-3", "no_reply", "", 0.0), ("obs-4", "no_reply", "", 0.0)]
+
+
+def test_a_replys_row_keeps_the_grounding_of_each_of_its_calls(monkeypatch, clock, tmp_path):
+    """A reply's calls name elements of frames 1 and 2, each resolved against its frame's marks
+    into the one inspection of the frame the reply started on, which each resolution replaces
+    (sandbox/observation/som.py ToolRuntime.resolve_action). The reply's row keeps each call's:
+    the first names an element frame 1 does not have, and is no action."""
+
+    class MarkingToolRuntime(RecordingToolRuntime):
+        def inspect(self, observation, **fields) -> dict:
+            marks = {"P1": {"kind": "point", "point": [10, 20]}}
+            return {**super().inspect(observation, **fields), "marks": marks}
+
+        def resolve_action(self, action, marks, execution):
+            resolved, execution["reference_resolution"] = resolve_action_references(action, marks)
+            return resolved
+
+    agent = make_agent(monkeypatch, clock, log_dir=tmp_path)
+    agent.bind_tool_runtime(MarkingToolRuntime())
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    missing = Call(0.25, "c1", "click", {"target": "P9", "frame": 1})
+    present = Call(0.5, "c2", "click", {"target": "P1", "frame": 2})
+    agent.driver.replies.append(Reply((missing, present), ends_at=1.0))
+    r = agent.generate(0, 0, frame, BUDGET).result
+    agent.accept(0)
+    agent.close()
+    assert r["action_protocol"]["protocol_failure"] == "invalid_action_output"
+    assert [arrival.call_id for arrival in posted] == ["c2"]
+    [row] = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
+    assert [
+        (
+            entry["call_id"],
+            entry["grounding"]["frame"],
+            entry["grounding"]["valid"],
+            entry["grounding"]["resolutions"][0].get("error"),
+        )
+        for entry in row["grounding"]
+    ] == [("c1", 1, False, "mark_not_in_observation"), ("c2", 2, True, None)]
 
 
 def test_feedback_says_what_the_model_asked_for_not_what_ran(monkeypatch, clock):
