@@ -320,6 +320,23 @@ def test_luna_question_retries_spent(tmp_path, monkeypatch):
     assert 'RuntimeError("gui_action question 0: DecisionsHTTPError(' in detail
 
 
+def test_luna_screen_pointer_at_1000_is_the_last_column(tmp_path):
+    """A whole-screen pointer composed at x = 1000 is the model image's last column, 767 of 768
+    (ChoiceDecision._compose_pointer keeps a whole-screen point below the image size), not one
+    past it; y = 512 becomes 221, round(432 * 512 / 1000)."""
+    _, (record,) = _play(
+        "openai_decisions",
+        [script.decision("game_pointer_screen_click", "1000", "500", "512")],
+        tmp_path,
+        task=script.ReplayGameTask(),
+        instruction=script.GAME_INSTRUCTION,
+        scene=script.GAME_SCENE,
+    )
+    phases = [call["phase"] for call in _runtime(record)["jev_calls"]]
+    assert phases == ["gui_action", "pointer_x_range", "pointer_y_range", "pointer_y_value"]
+    assert json.loads(record["result"]["raw"]) == {"action": "click", "x": 767, "y": 221}
+
+
 @pytest.mark.parametrize("api", list(APIS))
 def test_candidate_overflow(api, tmp_path):
     """Too many candidates: a rejected group is bisected (selection.py _choose); a rejected
