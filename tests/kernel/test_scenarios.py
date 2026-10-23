@@ -218,7 +218,7 @@ def test_a_reply_back_while_the_snapshot_is_taken_is_discarded():
 
 def test_a_reply_after_the_deadline_is_not_waited_for():
     """宽限期过了才返回: the reply would come back 5 s after the deadline. Today a call that slow
-    is abandoned at the deadline plus the 2 s grace and reported skipped_timeout (runner.py
+    is abandoned at the deadline plus the 2 s grace and reported skipped_timeout (legacy_loop.py
     _move_timeout); now there is no grace, so the episode ends at the deadline, interrupts the
     call and finishes without waiting for it. (A reply inside the old grace is the test before.)"""
     sim = _run(_wall(3.0), World(replies=[Reply(latency=8.0, action=CLICK)]))

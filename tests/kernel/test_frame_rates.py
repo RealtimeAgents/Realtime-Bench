@@ -302,9 +302,10 @@ def test_a_large_allowance_is_rounded_down_within_float_noise():
     ],
 )
 def test_the_horizon_snaps_to_a_whole_tick_within_1e9(minutes, whole):
-    """At 5 fps the run's horizon is max_minutes * 60 * 5 ticks (runner.py main), whose float noise
-    grows with it; within 1e-9 of a whole tick it is that tick, as the environment's clock snaps,
-    and further off it stays as it is."""
+    """At 5 fps the run's horizon is max_minutes * 60 * 5 ticks (runner.py main gives the
+    duration, TurnConfig.max_ticks the ticks), whose float noise grows with it; within 1e-9 of a
+    whole tick it is that tick, as the environment's clock snaps, and further off it stays as it
+    is."""
     ticks = minutes * 60 * 5
     assert TurnConfig("token", minutes * 60, env_fps=5).max_ticks == (
         ticks if whole is None else whole

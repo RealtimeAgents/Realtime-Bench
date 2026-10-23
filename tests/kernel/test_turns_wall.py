@@ -10,9 +10,9 @@ instead the periodic check its execution delayed. Waits, the next frame and the 
 cap are timers; a hold's keys are released by the environment's own timer.
 
 Every expected value is worked out by hand: from today's runner where the kernel keeps its rules
-(evaluation/runner.py, sandbox/actions.py) and from phase2.md (事件内核; 时间和结束判定) where it
-changes them. Times are seconds since the episode origin; env_fps = input_fps = 1 unless a test
-says otherwise.
+(tests/differential/legacy_loop.py and legacy_environment.py, sandbox/actions.py) and from
+phase2.md (事件内核; 时间和结束判定) where it changes them. Times are seconds since the episode
+origin; env_fps = input_fps = 1 unless a test says otherwise.
 """
 
 from __future__ import annotations
