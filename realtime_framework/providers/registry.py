@@ -358,7 +358,7 @@ def load_definitions(directory):
         if api == "chat_completions":
             definition["defaults"].update(
                 chat_stream=settings.get("stream", True),
-                chat_include_usage=settings.get("include_usage", False),
+                chat_include_usage=settings.get("include_usage", True),
             )
         if api in {"openrouter", "openai_decisions"}:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
@@ -634,6 +634,8 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
         fields["api_key_env"] = e.key_env
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
+            # Same default as YAML presets; STREAM_CHAT_INCLUDE_USAGE below can still override.
+            fields.setdefault("chat_include_usage", True)
         for field in (
             "context_window_tokens",
             "context_counter",

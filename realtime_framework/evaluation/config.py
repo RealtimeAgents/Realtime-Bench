@@ -712,6 +712,13 @@ def effective_run_config(
             "parameter": POLICIES[adapter_type].output_limit_param,
             "uncapped_value": model_config.get("native_output_limit") or "provider_default",
         }
+        if adapter_type == "chat_completions":
+            # Self-hosted endpoints replay prior reasoning_content; earlier runs did not.
+            config["reasoning_history_policy"] = (
+                "preserved_reasoning_content_v1"
+                if POLICIES[adapter_type].preserve_reasoning_history
+                else "dropped"
+            )
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:
