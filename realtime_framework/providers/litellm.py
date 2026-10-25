@@ -395,6 +395,9 @@ POLICIES = {
         stream=None,
         include_usage=None,
         strip_image_detail=True,
+        # Self-hosted reasoning models (e.g. Kimi K3, GLM-5.3) expect prior reasoning_content
+        # back in history; vLLM and SGLang render it through the model's chat template.
+        preserve_reasoning_history=True,
         surface_tool_calls=True,
         context_status=True,
         require_api_key=False,
