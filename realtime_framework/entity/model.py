@@ -54,7 +54,6 @@ class RealtimeCapabilities:
     protocol_family: str
     can_compact_history_in_place: bool = False
     max_video_fps: float | None = None
-    terminal_output_usage: bool = True
     # How the model submits a GUI action: one JSON action in visible text, exactly one call
     # to the canonical GUI functions (entity.actions.gui_function_declarations), or one choice
     # among harness-enumerated candidate actions. The harness selects its output contract and

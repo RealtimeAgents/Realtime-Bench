@@ -256,7 +256,6 @@ class GeminiLiveDriver(SessionLifecycle):
         # tool_transcript: text that keeps the wire fields of each call and its receipt.
         tool_call_replay=("native_tools", "tool_transcript"),
         max_video_fps=1.0,
-        terminal_output_usage=True,
         action_channel="function_call",
         interaction_modes=frozenset({"turn_based", "streaming"}),
     )

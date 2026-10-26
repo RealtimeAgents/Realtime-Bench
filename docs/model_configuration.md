@@ -188,8 +188,8 @@ A model that needs a new wire protocol gets a driver:
    what became of each content you write (sent, confirmed or refused by the server, or unknown
    after a failed write) with `_record_delivery`. Build HTTP clients with the hooks in
    `realtime_framework/providers/capture.py`, so every request and response is recorded.
-2. Declare `capabilities` (`RealtimeCapabilities`): usage
-   timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
+2. Declare `capabilities` (`RealtimeCapabilities`): `action_channel` (`"text_json"` or
+   `"function_call"`), the clocks the API supports,
    and what it can render of the context policy: `roles`,
    `feedback_placements`, `reasoning_replay`, `server_context` and, for function-call sessions,
    `tool_call_replay`. `server_context` is `"unknown"` when the provider keeps items of the

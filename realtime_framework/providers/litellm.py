@@ -393,7 +393,6 @@ _STREAMING_CHAT = RealtimeCapabilities(
     roles=("instruction", "input", "model"),
     feedback_placements=("separate_message",),
     server_context="none",
-    terminal_output_usage=True,
 )
 
 
@@ -1167,7 +1166,6 @@ class ChatCompletionsDriver(LiteLLMDriver):
     capabilities = replace(
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
-        terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
         # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
@@ -1232,7 +1230,6 @@ class DirectLiteLLMDriver(LiteLLMDriver):
     capabilities = replace(
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
-        terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
         # The model id picks LiteLLM's provider, and with it what becomes of reasoning_content:

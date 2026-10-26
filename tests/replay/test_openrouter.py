@@ -475,11 +475,10 @@ def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], li
 def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
     """Usage arrives only with the last event, after the whole action text.
 
-    The openrouter path declares terminal_output_usage=True (providers/litellm.py _STREAMING_CHAT),
-    but nothing reads that flag, and nothing on this path lets the clock mode decide whether
-    terminal usage may delay a wall-clock action: the clock mode does not reach the driver (the
-    non-streaming litellm gateway's check that read it is now the pre-run check_wall_clock,
-    providers/preflight.py check_wall_clock). On either clock the runtime reads every event before
+    Nothing on this path lets the clock mode decide whether terminal usage may delay a
+    wall-clock action: the clock mode does not reach the driver (the non-streaming litellm
+    gateway's check that read it is now the pre-run check_wall_clock, providers/preflight.py
+    check_wall_clock). On either clock the runtime reads every event before
     the decision returns (harnesses/default/context.py RealtimeRuntime._run_turn), and the
     collector keeps the last usage (harnesses/default/harness.py
     _GenerationOutputCollector.consume). The usage matters to the runner (kernel/turns.py _accept):
