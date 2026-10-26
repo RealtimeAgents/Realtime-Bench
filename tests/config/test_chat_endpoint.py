@@ -115,7 +115,7 @@ def test_trial_stream_usage_of_a_litellm_model(capsys, flag):
 
 
 def check(config):
-    """The pre-run checks of the runner (evaluation/runner.py set_up_agent)."""
+    """The pre-run checks of the runner (evaluation/runner.py main) and the trial worker."""
     check_episode(config, clock_mode="wall", task=tasks.get(WEB), env_fps=config.fps)
 
 
