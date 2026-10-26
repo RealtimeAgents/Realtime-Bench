@@ -75,7 +75,9 @@ LIVE_PROTOCOL_OPTIONS = {
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
 }
 # Context policy item 10: how past tool calls are replayed into a rebuilt session. It stays in
-# provider_options, where ContextPolicy.for_path reads it and this driver records it.
+# provider_options, where ContextPolicy.for_path reads it and this driver records it. Every model
+# sets it as well: the row's value, native_tools, can stall the next interaction
+# (gemini/session.py SessionCore._tool_contents).
 LIVE_HISTORY_OPTIONS = {
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
@@ -239,7 +241,7 @@ class GeminiLiveDriver(SessionLifecycle):
     )
     compat = Compat(
         provider_options=LIVE_OPTIONS,
-        required_provider_options=tuple(LIVE_PROTOCOL_OPTIONS),
+        required_provider_options=tuple(LIVE_OPTIONS),
         # Response scheduling applies to non-blocking functions only.
         provider_option_requires={
             ("tool_response_scheduling", "silent"): ("tool_behavior", "non_blocking")

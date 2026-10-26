@@ -381,17 +381,26 @@ GEMINI_OPTIONS = {
     "completion_signal": "turn_complete",
     "input_transport": "client_content",
     "tool_response_scheduling": "when_idle",
+    "history_format": "tool_transcript",
 }
 
 
 @pytest.mark.parametrize(
     "options",
-    [{}, {name: value for name, value in GEMINI_OPTIONS.items() if name != "input_transport"}],
-    ids=["none", "one-left-out"],
+    [
+        {},
+        *[
+            {name: value for name, value in GEMINI_OPTIONS.items() if name != left_out}
+            for left_out in ("input_transport", "history_format")
+        ],
+    ],
+    ids=["none", "one-left-out", "history-format-left-out"],
 )
 def test_gemini_model_without_its_options(options):
     """No driver default stands in for a Gemini Live model's wire options: a model that does not
-    set each one, a raw model id (which has no YAML) or a YAML without them, is refused."""
+    set each one, a raw model id (which has no YAML) or a YAML without them, is refused. That
+    includes the tool-call replay format (context policy item 10), whose default, native_tools,
+    can stall the next interaction (gemini/session.py)."""
     missing = [name for name in GEMINI_OPTIONS if name not in options]
     fails(
         lambda: episode(gemini(model_name="gemini-other", provider_options=options)),

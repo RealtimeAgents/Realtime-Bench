@@ -13,8 +13,8 @@ action, usage and commit.
 Scripts:
 - the long scenario for two maintained models (their YAMLs' provider_options, configs/models),
   which differ in the completion signal and the tool acknowledgement;
-- a model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS; history_format
-  left to LIVE_HISTORY_OPTIONS): realtime_input observations and native_tools history;
+- a model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS,
+  LIVE_HISTORY_OPTIONS): realtime_input observations and native_tools history;
 - a resume that the server rejects, which falls back to replaying the history
   (live.py GeminiLiveDriver._sync_history);
 - 3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script: blocking calls,
@@ -38,7 +38,7 @@ import realtime_framework.providers.registry as catalog
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.providers.gemini.live import LIVE_PROTOCOL_OPTIONS
+from realtime_framework.providers.gemini.live import LIVE_OPTIONS
 
 from . import baseline
 from .build import Episode, build_episode
@@ -185,7 +185,7 @@ EXTENDED_THINKING = Preset(
 DRIVER_DEFAULT = Preset("driver-default", "replay-gemini-live", "native_tools", {}, turn_complete)
 # A model sets each wire option (providers/preflight.py check_provider_options); these are the
 # driver's defaults.
-DRIVER_DEFAULT_OPTIONS = {name: default for name, (default, _) in LIVE_PROTOCOL_OPTIONS.items()}
+DRIVER_DEFAULT_OPTIONS = {name: default for name, (default, _) in LIVE_OPTIONS.items()}
 # 3.1 Flash Live calls functions synchronously only and has no function scheduling
 # (configs/models/gemini-live.yaml).
 FLASH_LIVE = Preset("flash-live", "gemini-live", "tool_transcript", {}, turn_complete)
@@ -535,8 +535,8 @@ DEFAULT_SCENARIO = [
 
 
 def test_driver_default_short(live_env, tmp_path):
-    """A model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS) and leaves
-    history_format to its default (LIVE_HISTORY_OPTIONS, live_options). The goAway of decision 1
+    """A model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS,
+    LIVE_HISTORY_OPTIONS), native_tools history among them. The goAway of decision 1
     comes without a resumption handle, so the session is replayed at once (live.py
     GeminiLiveDriver._sync_history), in the native_tools format with the thought-signature sentinel
     (gemini/session.py REPLAY_THOUGHT_SIGNATURE, SessionCore._tool_contents)."""

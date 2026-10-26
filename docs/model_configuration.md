@@ -125,10 +125,10 @@ from the command line, a run plan or Harbor.
 `provider_options` (top level) sets wire options of the API that its driver declares
 (`compat.provider_options`). Of the registered APIs, `openrouter` takes `cache_breakpoint` (`true`
 or `false`, the default), and `gemini_live` takes the options below; a Gemini Live model sets each
-of `tool_behavior`, `completion_signal`, `input_transport` and
-`tool_response_scheduling`: a model without them, a raw model id among them, is refused before
-the run. `history_format` (`native_tools` or `tool_transcript`: how past function calls are
-replayed into a rebuilt session) is optional. The allowed values are in `LIVE_PROTOCOL_OPTIONS`
+of `tool_behavior`, `completion_signal`, `input_transport`, `tool_response_scheduling` and
+`history_format` (`native_tools` or `tool_transcript`: how past function calls are replayed into
+a rebuilt session): a model without them, a raw model id among them, is refused before the run.
+The allowed values are in `LIVE_PROTOCOL_OPTIONS` and `LIVE_HISTORY_OPTIONS`
 (`realtime_framework/providers/gemini/live.py`), and the Gemini presets in `configs/models` set
 the combinations their models need.
 
