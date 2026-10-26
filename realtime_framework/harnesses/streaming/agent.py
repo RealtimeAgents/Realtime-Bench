@@ -77,7 +77,6 @@ from realtime_framework.entity.model import (
     RequestRetry,
     RetryCancelled,
     SessionSeed,
-    SyncDisposition,
     TransportFailureError,
     retry_cancellation,
 )
@@ -113,7 +112,12 @@ from realtime_framework.harnesses.streaming.history import (
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
-from realtime_framework.providers.session_lifecycle import RenewalRequired, session_preparing
+from realtime_framework.providers.session_lifecycle import (
+    RenewalRequired,
+    SessionStates,
+    session_preparing,
+    session_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +211,6 @@ class NativeStreamingAgent(VisionAgentBase):
         # Set once close() starts: a push readying the session then gives up, its backoff
         # included, instead of holding the lock close() waits for.
         self._closing = self.clock.event()
-        self._session_known: str | None = None  # the last SessionStateChanged's state
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
@@ -234,6 +237,7 @@ class NativeStreamingAgent(VisionAgentBase):
             self.config, clock=self.clock, streaming=True
         )
         self.driver.bind_trace(self._trace)
+        self._states = SessionStates(self._trace, self.driver.capabilities.protocol_family)
         self._context_policy = current_context_policy().for_path(
             self.config.adapter_type, self.config.provider_options, self.config.context_preset
         )
@@ -278,9 +282,11 @@ class NativeStreamingAgent(VisionAgentBase):
         # The encoder's streaming setting (ModelConfig.streaming over its defaults); one that
         # keeps no frame count of its own, as Gemini Live leaves its context to the server, takes
         # the policy's.
+        own = "retained_frames" in self.driver.streaming_settings
         self._retained = self.driver.streaming_settings.get(
             "retained_frames", self._context_policy.visuals.keep
         )
+        self._fold_item = None if own else "visuals"  # the policy item a fold is recorded under
         self._execution.start()
         with self._lock:
             view = self._view()
@@ -308,80 +314,22 @@ class NativeStreamingAgent(VisionAgentBase):
         )
 
     def _record_session(self, sync, result=None, error=None) -> None:
-        """The ``record`` of a session operation (SessionLifecycle), as a turn's
-        (RealtimeRuntime._record_reconnect, _record_sync): a HistoryChanged for a reopened
-        session, and for each sync, of the kind the driver's result reports; and what that left
-        of the provider's context."""
-        if sync is None:
-            self._history_changed("rebuild", "recovery", {"reason": "reconnect"})
-            self._session_state("exact", "reconnect", ProviderHistoryState.EXACT)
-            return
-        metadata = result.provider_metadata if result is not None else {}
-        trigger = "recovery" if sync.reason == "runtime_recovery" else "provider"
-        if metadata.get("session_resumed"):
-            kind = "session_resumed"
-        elif metadata.get("resume_error"):
-            kind, trigger = "resume_fallback", "fallback"
-        elif metadata.get("history_in_place_edit_fallback"):
-            kind, trigger = "in_place_edit_fallback", "fallback"
-        elif result is not None and (
-            result.disposition == SyncDisposition.REBUILT
-            or metadata.get("history_session_reconnected")
-        ):
-            kind = "rebuild"
-        else:
-            kind = "sync"
-        self._history_changed(
-            kind,
-            trigger,
-            {
-                "reason": sync.reason,
-                "force_rebuild": sync.force_rebuild,
-                "disposition": result.disposition.value if result is not None else None,
-                "history_state": result.history_state.value if result is not None else None,
-                "detail": result.detail if result is not None else None,
-                "provider_metadata": metadata,
-            },
-            error=repr(error)[:500] if error is not None else None,
-        )
-        if result is None:
-            self._session_state("unknown", f"sync_error:{sync.reason}", None)
-        elif kind == "session_resumed":
-            # Exact for the driver, but restored from the resume handle, not sent on this
-            # connection.
-            self._session_state("unknown", "session_resumed", result.history_state)
-        elif result.history_state == ProviderHistoryState.EXACT:
-            self._session_state("exact", f"sync:{sync.reason}", result.history_state)
-        else:
-            self._session_state("unknown", f"sync:{sync.reason}", result.history_state)
+        """The ``record`` of a session operation (SessionLifecycle), as a turn's: a
+        HistoryChanged for a reopened session, and for each sync, of the kind the driver's result
+        reports; and what that left of the provider's context (session_record)."""
+        record = session_record(sync, result, error)
+        self._history_changed(record.kind, record.trigger, None, **record.fields)
+        self._states.record(*record.state)
 
-    def _history_changed(self, kind: str, trigger: str, sync: dict, **fields) -> None:
+    def _history_changed(self, kind: str, trigger: str, policy_item, **fields) -> None:
         self._trace.capture(
             TraceEvent.HISTORY_CHANGED,
             {
                 "kind": kind,
                 "trigger": trigger,
-                "policy_item": None,
+                "policy_item": policy_item,
                 "policy_version": self._context_policy.version,
-                "sync": sync,
                 **fields,
-            },
-        )
-
-    def _session_state(self, state, cause, provider_state, generation_id=None) -> None:
-        """Record when the provider's context becomes unknown, or exact again, as a turn's
-        session does (RealtimeRuntime._record_session_state)."""
-        if state == self._session_known:
-            return
-        self._session_known = state
-        self._trace.capture(
-            TraceEvent.SESSION_STATE_CHANGED,
-            {
-                "protocol_family": self.driver.capabilities.protocol_family,
-                "state": state,
-                "cause": cause,
-                "provider_history_state": provider_state.value if provider_state else None,
-                "generation_id": generation_id,
             },
         )
 
@@ -499,12 +447,20 @@ class NativeStreamingAgent(VisionAgentBase):
 
     def _release_folded(self) -> None:
         """Let go of the screenshot of the frame the newest push folded, as a turn-based history
-        folds one (CanonicalTurn.fold_visual): the view folds it already. The caller holds the
-        lock."""
+        folds one (CanonicalTurn.fold_visual), and record the fold: the view folds it already.
+        The caller holds the lock."""
         frames = [index for index, block in enumerate(self._blocks) if block.kind == "frame"]
         if len(frames) > self._retained:
             index = frames[-self._retained - 1]
-            self._blocks[index] = replace(self._blocks[index], image=None)
+            block = self._blocks[index]
+            self._blocks[index] = replace(block, image=None)
+            self._history_changed(
+                "visual_fold",
+                "policy",
+                self._fold_item,
+                retained_frames=self._retained,
+                frames=[{"block": block.id, "observation_id": block.observation_id}],
+            )
 
     def _retire(self) -> None:
         """Finish the inspection of each frame no reply can start on any more, once the replies
@@ -695,6 +651,9 @@ class NativeStreamingAgent(VisionAgentBase):
                 if reply.cancel.is_set():
                     # The abort closed the connection under it: no failure of the reply's.
                     raise RetryCancelled("generation abandoned during its reply") from None
+                self._states.record(
+                    "unknown", "generation_failed", generation_id=f"streaming-{reply.generation}"
+                )
                 raise
             if number > 1:
                 self._reply_finished(number, "ok")
@@ -781,7 +740,7 @@ class NativeStreamingAgent(VisionAgentBase):
         reply's action is parsed whatever the end, from the text that came."""
         if reply.terminal != ProviderHistoryState.EXACT:
             self.driver.mark_dirty()
-            self._session_state(
+            self._states.record(
                 "unknown", "generation_terminal_state", reply.terminal, reply.handle.generation_id
             )
         if self._answer.action_channel == "function_call":
@@ -900,6 +859,9 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._aborted_early.add(generation)
             else:
                 reply.cancel.set()
+        self._states.record(
+            "unknown", "generation_aborted", generation_id=f"streaming-{generation}"
+        )
         with trace_scope(phase="abort", generation=generation):
             self._execution.run(
                 self.driver.abort(None if reply is None else reply.handle),

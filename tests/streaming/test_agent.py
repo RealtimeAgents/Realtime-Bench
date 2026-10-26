@@ -9,6 +9,7 @@ import json
 import threading
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -1157,7 +1158,7 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
     agent.push(observation(clock, 4))
     agent.abort(8)
     agent.push(observation(clock, 5))
-    changes = trace.of(TraceEvent.HISTORY_CHANGED)
+    changes = [c for c in trace.of(TraceEvent.HISTORY_CHANGED) if c["kind"] != "visual_fold"]
     assert [(c["kind"], c["trigger"], c["sync"]["reason"]) for c in changes] == [
         ("rebuild", "recovery", "runtime_recovery"),
         ("session_resumed", "provider", "go_away"),
@@ -1169,6 +1170,82 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
         ("unknown", "generation_terminal_state", "streaming-7"),
         ("exact", "sync:runtime_recovery", None),
         ("unknown", "session_resumed", None),
+        ("exact", "reconnect", None),
+    ]
+    agent.close()
+
+
+class _PolicyRetained(FakeLiveDriver):
+    """Keeps no frame count of its own, as Gemini Live, whose context the server compresses."""
+
+    streaming_settings: ClassVar[dict] = {}
+
+
+@pytest.mark.parametrize(("driver", "item"), [(FakeLiveDriver, None), (_PolicyRetained, "visuals")])
+def test_each_frame_the_view_folds_is_recorded_as_a_turn_based_fold_is(
+    monkeypatch, clock, driver, item
+):
+    """As a turn-based fold (RealtimeRuntime._record_retention): a HistoryChanged names the frame
+    each push folded, under the policy's visuals item where the view keeps the policy's count,
+    and under none where the encoder's own setting keeps it."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, driver, trace=trace)
+    keep = agent._retained
+    for n in range(1, keep + 3):
+        agent.push(observation(clock, n))
+    folds = [c for c in trace.of(TraceEvent.HISTORY_CHANGED) if c["kind"] == "visual_fold"]
+    assert folds == [
+        {
+            "kind": "visual_fold",
+            "trigger": "policy",
+            "policy_item": item,
+            "policy_version": agent._context_policy.version,
+            "retained_frames": keep,
+            "frames": [{"block": f"f{n}.frame", "observation_id": f"obs-{n}"}],
+        }
+        for n in (1, 2)
+    ]
+    agent.close()
+
+
+def test_a_failed_reply_leaves_the_providers_context_unknown_until_the_session_is_rebuilt(
+    monkeypatch, clock
+):
+    """The session may hold some of the reply, which the view does not: the context is unknown
+    from then on, and exact again once the next push rebuilt the session from the view."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((Fail(0.25, RuntimeError("stream broke")),), ends_at=1.0))
+    with pytest.raises(RuntimeError, match="stream broke"):
+        agent.generate(7, 3, frame, BUDGET)
+    agent.push(observation(clock, 3))
+    states = trace.of(TraceEvent.SESSION_STATE_CHANGED)
+    assert [(s["state"], s["cause"], s["generation_id"]) for s in states] == [
+        ("unknown", "generation_failed", "streaming-7"),
+        ("exact", "sync:runtime_recovery", None),
+    ]
+    agent.close()
+
+
+def test_an_abort_leaves_the_providers_context_unknown_until_the_session_is_reopened(
+    monkeypatch, clock
+):
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.5, 1),), ends_at=100.0))
+    done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    agent.abort(7)
+    assert clock.wait(done, 1.0)
+    agent.discard(7)
+    agent.push(observation(clock, 3))
+    states = trace.of(TraceEvent.SESSION_STATE_CHANGED)
+    assert [(s["state"], s["cause"], s["generation_id"]) for s in states] == [
+        ("unknown", "generation_aborted", "streaming-7"),
         ("exact", "reconnect", None),
     ]
     agent.close()
