@@ -309,14 +309,13 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
             agent.abort(1)
             pending = _generate(episode, 1, 0)
             agent.discard(1)
-            frame = agent.frames.latest()
         finally:
             episode.finish()
     assert _cancelled(pending)
     assert pending.result["stale"] is True and pending.result["action"] is None
     assert stub.requests == [] and stub.unused_replies == 1
     assert agent._runtime.turns == () and agent.action_history == []
-    assert frame is None and _jsonl(tmp_path / "tool_calls.jsonl") == []
+    assert agent.frames._frames == {} and _jsonl(tmp_path / "tool_calls.jsonl") == []
 
 
 def test_an_abort_before_the_reply_sends_no_request(tmp_path):
@@ -661,8 +660,8 @@ def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
     """Turn-based, on a page whose Submit button (P3) moves 120 px right in every frame.
     Generation 1 is aborted while it still inspects its frame, and enters that frame in the
     table only after generation 2 has entered its own and sent its request. The newest frame is
-    then generation 1's, yet generation 2's click on P3 is grounded on generation 2's own frame,
-    and that is the frame marked sent."""
+    then generation 1's, yet generation 2's click on P3 is grounded on generation 2's own
+    frame."""
     inspecting, inspected, asked, answer = (threading.Event() for _ in range(4))
 
     def hold_the_reply(index):
@@ -705,12 +704,11 @@ def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
         own.metadata["observation_id"],
         late.metadata["observation_id"],
     )
-    assert table.latest() is late_frame and _cancelled(abandoned)
+    assert len(table._frames) == 2 and _cancelled(abandoned)
     assert own_frame.marks["P3"]["point"] != late_frame.marks["P3"]["point"]
     click = pending.result["action"]
     assert [click.parameters["x"], click.parameters["y"]] == own_frame.marks["P3"]["point"]
     assert click.coordinate_transform == own_frame.geometry
-    assert (own_frame.send_status, late_frame.send_status) == ("sent", "prepared")
 
 
 def test_a_late_abandoned_generation_leaves_the_next_its_action_cap(tmp_path):

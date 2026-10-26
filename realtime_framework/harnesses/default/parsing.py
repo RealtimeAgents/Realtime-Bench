@@ -896,24 +896,19 @@ class FunctionCallTurnCollector:
             protocol_failure = "native_function_call_count"
             text = ""
         else:
-            streaming = self.agent.interaction_mode == "streaming"
             try:
-                action = canonical_function_action(
-                    call.name, call.arguments, frame_reference=streaming
-                )
+                action = canonical_function_action(call.name, call.arguments)
             except ValueError as exc:
                 # A call its function's schema rejects is no action: the turn stays, complete and
                 # charged, and the shared harness executes WAIT. A malformed action is model
                 # behavior, not a transport/accounting failure that should invalidate the
-                # benchmark cell. A streaming call without its frame is refused for that instead
-                # (frames.MISSING_FRAME).
+                # benchmark cell.
                 function_validation_error = str(exc)
                 action = {
                     "action": call.name,
                     **(call.arguments if isinstance(call.arguments, dict) else {}),
                 }
-                if not streaming or "frame" in action:
-                    protocol_failure = "invalid_action_output"
+                protocol_failure = "invalid_action_output"
             text = json.dumps(action, ensure_ascii=False)
         fields = {
             "provider_token_normalization_schema": TOKEN_NORMALIZATION_SCHEMA,

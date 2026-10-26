@@ -37,7 +37,6 @@ def test_frames_entered_from_several_threads_get_every_number_once():
     count = threads * per_thread
     numbers = sorted(record.frame for lane in entered for record in lane)
     assert numbers == list(range(1, count + 1))
-    assert table.latest().frame == count
 
 
 def test_a_frame_has_no_acknowledgement_until_the_driver_reports_one():

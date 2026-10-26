@@ -1,5 +1,6 @@
-"""Under streaming each screenshot carries its frame number in its top-left corner, drawn over
-the SoM marks; turn-based screenshots are the SoM images, unchanged."""
+"""Under streaming each screenshot carries its frame number in its top-left corner (the frames the
+native-streaming agent pushes: tests/streaming/test_streaming_e2e.py); turn-based screenshots are
+the SoM images, unchanged."""
 
 from __future__ import annotations
 
@@ -57,27 +58,12 @@ def _sent_images(stub) -> list[bytes]:
     return images
 
 
-def _run(tmp_path, interaction_mode):
+def test_turn_based_screenshots_are_the_som_images(tmp_path):
     with ChatCompletionsStub(replies(STEPS)) as stub:
-        episode = open_episode(stub, tmp_path, interaction_mode=interaction_mode)
+        episode = open_episode(stub, tmp_path)
         try:
             proofs = [decide(episode, k, "wait")[1]["inspection"] for k in range(len(STEPS))]
         finally:
             episode.finish()
-    return _sent_images(stub), proofs
-
-
-def test_turn_based_screenshots_are_the_som_images(tmp_path):
-    images, proofs = _run(tmp_path, None)
-    for image, proof in zip(images, proofs, strict=True):
+    for image, proof in zip(_sent_images(stub), proofs, strict=True):
         assert hashlib.sha256(image).hexdigest() == proof["marked_image_sha256"]
-
-
-def test_streaming_screenshots_carry_their_frame_number(tmp_path):
-    turn_based, _ = _run(tmp_path / "turn_based", None)
-    streaming, proofs = _run(tmp_path / "streaming", "streaming")
-    for frame, (som_image, image, proof) in enumerate(
-        zip(turn_based, streaming, proofs, strict=True), 1
-    ):
-        assert hashlib.sha256(som_image).hexdigest() == proof["marked_image_sha256"]
-        assert image == render_frame_number(som_image, frame)

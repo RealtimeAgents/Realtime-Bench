@@ -14,30 +14,14 @@ from realtime_framework.entity.actions import (
     canonical_function_action,
     gui_function_declarations,
 )
-from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME, MISSING_FRAME
 from realtime_framework.harnesses.default.harness import FUNCTION_CALL_PROFILE
 from realtime_framework.harnesses.default.prompts import (
     FRAME_REFERENCE_RULES,
     FUNCTION_CALL_FRAME_REFERENCE_RULES,
+    gui_system_prompt,
 )
-from tests.replay.build import build_episode
-from tests.replay.frames import ReplayTask
-from tests.replay.scenario import TASK_INSTRUCTION, replies
-from tests.replay.steps import Step, commit, decide
-from tests.replay.stub import ChatCompletionsStub
-from tests.replay.test_gemini_live import (  # noqa: F401 - live_env is a fixture
-    API_KEY,
-    MAX_TICKS,
-    TOKENS_PER_FRAME,
-    TOOL_TRANSCRIPT,
-    catalog_config,
-    live_env,
-    turn_script,
-)
-from tests.replay.ws_gemini_live import LiveStub
-
-from .episode import open_episode
-from .test_grounding import SCENE
+from tests.fake_clock import FakeClock
+from tests.streaming.fake_live import LIVE, REALTIME, FakeLiveDriver, TextLiveDriver, make_agent
 
 
 def _schemas(declarations):
@@ -82,16 +66,31 @@ def test_a_streaming_call_keeps_its_frame_for_grounding():
         canonical_function_action("click", arguments)
 
 
-def test_the_text_json_instruction_gains_the_frame_reference_block(tmp_path):
-    texts = {}
-    with ChatCompletionsStub(replies([])) as stub:
-        for mode in ("turn_based", "streaming"):
-            episode = open_episode(stub, tmp_path / mode, interaction_mode=mode)
-            texts[mode] = episode.agent._system_block.text
-            episode.finish()
-    assert FRAME_REFERENCE_RULES not in texts["turn_based"]
-    assert texts["streaming"].count(FRAME_REFERENCE_RULES) == 1
-    assert texts["streaming"].replace("\n\n" + FRAME_REFERENCE_RULES, "") == texts["turn_based"]
+@pytest.mark.parametrize(("driver", "model"), [(TextLiveDriver, REALTIME), (FakeLiveDriver, LIVE)])
+def test_the_streaming_instruction_gains_its_frame_reference_block(monkeypatch, driver, model):
+    """The native-streaming agent's, against the instruction a turn composes of the same parts:
+    no scenario prompt or clock note is configured here (tests/streaming/fake_live.py
+    make_agent). OpenAI Realtime answers in text JSON, Gemini Live in function calls."""
+    clock = FakeClock(wall_origin=1000.0)
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock, driver, model)
+        agent.close()
+    streaming = agent._seed.system_instruction
+    if model == REALTIME:
+        rules, turn_based = FRAME_REFERENCE_RULES, gui_system_prompt("Click the button.")
+    else:
+        rules = FUNCTION_CALL_FRAME_REFERENCE_RULES
+        turn_based = FUNCTION_CALL_PROFILE.system_instruction(
+            types.SimpleNamespace(
+                interaction_mode="turn_based",
+                task_category="realtime",
+                streaming_note=None,
+                task_instruction="Click the button.",
+            )
+        )
+    assert rules not in turn_based
+    assert streaming.count(rules) == 1
+    assert streaming.replace("\n\n" + rules, "") == turn_based
 
 
 def test_the_function_call_instruction_gains_its_frame_reference_block():
@@ -107,64 +106,3 @@ def test_the_function_call_instruction_gains_its_frame_reference_block():
     streaming = FUNCTION_CALL_PROFILE.system_instruction(agent("streaming"))
     assert FUNCTION_CALL_FRAME_REFERENCE_RULES not in turn_based
     assert streaming.replace("\n\n" + FUNCTION_CALL_FRAME_REFERENCE_RULES, "") == turn_based
-
-
-def test_gemini_live_calls_pass_their_frame(live_env, tmp_path):  # noqa: F811
-    steps = [
-        Step('{"action": "wait", "frame": 1}', status="wait"),
-        Step('{"action": "click", "target": "P3", "frame": 1}'),
-        Step('{"action": "click", "target": "P3"}'),
-    ]
-    preset = TOOL_TRANSCRIPT
-    turns = [turn_script(k, step, preset) for k, step in enumerate(steps)]
-    with LiveStub(
-        turns,
-        cert_dir=tmp_path / "tls",
-        api_key=API_KEY,
-        history_format=preset.history_format,
-        ack_options=preset.ack_options,
-    ) as stub:
-        live_env.setenv("GOOGLE_GEMINI_BASE_URL", stub.base_url)
-        live_env.setenv("SSL_CERT_FILE", str(stub.cert_file))
-        episode = build_episode(
-            catalog_config(preset.model),
-            tmp_path / "run",
-            task=ReplayTask(),
-            instruction=TASK_INSTRUCTION,
-            model_key=preset.model,
-            clock_mode="token",
-            tokens_per_frame=TOKENS_PER_FRAME,
-            max_ticks=MAX_TICKS,
-            before_initialize=lambda agent: setattr(agent, "interaction_mode", "streaming"),
-            scene=SCENE,
-        )
-        agent, results = episode.agent, []
-        try:
-            for k, step in enumerate(steps):
-                observation = episode.frames.capture(k)
-                budget = episode.budget(observation.tick_number)
-                results.append(decide(agent, k, observation, budget))
-                commit(agent, k, step.status, step.detail)
-                stub.wait_until_idle()
-        finally:
-            agent.close()
-    assert stub.violations == [] and stub.unused_turns == 0
-    (setup,) = [event["msg"]["setup"] for event in stub.events if "setup" in event["msg"]]
-    assert FUNCTION_CALL_FRAME_REFERENCE_RULES in setup["systemInstruction"]["parts"][0]["text"]
-    for declaration in setup["tools"][0]["functionDeclarations"]:
-        assert "frame" in declaration["parameters_json_schema"]["required"]
-
-    first = agent.frames.locate(1)[0]
-    click = results[1]
-    assert click["function_validation_error"] is None
-    assert click["action_protocol"]["frame_reference"]["frame"] == 1
-    assert [click["action"].parameters["x"], click["action"].parameters["y"]] == first.marks[
-        "P3"
-    ]["point"]
-    assert click["action"].coordinate_transform == first.geometry
-
-    unframed = results[2]
-    assert unframed["function_validation_error"] == "missing GUI function arguments"
-    assert unframed["action"] is None
-    assert unframed["action_protocol"]["rejection"] == INVALID_GROUNDING_FRAME
-    assert unframed["action_protocol"]["frame_reference"]["error"] == MISSING_FRAME

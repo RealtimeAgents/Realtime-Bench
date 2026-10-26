@@ -1106,10 +1106,7 @@ class DefaultHarness(VisionAgentBase):
 
     interaction_profile: InteractionProfile  # set by initialize() from context policy item 11
     supports_unbounded_output = True
-    # A streaming run builds NativeStreamingAgent instead (harnesses/registry.py create_agent);
-    # only tests set "streaming" here before initialize(), which draws each frame's number on its
-    # screenshot, asks every action for the frame it is based on, and interprets the action
-    # against that frame.
+    # A streaming run builds NativeStreamingAgent instead (harnesses/registry.py create_agent).
     interaction_mode = "turn_based"
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
@@ -1264,11 +1261,7 @@ class DefaultHarness(VisionAgentBase):
             action_channel=channel,
             format_profile=self.interaction_profile.name,
             function_declarations=(
-                tuple(
-                    gui_function_declarations(frame_reference=self.interaction_mode == "streaming")
-                )
-                if channel == "function_call"
-                else ()
+                tuple(gui_function_declarations()) if channel == "function_call" else ()
             ),
         )
 
@@ -1675,8 +1668,6 @@ class DefaultHarness(VisionAgentBase):
                 raise
         else:
             self._attempt_finished(generation, request, len(retry_reasons) + 1, runtime_result)
-            # The runtime takes exactly one observation per generation: its own frame.
-            self.frames.record_sent(generation.frame.frame, self.clock.time())
             if retry_reasons:
                 runtime_result.provider_metadata.update(
                     {
@@ -1785,10 +1776,7 @@ class DefaultHarness(VisionAgentBase):
             )
             if not native_protocol_failure:
                 action_protocol["source"] = "native_function_call"
-        if action is None:  # a rejected streaming action
-            executed = "none"
-        else:
-            executed = action_text(action)
+        executed = action_text(action)
         generation.staged = _Staged(
             feedback,
             unattached,
@@ -1883,11 +1871,10 @@ class DefaultHarness(VisionAgentBase):
             ),
             "thinking": thinking,
             "model_output": output.text,
-            "parsed_action": (
-                None
-                if action is None
-                else {"action_type": action.action_type.value, "parameters": action.parameters}
-            ),
+            "parsed_action": {
+                "action_type": action.action_type.value,
+                "parameters": action.parameters,
+            },
             "action_protocol": action_protocol,
             "inspection": newest_proof,
             "input_prompt": self._prompt_text_summary(

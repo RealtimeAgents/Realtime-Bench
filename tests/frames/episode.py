@@ -10,18 +10,13 @@ from tests.replay.scenario import TASK_INSTRUCTION
 from tests.replay.test_chat_completions import MODEL_KEY, chat_completions_config
 
 
-def open_episode(stub, run_dir, *, interaction_mode=None, scene=None):
-    def before_initialize(agent):
-        if interaction_mode is not None:
-            agent.interaction_mode = interaction_mode
-
+def open_episode(stub, run_dir, *, scene=None):
     return build_episode(
         chat_completions_config(stub.base_url, stream=False),
         run_dir,
         task=ReplayTask(),
         instruction=TASK_INSTRUCTION,
         model_key=MODEL_KEY,
-        before_initialize=before_initialize,
         scene=scene,
     )
 
