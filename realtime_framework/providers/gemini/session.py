@@ -386,16 +386,21 @@ class SessionCore:
         The system block travels in the setup instead. In a turn-based view a model output is the
         canonical action of the native call that its turn's tool block carries, so it has no
         Content of its own; an execution feedback of its own is a text Content after the turn's
-        tool rounds. The streaming view (harnesses/streaming/history.py) has no tool blocks:
-        each reply's output that said anything and each execution feedback is a text Content, in
-        the view's order, and a frame is its own text, as a push sends it. That order is not the
-        one the live session got them in: there each feedback came with the trigger after it,
-        after the frames pushed meanwhile.
+        tool rounds. In the streaming view (harnesses/streaming/history.py) a reply's tool block
+        likewise stands for its output: each other output that said anything and each execution
+        feedback is a text Content, in the view's order, and a frame is its own text, as a push
+        sends it. That order is not the one the live session got them in: there each feedback
+        came with the trigger after it, after the frames pushed meanwhile.
         """
         if history is None:
             return [], []
         texts = history.policy.texts
         prefixes = _frame_prefixes(history)
+        tooled = {
+            item.block.id.removesuffix(".tools") + ".output"
+            for item in history.items
+            if item.block.kind == "tool_exchange"
+        }
         contents, carriers, turn_index = [], [], -1
         for item in history.items:
             block = item.block
@@ -416,7 +421,7 @@ class SessionCore:
                 contents += tool_contents
                 carriers += [(block.id,)] * len(tool_contents)
             elif self.streaming and block.kind in ("model_output", "execution_feedback"):
-                if block.text:
+                if block.text and block.id not in tooled:
                     contents.append(Content(_ROLES[item.intent.role], (Part(text=block.text),)))
                     carriers.append((block.id,))
             elif _is_feedback(item):

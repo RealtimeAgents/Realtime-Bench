@@ -100,6 +100,7 @@ from realtime_framework.harnesses.default.execution_thread import ExecutionThrea
 from realtime_framework.harnesses.default.request import ledger_block
 from realtime_framework.providers.session_lifecycle import SessionStates
 from realtime_framework.providers.session_lifecycle import StatelessSession
+from realtime_framework.providers.session_lifecycle import replay_items
 from realtime_framework.providers.session_lifecycle import session_record
 from realtime_framework.sandbox.observation.som import without_observation_interactables
 
@@ -735,10 +736,6 @@ class RealtimeRuntime:
             )
         return count
 
-    def _replay_items(self) -> list[str]:
-        # A replayed live session re-sends past tool calls in the policy's format.
-        return ["tool_call_replay"] if self.policy.tool_call_replay is not None else []
-
     def _record_sync(self, sync, removed_turns, incoming=(), *, result=None, error=None):
         """One HistoryChanged per sync call (session_record), with the policy items behind it
         and the turns it removed and replayed."""
@@ -746,7 +743,7 @@ class RealtimeRuntime:
         compaction = sync.reason == "history_block_compaction"
         policy_item = list(self._compaction_items) if compaction else []
         if record.rebuilt:
-            policy_item += self._replay_items()
+            policy_item += replay_items(self.policy)
         self._history_changed(
             record.kind,
             record.trigger,
@@ -766,7 +763,7 @@ class RealtimeRuntime:
         self._history_changed(
             record.kind,
             record.trigger,
-            self._replay_items() or None,
+            replay_items(self.policy) or None,
             turns=[],
             replayed_turns=len(self._turns),
             **record.fields,

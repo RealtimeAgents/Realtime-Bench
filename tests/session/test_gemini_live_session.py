@@ -9,6 +9,7 @@ are google-genai's LiveServerMessage, built from the wire JSON the replay stub s
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 from google.genai import types
@@ -18,7 +19,12 @@ from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.frames import FrameRecord
-from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
+from realtime_framework.harnesses.default.request import (
+    build_request,
+    ledger_block,
+    system_block,
+    tool_exchange_block,
+)
 from realtime_framework.harnesses.streaming.history import (
     feedback_block,
     frame_block,
@@ -105,12 +111,14 @@ def pushed(k: int):
     return frame_block(FrameRecord(k, observation.observation_id, float(k), {}, None), observation)
 
 
-def streaming_view(blocks, *, frames: int = 2):
+def streaming_view(blocks, *, frames: int = 2, history_format: str = "native_tools"):
     """The streaming history view of the accepted ``blocks``: every reply kept, the newest
     ``frames`` frames with their screenshots."""
     return history_view(
         blocks,
-        policy=current_context_policy().for_path("gemini_live", {}, None),
+        policy=current_context_policy().for_path(
+            "gemini_live", {"history_format": history_format}, None
+        ),
         system=system_block("system instruction", None),
         retained_frames=frames,
         answer=AnswerRequirements("function_call", "standard_vlm"),
@@ -305,6 +313,35 @@ def test_a_streaming_rebuild_replays_the_streaming_view():
         frame_content(3),
     ]
     assert connect.seeded == ("f1.frame", "d1.output", "f2.frame", "d1.feedback", "f3.frame")
+
+
+def test_a_streaming_rebuild_replays_a_replys_tool_rounds_as_a_turns_transcript():
+    """Decision 24: a reply whose tool rounds the view holds replays them as a turn's are, the
+    policy's transcript under its header, and not its output, the action as plain model text,
+    which a turn-based seed avoids too."""
+    action = '{"action": "click", "target": "P1", "frame": 1}'
+    call = {"id": "c1", "name": "click", "arguments": {"target": "P1", "frame": 1}}
+    receipt = {"id": "c1", "name": "click", "response": {"status": "queued"}}
+    exchange = {"function_calls": [call], "function_responses": [receipt]}
+    blocks = [pushed(1), output_block(1, action, "obs-1", None), pushed(2)]
+    history = streaming_view(blocks, history_format="tool_transcript")
+    tools = tool_exchange_block(
+        history.policy,
+        {"native_tool_exchanges": [exchange]},
+        decision=1,
+        based_on="obs-1",
+        wall_ns=None,
+    )
+    history = streaming_view([*blocks[:2], tools, blocks[2]], history_format="tool_transcript")
+    connect = plan(session_core(streaming=True), history)
+    (contents,) = connect.seed
+    transcript = history.policy.texts.gemini_tool_history_header + "\n" + json.dumps([exchange])
+    assert contents == [
+        frame_content(1),
+        Content("model", (Part(text=transcript),)),
+        frame_content(2),
+    ]
+    assert connect.seeded == ("f1.frame", "d1.tools", "f2.frame")
 
 
 def test_a_streaming_rebuild_skips_an_empty_reply_output():

@@ -19,6 +19,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
     ConnectRequest,
@@ -447,6 +448,12 @@ def session_record(
         "error": repr(error)[:500] if error is not None else None,
     }
     return SessionRecord(kind, trigger, rebuilt, fields, state)
+
+
+def replay_items(policy: PathPolicy) -> list[str]:
+    """The context policy items a session rebuilt from the history view replays it by: item 10,
+    past tool calls in the policy's format."""
+    return ["tool_call_replay"] if policy.tool_call_replay is not None else []
 
 
 class SessionStates:

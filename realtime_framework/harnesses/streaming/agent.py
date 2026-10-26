@@ -103,7 +103,7 @@ from realtime_framework.harnesses.default.harness import (
     interaction_profile,
     parse_grounded_action,
 )
-from realtime_framework.harnesses.default.request import system_block
+from realtime_framework.harnesses.default.request import system_block, tool_exchange_block
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.harnesses.streaming.history import (
     feedback_block,
@@ -115,6 +115,7 @@ from realtime_framework.providers.registry import adapter_class
 from realtime_framework.providers.session_lifecycle import (
     RenewalRequired,
     SessionStates,
+    replay_items,
     session_preparing,
     session_record,
 )
@@ -316,9 +317,11 @@ class NativeStreamingAgent(VisionAgentBase):
     def _record_session(self, sync, result=None, error=None) -> None:
         """The ``record`` of a session operation (SessionLifecycle), as a turn's: a
         HistoryChanged for a reopened session, and for each sync, of the kind the driver's result
-        reports; and what that left of the provider's context (session_record)."""
+        reports, with the policy item a rebuild replays the view by; and what that left of the
+        provider's context (session_record)."""
         record = session_record(sync, result, error)
-        self._history_changed(record.kind, record.trigger, None, **record.fields)
+        replayed = replay_items(self._context_policy) if record.rebuilt else []
+        self._history_changed(record.kind, record.trigger, replayed or None, **record.fields)
         self._states.record(*record.state)
 
     def _history_changed(self, kind: str, trigger: str, policy_item, **fields) -> None:
@@ -884,19 +887,26 @@ class NativeStreamingAgent(VisionAgentBase):
         self._gates.clear()
 
     def accept(self, generation: int) -> None:
-        """AcceptResult: the reply's output joins the view where it began, and its usage the
-        episode's. A failed reply, which the kernel accepts too, joins nothing, as a failed
-        turn."""
+        """AcceptResult: the reply's output joins the view where it began, with its tool rounds
+        after it where the policy replays them (context policy item 10), as a turn's join its
+        history, and its usage the episode's. A failed reply, which the kernel accepts too, joins
+        nothing, as a failed turn."""
         with self._lock:
             reply = self._replies.pop(generation)
             self._off(generation)
             if reply.output and not reply.failed:
-                self._blocks.insert(
-                    reply.position,
-                    output_block(
-                        reply.decision, reply.output, reply.based_on, self.clock.time_ns()
-                    ),
+                wall_ns = self.clock.time_ns()
+                tools = tool_exchange_block(
+                    self._context_policy,
+                    reply.handle.metadata.get("completed_turn_refs") or {},
+                    decision=reply.decision,
+                    based_on=reply.based_on,
+                    wall_ns=wall_ns,
                 )
+                self._blocks[reply.position : reply.position] = [
+                    output_block(reply.decision, reply.output, reply.based_on, wall_ns),
+                    *(() if tools is None else (tools,)),
+                ]
         if reply.failed:
             self._log_reply(reply, "reply_failed")
             return

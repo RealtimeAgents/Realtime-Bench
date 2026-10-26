@@ -15,8 +15,10 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.events import FunctionCall
 from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import UNTRACED, TraceEvent
+from realtime_framework.entity.request import Intent, ToolExchange
 from realtime_framework.evaluation.kernel.events import Invalidated, Outcome
 from realtime_framework.evaluation.kernel.streaming import (
     CallsCancelled,
@@ -1172,6 +1174,69 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
         ("unknown", "session_resumed", None),
         ("exact", "reconnect", None),
     ]
+    agent.close()
+
+
+class _ToolRounds(FakeLiveDriver):
+    """Reports each reply's calls in its handle's completed_turn_refs, a round each, with the
+    queued acknowledgement, as Gemini Live does."""
+
+    async def request_reply(self, request):
+        handle = await super().request_reply(request)
+        handle.metadata["completed_turn_refs"] = {
+            "native_function_calls": [],
+            "native_tool_exchanges": [],
+        }
+        return handle
+
+    async def events(self, generation):
+        refs = generation.metadata["completed_turn_refs"]
+        async for event in super().events(generation):
+            if isinstance(event, FunctionCall):
+                call = {"id": event.call_id, "name": event.name, "arguments": event.arguments}
+                receipt = {"id": event.call_id, "name": event.name, "response": QUEUED}
+                refs["native_function_calls"].append(call)
+                refs["native_tool_exchanges"].append(
+                    {"function_calls": [call], "function_responses": [receipt]}
+                )
+            yield event
+
+
+QUEUED = {"status": "queued"}
+
+
+def test_a_rebuilt_session_replays_a_replys_tool_rounds_as_a_turns_are(monkeypatch, clock):
+    """Decision 24: an accepted reply's tool rounds join the view right after its output, in the
+    block a turn's join a turn-based request in (harnesses/default/request.py
+    tool_exchange_block), and a session rebuilt from the view records that it replays them
+    (context policy item 10)."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, _ToolRounds, trace=trace)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 1),), ends_at=1.0))
+    agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    agent.abort(8)
+    agent.push(observation(clock, 3))
+    connect = [call for call in agent.driver.calls if call[0] == "connect"][-1]
+    assert connect == ("connect", ("system", "f1.frame", "f2.frame", "d3.output", "d3.tools"))
+    items = {item.block.id: item for item in agent.driver.views[-1].items}
+    tools = items["d3.tools"].block
+    assert (tools.kind, items["d3.tools"].intent) == ("tool_exchange", Intent("model", "in_order"))
+    arguments = {"x": 10, "y": 20, "button": "left", "frame": 1}
+    call = {"id": "c1", "name": "click", "arguments": arguments}
+    receipt = {"id": "c1", "name": "click", "response": QUEUED}
+    assert tools.exchanges == (ToolExchange(calls=(call,), receipts=(receipt,), text_after=""),)
+    header = agent._context_policy.texts.gemini_tool_history_header
+    assert tools.text == header + "\n" + json.dumps(
+        [{"function_calls": [call], "function_responses": [receipt]}]
+    )
+    assert tools.based_on == items["d3.output"].block.based_on == "obs-1"
+    (reconnect,) = [
+        c for c in trace.of(TraceEvent.HISTORY_CHANGED) if c.get("sync") == {"reason": "reconnect"}
+    ]
+    assert reconnect["policy_item"] == ["tool_call_replay"]
     agent.close()
 
 
