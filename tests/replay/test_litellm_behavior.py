@@ -261,20 +261,26 @@ def test_openrouter_effort_max_is_sent_as_xhigh_unless_nested(
 
 
 @pytest.mark.parametrize(
-    "model_name, kept",
+    "model_name, options, kept",
     [
-        ("anthropic/claude-opus-5", True),
-        ("google/gemini-3.8-flash", True),
-        ("google/gemma-4-31b", False),
-        ("deepseek/deepseek-v4.1-flash", False),
+        ("anthropic/claude-opus-5", {"cache_breakpoint": True}, True),
+        ("google/gemini-3.8-flash", {"cache_breakpoint": True}, True),
+        ("google/gemma-4-31b", {"cache_breakpoint": True}, False),
+        ("deepseek/deepseek-v4.1-flash", {"cache_breakpoint": True}, False),
+        ("anthropic/claude-opus-5", {}, False),
+        ("z-ai/glm-5", {"cache_breakpoint": True}, True),
     ],
 )
-def test_openrouter_cache_control_survives_only_for_listed_model_names(model_name, kept, tmp_path):
+def test_openrouter_cache_control_survives_only_for_listed_model_names(
+    model_name, options, kept, tmp_path
+):
     """Outside CacheControlSupportedModels (claude, gemini, minimax, glm, z-ai: llms/openrouter/
     chat/transformation.py:30-37, matched as substrings of the model name at :75-83), LiteLLM
     removes every ``cache_control`` key from the messages (:85-94, llms/openai/chat/
     gpt_transformation.py:401-423). ``google/gemma-4-31b`` is marked by the driver exactly as
-    ``google/gemini-3.8-flash`` is, so the difference is LiteLLM's name list."""
+    ``google/gemini-3.8-flash`` is, so the difference is LiteLLM's name list. The driver marks a
+    model whose YAML sets the cache_breakpoint option, whatever its name: an ``anthropic/`` model
+    without it is not marked, and ``z-ai/glm-5`` with it is."""
     with HttpStub(_chat_answer) as stub:
         config = _model(
             stub.origin,
@@ -282,7 +288,7 @@ def test_openrouter_cache_control_survives_only_for_listed_model_names(model_nam
             model_name,
             "/api/v1",
             upstream_provider=model_name.split("/")[0],
-            provider_options={"cache_breakpoint": True},
+            provider_options=options,
         )
         assert _generate(config, tmp_path).error is None
     sent = _sent(stub)
