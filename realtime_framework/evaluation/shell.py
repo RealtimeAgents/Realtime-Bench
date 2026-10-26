@@ -385,6 +385,7 @@ class _Shell:
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
         self._accepting: set[int] = set()  # the generations the batch being run accepts
+        self._aborting: dict[int, str] = {}  # and those it aborts, with why
         self._batch_invalid = False  # the shell posted an invalid run during the batch being run
         self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self._snapshot_read = False
@@ -585,6 +586,11 @@ class _Shell:
 
     def _run_all(self, commands: list) -> None:
         self._accepting = {c.generation for c in commands if isinstance(c, AcceptResult)}
+        # An abort comes right after its generation's GenerationAbandoned record (kernel/core.py
+        # abandon_generation), whose handling records why the generation was given up (_given_up).
+        self._aborting = {
+            c.generation: c.reason for c in commands if isinstance(c, AbortGeneration)
+        }
         self._batch_invalid = False
         for command in commands:
             self._run(command)
@@ -1338,9 +1344,11 @@ class _Shell:
         if held is None:
             return  # its StartGeneration raised
         held.given_up = True
-        bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
-        if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
-            bound = "provider_watchdog"
+        bound = {
+            "per_move_cap": "per_move_cap",
+            "deadline": "wall_deadline",
+            "generation_watchdog_timeout": "provider_watchdog",
+        }.get(self._aborting[held.generation])
         if held.inference is not None:
             self._emit_inference(held.inference, entry)
             held.inference = None  # its echo writes nothing more

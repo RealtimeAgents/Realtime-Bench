@@ -198,7 +198,8 @@ class Kernel:
             return
         self.generation = None
         self.record("GenerationAbandoned", generation=generation, reason=reason)
-        self.emit(AbortGeneration(generation))
+        why = self.invalid.reason if reason == "invalid" else reason
+        self.emit(AbortGeneration(generation, why))
 
     def invalidate(self, category: str, reason: str, detail=None, at: float | None = None) -> None:
         """Latch the first non-model failure; it ends the episode and the run is never scored.

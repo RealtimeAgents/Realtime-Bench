@@ -302,6 +302,9 @@ class AbortGeneration:
     """Interrupt a generation the kernel gave up on. Its late result will be discarded."""
 
     generation: int
+    # Why: as GenerationAbandoned names it, the end's cause or the policy's own reason, but for
+    # an invalidation the invalid run's reason, such as the provider watchdog's.
+    reason: str
 
 
 @dataclass(frozen=True)

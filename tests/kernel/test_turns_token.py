@@ -1519,6 +1519,9 @@ def test_a_watchdog_timeout_abandons_the_generation_and_discards_its_late_result
     names = _names(sim.commands)
     assert names.index("FreezeSnapshot") < names.index("AbortGeneration")
     assert names.index("GenerationAbandoned") < names.index("AbortGeneration")
+    assert [c for c in sim.commands if isinstance(c, AbortGeneration)] == [
+        AbortGeneration(1, "generation_watchdog_timeout")
+    ]
     assert [generation for generation, _ in sim.aborted] == [1]
     assert (sim.accepted, sim.discarded) == ([], [1])
     assert [entry.data["generation"] for entry in sim.entries("ResultDiscarded")] == [1]

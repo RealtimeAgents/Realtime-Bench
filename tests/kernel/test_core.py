@@ -181,7 +181,7 @@ def test_an_abandoned_generation_is_written_off_before_it_is_interrupted():
     assert isinstance(commands[0], Record)
     assert commands[0].entry.kind == "GenerationAbandoned"
     assert commands[0].entry.data == {"generation": generation, "reason": "per_move_cap"}
-    assert commands[1:] == [AbortGeneration(generation)]
+    assert commands[1:] == [AbortGeneration(generation, "per_move_cap")]
     # Its late result is stale: discarded, never given to the policy.
     kernel.post(GenerationFinished(generation, GenerationResult(output_tokens=9)))
     commands = kernel.step(5.0)
@@ -211,12 +211,23 @@ def test_the_first_end_freezes_the_snapshot_then_interrupts_the_generation():
     commands = kernel._flush()
     assert _kinds(commands) == ["EpisodeEnded", "GenerationAbandoned"]
     assert _records(commands)[0].data == {"cause": "deadline", "reason": None, "at": 300.0}
-    assert _others(commands) == [FreezeSnapshot(), AbortGeneration(generation)]
+    assert _others(commands) == [FreezeSnapshot(), AbortGeneration(generation, "deadline")]
     kinds = [type(c).__name__ if not isinstance(c, Record) else c.entry.kind for c in commands]
     assert kinds == ["EpisodeEnded", "FreezeSnapshot", "GenerationAbandoned", "AbortGeneration"]
     assert policy.calls[-1] == ("end", "deadline")
     # Timers stop with the episode.
     assert kernel.step(10.0) is None
+
+
+def test_an_invalidation_interrupts_the_generation_for_the_invalid_run_s_reason():
+    # Its record names the end's cause; the interruption says which failure it was.
+    kernel, _ = _kernel()
+    generation = kernel.start_generation(0, "obs-0", 0, None)
+    kernel._flush()
+    kernel.invalidate("provider", "generation_watchdog_timeout", "generation exceeded 300s")
+    commands = kernel._flush()
+    assert _records(commands)[-1].data == {"generation": generation, "reason": "invalid"}
+    assert _others(commands)[-1] == AbortGeneration(generation, "generation_watchdog_timeout")
 
 
 def test_later_end_signals_change_nothing():
