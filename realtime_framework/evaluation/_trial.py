@@ -48,10 +48,8 @@ def main(argv=None):
     )
     parser.add_argument(
         "--include-usage",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Request terminal usage from streaming endpoints (default: on; "
-        "--no-include-usage for endpoints that reject stream_options)",
+        action="store_true",
+        help="Request optional terminal usage from streaming endpoints",
     )
     parser.add_argument("--reasoning-effort", help="Only set if the selected endpoint supports it")
     parser.add_argument(
@@ -105,12 +103,7 @@ def main(argv=None):
     if args.lane < 0 or 9292 + args.lane * 1000 > 65535:
         parser.error("--lane must be between 0 and 56")
     if args.catalog_model:
-        if (
-            args.base_url
-            or args.no_stream
-            or args.include_usage is not None
-            or args.api_key_env is not None
-        ):
+        if args.base_url or args.no_stream or args.include_usage or args.api_key_env is not None:
             parser.error(
                 "Endpoint options apply to --model; catalog models use their own transport configuration"
             )
@@ -120,7 +113,7 @@ def main(argv=None):
 
         if any(c.isspace() for c in args.model) or not all(args.model.split("/", 1)):
             parser.error("Use a LiteLLM model name in provider/model-id format")
-        if args.include_usage is not None:
+        if args.include_usage:
             parser.error("LiteLLM collects response usage automatically; omit --include-usage")
         try:
             base_url = validate_endpoint(args.base_url) if args.base_url else ""
@@ -148,7 +141,7 @@ def main(argv=None):
             BENCHMARK_MODEL_REVISION=args.model_revision or "",
             BENCHMARK_BASE_URL=base_url,
             STREAM_CHAT_STREAM="0" if args.no_stream else "1",
-            STREAM_CHAT_INCLUDE_USAGE="0" if args.include_usage is False else "1",
+            STREAM_CHAT_INCLUDE_USAGE="1" if args.include_usage else "0",
             BENCHMARK_CONTEXT_WINDOW_TOKENS="",
             BENCHMARK_CONTEXT_COUNTER="estimate",
             BENCHMARK_CONTEXT_IMAGE_TOKENS="4096",
