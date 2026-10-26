@@ -713,7 +713,7 @@ def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
         request = GenerationRequest("turn-0", None, "inf", canonical=rig.view(blocks))
         rig.socket.answer("activityEnd", TURN_COMPLETE)
         await drain(rig.driver.events(await rig.driver.request_reply(request)))
-        left = dict(rig.driver._replies)
+        left = dict(rig.driver._core.replies)
         await rig.driver.close()
         return left
 
@@ -773,13 +773,13 @@ def test_a_write_cancelled_while_it_waits_for_the_session_records_nothing():
                 write.cancel()
             await asyncio.wait(writes)
         state = (dict(rig.driver._core.delivery), dict(rig.driver._core.carried))
-        replies = (dict(rig.driver._core.replies), dict(rig.driver._replies))
+        replies = dict(rig.driver._core.replies)
         await rig.driver.close()
         return state, replies
 
     (delivery, carried), replies = asyncio.run(run())
     assert list(delivery) == [("setup",)] and carried == {}
-    assert replies == ({}, {})
+    assert replies == {}
     assert rig.socket.sent == []
 
 
@@ -1207,10 +1207,10 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
             await rig.driver.request_reply(request)
         except RuntimeError:
             pass
-        state = (dict(rig.driver._core.replies), dict(rig.driver._replies))
+        state = dict(rig.driver._core.replies)
         rig.socket.feed(cancelled("call-1"))
         await settle()
-        held = [orphan.cancelled for orphan in rig.driver._cancelled_between]
+        held = [orphan.cancelled for orphan in rig.driver._core.cancelled_between]
         try:
             await rig.driver.push_frame(None, rig.view([*blocks, pushed(2)]))
         except RuntimeError as exc:
@@ -1219,7 +1219,7 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
         return state, held, refused
 
     state, held, refused = asyncio.run(run())
-    assert state == ({}, {})
+    assert state == {}
     assert held == [("call-0",), ("call-1",)]
     assert refused == "Gemini Live input activity is already open"
     # Its start, feedback and audio went out before its end failed.
@@ -1304,7 +1304,6 @@ def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again
         left = (
             [wire(message) for message in first.sent],
             dict(rig.driver._core.replies),
-            dict(rig.driver._replies),
             rig.driver.state,
             rig.driver.connection_renewal_reason(),
         )
@@ -1317,7 +1316,7 @@ def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again
 
     refused, left, renewed = asyncio.run(run())
     assert isinstance(refused, RenewalRequired)
-    assert left == (["video", ("text", "frame 1")], {}, {}, RuntimeState.READY, "go_away")
+    assert left == (["video", ("text", "frame 1")], {}, RuntimeState.READY, "go_away")
     assert renewed.provider_metadata["session_resumed"]
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
     assert [wire(message) for message in rig.socket.sent] == ACTIVITY
@@ -1467,7 +1466,7 @@ def test_a_reply_is_read_on_the_connection_it_started_on():
             await drain(rig.driver.events(generation))
         except RuntimeError as exc:
             failure = str(exc)
-        left = dict(rig.driver._replies)
+        left = dict(rig.driver._core.replies)
         await rig.driver.close()
         return failure, left
 

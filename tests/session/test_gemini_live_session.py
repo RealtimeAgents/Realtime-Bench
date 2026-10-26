@@ -201,6 +201,15 @@ def renewal_handle(core: SessionCore) -> str | None:
     return core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True)
 
 
+def reply_ended(core: SessionCore, connection: int) -> None:
+    """The reply read on ``connection`` has ended: it takes no later message read there, and is
+    in flight no more once its events() are done too."""
+    generation = core.replies[connection]
+    assert generation.ended and core.received(connection, server_content(), 0.0) is None
+    core.reply_done(generation)
+    assert connection not in core.replies
+
+
 def frame_content(k: int, text: str | None = None) -> Content:
     image = view([turn(k)]).items[1].block.image
     return Content("user", (Part(text=text or f"frame {k}"), Part(image=image)))
@@ -648,7 +657,7 @@ def test_go_away_resumes_after_a_clean_turn():
     received = receive(core, server_content(turnComplete=True), now=112.0)
     assert received.complete and received.ends and not received.contaminated
     assert core.resume_handle == "handle-0"
-    assert core.replies == {}
+    reply_ended(core, 1)
 
     assert renewal_handle(core) == "handle-0"
     assert core.resume_handle_for("go_away", force_rebuild=True, generation_clean=True) is None
@@ -753,7 +762,7 @@ def test_extended_thinking_spans_intermediate_turn_complete():
     received = receive(core, server_content(interactionStatus="IDLE"))
     assert received.status == "IDLE" and received.complete and received.ends
     assert renewal_handle(core) == "handle-0"
-    assert core.replies == {}
+    reply_ended(core, 1)
 
 
 def test_idle_ends_a_turn_complete_interaction_uncleanly():
@@ -796,7 +805,9 @@ def test_reply_read_after_close_keeps_its_generation():
     assert not core.renewal_required and core.go_away_deadline is None
     current = receive(core, server_content(turnComplete=True))
     assert (current.connection, current.generation, current.generation_id) == (2, 1, "turn-1")
-    assert current.complete and core.replies == {}
+    assert current.complete
+    reply_ended(core, 1)
+    reply_ended(core, 2)
 
 
 def test_an_orphan_message_changes_nothing():
@@ -830,7 +841,8 @@ def test_a_reply_message_arrives_as_received():
     assert isinstance(received, Received)
     assert (received.connection, received.generation, received.generation_id) == (1, 1, "turn-0")
     assert arrive(core, server_content(turnComplete=True)).ends
-    assert core.resume_handle == "handle-0" and core.replies == {}
+    assert core.resume_handle == "handle-0"
+    reply_ended(core, 1)
 
 
 def test_a_reply_s_first_message_is_its_generation_s_once_it_starts_before_the_trigger():

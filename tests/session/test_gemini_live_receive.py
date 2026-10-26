@@ -656,16 +656,17 @@ def test_a_reply_read_after_reconnecting_keeps_its_connection_and_generation():
 
 def test_a_message_is_numbered_by_the_generation_in_flight_when_read():
     """The receiver numbers a message when it reads it, by the generation then in flight on the
-    connection, whichever events() asked: here the first reply's consumer reads on after the next
-    generation has started."""
+    connection, and hands it to that generation's events(): here the next generation has
+    started after the first reply's first message, and its events() read and take the rest."""
     rig = Rig("gemini-3.8-live", [[TRANSCRIPT, TURN_COMPLETE]])
 
     async def run():
         await rig.connect()
         first = rig.driver.events(await rig.start("turn-0"))
         before = stamps([await anext(first)])
-        await rig.start("turn-1")
-        return before, stamps(await drain(first))
+        after = stamps(await drain(rig.driver.events(await rig.start("turn-1"))))
+        await first.aclose()
+        return before, after
 
     before, after = asyncio.run(run())
     assert before == [("TextDelta", 1, 1, "turn-0")]

@@ -24,7 +24,8 @@ which the driver writes to the event log.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
@@ -285,9 +286,17 @@ class Orphan:
 
 @dataclass
 class _Generation:
+    connection: int
     number: int  # on its connection, from 1
     id: str
     interrupted: bool = False
+    # Its reply's messages as they were read, until its events() takes them.
+    messages: deque[Received] = field(default_factory=deque)
+    # Streaming: the cancellations read between replies before it started, which its events()
+    # hand over first.
+    held: list[Orphan] = field(default_factory=list)
+    ended: bool = False  # its reply's end was read
+    done: bool = False  # its events() are done
 
 
 class SessionCore:
@@ -340,8 +349,12 @@ class SessionCore:
         # seed replays it. A resume keeps it: what a trigger handed after the handle the session
         # resumed from is lost with the server's state, and no trigger hands it again.
         self.carried: dict[str, str] = {}
-        # The generation whose reply is being read, by connection, until the reply ends.
+        # The generation started last on each connection, until its reply ended and its events()
+        # are done: the one whose reply takes what is read there until it ended.
         self.replies: dict[int, _Generation] = {}
+        # Streaming: the cancellations read between replies, also past their connection's close,
+        # which the next reply to start holds.
+        self.cancelled_between: list[Orphan] = []
 
     # ---- connections ---------------------------------------------------------------------
 
@@ -667,9 +680,28 @@ class SessionCore:
 
     # ---- reads -----------------------------------------------------------------------------
 
-    def start_generation(self, generation_id: str) -> None:
+    def start_generation(self, generation_id: str) -> _Generation:
+        """Start the open connection's next generation, whose reply takes what is read there
+        from now; streaming, it holds the cancellations read between replies."""
         self._generations += 1
-        self.replies[self.connection] = _Generation(self._generations, generation_id)
+        generation = _Generation(self.connection, self._generations, generation_id)
+        if self.streaming:
+            generation.held, self.cancelled_between = self.cancelled_between, []
+        self.replies[self.connection] = generation
+        return generation
+
+    @property
+    def replying(self) -> bool:
+        """A reply started on the open connection has not ended, or its events() are not done:
+        a connection carries one reply at a time."""
+        generation = self.replies.get(self.connection)
+        return generation is not None and not generation.done
+
+    def reply_done(self, generation: _Generation) -> None:
+        """Its events() are done: once its reply ended too, it is in flight no more."""
+        generation.done = True
+        if generation.ended and self.replies.get(generation.connection) is generation:
+            del self.replies[generation.connection]
 
     def reader_failed(self, connection: int) -> None:
         """The connection's reader failed: no reply is read on it any more."""
@@ -677,15 +709,19 @@ class SessionCore:
 
     def reply_abandoned(self) -> None:
         """The reply started on the open connection will not come (its trigger did not go out):
-        its generation takes none of the connection's messages."""
-        self.replies.pop(self.connection, None)
+        its generation takes none of the connection's messages, and the cancellations it held
+        are the next reply's."""
+        generation = self.replies.pop(self.connection, None)
+        if generation is not None:
+            self.cancelled_between[:0] = generation.held
 
     def received(self, connection: int, message, now: float) -> Received | None:
         """Apply one server message that arrived on ``connection`` at ``now`` (the driver's
-        monotonic clock). With no generation's reply being read on that connection the message is
-        an orphan: nothing takes it, and it changes nothing (None; see arrived)."""
+        monotonic clock), and hand it to the reply that takes it. With no generation's reply
+        being read on that connection the message is an orphan: nothing takes it, and it changes
+        nothing (None; see arrived)."""
         generation = self.replies.get(connection)
-        if generation is None:
+        if generation is None or generation.ended:
             return None
         server = getattr(message, "server_content", None)
         status = interaction_status(message)
@@ -703,9 +739,7 @@ class SessionCore:
         # IDLE ends the interaction whichever completion signal is configured; under turn_complete
         # it ends it without completing it.
         ends = complete or status == "IDLE"
-        if ends:
-            del self.replies[connection]
-        return Received(
+        received = Received(
             connection,
             generation.number,
             generation.id,
@@ -719,19 +753,29 @@ class SessionCore:
             control,
             _cancelled(message),
         )
+        generation.messages.append(received)
+        if ends:
+            generation.ended = True
+            if generation.done:
+                del self.replies[connection]
+        return received
 
     def arrived(self, connection: int, message, now: float) -> Received | Orphan:
         """Apply one server message as a reader that reads every message as it arrives does
         (streaming): as received() does while a generation's reply is being read on
         ``connection``, else as an orphan, whose goAway still asks for a new connection and whose
-        resumption update is still the latest handle."""
+        resumption update is still the latest handle; one that cancels calls is held for the
+        next reply to start (cancelled_between)."""
         received = self.received(connection, message, now)
         if received is not None:
             return received
         control = (
             self._control(message, clean=False, now=now) if connection == self.connection else {}
         )
-        return Orphan(connection, message, now, control, _cancelled(message))
+        orphan = Orphan(connection, message, now, control, _cancelled(message))
+        if orphan.cancelled:
+            self.cancelled_between.append(orphan)
+        return orphan
 
     def _control(self, message, *, clean: bool, now: float) -> dict:
         update = getattr(message, "session_resumption_update", None)
