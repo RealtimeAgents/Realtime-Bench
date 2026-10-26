@@ -703,6 +703,8 @@ class LiteLLMDriver:
         await asyncio.to_thread(pace_request, self)
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
+        # An abort can replace the client, and its capture, before the request or these events end.
+        capture = self._http_capture
         response = await self._sdk.acompletion(**kwargs)
         audit = {
             "usage": None,
@@ -744,8 +746,7 @@ class LiteLLMDriver:
                 "response": response,
                 "raw_audit": audit,
                 "backend_route": self._backend_route(),
-                # An abort replaces the client, and its capture, before these events end.
-                "http_capture": self._http_capture,
+                "http_capture": capture,
             },
         )
 
