@@ -27,9 +27,6 @@ FRAME_NOT_IN_TABLE = "frame_not_in_table"
 # The protocol failure of an action that parsed but names a mark its frame does not have: WAIT runs
 # in its place on the turn-based clock, and nothing under streaming.
 GROUNDING_FAILED = "grounding_failed"
-# The protocol failure of an action that parsed but names a mark its frame does not have: WAIT runs
-# in its place on the turn-based clock, and nothing under streaming.
-GROUNDING_FAILED = "grounding_failed"
 
 
 @dataclass
