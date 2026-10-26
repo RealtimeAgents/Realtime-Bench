@@ -140,7 +140,7 @@ class _Pushed:
     """A frame in the session: its frame-table entry, as prepared for the model, and its
     inspection, if the agent has a tool runtime; and the replies started on it, for its
     inspection's one record: how many are on, the outputs of those that ended, in order, their
-    time, and how the last ended."""
+    time, how the last ended, and how each of their actions resolved, as it arrived."""
 
     record: FrameRecord
     value: ProviderObservation
@@ -149,6 +149,7 @@ class _Pushed:
     outputs: list[str] = field(default_factory=list)
     latency: float = 0.0
     outcome: str = "no_reply"
+    resolutions: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -812,15 +813,15 @@ class NativeStreamingAgent(VisionAgentBase):
         """Parse one action against the frame it names and post it, with the time its message
         came off the wire, ``received_at`` on the clock's monotonic reading."""
         arrived = self._wall(received_at)
-        execution = reply.own.execution
-        action, protocol, resolution = parse_grounded_action(
-            self, text, arrived, reply.own.record, resolve=execution is not None
+        action, protocol, _ = parse_grounded_action(
+            self, text, arrived, reply.own.record, resolve=reply.own.execution is not None
         )
-        if resolution is not None:
-            # The inspection of the frame the reply started on keeps the last resolution of any
-            # call of the replies on it.
-            execution["reference_resolution"] = resolution
-        reply.grounding.append({"call_id": call_id, "grounding": protocol.get("grounding")})
+        grounding = protocol.get("grounding")
+        reply.grounding.append({"call_id": call_id, "grounding": grounding})
+        with self._lock:
+            reply.own.resolutions.append(
+                {"decision": reply.decision, "call_id": call_id, "resolution": grounding}
+            )
         if protocol["protocol_failure"] is not None:
             if reply.protocol_failure is None and protocol["protocol_failure"] == GROUNDING_FAILED:
                 with self._lock:
@@ -980,7 +981,11 @@ class NativeStreamingAgent(VisionAgentBase):
         }
 
     def _finish_inspection(self, pushed: _Pushed, outcome: str, **fields) -> None:
+        """The frame's one inspection row, which keeps the resolution of each action of the
+        replies started on it, in the order they arrived (decision 16)."""
         if self.tool_runtime is not None and pushed.execution is not None:
+            with self._lock:
+                pushed.execution["reference_resolution"] = list(pushed.resolutions)
             self.tool_runtime.finish(pushed.execution, outcome=outcome, **fields)
 
     # ---- the end ------------------------------------------------------------------------------

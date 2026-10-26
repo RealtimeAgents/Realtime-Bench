@@ -835,7 +835,10 @@ class ToolRuntime:
         raw_action_output: str = "",
         outcome: str = "completed",
     ) -> None:
-        """Finish and persist one observation injection after its action round."""
+        """Finish and persist one observation injection after its action round, with the
+        reference resolution its caller kept on ``execution``: the last a turn-based decision's
+        output made, or, for a streaming frame, the resolution of each action of the replies
+        started on it (harnesses/streaming/agent.py)."""
         call_id = (execution.get("proof") or {}).get("call_id")
         if not call_id:
             return

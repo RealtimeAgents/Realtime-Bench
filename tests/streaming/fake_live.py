@@ -328,10 +328,12 @@ class TextLiveDriver(FakeLiveDriver):
 class RecordingToolRuntime:
     """A tool runtime whose inspections find no element, and which writes each finished one
     to ``rows`` as (observation id, outcome, raw action output, latency), once, as the SoM
-    runtime does (sandbox/observation/som.py ToolRuntime.finish)."""
+    runtime does (sandbox/observation/som.py ToolRuntime.finish), and its reference resolution
+    to ``resolutions`` by observation id."""
 
     def __init__(self):
         self.rows: list[tuple] = []
+        self.resolutions: dict[str, object] = {}
         self._pending: set[str] = set()
 
     def inspect(self, observation, *, requested_observation_id, **sizes) -> dict:
@@ -346,6 +348,7 @@ class RecordingToolRuntime:
             self._pending.remove(call_id)
             observation_id = execution["proof"]["observation_id"]
             self.rows.append((observation_id, outcome, raw_action_output, action_latency_s))
+            self.resolutions[observation_id] = execution.get("reference_resolution")
 
     def close(self) -> None:
         pass

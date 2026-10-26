@@ -1031,6 +1031,39 @@ def test_a_replys_row_keeps_the_grounding_of_each_of_its_calls(monkeypatch, cloc
     ] == [("c1", 1, False, "mark_not_in_observation"), ("c2", 2, True, None)]
 
 
+def test_a_frames_inspection_keeps_the_resolution_of_each_action_of_the_replies_on_it(
+    monkeypatch, clock
+):
+    """Decision 16: the one inspection of the frame two replies started on keeps the resolution
+    of each of their actions as it arrived, against whichever frame it names, not the last only;
+    a frame no reply started on keeps none."""
+    agent = make_agent(monkeypatch, clock)
+    runtime = _OneMark()
+    agent.bind_tool_runtime(runtime)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [
+        Reply(
+            (
+                Call(0.25, "a", "click", {"target": "P1", "frame": 1}),
+                Call(0.5, "b", "click", {"target": "P9", "frame": 2}),
+            ),
+            ends_at=1.0,
+        ),
+        Reply((Call(0.25, "c", "click", {"x": 30, "y": 40, "frame": 2}),), ends_at=1.0),
+    ]
+    for generation in (0, 1):
+        agent.generate(generation, generation, frame, BUDGET)
+        agent.accept(generation)
+    agent.close()
+    assert [
+        (entry["decision"], entry["call_id"], entry["resolution"]["frame"])
+        + (entry["resolution"]["mode"], entry["resolution"]["valid"])
+        for entry in runtime.resolutions["obs-2"]
+    ] == [(0, "a", 1, "som", True), (0, "b", 2, "som", False), (1, "c", 2, "raw_coordinates", True)]
+    assert runtime.resolutions["obs-1"] == []
+
+
 def test_a_call_naming_a_mark_its_frame_lacks_is_the_replys_grounding_failure(monkeypatch, clock):
     """Nothing runs for it, and the reply's feedback names the mark and the action asked for."""
     agent = make_agent(monkeypatch, clock)
