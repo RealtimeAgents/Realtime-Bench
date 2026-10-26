@@ -10,6 +10,11 @@ import os
 import socket
 import sys
 
+# LiteLLM reads its settings once, at its import, and some change requests: LITELLM_DROP_PARAMS
+# and LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES among them (litellm/__init__.py:249-270). Tests
+# run with its defaults.
+for _name in [name for name in os.environ if name.startswith("LITELLM_")]:
+    os.environ.pop(_name)
 # Importing LiteLLM fetches its model cost map over the network unless this is set
 # (litellm/litellm_core_utils/get_model_cost_map.py:646). The replay model id is in neither the
 # bundled nor the remote map, so the choice changes no request.
