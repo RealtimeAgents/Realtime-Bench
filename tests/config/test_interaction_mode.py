@@ -683,15 +683,13 @@ def _report_root(root, interaction_mode, streaming=TRACE, cell="cell"):
     (runner.py run_stream), and its summary has the streaming section ``streaming``: by default
     the one its trace gives (reporting.summarize_streaming), none for None. Returns the root."""
     from realtime_framework.evaluation.reporting import prepare_episode_report, summarize_streaming
+    from realtime_framework.evaluation.run_spec import RunSpec
     from realtime_framework.providers.gemini.live import GeminiLiveDriver
 
-    args = types.SimpleNamespace(
-        model=GEMINI, model_input_fps=1.0, reasoning_effort="fixed", fps=1.0, max_minutes=5.0,
-        mode="default", clock="wall", protocol="wall-clock", seed=42, tokens_per_frame="64",
-        think_budget_s=None, per_move_cap_s=None, interaction_mode=interaction_mode, task=WEB,
-        results_dir=str(root / cell),
+    spec = RunSpec(clock_mode="wall", tokens_per_frame=64, interaction_mode=interaction_mode)
+    prepare_episode_report(
+        spec, model=GEMINI, task=WEB, reasoning_effort="fixed", results_dir=str(root / cell)
     )
-    prepare_episode_report(args)
     (expected,) = json.loads((root / cell / "summary.json").read_text())["runs"]
     run = root / cell / WEB
     run.mkdir()

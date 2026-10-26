@@ -535,19 +535,15 @@ def test_harbor_verify_compares_the_model_input_rate():
 
 def test_the_identity_a_local_report_expects_has_both_rates(tmp_path):
     """runner.main() with --report-root records the identity its report expects before the run
-    (reporting.prepare_episode_report), from the arguments main() parsed."""
-    import argparse
-
+    (reporting.prepare_episode_report), from the run options main() runs with."""
     from realtime_framework.evaluation.reporting import prepare_episode_report
+    from realtime_framework.evaluation.run_spec import RunSpec
 
-    args = argparse.Namespace(
-        model=GEMINI, task=WEB, fps=2.0, model_input_fps=1.0, interaction_mode="turn_based",
-        reasoning_effort=catalog.get(GEMINI).defaults["reasoning_effort"], max_minutes=5.0,
-        mode="default", clock="wall", protocol="wall-clock", seed=42,
-        tokens_per_frame="unlimited", think_budget_s=None, per_move_cap_s=None,
+    prepare_episode_report(
+        RunSpec(clock_mode="wall", fps=2.0, model_input_fps=1.0), model=GEMINI, task=WEB,
+        reasoning_effort=catalog.get(GEMINI).defaults["reasoning_effort"],
         results_dir=str(tmp_path),
-    )  # fmt: skip
-    prepare_episode_report(args)
+    )
     (run,) = json.loads((tmp_path / "summary.json").read_text())["runs"]
     assert (run["fps"], run["model_input_fps"]) == (2.0, 1.0)
 

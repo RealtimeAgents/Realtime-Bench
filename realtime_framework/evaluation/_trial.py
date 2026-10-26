@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shutil
 import sys
@@ -13,17 +12,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from realtime_framework.entity.config import merge_streaming_settings
-from realtime_framework.entity.config import task_seed
 from realtime_framework.entity.context_policy import MODEL_PRESETS
+from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
+from realtime_framework.evaluation.run_spec import INTERACTION_MODES
+from realtime_framework.evaluation.run_spec import PROTOCOLS
+from realtime_framework.evaluation.run_spec import run_spec
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def positive(value):
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise argparse.ArgumentTypeError("must be finite and positive")
-    return number
 
 
 def runner_arguments(plan):
@@ -98,35 +93,35 @@ def main(argv=None):
         "--suite", default="public", help="Task suite NAME or NAME@MAJOR.MINOR (default: public)"
     )
     parser.add_argument("--task", required=True, help="Task ID supplied by Harbor")
-    parser.add_argument("--clock", choices=("wall", "token"), default="wall")
-    parser.add_argument("--tokens-per-frame", default="unlimited")
+    # A run option not given is None, which takes the trial worker's default
+    # (evaluation/run_spec.py).
     parser.add_argument(
-        "--fps",
-        type=positive,
-        default=1.0,
-        help="Environment frame rate in frames/second (default: 1)",
+        "--clock",
+        choices=tuple(PROTOCOLS),
+        help=f"(default: {ENTRY_DEFAULTS['trial']['clock_mode']})",
     )
     parser.add_argument(
-        "--model-input-fps",
-        type=positive,
-        default=None,
-        help="Frames per second fed to the model (default: --fps)",
+        "--tokens-per-frame", help=f"(default: {ENTRY_DEFAULTS['trial']['tokens_per_frame']})"
+    )
+    parser.add_argument(
+        "--fps", type=float, help="Environment frame rate in frames/second (default: 1)"
+    )
+    parser.add_argument(
+        "--model-input-fps", type=float, help="Frames per second fed to the model (default: --fps)"
     )
     parser.add_argument(
         "--interaction-mode",
-        choices=("turn_based", "streaming"),
-        default="turn_based",
+        choices=INTERACTION_MODES,
         help="One frame per model generation, or frames streamed to a live model (default: "
         "turn_based)",
     )
     parser.add_argument(
         "--duration-minutes",
         "--max-minutes",
-        type=positive,
-        default=5.0,
+        type=float,
         help="Scored episode horizon in minutes (default: 5)",
     )
-    parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
+    parser.add_argument("--seed", help="Task seed (default: SEED where it is set)")
     parser.add_argument("--lane", type=int, default=0, help="Port/display isolation lane")
     parser.add_argument(
         "--report-output",
@@ -142,16 +137,19 @@ def main(argv=None):
         "--dry-run", action="store_true", help="Validate and print the plan; no API calls or files"
     )
     args = parser.parse_args(argv)
-    model_input_fps = args.fps if args.model_input_fps is None else args.model_input_fps
-    if args.clock == "wall" or args.tokens_per_frame in (None, "unlimited"):
-        tokens_per_frame = None
-    else:
-        try:
-            tokens_per_frame = int(args.tokens_per_frame)
-            if tokens_per_frame <= 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            parser.error("--tokens-per-frame must be positive or 'unlimited'")
+    try:
+        spec = run_spec(
+            "trial",
+            clock_mode=args.clock,
+            tokens_per_frame=args.tokens_per_frame,
+            fps=args.fps,
+            model_input_fps=args.model_input_fps,
+            interaction_mode=args.interaction_mode,
+            duration_minutes=args.duration_minutes,
+            seed=args.seed,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     from realtime_framework.providers.registry import load_project_secrets
 
     load_project_secrets()
@@ -236,14 +234,14 @@ def main(argv=None):
         catalog.validate_reasoning_effort(key, effort)
         validate_model_interaction(
             entry.adapter_type,
-            clock_mode=args.clock,
-            fps=args.fps,
-            model_input_fps=model_input_fps,
-            interaction_mode=args.interaction_mode,
-            tokens_per_frame=tokens_per_frame,
+            clock_mode=spec.clock_mode,
+            fps=spec.fps,
+            model_input_fps=spec.model_input_fps,
+            interaction_mode=spec.interaction_mode,
+            tokens_per_frame=spec.tokens_per_frame,
         )
         check_token_budget(
-            entry.adapter_type, clock_mode=args.clock, tokens_per_frame=tokens_per_frame
+            entry.adapter_type, clock_mode=spec.clock_mode, tokens_per_frame=spec.tokens_per_frame
         )
     except (KeyError, ValueError) as exc:
         parser.error(str(exc))
@@ -261,20 +259,19 @@ def main(argv=None):
     selected = [args.task]
     if selected[0] not in all_tasks:
         parser.error("Task ID must be a member of the selected suite")
-    protocol = "wall-clock" if args.clock == "wall" else "time-aware-token-v1"
     plan = {
         "benchmark_id": "harbor-trial",
         "suite": args.suite,
         "runtime": {
-            "mode": "default",
-            "clock_mode": args.clock,
-            "tokens_per_frame": tokens_per_frame,
-            "fps": args.fps,
-            "model_input_fps": model_input_fps,
-            "interaction_mode": args.interaction_mode,
-            "duration_minutes": args.duration_minutes,
-            "seed": args.seed,
-            "protocol": protocol,
+            "mode": spec.mode,
+            "clock_mode": spec.clock_mode,
+            "tokens_per_frame": spec.tokens_per_frame,
+            "fps": spec.fps,
+            "model_input_fps": spec.model_input_fps,
+            "interaction_mode": spec.interaction_mode,
+            "duration_minutes": spec.duration_minutes,
+            "seed": spec.seed,
+            "protocol": spec.protocol,
             "graphics_mode": os.environ.get("SANDBOX_GRAPHICS_MODE", "cpu"),
             "recording_encoder": os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
         },
@@ -298,15 +295,15 @@ def main(argv=None):
 
     try:
         resolved_model = catalog.to_model_config(
-            key, fps=model_input_fps, reasoning_effort=effort
+            key, fps=spec.model_input_fps, reasoning_effort=effort
         )
         # The runner's pre-run rules, so that Harbor's resolve refuses what the runner would.
         check_episode(
             resolved_model,
-            clock_mode=args.clock,
+            clock_mode=spec.clock_mode,
             task=tasks.get(args.task),
-            env_fps=args.fps,
-            interaction_mode=args.interaction_mode,
+            env_fps=spec.fps,
+            interaction_mode=spec.interaction_mode,
         )
     except (OSError, ValueError, ImportError) as exc:
         parser.error(str(exc))
@@ -319,7 +316,7 @@ def main(argv=None):
     if catalog.is_external_driver(entry.adapter_type):
         # The driver's code, part of the configuration hash (evaluation/config.py).
         settings["external_driver"] = _yaml.external_driver_identity(entry.adapter_type)
-    if args.interaction_mode == "streaming":
+    if spec.interaction_mode == "streaming":
         # The settings the run records (evaluation/config.py effective_run_config), part of the
         # configuration hash.
         driver = catalog.adapter_class(entry.adapter_type)

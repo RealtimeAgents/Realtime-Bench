@@ -1403,36 +1403,31 @@ def _streaming_totals(scored) -> dict:
     }
 
 
-def prepare_episode_report(args):
+def prepare_episode_report(spec, *, model, task, reasoning_effort, results_dir):
     """Record expected identity before execution, independently of the resulting summary, from
-    runner.main()'s arguments with its defaults filled in (config.apply_run_defaults)."""
-    from realtime_framework.evaluation.config import config_fingerprint, effective_run_config
+    runner.main()'s run options ``spec`` (evaluation/run_spec.py) and its catalog ``model``,
+    ``task`` and ``reasoning_effort`` with its defaults filled in (config.apply_run_defaults)."""
+    from realtime_framework.evaluation.config import config_fingerprint, run_spec_config
     from realtime_framework.providers import registry as catalog
 
     model_config = catalog.to_model_config(
-        args.model, fps=args.model_input_fps, reasoning_effort=args.reasoning_effort
+        model, fps=spec.model_input_fps, reasoning_effort=reasoning_effort
     )
-    runtime_hash = config_fingerprint(effective_run_config(
-        model_config=model_config, fps=args.fps, max_minutes=args.max_minutes,
-        mode=args.mode, clock_mode=args.clock, protocol=args.protocol, seed=args.seed,
-        tokens_per_frame=None if args.tokens_per_frame == "unlimited" else int(args.tokens_per_frame),
-        think_budget_s=args.think_budget_s, per_move_cap_s=args.per_move_cap_s,
-        interaction_mode=args.interaction_mode,
-    ))
+    runtime_hash = config_fingerprint(run_spec_config(spec, model_config))
     expected = {
         **resolve_run_identity(
-            task_id=args.task, model=args.model, adapter=model_config.adapter_type,
-            backend_model=model_config.model_name, mode=args.mode, cap=args.max_minutes,
-            protocol=args.protocol, fps=args.fps, model_input_fps=args.model_input_fps,
-            interaction_mode=args.interaction_mode, runtime_config_hash=runtime_hash,
+            task_id=task, model=model, adapter=model_config.adapter_type,
+            backend_model=model_config.model_name, mode=spec.mode, cap=spec.duration_minutes,
+            protocol=spec.protocol, fps=spec.fps, model_input_fps=spec.model_input_fps,
+            interaction_mode=spec.interaction_mode, runtime_config_hash=runtime_hash,
         ),
-        "seed": args.seed,
-        "benchmark_cell": args.model,
-        "reasoning_effort": args.reasoning_effort,
-        "clock_mode": args.clock,
-        "tokens_per_frame": None if args.clock == "wall" or args.tokens_per_frame == "unlimited" else int(args.tokens_per_frame),
+        "seed": spec.seed,
+        "benchmark_cell": model,
+        "reasoning_effort": reasoning_effort,
+        "clock_mode": spec.clock_mode,
+        "tokens_per_frame": spec.tokens_per_frame,
     }
-    path = Path(args.results_dir) / "summary.json"
+    path = Path(results_dir) / "summary.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"runs": [expected]}, indent=2) + "\n")
 

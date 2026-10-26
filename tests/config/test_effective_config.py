@@ -31,7 +31,7 @@ def test_runner_and_trial_reach_the_decision_loop():
     runner = exported["entries"]["runner"]["models"][MODEL]
     trial = exported["entries"]["trial"]["models"][MODEL]
     assert runner["error"] is None and trial["error"] is None
-    # Each entry point keeps its own default clock (runner.py main; _trial.py main).
+    # Each entry point keeps its own default clock (run_spec.py ENTRY_DEFAULTS).
     assert runner["run"]["clock_mode"] == "token" and trial["run"]["clock_mode"] == "wall"
     # The hash _trial's runner records before the episode (reporting.py prepare_episode_report)
     # and after setup (runner.py main) agree.

@@ -9,7 +9,6 @@ import traceback as traceback
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.clock import episode_clocks
-from realtime_framework.evaluation.config import DEFAULT_MODE
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.shell import run_episode
@@ -110,13 +109,11 @@ import realtime_framework.sandbox.desktop as R
 import realtime_framework.providers.registry as catalog
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
-from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import UnsupportedTokenBudget
 from realtime_framework.providers.preflight import check_episode
-from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import check_token_budget
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
@@ -132,7 +129,7 @@ from realtime_framework.evaluation.config import INTERACTABLES_REPRESENTATION
 from realtime_framework.evaluation.config import INTERACTABLES_SCHEMA
 from realtime_framework.evaluation.config import apply_run_defaults
 from realtime_framework.evaluation.config import config_fingerprint
-from realtime_framework.evaluation.config import effective_run_config
+from realtime_framework.evaluation.config import run_spec_config
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
 from realtime_framework.evaluation.reporting import summarize_run_metrics
 from realtime_framework.evaluation.reporting import summarize_streaming
@@ -231,11 +228,16 @@ def _invalid_snapshot(snapshot):
 
 
 # Capture, simulated-time advancement, and action execution live in realtime_framework.sandbox.actions.
-from realtime_framework.entity.config import task_seed
+from realtime_framework.evaluation.config import runner_run_spec
+from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
+from realtime_framework.evaluation.run_spec import INTERACTION_MODES
+from realtime_framework.evaluation.run_spec import PROTOCOLS
+from realtime_framework.evaluation.run_spec import RunSpec
 
 
 def _parser() -> argparse.ArgumentParser:
-    """The runner's arguments, as main() parses them and the emergency summary reads them."""
+    """The runner's arguments, as main() parses them and the emergency summary reads them. A run
+    option not given is None, which takes the runner's default (evaluation/run_spec.py)."""
     p = argparse.ArgumentParser()
     p.add_argument(
         "--adapter",
@@ -247,7 +249,7 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="a catalog key (realtime_framework/providers/registry.py) OR a raw backend id / local model path",
     )
-    p.add_argument("--fps", type=float, default=1.0)
+    p.add_argument("--fps", type=float, default=None)
     p.add_argument(
         "--model-input-fps",
         type=float,
@@ -256,21 +258,23 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--interaction-mode",
-        choices=("turn_based", "streaming"),
-        default="turn_based",
+        choices=INTERACTION_MODES,
+        default=None,
         help="turn_based: one frame per model generation (the leaderboard); streaming: frames "
         "pushed into a live session while the model generates.",
     )
     p.add_argument(
         "--clock",
-        choices=["wall", "token"],
+        choices=tuple(PROTOCOLS),
         default=None,
-        help="wall uses deployment time; token places actions at n/B frame positions.",
+        help="wall uses deployment time; token places actions at n/B frame positions "
+        f"(default: {ENTRY_DEFAULTS['runner']['clock_mode']}).",
     )
     p.add_argument(
         "--tokens-per-frame",
-        default=str(DEFAULT_TOKENS_PER_FRAME),
-        help="positive token-to-time rate B per frame (default: %(default)s); "
+        default=None,
+        help="positive token-to-time rate B per frame (default: "
+        f"{ENTRY_DEFAULTS['runner']['tokens_per_frame']}); "
         "'unlimited' acts at the observed tick, then advances one frame.",
     )
     p.add_argument(
@@ -279,8 +283,8 @@ def _parser() -> argparse.ArgumentParser:
         help="model-native reasoning effort; catalog models validate their own range.",
     )
     p.add_argument("--task", required=True, help="registered task id")
-    p.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
-    p.add_argument("--max-minutes", type=float, default=5.0)
+    p.add_argument("--seed", default=None, help="task seed (default: SEED where it is set)")
+    p.add_argument("--max-minutes", type=float, default=None)
     p.add_argument(
         "--think-budget-s",
         type=float,
@@ -320,43 +324,23 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _run_spec(p: argparse.ArgumentParser, a) -> RunSpec:
+    """The run options main() runs with, from the arguments ``a`` it parsed with ``p``."""
+    try:
+        return runner_run_spec(a)
+    except ValueError as exc:
+        p.error(str(exc))
+
+
 def main():
     p = _parser()
     a = p.parse_args()
-    a.mode = DEFAULT_MODE  # fixed identity field; the runner has one decision loop
-    # prepare_episode_report reads the run's identity from the arguments
     apply_run_defaults(a)
-    if a.clock == "wall" or a.tokens_per_frame == "unlimited":
-        tokens_per_frame = None
-    else:
-        try:
-            tokens_per_frame = int(a.tokens_per_frame)
-        except ValueError:
-            p.error("--tokens-per-frame must be a positive integer or 'unlimited'")
-        if tokens_per_frame <= 0:
-            p.error("--tokens-per-frame must be positive")
-    protocol = a.protocol
-    if not 0 < a.fps < float("inf") or not 0 < a.max_minutes < float("inf"):
-        p.error("--fps and --max-minutes must be finite and positive")
-    if not 0 < a.model_input_fps < float("inf"):
-        p.error("--model-input-fps must be finite and positive")
-    # --fps is the environment's frame rate (task clock, ticks, loop, scored world time);
-    # --model-input-fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
-    env_fps, model_input_fps = a.fps, a.model_input_fps
-    if protocol == "time-aware-token-v1":
-        if a.clock != "token":
-            p.error("time-aware-token-v1 requires --clock token")
-        if a.think_budget_s is not None or a.per_move_cap_s is not None:
-            p.error(
-                "time-aware-token-v1 uses only the task horizon T; deliberation caps are "
-                "legacy diagnostics"
-            )
-    try:
-        check_streaming_options(
-            a.interaction_mode, think_budget_s=a.think_budget_s, per_move_cap_s=a.per_move_cap_s
-        )
-    except ValueError as exc:
-        p.error(str(exc))
+    spec = _run_spec(p, a)
+    # spec.fps is the environment's frame rate (task clock, ticks, loop, scored world time);
+    # spec.model_input_fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
+    env_fps, model_input_fps = spec.fps, spec.model_input_fps
+    tokens_per_frame, protocol = spec.tokens_per_frame, spec.protocol
     requested_model_identity = _model_identity(a.model, a.adapter)
     catalog_entry = catalog.get(a.model) if catalog.has(a.model) else None
     reasoning_effort = a.reasoning_effort
@@ -377,7 +361,7 @@ def main():
     try:
         check_token_budget(
             requested_model_identity["adapter"],
-            clock_mode=a.clock,
+            clock_mode=spec.clock_mode,
             tokens_per_frame=tokens_per_frame,
         )
     except UnsupportedTokenBudget as exc:
@@ -407,14 +391,14 @@ def main():
             )
         check_episode(
             cfg,
-            clock_mode=a.clock,
+            clock_mode=spec.clock_mode,
             task=ctask,
             env_fps=env_fps,
-            interaction_mode=a.interaction_mode,
+            interaction_mode=spec.interaction_mode,
         )
     except ValueError as exc:
         p.error(str(exc))
-    clocks = episode_clocks(a.clock, env_fps)
+    clocks = episode_clocks(spec.clock_mode, env_fps)
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -430,15 +414,15 @@ def main():
         {
             "task_id": a.task,
             "requested_model": requested_model_identity,
-            "clock_mode": a.clock,
-            "mode": a.mode,
+            "clock_mode": spec.clock_mode,
+            "mode": spec.mode,
             "fps": env_fps,
             "model_input_fps": model_input_fps,
-            "interaction_mode": a.interaction_mode,
+            "interaction_mode": spec.interaction_mode,
             "tokens_per_frame": tokens_per_frame,
             "reasoning_effort": reasoning_effort,
-            "max_minutes": a.max_minutes,
-            "seed": a.seed,
+            "max_minutes": spec.duration_minutes,
+            "seed": spec.seed,
             "protocol": protocol,
             "benchmark_eligible": benchmark_cell_eligible,
             "comparison_scope": comparison_scope,
@@ -454,7 +438,13 @@ def main():
         from realtime_framework.evaluation.reporting import prepare_episode_report
 
         build_image("realtime")
-        prepare_episode_report(a)
+        prepare_episode_report(
+            spec,
+            model=a.model,
+            task=a.task,
+            reasoning_effort=reasoning_effort,
+            results_dir=a.results_dir,
+        )
     R.start_container(env_config)
     guest = GuestClient(host="localhost", port=env_config.guest_agent_port)
     if not guest.wait_until_ready(max_wait=60):
@@ -493,10 +483,10 @@ def main():
     run_stage = "environment_setup"
     try:
         # -------- provision the registered task --------
-        ctask.configure_seed(a.seed)
+        ctask.configure_seed(spec.seed)
         task = ctask.description()
         ctask.configure_clock(
-            a.clock, env_fps, task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps)
+            spec.clock_mode, env_fps, task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps)
         )
         url = ctask.provision()
         if url:
@@ -512,8 +502,8 @@ def main():
                 cfg,
                 ctask,
                 task,
-                clock_mode=a.clock,
-                interaction_mode=a.interaction_mode,
+                clock_mode=spec.clock_mode,
+                interaction_mode=spec.interaction_mode,
                 tokens_per_frame=tokens_per_frame,
                 run_dir=run_dir,
                 episode_trace=episode_trace,
@@ -538,31 +528,19 @@ def main():
 
         # Optional legacy diagnostics may add deliberation caps explicitly. The maintained method
         # uses only the shared episode horizon T and therefore does not inherit task-local caps.
-        think_budget = a.think_budget_s
+        think_budget = spec.think_budget_s
         if think_budget is not None:
             print(
                 f"[think] deliberation budget = {think_budget:g}s of cumulative model thinking",
                 flush=True,
             )
-        per_move_cap = a.per_move_cap_s
+        per_move_cap = spec.per_move_cap_s
         if per_move_cap is not None:
             print(
                 f"[think] per-move cap = {per_move_cap:g}s (a slower move times out -> no action that turn)",
                 flush=True,
             )
-        runtime_config = effective_run_config(
-            seed=a.seed,
-            model_config=cfg,
-            fps=env_fps,
-            mode=a.mode,
-            max_minutes=a.max_minutes,
-            protocol=protocol,
-            think_budget_s=think_budget,
-            per_move_cap_s=per_move_cap,
-            clock_mode=a.clock,
-            tokens_per_frame=tokens_per_frame,
-            interaction_mode=a.interaction_mode,
-        )
+        runtime_config = run_spec_config(spec, cfg)
         runtime_config_hash = config_fingerprint(runtime_config)
         _atomic_write_json(
             run_dir / "run_config.json",
@@ -585,7 +563,7 @@ def main():
         wall_start_time = None
         episode_start = None
         if (
-            a.clock == "wall"
+            spec.clock_mode == "wall"
             and ctask is not None
             and hasattr(ctask, "reset_episode")
             and getattr(ctask, "category", None) in {"browser_game", "realtime"}
@@ -616,11 +594,11 @@ def main():
                 )
 
         # -------- environment budget --------
-        if a.clock == "token":
+        if spec.clock_mode == "token":
             deadline = None
         else:
             wall_start_time = wall_start_time or clocks.semantic.time()
-            deadline = wall_start_time + a.max_minutes * 60
+            deadline = wall_start_time + spec.duration_minutes * 60
         # Any task may expose episode_over for a server-owned terminal state; realtime tasks use it
         # for irreversible failures.
         env = GuestEnvironment(
@@ -630,7 +608,7 @@ def main():
             stop_check=(getattr(ctask, "episode_over", None) if ctask else None),
             scene_capture=scene_capture,
             action_audit_path=run_dir / "action_lifecycle.jsonl",
-            clock_mode=a.clock,
+            clock_mode=spec.clock_mode,
             wall_start_time=wall_start_time,
             clocks=clocks,
         )
@@ -638,14 +616,14 @@ def main():
         # -------- run the streaming loop --------
         _loop_t0 = clocks.operational.time()
         run_stage = "inference"
-        _active_start = wall_start_time if a.clock == "wall" else _loop_t0
+        _active_start = wall_start_time if spec.clock_mode == "wall" else _loop_t0
         episode_trace.emit(
             "ActiveLoopStarted",
             {
                 "start_unix_s": _active_start,
                 "loop_entered_unix_s": _loop_t0,
                 "deadline_unix_s": deadline,
-                "clock_mode": a.clock,
+                "clock_mode": spec.clock_mode,
                 "episode_start": episode_start,
             },
         )
@@ -653,8 +631,8 @@ def main():
             timeline = run_stream(
                 agent,
                 env,
-                clock_mode=a.clock,
-                duration_s=a.max_minutes * 60,
+                clock_mode=spec.clock_mode,
+                duration_s=spec.duration_minutes * 60,
                 env_fps=env_fps,
                 input_fps=model_input_fps,
                 tokens_per_frame=tokens_per_frame,
@@ -665,7 +643,7 @@ def main():
                 agent_trace=agent_trace,
                 clocks=clocks,
                 inputs_log=run_dir / "kernel_inputs.jsonl",
-                interaction_mode=a.interaction_mode,
+                interaction_mode=spec.interaction_mode,
             )
             error = getattr(env, "_loop_error", None)
         finally:
@@ -680,10 +658,10 @@ def main():
                 "deadline_unix_s": deadline,
                 "episode_start": episode_start,
                 # Setup between the task's scored origin and the scheduler's first observation.
-                "start_overhead_s": (_loop_t0 - wall_start_time) if a.clock == "wall" else 0.0,
+                "start_overhead_s": (_loop_t0 - wall_start_time) if spec.clock_mode == "wall" else 0.0,
                 "active_wall_time_s": _active_end - _active_start,
-                "clock_mode": a.clock,
-                "horizon_s": a.max_minutes * 60,
+                "clock_mode": spec.clock_mode,
+                "horizon_s": spec.duration_minutes * 60,
             }
             _atomic_write_json(run_dir / "active-loop.json", active_loop)
             episode_trace.emit("ActiveLoopEnded", active_loop)
@@ -738,13 +716,13 @@ def main():
                 adapter=cfg.adapter_type,
                 model=requested_model_identity["model"],
                 backend_model=cfg.model_name,
-                mode=a.mode,
-                cap=a.max_minutes,
+                mode=spec.mode,
+                cap=spec.duration_minutes,
                 protocol=protocol,
                 harness_hash=harness_hash,
                 fps=env_fps,
                 model_input_fps=model_input_fps,
-                interaction_mode=a.interaction_mode,
+                interaction_mode=spec.interaction_mode,
                 runtime_config=runtime_config,
                 runtime_config_hash=runtime_config_hash,
                 snapshot=frozen_snapshot,
@@ -938,11 +916,11 @@ def main():
         cost_accounting = summarize_cost(
             token_accounting,
             # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
-            unaccounted="not_accounted_streaming" if a.interaction_mode == "streaming" else None,
+            unaccounted="not_accounted_streaming" if spec.interaction_mode == "streaming" else None,
         )
         from realtime_framework.evaluation.clock import summarize_model_timing
 
-        model_timing = summarize_model_timing(run_dir, interaction_mode=a.interaction_mode)
+        model_timing = summarize_model_timing(run_dir, interaction_mode=spec.interaction_mode)
         cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
         cost_known_usd = cost_accounting.get("known_cost_usd")
         invalid_run = invalid_runs[0] if invalid_runs else None
@@ -968,7 +946,7 @@ def main():
         # The trace holds every record the episode wrote, checkpointed above. A streaming section
         # that cannot be read leaves the run unscored, as the run metrics below then count it.
         streaming = None
-        if a.interaction_mode == "streaming":
+        if spec.interaction_mode == "streaming":
             try:
                 streaming = summarize_streaming(
                     run_dir / "episode_trace.jsonl",
@@ -993,11 +971,11 @@ def main():
                 run_dir / "action_lifecycle.jsonl",
                 total_decisions=len(timeline),
                 solved=solved,
-                clock_mode=a.clock,
+                clock_mode=spec.clock_mode,
                 tokens_per_frame=tokens_per_frame,
                 fps=model_input_fps,
                 termination=termination,
-                horizon_s=a.max_minutes * 60,
+                horizon_s=spec.duration_minutes * 60,
             )
         except Exception:
             metrics_error = traceback.format_exc()
@@ -1016,11 +994,11 @@ def main():
                 run_dir / "missing-action-lifecycle.jsonl",
                 total_decisions=len(timeline),
                 solved=None,
-                clock_mode=a.clock,
+                clock_mode=spec.clock_mode,
                 tokens_per_frame=tokens_per_frame,
                 fps=model_input_fps,
                 termination=None,
-                horizon_s=a.max_minutes * 60,
+                horizon_s=spec.duration_minutes * 60,
                 validate_decision_count=False,
             )
             run_metrics["run_metrics_error"] = metrics_error
@@ -1033,13 +1011,13 @@ def main():
             task_id=a.task,
             ctask=ctask,
             **effective_model_identity,
-            mode=a.mode,
-            cap=a.max_minutes,
+            mode=spec.mode,
+            cap=spec.duration_minutes,
             protocol=protocol,
             harness_hash=harness_hash,
             fps=env_fps,
             model_input_fps=model_input_fps,
-            interaction_mode=a.interaction_mode,
+            interaction_mode=spec.interaction_mode,
             runtime_config_hash=runtime_config_hash,
         )
         failures = _distinct(invalid_runs)
@@ -1095,10 +1073,10 @@ def main():
             ),
             "loop_stop_reason": latched,
             "termination": termination,
-            "max_minutes": a.max_minutes,
-            "seed": a.seed,
+            "max_minutes": spec.duration_minutes,
+            "seed": spec.seed,
             "applied_seed": getattr(ctask, "applied_seed", None),
-            "clock_mode": a.clock,
+            "clock_mode": spec.clock_mode,
             "tokens_per_frame": tokens_per_frame,
             "dropped_intermediate_frames": int(getattr(env, "_dropped_intermediate_frames", 0) or 0)
             if env is not None
@@ -1106,7 +1084,7 @@ def main():
             "output_clock_policy": OUTPUT_CLOCK_POLICY,
             "tokens_per_world_second": (
                 tokens_per_frame * model_input_fps
-                if a.clock == "token" and tokens_per_frame is not None
+                if spec.clock_mode == "token" and tokens_per_frame is not None
                 else None
             ),
             "world_time_s": world_time_s,
@@ -1168,7 +1146,7 @@ def main():
         summ.update(episode_outcome(summ))
         summ["episode_trace"] = episode_trace.describe()
         episode_trace.close()
-        if a.interaction_mode == "streaming":
+        if spec.interaction_mode == "streaming":
             summ["streaming"] = streaming
         _atomic_write_json(run_dir / "run_summary.json", summ)
     except Exception:
@@ -1362,36 +1340,26 @@ def _write_emergency_summary(
     """The summary of an invalid run main() wrote none for, from the arguments main() parsed: a
     failure to set up, or one building the summary after the episode (main). The run is invalid
     for the first of ``failures``, each a different one."""
-    a = _parser().parse_args()
+    p = _parser()
+    a = p.parse_args()
     if not a.run_id:
         return
+    spec = _run_spec(p, a)
     run_dir = Path(a.results_dir) / a.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / "run_summary.json"
     if path.exists():
         return
-    model_identity = _model_identity(a.model, a.adapter)
-    mode = DEFAULT_MODE
-    clock_mode = a.clock or "token"
-    protocol = a.protocol or ("wall-clock" if clock_mode == "wall" else "time-aware-token-v1")
-    cap_minutes = a.max_minutes
-    env_fps = a.fps
-    model_input_fps = env_fps if a.model_input_fps is None else a.model_input_fps
     run_identity = resolve_run_identity(
         task_id=a.task,
-        **model_identity,
-        mode=mode,
-        cap=cap_minutes,
-        protocol=protocol,
+        **_model_identity(a.model, a.adapter),
+        mode=spec.mode,
+        cap=spec.duration_minutes,
+        protocol=spec.protocol,
         harness_hash=harness_fingerprint(),
-        fps=env_fps,
-        model_input_fps=model_input_fps,
-        interaction_mode=a.interaction_mode,
-    )
-    tokens_per_frame = (
-        None
-        if clock_mode == "wall" or a.tokens_per_frame == "unlimited"
-        else int(a.tokens_per_frame)
+        fps=spec.fps,
+        model_input_fps=spec.model_input_fps,
+        interaction_mode=spec.interaction_mode,
     )
     # No decision lifecycle: a run that failed to set up wrote none, one in a run directory used
     # before is an earlier run's, and one main() could not summarize may be what failed.
@@ -1399,11 +1367,11 @@ def _write_emergency_summary(
         run_dir / "missing-action-lifecycle.jsonl",
         total_decisions=decisions,
         solved=None,
-        clock_mode=clock_mode,
-        tokens_per_frame=tokens_per_frame,
-        fps=model_input_fps,
+        clock_mode=spec.clock_mode,
+        tokens_per_frame=spec.tokens_per_frame,
+        fps=spec.model_input_fps,
         termination=None,
-        horizon_s=cap_minutes * 60,
+        horizon_s=spec.duration_minutes * 60,
         validate_decision_count=False,
     )
     cost_accounting = summarize_cost(None)
@@ -1413,10 +1381,10 @@ def _write_emergency_summary(
         {
             **run_identity,
             "instance_id": a.task,
-            "max_minutes": cap_minutes,
-            "seed": a.seed,
-            "clock_mode": clock_mode,
-            "tokens_per_frame": tokens_per_frame,
+            "max_minutes": spec.duration_minutes,
+            "seed": spec.seed,
+            "clock_mode": spec.clock_mode,
+            "tokens_per_frame": spec.tokens_per_frame,
             "world_time_s": None,
             "run_status": "invalid",
             "invalid_run": invalid_run,
