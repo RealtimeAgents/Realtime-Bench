@@ -681,6 +681,60 @@ def test_an_episode_whose_termination_record_raises_still_ends(monkeypatch, kern
         assert any(line.startswith("[streaming] wrapping up the episode failed") for line in logs)
 
 
+class _UnwritableRows:
+    """An episode trace whose kernel record of kind ``kind`` cannot be written."""
+
+    def __init__(self, kind: str | None):
+        self.kind = kind
+
+    def emit(self, event, payload=None, **fields):
+        if event == "KernelRecord" and payload["kind"] == self.kind:
+            raise OSError("trace disk full")
+
+    def checkpoint(self):
+        pass
+
+
+@pytest.mark.parametrize("kind", ["SnapshotFrozen", "Termination"])
+def test_a_record_of_the_last_batch_that_cannot_be_written_invalidates_the_run(kind):
+    """The kernel writes the echo of the snapshot's answer and its termination record in the
+    batch of its Finish, and takes no event after it. A write that fails there still invalidates
+    the run, as on the turn-based shell: the shell carries it into the termination, which keeps
+    its end (decision 32)."""
+
+    def episode(kind):
+        clock = FakeClock()
+        env, logs = FakeEnv(clock), []
+        with clock.participant():
+            termination = run_streaming_episode(
+                FakeAgent(clock, ONE_CLICK),
+                env,
+                StreamingConfig(duration_s=5.0),
+                clocks=Clocks(clock, clock),
+                log=logs.append,
+                trace=_UnwritableRows(kind),
+            )
+        return termination, env, logs
+
+    control, _, _ = episode(None)
+    termination, env, logs = episode(kind)
+    assert control.invalid is None
+    assert "OSError: trace disk full" in termination.invalid.detail
+    assert termination == Termination(
+        "invalid_run",
+        control.cause,
+        control.ended_at,
+        control.snapshot_at,
+        control.ops_ended_at,
+        control.ops_snapshot_at,
+        Invalidated("harness", "episode_trace_write_failed", termination.invalid.detail),
+    )
+    assert env._stop_reason == "invalid_run"
+    assert env._invalid_run["reason"] == "episode_trace_write_failed"
+    assert env._termination["stop_reason"] == "invalid_run"
+    assert any(line.startswith("[invalid-run] harness:episode_trace_write_failed") for line in logs)
+
+
 def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
     """Decision 33, as on the turn-based shell: the inputs are released once the outcome is
     latched and the snapshot read. A release that raises is logged; the run stays valid and the

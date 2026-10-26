@@ -312,6 +312,19 @@ def _only_logged(record: dict) -> str:
     )
 
 
+def _with_unheard(termination: Termination, unheard: Invalidated | None, log) -> Termination:
+    """A failure a shell found in the batch of the kernel's Finish, such as the termination
+    record's own write, invalidates the run as the kernel would have, at the same end (decision
+    32)."""
+    if unheard is None or termination.invalid is not None:
+        return termination
+    # The end of a traceback names the exception (legacy_loop.py _invalidate).
+    detail = None if unheard.detail is None else unheard.detail[-2000:]
+    invalid = Invalidated(unheard.category, unheard.reason, detail)
+    log(f"[invalid-run] {invalid.category}:{invalid.reason}" + (f" — {detail}" if detail else ""))
+    return replace(termination, stop_reason="invalid_run", invalid=invalid)
+
+
 def _escaped_termination(
     kernel: Kernel,
     semantic: float,
@@ -1097,19 +1110,9 @@ class _Shell:
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in world seconds to nine places
-        (legacy_loop.py ``_termination``); the token clock's are ticks. A failure the shell found
-        in this last batch, such as the termination record's own write, invalidates the run as
-        the kernel would have, at the same end (decision 32)."""
-        unheard = self._unheard
-        if unheard is not None and termination.invalid is None:
-            # The end of a traceback names the exception (legacy_loop.py _invalidate).
-            detail = None if unheard.detail is None else unheard.detail[-2000:]
-            invalid = Invalidated(unheard.category, unheard.reason, detail)
-            self.log(
-                f"[invalid-run] {invalid.category}:{invalid.reason}"
-                + (f" — {detail}" if detail else "")
-            )
-            termination = replace(termination, stop_reason="invalid_run", invalid=invalid)
+        (legacy_loop.py ``_termination``); the token clock's are ticks, and a failure the shell
+        found in this last batch goes into it (_with_unheard)."""
+        termination = _with_unheard(termination, self._unheard, self.log)
         try:
             self._terminate(termination)
         finally:
