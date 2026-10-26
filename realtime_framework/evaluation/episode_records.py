@@ -257,11 +257,13 @@ def clock_output_tokens(r: dict) -> tuple[int | None, str | None]:
     return None, None
 
 
-def account_tokens(r: dict, remaining_clock_tokens: int | None, env) -> None:
+def account_tokens(
+    r: dict, remaining_clock_tokens: int | None, accounting: TokenAccounting
+) -> None:
     """Settle the result's clock output tokens and its token record, and add the record to the
-    episode's token accounting on ``env``: once per result, on the thread that owns ``env``, as
-    nothing locks the accounting. Output past the remaining allowance is billed but not charged
-    to the clock: the clock count stops at the allowance and the excess is kept as post-horizon
+    episode's token accounting: once per result, on the thread that owns the accounting, as
+    nothing locks it. Output past the remaining allowance is billed but not charged to the
+    clock: the clock count stops at the allowance and the excess is kept as post-horizon
     tokens."""
     count, source = clock_output_tokens(r)
     if remaining_clock_tokens is not None and count is not None and count > remaining_clock_tokens:
@@ -295,10 +297,6 @@ def account_tokens(r: dict, remaining_clock_tokens: int | None, env) -> None:
         "provider_upstream",
     ):
         r[name] = r["token_accounting"].get(name)
-    accounting = getattr(env, "_token_accounting", None)
-    if accounting is None:
-        accounting = TokenAccounting()
-        env._token_accounting = accounting
     accounting.add(r["token_accounting"])
 
 

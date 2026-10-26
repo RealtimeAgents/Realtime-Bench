@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -22,7 +21,7 @@ from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.agent_trace import load_body
-from realtime_framework.evaluation.clock import token_record
+from realtime_framework.evaluation.clock import TokenAccounting, token_record
 from realtime_framework.providers.preflight import check_episode
 
 from . import baseline
@@ -340,10 +339,9 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
     # Its token record says why it has no usage (evaluation/clock.py token_record).
     assert token_record(result)["provider_usage_missing_reason"] == "request_not_sent"
     result["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
-    env = SimpleNamespace()
-    episode_records.account_tokens(result, None, env)
+    accounting = TokenAccounting()
+    episode_records.account_tokens(result, None, accounting)
     assert (result["clock_output_tokens"], result["clock_output_tokens_source"]) == (None, None)
-    accounting = env._token_accounting
     assert (accounting.responses, accounting.clock_sources) == (1, set())
     assert accounting.missing_reasons == {"request_not_sent": 1}
     trace = (tmp_path / "episode_trace.jsonl").read_text()

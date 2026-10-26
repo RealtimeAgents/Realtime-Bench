@@ -61,6 +61,7 @@ from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
@@ -380,6 +381,7 @@ class _Shell:
         self._returned: deque[_Generation] = deque()  # results the workers handed back
         self._generations: dict[int, _Generation] = {}
         self._abandoned: list[_Generation] = []
+        self._token_accounting: TokenAccounting | None = None
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
@@ -877,8 +879,10 @@ class _Shell:
         # The clock's count is the result's own: an agent that holds its result adds its usage
         # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
         # A result that names none has none: the agents create_agent makes name theirs
-        # (harnesses/registry.py).
-        episode_records.account_tokens(r, held.remaining, self.env)
+        # (harnesses/registry.py). The episode has no accounting until a result is settled.
+        if self._token_accounting is None:
+            self._token_accounting = self.env._token_accounting = TokenAccounting()
+        episode_records.account_tokens(r, held.remaining, self._token_accounting)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(held.usage_before, usage_after)
@@ -1223,7 +1227,7 @@ class _Shell:
             entry = Entry(None, semantic, ops, "GenerationAbandoned", data)
             if held.inference is not None:
                 self._emit_inference(held.inference, entry)
-                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
+                self._token_accounting.leave_unreported(held.result["token_accounting"])
                 continue
             seconds = (
                 termination.ops_ended_at - held.started_ops
@@ -1356,7 +1360,7 @@ class _Shell:
                 held.result["harness_timeout_reason"] = "per_move_cap"
                 self._decision.result = held.result
             else:
-                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
+                self._token_accounting.leave_unreported(held.result["token_accounting"])
             if bound is not None:
                 self.log(
                     f"[default] k={held.decision} generation back in "
@@ -1397,7 +1401,7 @@ class _Shell:
         if reason == "per_move_cap":
             self._decision.result = r
         elif bound is not None:
-            self.env._token_accounting.leave_unreported(r["token_accounting"])
+            self._token_accounting.leave_unreported(r["token_accounting"])
         self._emit_inference(inference, entry)
         if result.invalid is not None and self.kernel.invalid is None:
             self._invalidate(result.invalid)  # its trajectory row could not be written

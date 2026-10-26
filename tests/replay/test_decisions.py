@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +26,7 @@ import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import FIXED_TEXTS, LEDGER_OMISSION
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
@@ -389,12 +389,12 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     rows = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
     assert [(row["tick"], row["stale"]) for row in map(json.loads, rows)] == [(0, False)]
     # Settled as the runner settles each result (evaluation/episode_records.py account_tokens).
-    env = SimpleNamespace()
-    episode_records.account_tokens(result, None, env)
+    accounting = TokenAccounting()
+    episode_records.account_tokens(result, None, accounting)
     record = result["token_accounting"]
     assert record["provider_usage_status"] == "partial"
     assert record["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
-    inputs = env._token_accounting.summary()["counts"]["provider_input_tokens"]
+    inputs = accounting.summary()["counts"]["provider_input_tokens"]
     assert (inputs["total"], inputs["known_total"], inputs["complete"]) == (
         None,
         answered["input_tokens"],
