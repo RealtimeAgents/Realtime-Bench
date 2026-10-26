@@ -33,6 +33,7 @@ import os
 import socket
 import ssl
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from openai.resources.realtime.realtime import RealtimeSessionResource
@@ -40,20 +41,27 @@ from websockets.exceptions import ConnectionClosedError
 
 import realtime_framework.entity.model as model_module
 from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import GenerationHandle
+from realtime_framework.entity.model import HistorySyncRequest
+from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import SessionSeed
+from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import TransportFailureError
+from realtime_framework.entity.records import UNTRACED
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
 from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
+from tests.session.test_openai_realtime_session import turn, view
 
 from . import baseline
 from .build import build_episode
@@ -616,6 +624,42 @@ def test_a_rebuild_that_spends_its_connect_retries_fails_the_turn(
         rejected = [connection.rejected for connection in stub.connections]
     assert rejected == [None] + [status] * 4
     assert result["invalid_reason"] == reason
+
+
+def test_a_repair_whose_rebuild_spends_its_connect_retries_breaks_the_session(monkeypatch):
+    """Decision 35: after a generation, a repair whose rebuild spends its connect retries comes
+    back BROKEN, so the turn keeps its result and fails as history_sync_failed
+    (harnesses/default/harness.py DefaultHarness._generate); only a rebuild before a
+    generation raises the spent retries, as above. The response left no output item to replace,
+    so the repair rebuilds the session, and the server refuses every upgrade after the first."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed("instruction", MODEL_KEY, None, 1.0, answer)
+
+    async def repair(driver):
+        await driver.connect(ConnectRequest(seed=seed))
+        response = SimpleNamespace(output_item_ids=[])
+        generation = GenerationHandle("generation-1", opaque=(driver._session, response))
+        history = view([turn(0, "a0")])
+        request = HistorySyncRequest(seed, "provider_history_changed", history, generation)
+        try:
+            return await driver.repair(
+                request, ProviderHistoryState.UNKNOWN, False, lambda *args, **kwargs: None
+            )
+        finally:
+            await driver.close()
+
+    with RealtimeStub([], reject_upgrades=tuple(range(2, 12))) as stub:
+        driver = OpenAIRealtimeDriver(realtime_config(stub.base_url))
+        driver.bind_trace(UNTRACED)
+        result = asyncio.run(repair(driver))
+        rejected = [connection.rejected for connection in stub.connections]
+    assert rejected == [None] + [503] * 4
+    assert (result.disposition, result.history_state) == (
+        SyncDisposition.BROKEN,
+        ProviderHistoryState.UNKNOWN,
+    )
+    assert driver.state == RuntimeState.BROKEN
 
 
 def _while_handling(error: Exception, handled: Exception) -> Exception:
