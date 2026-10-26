@@ -130,7 +130,8 @@ def validate_model_interaction(
 
 def check_config(driver, config) -> None:
     """Static model-config rules, in the order the driver's constructor applied them; the
-    context reserve, which the estimating APIs also checked before each request, comes last."""
+    context reserve, which the estimating APIs also checked before each request, comes last,
+    then the reserve against the output limit each request sends."""
     compat = driver.compat
     if compat.output_limit_required and config.native_output_limit is None:
         raise ValueError(
@@ -144,6 +145,22 @@ def check_config(driver, config) -> None:
         and config.context_reserve_tokens >= config.context_window_tokens
     ):
         raise ValueError("Context capacity must exceed generation reserve")
+    # An API that maps the decision's cap onto its request (maps_output_cap; LiteLLMDriver
+    # transport_output_token_cap) sends the native limit when no decision cap applies, so a
+    # request the window admits must leave room for that output.
+    limit = config.native_output_limit
+    if (
+        driver.capabilities.request_size_estimation
+        and driver.capabilities.maps_output_cap
+        and config.context_window_tokens is not None
+        and limit is not None
+        and config.context_reserve_tokens < limit
+    ):
+        raise ValueError(
+            f"The context reserve ({config.context_reserve_tokens} tokens) is below the output "
+            f"limit each request sends ({limit} tokens); set BENCHMARK_CONTEXT_RESERVE_TOKENS to "
+            f"at least {limit}, or lower endpoint.native_output_limit in the model YAML"
+        )
 
 
 def check_provider_options(compat, config) -> None:

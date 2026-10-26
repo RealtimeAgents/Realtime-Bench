@@ -100,8 +100,10 @@ The run records each context-policy value as the policy sets it, and two of them
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs
 only where the driver estimates its requests (`request_size_estimation`) and the model has a
 context window (`context_window_tokens`, from the driver's model defaults or
-`BENCHMARK_CONTEXT_WINDOW_TOKENS`). There, a request over the window archives the oldest turns,
-a block at a time. With no turn left, the earliest archived actions give way to a note in the
+`BENCHMARK_CONTEXT_WINDOW_TOKENS`). There, a request over the window minus its reserve archives
+the oldest turns, a block at a time. On `chat_completions` the reserve
+(`BENCHMARK_CONTEXT_RESERVE_TOKENS`, 4096 by default) must be at least the endpoint's
+`native_output_limit`, which each request sends, or the run is refused. With no turn left, the earliest archived actions give way to a note in the
 ledger, a block at a time, and stay out for the rest of the episode, as archived turns do. A
 request that does not fit with every archived action left out is not sent, and the run is
 invalid (`context_exceeded_before_request`). Luna's driver, which has no roles, places the
