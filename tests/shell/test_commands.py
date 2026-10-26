@@ -112,7 +112,6 @@ def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     assert env._dropped_intermediate_frames == 0
     assert getattr(env, "_invalid_run", None) is None
     assert not hasattr(env, "kernel_counts_reads")
-    assert agent._clock_mode == "wall"
     assert env.horizon is None
     assert episode.trace.checkpoints == 3
 
@@ -200,7 +199,6 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
         "snapshot_delay_s": 0.0,
     }
     assert env.horizon == 4.0
-    assert episode.agent._clock_mode == "token"
 
 
 def test_an_action_is_timed_when_it_lands_whatever_comes_of_it():

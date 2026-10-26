@@ -371,7 +371,6 @@ class _Shell:
         if self.token:
             # Under the kernel's own horizon, a safety net for every advance.
             env.set_episode_horizon(self.config.max_ticks)
-        self.agent._clock_mode = self.config.clock_mode
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
         # A replay aid, opened and closed apart from the episode, which goes on without it.
