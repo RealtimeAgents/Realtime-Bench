@@ -259,21 +259,20 @@ async def _interrupted(driver: OpenAIRealtimeDriver):
         generation = await _start(driver, [turn(0)])
         stream = driver.events(generation)
         received = [await anext(stream), await anext(stream)]
-        result = await driver.interrupt(generation)
+        await driver.interrupt(generation)
         received += [event async for event in stream]
-        return received, result
+        return received
     finally:
         await driver.close()
 
 
 def test_interrupt_cancels_the_response_by_its_id():
     with WsStub(_server(held=1)) as stub:
-        received, result = _within(_interrupted(_driver(stub)))
+        received = _within(_interrupted(_driver(stub)))
     (connection,) = stub.connections
     cancel = json.loads(connection.received[-1])
     assert cancel["type"] == "response.cancel" and cancel["response_id"] == "resp_1"
     assert cancel["event_id"].startswith("rtb_cancel_")
-    assert result.history_state == ProviderHistoryState.CONTAMINATED
     assert [e.kind for e in received if isinstance(e, GenerationBoundary)] == [
         "started",
         "interrupted",

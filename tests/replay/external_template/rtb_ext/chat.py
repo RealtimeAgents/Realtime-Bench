@@ -25,7 +25,6 @@ from realtime_framework.entity.model import (
     Compat,
     Deployment,
     GenerationHandle,
-    InterruptResult,
     RealtimeCapabilities,
     StatelessEncoder,
     TransportFailure,
@@ -137,8 +136,8 @@ class ExternalChatDriver(StatelessEncoder):
             generation_id, sequence + 1, CHANNEL, "turn_complete", ProviderHistoryState.EXACT
         )
 
-    async def interrupt(self, generation) -> InterruptResult:
-        return InterruptResult(ProviderHistoryState.EXACT)
+    async def interrupt(self, generation) -> None:
+        """Nothing is left to cut short: the whole response came with start_generation."""
 
     async def close(self) -> None:
         if self._client is not None:

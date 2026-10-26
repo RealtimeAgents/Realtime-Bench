@@ -262,12 +262,6 @@ class GenerationHandle:
 
 
 @dataclass(frozen=True)
-class InterruptResult:
-    history_state: ProviderHistoryState
-    provider_metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class HistorySyncRequest:
     seed: SessionSeed
     reason: str
@@ -348,7 +342,8 @@ class ModelEncoder(abc.ABC):
     def events(self, generation: GenerationHandle) -> AsyncIterator[ProviderEvent]: ...
 
     @abc.abstractmethod
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult: ...
+    async def interrupt(self, generation: GenerationHandle) -> None:
+        """Cut ``generation`` short, as far as the API can, ahead of the abort's close."""
 
     @abc.abstractmethod
     async def close(self) -> None: ...

@@ -33,7 +33,6 @@ from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
 from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderError
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
@@ -846,11 +845,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 )
                 return
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         session, core_generation = generation.opaque
         # A response on a session closed or replaced since was closed with its connection.
         if self._session is not session:
-            return InterruptResult(ProviderHistoryState.UNKNOWN)
+            return
         kwargs = {}
         response_id = core_generation.response_id
         if response_id:
@@ -860,12 +859,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         core_generation.cancel_event_id = cancel_event_id
         try:
             await self.clock.wait_for(session._conn.response.cancel(**kwargs), _INTERRUPT_TIMEOUT_S)
-            return InterruptResult(ProviderHistoryState.CONTAMINATED)
-        except Exception as exc:  # noqa: BLE001 - provider control boundary
-            return InterruptResult(
-                ProviderHistoryState.UNKNOWN,
-                {"cancel_error": repr(exc)[:300]},
-            )
+        except Exception:  # noqa: BLE001, S110 - provider control boundary; the close follows
+            pass
 
     async def _rebuild(self, request: HistorySyncRequest) -> HistorySyncResult:
         try:

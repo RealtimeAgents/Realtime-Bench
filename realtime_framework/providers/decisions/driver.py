@@ -19,7 +19,6 @@ from realtime_framework.entity.model import (
     FATAL,
     ChoiceClient,
     GenerationHandle,
-    InterruptResult,
     RetryCancelled,
     StatelessEncoder,
     TransportFailure,
@@ -111,4 +110,4 @@ class DecisionEncoder(StatelessEncoder, ChoiceClient):
         )
 
     async def interrupt(self, generation):
-        return InterruptResult(ProviderHistoryState.EXACT)
+        """Nothing is left to cut short: start_generation asked every question of the decision."""

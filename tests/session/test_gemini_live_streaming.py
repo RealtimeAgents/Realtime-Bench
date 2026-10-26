@@ -28,7 +28,6 @@ from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
     GenerationBoundary,
-    ProviderHistoryState,
 )
 from realtime_framework.entity.model import (
     ConnectRequest,
@@ -362,12 +361,10 @@ def test_an_interrupt_closes_the_connection():
     async def run():
         await rig.connect()
         generation = await rig.start("turn-0")
-        result = await rig.driver.interrupt(generation)
-        return result, rig.driver._session
+        await rig.driver.interrupt(generation)
+        return rig.driver._session
 
-    result, session = asyncio.run(run())
-    assert result.history_state == ProviderHistoryState.CONTAMINATED
-    assert result.provider_metadata == {"interrupt_method": "connection_close"}
+    session = asyncio.run(run())
     assert session is None and rig.socket.sent == []
 
 

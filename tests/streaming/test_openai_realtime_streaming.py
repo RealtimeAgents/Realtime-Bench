@@ -1095,15 +1095,13 @@ def test_an_interrupt_cancels_a_reply_on_its_own_session_only():
     reply = replaced.core.start_reply()
     reply.response_id = "resp_1"
     driver._session, driver._conn = _Session(2, new, new_core()), new
-    result = _within(driver.interrupt(GenerationHandle("reply-1", opaque=(replaced, reply))))
+    _within(driver.interrupt(GenerationHandle("reply-1", opaque=(replaced, reply))))
     assert (old.written, new.written) == ([], [])
-    assert result.history_state == ProviderHistoryState.UNKNOWN
     driver._session, driver._conn = replaced, old
-    result = _within(driver.interrupt(GenerationHandle("reply-1", opaque=(replaced, reply))))
+    _within(driver.interrupt(GenerationHandle("reply-1", opaque=(replaced, reply))))
     assert old.written == [
         ("response.cancel", {"response_id": "resp_1", "event_id": reply.cancel_event_id})
     ]
-    assert result.history_state == ProviderHistoryState.CONTAMINATED
 
 
 def test_a_reply_goes_out_after_the_feedback_the_session_lacks():

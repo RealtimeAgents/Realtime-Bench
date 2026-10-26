@@ -17,7 +17,6 @@ from realtime_framework.entity.model import (
     GenerationOutput,
     GenerationRequest,
     HistorySyncResult,
-    InterruptResult,
     ProviderObservation,
     RealtimeCapabilities,
     RuntimeState,
@@ -78,7 +77,6 @@ class _LiveDriver(SessionLifecycle):
 
     async def interrupt(self, generation):
         self.log.append(("interrupt", generation.generation_id))
-        return InterruptResult(ProviderHistoryState.UNKNOWN)
 
     async def send_observation(self, observation, history):
         return {}
@@ -118,7 +116,6 @@ class _StatelessDriver(StatelessEncoder):
 
     async def interrupt(self, generation):
         self.log.append(("interrupt", generation.generation_id))
-        return InterruptResult(ProviderHistoryState.EXACT)
 
     async def close(self):
         self.log.append(("close",))

@@ -24,7 +24,6 @@ from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
 from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import PushReceipt
@@ -1367,27 +1366,20 @@ class GeminiLiveDriver(SessionLifecycle):
             if received.ends:
                 return
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         if self._session is None or self._activity_open:
-            return InterruptResult(ProviderHistoryState.UNKNOWN)
+            return
         if self.streaming or self.options["input_transport"] == "client_content":
             # client_content does not opt into manual audio activity detection, and streaming's
             # NO_INTERRUPTION lets an ActivityStart cut nothing off. Closing the connection
             # cancels the incomplete turn without injecting an ActivityStart.
             await self._close_current()
-            return InterruptResult(
-                ProviderHistoryState.CONTAMINATED,
-                {"interrupt_method": "connection_close"},
-            )
+            return
         try:
             await self._session.send_realtime_input(activity_start=self.types.ActivityStart())
             self._activity_open = True
-            return InterruptResult(ProviderHistoryState.CONTAMINATED)
-        except Exception as exc:  # noqa: BLE001 - provider control boundary
-            return InterruptResult(
-                ProviderHistoryState.UNKNOWN,
-                {"interrupt_error": repr(exc)[:300]},
-            )
+        except Exception:  # noqa: BLE001, S110 - provider control boundary; the close follows
+            pass
 
     async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         resume_error = None

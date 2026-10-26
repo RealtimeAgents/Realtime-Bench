@@ -43,7 +43,6 @@ from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
-from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.records import TraceEvent
@@ -1014,14 +1013,13 @@ class LiteLLMDriver(StatelessEncoder):
 
     # ---- interruption and cleanup ----------------------------------------------------------
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         generation.metadata["interrupted"] = True
         response = generation.metadata.get("response")
         if response is not None:
             await response.aclose()
             with self._lock:
                 self._responses.pop(id(response), None)
-        return InterruptResult(ProviderHistoryState.EXACT)
 
     async def close(self) -> None:
         with self._lock:
