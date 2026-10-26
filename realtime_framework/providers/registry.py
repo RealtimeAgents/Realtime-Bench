@@ -402,53 +402,29 @@ Only the selected implementation is imported, so optional SDKs never affect othe
 import inspect as inspect
 from importlib import import_module as import_module
 
-from realtime_framework.entity.model import Compat, Deployment, ModelClient, RealtimeCapabilities
-
-# RealtimeDriver's methods, plus bind_trace, which the harness calls on every driver it builds.
-_DRIVER_METHODS = (
-    "connect",
-    "send_observation",
-    "start_generation",
-    "events",
-    "interrupt",
-    "sync_history",
-    "close",
-    "bind_trace",
+from realtime_framework.entity.model import (
+    ChoiceClient,
+    Compat,
+    Deployment,
+    ModelEncoder,
+    RealtimeCapabilities,
+    SessionEncoder,
+    StatelessEncoder,
+    interface_methods,
 )
+
 _DRIVER_DECLARATIONS = (
     ("capabilities", RealtimeCapabilities),
     ("deployment", Deployment),
     ("compat", Compat),
     ("model_defaults", dict),
 )
-# Capability flags and the methods they commit a driver to. The runtime calls
-# request_context_status before each request of an API that declares request_size_estimation,
-# and of no other: a driver with the method but not the flag would never be estimated.
-_DECLARED_METHODS = {
-    "classifies_transport_errors": ("classify_transport_error",),
-    "connection_renewal": ("connection_renewal_reason",),
-    "request_size_estimation": ("request_context_status",),
-    "maps_output_cap": ("transport_output_token_cap",),
-    # What the runtime readies, syncs, renews, repairs, aborts and marks a persistent session's
-    # encoder with (providers/session_lifecycle.py).
-    "persistent_session": (
-        "ensure_ready",
-        "synchronize",
-        "renew",
-        "repair",
-        "abort",
-        "mark_dirty",
-    ),
-}
-# What the native-streaming agent pushes frames, asks for replies and classifies their failures
-# with, whatever classifies_transport_errors says (harnesses/streaming/agent.py), and what the
-# selection flow asks a choice API's questions and classifies their failures with
-# (providers/decisions/selection.py).
-_STREAMING_METHODS = ("push_frame", "request_reply", "classify_transport_error")
-_CHOICE_METHODS = ("decide", "classify_question_error")
+# What the native-streaming agent pushes frames and asks for replies with
+# (harnesses/streaming/agent.py).
+_STREAMING_METHODS = ("push_frame", "request_reply")
 
 
-def adapter_class(adapter_type: str) -> type[ModelClient]:
+def adapter_class(adapter_type: str) -> type[ModelEncoder]:
     """Resolve one driver without importing unrelated provider stacks."""
     if adapter_type in APIS:
         return _driver_class(APIS[adapter_type])
@@ -487,7 +463,17 @@ def _check_driver(target: str, driver: type) -> None:
     """Check that a driver class has what the catalog, the pre-run checks, the harness and the
     runtime read from it, and takes what the harness builds it with; registered drivers meet the
     same contract."""
-    missing = [name for name in _DRIVER_METHODS if not callable(getattr(driver, name, None))]
+    # The runtime manages a SessionEncoder's session and only aborts a StatelessEncoder
+    # (harnesses/default/context.py RealtimeRuntime): a driver is exactly one of them.
+    stateless, session = issubclass(driver, StatelessEncoder), issubclass(driver, SessionEncoder)
+    if not stateless and not session:
+        raise ValueError(
+            f"{target!r} is not a model encoder: subclass StatelessEncoder or SessionEncoder"
+        )
+    if stateless and session:
+        raise ValueError(f"{target!r} subclasses both StatelessEncoder and SessionEncoder")
+    interface = SessionEncoder if session else StatelessEncoder
+    missing = [name for name in interface_methods(interface) if name in driver.__abstractmethods__]
     if missing:
         raise ValueError(f"{target!r} is not a model encoder: missing {', '.join(missing)}")
     try:
@@ -500,13 +486,6 @@ def _check_driver(target: str, driver: type) -> None:
         if not isinstance(getattr(driver, name, None), kind):
             declaration = f"a {kind.__name__} class attribute"
             raise ValueError(f"{target!r} declares no {name} ({declaration})")  # noqa: TRY004
-    for flag, methods in _DECLARED_METHODS.items():
-        for method in methods:
-            if getattr(driver.capabilities, flag) and not callable(getattr(driver, method, None)):
-                raise ValueError(f"{target!r} declares {flag} but has no {method}()")
-    # The runtime also reads a persistent session's state (RealtimeRuntime.state).
-    if driver.capabilities.persistent_session and not hasattr(driver, "state"):
-        raise ValueError(f"{target!r} declares persistent_session but has no state")
     if "streaming" in driver.capabilities.interaction_modes:
         # The native-streaming agent builds it so (harnesses/streaming/agent.py).
         try:
@@ -528,20 +507,15 @@ def _check_driver(target: str, driver: type) -> None:
                     f"{target!r} declares streaming but has no {method}()"
                 )
     if driver.capabilities.action_channel == "choice":
-        for method in _CHOICE_METHODS:
+        for method in interface_methods(ChoiceClient):
             if not callable(getattr(driver, method, None)):
                 raise ValueError(  # noqa: TRY004
                     f"{target!r} declares the choice action channel but has no {method}()"
                 )
-    estimates = driver.capabilities.request_size_estimation
-    if callable(getattr(driver, "request_context_status", None)) and not estimates:
+    if session and hasattr(driver, "request_context_status"):
         raise ValueError(
-            f"{target!r} has request_context_status() but does not declare request_size_estimation"
-        )
-    if estimates and driver.capabilities.persistent_session:
-        raise ValueError(
-            f"{target!r} declares request_size_estimation on a persistent session, whose "
-            "context the runtime cannot archive"
+            f"{target!r} has request_context_status() on a session encoder, whose context the "
+            "runtime cannot archive"
         )
 
 

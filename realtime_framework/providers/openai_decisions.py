@@ -61,7 +61,6 @@ class DecisionsDeployment(Deployment):
 class OpenAIDecisionsClient(DecisionEncoder):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_decisions",
-        persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
         # Decisions state has no roles (providers/decisions/history.py render_transcript).
@@ -72,8 +71,6 @@ class OpenAIDecisionsClient(DecisionEncoder):
         finite_frame_budget=False,
         wall_clock_only=True,
         accepts_reasoning_effort=False,
-        classifies_transport_errors=True,
-        request_size_estimation=True,
     )
     deployment = DecisionsDeployment(
         family="vlm",
@@ -115,10 +112,11 @@ class OpenAIDecisionsClient(DecisionEncoder):
             event_hooks=HttpCapture(self, "decisions.http", "choice_question").hooks,
         )
 
-    async def connect(self, request):
-        # An abort closes the client (close below); the decision after it connects again.
+    async def start_generation(self, request):
+        # An abort closes the client (close below); the decision after it opens a new one.
         if self.client.is_closed:
             self.client = self._new_client()
+        return await super().start_generation(request)
 
     def bind_trace(self, trace) -> None:
         self._trace = trace

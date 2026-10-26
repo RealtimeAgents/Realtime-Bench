@@ -19,7 +19,6 @@ import os as os
 import re as re
 import threading as threading
 import uuid as uuid
-from collections.abc import Iterator as Iterator
 from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from dataclasses import replace as replace
@@ -41,16 +40,11 @@ from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import retry_cancel_event
 from realtime_framework.entity.model import Compat
-from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
-from realtime_framework.entity.model import HistorySyncRequest
-from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
-from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
-from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
@@ -67,7 +61,6 @@ ANTHROPIC_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 ANTHROPIC_REASONING_EFFORTS = (None, "fixed", "none", *ANTHROPIC_EFFORT_LEVELS)
 _REQUEST_GATE = threading.Lock()
 _LAST_REQUEST_AT = [0.0]
-_END = object()
 
 
 # Helpers
@@ -114,22 +107,6 @@ def pace_request(owner) -> None:
             if clock.wait(retry_cancel_event(), wait):
                 raise RetryCancelled("generation abandoned during the request_pacing wait")
         _LAST_REQUEST_AT[0] = clock.time()
-
-
-def _next_or_end(iterator: Iterator):
-    try:
-        return next(iterator)
-    except StopIteration:
-        return _END
-
-
-async def iterate_blocking(iterator: Iterator):
-    """Expose a blocking SDK iterator without blocking the runtime event loop."""
-    while True:
-        value = await asyncio.to_thread(_next_or_end, iterator)
-        if value is _END:
-            return
-        yield value
 
 
 def object_dict(value) -> dict | None:
@@ -412,13 +389,9 @@ def chat_messages(request) -> tuple[dict, ...]:
 # Per-API declarations
 _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
-    persistent_session=False,
     roles=("instruction", "input", "model"),
     feedback_placements=("separate_message",),
     server_context="none",
-    terminal_output_usage=True,
-    classifies_transport_errors=True,
-    maps_output_cap=True,
 )
 
 
@@ -490,7 +463,7 @@ class _AuditedSDKStream:
 
 
 # Driver
-class LiteLLMDriver:
+class LiteLLMDriver(StatelessEncoder):
     """Stateless HTTP driver: canonical history is rendered into every request.
 
     Consequently there is no provider-side conversation to repair after a wall-clock early return.
@@ -546,24 +519,6 @@ class LiteLLMDriver:
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
-
-    # ---- lifecycle -------------------------------------------------------------------------
-
-    async def connect(self, request: ConnectRequest) -> None:
-        return None
-
-    async def send_observation(self, observation: ProviderObservation, history) -> dict:
-        # The complete canonical prompt is sent by start_generation; this hook intentionally has no
-        # transport side effect for stateless APIs.
-        return {"observation_id": observation.observation_id}
-
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
-        return HistorySyncResult(
-            SyncDisposition.EXACT,
-            ProviderHistoryState.EXACT,
-            detail="stateless request history is canonical",
-            provider_metadata={"history_request_recomposed": True},
-        )
 
     # ---- request shaping -------------------------------------------------------------------
 
@@ -1058,14 +1013,13 @@ class LiteLLMDriver:
 
     # ---- interruption and cleanup ----------------------------------------------------------
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         generation.metadata["interrupted"] = True
         response = generation.metadata.get("response")
         if response is not None:
             await response.aclose()
             with self._lock:
                 self._responses.pop(id(response), None)
-        return InterruptResult(ProviderHistoryState.EXACT)
 
     async def close(self) -> None:
         with self._lock:
@@ -1210,11 +1164,8 @@ class ChatCompletionsDriver(LiteLLMDriver):
     capabilities = replace(
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
-        terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
-        # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
-        request_size_estimation=True,
         # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
         # reasoning_content through unchanged, and vLLM and SGLang hand it to the model's chat
         # template. A model that needs it back names a preset that sends it (K3: kimi_k3).
@@ -1236,6 +1187,7 @@ class ChatCompletionsDriver(LiteLLMDriver):
     )
     compat = ChatCompat(strip_image_detail=True)
 
+    # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
     async def request_context_status(self, request):
         """Count the actual pending request, including the newest image and action ledger."""
         limit = self.config.context_window_tokens
@@ -1276,7 +1228,6 @@ class DirectLiteLLMDriver(LiteLLMDriver):
     capabilities = replace(
         _STREAMING_CHAT,
         protocol_family="compatible_chat",
-        terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
         # The model id picks LiteLLM's provider, and with it what becomes of reasoning_content:

@@ -98,8 +98,8 @@ refused before the run, and the run records the preset with its configuration.
 
 The run records each context-policy value as the policy sets it, and two of them say what the
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs
-only where the driver estimates its requests (`request_size_estimation`) and the model has a
-context window (`context_window_tokens`, from the driver's model defaults or
+only where the driver estimates its requests (it overrides `request_context_status`) and the
+model has a context window (`context_window_tokens`, from the driver's model defaults or
 `BENCHMARK_CONTEXT_WINDOW_TOKENS`). There, a request over the window minus its reserve archives
 the oldest turns, a block at a time. On `chat_completions` the reserve
 (`BENCHMARK_CONTEXT_RESERVE_TOKENS`, 4096 by default) must be at least the endpoint's
@@ -159,35 +159,38 @@ own preset, so the runs keep apart by model name too.
 
 A model that needs a new wire protocol gets a driver:
 
-1. Write a driver in `realtime_framework/providers/` implementing `RealtimeDriver`
-   (`realtime_framework/entity/model.py`): `connect`, `send_observation`, `start_generation`,
-   `events`, `interrupt`, `sync_history`, `close`, plus `bind_trace(trace)`, which receives the
-   episode trace. The harness builds it as `Driver(config, clock=clock)`, with the episode's
-   operational clock (`realtime_framework/clock.py`); an external driver whose constructor cannot
-   take `clock` is refused when its model is loaded, and the tests hold every registered driver
-   to the same check. Keep it as `self.clock`: the capture hooks below time each response on it,
+1. Write a driver in `realtime_framework/providers/` that subclasses `StatelessEncoder` or
+   `SessionEncoder` (`realtime_framework/entity/model.py`): `start_generation`, `events`,
+   `interrupt`, `close`, plus `bind_trace(trace)`, which receives the episode trace, are the
+   abstract methods both have. The harness builds it as `Driver(config, clock=clock)`, with the
+   episode's operational clock (`realtime_framework/clock.py`); an external driver that leaves
+   out an abstract method, or whose constructor cannot take `clock`, is refused when its model is
+   loaded, and the tests hold every registered driver to the same checks. Keep it as
+   `self.clock`: the capture hooks below time each response on it,
    and the driver's own waits and time reads (a pause between requests, a grace period) go
    through it. Transport timeouts, such as an HTTP client's or a WebSocket receive's, stay in
-   real time. Stateless APIs make `connect` and `sync_history`
-   no-ops and send the canonical request (`GenerationRequest.canonical`,
-   `realtime_framework/entity/request.py`) in their own format; session APIs send each
-   observation and keep native history. A session API (`persistent_session`) also manages its
+   real time. A stateless API (`StatelessEncoder`) sends the canonical request
+   (`GenerationRequest.canonical`, `realtime_framework/entity/request.py`) in its own format with
+   each generation, and the runtime asks it nothing else: an abort interrupts the generation
+   under way and closes the driver, which reopens what the next generation needs. A session API
+   (`SessionEncoder`) also has `connect` and `send_observation(observation, history)`, sends
+   each observation and keeps native history, and manages its
    session: the runtime calls its `ensure_ready` before each generation, `synchronize` after the
    retained history changed, `renew`, `repair` after each generation, `abort` and `mark_dirty`,
    and reads its `state`. Each of them but `abort` and `mark_dirty` takes the runtime's
    `record(sync, result=None, error=None)`: called once for each sync the operation runs, with
    the sync request and its result or error, and with `sync=None` once it reopened the session,
    it writes the history change to the trace. A session API inherits `SessionLifecycle`
-   (`realtime_framework/providers/session_lifecycle.py`), which implements them, with
-   `connect`, `sync_history` and `close`, over your `_connect`, `_sync_history`,
+   (`realtime_framework/providers/session_lifecycle.py`), the `SessionEncoder` that implements
+   them, with `connect` and `close`, over your `_connect`, `_sync_history`,
    `_close_current` and `interrupt`; it reads `self.clock`, writes its records to the trace
    `bind_trace` gave you, kept as `self._trace`, and `_wait` records a wait and takes it. Record
    what became of each content you write (sent, confirmed or refused by the server, or unknown
    after a failed write) with `_record_delivery`. Build HTTP clients with the hooks in
    `realtime_framework/providers/capture.py`, so every request and response is recorded.
-2. Declare `capabilities` (`RealtimeCapabilities`): session persistence, interruption, usage
-   timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
-   which optional methods it implements, and what it can render of the context policy: `roles`,
+2. Declare `capabilities` (`RealtimeCapabilities`): `action_channel` (`"text_json"` or
+   `"function_call"`), the clocks the API supports,
+   and what it can render of the context policy: `roles`,
    `feedback_placements`, `reasoning_replay`, `server_context` and, for function-call sessions,
    `tool_call_replay`. `server_context` is `"unknown"` when the provider keeps items of the
    session the client never sees (reasoning, thoughts, audio), `"none"` when it keeps nothing
@@ -206,8 +209,8 @@ A model that needs a new wire protocol gets a driver:
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
    [streaming settings](#streaming-settings) (a dict), takes `streaming`: the
    native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`, and has
-   `push_frame`, `request_reply` and `classify_transport_error`, which the agent pushes frames,
-   asks for replies and classifies their failures with. A
+   `push_frame` and `request_reply`, which the agent pushes frames and asks for replies with;
+   it classifies their failures with `classify_transport_error`. A
    driver whose `action_channel` is `"choice"` has `decide` and `classify_question_error`, which
    the selection flow (`realtime_framework/providers/decisions/`) asks each question and
    classifies its failures with. An external driver without any of these is refused when its
@@ -216,8 +219,8 @@ A model that needs a new wire protocol gets a driver:
    `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
    provider-measured usage.
-4. Implement `classify_transport_error(exc) -> TransportFailure` and declare
-   `classifies_transport_errors=True`. Do not write a retry loop in the driver or turn on SDK
+4. Override `classify_transport_error(exc) -> TransportFailure`; the default takes every
+   failure as fatal. Do not write a retry loop in the driver or turn on SDK
    retries: the shared executor (`RequestRetry`, `realtime_framework/entity/model.py`) retries
    transient failures of each turn itself, stops once the runner abandons the decision, and
    records every attempt.
@@ -240,23 +243,25 @@ driver as a [model API](#add-a-model-api).
    driver reports complete usage on a finite token clock, runs on any clock and accepts every
    reasoning effort. Declare `roles` (the request roles you map, e.g.
    `("instruction", "input", "model")`), `feedback_placements=("separate_message",)` and
-   `server_context="none"` for a stateless API. Each optional-method flag you set
-   (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
-   `maps_output_cap`) needs its method, and `persistent_session` needs `ensure_ready`,
-   `synchronize`, `renew`, `repair`, `abort`, `mark_dirty` and `state`. The driver runs under the
+   `server_context="none"` for a stateless API. The optional methods
+   `classify_transport_error`, `transport_output_token_cap`, `request_context_status` (stateless)
+   and `connection_renewal_reason` (session) each have a default; overriding one takes it up.
+   A class that subclasses neither `StatelessEncoder` nor
+   `SessionEncoder`, or both, or leaves out an abstract method of the one it subclasses, is
+   refused when its YAML is loaded; a session API subclasses `SessionLifecycle`, which is a
+   `SessionEncoder`, as in step 1. The driver runs under the
    `chat_completions` context policy, with the model's [context preset](#context-preset) if it
    names one. Its prompts ask for one JSON action in the visible text, so a driver whose
-   `action_channel` is not `"text_json"` is refused before the run. With
-   `request_size_estimation`, the runtime asks `request_context_status(request)`
+   `action_channel` is not `"text_json"` is refused before the run. Where the driver overrides
+   `request_context_status(request)`, the runtime asks it
    before each request and archives the oldest turns while the request exceeds the context
    window. With no turn left, the earliest archived actions give way to a note in the ledger,
    and stay out for the rest of the episode, as archived turns do; a request that still does
    not fit is not sent, and the run is invalid (`context_exceeded_before_request`).
    Without a declared window the method returns
-   `{"pressure": False, "counter": "unconfigured"}`. The flag, not the method, decides this: a
-   driver that implements `request_context_status` without declaring `request_size_estimation`
-   is refused when its YAML is loaded, and so is a persistent session that declares it: the
-   runtime archives the history a stateless request carries, not a session's.
+   `{"pressure": False, "counter": "unconfigured"}`. A `SessionEncoder` that has
+   `request_context_status` is refused when its YAML is loaded: the runtime archives the history
+   a stateless request carries, not a session's.
 2. Install the package into the environment that runs the benchmark, for example
    `uv pip install -e /path/to/your-driver`. `PYTHONPATH` is not enough: each Harbor trial runs
    with `PYTHONPATH` set to this repository.
@@ -283,6 +288,6 @@ configuration records the module, the class, a digest of every file in the packa
 context policy row (`chat_completions`), so results from different driver code are never mixed.
 
 `tests/replay/external_template/rtb_ext/chat.py` is a complete example of a stateless chat
-driver.
+driver, a `StatelessEncoder`.
 
 If your model cannot be reached through any of these, [contact us](submit.md#contact).

@@ -17,11 +17,10 @@ from realtime_framework.entity.events import (
 )
 from realtime_framework.entity.model import (
     FATAL,
+    ChoiceClient,
     GenerationHandle,
-    HistorySyncResult,
-    InterruptResult,
     RetryCancelled,
-    SyncDisposition,
+    StatelessEncoder,
     TransportFailure,
     TransportFailureError,
     exception_chain,
@@ -32,17 +31,14 @@ from realtime_framework.providers.decisions.selection import SELECTION_POLICY, C
 HISTORY_REPLAY_LABELS = {"turns": "canonical", "action_digest": "action_digest"}
 
 
-class DecisionEncoder:
-    """The RealtimeDriver half of a Decisions encoder.
+class DecisionEncoder(StatelessEncoder, ChoiceClient):
+    """The StatelessEncoder half of a Decisions encoder.
 
-    A registered Decision API subclasses it with its protocol (``decide``,
+    A registered Decision API subclasses it with its protocol (ChoiceClient's ``decide`` and
     ``classify_question_error``, ``bind_trace``, ``close``), capabilities (with ``max_choices``),
     deployment and the ``clock`` its constructor takes, so the registered class is the complete
     driver.
     """
-
-    async def connect(self, request):
-        return None
 
     @staticmethod
     def classify_transport_error(exc):
@@ -51,9 +47,6 @@ class DecisionEncoder:
             if isinstance(current, TransportFailureError):
                 return current.failure
         return TransportFailure(FATAL)
-
-    async def send_observation(self, observation, history):
-        return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):
         decision = ChoiceDecision(self, request.canonical, trace=self._trace, clock=self.clock)
@@ -117,11 +110,4 @@ class DecisionEncoder:
         )
 
     async def interrupt(self, generation):
-        return InterruptResult(ProviderHistoryState.EXACT)
-
-    async def sync_history(self, request):
-        return HistorySyncResult(
-            SyncDisposition.EXACT,
-            ProviderHistoryState.EXACT,
-            detail="stateless request uses canonical retained history",
-        )
+        """Nothing is left to cut short: start_generation asked every question of the decision."""

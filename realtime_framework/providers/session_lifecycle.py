@@ -4,10 +4,11 @@ A session encoder keeps one provider session open across generations. Whether th
 take the next generation, and the cleanup an abort leaves behind for the next use to wait for, do
 not depend on the protocol: SessionLifecycle keeps both, and readies, renews, repairs or aborts the
 session through the encoder's own connection operations. It also records the encoder's waits on
-the clock, and takes the ones the encoder makes of its own accord. StatelessSession presents a
-stateless driver the same way, so the runtime drives every driver alike. How a session operation
-reads in an agent's trace, and what it leaves of the provider's context, are session_record's and
-SessionStates', which the turn-based runtime and the native-streaming agent share.
+the clock, and takes the ones the encoder makes of its own accord. The abort cleanups
+(AbortCleanup) are also the runtime's for a stateless encoder, which has no session. How a session
+operation reads in an agent's trace, and what it leaves of the provider's context, are
+session_record's and SessionStates', which the turn-based runtime and the native-streaming agent
+share.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import asyncio
 import contextlib
 import contextvars
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from realtime_framework.entity.context_policy import PathPolicy
@@ -28,6 +29,7 @@ from realtime_framework.entity.model import (
     HistorySyncResult,
     RetryCancelled,
     RuntimeState,
+    SessionEncoder,
     SessionSeed,
     SyncDisposition,
     retry_cancel_event,
@@ -58,6 +60,72 @@ def session_preparing(observe: Callable[[], None]):
         _PREPARING.reset(token)
 
 
+def record_wait(trace, clock, wait: str, seconds: float, until: float | None = None) -> None:
+    """Write a timed wait to the agent ``trace`` before it starts: what it waits for, how long,
+    and until which time on the operational ``clock``. ``until`` is the end of a wait bounded by a
+    deadline, on that clock; a wait without one ends ``seconds`` from now."""
+    if until is None:
+        until_ns = clock.monotonic_ns() + round(seconds * 1e9)
+    else:
+        until_ns = round(until * 1e9)
+    trace.capture(
+        TraceEvent.SESSION_WAIT,
+        {"wait": wait, "seconds": seconds, "until_monotonic_ns": until_ns},
+    )
+
+
+class AbortCleanup:
+    """An encoder's abort cleanups: each runs once the one before it is done, and the next use of
+    the encoder waits for the last one, for at most _CLEANUP_WAIT_S (settle). ``owner`` waits on
+    its ``clock`` and writes the wait to its trace (``_record_wait``): a session encoder, or the
+    runtime of a stateless one."""
+
+    def __init__(self, owner) -> None:
+        self._owner = owner
+        self.task: asyncio.Task | None = None  # the last one
+
+    @property
+    def running(self) -> bool:
+        return self.task is not None and not self.task.done()
+
+    async def run(self, cleanup: Callable[[], Awaitable[None]]) -> None:
+        """Run ``cleanup()`` once the cleanup before it is done; it takes that one's place as the
+        one the next use waits for."""
+        self.task = asyncio.ensure_future(self._after(self.task, cleanup))
+        await asyncio.wait({self.task})
+
+    @staticmethod
+    async def _after(before: asyncio.Task | None, cleanup) -> None:
+        """``cleanup()`` once ``before`` is done: the next use waits for the last cleanup alone,
+        and the close of one still running would close what the next use opens. Cancelled while
+        it waits, it cancels ``before`` too."""
+        if before is not None:
+            try:
+                await asyncio.wait({before})
+            except asyncio.CancelledError:
+                before.cancel()
+                raise
+        await cleanup()
+
+    async def settle(self) -> bool:
+        """Wait for the last cleanup; one still running after _CLEANUP_WAIT_S is cancelled.
+        Whether it was."""
+        cleanup = self.task
+        if cleanup is None:
+            return False
+        if not cleanup.done():
+            self._owner._record_wait("abort_cleanup", _CLEANUP_WAIT_S)
+        cancelled = False
+        try:
+            await self._owner.clock.wait_for(asyncio.wait({cleanup}), _CLEANUP_WAIT_S)
+        except TimeoutError:
+            cleanup.cancel()
+            cancelled = True
+        if self.task is cleanup:
+            self.task = None
+        return cancelled
+
+
 class RenewalRequired(RuntimeError):
     """The provider asked for a new connection (connection_renewal_reason), and the session
     takes no input until renew() made it: a frame or a reply refused for that is held back, not
@@ -66,7 +134,7 @@ class RenewalRequired(RuntimeError):
     encoder can, and what was refused can be put in again."""
 
 
-class SessionLifecycle:
+class SessionLifecycle(SessionEncoder):
     """A live encoder's session: connected or not, dirty or not, and the last abort's cleanup.
 
     The session is connected once connect() opened it or a sync left it exact, and no longer once
@@ -103,9 +171,9 @@ class SessionLifecycle:
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one, and ``interrupt(generation)``; ``capabilities``, with
-    ``connection_renewal_reason()`` where they declare connection_renewal; ``clock``, the
-    operational clock; and ``_trace``, which bind_trace sets. ``interrupt`` and
+    is one, and ``interrupt(generation)``; ``capabilities``; ``connection_renewal_reason()``
+    where the provider asks for new connections; ``clock``, the operational clock; and
+    ``_trace``, which bind_trace sets. ``interrupt`` and
     ``_close_current`` must each end within a bound, whatever a write in progress on the
     connection does: the close fails a write stuck in it, and the interrupt, which the close
     follows, does not wait for one. That is what ends an abort's cleanup before ensure_ready and
@@ -115,7 +183,7 @@ class SessionLifecycle:
     _connected = False
     _dirty = False
     _broken = False
-    _cleanup: asyncio.Task | None = None
+    _abort_cleanup: AbortCleanup | None = None
     _operation_lock: asyncio.Lock | None = None
 
     @property
@@ -152,7 +220,7 @@ class SessionLifecycle:
         """Close the connection once the last abort's cleanup is done, or has run for
         _CLEANUP_WAIT_S, or the caller stops waiting, whichever comes first."""
         try:
-            await self._settle()
+            await self._aborts.settle()
         finally:
             self._connected = False
             await self._close_current()
@@ -177,9 +245,9 @@ class SessionLifecycle:
         result is returned; a recovery that does not leave it exact raises. A failed reopen
         raises unrecorded.
         """
-        if self._cleanup is not None and not self._cleanup.done():
+        if self._aborts.running:
             self._preparing()
-        if await self._settle():
+        if await self._aborts.settle():
             await self._interrupt_and_close(None)
         async with self._session_lock():
             if self._connected and not self._dirty:
@@ -215,10 +283,9 @@ class SessionLifecycle:
     ) -> HistorySyncResult | None:
         """Renew the connection once the provider asked for it (connection_renewal_reason), from
         ``history``; a renewal that does not leave the session exact raises. None when no renewal
-        is due."""
-        reason = (
-            self.connection_renewal_reason() if self.capabilities.connection_renewal else None
-        )
+        is due. The caller readies the session first (ensure_ready): one closed or dirty since,
+        which may hold what the history does not, is rebuilt then, and owes no renewal."""
+        reason = self.connection_renewal_reason()
         if not reason:
             return None
         self._preparing()
@@ -248,22 +315,14 @@ class SessionLifecycle:
         far as either works, once the cleanup of the abort before is done. The next ensure_ready
         and close wait for this to finish, for at most _CLEANUP_WAIT_S; a later abort takes its
         place as the one they wait for."""
-        self._cleanup = asyncio.ensure_future(self._clean_up(self._cleanup, generation))
-        await asyncio.wait({self._cleanup})
+        await self._aborts.run(lambda: self._interrupt_and_close(generation))
 
-    async def _clean_up(
-        self, before: asyncio.Task | None, generation: GenerationHandle | None
-    ) -> None:
-        """An abort's cleanup, once ``before``, the one it takes the place of, is done:
-        ensure_ready waits for the last cleanup alone, and the close of one still running would
-        close the session it opens. Cancelled while it waits, it cancels ``before`` too."""
-        if before is not None:
-            try:
-                await asyncio.wait({before})
-            except asyncio.CancelledError:
-                before.cancel()
-                raise
-        await self._interrupt_and_close(generation)
+    @property
+    def _aborts(self) -> AbortCleanup:
+        # Made on first use, as the session lock is: an encoder builds no SessionLifecycle.
+        if self._abort_cleanup is None:
+            self._abort_cleanup = AbortCleanup(self)
+        return self._abort_cleanup
 
     def _session_lock(self) -> asyncio.Lock:
         # Made on first use, on the execution thread's loop, which every operation runs on.
@@ -309,24 +368,6 @@ class SessionLifecycle:
             pass
         self._connected, self._broken = False, False
 
-    async def _settle(self) -> bool:
-        """Wait for the last abort's cleanup; one still running after _CLEANUP_WAIT_S is
-        cancelled. Whether it was."""
-        cleanup = self._cleanup
-        if cleanup is None:
-            return False
-        if not cleanup.done():
-            self._record_wait("abort_cleanup", _CLEANUP_WAIT_S)
-        cancelled = False
-        try:
-            await self.clock.wait_for(asyncio.wait({cleanup}), _CLEANUP_WAIT_S)
-        except TimeoutError:
-            cleanup.cancel()
-            cancelled = True
-        if self._cleanup is cleanup:
-            self._cleanup = None
-        return cancelled
-
     async def _wait(self, wait: str, seconds: float) -> None:
         """Wait ``seconds`` on the operational clock, on an executor thread as RequestRetry's
         backoff does, and like it on the cancel event of the enclosing retry_cancellation: once
@@ -367,16 +408,7 @@ class SessionLifecycle:
         )
 
     def _record_wait(self, wait: str, seconds: float, until: float | None = None) -> None:
-        """``until`` is the end of a wait bounded by a deadline, on the operational clock; a
-        wait without one ends ``seconds`` from now."""
-        if until is None:
-            until_ns = self.clock.monotonic_ns() + round(seconds * 1e9)
-        else:
-            until_ns = round(until * 1e9)
-        self._trace.capture(
-            TraceEvent.SESSION_WAIT,
-            {"wait": wait, "seconds": seconds, "until_monotonic_ns": until_ns},
-        )
+        record_wait(self._trace, self.clock, wait, seconds, until)
 
 
 @dataclass(frozen=True)
@@ -494,31 +526,3 @@ class SessionStates:
 def _abandoned() -> bool:
     """Whether the generation this context's operations belong to was abandoned."""
     return retry_cancel_event().is_set()
-
-
-class StatelessSession(SessionLifecycle):
-    """A stateless driver as a session: its connect, sync_history and close stand for the
-    connection operations. Nothing on the provider side outlives a request, but the runtime
-    readies, aborts and closes it as it does a live session's; a driver whose abort closed its
-    client makes a new one when the next generation connects again."""
-
-    def __init__(self, driver, *, clock, trace):
-        self.driver = driver
-        self.capabilities = driver.capabilities
-        self.clock = clock
-        self._trace = trace
-
-    async def _connect(self, request: ConnectRequest) -> None:
-        await self.driver.connect(request)
-
-    async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
-        return await self.driver.sync_history(request)
-
-    async def _close_current(self) -> None:
-        await self.driver.close()
-
-    async def interrupt(self, generation: GenerationHandle):
-        return await self.driver.interrupt(generation)
-
-    def connection_renewal_reason(self) -> str | None:
-        return self.driver.connection_renewal_reason()

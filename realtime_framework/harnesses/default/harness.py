@@ -1269,9 +1269,7 @@ class DefaultHarness(VisionAgentBase):
         """No frame waits in the agent: generate() is handed its observation."""
 
     def transport_output_token_cap(self, provider_cap):
-        if self.driver.capabilities.maps_output_cap:
-            return self.driver.transport_output_token_cap(provider_cap)
-        return None if provider_cap is None else int(provider_cap)
+        return self.driver.transport_output_token_cap(provider_cap)
 
     def _prepare_observations(self, observations, tick):
         """The prepared observations, their inspections, the newest one's answer options, and
@@ -1538,7 +1536,6 @@ class DefaultHarness(VisionAgentBase):
         )
         request = GenerationRequest(
             generation_id=f"turn-{tick}-{uuid.uuid4().hex[:12]}",
-            provider_output_token_cap=provider_cap,
             transport_output_token_cap=transport_cap,
             generation=generation.number,
         )
@@ -1567,11 +1564,7 @@ class DefaultHarness(VisionAgentBase):
             if self.driver.capabilities.action_channel == "function_call"
             else _GenerationOutputCollector
         )
-        classifier = (
-            self.driver.classify_transport_error
-            if self.driver.capabilities.classifies_transport_errors
-            else None
-        )
+        classifier = self.driver.classify_transport_error
         collector = None
         retry_reasons = []
         retry_delays = []
@@ -1590,11 +1583,10 @@ class DefaultHarness(VisionAgentBase):
         def classify(exc):
             if isinstance(exc, RequestExceedsContext):  # the harness's own; a retry cannot fit
                 return TransportFailure(FATAL)
-            if callable(classifier):
-                try:
-                    return classifier(exc)
-                except Exception:  # noqa: BLE001, S110 - unclassifiable stays fatal
-                    pass
+            try:
+                return classifier(exc)
+            except Exception:  # noqa: BLE001, S110 - unclassifiable stays fatal
+                pass
             return TransportFailure(FATAL)
 
         def received_output(exc):

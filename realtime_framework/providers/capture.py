@@ -11,6 +11,7 @@ response headers alike, are not recorded at all.
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import weakref
 
@@ -275,6 +276,11 @@ def _session_capture(connection, direction: str, message=None, **fields) -> int 
     )
 
 
+def _received_in(scope: dict | None, connection, message) -> None:
+    enter_trace_scope(scope)
+    _session_capture(connection, "server", message)
+
+
 def _connection_class(base, owner, channel: str, classify):
     numbers = itertools.count(1)
 
@@ -282,6 +288,7 @@ def _connection_class(base, owner, channel: str, classify):
         trace_owner = owner
         trace_channel = channel
         trace_classify = staticmethod(classify)
+        trace_read_scope = None
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -291,8 +298,8 @@ def _connection_class(base, owner, channel: str, classify):
     return Recording
 
 
-def sync_ws_connection(owner, channel: str, classify):
-    """A ``websockets.sync`` client connection class that records every message.
+def async_ws_connection(owner, channel: str, classify):
+    """A ``websockets.asyncio`` client connection class that records every message.
 
     A client message is captured just before it is written, so it always precedes its
     acknowledgement in capture order; a failed write adds a lifecycle record whose state is
@@ -300,49 +307,6 @@ def sync_ws_connection(owner, channel: str, classify):
     of the call that receives it, or in the one ``trace_read_scope()`` gives as the message comes
     in, where the driver sets it: a reader whose read began before what it reads for did.
     """
-    from websockets.sync.client import ClientConnection
-
-    class Connection(_connection_class(ClientConnection, owner, channel, classify)):
-        trace_read_scope = None
-
-        def handshake(self, *args, **kwargs):
-            try:
-                return super().handshake(*args, **kwargs)
-            except Exception as exc:
-                _session_capture(
-                    self, "lifecycle", message_type="handshake_failed", error=_error_text(exc)
-                )
-                raise
-
-        def send(self, message, text=None):
-            sequence = _session_capture(self, "client", message)
-            try:
-                return super().send(message, text)
-            except Exception as exc:
-                _session_capture(
-                    self,
-                    "lifecycle",
-                    message_type="send_failed",
-                    state="unknown",
-                    refers_to=sequence,
-                    error=_error_text(exc),
-                )
-                raise
-
-        def recv(self, timeout=None, decode=None):
-            message = super().recv(timeout, decode)
-            if self.trace_read_scope is not None:
-                # Such a read runs on a worker thread, in a copy of its reader's context: the
-                # scope goes to this read alone.
-                enter_trace_scope(self.trace_read_scope())
-            _session_capture(self, "server", message)
-            return message
-
-    return Connection
-
-
-def async_ws_connection(owner, channel: str, classify):
-    """The ``websockets.asyncio`` counterpart of :func:`sync_ws_connection`."""
     from websockets.asyncio.client import ClientConnection
 
     class Connection(_connection_class(ClientConnection, owner, channel, classify)):
@@ -372,7 +336,12 @@ def async_ws_connection(owner, channel: str, classify):
 
         async def recv(self, decode=None):
             message = await super().recv(decode)
-            _session_capture(self, "server", message)
+            if self.trace_read_scope is None:
+                _session_capture(self, "server", message)
+            else:
+                # The reader reads on in a context of its own: the scope goes to this message
+                # alone, not to what the reader records after it.
+                contextvars.copy_context().run(_received_in, self.trace_read_scope(), self, message)
             return message
 
     return Connection

@@ -316,9 +316,7 @@ class NativeStreamingAgent(VisionAgentBase):
         """No frame waits in the agent: a frame goes into the session only when pushed."""
 
     def transport_output_token_cap(self, provider_cap):
-        if self.driver.capabilities.maps_output_cap:
-            return self.driver.transport_output_token_cap(provider_cap)
-        return None if provider_cap is None else int(provider_cap)
+        return self.driver.transport_output_token_cap(provider_cap)
 
     def _view(self, blocks: list[ContentBlock] | None = None) -> CanonicalRequest:
         """The session ``blocks`` make, the accepted ones by default; the caller holds the
@@ -462,9 +460,7 @@ class NativeStreamingAgent(VisionAgentBase):
         return self.clock.time() - (self.clock.monotonic() - monotonic)
 
     def _renewal_due(self) -> bool:
-        return bool(
-            self.driver.capabilities.connection_renewal and self.driver.connection_renewal_reason()
-        )
+        return bool(self.driver.connection_renewal_reason())
 
     def _release_folded(self) -> None:
         """Let go of the screenshot of the frame the newest push folded, as a turn-based history
@@ -723,7 +719,6 @@ class NativeStreamingAgent(VisionAgentBase):
                     reply.handle = await self.driver.request_reply(
                         GenerationRequest(
                             generation_id=f"streaming-{reply.generation}",
-                            provider_output_token_cap=budget.provider_output_tokens,
                             transport_output_token_cap=budget.transport_output_tokens,
                             canonical=view,
                             generation=reply.generation,

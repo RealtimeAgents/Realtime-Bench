@@ -168,9 +168,9 @@ class PathPolicy:
     verbatim_replay: bool
     # 8 before each request, archive the oldest turns while it exceeds the declared context
     # window, then, with no turn left, leave out the earliest archived actions, which stay out
-    # for the rest of the episode as archived turns do. On allows it; it acts only where the API
-    # declares an estimate of its requests (RealtimeCapabilities.request_size_estimation) and
-    # the model config has a window
+    # for the rest of the episode as archived turns do. On allows it; it acts only where the
+    # API's driver estimates its requests (it overrides StatelessEncoder.request_context_status)
+    # and the model config has a window
     pressure_archive: bool
     # 9 Decision history form; the pre-run checks take only the form the API replays
     # (RealtimeCapabilities.history_replay)

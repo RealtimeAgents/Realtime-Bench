@@ -7,7 +7,7 @@ import asyncio as asyncio
 import contextvars
 import logging as logging
 import os as os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from typing import ClassVar as ClassVar
 
@@ -24,7 +24,6 @@ from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
 from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import PushReceipt
@@ -39,6 +38,7 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.records import current_trace_scope
 from realtime_framework.entity.records import enter_trace_scope
 from realtime_framework.entity.request import CanonicalRequest
@@ -130,32 +130,18 @@ class GoAwayDeadlineExceeded(RuntimeError):
     """An incomplete native turn must remain invalid, even without visible output."""
 
 
-@dataclass
-class _StreamedReply:
-    """Streaming: a reply the reader reads for, until its events() is done, on the connection
-    it started on (``session`` and its reader). ``held`` are the cancellations read between
-    replies before it started; ``messages`` holds what the reader read and events() has not
-    taken yet, or the reader's failure; ``ended``, whether it read the reply's end."""
-
-    session: Any
-    receiver: _Receiver
-    held: list[Orphan]
-    messages: asyncio.Queue = field(default_factory=asyncio.Queue)
-    ended: bool = False
-
-
 class _Receiver:
     """The one reader of a connection once it is set up: each server message, applied to the
     session core, which stamps it with the connection and the generation whose reply was being
-    read. The setup's acknowledgement (setupComplete), the only one Gemini Live sends, is read by
-    google-genai inside its connect, before the receiver exists.
+    read, and hands it to that reply. The setup's acknowledgement (setupComplete), the only one
+    Gemini Live sends, is read by google-genai inside its connect, before the receiver exists.
 
     google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
     IDLE, so the receiver opens the next one and spans every generation on the connection.
     Extended Thinking uses ``turn_complete`` for intermediate spoken fillers; the core decides
     where a generation ends. Turn-based, it reads only when a generation asks for a message.
-    Streaming, the driver's reader asks for every message as it arrives, and gets the orphans
-    too (SessionCore.arrived).
+    Streaming, it reads every message as it arrives (read_continuously), the orphans too
+    (SessionCore.arrived).
 
     A read that fails or is cancelled leaves the connection unusable: every later read raises the
     failure again. A cancelled read is kept as a RuntimeError caused by the cancellation, so that
@@ -164,12 +150,13 @@ class _Receiver:
 
     def __init__(self, session, number: int, core: SessionCore, clock: Clock):
         self.number = number
+        self.session = session
         self.failure: BaseException | None = None
-        self._session = session
         self._core = core
         self._clock = clock
         self._messages = None  # the SDK's current receive() iterator
         self._opened_empty = False  # it has given no message yet
+        self._read_one: asyncio.Event | None = None  # streaming: set as each read ends
 
     async def next(self) -> Received | Orphan:
         if self.failure is None:
@@ -187,10 +174,54 @@ class _Receiver:
         self._core.reader_failed(self.number)
         raise self.failure
 
+    async def receive_until(self, ready) -> None:
+        """Receive until ``ready()`` holds: turn-based, by reading, in the caller's context;
+        streaming, by waiting for the reads of read_continuously. A failed read raises in every
+        waiter, once it has taken what was read before."""
+        while not ready():
+            if self._read_one is None:
+                await self.next()
+            elif self.failure is not None:
+                raise self.failure
+            else:
+                self._read_one.clear()
+                await self._read_one.wait()
+
+    def read_continuously(self, on_failed, context: contextvars.Context) -> asyncio.Task:
+        """Streaming: the task, run in ``context``, that reads every message as it arrives,
+        until a read fails, which also calls ``on_failed()``, or the task is cancelled. Each goes
+        to the reply that takes it, or is an orphan; the core holds an orphan's cancellations for
+        the next reply to start, on this connection or a later one, and keeps its goAway and
+        resumption update; nothing else of it is taken. What it reads is recorded in the trace
+        scope of the reply it reads for, which start_generation hands to ``context``, until the
+        reply's end."""
+        self._read_one = asyncio.Event()
+        return asyncio.get_running_loop().create_task(self._read_all(on_failed), context=context)
+
+    async def _read_all(self, on_failed) -> None:
+        try:
+            while True:
+                arrived = await self.next()
+                if isinstance(arrived, Received) and arrived.ends:
+                    enter_trace_scope(None)  # until the next reply hands its own over
+                if isinstance(arrived, Orphan) and not arrived.cancelled:
+                    logger.debug(
+                        "Gemini Live connection %d: no generation takes %s",
+                        self.number,
+                        type(arrived.message).__name__,
+                    )
+                self._read_one.set()
+        except asyncio.CancelledError:
+            self._read_one.set()
+            raise
+        except Exception:  # noqa: BLE001 - kept as the failure every waiter raises
+            self._read_one.set()
+            on_failed()
+
     async def _read(self) -> Received | Orphan:
         while True:
             if self._messages is None:
-                self._messages = self._session.receive().__aiter__()
+                self._messages = self.session.receive().__aiter__()
                 self._opened_empty = True
             try:
                 message = await anext(self._messages)
@@ -217,7 +248,6 @@ class _Receiver:
 class GeminiLiveDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="gemini_live",
-        persistent_session=True,
         # The system instruction goes into the session setup, not into a content role.
         roles=("input", "model"),
         feedback_placements=("separate_message",),
@@ -225,10 +255,7 @@ class GeminiLiveDriver(SessionLifecycle):
         # tool_transcript: text that keeps the wire fields of each call and its receipt.
         tool_call_replay=("native_tools", "tool_transcript"),
         max_video_fps=1.0,
-        terminal_output_usage=True,
         action_channel="function_call",
-        classifies_transport_errors=True,
-        connection_renewal=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
     )
     deployment = GeminiDeployment(
@@ -319,10 +346,6 @@ class GeminiLiveDriver(SessionLifecycle):
         self._receiver: _Receiver | None = None  # the open connection's reader
         self._reading: asyncio.Task | None = None  # streaming: the task reading it
         self._reading_context: contextvars.Context | None = None  # and the context it runs in
-        # Streaming: the replies the reader reads for, by generation id; and the cancellations
-        # read between replies, which the next reply's events() hands over.
-        self._replies: dict[str, _StreamedReply] = {}
-        self._cancelled_between: list[Orphan] = []
         # The WebSocket of the last connection opened, which the trace numbered
         # (providers/capture.py), and of each one the core counted, by the core's number.
         self._trace_connection = None
@@ -355,17 +378,8 @@ class GeminiLiveDriver(SessionLifecycle):
         socket = self._trace_connections.get(connection, self._trace_connection)
         self._record_delivery(state, contents, socket.trace_connection_id)
 
-    @staticmethod
-    def _exception_chain(exc: BaseException):
-        current: BaseException | None = exc
-        seen: set[int] = set()
-        while current is not None and id(current) not in seen:
-            yield current
-            seen.add(id(current))
-            current = current.__cause__ or current.__context__
-
     def _rate_limit_kind(self, exc: BaseException) -> str | None:
-        for current in self._exception_chain(exc):
+        for current in exception_chain(exc):
             code = int(getattr(current, "code", 0) or 0)
             status = str(getattr(current, "status", "") or "").strip().lower()
             detail = (
@@ -385,9 +399,7 @@ class GeminiLiveDriver(SessionLifecycle):
 
     def classify_transport_error(self, exc: BaseException) -> TransportFailure:
         """Classify a failed turn for the harness's shared retry policy."""
-        if any(
-            isinstance(current, GoAwayDeadlineExceeded) for current in self._exception_chain(exc)
-        ):
+        if any(isinstance(current, GoAwayDeadlineExceeded) for current in exception_chain(exc)):
             return TransportFailure(FATAL)
         limited = self._rate_limit_kind(exc)
         if limited is not None:
@@ -407,7 +419,7 @@ class GeminiLiveDriver(SessionLifecycle):
         Generic ABORTED and service-unavailable closes are also transient candidates; other 1008
         policy violations and explicit GoAway deadline failures remain terminal.
         """
-        for current in self._exception_chain(exc):
+        for current in exception_chain(exc):
             if isinstance(current, EmptyInterruptedToolTurnError):
                 return True
             if isinstance(current, self._connection_closed_type):
@@ -573,10 +585,6 @@ class GeminiLiveDriver(SessionLifecycle):
         self._last_video_sent_at = None
         self._go_away_wait_recorded = None
         self._core.closed()
-        if self.streaming:
-            # Closing cut off whatever the session was taking: it is rebuilt, not resumed. A
-            # renewal's connect plans its own resume after this.
-            self._core.unresumable()
         if reading is not None:
             # Its replies end with the cancelled read, not with whatever the close would raise.
             reading.cancel()
@@ -630,9 +638,7 @@ class GeminiLiveDriver(SessionLifecycle):
             # The reader records what it reads in the scope of the reply it reads for
             # (start_generation hands it over), not in the scope of the call that connected.
             self._reading_context = contextvars.Context()
-            self._reading = asyncio.get_running_loop().create_task(
-                self._read_on(self._receiver), context=self._reading_context
-            )
+            self._reading = self._receiver.read_continuously(self.mark_dirty, self._reading_context)
         self._connect_metadata = {
             "session_connect_mode": connect.mode,
             "session_resume_handle_used": connect.resume_handle is not None,
@@ -686,63 +692,6 @@ class GeminiLiveDriver(SessionLifecycle):
                 pass
             raise
         return session
-
-    async def _read_on(self, receiver: _Receiver) -> None:
-        """Streaming: read every message of the connection as it arrives. A reply's messages go
-        to its events(); an orphan's goAway and resumption update are the core's to keep, and
-        nothing else of it is taken but its cancellations. Those are held, also past this
-        connection's close, for the next reply to start, on this connection or a later one: its
-        events() hands them over first, in its own generation, telling the connection they were
-        read on; their calls, of any earlier reply, are told by id only. A read that fails or is
-        cancelled ends every reply waiting with the receiver's failure; one that fails leaves the
-        session dirty, as the connection takes nothing any more (_session_for_input)."""
-        try:
-            while True:
-                arrived = await receiver.next()
-                if isinstance(arrived, Received) and arrived.ends:
-                    enter_trace_scope(None)  # until the next reply hands its own over
-                reply = (
-                    self._replies.get(arrived.generation_id)
-                    if isinstance(arrived, Received)
-                    else None
-                )
-                if reply is not None:
-                    reply.messages.put_nowait(arrived)
-                    reply.ended = reply.ended or arrived.ends
-                    continue
-                if isinstance(arrived, Orphan) and arrived.cancelled:
-                    self._cancelled_between.append(arrived)
-                    continue
-                # An orphan, or the rest of a reply whose events() already failed.
-                logger.debug(
-                    "Gemini Live connection %d: no generation takes %s",
-                    receiver.number,
-                    type(arrived.message).__name__,
-                )
-        except asyncio.CancelledError:
-            self._end_replies(receiver.failure)
-            raise
-        except Exception:  # noqa: BLE001 - the receiver keeps it as its failure
-            self._end_replies(receiver.failure)
-            self.mark_dirty()
-
-    def _end_replies(self, failure: BaseException) -> None:
-        for reply in self._replies.values():
-            reply.messages.put_nowait(failure)
-
-    async def _streamed(self, reply: _StreamedReply, receiver: _Receiver) -> Received:
-        """Streaming: the next message the reader read for this reply. One it read already is
-        taken at once: the goAway deadline bounds only the wait for one not read yet, as it
-        bounds a turn-based read."""
-        if not reply.messages.empty():
-            received = reply.messages.get_nowait()
-        elif receiver.failure is not None:
-            raise receiver.failure
-        else:
-            received = await self._before_go_away_deadline(reply.messages.get())
-        if isinstance(received, BaseException):
-            raise received
-        return received
 
     def connection_renewal_reason(self) -> str | None:
         # Let the provider-defined connection lifetime be observable. Reconnect only when Gemini
@@ -819,8 +768,7 @@ class GeminiLiveDriver(SessionLifecycle):
         a frame so refused is not in the session until a push of a view it is the newest of.
         The reply in flight then still ends on this connection, by the goAway deadline; renew()
         once it has ended resumes the session with the latest resumable handle
-        (SessionCore.resume_handle_for), or rebuilds it from the history where there is none, or
-        where this driver closed the connection (an abort) or a trigger did not go out whole.
+        (SessionCore.resume_handle_for), or rebuilds it from the history where there is none.
         renew() before then closes the connection under the reply, whose events() raise."""
         async with self._session_lock():
             session = self._session_for_input()
@@ -852,7 +800,7 @@ class GeminiLiveDriver(SessionLifecycle):
             session = self._session_for_input()
             if self._activity_open:
                 raise RuntimeError("Gemini Live input activity is already open")
-            if any(reply.receiver is self._receiver for reply in self._replies.values()):
+            if self._core.replying:
                 raise RuntimeError("Gemini Live has a reply in flight on the connection")
             generation = await self.start_generation(request)
             trigger = None
@@ -868,9 +816,6 @@ class GeminiLiveDriver(SessionLifecycle):
                 if trigger is not None:
                     self._core.send_failed(trigger.keys)
                 self._core.reply_abandoned()
-                self._core.unresumable()
-                abandoned = self._replies.pop(request.generation_id)
-                self._cancelled_between[:0] = abandoned.held
                 self._reading_context.run(enter_trace_scope, None)
                 raise
             self._activity_open = False
@@ -944,19 +889,20 @@ class GeminiLiveDriver(SessionLifecycle):
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        reply = self._core.start_generation(request.generation_id)
         if self.streaming:
-            held, self._cancelled_between = self._cancelled_between, []
-            self._replies[request.generation_id] = _StreamedReply(
-                self._session, self._receiver, held
-            )
             # What the reader reads from here is this reply's, as for a turn-based reply's read.
             self._reading_context.run(enter_trace_scope, current_trace_scope())
-        self._core.start_generation(request.generation_id)
         transport = "realtime_input" if self.streaming else self.options["input_transport"]
         return GenerationHandle(
             request.generation_id,
-            # The policy's queued acknowledgement, sent for every call of this generation.
-            opaque=request.canonical.policy.texts.gemini_queued_tool_response,
+            # The connection's receiver, the reply's generation, and the policy's queued
+            # acknowledgement, sent for every call of this generation.
+            opaque=(
+                self._receiver,
+                reply,
+                request.canonical.policy.texts.gemini_queued_tool_response,
+            ),
             metadata={
                 **self._connect_metadata,
                 "input_audio_carrier_ms": 100 if transport == "realtime_input" else 0,
@@ -1146,44 +1092,38 @@ class GeminiLiveDriver(SessionLifecycle):
         return [text] if text else []
 
     async def events(self, generation: GenerationHandle):
-        """The reply's events. A streaming reply is read on the connection it started on,
-        whichever is open now: one closed since ends it with its reader's failure."""
+        """The reply's events, read on the connection it started on, whichever is open now: one
+        closed since ends it with its reader's failure."""
+        receiver, reply, response = generation.opaque
+
+        async def take() -> Received:
+            if not reply.messages:
+                receiving = receiver.receive_until(lambda: reply.messages)
+                # What was read already is taken at once, a failed read too: the goAway deadline
+                # bounds only the wait for a message not read yet.
+                if receiver.failure is None:
+                    receiving = self._before_go_away_deadline(receiving)
+                await receiving
+            return reply.messages.popleft()
+
+        def bound(operation):
+            # A reply read to its end is the server's whole turn, whatever the deadline.
+            return operation if reply.ended else self._before_go_away_deadline(operation)
+
         try:
-            if self.streaming:
-                reply = self._replies[generation.generation_id]
-                session, receiver, held = reply.session, reply.receiver, reply.held
-
-                def take():
-                    return self._streamed(reply, receiver)
-
-                def bound(operation):
-                    # A reply read to its end is the server's whole turn, whatever the deadline.
-                    return operation if reply.ended else self._before_go_away_deadline(operation)
-
-            else:
-                session, receiver, held = self._session, self._receiver, []
-                if session is None:
-                    raise RuntimeError("Gemini Live session is not connected")
-
-                def take():
-                    return self._before_go_away_deadline(receiver.next())
-
-                bound = self._before_go_away_deadline
-            try:
-                async for event in self._events(generation, session, take, bound, held):
-                    yield event
-            except Exception:
-                # The core applied each message as it was read; a reply that then failed here is
-                # not a clean boundary to resume from.
-                self._core.generation_failed(receiver.number)
-                raise
+            async for event in self._events(
+                generation, receiver.session, take, bound, reply.held, response
+            ):
+                yield event
         finally:
-            self._replies.pop(generation.generation_id, None)
+            self._core.reply_done(reply)
 
-    async def _events(self, generation: GenerationHandle, session, take, bound, held):
-        """The reply's events: the cancellations ``held`` for it first, then its messages, which
-        ``take()`` gives one by one; ``bound(write)`` bounds a tool acknowledgement by the goAway
-        deadline where it applies."""
+    async def _events(self, generation: GenerationHandle, session, take, bound, held, response):
+        """The reply's events: the cancellations ``held`` for it first, in its own generation,
+        telling the connection they were read on (their calls, of any earlier reply, are told by
+        id only), then its messages, which ``take()`` gives one by one; ``bound(write)`` bounds a
+        tool acknowledgement by the goAway deadline where it applies, and ``response`` is the
+        queued acknowledgement each call gets."""
         sequence = 0
         latest_usage = None
         tool_calls_seen = 0
@@ -1323,7 +1263,7 @@ class GeminiLiveDriver(SessionLifecycle):
                     self.types.FunctionResponse(
                         id=call_id,
                         name=name,
-                        response=dict(generation.opaque),
+                        response=dict(response),
                         **self._core.tool_response_options,
                     )
                     for call_id, name in acknowledged
@@ -1426,28 +1366,20 @@ class GeminiLiveDriver(SessionLifecycle):
             if received.ends:
                 return
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         if self._session is None or self._activity_open:
-            return InterruptResult(ProviderHistoryState.UNKNOWN)
+            return
         if self.streaming or self.options["input_transport"] == "client_content":
             # client_content does not opt into manual audio activity detection, and streaming's
             # NO_INTERRUPTION lets an ActivityStart cut nothing off. Closing the connection
             # cancels the incomplete turn without injecting an ActivityStart.
             await self._close_current()
-            return InterruptResult(
-                ProviderHistoryState.CONTAMINATED,
-                {"interrupt_method": "connection_close"},
-            )
+            return
         try:
             await self._session.send_realtime_input(activity_start=self.types.ActivityStart())
             self._activity_open = True
-            self._core.interrupt_sent()
-            return InterruptResult(ProviderHistoryState.CONTAMINATED)
-        except Exception as exc:  # noqa: BLE001 - provider control boundary
-            return InterruptResult(
-                ProviderHistoryState.UNKNOWN,
-                {"interrupt_error": repr(exc)[:300]},
-            )
+        except Exception:  # noqa: BLE001, S110 - provider control boundary; the close follows
+            pass
 
     async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         resume_error = None

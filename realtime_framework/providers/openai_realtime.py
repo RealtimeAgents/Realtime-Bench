@@ -11,7 +11,6 @@ import logging as logging
 import os as os
 import socket
 import ssl
-import threading as threading
 import uuid as uuid
 from copy import copy as copy
 from functools import partial
@@ -19,7 +18,7 @@ from typing import ClassVar as ClassVar
 
 from openai import APIConnectionError as APIConnectionError
 from openai import APITimeoutError as APITimeoutError
-from openai import OpenAI as OpenAI
+from openai import AsyncOpenAI
 from websockets.exceptions import ConnectionClosed as ConnectionClosed
 from websockets.exceptions import ConnectionClosedOK as ConnectionClosedOK
 
@@ -34,7 +33,6 @@ from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
 from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderError
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
@@ -60,7 +58,7 @@ from realtime_framework.entity.model import retry_cancel_event
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import current_trace_scope
 from realtime_framework.entity.records import trace_scope
-from realtime_framework.providers.capture import sync_ws_connection
+from realtime_framework.providers.capture import async_ws_connection
 from realtime_framework.providers.openai_realtime_session import Delete
 from realtime_framework.providers.openai_realtime_session import Operation
 from realtime_framework.providers.openai_realtime_session import RealtimeSessionCore
@@ -76,12 +74,12 @@ _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversat
 # (decision N49). A close stuck on a write that does not drain leaves a streaming push stuck in
 # the same write; dropping the socket fails both.
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
-# How long a connection may take to open: TCP, TLS and the WebSocket upgrade, in real time
+# How long a connection may take to open: TCP, TLS and the WebSocket upgrade, on the loop's time
 # (websockets' open_timeout). The session.update after it reads no answer.
 _HANDSHAKE_TIMEOUT_S = 10.0
-# How long an interrupt's cancel may wait to be written. It waits behind a write in progress, and
-# a streaming push stuck in one holds the connection's writes until the abort's close after the
-# interrupt drops the socket; the close needs no cancel to end the response.
+# How long an interrupt's cancel may wait to be written. It waits for the connection's writes to
+# drain, which a streaming push stuck in a write holds until the abort's close after the
+# interrupt drops the connection; the close needs no cancel to end the response.
 _INTERRUPT_TIMEOUT_S = 1.0
 # The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers,
 # and of the host's ephemeral ports or buffers run out, which pass once some are free again.
@@ -185,11 +183,9 @@ class _Session:
                 self._read_one.set()
         except asyncio.CancelledError:
             # Only a close that may have left the connection open, or the end of the loop,
-            # cancels the reader: the session is over all the same for whoever waits on it, and
-            # the read its thread is blocked in ends only once the socket closes.
+            # cancels the reader: the session is over all the same for whoever waits on it.
             self.failure = ConnectionError("OpenAI Realtime session closed")
             self._read_one.set()
-            self._conn._connection.close_socket()
             raise
         except Exception as exc:  # noqa: BLE001 - the core failed on an event: every waiter raises it
             self.failure = exc
@@ -233,7 +229,7 @@ class _Session:
 
     async def _receive(self) -> None:
         try:
-            event = await asyncio.to_thread(self._conn.recv)
+            event = await self._conn.recv()
         except ConnectionClosedOK as closed:
             self.closed = closed
         except Exception as exc:  # noqa: BLE001 - every waiter raises it
@@ -258,14 +254,10 @@ class _Session:
 class OpenAIRealtimeDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_realtime",
-        persistent_session=True,
         roles=("instruction", "input", "model"),
         feedback_placements=("separate_message",),
         server_context="unknown",
         can_compact_history_in_place=True,
-        terminal_output_usage=True,
-        classifies_transport_errors=True,
-        maps_output_cap=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
         # The 1 fps native streaming is designed for, until a smoke test finds the rate the API
         # keeps up with (docs/streaming_smoke_test.md).
@@ -302,18 +294,13 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs = {"api_key": key}
         if config.api_base_url:
             kwargs["base_url"] = config.api_base_url
-        self.client = OpenAI(**kwargs)
-        self._ws_connection = sync_ws_connection(
+        self.client = AsyncOpenAI(**kwargs)
+        self._ws_connection = async_ws_connection(
             self, "openai_realtime.ws", classify_realtime_message
         )
         self._cm = None
         self._conn = None
-        self._send_lock = threading.Lock()
-        # Each close moves the epoch on. A handshake runs on a thread no cancellation stops: it
-        # keeps the connection it opened only if no close came since it began (open_session),
-        # and the lock keeps that check from interleaving with a close taking the connection.
-        self._epoch = 0
-        self._epoch_lock = threading.Lock()
+        self._opening: asyncio.Task | None = None  # a connect's _open, until it is done
         # The open connection's conversation and its receiver.
         self._session: _Session | None = None
 
@@ -333,8 +320,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         A connect attempt fails below HTTP with a ConnectionError (refused or reset), an OSError
         naming a network or host that is down or unreachable or the host's ephemeral ports or
         buffers run out (EADDRNOTAVAIL, ENOBUFS), a failed name lookup (socket.gaierror, or the
-        plain OSError without an errno of a lookup that returned no address), ssl.SSLError or a
-        timeout or, when the connection ends before the upgrade response, with websockets'
+        plain OSError without an errno of a lookup that returned no address), the plain OSError
+        without an errno of every address of the lookup failing, each its own way, ssl.SSLError
+        or a timeout or, when the connection ends before the upgrade response, with websockets'
         InvalidMessage caused by EOFError; these are transient (decision 37). Every other OSError
         is a local fault (a permission, a missing file, an invalid argument) and fatal.
         """
@@ -355,7 +343,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             if (
                 isinstance(current, transient)
                 or (isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS)
-                # socket.create_connection's, once getaddrinfo returned no address.
+                # asyncio's create_connection's, once getaddrinfo returned no address, or every
+                # address it returned failed and not alike ("Multiple exceptions").
                 or (type(current) is OSError and current.errno is None)
             ):
                 return TransportFailure(TRANSIENT)
@@ -384,10 +373,6 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         provider_cap = max(1, int(provider_cap))
         return "inf" if provider_cap > 4096 else provider_cap
 
-    def _wire(self, operation, *args, **kwargs):
-        with self._send_lock:
-            return operation(*args, **kwargs)
-
     @staticmethod
     def _new_client_id(kind: str) -> str:
         """Return an OpenAI Realtime client ID within the API's 32-character limit."""
@@ -397,13 +382,13 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise ValueError(f"Realtime client ID kind is too long: {kind!r}")
         return prefix + uuid.uuid4().hex[:suffix_length]
 
-    def _send(self, conn, operation: Operation) -> None:
+    async def _send(self, conn, operation: Operation) -> None:
         """Send one planned conversation item create or delete on the SDK connection ``conn``."""
         if isinstance(operation, Delete):
             kwargs = {"item_id": operation.item_id}
             if operation.event_id is not None:
                 kwargs["event_id"] = operation.event_id
-            self._wire(conn.conversation.item.delete, **kwargs)
+            await conn.conversation.item.delete(**kwargs)
             return
         content = [
             {
@@ -431,7 +416,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             kwargs["previous_item_id"] = operation.previous_item_id
         if operation.event_id is not None:
             kwargs["event_id"] = operation.event_id
-        self._wire(conn.conversation.item.create, **kwargs)
+        await conn.conversation.item.create(**kwargs)
 
     async def _send_all(self, session: _Session, operations) -> None:
         """Send operations planned on ``session`` in order, on its own connection; its core
@@ -440,7 +425,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         for operation in operations:
             core.sending(operation)
             try:
-                await asyncio.to_thread(self._send, session._conn, operation)
+                await self._send(session._conn, operation)
             except BaseException:
                 core.send_failed(operation)
                 raise
@@ -456,67 +441,76 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             raise session.closed
 
     async def _close_current(self) -> None:
-        with self._epoch_lock:
-            self._epoch += 1
-            cm, self._cm = self._cm, None
-            self._conn = None
+        """Close the open connection, if any, once a connect still opening one has ended."""
+        opening, self._opening = self._opening, None
+        if opening is not None:
+            # Cancelled, it ends at once, in its handshake or its session.update; a connection
+            # it opened is closed below.
+            opening.cancel()
+            await asyncio.wait({opening})
+        cm, self._cm = self._cm, None
+        conn, self._conn = self._conn, None
         session, self._session = self._session, None
         closed = True
         if cm is not None:
             try:
                 await self.clock.wait_for(
-                    asyncio.to_thread(cm.__exit__, None, None, None),
-                    _CONNECTION_CLOSE_TIMEOUT_S,
+                    cm.__aexit__(None, None, None), _CONNECTION_CLOSE_TIMEOUT_S
                 )
             except Exception:  # noqa: BLE001 - best-effort SDK cleanup
                 # A close stuck on a write that does not drain leaves a streaming push stuck in
-                # the same write: drop the socket under both, which fails the write and lets the
-                # close return. The SDK keeps the WebSocket connection as ``_connection``.
+                # the same write: drop the connection under both, which fails the write. The SDK
+                # keeps the WebSocket connection as ``_connection``.
                 closed = False
-                if session is not None:
-                    session._conn._connection.close_socket()
+                conn._connection.transport.abort()
         if session is not None:
             await session.stop_reading(closed=closed)
 
+    async def _open(self, request: ConnectRequest) -> None:
+        """Open a connection, keep it as the open one and set the session up on it."""
+        cm = self.client.realtime.connect(
+            model=request.seed.model_name,
+            websocket_connection_options={
+                "create_connection": self._ws_connection,
+                "open_timeout": _HANDSHAKE_TIMEOUT_S,
+            },
+        )
+        self._conn = await cm.__aenter__()
+        self._cm = cm
+        await self._conn.session.update(
+            session={
+                "type": "realtime",
+                "output_modalities": ["text"],
+                "instructions": request.seed.system_instruction,
+                "truncation": "disabled",
+            }
+        )
+
+    async def _open_session(self, request: ConnectRequest) -> None:
+        """One connect attempt: _open, unless a close that comes meanwhile cancels it. The
+        attempt then returns as one whose session the close ended, which _connect finds closed."""
+        opening = self._opening = asyncio.ensure_future(self._open(request))
+        try:
+            await opening
+        except asyncio.CancelledError:
+            if self._opening is opening:
+                raise
+        finally:
+            if self._opening is opening:
+                self._opening = None
+
     async def _connect(self, request: ConnectRequest) -> None:
         await self._close_current()
-
-        def open_session(epoch):
-            cm = self.client.realtime.connect(
-                model=request.seed.model_name,
-                websocket_connection_options={
-                    "create_connection": self._ws_connection,
-                    "open_timeout": _HANDSHAKE_TIMEOUT_S,
-                },
-            )
-            conn = cm.__enter__()
-            with self._epoch_lock:
-                kept = self._epoch == epoch
-                if kept:
-                    self._cm, self._conn = cm, conn
-            if not kept:
-                # A close came during the handshake and found nothing to close.
-                cm.__exit__(None, None, None)
-                return
-            conn.session.update(
-                session={
-                    "type": "realtime",
-                    "output_modalities": ["text"],
-                    "instructions": request.seed.system_instruction,
-                    "truncation": "disabled",
-                }
-            )
-
         if self.streaming:
             # One attempt, as Gemini Live's connect makes: native streaming's readying retries
             # the whole connect under the shared policy (decision 13).
             try:
-                await asyncio.to_thread(open_session, self._epoch)
+                await self._open_session(request)
             except Exception:
                 await self._close_current()
                 raise
         else:
-            await self._open_retried(request, open_session)
+            await self._open_retried(request)
         if retry_cancel_event().is_set():
             # Abandoned while the connection opened: nothing of the generation goes out on it,
             # and the abort closes only what was open when it came.
@@ -525,7 +519,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         if self._conn is None:  # a concurrent close() ended the session that just opened
             raise RuntimeError("OpenAI Realtime session closed while it opened")
         # The SDK keeps the WebSocket connection, which the trace numbered, as ``_connection``
-        # (openai/resources/realtime/realtime.py:765).
+        # (openai/resources/realtime/realtime.py:285).
         connection = self._conn._connection
         session = self._session = _Session(
             connection.trace_connection_number,
@@ -552,14 +546,14 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         else:
             await self._send_all(session, session.core.replay(request.history))
 
-    async def _open_retried(self, request: ConnectRequest, open_session) -> None:
-        """Turn-based: run ``open_session`` under the shared retry policy (decision 39); a failed
+    async def _open_retried(self, request: ConnectRequest) -> None:
+        """Turn-based: run _open_session under the shared retry policy (decision 39); a failed
         attempt closes what it opened."""
 
         async def send(attempt):
             try:
                 with trace_scope(connect_attempt=attempt):
-                    await asyncio.to_thread(open_session, self._epoch)
+                    await self._open_session(request)
             except Exception:
                 await self._close_current()
                 raise
@@ -591,8 +585,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         await retry.run_async(send)
 
     def _connect_finished(self, attempt, outcome, error=None, failure=None, delay=None) -> None:
-        """One ModelAttemptFinished per open_session attempt of the shared connect retry, and one
-        for the attempt a cancellation stopped."""
+        """One ModelAttemptFinished per _open_session attempt of the shared connect retry, and
+        one for the attempt a cancellation stopped."""
         with trace_scope(connect_attempt=attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
@@ -640,7 +634,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs = {"response": response}
         if core_generation.request_event_id is not None:
             kwargs["event_id"] = core_generation.request_event_id
-        await asyncio.to_thread(self._wire, session._conn.response.create, **kwargs)
+        await session._conn.response.create(**kwargs)
         return GenerationHandle(request.generation_id, opaque=(session, core_generation))
 
     async def push_frame(self, observation: ProviderObservation, history) -> PushReceipt:
@@ -851,11 +845,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 )
                 return
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         session, core_generation = generation.opaque
         # A response on a session closed or replaced since was closed with its connection.
         if self._session is not session:
-            return InterruptResult(ProviderHistoryState.UNKNOWN)
+            return
         kwargs = {}
         response_id = core_generation.response_id
         if response_id:
@@ -864,16 +858,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         kwargs["event_id"] = cancel_event_id
         core_generation.cancel_event_id = cancel_event_id
         try:
-            await self.clock.wait_for(
-                asyncio.to_thread(self._wire, session._conn.response.cancel, **kwargs),
-                _INTERRUPT_TIMEOUT_S,
-            )
-            return InterruptResult(ProviderHistoryState.CONTAMINATED)
-        except Exception as exc:  # noqa: BLE001 - provider control boundary
-            return InterruptResult(
-                ProviderHistoryState.UNKNOWN,
-                {"cancel_error": repr(exc)[:300]},
-            )
+            await self.clock.wait_for(session._conn.response.cancel(**kwargs), _INTERRUPT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001, S110 - provider control boundary; the close follows
+            pass
 
     async def _rebuild(self, request: HistorySyncRequest) -> HistorySyncResult:
         try:

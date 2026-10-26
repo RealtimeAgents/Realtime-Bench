@@ -1,9 +1,9 @@
 """Pre-run checks: every rule that rejects a run configuration before an episode starts.
 
 Each rule reads only the registered driver class's declarations (capabilities, deployment,
-compat flags, option tables), the configuration and, for check_context_policy, the context
-policy the run resolves. Every entry point keeps the rules it applied before the checks were
-collected here:
+compat flags, option tables, the optional methods it overrides), the configuration and, for
+check_context_policy, the context policy the run resolves. Every entry point keeps the rules it
+applied before the checks were collected here:
 
 - runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
   check_token_budget and check_streaming_options, which effective_run_config applies too;
@@ -24,6 +24,7 @@ for the API key, and are now reported ahead of a missing key.
 from __future__ import annotations
 
 from realtime_framework.entity.context_policy import PROMPT_CHANNELS, current_context_policy
+from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.providers.registry import adapter_class
 
 
@@ -59,8 +60,8 @@ def check_interaction_mode(
     if interaction_mode == "turn_based":
         return
     capabilities = driver.capabilities
-    if not capabilities.persistent_session:
-        raise ValueError(
+    if not issubclass(driver, SessionEncoder):
+        raise ValueError(  # noqa: TRY004
             f"Streaming requires a live API (openai_realtime or gemini_live); {adapter_type} "
             "is not one"
         )
@@ -142,18 +143,18 @@ def check_config(driver, config) -> None:
         )
     check_provider_options(compat, config)
     if (
-        driver.capabilities.request_size_estimation
+        implements(driver, "request_context_status")
         and config.context_window_tokens is not None
         and config.context_reserve_tokens >= config.context_window_tokens
     ):
         raise ValueError("Context capacity must exceed generation reserve")
-    # An API that maps the decision's cap onto its request (maps_output_cap; LiteLLMDriver
-    # transport_output_token_cap) sends the native limit when no decision cap applies, so a
-    # request the window admits must leave room for that output.
+    # An API that maps the decision's cap onto its request (its own transport_output_token_cap,
+    # as LiteLLMDriver's) sends the native limit when no decision cap applies, so a request the
+    # window admits must leave room for that output.
     limit = config.native_output_limit
     if (
-        driver.capabilities.request_size_estimation
-        and driver.capabilities.maps_output_cap
+        implements(driver, "request_context_status")
+        and implements(driver, "transport_output_token_cap")
         and config.context_window_tokens is not None
         and limit is not None
         and config.context_reserve_tokens < limit
@@ -245,7 +246,7 @@ def check_context_policy(driver, policy, config) -> None:
     if (
         policy.pressure_archive
         and config.context_window_tokens is not None
-        and not capabilities.request_size_estimation
+        and not implements(driver, "request_context_status")
     ):
         raise ValueError(
             f"The {api} API declares a context window but no estimate of its requests"
