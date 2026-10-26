@@ -2,11 +2,13 @@
 blocks the streaming agent has accepted (phase2.md, native streaming 上下文怎么管).
 
 The agent keeps the blocks in the order they came to the session: each pushed frame under its
-frame-table number, each accepted reply's model output where the output began, based on the frame
-its action names, and each execution feedback, attached to the output whose action it reports.
-The view keeps the frames and outputs in that order under their ids, so an encoder can diff two
-views by id. Only the newest frames keep their screenshots; an older frame folds as a turn-based
-frame does, and never gets its screenshot back. Every output stays, however old.
+frame-table number, the model output of each reply accepted, or given up once an action of it ran,
+where the output began, based on the frame its action names, with the reply's tool rounds right
+after it where the policy replays them, as a turn's (harnesses/default/request.py
+tool_exchange_block), and each execution feedback, attached to the output whose action it reports. The view keeps the frames and outputs in that order under
+their ids, so an encoder can diff two views by id. Only the newest frames keep their screenshots;
+an older frame folds as a turn-based frame does, and never gets its screenshot back. Every output
+stays, however old.
 
 Each execution feedback is a block of its own, as a turn-based request places it under
 separate_message (harnesses/default/request.py _turn_items): it keeps its id and stays where it
@@ -32,7 +34,12 @@ from realtime_framework.entity.request import (
 )
 from realtime_framework.harnesses.default.frames import FrameRecord
 
-_KIND_ROLES = {"frame": "input", "model_output": "model", "execution_feedback": "input"}
+_KIND_ROLES = {
+    "frame": "input",
+    "model_output": "model",
+    "tool_exchange": "model",
+    "execution_feedback": "input",
+}
 
 
 def frame_block(frame: FrameRecord, observation: ProviderObservation) -> ContentBlock:

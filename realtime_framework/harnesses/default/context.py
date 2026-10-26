@@ -98,7 +98,10 @@ from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.entity.request import ContentBlock
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.request import ledger_block
+from realtime_framework.providers.session_lifecycle import SessionStates
 from realtime_framework.providers.session_lifecycle import StatelessSession
+from realtime_framework.providers.session_lifecycle import replay_items
+from realtime_framework.providers.session_lifecycle import session_record
 from realtime_framework.sandbox.observation.som import without_observation_interactables
 
 # Builds the canonical request from the turns to send and the archived-action ledger block.
@@ -147,8 +150,7 @@ class RealtimeRuntime:
             if self.capabilities.persistent_session
             else StatelessSession(driver, clock=self.clock, trace=trace)
         )
-        # What the agent trace last recorded about the provider-side context: exact or unknown.
-        self._session_state = "exact"
+        self._states = SessionStates(trace, self.capabilities.protocol_family)
         # The context-policy items behind this turn's history_block_compaction sync.
         self._compaction_items: list[str] = []
         self._lock = threading.Lock()
@@ -313,9 +315,7 @@ class RealtimeRuntime:
             if sync is None:
                 self._record_reconnect()
                 return
-            self._record_sync(
-                sync.reason, sync.force_rebuild, removed_turns, incoming, result=result, error=error
-            )
+            self._record_sync(sync, removed_turns, incoming, result=result, error=error)
 
         return record
 
@@ -508,7 +508,7 @@ class RealtimeRuntime:
 
         cancelled = self._abandoned(cancel)
         if terminal_history != ProviderHistoryState.EXACT:
-            self._record_session_state(
+            self._states.record(
                 "unknown", "generation_terminal_state", terminal_history, request.generation_id
             )
         output = collector.finish()
@@ -736,77 +736,39 @@ class RealtimeRuntime:
             )
         return count
 
-    def _replay_items(self) -> list[str]:
-        # A replayed live session re-sends past tool calls in the policy's format.
-        return ["tool_call_replay"] if self.policy.tool_call_replay is not None else []
-
-    def _record_sync(
-        self, reason, force_rebuild, removed_turns, incoming=(), *, result=None, error=None
-    ):
-        """One HistoryChanged per sync call, of the kind the driver's result reports.
-
-        The fallback kinds come from provider_metadata keys the drivers already return.
-        """
-        metadata = result.provider_metadata if result is not None else {}
-        trigger = {"history_block_compaction": "policy", "runtime_recovery": "recovery"}.get(
-            reason, "provider"
-        )
-        rebuilt = result is not None and (
-            result.disposition == SyncDisposition.REBUILT
-            or bool(metadata.get("history_session_reconnected"))
-        )
-        if metadata.get("session_resumed"):
-            kind, rebuilt = "session_resumed", False
-        elif metadata.get("resume_error"):
-            kind, trigger = "resume_fallback", "fallback"
-        elif metadata.get("history_in_place_edit_fallback"):
-            kind, trigger = "in_place_edit_fallback", "fallback"
-        else:
-            kind = "rebuild" if rebuilt else "sync"
-        policy_item = list(self._compaction_items) if reason == "history_block_compaction" else []
-        if rebuilt:
-            policy_item += self._replay_items()
+    def _record_sync(self, sync, removed_turns, incoming=(), *, result=None, error=None):
+        """One HistoryChanged per sync call (session_record), with the policy items behind it
+        and the turns it removed and replayed."""
+        record = session_record(sync, result, error)
+        compaction = sync.reason == "history_block_compaction"
+        policy_item = list(self._compaction_items) if compaction else []
+        if record.rebuilt:
+            policy_item += replay_items(self.policy)
         self._history_changed(
-            kind,
-            trigger,
+            record.kind,
+            record.trigger,
             policy_item or None,
             turns=self._turn_refs(removed_turns),
-            replayed_turns=len(self._turns) + len(incoming) if rebuilt else None,
-            sync={
-                "reason": reason,
-                "force_rebuild": force_rebuild,
-                "disposition": result.disposition.value if result is not None else None,
-                "history_state": result.history_state.value if result is not None else None,
-                "detail": result.detail if result is not None else None,
-                "provider_metadata": metadata,
-            },
-            error=repr(error)[:500] if error is not None else None,
+            replayed_turns=len(self._turns) + len(incoming) if record.rebuilt else None,
+            **record.fields,
         )
-        if result is None:
-            self._record_session_state("unknown", f"sync_error:{reason}", None)
-        elif kind == "session_resumed":
-            # Exact for the driver, but restored from the resume handle, not sent on this
-            # connection.
-            self._record_session_state("unknown", "session_resumed", result.history_state)
-        elif result.history_state == ProviderHistoryState.EXACT:
-            self._record_session_state("exact", f"sync:{reason}", result.history_state)
-        else:
-            self._record_session_state("unknown", f"sync:{reason}", result.history_state)
+        self._states.record(*record.state)
 
     def _record_reconnect(self) -> None:
         """The session's ensure_ready replayed the canonical turns on a new session after an
         abort or failure."""
         if not self.capabilities.persistent_session:
             return  # a stateless connect sends nothing; the next request carries the history
+        record = session_record(None)
         self._history_changed(
-            "rebuild",
-            "recovery",
-            self._replay_items() or None,
+            record.kind,
+            record.trigger,
+            replay_items(self.policy) or None,
             turns=[],
             replayed_turns=len(self._turns),
-            sync={"reason": "reconnect"},
+            **record.fields,
         )
-        self._record_session_state("exact", "reconnect", ProviderHistoryState.EXACT)
+        self._states.record(*record.state)
 
     def _record_generation_prepared(self, incoming, physical_metadata, generation) -> None:
         turns = self._turns + incoming
@@ -841,24 +803,5 @@ class RealtimeRuntime:
                     ),
                 },
                 "request_context": physical_metadata or None,
-            },
-        )
-
-    def _record_session_state(self, state, cause, provider_state, generation_id=None) -> None:
-        """Record when the provider-side context becomes unknown, or exact again, as the session
-        operations reported it. What became of each content the encoder wrote is its
-        SessionDelivery records; what the provider keeps beside it, the capability
-        server_context."""
-        if state == self._session_state:
-            return
-        self._session_state = state
-        self._trace.capture(
-            TraceEvent.SESSION_STATE_CHANGED,
-            {
-                "protocol_family": self.capabilities.protocol_family,
-                "state": state,
-                "cause": cause,
-                "provider_history_state": provider_state.value if provider_state else None,
-                "generation_id": generation_id,
             },
         )

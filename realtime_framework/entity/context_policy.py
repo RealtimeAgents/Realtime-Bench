@@ -58,12 +58,21 @@ from realtime_framework.entity.records import _jsonable
 # it once for all of them (decision 28). They include: a request still over the window with
 # every turn archived leaves out the earliest archived actions, a note in their place, and JEV's
 # ledger header then says every listed action is kept; Gemini Live and Luna frames name their own
-# screen, as the text-JSON frames do; the clock note names the environment ticks when the two
-# frame rates differ; the notes on a done run as a wait and on a decision with no accepted answer;
+# screen, as the text-JSON frames do, Luna's in its frame text as well; the clock note names the
+# environment ticks when the two frame rates differ; the notes on a done run as a wait and on a
+# decision with no accepted answer;
 # OpenAI Realtime and Gemini Live send each action's execution feedback as its own item, not in
 # front of the next frame; the streaming harness's feedback says that a superseded action was
 # replaced while it waited, why a cancelled call did not run, and that a reply's protocol failure
-# leaves each action it handed over its own feedback (harnesses/streaming/feedback.py).
+# leaves each action it handed over its own feedback (harnesses/streaming/feedback.py); the SoM
+# mark badges of a streaming screenshot keep clear of its frame number; an action naming a mark
+# its frame does not have is a grounding failure, whose feedback names the mark and the action
+# asked for, not output without a valid action; the function-call output contract charges token
+# usage to simulated time only under a finite B, as the text-JSON one does; a native-streaming
+# run's instructions, function declarations, frame texts and SoM legends read an action's marks
+# and coordinates from the frame it names, its frames name no decision, its clock note counts
+# replies, and nothing is executed, not WAIT, for a reply without a valid action; a turn's frame
+# text asks for the newest screenshot's marks, not the current ones (P6).
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).

@@ -24,6 +24,9 @@ INVALID_GROUNDING_FRAME = "invalid_grounding_frame"
 MISSING_FRAME = "missing_frame"
 INVALID_FRAME_SYNTAX = "invalid_frame_syntax"
 FRAME_NOT_IN_TABLE = "frame_not_in_table"
+# The protocol failure of an action that parsed but names a mark its frame does not have: WAIT runs
+# in its place on the turn-based clock, and nothing under streaming.
+GROUNDING_FAILED = "grounding_failed"
 
 
 @dataclass
@@ -52,6 +55,11 @@ class FrameTable:
     def __init__(self) -> None:
         self._frames: dict[int, FrameRecord] = {}
         self._lock = threading.Lock()
+
+    def next_frame(self) -> int:
+        """The number register() gives the next frame."""
+        with self._lock:
+            return len(self._frames) + 1
 
     def register(
         self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None

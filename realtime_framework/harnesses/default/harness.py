@@ -135,14 +135,6 @@ class VisionAgentBase(StreamingAgent):
     def token_usage(self) -> dict:
         return dict(self._tok)
 
-    def _system_instruction_text(self, frame_reference_rules: str | None) -> str:
-        return gui_system_prompt(
-            self.task_instruction,
-            scenario_prompt=getattr(self, "system_prompt_override", None),
-            clock_prompt=self.streaming_note,
-            frame_reference_rules=frame_reference_rules,
-        )
-
     @staticmethod
     def _prompt_text_summary(messages: list[dict]) -> str:
         parts = []
@@ -693,14 +685,20 @@ class VisionAgentBase(StreamingAgent):
 
 from dataclasses import dataclass as dataclass
 
+from realtime_framework.harnesses.default.prompts import FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_ACTION_SPACE
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
+from realtime_framework.harnesses.default.prompts import GROUNDING_FAILED_FEEDBACK
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
+from realtime_framework.harnesses.default.prompts import STREAMING_FUNCTION_CALL_ACTION_SPACE
+from realtime_framework.harnesses.default.prompts import STREAMING_FUNCTION_CALL_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import STREAMING_TEXT_ACTION_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import PromptOptions
 from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
 from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
@@ -714,24 +712,35 @@ class InteractionProfile:
     name: str
     action_space: str | None = None
     output_contract: str = STREAM_OUTPUT_CONTRACT
+    # Its output contract under a finite B (PromptOptions.finite_budget), where that differs.
+    finite_budget_output_contract: str | None = None
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
-    # How an action names its frame under streaming.
+    # A streaming profile's: how an action names its frame.
     frame_reference_rules: str | None = None
 
     def system_instruction(self, agent) -> str:
-        frame_reference_rules = (
-            self.frame_reference_rules if agent.interaction_mode == "streaming" else None
+        """The episode's, composed for ``agent.prompt_options`` (harnesses/registry.py
+        configure_agent), for which the profile was chosen (interaction_profile)."""
+        output_contract = (
+            self.finite_budget_output_contract
+            if agent.prompt_options.finite_budget and self.finite_budget_output_contract
+            else self.output_contract
         )
         if self.action_space is None:
-            return agent._system_instruction_text(frame_reference_rules)
+            return gui_system_prompt(
+                agent.task_instruction,
+                scenario_prompt=getattr(agent, "system_prompt_override", None),
+                clock_prompt=agent.streaming_note,
+                frame_reference_rules=self.frame_reference_rules,
+            )
         return "\n\n".join(
             filter(
                 None,
                 (
                     SCENARIO_ROLES[agent.task_category],
                     self.action_space,
-                    frame_reference_rules,
-                    self.output_contract,
+                    self.frame_reference_rules,
+                    output_contract,
                     getattr(agent, "streaming_note", None),
                     f"TASK:\n{agent.task_instruction}",
                 ),
@@ -751,15 +760,13 @@ class InteractionProfile:
         return geometry.image_size
 
 
-STANDARD_VLM_PROFILE = InteractionProfile(
-    "standard_vlm", frame_reference_rules=FRAME_REFERENCE_RULES
-)
+STANDARD_VLM_PROFILE = InteractionProfile("standard_vlm")
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
     action_space=FUNCTION_CALL_ACTION_SPACE,
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
+    finite_budget_output_contract=FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
-    frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
 )
 # The choice models' profiles.
 JEV_PROFILE = InteractionProfile(
@@ -789,7 +796,8 @@ MULTIMODAL_CHOICE_PROFILE = InteractionProfile(
         "other input through successive choices of words, characters or Unicode code points, "
         "then finishes to type it. Spaces and casing are explicit."
     ),
-    frame_prompt=JEV_PROFILE.frame_prompt,
+    # Luna's transcript keeps the older frames, which JEV's digest leaves out.
+    frame_prompt="Screen observed for this decision.",
 )
 
 MULTIMODAL_GAME_CHOICE_PROFILE = InteractionProfile(
@@ -816,6 +824,33 @@ INTERACTION_PROFILES = {
         MULTIMODAL_GAME_CHOICE_PROFILE,
     )
 }
+# The profiles of a native-streaming run, whose drivers answer in text JSON or function calls.
+# Every action names its frame and is read against it, however old, and its text JSON scenario
+# prompt is streaming's as well (prompts.py system_prompt_for_category).
+STREAMING_INTERACTION_PROFILES = {
+    profile.name: profile
+    for profile in (
+        InteractionProfile(
+            "standard_vlm",
+            frame_prompt=STREAMING_TEXT_ACTION_FRAME_PROMPT,
+            frame_reference_rules=FRAME_REFERENCE_RULES,
+        ),
+        InteractionProfile(
+            "function_call",
+            action_space=STREAMING_FUNCTION_CALL_ACTION_SPACE,
+            output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
+            frame_prompt=STREAMING_FUNCTION_CALL_FRAME_PROMPT,
+            frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
+        ),
+    )
+}
+
+
+def interaction_profile(name: str, options: PromptOptions) -> InteractionProfile:
+    """The profile context policy item 11 names, for a run of ``options``."""
+    if options.interaction_mode == "streaming":
+        return STREAMING_INTERACTION_PROFILES[name]
+    return INTERACTION_PROFILES[name]
 
 
 # Default harness
@@ -865,6 +900,7 @@ from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
+from realtime_framework.harnesses.default.frames import GROUNDING_FAILED
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
 from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.frames import FrameTable
@@ -877,6 +913,7 @@ from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 from realtime_framework.sandbox.observation.som import render_frame_number
+from realtime_framework.sandbox.observation.som import resolve_action_references
 
 
 class _GenerationOutputCollector:
@@ -942,7 +979,8 @@ class _GenerationOutputCollector:
 def bind_observation(agent, observation, prompt, tick):
     """Prepare one capture for the model, attach its read-only interactables and enter it in the
     frame table, whose record of it comes back too. Under streaming the frame's number is drawn
-    on the screenshot."""
+    on the screenshot, and the marks keep clear of it."""
+    streaming = agent.interaction_mode == "streaming"
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
     observation.metadata = metadata
@@ -960,6 +998,9 @@ def bind_observation(agent, observation, prompt, tick):
             model_height=height,
             model_image_bytes=prepared.data,
             model_image_mime_subtype=prepared.mime_subtype,
+            # A streaming push enters its frame on the shell's one push lane, so no other frame
+            # takes this number before the frame table gives it to this one.
+            frame_number=agent.frames.next_frame() if streaming else None,
         )
         prompt = observation_prompt_with_interactables(
             prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
@@ -987,77 +1028,105 @@ def bind_observation(agent, observation, prompt, tick):
         value.geometry,
         execution["marks"] if execution else None,
     )
-    if agent.interaction_mode == "streaming":
+    if streaming:
         value.image_bytes = render_frame_number(value.image_bytes, frame.frame)
         value.mime_type = "image/png"
     return value, execution, frame
 
 
-def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
+@dataclass(frozen=True)
+class _Grounded:
+    """One body of model output that parsed, read against its frame: the action as the model
+    wrote it, and as the frame's marks resolve it, None when they cannot."""
+
+    asked: Action
+    action: Action | None
+    frame: FrameRecord | None  # None: a streaming action whose frame cannot be found
+    reference: object = None  # streaming: its frame field as written
+    frame_error: str | None = None  # streaming: why its frame cannot be found
+    resolution: dict | None = None  # how the marks resolved it; None when they were not read
+
+    @property
+    def unknown_mark(self) -> str | None:
+        """The mark its frame does not have, which stopped its resolution: resolution stops at
+        the first reference that fails."""
+        if self.action is not None or self.resolution is None:
+            return None
+        failed = (self.resolution.get("resolutions") or [{}])[-1]
+        return failed["mark"] if failed.get("error") == "mark_not_in_observation" else None
+
+
+def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
     """Parse one action from model output and interpret it against its frame-table entry: the
-    frame's marks resolve its element references and its geometry binds its coordinates.
+    frame's marks resolve its element references, where ``resolve``, as when the agent inspects
+    its frames, and its geometry binds its coordinates. The action, its protocol, and the last
+    resolution the output made, which the inspection's tool trace records.
 
     A streaming action names its frame, however old, and is rejected (no action) when that frame
     cannot be found; the frame and its age are recorded. A turn-based action uses ``own_frame``,
-    the one its generation sent: an abandoned generation may enter its frame later. ``execution``
-    is the decision's inspection; its tool trace records the resolution.
+    the one its generation sent: an abandoned generation may enter its frame later.
+
+    Output whose one action names a mark its frame does not have is a grounding failure, not
+    output without an action: the protocol records the action asked for and the mark.
     """
     frames = agent.frames
     streaming = agent.interaction_mode == "streaming"
-    # (action, its frame, its frame field, why no frame was found) of each parsed candidate.
-    candidates = []
-    # The resolution this output made: under streaming ``execution`` is the frame's, which
-    # holds the last resolution of any call on the frame.
-    grounding = None
 
-    def parse_and_ground(body):
-        nonlocal grounding
+    def ground(body) -> _Grounded | None:
         if streaming:
-            parsed, reference = agent.interaction_profile.parse_framed_action(agent, body)
+            asked, reference = agent.interaction_profile.parse_framed_action(agent, body)
             frame, error = frames.locate(reference)
         else:
-            parsed, reference = agent.interaction_profile.parse_action(agent, body), None
+            asked, reference = agent.interaction_profile.parse_action(agent, body), None
             frame, error = own_frame, None
-        if parsed is None:
+        if asked is None:
             return None
-        if frame is not None:
-            runtime = getattr(agent, "tool_runtime", None)
-            if runtime is not None and execution is not None:
-                parsed = runtime.resolve_action(parsed, frame.marks, execution)
-                grounding = execution["reference_resolution"]
-                if streaming:
-                    # The decision's inspection row names the frame whose marks resolved it.
-                    execution["reference_resolution"].update(
-                        frame=frame.frame, observation_id=frame.observation_id
-                    )
-        if parsed is not None:
-            candidates.append((parsed, frame, reference, error))
-        return parsed
+        if frame is None or not resolve:
+            return _Grounded(asked, asked, frame, reference, error)
+        action, resolution = resolve_action_references(asked, frame.marks)
+        if streaming:
+            # The inspection row names the frame whose marks resolved it.
+            resolution = {
+                **resolution,
+                "frame": frame.frame,
+                "observation_id": frame.observation_id,
+            }
+        return _Grounded(asked, action, frame, reference, error, resolution)
 
-    resolution = resolve_action_output(text, parse_and_ground, framed=streaming)
-    action_protocol = resolution.metadata()
-    frame = own_frame
-    if streaming and resolution.valid:
-        frame, reference, error = next(
-            (f, r, e) for a, f, r, e in candidates if a is resolution.action
+    output = resolve_action_output(text, ground, framed=streaming)
+    decision = output.decision
+    resolutions = [parsed.resolution for parsed in output.parses if parsed.resolution is not None]
+    grounding = last = resolutions[-1] if resolutions else None
+    action_protocol = decision.metadata()
+    unknown = next((parsed for parsed in output.parses if parsed.unknown_mark is not None), None)
+    if decision.protocol_failure == "invalid_action_output" and unknown is not None:
+        grounding = unknown.resolution
+        action_protocol.update(
+            protocol_failure=GROUNDING_FAILED,
+            requested=action_text(unknown.asked),
+            unknown_mark=unknown.unknown_mark,
         )
+    frame = own_frame
+    if streaming and decision.valid:
+        chosen = output.chosen
+        frame = chosen.frame
         if frame is None:
             action_protocol.update(
                 rejection=INVALID_GROUNDING_FRAME,
-                frame_reference={"frame": reference, "error": error},
+                frame_reference={"frame": chosen.reference, "error": chosen.frame_error},
             )
-            return None, action_protocol
+            return None, action_protocol, last
         action_protocol["frame_reference"] = {
             "frame": frame.frame,
             "observation_id": frame.observation_id,
             **frames.age(frame, arrived_unix_s),
         }
     action = agent.interaction_profile.bind_action(
-        resolution.action, FrameGeometry.from_dict(frame.geometry)
+        decision.action, FrameGeometry.from_dict(frame.geometry)
     )
-    if execution is not None:
+    if resolve:
         action_protocol["grounding"] = grounding
-    return action, action_protocol
+    return action, action_protocol, last
 
 
 def action_text(action: Action) -> str:
@@ -1198,9 +1267,10 @@ class DefaultHarness(VisionAgentBase):
         # Each accepted decision's action record, by its index in action_history.
         self._decision_actions: dict[int, int] = {}
         self.frames = FrameTable()
-        self.interaction_profile = INTERACTION_PROFILES[
-            self._context_policy.prompts[self.task_category]  # context policy item 11
-        ]
+        self.interaction_profile = interaction_profile(
+            self._context_policy.prompts[self.task_category],  # context policy item 11
+            self.prompt_options,
+        )
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.
         self._system_block = system_block(fixed, self.clock.time_ns())
@@ -1767,9 +1837,15 @@ class DefaultHarness(VisionAgentBase):
             if newest_execution is not None:
                 action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
-            action, action_protocol = parse_grounded_action(
-                self, output.text, newest_execution, self.clock.time(), generation.frame
+            action, action_protocol, resolution = parse_grounded_action(
+                self,
+                output.text,
+                self.clock.time(),
+                generation.frame,
+                resolve=newest_execution is not None,
             )
+            if resolution is not None:
+                newest_execution["reference_resolution"] = resolution
         thinking = output.reasoning_text
         serialization = output.token_fields.get("action_serialization")
         if serialization in {"native_function_call", "native_function_calls"}:
@@ -1788,21 +1864,27 @@ class DefaultHarness(VisionAgentBase):
             if not native_protocol_failure:
                 action_protocol["source"] = "native_function_call"
         executed = action_text(action)
+        record = {
+            "action": output.text,
+            "thinking": thinking,
+            "executed": executed,
+            "observation_tick": action_observation.observation.tick_number,
+            "observation_timestamp": action_observation.observation.timestamp,
+            "parse_failed": bool(action_protocol.get("protocol_failure")),
+            "protocol_failure": action_protocol.get("protocol_failure"),
+            "parse_mode": action_protocol.get("parse_mode"),
+        }
+        if action_protocol.get("protocol_failure") == GROUNDING_FAILED:
+            record.update(
+                requested=action_protocol["requested"],
+                unknown_mark=action_protocol["unknown_mark"],
+            )
         generation.staged = _Staged(
             unattached,
             inspection_executions,
             runtime_result,
             action_observation,
-            {
-                "action": output.text,
-                "thinking": thinking,
-                "executed": executed,
-                "observation_tick": action_observation.observation.tick_number,
-                "observation_timestamp": action_observation.observation.timestamp,
-                "parse_failed": bool(action_protocol.get("protocol_failure")),
-                "protocol_failure": action_protocol.get("protocol_failure"),
-                "parse_mode": action_protocol.get("parse_mode"),
-            },
+            record,
         )
 
         token_fields = dict(output.token_fields)
@@ -1963,7 +2045,10 @@ class DefaultHarness(VisionAgentBase):
         ``replacement`` is the wait the kernel ran in place of a done or fail."""
         last = entry or {}
         parse_failed = bool(last.get("parse_failed"))
-        requested = "invalid_action" if parse_failed else (last.get("executed") or "none")
+        # A grounding failure's record keeps the action asked for (parse_grounded_action).
+        requested = last.get("requested") or (
+            "invalid_action" if parse_failed else (last.get("executed") or "none")
+        )
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
         replaced = replacement is not None and status in landed_statuses
@@ -1977,10 +2062,16 @@ class DefaultHarness(VisionAgentBase):
         feedback = f"EXECUTION RESULT: actual={executed}; requested={requested}; status={status}."
         if detail:
             feedback += f" Detail: {detail}"
-        note = action_result_note(
-            "none" if parse_failed else status,
-            last.get("protocol_failure", "") if parse_failed else detail,
-        )
+        if "unknown_mark" in last:
+            note = (
+                GROUNDING_FAILED_FEEDBACK.format(mark=last["unknown_mark"])
+                + f" ({GROUNDING_FAILED})"
+            )
+        else:
+            note = action_result_note(
+                "none" if parse_failed else status,
+                last.get("protocol_failure", "") if parse_failed else detail,
+            )
         if note:
             feedback += " " + note
         if replaced:

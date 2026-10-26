@@ -5,7 +5,9 @@ take the next generation, and the cleanup an abort leaves behind for the next us
 not depend on the protocol: SessionLifecycle keeps both, and readies, renews, repairs or aborts the
 session through the encoder's own connection operations. It also records the encoder's waits on
 the clock, and takes the ones the encoder makes of its own accord. StatelessSession presents a
-stateless driver the same way, so the runtime drives every driver alike.
+stateless driver the same way, so the runtime drives every driver alike. How a session operation
+reads in an agent's trace, and what it leaves of the provider's context, are session_record's and
+SessionStates', which the turn-based runtime and the native-streaming agent share.
 """
 
 from __future__ import annotations
@@ -13,8 +15,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 
+from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
     ConnectRequest,
@@ -372,6 +377,118 @@ class SessionLifecycle:
             TraceEvent.SESSION_WAIT,
             {"wait": wait, "seconds": seconds, "until_monotonic_ns": until_ns},
         )
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    """A session operation's ``record`` call as an agent's trace has it: the HistoryChanged's
+    kind and trigger and its sync fields, whether the operation replayed the history on the
+    session, and the SessionStateChanged it leaves, as (state, cause, provider history state)."""
+
+    kind: str
+    trigger: str
+    rebuilt: bool
+    fields: dict
+    state: tuple[str, str, ProviderHistoryState | None]
+
+
+def session_record(
+    sync: HistorySyncRequest | None,
+    result: HistorySyncResult | None = None,
+    error: BaseException | None = None,
+) -> SessionRecord:
+    """The record of one ``record(sync, result=None, error=None)`` call, alike for the
+    turn-based runtime and the native-streaming agent: a reopened session when ``sync`` is None,
+    otherwise one sync, of the kind the driver's result reports. The fallback kinds come from
+    provider_metadata keys the drivers already return."""
+    if sync is None:
+        return SessionRecord(
+            "rebuild",
+            "recovery",
+            True,
+            {"sync": {"reason": "reconnect"}},
+            ("exact", "reconnect", ProviderHistoryState.EXACT),
+        )
+    reason = sync.reason
+    metadata = result.provider_metadata if result is not None else {}
+    trigger = {"history_block_compaction": "policy", "runtime_recovery": "recovery"}.get(
+        reason, "provider"
+    )
+    rebuilt = result is not None and (
+        result.disposition == SyncDisposition.REBUILT
+        or bool(metadata.get("history_session_reconnected"))
+    )
+    if metadata.get("session_resumed"):
+        kind, rebuilt = "session_resumed", False
+    elif metadata.get("resume_error"):
+        kind, trigger = "resume_fallback", "fallback"
+    elif metadata.get("history_in_place_edit_fallback"):
+        kind, trigger = "in_place_edit_fallback", "fallback"
+    else:
+        kind = "rebuild" if rebuilt else "sync"
+    if result is None:
+        state = ("unknown", f"sync_error:{reason}", None)
+    elif kind == "session_resumed":
+        # Exact for the driver, but restored from the resume handle, not sent on this
+        # connection.
+        state = ("unknown", "session_resumed", result.history_state)
+    elif result.history_state == ProviderHistoryState.EXACT:
+        state = ("exact", f"sync:{reason}", result.history_state)
+    else:
+        state = ("unknown", f"sync:{reason}", result.history_state)
+    fields = {
+        "sync": {
+            "reason": reason,
+            "force_rebuild": sync.force_rebuild,
+            "disposition": result.disposition.value if result is not None else None,
+            "history_state": result.history_state.value if result is not None else None,
+            "detail": result.detail if result is not None else None,
+            "provider_metadata": metadata,
+        },
+        "error": repr(error)[:500] if error is not None else None,
+    }
+    return SessionRecord(kind, trigger, rebuilt, fields, state)
+
+
+def replay_items(policy: PathPolicy) -> list[str]:
+    """The context policy items a session rebuilt from the history view replays it by: item 10,
+    past tool calls in the policy's format."""
+    return ["tool_call_replay"] if policy.tool_call_replay is not None else []
+
+
+class SessionStates:
+    """An agent's SessionStateChanged records: one each time the provider-side context becomes
+    unknown, or exact again, which it is before anything says otherwise. What became of each
+    content the encoder wrote is its SessionDelivery records; what the provider keeps beside it,
+    the capability server_context. The native-streaming agent records from the execution thread
+    and from its abort's."""
+
+    def __init__(self, trace, protocol_family: str) -> None:
+        self._trace, self._family = trace, protocol_family
+        self._state = "exact"
+        self._lock = threading.Lock()
+
+    def record(
+        self,
+        state: str,
+        cause: str,
+        provider_state: ProviderHistoryState | None = None,
+        generation_id: str | None = None,
+    ) -> None:
+        with self._lock:
+            if state == self._state:
+                return
+            self._state = state
+            self._trace.capture(
+                TraceEvent.SESSION_STATE_CHANGED,
+                {
+                    "protocol_family": self._family,
+                    "state": state,
+                    "cause": cause,
+                    "provider_history_state": provider_state.value if provider_state else None,
+                    "generation_id": generation_id,
+                },
+            )
 
 
 def _abandoned() -> bool:

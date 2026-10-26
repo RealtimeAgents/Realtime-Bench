@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 # The statuses of an action that ran: one the environment applied, and a wait, which ends where it
 # arrives (evaluation/kernel/streaming.py).
-_RAN = {"applied", "wait"}
+RAN = {"applied", "wait"}
 # The policy's statuses of an action a newer one took the place of while it waited (SUPERSEDED),
 # of one whose reply was given up (CANCELLED_GENERATION), of one whose call the provider cancelled
 # while it waited (CANCELLED_CALL), and of a reply that came to no action with no protocol
@@ -52,6 +52,11 @@ _PROTOCOL_FAILURE_NOTE = (
     "NOTE: your reply held something that could not be executed ({failure}); nothing ran for it. "
     "Actions the reply handed over, if any, have their own feedback."
 )
+_GROUNDING_FAILED_NOTE = (
+    "NOTE: your reply held an action naming {mark}, which is not a mark of the screenshot the "
+    "action is based on ({failure}); nothing ran for it. Actions the reply handed over, if any, "
+    "have their own feedback."
+)
 _FRAME_NOTE = (
     "NOTE: this action was NOT executed because its frame field {why}. Set frame to the FRAME "
     "number drawn on the screenshot the action is based on."
@@ -63,24 +68,27 @@ _FRAME_ERRORS = {
 }
 
 
-def execution_feedback(outcome: Outcome, requested: str) -> str:
+def execution_feedback(outcome: Outcome, requested: str, unknown_mark: str | None = None) -> str:
     """The feedback on one outcome. ``requested`` is what the model asked for, as action_text
     writes it, or "none": the outcome holds only what ran, and no action at all when the frame
-    the action names cannot be found."""
+    the action names cannot be found. ``unknown_mark`` is the mark of a reply's grounding
+    failure, which its frame does not have."""
     status = outcome.status
-    actual = action_text(outcome.action) if status in _RAN else "none"
+    actual = action_text(outcome.action) if status in RAN else "none"
     text = f"EXECUTION RESULT: actual={actual}; requested={requested}; status={status}."
     if status == INVALID_GROUNDING_FRAME:
         return f"{text} {_FRAME_NOTE.format(why=_FRAME_ERRORS[outcome.detail])}"
     if outcome.detail:
         text += f" Detail: {outcome.detail}"
-    if status == "none" and outcome.protocol_failure is not None:
+    if status == "none" and unknown_mark is not None:
+        note = _GROUNDING_FAILED_NOTE.format(mark=unknown_mark, failure=outcome.protocol_failure)
+    elif status == "none" and outcome.protocol_failure is not None:
         note = _PROTOCOL_FAILURE_NOTE.format(failure=outcome.protocol_failure)
     else:
         note = _NOTES.get(status) or action_result_note(status)
     if note:
         text += " " + note
     # The policy runs a done or fail as a wait (evaluation/kernel/streaming.py _arrived).
-    if status in _RAN and outcome.protocol_failure == "unsupported_terminal_action":
+    if status in RAN and outcome.protocol_failure == "unsupported_terminal_action":
         text += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
     return text

@@ -188,20 +188,14 @@ class _Agent:
     driver = None
     token_usage = None
 
-    def __init__(self, config, interaction_mode):
+    def __init__(self, config):
         self.config = config
-        self.interaction_mode = interaction_mode
 
     def bind_tool_runtime(self, runtime):
         pass
 
     def initialize(self, task_instruction, initial_observation):
         self.task_instruction = task_instruction
-
-    def _system_instruction_text(self, frame_reference_rules):
-        from realtime_framework.harnesses.default.harness import VisionAgentBase
-
-        return VisionAgentBase._system_instruction_text(self, frame_reference_rules)
 
     def discard_pending_observations(self):
         pass
@@ -322,14 +316,16 @@ def _probe_runner(request: dict) -> dict:
             "detailed_history_drop_block_size": policy.turns.block,
         }
         state["prompts"] = policy.prompts
-        return _Agent(config, interaction_mode)
+        return _Agent(config)
 
     def run_stream(adapter, env, **loop):
-        from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
+        from realtime_framework.harnesses.default.harness import interaction_profile
 
         _attribute(state["attribution"], state["start"], "runner", claimed=state["claimed"])
         # As each agent's initialize() builds it (harnesses/default/harness.py, streaming/agent.py).
-        profile = INTERACTION_PROFILES[state["prompts"][adapter.task_category]]
+        profile = interaction_profile(
+            state["prompts"][adapter.task_category], adapter.prompt_options
+        )
         state["loop"] = {
             "run_stream": {
                 key: loop[key]

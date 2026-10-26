@@ -34,16 +34,13 @@ clock advance off the screenshot.
 
 A lane takes its place in the gate's line when it is given the command, so the environment runs
 the kernel's commands in the order the kernel sent them, also those it sent in one step to two
-lanes. One kind goes out of turn: while an action holds the gate, a capture goes past what waits to
-hold it alone, which waits for that action anyway. What waits to hold the gate alone so waits for
-the action and for the captures that run alongside it, each within its own budget, and frames
-keep coming meanwhile. Waiting for the gate is a wait on the clock, so a fake clock moves on while
+lanes. What waits to hold the gate alone waits for the action and the capture that hold it, each
+within its own budget. Waiting for the gate is a wait on the clock, so a fake clock moves on while
 an operation that holds it waits.
 
-The streaming policy reaches neither that rule nor the snapshot's place after an action still
-waiting (``freeze_turn`` below): it sends no capture while an end check or the snapshot waits, and
-no action waits for the gate (kernel/streaming.py ``_proceed``). They are the gate's rules for
-whoever sends those all the same, and tests/shell_streaming/test_env_gate.py holds them.
+The streaming policy sends no capture while an end check or the snapshot waits for the gate, and
+no action waits for it (kernel/streaming.py ``_proceed``): a capture asked for then, and a
+snapshot asked for while the action executing waits, fail an assertion.
 
 Like the turn-based shell, the gate compares ``_invalid_run`` before and after each operation and
 posts what the environment latched itself before the operation's answer; it posts each record
@@ -68,9 +65,9 @@ while no capture or action is out, and neither while one is out (kernel/streamin
 so an end check does not wait behind them for the gate; the gate holds it alone all the same.
 
 At the end the snapshot waits for the action executing to finish (stream-plan 4.8) and goes
-right after it: ``freeze_turn`` gives it the place in the gate's line next after that action, or
-first when the action holds the gate already, ahead of the others that were waiting, as the
-turn-based shell takes it right after the action on its one thread. Its wait is bounded by
+right after it: ``freeze_turn`` gives it the first place in the gate's line, ahead of the others
+waiting, while that action holds the gate, as the turn-based shell takes it right after the action
+on its one thread. Its wait is bounded by
 whoever takes it: the streaming shell's bound is the larger of the action's budget and a
 capture's, for a capture alongside the action (N32).
 """
@@ -113,20 +110,18 @@ class EnvGate:
         self._posted: dict | None = None
         self._frozen = False
 
-    def reserve(
-        self, kind: str = ALONE, *, after: threading.Event | None = None, ahead=False
-    ) -> threading.Event:
+    def reserve(self, kind: str = ALONE, *, ahead=False) -> threading.Event:
         """A place in the gate's line for an operation of ``kind``, which ``call`` waits for: at
-        the line's end, or ``ahead`` of every other waiter but ``after`` while that one waits."""
+        the line's end, or ``ahead`` of every other waiter."""
         turn = self._clock.event()
         with self._mutex:
-            turns = [waiting for waiting, _ in self._line]
-            if not ahead:
-                self._line.append((turn, kind))
-            elif after in turns:
-                self._line.insert(turns.index(after) + 1, (turn, kind))
-            else:
+            assert kind != CAPTURE or all(waits != ALONE for _, waits in self._line), (
+                "a capture asked for while an operation waits to hold the gate alone"
+            )
+            if ahead:
                 self._line.appendleft((turn, kind))
+            else:
+                self._line.append((turn, kind))
             self._grant()
         return turn
 
@@ -188,7 +183,7 @@ class EnvGate:
                 if self._holders or alone_waits:
                     alone_waits = True
                     continue
-            elif alone_waits and not (kind == CAPTURE and ACTION in holding):
+            elif alone_waits:
                 continue
             self._line.remove(entry)
             self._holders[turn] = kind
@@ -337,7 +332,8 @@ class EnvLanes:
         """The snapshot's place at the gate, alone and next after the action executing, ahead of
         every other operation waiting; and that action, None when none executes."""
         executing, turn = self.executing, self._executing_turn
-        return self.gate.reserve(ALONE, after=turn, ahead=True), executing
+        assert turn is None or turn.is_set(), "the action executing waits for the gate"
+        return self.gate.reserve(ALONE, ahead=True), executing
 
     def check_end(self, command: CheckEnd) -> None:
         def run(turn):
