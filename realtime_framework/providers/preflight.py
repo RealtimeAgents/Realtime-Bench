@@ -21,7 +21,7 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import PROMPT_CHANNELS, current_context_policy
 from realtime_framework.providers.registry import adapter_class
 
 
@@ -278,6 +278,14 @@ def check_context_policy(driver, policy, config) -> None:
             f"The {api} API answers in {capabilities.action_channel}; "
             f"the {policy.observation} observation is for choice APIs"
         )
+    # The harness picks the system prompt by the profile, and the function declarations and the
+    # reply's collector by the driver's channel (harnesses/default/harness.py).
+    for category, prompt in policy.prompts.items():
+        if prompt is not None and PROMPT_CHANNELS[prompt] != capabilities.action_channel:
+            raise ValueError(
+                f"The {api} API answers in {capabilities.action_channel}; its context policy "
+                f"prompts {category} tasks with {prompt}, which asks for {PROMPT_CHANNELS[prompt]}"
+            )
 
 
 def check_episode(

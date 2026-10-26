@@ -120,6 +120,10 @@ class Deployment:
     # LiteLLM provider whose bundled model map supplies native output limits; "" means the model
     # id carries its own provider prefix, None means the endpoint must declare any limit.
     litellm_provider: str | None = None
+    # Every model of the API names its upstream provider (ModelConfig.upstream_provider), in its
+    # YAML or the driver's model_defaults, for its requests to pin or its responses to be checked
+    # against; a model of any other API names none (providers/registry.py).
+    requires_upstream_provider: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)

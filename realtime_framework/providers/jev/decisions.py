@@ -39,6 +39,7 @@ class JevDecisionsClient(OpenAIDecisionsClient):
         default_base_url=DEFAULT_DECISIONS_BASE_URL,
         # Requests carry no provider routing block; responses still validate the TypeSafe route.
         pin_route=False,
+        requires_upstream_provider=True,
     )
     model_defaults: ClassVar[dict[str, dict]] = {
         "typesafe/jev-1.13": {

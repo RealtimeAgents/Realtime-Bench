@@ -125,10 +125,10 @@ from the command line, a run plan or Harbor.
 `provider_options` (top level) sets wire options of the API that its driver declares
 (`compat.provider_options`). Of the registered APIs, `openrouter` takes `cache_breakpoint` (`true`
 or `false`, the default), and `gemini_live` takes the options below; a Gemini Live model sets each
-of `tool_behavior`, `completion_signal`, `input_transport` and
-`tool_response_scheduling`: a model without them, a raw model id among them, is refused before
-the run. `history_format` (`native_tools` or `tool_transcript`: how past function calls are
-replayed into a rebuilt session) is optional. The allowed values are in `LIVE_PROTOCOL_OPTIONS`
+of `tool_behavior`, `completion_signal`, `input_transport`, `tool_response_scheduling` and
+`history_format` (`native_tools` or `tool_transcript`: how past function calls are replayed into
+a rebuilt session): a model without them, a raw model id among them, is refused before the run.
+The allowed values are in `LIVE_PROTOCOL_OPTIONS` and `LIVE_HISTORY_OPTIONS`
 (`realtime_framework/providers/gemini/live.py`), and the Gemini presets in `configs/models` set
 the combinations their models need.
 
@@ -194,8 +194,10 @@ A model that needs a new wire protocol gets a driver:
    beside what the client sent; the run identity records it, and no run is refused for it. The
    pre-run checks (`providers/preflight.py`) read the rest; an undeclared value counts as
    unsupported, and a context policy the driver cannot render is refused.
-   Declare `deployment` (`Deployment`: catalog family and provider, default key variable; a
-   driver family's subclass adds where its requests go, as `ChatDeployment`,
+   Declare `deployment` (`Deployment`: catalog family and provider, default key variable, and
+   whether each model names the upstream provider its requests pin or its responses are checked
+   against, `requires_upstream_provider`; a driver family's subclass adds where its requests go,
+   as `ChatDeployment`,
    `DecisionsDeployment` and `GeminiDeployment` do),
    `compat` (`Compat`: the API's restrictions the pre-run checks read: whether every request
    sends an output limit, the [provider options](#provider-options) a model may or must set with
@@ -204,7 +206,8 @@ A model that needs a new wire protocol gets a driver:
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
    [streaming settings](#streaming-settings) (a dict), takes `streaming`: the
    native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`, and has
-   `push_frame` and `request_reply`, which the agent pushes frames and asks for replies with. A
+   `push_frame`, `request_reply` and `classify_transport_error`, which the agent pushes frames,
+   asks for replies and classifies their failures with. A
    driver whose `action_channel` is `"choice"` has `decide` and `classify_question_error`, which
    the selection flow (`realtime_framework/providers/decisions/`) asks each question and
    classifies its failures with. An external driver without any of these is refused when its
@@ -242,7 +245,8 @@ driver as a [model API](#add-a-model-api).
    `maps_output_cap`) needs its method, and `persistent_session` needs `ensure_ready`,
    `synchronize`, `renew`, `repair`, `abort`, `mark_dirty` and `state`. The driver runs under the
    `chat_completions` context policy, with the model's [context preset](#context-preset) if it
-   names one. With
+   names one. Its prompts ask for one JSON action in the visible text, so a driver whose
+   `action_channel` is not `"text_json"` is refused before the run. With
    `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
    window. With no turn left, the earliest archived actions give way to a note in the ledger,
@@ -268,9 +272,10 @@ driver as a [model API](#add-a-model-api).
    reasoning_effort: low
    ```
 
-   `stream`, `include_usage` and `upstream_provider` belong to registered APIs; per-model
-   settings go in the class's `model_defaults`, or in the preset's `provider_options` where
-   `compat` declares them. A framework class is selected by its registered name, not by its path.
+   `stream` and `include_usage` belong to registered APIs, and `upstream_provider` to a driver
+   whose `deployment` sets `requires_upstream_provider`, which every one of its presets must then
+   name, unless its `model_defaults` does; other per-model settings go in the class's
+   `model_defaults`, or in the preset's `provider_options` where `compat` declares them. A framework class is selected by its registered name, not by its path.
 
 Run it with `-m <name>`. Every lookup of the catalog imports the class and checks these
 declarations, so a broken driver stops every run until its preset is fixed or removed. The run

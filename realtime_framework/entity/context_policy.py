@@ -169,7 +169,8 @@ class PathPolicy:
     tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
     # 11 task category -> InteractionProfile.name; None: no profile for the category. The pre-run
     # checks reject the one such pairing, a text-only choice model on a browser game, from the
-    # capabilities (providers/preflight.py check_choice_task)
+    # capabilities (providers/preflight.py check_choice_task), and take only profiles that ask for
+    # the API's action channel (PROMPT_CHANNELS)
     prompts: Mapping[str, str | None]
     # 12 what one observation carries; the pre-run checks take only the one the API's observation
     # modality and action channel allow
@@ -225,6 +226,15 @@ class ContextPolicy:
         )
 
 
+# The action channel (RealtimeCapabilities.action_channel) each profile item 11 names asks the
+# model to answer in (harnesses/default/harness.py INTERACTION_PROFILES).
+PROMPT_CHANNELS = {
+    "standard_vlm": "text_json",
+    "function_call": "function_call",
+    "jev_decisions": "choice",
+    "multimodal_decisions": "choice",
+    "multimodal_game_decisions": "choice",
+}
 _TEXT_JSON_PROMPTS = {"realtime": "standard_vlm", "browser_game": "standard_vlm"}
 # The standard values of the items that come neither from the environment (items 1 and 2) nor
 # from FIXED_TEXTS (item 5).

@@ -235,10 +235,13 @@ def validate_connection(connection):
         raise ValueError("endpoint.api_key_env must name an environment variable")
     if api != "chat_completions" and {"stream", "include_usage"} & settings.keys():
         raise ValueError("stream/include_usage are transport options for chat_completions only")
-    if api in {"openrouter", "openai_decisions"} and not settings.get("upstream_provider"):
-        raise ValueError(f"{api} requires upstream_provider to keep the route fixed")
-    if api not in {"openrouter", "openai_decisions"} and "upstream_provider" in settings:
-        raise ValueError("upstream_provider is only valid for OpenRouter APIs")
+    # Where the deployment requires one, it may come from the driver's model_defaults instead
+    # (_load_entries).
+    if (
+        "upstream_provider" in settings
+        and not adapter_class(api).deployment.requires_upstream_provider
+    ):
+        raise ValueError(f"The {api} API takes no upstream_provider")
     return settings
 
 
@@ -314,7 +317,7 @@ def load_definitions(directory):
                 chat_stream=settings.get("stream", True),
                 chat_include_usage=settings.get("include_usage", True),
             )
-        if api in {"openrouter", "openai_decisions"}:
+        if "upstream_provider" in settings:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
         if "provider_options" in value:
             # Checked against the driver's compat before the run (providers/preflight.py
@@ -437,10 +440,11 @@ _DECLARED_METHODS = {
         "mark_dirty",
     ),
 }
-# What the native-streaming agent pushes frames and asks for replies with
-# (harnesses/streaming/agent.py), and what the selection flow asks a choice API's questions and
-# classifies their failures with (providers/decisions/selection.py).
-_STREAMING_METHODS = ("push_frame", "request_reply")
+# What the native-streaming agent pushes frames, asks for replies and classifies their failures
+# with, whatever classifies_transport_errors says (harnesses/streaming/agent.py), and what the
+# selection flow asks a choice API's questions and classifies their failures with
+# (providers/decisions/selection.py).
+_STREAMING_METHODS = ("push_frame", "request_reply", "classify_transport_error")
 _CHOICE_METHODS = ("decide", "classify_question_error")
 
 
@@ -622,16 +626,13 @@ def _load_entries() -> list[ModelEntry]:
             )
         defaults["temperature"] = None
         upstream_provider = defaults.get("upstream_provider")
-        if d.get("provider") == "openrouter":
+        api = d["adapter_type"]
+        if adapter_class(api).deployment.requires_upstream_provider:
             if not isinstance(upstream_provider, str) or not upstream_provider.strip():
-                raise ValueError(
-                    f"{_fname}: OpenRouter entries must pin defaults.upstream_provider"
-                )
+                raise ValueError(f"{_fname}: the {api} API requires endpoint.upstream_provider")
             defaults["upstream_provider"] = upstream_provider.strip()
         elif upstream_provider is not None:
-            raise ValueError(
-                f"{_fname}: defaults.upstream_provider is only valid for OpenRouter entries"
-            )
+            raise ValueError(f"{_fname}: the {api} API takes no upstream_provider")
         d["defaults"] = defaults
         d["python_env"] = os.environ.get("REALTIMEBENCH_PYTHON") or sys.executable
         # Bridge keys are placeholders; the trial launcher supplies the actual endpoint.
