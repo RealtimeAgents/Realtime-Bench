@@ -9,6 +9,9 @@ import os
 import pytest
 
 import realtime_framework.providers.registry as catalog
+import realtime_tasks.registry as tasks
+from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.providers.preflight import check_episode
 
 WEB = "rt_waitlist_fit"
 ENDPOINT = "http://127.0.0.1:9/v1"
@@ -99,3 +102,38 @@ def test_trial_stream_usage_of_a_litellm_model(capsys, flag):
         ["--model", "openai/m", flag],
         "LiteLLM collects response usage automatically; omit --include-usage",
     )
+
+
+# Past reasoning: sent back where the model names the kimi_k3 preset, as Kimi requires for K3
+
+
+def check(config):
+    """The pre-run checks of the runner (evaluation/runner.py set_up_agent)."""
+    check_episode(config, clock_mode="wall", task=tasks.get(WEB), env_fps=config.fps)
+
+
+def replays_reasoning(config) -> bool:
+    policy = current_context_policy().for_path(
+        config.adapter_type, config.provider_options, config.context_preset
+    )
+    return policy.reasoning_replay
+
+
+def test_yaml_context_preset(tmp_path, monkeypatch):
+    """K3 served behind a chat_completions endpoint names the kimi_k3 preset in its YAML, as its
+    moonshot preset does (configs/models/kimi-k3.yaml): it sends past reasoning back, and the
+    pre-run checks accept it. A chat_completions model without a preset sends none."""
+    models = tmp_path / "models"
+    models.mkdir()
+    endpoint = f"endpoint: {{api: chat_completions, model: m, base_url: {ENDPOINT}}}\n"
+    (models / "k3.yaml").write_text(endpoint + "context_preset: kimi_k3\n")
+    (models / "plain.yaml").write_text(endpoint)
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+    catalog._catalog_entries.cache_clear()
+    try:
+        for key, preset, replayed in (("k3", "kimi_k3", True), ("plain", None, False)):
+            config = catalog.to_model_config(key, fps=1.0)
+            assert (config.context_preset, replays_reasoning(config)) == (preset, replayed)
+            check(config)
+    finally:
+        catalog._catalog_entries.cache_clear()

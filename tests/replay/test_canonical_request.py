@@ -148,11 +148,12 @@ def test_reasoning_replay():
             {"role": "assistant", "content": "A1"}
         ], api
     # Kimi K3's YAML names the kimi_k3 preset, which keeps the reasoning
-    # (entity/context_policy.py PRESETS).
-    k3 = POLICY.for_path("moonshot", {}, "kimi_k3")
-    moonshot = chat_messages(build_request(k3, SYSTEM, tuple(turns), None, ANSWER, CALL))
-    assert moonshot[2] == {"role": "assistant", "content": "A1", "reasoning_content": "R1"}
-    assert moonshot[4] == {"role": "assistant", "content": "", "reasoning_content": "R2"}
+    # (entity/context_policy.py PRESETS), on moonshot and behind a chat_completions endpoint.
+    for api in ("moonshot", "chat_completions"):
+        k3 = POLICY.for_path(api, {}, "kimi_k3")
+        messages = chat_messages(build_request(k3, SYSTEM, tuple(turns), None, ANSWER, CALL))
+        assert messages[2] == {"role": "assistant", "content": "A1", "reasoning_content": "R1"}
+        assert messages[4] == {"role": "assistant", "content": "", "reasoning_content": "R2"}
 
 
 def test_gemini_tool_exchanges_are_recorded_not_converted():

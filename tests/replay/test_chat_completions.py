@@ -23,6 +23,7 @@ from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.clock import token_record
+from realtime_framework.providers.preflight import check_episode
 
 from . import baseline
 from .build import build_episode
@@ -170,6 +171,8 @@ def test_long_scenario(stream, tmp_path):
     assert all(r["result"]["inspection"]["valid"] for r in records)
     _check_history_changes(records)
     _check_rejection_feedback(records)
+    # The row's standard values send no past reasoning (test_context_preset_sends_past_reasoning).
+    assert not any("reasoning_content" in m for r in records for m in _messages(r))
     assert invalid_run is None
     _check_agent_trace(tmp_path, stub, records)
 
@@ -189,6 +192,40 @@ def test_long_scenario(stream, tmp_path):
     assert not problems, f"{len(problems)} difference(s) from {path.name}:\n" + "\n".join(
         problems[:60]
     )
+
+
+# Two reasoning replies (decisions 0 and 3), each replayed in a later request.
+PRESET_SCENARIO = LONG_SCENARIO[:5]
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
+def test_context_preset_sends_past_reasoning(stream, tmp_path):
+    """A model whose YAML names the kimi_k3 preset, Kimi K3 behind a vLLM or SGLang endpoint, gets
+    its past reasoning back (entity/context_policy.py PRESETS): the next request carries it on the
+    turn's assistant message (harnesses/default/request.py _turn_items, providers/litellm.py
+    chat_messages), and the stub receives it there. The pre-run checks accept the preset here."""
+    with ChatCompletionsStub(replies(PRESET_SCENARIO)) as stub:
+        config = chat_completions_config(stub.base_url, stream=stream).model_copy(
+            update={"context_preset": "kimi_k3"}
+        )
+        check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=config.fps)
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY
+        )
+        try:
+            records = run_steps(episode, PRESET_SCENARIO, stub)
+        finally:
+            invalid_run = episode.finish()
+    assert invalid_run is None
+    assert stub.unscripted == 0 and stub.unused_replies == 0
+    assert sum(bool(step.reasoning) for step in PRESET_SCENARIO[:-1]) == 2
+    for k, step in enumerate(PRESET_SCENARIO[:-1]):
+        # Turn k is the newest turn of request k + 1, so its assistant message comes last.
+        *_, replayed = (m for m in _messages(records[k + 1]) if m["role"] == "assistant")
+        expected = {"role": "assistant", "content": step.reply}
+        if step.reasoning:
+            expected["reasoning_content"] = step.reasoning
+        assert replayed == expected, f"request {k + 1}"
 
 
 # (context_window_tokens, context_reserve_tokens) that hold the system text and the current frame
