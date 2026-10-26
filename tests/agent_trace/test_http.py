@@ -257,17 +257,16 @@ def test_connection_error_resend_is_a_second_request_in_the_same_attempt(tmp_pat
     """LiteLLM's AsyncHTTPHandler resends once after RemoteProtocolError or ConnectError, on a
     new client that carries the same hooks (http_handler.py:851-866).
 
-    httpx's own transport reports a connection closed without a response as RemoteProtocolError
-    every time; aiohttp reports it as a read error or a connect error depending on timing. The
-    hooks sit on the httpx client either way.
+    DISABLE_AIOHTTP_TRANSPORT, which the handler reads each time it builds a client
+    (http_handler.py:1249-1253), puts it on httpx's own transport, which reports a connection
+    closed without a response as RemoteProtocolError every time; aiohttp reports it as a read
+    error or a connect error depending on timing. The hooks sit on the httpx client either way.
 
     LiteLLM closes the resend client as soon as the response headers arrive (http_handler.py:
     865-866), so the streamed body sometimes fails with ReadError and the harness retries the
     whole turn; the trace then holds that failure and a second attempt.
     """
-    import litellm
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     _, _, fields = HOOKED["openrouter"]
 
     def answer(index, received):
