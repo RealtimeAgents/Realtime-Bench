@@ -100,7 +100,7 @@ def _run(driver, run_dir: Path, turns: int):
         with trace_scope(phase="initialize"):
             runtime.start(seed)
         for k in range(turns):
-            request = GenerationRequest(f"turn-{k}", None, "inf", "wall")
+            request = GenerationRequest(f"turn-{k}", None, "inf")
             with trace_scope(phase="decision", decision=k, generation_id=f"turn-{k}", attempt=1):
                 result = runtime.run_turn(
                     [_observation(k)],

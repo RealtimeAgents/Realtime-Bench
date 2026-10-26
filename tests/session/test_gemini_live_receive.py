@@ -176,7 +176,7 @@ class Rig:
         await self.driver.connect(ConnectRequest(seed=self.seed))
 
     async def start(self, generation_id: str):
-        request = GenerationRequest(generation_id, None, "inf", "wall", canonical=self.history)
+        request = GenerationRequest(generation_id, None, "inf", canonical=self.history)
         return await self.driver.start_generation(request)
 
 

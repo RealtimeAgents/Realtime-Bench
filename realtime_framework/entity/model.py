@@ -246,7 +246,6 @@ class GenerationRequest:
     generation_id: str
     provider_output_token_cap: int | None
     transport_output_token_cap: int | str | None
-    clock_mode: Literal["token", "wall"]
     # Filled by the runtime from the retained history before each provider call.
     canonical: CanonicalRequest | None = None
     # The event kernel's number of this generation, which the agent keys the generation's state by.

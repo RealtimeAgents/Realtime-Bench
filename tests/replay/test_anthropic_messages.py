@@ -361,7 +361,7 @@ def test_instruction_ledger_joins_the_system_field(monkeypatch):
 
         async def send():
             generation = GenerationRequest(
-                "turn-1", None, config.native_output_limit, "token", canonical=request
+                "turn-1", None, config.native_output_limit, canonical=request
             )
             handle = await driver.start_generation(generation)
             async for _ in driver.events(handle):

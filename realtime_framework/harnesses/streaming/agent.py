@@ -717,7 +717,6 @@ class NativeStreamingAgent(VisionAgentBase):
                             generation_id=f"streaming-{reply.generation}",
                             provider_output_token_cap=budget.provider_output_tokens,
                             transport_output_token_cap=budget.transport_output_tokens,
-                            clock_mode="wall",
                             canonical=view,
                             generation=reply.generation,
                         )

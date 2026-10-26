@@ -286,7 +286,7 @@ def test_a_choice_question_retries_and_is_timed_on_the_agent_clock(monkeypatch):
         return ChoiceReply({"type": "choice", "choice": choice}, usage, {})
 
     monkeypatch.setattr(driver, "decide", decide)
-    request = GenerationRequest("turn-1", None, None, "wall", canonical=_request(DECISIONS))
+    request = GenerationRequest("turn-1", None, None, canonical=_request(DECISIONS))
     metadata = _run(clock, driver.start_generation(request)).metadata
     delay = TRANSPORT_RETRY.delay_s(1, "clock-wiring:obs-1:0", TransportFailure(TRANSIENT))
     assert asked == [0.0, delay]

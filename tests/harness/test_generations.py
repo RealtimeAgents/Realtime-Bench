@@ -510,8 +510,8 @@ def test_the_result_export_shows_each_step_the_request_it_was_prepared_from(tmp_
 
 
 def test_a_generation_requests_with_its_budget(tmp_path):
-    """generate() hands its budget's provider and transport caps and its clock mode to the
-    request; the transport cap is the request's max_tokens."""
+    """generate() hands its budget's provider and transport caps to the request; the transport
+    cap is the request's max_tokens."""
     seen = []
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
@@ -519,8 +519,7 @@ def test_a_generation_requests_with_its_budget(tmp_path):
         start = agent.driver.start_generation
 
         async def recorded(request):
-            caps = (request.provider_output_token_cap, request.transport_output_token_cap)
-            seen.append((*caps, request.clock_mode))
+            seen.append((request.provider_output_token_cap, request.transport_output_token_cap))
             return await start(request)
 
         agent.driver.start_generation = recorded
@@ -532,7 +531,7 @@ def test_a_generation_requests_with_its_budget(tmp_path):
             agent.accept(1)
         finally:
             episode.finish()
-    assert seen == [(777, 778, "wall")]
+    assert seen == [(777, 778)]
     assert json.loads(stub.requests[0].body)["max_tokens"] == 778
 
 

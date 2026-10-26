@@ -237,7 +237,7 @@ class Rig:
     async def start(self, generation_id: str, history=None):
         """A generation registered on the session, without its trigger."""
         canonical = history if history is not None else self.view([])
-        request = GenerationRequest(generation_id, None, "inf", "wall", canonical=canonical)
+        request = GenerationRequest(generation_id, None, "inf", canonical=canonical)
         return await self.driver.start_generation(request)
 
 
@@ -657,7 +657,7 @@ def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
     async def reply(generation_id: str, *messages):
         """One reply, which the server starts as soon as its activity ends; what request_reply
         sent goes to ``triggers``."""
-        request = GenerationRequest(generation_id, None, "inf", "wall", canonical=rig.view(blocks))
+        request = GenerationRequest(generation_id, None, "inf", canonical=rig.view(blocks))
         rig.socket.answer("activityEnd", *messages, TURN_COMPLETE)
         before = len(rig.socket.sent)
         generation = await rig.driver.request_reply(request)
@@ -710,7 +710,7 @@ def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
     async def run():
         await rig.connect()
         await rig.driver.push_frame(None, rig.view(blocks))
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view(blocks))
         rig.socket.answer("activityEnd", TURN_COMPLETE)
         await drain(rig.driver.events(await rig.driver.request_reply(request)))
         left = dict(rig.driver._replies)
@@ -732,7 +732,7 @@ def test_a_push_and_a_trigger_go_out_one_after_the_other():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         await asyncio.gather(
             rig.driver.push_frame(None, rig.view([pushed(1)])),
             rig.driver.request_reply(request),
@@ -762,7 +762,7 @@ def test_a_write_cancelled_while_it_waits_for_the_session_records_nothing():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view(blocks))
         async with rig.driver._session_lock():
             writes = [
                 asyncio.ensure_future(rig.driver.push_frame(None, rig.view(blocks))),
@@ -790,7 +790,7 @@ def test_a_reply_is_refused_while_an_activity_is_left_open():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         rig.socket.fail = lambda message: wire(message) == "activityEnd"
         failures = []
         for _ in range(2):
@@ -1002,7 +1002,7 @@ def test_events_carry_the_number_the_trace_gives_their_connection():
         with pytest.raises(ConnectionClosedError):
             await rig.connect()
         await rig.connect()
-        request = GenerationRequest("turn-1", None, "inf", "wall", canonical=rig.view([]))
+        request = GenerationRequest("turn-1", None, "inf", canonical=rig.view([]))
         rig.socket.answer("activityEnd", call("call-1"), TURN_COMPLETE)
         events = await drain(rig.driver.events(await rig.driver.request_reply(request)))
         await rig.driver.close()
@@ -1023,7 +1023,7 @@ def test_each_message_is_traced_under_the_reply_it_was_read_for():
         with trace_scope(phase="initialize"):
             await rig.connect()
         for k in (1, 2):
-            request = GenerationRequest(f"turn-{k}", None, "inf", "wall", canonical=rig.view([]))
+            request = GenerationRequest(f"turn-{k}", None, "inf", canonical=rig.view([]))
             with trace_scope(phase="decision", generation=k):
                 rig.socket.answer("activityEnd", call(f"call-{k}"), TURN_COMPLETE)
                 await drain(rig.driver.events(await rig.driver.request_reply(request)))
@@ -1068,7 +1068,7 @@ def test_nothing_read_after_a_reply_is_traced_under_it_however_it_ended():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([]))
         with trace_scope(phase="decision", generation=1):
             events = rig.driver.events(await rig.driver.request_reply(request))
             rig.socket.feed(call("call-0"))
@@ -1101,7 +1101,7 @@ def test_nothing_goes_out_once_the_reader_failed():
         await rig.connect()
         rig.socket.feed(server_closed(1011, "Internal error."))
         await settle()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         failures = []
         for write in (
             rig.driver.push_frame(None, rig.view([pushed(1)])),
@@ -1146,7 +1146,7 @@ def test_a_reply_is_refused_while_one_is_in_flight():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         await rig.driver.request_reply(request)
         written = len(rig.socket.sent)
         try:
@@ -1169,7 +1169,7 @@ def test_a_reply_read_to_its_end_is_in_flight_until_its_events_are_done():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"), TURN_COMPLETE)
         await settle()
@@ -1202,7 +1202,7 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
         rig.socket.feed(cancelled("call-0"))
         await settle()
         rig.socket.fail = lambda message: wire(message) == "activityEnd"
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view(blocks))
         try:
             await rig.driver.request_reply(request)
         except RuntimeError:
@@ -1253,7 +1253,7 @@ def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         generation = await rig.driver.request_reply(request)
         rig.socket.feed(update("handle-1"), GO_AWAY)
         await settle()
@@ -1283,7 +1283,7 @@ def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again
     renewal resumes it, and the reply asked again goes out on the new connection."""
     rig = Rig()
     view = rig.view([pushed(1)])
-    request = GenerationRequest("turn-0", None, "inf", "wall", canonical=view)
+    request = GenerationRequest("turn-0", None, "inf", canonical=view)
 
     async def run():
         await rig.connect()
@@ -1328,7 +1328,7 @@ def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         generation = await rig.driver.request_reply(request)
         rig.socket.feed(update("handle-1"), GO_AWAY)
         await settle()
@@ -1358,7 +1358,7 @@ def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view(blocks))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view(blocks))
         rig.socket.feed(update("handle-1"))
         await settle()
         if lost == "abort":
@@ -1390,7 +1390,7 @@ def test_a_handle_that_comes_after_a_failed_trigger_resumes_nothing_either():
     async def run():
         await rig.connect()
         rig.socket.fail = lambda message: wire(message) == "activityEnd"
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         with pytest.raises(RuntimeError):
             await rig.driver.request_reply(request)
         rig.socket.feed(update("handle-2"), GO_AWAY)
@@ -1438,7 +1438,7 @@ def test_a_reply_is_read_on_the_connection_it_started_on():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         generation = await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"))
         await settle()
@@ -1465,7 +1465,7 @@ def test_a_reply_on_a_closed_connection_is_bound_by_no_go_away_of_the_new_one():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         old = await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"))
         await settle()
@@ -1493,7 +1493,7 @@ def test_a_call_handed_over_after_a_reconnect_is_no_call_of_the_new_connection()
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", None, "inf", "wall", canonical=rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         old = await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"))
         await settle()

@@ -1139,10 +1139,9 @@ class _Generation:
 
     number: int  # the kernel's generation number
     decision: int
-    # The decision's output caps and clock (DecisionBudget).
+    # The decision's output caps (DecisionBudget).
     provider_output_tokens: int | None
     transport_output_tokens: int | str | None
-    clock_mode: str
     cancel: threading.Event  # set by abort() and close(); the runtime stops the generation
     # (ChoiceRequirements, SelectionMaterial) of its observation, for its requests.
     choice: tuple | None = None
@@ -1364,9 +1363,7 @@ class DefaultHarness(VisionAgentBase):
             "invalid_reason": "inspection_protocol_error",
         }
 
-    def _open(
-        self, number, decision, provider_output_tokens, transport_output_tokens, clock_mode
-    ) -> _Generation:
+    def _open(self, number, decision, provider_output_tokens, transport_output_tokens) -> _Generation:
         """Start a generation's state; abort() reaches it until the generation ends. The agent
         keeps the newest generation's action cap, which the runner audits against the decision's
         allowance once the result is back. A generation aborted before its worker got here does
@@ -1376,7 +1373,6 @@ class DefaultHarness(VisionAgentBase):
             decision,
             provider_output_tokens,
             transport_output_tokens,
-            clock_mode,
             self.clock.event(),
         )
         with self._generations_lock:
@@ -1419,11 +1415,7 @@ class DefaultHarness(VisionAgentBase):
         """StartGeneration, on a worker thread. The result is held, not written: accept() writes
         it into the history and discard() drops it."""
         state = self._open(
-            generation,
-            decision,
-            budget.provider_output_tokens,
-            budget.transport_output_tokens,
-            budget.clock_mode,
+            generation, decision, budget.provider_output_tokens, budget.transport_output_tokens
         )
         try:
             result = self._generate(state, [observation])
@@ -1574,7 +1566,6 @@ class DefaultHarness(VisionAgentBase):
             generation_id=f"turn-{tick}-{uuid.uuid4().hex[:12]}",
             provider_output_token_cap=provider_cap,
             transport_output_token_cap=transport_cap,
-            clock_mode=generation.clock_mode,
             generation=generation.number,
         )
         call = CallParameters(

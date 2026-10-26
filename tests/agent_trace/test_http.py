@@ -369,7 +369,6 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
         generation_id="turn-0-tokenize",
         provider_output_token_cap=None,
         transport_output_token_cap=None,
-        clock_mode="wall",
         canonical=canonical,
     )
     return driver, request, trace, sink
@@ -592,7 +591,7 @@ def test_jev_estimates_the_history_it_sends(tmp_path, monkeypatch):
         api_key_env="REPLAY_TRACE_KEY",
         upstream_provider="typesafe",
     )
-    request = GenerationRequest("turn-0", None, None, "wall", canonical=_request(config))
+    request = GenerationRequest("turn-0", None, None, canonical=_request(config))
 
     def status(window, reserve):
         client = JevDecisionsClient(

@@ -442,16 +442,12 @@ def test_partial_output_is_not_retried(openrouter_env, tmp_path):
     assert result["_trajectory_entry"]["transport_reconnect_attempts"] == 0
 
 
-def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], list, list]:
-    """Wrap the driver so the test sees each request's clock mode and every event the runtime
-    reads (harnesses/default/context.py RealtimeRuntime._run_turn). Once the runtime has read the
+def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], list]:
+    """Wrap the driver so the test sees every event the runtime reads
+    (harnesses/default/context.py RealtimeRuntime._run_turn). Once the runtime has read the
     complete action text, the stub releases the held usage chunk."""
-    streams, clock_modes, released = [], [], []
-    start_generation, events = driver.start_generation, driver.events
-
-    async def recorded_start(request):
-        clock_modes.append(request.clock_mode)
-        return await start_generation(request)
+    streams, released = [], []
+    events = driver.events
 
     async def recorded_events(generation):
         stream, visible = [], []
@@ -471,8 +467,8 @@ def _record_stream(driver, stub, action_text: str) -> tuple[list[list[dict]], li
                 released.append([dict(item) for item in stream])
                 stub.release_last_event()
 
-    driver.start_generation, driver.events = recorded_start, recorded_events
-    return streams, clock_modes, released
+    driver.events = recorded_events
+    return streams, released
 
 
 @pytest.mark.parametrize("clock_mode", ["token", "wall"])
@@ -481,10 +477,8 @@ def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
 
     The openrouter path declares terminal_output_usage=True (providers/litellm.py _STREAMING_CHAT),
     but nothing reads that flag, and nothing on this path lets the clock mode decide whether
-    terminal usage may delay a wall-clock action: the clock mode reaches the driver only as
-    GenerationRequest.clock_mode (harnesses/registry.py configure_agent;
-    harnesses/default/harness.py DefaultHarness._generate), which no driver reads (the
-    non-streaming litellm gateway's check that did is now the pre-run check_wall_clock,
+    terminal usage may delay a wall-clock action: the clock mode does not reach the driver (the
+    non-streaming litellm gateway's check that read it is now the pre-run check_wall_clock,
     providers/preflight.py check_wall_clock). On either clock the runtime reads every event before
     the decision returns (harnesses/default/context.py RealtimeRuntime._run_turn), and the
     collector keeps the last usage (harnesses/default/harness.py
@@ -503,10 +497,9 @@ def test_usage_only_with_last_event(clock_mode, openrouter_env, tmp_path):
     script = [Held(held), Reply(unreported.content, None, unreported.reasoning)]
     clock = TOKEN_CLOCK if clock_mode == "token" else {"clock_mode": "wall"}
     with openrouter_episode(openrouter_env, tmp_path, script, **clock) as (stub, config, episode):
-        streams, clock_modes, released = _record_stream(episode.agent.driver, stub, held.content)
+        streams, released = _record_stream(episode.agent.driver, stub, held.content)
         records = run_steps(episode, steps, stub)
     with_headers(records, stub.requests)
-    assert clock_modes == [clock_mode, clock_mode]
     # The release came from the runtime reading the action text, not from the stub's timeout,
     # and no usage had been read by then.
     assert not stub.hold_timed_out

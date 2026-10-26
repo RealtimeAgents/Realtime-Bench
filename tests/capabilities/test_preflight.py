@@ -1356,7 +1356,7 @@ def sent_ledger_roles(api, role):
     text = policy.texts.ledger_header + "\n" + ledger.text
     driver = catalog.adapter_class(api)
     if issubclass(driver, LiteLLMDriver):
-        generation = GenerationRequest("turn-1", None, None, "wall", canonical=request)
+        generation = GenerationRequest("turn-1", None, None, canonical=request)
         messages = driver(config)._request_kwargs(generation)["messages"]
         return [message["role"] for message in messages if message["content"] == text]
     if issubclass(driver, OpenAIRealtimeDriver):

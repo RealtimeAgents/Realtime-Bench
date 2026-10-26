@@ -689,7 +689,7 @@ def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
         observation, view = frame(1)
         await driver.push_frame(observation, view)
         handle = await driver.request_reply(
-            GenerationRequest("reply-1", None, "inf", "wall", canonical=view)
+            GenerationRequest("reply-1", None, "inf", canonical=view)
         )
         reply = asyncio.create_task(_collect(driver.events(handle)))
         await asyncio.sleep(1.0)
@@ -791,7 +791,7 @@ def test_each_streaming_message_is_traced_under_the_reply_it_was_read_for():
         with trace_scope(phase="push", observation_id="obs-1"):
             await driver.push_frame(observation, view)
         with trace_scope(phase="decision", generation=1):
-            request = GenerationRequest("reply-1", None, "inf", "wall", canonical=view)
+            request = GenerationRequest("reply-1", None, "inf", canonical=view)
             await _collect(driver.events(await driver.request_reply(request)))
         with trace_scope(phase="push", observation_id="obs-2"):
             await driver.push_frame(*frame(2))
@@ -1062,7 +1062,7 @@ def test_a_reply_asked_for_during_a_rebuild_goes_to_the_rebuilt_session():
         await lock.acquire()
         view = streaming_view(stream("FRB"))
         reply = asyncio.create_task(
-            driver.request_reply(GenerationRequest("reply-1", None, "inf", "wall", canonical=view))
+            driver.request_reply(GenerationRequest("reply-1", None, "inf", canonical=view))
         )
         await asyncio.sleep(0)
         rebuilt = _Session(2, new, new_core())
@@ -1126,7 +1126,7 @@ def test_a_reply_goes_out_after_the_feedback_the_session_lacks():
     sent(core, core.push(streaming_view(stream("FR"))))
     driver._session, driver._conn = _Session(1, wire, core), wire
     request = GenerationRequest(
-        "reply-2", None, "inf", "wall", canonical=streaming_view(stream("FRB"))
+        "reply-2", None, "inf", canonical=streaming_view(stream("FRB"))
     )
     handle = _within(driver.request_reply(request))
     _, reply = handle.opaque
@@ -1152,11 +1152,11 @@ def test_a_reply_asked_for_while_one_is_in_progress_raises():
 
     async def scenario():
         await driver.request_reply(
-            GenerationRequest("reply-1", None, "inf", "wall", canonical=view)
+            GenerationRequest("reply-1", None, "inf", canonical=view)
         )
         with pytest.raises(RuntimeError, match="^OpenAI Realtime reply already in progress$"):
             await driver.request_reply(
-                GenerationRequest("reply-2", None, "inf", "wall", canonical=view)
+                GenerationRequest("reply-2", None, "inf", canonical=view)
             )
 
     _within(scenario())

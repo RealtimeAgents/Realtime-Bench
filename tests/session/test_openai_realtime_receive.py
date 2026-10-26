@@ -129,7 +129,7 @@ async def _start(driver: OpenAIRealtimeDriver, turns):
     """Send the newest turn's observation and start the response to it."""
     history = view(turns)
     await driver.send_observation(turns[-1].observation, history)
-    request = GenerationRequest(f"turn-{len(turns)}", None, "inf", "wall", canonical=history)
+    request = GenerationRequest(f"turn-{len(turns)}", None, "inf", canonical=history)
     return await driver.start_generation(request)
 
 
@@ -561,7 +561,7 @@ def test_a_closed_session_reports_it_is_not_connected():
     """Once abort() closed the connection, an abandoned worker that goes on is told so."""
     driver = _offline_driver()
     history = view([turn(0)])
-    request = GenerationRequest("turn-0", None, "inf", "wall", canonical=history)
+    request = GenerationRequest("turn-0", None, "inf", canonical=history)
     for step in (
         driver.send_observation(turn(0).observation, history),
         driver.start_generation(request),
