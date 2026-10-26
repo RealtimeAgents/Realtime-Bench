@@ -20,6 +20,7 @@ from realtime_framework.entity.model import (
     GenerationHandle,
     HistorySyncResult,
     InterruptResult,
+    RetryCancelled,
     SyncDisposition,
     TransportFailure,
     TransportFailureError,
@@ -55,9 +56,15 @@ class DecisionEncoder:
         return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):
-        metadata = await ChoiceDecision(
-            self, request.canonical, trace=self._trace, clock=self.clock
-        ).run()
+        decision = ChoiceDecision(self, request.canonical, trace=self._trace, clock=self.clock)
+        try:
+            metadata = await decision.run()
+        except (Exception, RetryCancelled) as exc:
+            # The questions answered before the decision failed or was given up on; the harness
+            # counts them as its usage (harnesses/default/harness.py, decisions 19 and 37).
+            if decision.calls:
+                exc.partial_usage = dict(decision.usage)
+            raise
         metadata["history_form"] = request.canonical.history_form
         return GenerationHandle(request.generation_id, metadata=metadata)
 

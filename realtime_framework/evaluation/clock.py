@@ -79,16 +79,23 @@ def token_record(result):
     )
     record = {key: result.get(key) for key in COUNTS}
     record.update(normalized)
+    # Usage with a missing reason is partial: a failed Decision step's, without the failed
+    # question's (decision 19).
+    missing_reason = (
+        result.get("provider_usage_missing_reason")
+        if usage is not None
+        else result.get("provider_usage_missing_reason", "backend_did_not_return_usage")
+    )
     record.update(
         {
             "schema": "realtime_bench.token_accounting.v2",
             "scope": "inference_response",
             "remaining_clock_tokens": result.get("remaining_clock_tokens"),
             "provider_usage": usage,
-            "provider_usage_status": "reported" if usage is not None else "unavailable",
-            "provider_usage_missing_reason": None
-            if usage is not None
-            else result.get("provider_usage_missing_reason", "backend_did_not_return_usage"),
+            "provider_usage_status": (
+                "unavailable" if usage is None else "partial" if missing_reason else "reported"
+            ),
+            "provider_usage_missing_reason": missing_reason,
             "clock_output_tokens_source": result.get("clock_output_tokens_source"),
             "provider_visible_output_tokens_source": result.get(
                 "provider_visible_output_tokens_source"
@@ -218,6 +225,7 @@ class TokenAccounting:
         self.responses = 0
         self.sums = Counter()
         self.coverage = Counter()
+        self.partial = Counter()  # the responses whose partial usage the sums hold
         self.missing_reasons = Counter()
         self.clock_sources = set()
         self.normalization_schemas = Counter()
@@ -245,11 +253,15 @@ class TokenAccounting:
         if record.get("harness_abort_reason"):
             return
         self.responses += 1
+        # A partial usage adds to the known totals and leaves the totals incomplete.
+        covered = (
+            self.partial if record.get("provider_usage_status") == "partial" else self.coverage
+        )
         for key in COUNTS:
             value = _number(record, key)
             if value is not None:
                 self.sums[key] += value
-                self.coverage[key] += 1
+                covered[key] += 1
         if record.get("provider_usage_missing_reason"):
             self.missing_reasons[record["provider_usage_missing_reason"]] += 1
         if record.get("clock_output_tokens_source"):
@@ -318,7 +330,9 @@ class TokenAccounting:
                     if self.responses and self.coverage[key] == self.responses
                     else None
                 ),
-                "known_total": self.sums[key] if self.coverage[key] else None,
+                "known_total": (
+                    self.sums[key] if self.coverage[key] or self.partial[key] else None
+                ),
                 "responses_with_count": self.coverage[key],
                 # complete is numeric coverage only. The separate source flag shows that every
                 # normalized value also carries an auditable derivation.
