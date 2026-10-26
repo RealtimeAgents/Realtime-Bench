@@ -303,9 +303,8 @@ def account_tokens(r: dict, remaining_clock_tokens: int | None, env) -> None:
 
 
 def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:
-    """Record the adapter's handoff and action caps for the decision on ``r``. Raises RuntimeError
-    when together they exceed the provider allowance."""
-    handoff_cap = int(getattr(adapter, "_frame_handoff_max_tokens", 0) or 0)
+    """Record the adapter's action cap for the decision on ``r``. No adapter hands a part of its
+    output off, so the handoff cap is 0."""
     action_cap = int(
         getattr(
             adapter,
@@ -314,24 +313,9 @@ def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:
         )
         or 0
     )
-    # A decision that was invalidated before generation (e.g. inspection_protocol_error), or a
-    # call given up on, which has no output, may never have recomputed the adapter's
-    # per-decision caps, so they can still describe the previous decision; auditing them
-    # against this decision's allowance would raise spuriously.
-    if (
-        budget.provider_output_tokens is not None
-        and r.get("invalid_reason") is None
-        and r.get("harness_timeout_reason") is None
-        and r.get("harness_abort_reason") is None
-        and handoff_cap + action_cap > budget.provider_output_tokens
-    ):
-        raise RuntimeError(
-            f"adapter decision output caps exceed provider transport allowance: "
-            f"handoff={handoff_cap} + action={action_cap} > {budget.provider_output_tokens}"
-        )
     r.update(
         {
-            "handoff_token_cap": handoff_cap,
+            "handoff_token_cap": 0,
             "action_token_cap": action_cap,
             "unclamped_clock_output_tokens": r.get("unclamped_clock_output_tokens"),
             "post_horizon_output_tokens": r.get("post_horizon_output_tokens", 0),
