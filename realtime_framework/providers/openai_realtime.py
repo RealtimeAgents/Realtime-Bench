@@ -81,13 +81,16 @@ _HANDSHAKE_TIMEOUT_S = 10.0
 # a streaming push stuck in one holds the connection's writes until the abort's close after the
 # interrupt drops the socket; the close needs no cancel to end the response.
 _INTERRUPT_TIMEOUT_S = 1.0
-# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
+# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers,
+# and of the host's ephemeral ports or buffers run out, which pass once some are free again.
 _NETWORK_ERRNOS = {
     errno.ENETUNREACH,
     errno.EHOSTUNREACH,
     errno.ENETDOWN,
     errno.EHOSTDOWN,
     errno.ENETRESET,
+    errno.EADDRNOTAVAIL,
+    errno.ENOBUFS,
 }
 
 
@@ -319,13 +322,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         canonical history cannot duplicate a completed action.
 
         A connect attempt fails below HTTP with a ConnectionError (refused or reset), an OSError
-        naming a network or host that is down or unreachable, a failed name lookup
-        (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends before the
-        upgrade response, with websockets' InvalidMessage caused by EOFError; these are
-        transient. Every other OSError is fatal: a local fault (a permission, a missing file, an
-        invalid argument), and with them EADDRNOTAVAIL, ENOBUFS and an OSError without an errno
-        (a name lookup that returned no address), which can pass, as ephemeral ports or buffers
-        run out, but are not told apart from one.
+        naming a network or host that is down or unreachable or the host's ephemeral ports or
+        buffers run out (EADDRNOTAVAIL, ENOBUFS), a failed name lookup (socket.gaierror, or the
+        plain OSError without an errno of a lookup that returned no address), ssl.SSLError or a
+        timeout or, when the connection ends before the upgrade response, with websockets'
+        InvalidMessage caused by EOFError; these are transient (decision 37). Every other OSError
+        is a local fault (a permission, a missing file, an invalid argument) and fatal.
         """
         transient = (
             ConnectionClosed,
@@ -341,8 +343,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             # A reconnect inside the turn already spent the shared retry budget.
             if isinstance(current, TransportFailureError):
                 return current.failure
-            if isinstance(current, transient) or (
-                isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS
+            if (
+                isinstance(current, transient)
+                or (isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS)
+                # socket.create_connection's, once getaddrinfo returned no address.
+                or (type(current) is OSError and current.errno is None)
             ):
                 return TransportFailure(TRANSIENT)
             # A refused WebSocket upgrade (websockets InvalidStatus) carries its HTTP response.

@@ -643,14 +643,14 @@ def _while_handling(error: Exception, handled: Exception) -> Exception:
         (OSError(errno.ENETDOWN, "network down"), TRANSIENT),
         (OSError(errno.EHOSTDOWN, "host down"), TRANSIENT),
         (OSError(errno.ENETRESET, "network reset"), TRANSIENT),
-        (OSError(errno.EADDRNOTAVAIL, "address not available"), FATAL),
-        (OSError(errno.ENOBUFS, "no buffer space"), FATAL),
+        (OSError(errno.EADDRNOTAVAIL, "address not available"), TRANSIENT),
+        (OSError(errno.ENOBUFS, "no buffer space"), TRANSIENT),
+        (OSError("getaddrinfo returns an empty list"), TRANSIENT),
         (OSError(errno.EINVAL, "invalid argument"), FATAL),
-        (OSError("getaddrinfo returns an empty list"), FATAL),
         (PermissionError("permission"), FATAL),
         (FileNotFoundError("missing"), FATAL),
         (_while_handling(ValueError("bug"), FileNotFoundError("missing")), FATAL),
-        (_while_handling(KeyError("bug"), OSError("local")), FATAL),
+        (_while_handling(KeyError("bug"), OSError(errno.EINVAL, "local")), FATAL),
     ],
     ids=lambda value: (
         errno.errorcode.get(getattr(value, "errno", None)) or type(value).__name__
@@ -660,10 +660,11 @@ def _while_handling(error: Exception, handled: Exception) -> Exception:
 )
 def test_only_a_network_failure_below_http_is_transient(error, kind):
     """classify_transport_error takes a connection that failed below HTTP as transient: refused
-    or reset (ConnectionError), a network or host that is down or unreachable, a failed name
-    lookup, TLS, a timeout, and one that ended before the upgrade response (EOFError). Every
-    other OSError is fatal, EADDRNOTAVAIL, ENOBUFS and one without an errno too, though they can
-    pass; so is an error raised while handling one."""
+    or reset (ConnectionError), a network or host that is down or unreachable, ephemeral ports or
+    buffers run out (EADDRNOTAVAIL, ENOBUFS), a failed name lookup, also one that returned no
+    address (an OSError without an errno), TLS, a timeout, and one that ended before the upgrade
+    response (EOFError), as decision 37 has it. Every other OSError is local and fatal; so is an
+    error raised while handling one."""
     assert OpenAIRealtimeDriver.classify_transport_error(error).kind == kind
 
 
