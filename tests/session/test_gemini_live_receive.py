@@ -426,8 +426,10 @@ def test_a_receive_that_ends_without_a_message_fails():
 
 def test_a_failed_reply_does_not_resume():
     """The core promotes the resumption handle when it reads the clean completion; the driver
-    then rejects that message's usage. The failed reply is not a boundary to resume from, so the
-    goAway renewal rebuilds instead."""
+    then rejects that message's usage. The failed reply is not a boundary to resume from: the
+    runtime leaves the session dirty after it (harnesses/default/context.py RealtimeRuntime
+    .run_turn), so the next readying rebuilds it from the history, and no goAway renewal is due
+    after that."""
     bad_usage = {
         "promptTokenCount": 20,
         "responseTokenCount": 3,
@@ -454,11 +456,21 @@ def test_a_failed_reply_does_not_resume():
         except RuntimeError as exc:
             assert "AUDIO token detail exceeds" in str(exc)
         assert rig.driver.connection_renewal_reason() == "go_away"
-        request = HistorySyncRequest(rig.seed, "go_away", rig.history)
-        return await rig.driver.sync_history(request)
+        rig.driver.mark_dirty()
+        synced = []
+        ready = await rig.driver.ensure_ready(
+            rig.seed, rig.history, lambda sync, *_, **__: synced.append(sync)
+        )
+        renewed = await rig.driver.renew(rig.seed, rig.history, lambda *_, **__: None)
+        return ready, renewed, synced
 
-    result = asyncio.run(run())
-    assert result.disposition == SyncDisposition.REBUILT
+    ready, renewed, (sync,) = asyncio.run(run())
+    assert (ready.disposition, ready.detail, renewed) == (
+        SyncDisposition.REBUILT,
+        "runtime_recovery",
+        None,
+    )
+    assert (sync.reason, sync.force_rebuild) == ("runtime_recovery", True)
     assert [entry for entry in rig.log if entry[0] == "connect"] == [
         ("connect", None),
         ("connect", None),
@@ -815,19 +827,27 @@ def test_input_waits_for_the_renewal_a_go_away_asks_for():
 
 
 def test_an_interrupted_session_is_not_resumed():
-    """On the realtime_input transport an interrupt opens a new activity on the same connection;
-    the session it leaves has no clean boundary, so the goAway renewal rebuilds."""
+    """On the realtime_input transport an interrupt opens a new activity on the same connection,
+    which leaves no clean boundary; the abort it is part of (SessionLifecycle.abort) closes the
+    connection after it, so the next readying opens a session from the history, and no goAway
+    renewal is due after that."""
     rig = Rig("replay-gemini-live", [GO_AWAY_AFTER_A_CLEAN_TURN, []])
 
     async def run():
         await rig.connect()
         generation = await rig.start("turn-0")
         await drain(rig.driver.events(generation))
-        await rig.driver.interrupt(generation)
-        request = HistorySyncRequest(rig.seed, "go_away", rig.history, generation)
-        return await rig.driver.sync_history(request)
+        await rig.driver.abort(generation)
+        reopened = []
+        ready = await rig.driver.ensure_ready(
+            rig.seed, rig.history, lambda *args, **_: reopened.append(args)
+        )
+        renewed = await rig.driver.renew(rig.seed, rig.history, lambda *_, **__: None)
+        return ready, renewed, reopened
 
-    assert asyncio.run(run()).disposition == SyncDisposition.REBUILT
+    assert asyncio.run(run()) == (None, None, [(None,)])
+    # The interrupt's activity start, then the abort's close.
+    assert [next(iter(message)) for message in rig.live.sockets[0].sent] == ["realtime_input"]
     assert [entry for entry in rig.log if entry[0] == "connect"] == [
         ("connect", None),
         ("connect", None),

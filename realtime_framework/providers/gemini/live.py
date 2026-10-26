@@ -563,10 +563,6 @@ class GeminiLiveDriver(SessionLifecycle):
         self._last_video_sent_at = None
         self._go_away_wait_recorded = None
         self._core.closed()
-        if self.streaming:
-            # Closing cut off whatever the session was taking: it is rebuilt, not resumed. A
-            # renewal's connect plans its own resume after this.
-            self._core.unresumable()
         if reading is not None:
             # Its replies end with the cancelled read, not with whatever the close would raise.
             reading.cancel()
@@ -809,8 +805,7 @@ class GeminiLiveDriver(SessionLifecycle):
         a frame so refused is not in the session until a push of a view it is the newest of.
         The reply in flight then still ends on this connection, by the goAway deadline; renew()
         once it has ended resumes the session with the latest resumable handle
-        (SessionCore.resume_handle_for), or rebuilds it from the history where there is none, or
-        where this driver closed the connection (an abort) or a trigger did not go out whole.
+        (SessionCore.resume_handle_for), or rebuilds it from the history where there is none.
         renew() before then closes the connection under the reply, whose events() raise."""
         async with self._session_lock():
             session = self._session_for_input()
@@ -858,7 +853,6 @@ class GeminiLiveDriver(SessionLifecycle):
                 if trigger is not None:
                     self._core.send_failed(trigger.keys)
                 self._core.reply_abandoned()
-                self._core.unresumable()
                 abandoned = self._replies.pop(request.generation_id)
                 self._cancelled_between[:0] = abandoned.held
                 self._reading_context.run(enter_trace_scope, None)
@@ -1159,14 +1153,8 @@ class GeminiLiveDriver(SessionLifecycle):
                     return self._before_go_away_deadline(receiver.next())
 
                 bound = self._before_go_away_deadline
-            try:
-                async for event in self._events(generation, session, take, bound, held):
-                    yield event
-            except Exception:
-                # The core applied each message as it was read; a reply that then failed here is
-                # not a clean boundary to resume from.
-                self._core.generation_failed(receiver.number)
-                raise
+            async for event in self._events(generation, session, take, bound, held):
+                yield event
         finally:
             self._replies.pop(generation.generation_id, None)
 
@@ -1431,7 +1419,6 @@ class GeminiLiveDriver(SessionLifecycle):
         try:
             await self._session.send_realtime_input(activity_start=self.types.ActivityStart())
             self._activity_open = True
-            self._core.interrupt_sent()
             return InterruptResult(ProviderHistoryState.CONTAMINATED)
         except Exception as exc:  # noqa: BLE001 - provider control boundary
             return InterruptResult(

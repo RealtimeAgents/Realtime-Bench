@@ -334,8 +334,6 @@ class SessionCore:
         # Since the connection was planned: the latest handle the server called resumable, else
         # the one the connection resumes. Streaming resumes with it.
         self.latest_resume_handle: str | None = None
-        # Streaming: what the session holds is not known (unresumable) until the next connection.
-        self.held_unknown = False
         self.renewal_required = False  # a goAway asked for a new connection
         # Streaming: the execution feedback a seed or a trigger has handed to a connection of the
         # session, over the episode, the text handed by block id; a trigger's counts from when
@@ -506,7 +504,6 @@ class SessionCore:
         self._set([("setup",)], Delivery.CONFIRMED)
         self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
-        self.held_unknown = False
         self.renewal_required = False
         self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
@@ -522,9 +519,12 @@ class SessionCore:
         renewal resumes: turn-based only after a clean interaction, with the handle promoted at
         it; streaming, which has few clean boundaries, with the latest handle the server called
         resumable, whatever was sent or read after it, so the session it restores may lack input
-        or output the history has, or hold output the history lacks."""
+        or output the history has, or hold output the history lacks. A session that holds what
+        the history does not know of (an abort closed its connection, a reply failed, a trigger
+        did not go out whole) is closed or dirty for its lifecycle, which rebuilds it before a
+        renewal reads a handle (SessionLifecycle.renew)."""
         if self.streaming:
-            resumes = reason == "go_away" and not force_rebuild and not self.held_unknown
+            resumes = reason == "go_away" and not force_rebuild
             return self.latest_resume_handle if resumes else None
         if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
             return self.resume_handle
@@ -644,9 +644,6 @@ class SessionCore:
         self.sending(trigger.keys)
         return trigger
 
-    def interrupt_sent(self) -> None:
-        self.resume_handle = None
-
     def calls_received(self, calls: list[tuple], connection: int) -> None:
         """Calls read on ``connection``, pending there until acknowledged; read on a connection
         closed since, they are pending nowhere."""
@@ -681,24 +678,9 @@ class SessionCore:
         self._generations += 1
         self.replies[self.connection] = _Generation(self._generations, generation_id)
 
-    def generation_failed(self, connection: int) -> None:
-        """The reply on ``connection`` failed after the core applied its messages: if that is the
-        open connection, its session has no clean boundary to resume from."""
-        if connection == self.connection:
-            self.last_turn_clean = False
-            self.resume_handle = None
-
     def reader_failed(self, connection: int) -> None:
         """The connection's reader failed: no reply is read on it any more."""
         self.replies.pop(connection, None)
-
-    def unresumable(self) -> None:
-        """What the session holds is not known any more (an abort closed its connection, a
-        trigger did not go out whole): no handle resumes it, not even one the server sends on its
-        connection after this, and the next connection rebuilds it from the history."""
-        self.held_unknown = True
-        self.latest_resume_handle = None
-        self.resume_handle = None
 
     def reply_abandoned(self) -> None:
         """The reply started on the open connection will not come (its trigger did not go out):

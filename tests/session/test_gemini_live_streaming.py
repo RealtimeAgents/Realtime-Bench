@@ -1347,8 +1347,10 @@ def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():
 @pytest.mark.parametrize("lost", ["abort", "failed trigger"])
 def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
     """Once an abort closed the connection, or a trigger did not go out whole, what the session
-    holds is not known: the goAway renewal rebuilds it from the history, though a resumable
-    handle had come, and the seed replays the feedback."""
+    holds is not known: the abort leaves it closed, the agent leaves the failed reply's dirty
+    (harnesses/streaming/agent.py _reply), and the agent readies the session before it renews it
+    (_ready). That reopens or rebuilds it from the history, though a resumable handle and a goAway
+    had come, and no renewal is due after it; the seed replays the feedback."""
     rig = Rig()
     blocks = [
         pushed(1),
@@ -1370,21 +1372,29 @@ def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
             rig.socket.fail = lambda message: wire(message) == "activityEnd"
             with pytest.raises(RuntimeError):
                 await rig.driver.request_reply(request)
+            rig.driver.mark_dirty()
             rig.socket.feed(GO_AWAY)
             await settle()
-        result = await rig.driver.renew(rig.seed, rig.view(blocks), lambda *_, **__: None)
+        record = lambda *_, **__: None
+        ready = await rig.driver.ensure_ready(rig.seed, rig.view(blocks), record)
+        renewed = await rig.driver.renew(rig.seed, rig.view(blocks), record)
         await rig.driver.close()
-        return result
+        return ready, renewed
 
-    result = asyncio.run(run())
-    assert result.disposition == SyncDisposition.REBUILT
+    ready, renewed = asyncio.run(run())
+    if lost == "abort":
+        assert ready is None  # a session reopened, not a sync
+    else:
+        assert (ready.disposition, ready.detail) == (SyncDisposition.REBUILT, "runtime_recovery")
+    assert renewed is None
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, None]
     assert "d1.feedback" in rig.driver._core.carried
 
 
 def test_a_handle_that_comes_after_a_failed_trigger_resumes_nothing_either():
     """A resumable handle the server sends on the connection once a trigger did not go out whole
-    resumes its session no more than one before: the goAway renewal rebuilds it."""
+    resumes its session no more than one before: the failed reply left the session dirty, which
+    the readying before the renewal rebuilds."""
     rig = Rig()
 
     async def run():
@@ -1393,13 +1403,21 @@ def test_a_handle_that_comes_after_a_failed_trigger_resumes_nothing_either():
         request = GenerationRequest("turn-0", None, "inf", canonical=rig.view([pushed(1)]))
         with pytest.raises(RuntimeError):
             await rig.driver.request_reply(request)
+        rig.driver.mark_dirty()
         rig.socket.feed(update("handle-2"), GO_AWAY)
         await settle()
-        result = await rig.driver.renew(rig.seed, rig.view([pushed(1)]), lambda *_, **__: None)
+        record = lambda *_, **__: None
+        ready = await rig.driver.ensure_ready(rig.seed, rig.view([pushed(1)]), record)
+        renewed = await rig.driver.renew(rig.seed, rig.view([pushed(1)]), record)
         await rig.driver.close()
-        return result
+        return ready, renewed
 
-    assert asyncio.run(run()).disposition == SyncDisposition.REBUILT
+    ready, renewed = asyncio.run(run())
+    assert (ready.disposition, ready.detail, renewed) == (
+        SyncDisposition.REBUILT,
+        "runtime_recovery",
+        None,
+    )
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, None]
 
 

@@ -215,7 +215,8 @@ class SessionLifecycle:
     ) -> HistorySyncResult | None:
         """Renew the connection once the provider asked for it (connection_renewal_reason), from
         ``history``; a renewal that does not leave the session exact raises. None when no renewal
-        is due."""
+        is due. The caller readies the session first (ensure_ready): one closed or dirty since,
+        which may hold what the history does not, is rebuilt then, and owes no renewal."""
         reason = (
             self.connection_renewal_reason() if self.capabilities.connection_renewal else None
         )
