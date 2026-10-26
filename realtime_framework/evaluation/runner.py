@@ -1274,6 +1274,7 @@ def set_up_agent(
         tokens_per_frame=tokens_per_frame,
         clock_mode=clock_mode,
         category=getattr(ctask, "category", None),
+        interaction_mode=interaction_mode,
         env_fps=env_fps,
     )
     setup.stage = "environment_setup"

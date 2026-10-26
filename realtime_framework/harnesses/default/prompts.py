@@ -7,6 +7,22 @@ Task-specific objectives come from each task's instruction. All adapters compose
 contract with the model/interface-specific prompts centralized here.
 """
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PromptOptions:
+    """The run settings an episode's prompts are composed for, set before initialize()
+    (harnesses/registry.py configure_agent). Besides the task and the frame rates, the prompts
+    read nothing else of the run."""
+
+    interaction_mode: str  # "turn_based" or "streaming"
+    clock_mode: str  # "wall" or "token"
+    # Only a finite B charges output tokens to simulated time; the wall clock charges none, and the
+    # pause clock (the token clock with B unlimited) lands each action at the tick it observed.
+    finite_budget: bool
+
+
 # Keep action examples identical across text and native-tool adapters.
 GUI_ACTION_EXAMPLES = """- {"action": "click", "target": "P1"|"R1@u,v", "button": "left"|"middle"|"right"}
 - {"action": "right_click"|"double_click"|"triple_click", "target": "P1"|"R1@u,v"}
@@ -83,8 +99,7 @@ The adapter accepts common formatting wrappers when it can recover exactly one u
 action. If it finds no valid action or multiple different actions, the harness executes WAIT.
 """
 STREAM_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(output_tokens="")
-# Only a finite B charges output tokens to simulated time (budget_clock_prompt); the wall clock
-# charges none, and the pause clock lands each action at the tick it observed.
+# PromptOptions.finite_budget.
 FINITE_BUDGET_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(
     output_tokens=" All generated output tokens count."
 )
@@ -175,10 +190,10 @@ def gui_system_prompt(
     )
 
 
-def system_prompt_for_category(category: str | None, *, finite_budget: bool) -> str:
+def system_prompt_for_category(category: str | None, options: PromptOptions) -> str:
     if category not in SCENARIO_ROLES:
         raise ValueError(f"unsupported task category for scenario prompt: {category!r}")
-    contract = FINITE_BUDGET_OUTPUT_CONTRACT if finite_budget else STREAM_OUTPUT_CONTRACT
+    contract = FINITE_BUDGET_OUTPUT_CONTRACT if options.finite_budget else STREAM_OUTPUT_CONTRACT
     return _scenario_prompt(SCENARIO_ROLES[category], contract)
 
 
@@ -193,20 +208,21 @@ TEXT_ACTION_FRAME_PROMPT = (
 def budget_clock_prompt(
     fps: float,
     tokens_per_frame: int | None,
-    clock_mode: str = "token",
+    options: PromptOptions,
     env_fps: float | None = None,
 ) -> str:
     """Describe the effective evaluation clock without assuming a provider session mechanism.
-    ``fps`` is the model-input frame rate. ``env_fps``, the environment's, is described only
-    where it differs: frames then fall between environment ticks."""
-    second = "second" if clock_mode == "wall" else "simulated second"
+    ``fps`` is the model-input frame rate and ``tokens_per_frame`` B, set where the budget is
+    finite. ``env_fps``, the environment's, is described only where it differs: frames then fall
+    between environment ticks."""
+    second = "second" if options.clock_mode == "wall" else "simulated second"
     ticks = (
         ""
         if env_fps is None or env_fps == fps
         else f"Each frame is captured at the first environment tick ({env_fps:g} per {second}) "
         "at or after its scheduled time; observed_at_tick in the action ledger counts these ticks. "
     )
-    if clock_mode == "wall":
+    if options.clock_mode == "wall":
         return (
             f"WALL CLOCK: observations are scheduled at {fps:g} fps. "
             + ticks
@@ -219,7 +235,7 @@ def budget_clock_prompt(
         + "Physical inference and GUI execution latency do not advance simulated time. "
         "Produce at most one action per observation. "
     )
-    if tokens_per_frame is None:
+    if not options.finite_budget:
         advance = (
             "to the next scheduled frame" if ticks else "exactly one frame interval (1/f seconds)"
         )

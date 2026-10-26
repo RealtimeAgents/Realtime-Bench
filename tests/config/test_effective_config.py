@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.evaluation.effective_config import export
-from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES, VisionAgentBase
+from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.harnesses.registry import configure_agent
 
 MODEL, TASK = "claude-opus-5", "gh_timed_chess"
@@ -74,12 +74,16 @@ def test_the_system_prompt_hash_is_of_the_system_block_sent():
         ).prompts
         assert prompts[task.category] == profile
         # The agent as the runner configures and initializes it, on the trial worker's wall clock.
-        agent = SimpleNamespace(interaction_mode="turn_based", task_instruction=task.description())
+        agent = SimpleNamespace(task_instruction=task.description())
         configure_agent(
-            agent, fps=1.0, tokens_per_frame=None, clock_mode="wall", category=task.category
+            agent,
+            fps=1.0,
+            tokens_per_frame=None,
+            clock_mode="wall",
+            category=task.category,
+            interaction_mode="turn_based",
         )
         assert agent.streaming_note == record["clock_prompt"]
-        agent._system_instruction_text = MethodType(VisionAgentBase._system_instruction_text, agent)
         sent = INTERACTION_PROFILES[profile].system_instruction(agent)
         assert record["task"]["system_prompt_sha256"] == _sha256(sent), model
         assert sent.startswith(agent.system_prompt_override) == (profile == "standard_vlm")

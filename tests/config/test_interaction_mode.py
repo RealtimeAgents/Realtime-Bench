@@ -99,7 +99,7 @@ def run_main(
 
     def create_agent(config, **kwargs):
         agents.append(kwargs["interaction_mode"])
-        return probe._Agent(config, kwargs["interaction_mode"])
+        return probe._Agent(config)
 
     class NoSleeps(SystemClock):
         """main()'s setup waits take no time here."""

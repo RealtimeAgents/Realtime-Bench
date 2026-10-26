@@ -41,6 +41,7 @@ from .fake_live import (
     BUDGET,
     LIVE,
     REALTIME,
+    STREAMING,
     Call,
     Cancel,
     Error,
@@ -113,6 +114,7 @@ def test_a_session_that_never_opens_fails_the_agents_initialize(monkeypatch, clo
     config = catalog.to_model_config(LIVE, fps=1.0, reasoning_effort="fixed")
     agent = NativeStreamingAgent(config, None, trace=UNTRACED, clock=clock)
     agent.task_category = "realtime"
+    agent.prompt_options = STREAMING
     with pytest.raises(TimeoutError):
         agent.initialize("Click the button.", observation(clock, 0))
     assert clock.monotonic() == 60.0

@@ -108,13 +108,14 @@ def test_token_clock_is_set_up_with_b_per_model_input_frame(runner_cells):
 def test_pause_mode_steps_to_the_next_frame_where_the_rates_differ():
     """At 30/7 frames are due every 30/7 ticks and observed at whole ticks, so after an action
     the world moves 5 or 4 ticks, never exactly 1/7 s; at equal rates the note is unchanged."""
-    from realtime_framework.harnesses.default.prompts import budget_clock_prompt
+    from realtime_framework.harnesses.default.prompts import PromptOptions, budget_clock_prompt
 
-    split = budget_clock_prompt(7.0, None, "token", env_fps=30.0)
+    pause = PromptOptions("turn_based", "token", False)
+    split = budget_clock_prompt(7.0, None, pause, env_fps=30.0)
     assert "The environment then advances to the next scheduled frame, and" in split
     assert "1/f seconds" not in split
-    equal = budget_clock_prompt(7.0, None, "token", env_fps=7.0)
-    assert equal == budget_clock_prompt(7.0, None, "token")
+    equal = budget_clock_prompt(7.0, None, pause, env_fps=7.0)
+    assert equal == budget_clock_prompt(7.0, None, pause)
     assert "advances exactly one frame interval (1/f seconds), and" in equal
 
 
@@ -173,11 +174,7 @@ def _main_in_process(monkeypatch, tmp_path, argv, run_stream) -> list:
     monkeypatch.setattr(runner, "episode_clocks", clocks)
     monkeypatch.setattr(runner, "GuestClient", probe._Guest)
     monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
-    monkeypatch.setattr(
-        runner,
-        "create_agent",
-        lambda config, **kwargs: probe._Agent(config, kwargs["interaction_mode"]),
-    )
+    monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))
     registered = tasks.get
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
     monkeypatch.setattr(runner, "run_stream", run_stream)

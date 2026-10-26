@@ -88,7 +88,14 @@ class LiveWire(_Placeholders, WireNormalizer):
 
 
 def _initialized(agent, clock):
-    configure_agent(agent, fps=1.0, tokens_per_frame=None, clock_mode="wall", category="realtime")
+    configure_agent(
+        agent,
+        fps=1.0,
+        tokens_per_frame=None,
+        clock_mode="wall",
+        category="realtime",
+        interaction_mode="streaming",
+    )
     agent.initialize(TASK, Observation(b"", clock.time(), 0, {}))
     return agent
 

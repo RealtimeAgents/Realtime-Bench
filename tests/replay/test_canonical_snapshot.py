@@ -210,7 +210,14 @@ def test_luna_choice_parts(tmp_path):
         timeout=30.0,
         transport=httpx.MockTransport(answer),
     )
-    configure_agent(agent, fps=1.0, tokens_per_frame=None, clock_mode="wall", category="realtime")
+    configure_agent(
+        agent,
+        fps=1.0,
+        tokens_per_frame=None,
+        clock_mode="wall",
+        category="realtime",
+        interaction_mode="turn_based",
+    )
     agent.bind_tool_runtime(
         ToolRuntime(
             tmp_path / "tool_calls.jsonl",

@@ -26,22 +26,22 @@ def create_agent(
     return DefaultHarness(config, log_dir=log_dir, trace=trace, clock=clock)
 
 
-def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category, env_fps=None):
-    """Apply the run's clock note, task category and scenario prompt before initialize().
-    ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``; ``env_fps`` is the
-    environment's (``fps`` when omitted)."""
+def configure_agent(
+    agent, *, fps, tokens_per_frame, clock_mode, category, interaction_mode, env_fps=None
+):
+    """Apply the run's prompt options, clock note, task category and scenario prompt before
+    initialize(). ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``;
+    ``env_fps`` is the environment's (``fps`` when omitted). The prompts are composed for
+    ``agent.prompt_options`` alone."""
+    from realtime_framework.harnesses.default.prompts import PromptOptions
     from realtime_framework.harnesses.default.prompts import budget_clock_prompt
     from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 
-    agent.streaming_note = budget_clock_prompt(
-        fps,
-        tokens_per_frame,
-        clock_mode,
-        env_fps,
+    options = agent.prompt_options = PromptOptions(
+        interaction_mode, clock_mode, clock_mode == "token" and tokens_per_frame is not None
     )
+    agent.streaming_note = budget_clock_prompt(fps, tokens_per_frame, options, env_fps)
     # Role/rules vary by scenario family; the task-specific objective is injected separately.
-    agent.system_prompt_override = system_prompt_for_category(
-        category, finite_budget=clock_mode == "token" and tokens_per_frame is not None
-    )
+    agent.system_prompt_override = system_prompt_for_category(category, options)
     # The context policy's prompts (item 11) are keyed by it.
     agent.task_category = category

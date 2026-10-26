@@ -35,6 +35,7 @@ from realtime_framework.entity.model import (
     TransportFailure,
 )
 from realtime_framework.entity.records import UNTRACED
+from realtime_framework.harnesses.default.prompts import PromptOptions
 from realtime_framework.harnesses.streaming import agent as agent_module
 from realtime_framework.harnesses.streaming.agent import NativeStreamingAgent
 from realtime_framework.providers.session_lifecycle import RenewalRequired, SessionLifecycle
@@ -42,6 +43,8 @@ from realtime_framework.providers.session_lifecycle import RenewalRequired, Sess
 LIVE = "gemini-3.8-live"  # configs/models/gemini-3.8-live.yaml; its policy row gemini_live
 REALTIME = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml; openai_realtime, actions in text
 BUDGET = DecisionBudget(None, None, None, "wall")
+# The prompt options of a streaming run, which runs on the wall clock only.
+STREAMING = PromptOptions("streaming", "wall", False)
 EXACT, CONTAMINATED = ProviderHistoryState.EXACT, ProviderHistoryState.CONTAMINATED
 EXACT_SYNC = SyncDisposition.EXACT
 
@@ -380,10 +383,13 @@ def make_agent(
     monkeypatch, clock, driver=FakeLiveDriver, model=LIVE, log_dir=None, trace=UNTRACED
 ) -> NativeStreamingAgent:
     """An initialized agent on ``clock`` whose driver is ``driver``, on ``model``'s policy,
-    writing its trajectory to ``log_dir`` if given and its records to ``trace``."""
+    writing its trajectory to ``log_dir`` if given and its records to ``trace``. It is not
+    configured (harnesses/registry.py configure_agent): its prompts have no scenario prompt and
+    no clock note."""
     monkeypatch.setattr(agent_module, "adapter_class", lambda adapter_type: driver)
     config = catalog.to_model_config(model, fps=1.0, reasoning_effort="fixed")
     agent = NativeStreamingAgent(config, log_dir, trace=trace, clock=clock)
     agent.task_category = "realtime"
+    agent.prompt_options = STREAMING
     agent.initialize("Click the button.", observation(clock, 0))
     return agent

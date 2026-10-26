@@ -135,14 +135,6 @@ class VisionAgentBase(StreamingAgent):
     def token_usage(self) -> dict:
         return dict(self._tok)
 
-    def _system_instruction_text(self, frame_reference_rules: str | None) -> str:
-        return gui_system_prompt(
-            self.task_instruction,
-            scenario_prompt=getattr(self, "system_prompt_override", None),
-            clock_prompt=self.streaming_note,
-            frame_reference_rules=frame_reference_rules,
-        )
-
     @staticmethod
     def _prompt_text_summary(messages: list[dict]) -> str:
         parts = []
@@ -720,11 +712,20 @@ class InteractionProfile:
     frame_reference_rules: str | None = None
 
     def system_instruction(self, agent) -> str:
+        """The episode's, composed for ``agent.prompt_options`` (harnesses/registry.py
+        configure_agent)."""
         frame_reference_rules = (
-            self.frame_reference_rules if agent.interaction_mode == "streaming" else None
+            self.frame_reference_rules
+            if agent.prompt_options.interaction_mode == "streaming"
+            else None
         )
         if self.action_space is None:
-            return agent._system_instruction_text(frame_reference_rules)
+            return gui_system_prompt(
+                agent.task_instruction,
+                scenario_prompt=getattr(agent, "system_prompt_override", None),
+                clock_prompt=agent.streaming_note,
+                frame_reference_rules=frame_reference_rules,
+            )
         return "\n\n".join(
             filter(
                 None,

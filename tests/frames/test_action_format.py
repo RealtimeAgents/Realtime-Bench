@@ -18,6 +18,7 @@ from realtime_framework.harnesses.default.harness import FUNCTION_CALL_PROFILE
 from realtime_framework.harnesses.default.prompts import (
     FRAME_REFERENCE_RULES,
     FUNCTION_CALL_FRAME_REFERENCE_RULES,
+    PromptOptions,
     gui_system_prompt,
 )
 from tests.fake_clock import FakeClock
@@ -82,7 +83,7 @@ def test_the_streaming_instruction_gains_its_frame_reference_block(monkeypatch, 
         rules = FUNCTION_CALL_FRAME_REFERENCE_RULES
         turn_based = FUNCTION_CALL_PROFILE.system_instruction(
             types.SimpleNamespace(
-                interaction_mode="turn_based",
+                prompt_options=PromptOptions("turn_based", "wall", False),
                 task_category="realtime",
                 streaming_note=None,
                 task_instruction="Click the button.",
@@ -96,7 +97,7 @@ def test_the_streaming_instruction_gains_its_frame_reference_block(monkeypatch, 
 def test_the_function_call_instruction_gains_its_frame_reference_block():
     def agent(mode):
         return types.SimpleNamespace(
-            interaction_mode=mode,
+            prompt_options=PromptOptions(mode, "wall", False),
             task_category="realtime",
             streaming_note="CLOCK NOTE",
             task_instruction="Do the task.",
