@@ -25,6 +25,7 @@ from websockets.exceptions import ConnectionClosedOK as ConnectionClosedOK
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.providers.registry import load_project_secrets
+from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
@@ -291,7 +292,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         self.config = config
         self.clock = clock or SystemClock()
         self.streaming = streaming
-        self.streaming_settings = {**self.streaming_settings, **config.streaming}
+        self.streaming_settings = merge_streaming_settings(type(self), config.streaming)
         load_project_secrets()
         key = config.api_key or os.environ.get(config.api_key_env or self.deployment.key_env)
         if not key:

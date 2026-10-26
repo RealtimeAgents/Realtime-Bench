@@ -390,6 +390,7 @@ from pathlib import Path as Path
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
 from realtime_framework.entity.config import FrameEncodingConfig
 from realtime_framework.entity.config import RunnerTimingConfig
+from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import validate_model_interaction
@@ -748,9 +749,8 @@ def effective_run_config(
         config["external_driver"] = external_driver_identity(adapter_type)
     if interaction_mode == "streaming":
         # validate_model_interaction admits only a live API that declares streaming, and a driver
-        # that declares it declares its settings (providers/registry.py _check_driver). The model
-        # YAML's settings replace those of its driver's they name.
-        config["streaming"] = {**driver.streaming_settings, **streaming}
+        # that declares it declares its settings (providers/registry.py _check_driver).
+        config["streaming"] = merge_streaming_settings(driver, streaming)
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:

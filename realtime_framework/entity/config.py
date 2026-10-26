@@ -208,6 +208,12 @@ class ModelConfig(BaseModel):
     upstream_provider: Optional[str] = None
 
 
+def merge_streaming_settings(driver, settings: dict) -> dict:
+    """The native-streaming settings a model runs with: its driver's streaming_settings, with the
+    model YAML's ``settings`` (ModelConfig.streaming) in place of those they name."""
+    return {**driver.streaming_settings, **settings}
+
+
 # Settings read from the environment. Each field names its variable and parser; an unset variable
 # keeps the field default. The module that uses a group reads it once, at its import, so the
 # process environment at that moment decides the value (the runtime-config hash reads the same

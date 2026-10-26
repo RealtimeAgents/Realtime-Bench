@@ -12,6 +12,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.config import task_seed
 from realtime_framework.entity.context_policy import MODEL_PRESETS
 
@@ -322,7 +323,7 @@ def main(argv=None):
         # The settings the run records (evaluation/config.py effective_run_config), part of the
         # configuration hash.
         driver = catalog.adapter_class(entry.adapter_type)
-        settings["streaming"] = {**driver.streaming_settings, **resolved_model.streaming}
+        settings["streaming"] = merge_streaming_settings(driver, resolved_model.streaming)
     if args.dry_run:
         print(json.dumps(settings, indent=2))
         return 0
