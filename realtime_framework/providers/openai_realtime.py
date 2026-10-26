@@ -74,6 +74,9 @@ _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversat
 # a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
 # fails both. Normal closes finish well within it, so it adds no observable wait.
 _CONNECTION_CLOSE_TIMEOUT_S = 10.0
+# How long a connection may take to open: TCP, TLS and the WebSocket upgrade, in real time
+# (websockets' open_timeout). The session.update after it reads no answer.
+_HANDSHAKE_TIMEOUT_S = 10.0
 # How long an interrupt's cancel may wait to be written. It waits behind a write in progress, and
 # a streaming push stuck in one holds the connection's writes until the abort's close after the
 # interrupt drops the socket; the close needs no cancel to end the response.
@@ -468,7 +471,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         def open_session(epoch):
             cm = self.client.realtime.connect(
                 model=request.seed.model_name,
-                websocket_connection_options={"create_connection": self._ws_connection},
+                websocket_connection_options={
+                    "create_connection": self._ws_connection,
+                    "open_timeout": _HANDSHAKE_TIMEOUT_S,
+                },
             )
             conn = cm.__enter__()
             with self._epoch_lock:

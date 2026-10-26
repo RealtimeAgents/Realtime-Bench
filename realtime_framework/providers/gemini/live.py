@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 
 _SESSION_RELEASE_GRACE_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
+# How long a connection may take to open and acknowledge its setup. websockets bounds the opening
+# alone, at 10 s; google-genai then waits for setupComplete without a bound.
+_HANDSHAKE_TIMEOUT_S = 30.0
 
 
 # Wire options carried in ModelConfig.provider_options: (default, allowed values). A model sets
@@ -654,7 +657,7 @@ class GeminiLiveDriver(SessionLifecycle):
         ``connect``'s seed; one that fails on the way is closed again."""
         self._opening_ws = None
         try:
-            session = await cm.__aenter__()
+            session = await self.clock.wait_for(cm.__aenter__(), _HANDSHAKE_TIMEOUT_S)
             # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
             self._opening_ws = session._ws
             if getattr(session, "setup_complete", None) is None:
