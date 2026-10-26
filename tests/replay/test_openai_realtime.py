@@ -328,7 +328,7 @@ def test_long_scenario(tmp_path):
     assert all(prompt.startswith(TEXT_ACTION_FRAME_PROMPT) for prompt in prompts)
     assert all(text.startswith("EXECUTION RESULT: ") for text in feedback)
     # The rejected actions' feedback: the frames after two of them are folded later, and their
-    # feedback items stay, unlike the prompt prefix before them.
+    # feedback items stay.
     rejected = [k for k, step in enumerate(LONG_SCENARIO) if step.status == "rejected"]
     folded_at = {j: k for k, turns in FOLDS.items() for j in turns}
     assert [folded_at.get(k + 1) for k in rejected] == [20, 40, None]
