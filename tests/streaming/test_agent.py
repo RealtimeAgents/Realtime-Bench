@@ -1830,6 +1830,43 @@ def test_a_push_held_for_a_renewal_tells_the_kernel_when_it_waits_and_when_it_go
     agent.close()
 
 
+class _SlowRenewal(FakeLiveDriver):
+    """The fake live encoder, whose renewal after a goAway takes a second."""
+
+    async def _sync_history(self, request):
+        if request.reason == "go_away":
+            await asyncio.sleep(1.0)
+        return await super()._sync_history(request)
+
+
+def test_a_held_push_leaving_its_gate_while_a_reply_renews_the_session_leaves_it_preparing(
+    monkeypatch, clock
+):
+    """The session is prepared once nothing prepares it (review-final-encoders 4): the next reply
+    starts renewing the session while the push waits at its gate, and the push leaves the gate
+    while that renewal goes on. The kernel hears the session prepared as the reply's renewal
+    ends, not as the push leaves its gate."""
+    agent = make_agent(monkeypatch, clock, _SlowRenewal)
+    posted = []
+    agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [Reply((GoAway(0.5),), ends_at=2.0), Reply(ends_at=5.0)]
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    assert clock.wait(replied, 2.0)
+    next_reply, _ = _on_worker(clock, lambda: agent.generate(8, 4, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.accept(7)
+    assert clock.wait(pushed, 1.0)
+    assert "error" not in pushing
+    assert _preparations(posted) == [("SessionPreparing", 2.0), ("SessionPrepared", 4.0)]
+    operations = [call[:2] for call in agent.driver.calls]
+    assert operations[-3:] == [("sync", "go_away"), ("reply", 8), ("push", "obs-3")]
+    assert clock.wait(next_reply, 10.0)
+    agent.close()
+
+
 # ---- a goAway read while an input waits for the session (review-final-drivers 中 5) ------------
 
 
