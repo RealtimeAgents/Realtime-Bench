@@ -434,7 +434,7 @@ class RealtimeRuntime:
             archived_count += len(archived)
 
         self._stop_if_abandoned(cancel, "its reply")
-        self._record_generation_prepared(incoming, physical_metadata, request.generation)
+        self._record_generation_prepared(incoming, physical_metadata, request)
         provider_call_started_monotonic_ns = self.clock.monotonic_ns()
         provider_call_started_wall_time_ns = self.clock.time_ns()
         generation = await self.driver.start_generation(request)
@@ -770,12 +770,14 @@ class RealtimeRuntime:
         )
         self._states.record(*record.state)
 
-    def _record_generation_prepared(self, incoming, physical_metadata, generation) -> None:
+    def _record_generation_prepared(self, incoming, physical_metadata, request) -> None:
+        """The history the generation's request went with, and the canonical request itself as
+        its body."""
         turns = self._turns + incoming
         self._trace.capture(
             TraceEvent.GENERATION_PREPARED,
             {
-                "generation": generation,
+                "generation": request.generation,
                 "observation_id": incoming[-1].observation.observation_id,
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
@@ -804,4 +806,5 @@ class RealtimeRuntime:
                 },
                 "request_context": physical_metadata or None,
             },
+            body=request.canonical,
         )

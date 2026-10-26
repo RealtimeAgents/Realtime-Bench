@@ -6,11 +6,12 @@ that observed it, without I/O, hashing or serialization, and queued for one writ
 thread is the only agent-side caller of ``EpisodeTrace.emit``, whose lock already serializes it
 with the runner, so agent and runner records form one hash chain.
 
-Every body (request, reply, live-session message) goes to ``episode_blobs.pack`` next to the trace,
-never into the trace: the trace is exported and uploaded, the pack is neither, and bodies carry
-private task content. Long base64 spans are stored verbatim and once per hash; the rest of a body
-(its template) is stored zlib-compressed. Events carry only the locators, which the chain protects,
-and non-content metadata.
+Every body (request, reply, live-session message, the canonical request a generation was prepared
+from) goes to ``episode_blobs.pack`` next to the trace, never into the trace: the trace is
+exported and uploaded, the pack is neither, and bodies carry private task content. Long base64
+spans are stored verbatim and once per hash; the rest of a body (its template) is stored
+zlib-compressed. Events carry only the locators, which the chain protects, and non-content
+metadata.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from pathlib import Path
 
 from realtime_framework.clock import Clock
 from realtime_framework.entity.records import TraceEvent, current_trace_scope
+from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.evaluation.kernel.events import AgentRecord
 
 # Bound on writing the queued agent records at episode end, sized like ABANDONED_DRAIN_S
@@ -192,7 +194,9 @@ class AgentTraceSink:
         return self.trace.attempt_id
 
     def capture(self, event, payload, *, body=None, classify=None) -> int | None:
-        """Queue one record; ``body`` is bytes, str, a list of byte chunks or a request dict.
+        """Queue one record; ``body`` is bytes, str, a list of byte chunks, a request dict or a
+        canonical request, which the writer stores in its audit form (CanonicalRequest.to_record:
+        images by length and SHA-256).
 
         ``classify`` marks a live-session message and names its acknowledgement keys.
         """
@@ -265,6 +269,8 @@ class AgentTraceSink:
                 body = b"".join(body)
             elif isinstance(body, dict):
                 body = _json_bytes(body)
+            elif isinstance(body, CanonicalRequest):
+                body = _json_bytes(body.to_record())
             record["body"], template = self._store(body)
         if classify is not None:
             record.update(self._link(sequence, classify, record, template))

@@ -21,6 +21,7 @@ from realtime_framework.entity.context_policy import (
 )
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.prompts import (
@@ -448,6 +449,26 @@ def test_an_abort_after_the_reply_keeps_nothing(tmp_path):
     outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
     assert outcomes == ["superseded_by_timeout"]
     assert [r["type"] for r in _jsonl(tmp_path / "trajectory.jsonl")] == ["decision_discarded"]
+
+
+def test_a_generation_records_the_request_it_was_prepared_from(tmp_path):
+    """GenerationPrepared holds the canonical request the generation sent as its body, in the
+    blob pack, in its audit form: the screenshot by its length and SHA-256. The trace holds only
+    the body's locator."""
+    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        started = _count_calls(episode.agent.driver, "start_generation")
+        try:
+            decide(episode.agent, 0, episode.frames.capture(0), episode.budget(0))
+        finally:
+            episode.finish()
+    (((request,), _),) = started
+    (prepared,) = _trace(tmp_path, "GenerationPrepared")
+    assert set(prepared["body"]) <= {"sha256", "bytes", "template", "spans"}
+    record = json.loads(load_body(tmp_path / "episode_blobs.pack", prepared["body"]))
+    assert record == json.loads(json.dumps(request.canonical.to_record()))
+    (frame,) = [item["block"] for item in record["items"] if item["block"]["kind"] == "frame"]
+    assert set(frame["image"]["data"]) == {"byte_length", "sha256"}
 
 
 def test_a_generation_requests_with_its_budget(tmp_path):
