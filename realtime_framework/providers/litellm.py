@@ -63,6 +63,8 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# reasoning_effort values anthropic_thinking maps.
+ANTHROPIC_REASONING_EFFORTS = (None, "fixed", "none", *ANTHROPIC_EFFORT_LEVELS)
 _REQUEST_GATE = threading.Lock()
 _LAST_REQUEST_AT = [0.0]
 _END = object()
@@ -1194,7 +1196,11 @@ class AnthropicMessagesDriver(LiteLLMDriver):
         gateway="anthropic",
         default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
     )
-    compat = ChatCompat(cache_breakpoint=True, output_limit_required=True)
+    compat = ChatCompat(
+        cache_breakpoint=True,
+        output_limit_required=True,
+        reasoning_efforts=ANTHROPIC_REASONING_EFFORTS,
+    )
 
 
 class ChatCompletionsDriver(LiteLLMDriver):

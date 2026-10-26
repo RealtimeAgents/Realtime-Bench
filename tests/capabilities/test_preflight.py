@@ -443,6 +443,18 @@ def test_gemini_reasoning_effort(effort):
     )
 
 
+def test_anthropic_reasoning_effort():
+    """The Messages API maps none, fixed and its effort levels (litellm.py anthropic_thinking), not
+    every effort the catalog lists for an API that takes one."""
+    fails(
+        lambda: episode(preset("claude-opus-5-anthropic", reasoning_effort="minimal")),
+        "anthropic_messages reasoning_effort must be one of ['fixed', 'none', 'low', 'medium', "
+        "'high', 'xhigh', 'max'], got 'minimal'",
+    )
+    for effort in (None, "fixed", "none", "low", "max"):
+        episode(preset("claude-opus-5-anthropic", reasoning_effort=effort))
+
+
 @pytest.mark.parametrize(
     "config, message",
     [
