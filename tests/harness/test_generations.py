@@ -471,6 +471,44 @@ def test_a_generation_records_the_request_it_was_prepared_from(tmp_path):
     assert set(frame["image"]["data"]) == {"byte_length", "sha256"}
 
 
+def test_the_result_export_shows_each_step_the_request_it_was_prepared_from(tmp_path):
+    """The ATIF export of an episode (harbor_viewer.export_episode) gives each agent step the
+    canonical request its generation was prepared from, read from the run's pack."""
+    from realtime_framework.evaluation.harbor_viewer import export_episode
+
+    steps = LONG_SCENARIO[:2]
+    with ChatCompletionsStub(replies(steps)) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        agent = episode.agent
+        started = _count_calls(agent.driver, "start_generation")
+        try:
+            for k, step in enumerate(steps):
+                observation = episode.frames.capture(k)
+                budget = episode.budget(observation.tick_number)
+                result = agent.generate(k + 1, k, observation, budget).result
+                # The shell names the row's decision before it is written (shell.py _settle).
+                episode_records.annotate_result(
+                    result,
+                    decision=k,
+                    observation=observation,
+                    native_output_limit=agent.config.native_output_limit,
+                    budget=budget,
+                    tokens_per_frame=None,
+                )
+                agent.finalize_decision_audit(result)
+                agent.accept(k + 1)
+                commit(agent, k, step.status, step.detail)
+        finally:
+            episode.finish()
+    task = {"task_id": "replay", "suite_id": "replay", "interaction_mode": "turn_based"}
+    request = {"task": task, "mode": "default", "model": CHAT_MODEL_KEY}
+    export_episode(tmp_path, tmp_path / "logs", request)
+    trajectory = json.loads((tmp_path / "logs" / "trajectory.json").read_text())
+    shown = [step["extra"]["canonical_request"] for step in trajectory["steps"][2::2]]
+    sent = [json.loads(json.dumps(args[0].canonical.to_record())) for args, _ in started]
+    assert len(sent) == len(steps) and shown == sent
+
+
 def test_a_generation_requests_with_its_budget(tmp_path):
     """generate() hands its budget's provider and transport caps and its clock mode to the
     request; the transport cap is the request's max_tokens."""
