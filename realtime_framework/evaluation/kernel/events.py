@@ -332,6 +332,10 @@ class AdvanceClock:
     """Token clock: advance the environment by ``step`` ticks; answer with ClockStepped."""
 
     step: float
+    # Whether a failed step escapes the decision loop, as the legacy loop let one escape: all but
+    # a wait action's own steps, which ran inside execute() and failed the action
+    # (tests/differential/legacy_environment.py LegacyStateReads).
+    escapes: bool
 
 
 @dataclass(frozen=True)
@@ -339,6 +343,7 @@ class ReleaseKeys:
     """Token clock: release keys whose lease ended at this tick; answer with KeysReleased."""
 
     keys: tuple[str, ...]
+    escapes: bool  # as AdvanceClock's
 
 
 @dataclass(frozen=True)

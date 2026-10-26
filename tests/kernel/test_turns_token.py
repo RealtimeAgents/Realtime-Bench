@@ -582,7 +582,7 @@ def test_a_lease_that_ended_during_a_key_tap_is_released_by_the_kernel_after_the
         for command, at in zip(sim.commands, sim.command_times, strict=True)
         if isinstance(command, ReleaseKeys)
     ]
-    assert releases == [(tapped, ReleaseKeys(("a",)))]
+    assert releases == [(tapped, ReleaseKeys(("a",), escapes=True))]
     assert _clock(sim) == [
         # decision 0: loop top, after landing, the pace move 0 -> 1
         "check",
@@ -700,6 +700,32 @@ def test_a_wait_whose_own_step_fails_is_a_failed_action(replies, fault, reason, 
     termination = sim.termination
     assert (termination.stop_reason, termination.ended_at) == ("invalid_run", failed_at)
     assert termination.invalid == Invalidated("environment", reason, "renderer crashed")
+
+
+def test_only_a_wait_s_own_steps_do_not_escape_the_loop():
+    # "a" is held until 2.5, and a wait from 1 steps to 2, releases "a" at 2.5 and steps to 3.
+    # Decision 0's pace move to 1 and decision 2's approach to the horizon step outside a wait,
+    # where the legacy loop let a failure escape (tests/differential/legacy_environment.py
+    # LegacyStateReads).
+    sim = _run(
+        _token(10),
+        Reply(action=Action.hold_key("a", 2.5), output_tokens=0),
+        Reply(action=Action.wait(2.0), output_tokens=0),
+        _idle(7),
+    )
+    steps = [
+        (_names([command])[0], command.escapes)
+        for command in sim.commands
+        if isinstance(command, AdvanceClock | ReleaseKeys)
+    ]
+    assert steps[:5] == [
+        ("AdvanceClock", True),  # decision 0's pace move to 1
+        ("AdvanceClock", False),  # the wait's steps to 2, 2.5 and 3
+        ("AdvanceClock", False),
+        ("ReleaseKeys", False),
+        ("AdvanceClock", False),
+    ]
+    assert steps[5:] == [("AdvanceClock", True)] * 7
 
 
 TRACE_LOST = Invalidated("harness", "episode_trace_write_failed", "disk full")

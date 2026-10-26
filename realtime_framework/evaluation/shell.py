@@ -631,10 +631,10 @@ class _Shell:
                 self._execute(command)
             # A failed step is answered with its error, and the kernel gives it the environment's
             # reason (kernel/turns.py _step_failed, _rendered).
-            case AdvanceClock(step=step):
-                self.post(ClockStepped(self._failure(self.env.step_clock, step)))
-            case ReleaseKeys(keys=keys):
-                self.post(KeysReleased(keys, self._failure(self.env.release_keys, keys)))
+            case AdvanceClock(step=step, escapes=escapes):
+                self.post(ClockStepped(self._failure(escapes, self.env.step_clock, step)))
+            case ReleaseKeys(keys=keys, escapes=escapes):
+                self.post(KeysReleased(keys, self._failure(escapes, self.env.release_keys, keys)))
             case RenderFrame():
                 try:
                     rendered = self._env(self.env.render_current_frame)
@@ -718,15 +718,15 @@ class _Shell:
             self._invalidate(_invalidated(invalid))
         return result
 
-    def _failure(self, operation, *args) -> str | None:
-        """Run one synchronous environment operation; its error, None when it returned. The
-        legacy loop let it escape, except a token wait's own step, which ran inside execute()
-        and failed the action (tests/differential/legacy_environment.py LegacyStateReads)."""
+    def _failure(self, escapes: bool, operation, *args) -> str | None:
+        """Run one synchronous environment operation; its error, None when it returned. A
+        failure the legacy loop let escape, as the command says, is logged as one
+        (events.py AdvanceClock)."""
         try:
             self._env(operation, *args)
         except Exception:  # noqa: BLE001 - the command's answer carries it
             failure = traceback.format_exc()
-            if self.policy.phase != "wait":
+            if escapes:
                 self._escaped(failure)
             return failure
         return None

@@ -847,7 +847,7 @@ class TurnPolicy:
                 # A lease ending at this tick is released without an end check.
                 return self._release(self._advance)
         self._stepping = True
-        self.kernel.emit(AdvanceClock(step))
+        self.kernel.emit(AdvanceClock(step, escapes=self.phase is not _Phase.WAIT))
 
     def _clock_stepped(self, event: ClockStepped) -> None:
         if not self._stepping:
@@ -879,7 +879,7 @@ class TurnPolicy:
             del self.leases[key]
         self._released = then
         self._stepping = True
-        self.kernel.emit(ReleaseKeys(keys))
+        self.kernel.emit(ReleaseKeys(keys, escapes=self.phase is not _Phase.WAIT))
 
     def _keys_released(self, event: KeysReleased) -> None:
         if not self._stepping:
