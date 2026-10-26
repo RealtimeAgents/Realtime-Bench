@@ -11,6 +11,7 @@ or network is used.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from dataclasses import replace
 
@@ -981,6 +982,42 @@ def test_reasoning_effort_of_a_choice_api(capsys, tmp_path):
         lambda: catalog.load_definitions(models),
         "luna.yaml: reasoning_effort must be one of ['fixed']",
     )
+
+
+def test_upstream_provider_of_a_model_yaml(tmp_path, monkeypatch):
+    """Whether a model names an upstream provider is its API's deployment's declaration
+    (Deployment.requires_upstream_provider). A new JEV model names it in its YAML, as an OpenRouter
+    or a Luna model does, and the shipped JEV keeps its driver's; a model of an API that routes to
+    no upstream names none."""
+    models = tmp_path / "models"
+    models.mkdir()
+    shutil.copy(catalog.MODELS_DIR / "jev-1.13.yaml", models)
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+
+    def load(text):
+        (models / "m.yaml").write_text(text)
+        catalog._catalog_entries.cache_clear()
+        return lambda: catalog.get("m")
+
+    try:
+        jev = "endpoint: {api: jev_decisions, model: typesafe/jev-2.0, upstream_provider: typesafe}\n"
+        assert load(jev)().defaults["upstream_provider"] == "typesafe"
+        assert catalog.get("jev-1.13").defaults["upstream_provider"] == "typesafe"
+        for api, model in (
+            ("jev_decisions", "typesafe/jev-2.0"),
+            ("openai_decisions", "openai/x"),
+            ("openrouter", "openai/x"),
+        ):
+            fails(
+                load(f"endpoint: {{api: {api}, model: {model}}}\n"),
+                f"m.yaml: the {api} API requires endpoint.upstream_provider",
+            )
+        fails(
+            load("endpoint: {api: moonshot, model: kimi-k3, upstream_provider: moonshot}\n"),
+            "The moonshot API takes no upstream_provider",
+        )
+    finally:
+        catalog._catalog_entries.cache_clear()
 
 
 @pytest.mark.parametrize(

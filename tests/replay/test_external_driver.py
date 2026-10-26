@@ -578,8 +578,9 @@ def test_external_driver_rejected(external, api, message):
                 f"framework class; use one of {list(catalog.APIS)}"
             ),
         ),
+        # The template's deployment routes to no upstream (Deployment.requires_upstream_provider).
+        (TARGET, {"upstream_provider": "x"}, f"The {TARGET} API takes no upstream_provider"),
         # The rules of registered names stay theirs.
-        (TARGET, {"upstream_provider": "x"}, "upstream_provider is only valid for OpenRouter APIs"),
         (
             TARGET,
             {"stream": False},
@@ -591,6 +592,48 @@ def test_external_driver_rejected(external, api, message):
 def test_external_endpoint_rejected(external, api, endpoint, message):
     write_model(external.models, api, key="ext-bad", **endpoint)
     fails(lambda: catalog.get("ext-bad"), message)
+
+
+ROUTED = '''
+from dataclasses import replace
+
+from realtime_framework.entity.model import Deployment
+
+from rtb_ext.chat import ExternalChatDriver
+
+
+class OpenRouterHosted(ExternalChatDriver):
+    deployment = Deployment(
+        family="vlm", provider="openrouter", key_env="REPLAY_EXT_API_KEY", vendor="replay"
+    )
+
+
+class Routed(OpenRouterHosted):
+    deployment = replace(OpenRouterHosted.deployment, requires_upstream_provider=True)
+'''
+
+
+def test_upstream_provider_follows_the_deployment(external):
+    """A driver's provider label decides nothing: one labelled openrouter whose deployment routes to
+    no upstream loads without one, and one whose deployment requires one
+    (Deployment.requires_upstream_provider) takes it from its YAML, as OpenRouter's does."""
+    (external.site / "rtb_ext" / "routed.py").write_text(ROUTED)
+    hosted, routed = "rtb_ext.routed:OpenRouterHosted", "rtb_ext.routed:Routed"
+    write_model(external.models, hosted, key="ext-hosted")
+    write_model(external.models, routed, key="ext-routed", upstream_provider="someone")
+    entry = catalog.get("ext-hosted")
+    assert entry.provider == "openrouter" and "upstream_provider" not in entry.defaults
+    assert catalog.to_model_config("ext-routed", fps=1.0).upstream_provider == "someone"
+
+    write_model(external.models, routed, key="ext-routed")
+    catalog._catalog_entries.cache_clear()
+    fails(
+        lambda: catalog.get("ext-routed"),
+        f"ext-routed.yaml: the {routed} API requires endpoint.upstream_provider",
+    )
+    write_model(external.models, hosted, key="ext-routed", upstream_provider="someone")
+    catalog._catalog_entries.cache_clear()
+    fails(lambda: catalog.get("ext-routed"), f"The {hosted} API takes no upstream_provider")
 
 
 def test_model_defaults_preset_checked_as_the_yaml(external, monkeypatch):

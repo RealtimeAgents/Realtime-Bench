@@ -1144,6 +1144,7 @@ class OpenRouterDriver(LiteLLMDriver):
         default_base_url=DEFAULT_OPENROUTER_BASE_URL,
         base_url_env="OPENROUTER_BASE_URL",
         pin_route=True,
+        requires_upstream_provider=True,
     )
     compat = ChatCompat(provider_options={"cache_breakpoint": (False, (False, True))})
 

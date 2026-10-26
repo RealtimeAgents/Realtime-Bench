@@ -81,6 +81,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
         key_env="OPENROUTER_API_KEY",
         default_base_url=DEFAULT_DECISIONS_BASE_URL,
         pin_route=True,
+        requires_upstream_provider=True,
     )
     compat = Compat()
     # Per-model catalog defaults (providers/registry.py).
