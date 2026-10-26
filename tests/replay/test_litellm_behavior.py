@@ -55,6 +55,7 @@ from ..agent_trace.test_http import _anthropic_answer, _events, _openai_answer, 
 from .build import build_episode
 from .frames import ReplayTask
 from .scenario import TASK_INSTRUCTION
+from .steps import decide
 from .stub import CREATED
 
 KEY_ENV = "REPLAY_BEHAVIOR_KEY"
@@ -864,9 +865,7 @@ def test_a_refused_connection_is_sent_twice_per_attempt_on_litellms_handler(
     )
     try:
         observation = episode.frames.capture(0)
-        episode.agent.configure_decision(episode.budget(observation.tick_number))
-        episode.agent.stream_prefill(observation)
-        result = episode.agent.stream_generate(tick=0)
+        result = decide(episode.agent, 0, observation, episode.budget(observation.tick_number))
     finally:
         assert episode.finish() is None
     assert result["invalid_reason"] == "provider_unavailable"
