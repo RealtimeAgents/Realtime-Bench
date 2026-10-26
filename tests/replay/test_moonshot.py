@@ -11,6 +11,7 @@ runs on a finite frame budget B, the short snapshot in pause mode (B unlimited).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -77,15 +78,21 @@ def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, **changes):
             tokens_per_frame=tokens_per_frame,
             max_ticks=MAX_TICKS,
         )
+        transport = redirect_to_stub(monkeypatch, stub.port)
         try:
-            transport = redirect_to_stub(episode.agent.driver, stub.port)
             records = run_steps(episode, steps, stub)
         finally:
-            episode.agent.close()
+            assert episode.finish() is None
     assert stub.unscripted == 0, "the agent sent requests beyond the script"
     assert stub.unused_replies == 0, "scripted replies were left unused"
-    # Every request was addressed to the official endpoint and answered by the stub.
+    # Every request was addressed to the official endpoint and answered by the stub, and the
+    # driver's capture hooks recorded each as sent.
     assert transport.urls == [ENDPOINT] * len(stub.requests)
+    events = [json.loads(line) for line in (tmp_path / "episode_trace.jsonl").open()]
+    sent = [e["payload"] for e in events if e["event"] == "ModelRequestSent"]
+    assert [(r["channel"], r["url"]) for r in sent] == [
+        ("litellm.openai_sdk", ENDPOINT)
+    ] * len(stub.requests)
     sent = iter(zip(transport.urls, stub.requests))
     for record in records:
         for request in record["requests"]:

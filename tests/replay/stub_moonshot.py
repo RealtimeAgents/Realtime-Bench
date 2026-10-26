@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler
 
 import httpx
+import openai
 from openai import DefaultAsyncHttpxClient
 
 from .scenario import replies
@@ -141,18 +142,21 @@ class StubTransport(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
-def redirect_to_stub(driver, port: int) -> StubTransport:
+def redirect_to_stub(monkeypatch, port: int) -> StubTransport:
     """Send the driver's requests to the stub while its base URL stays official.
 
-    The driver builds one AsyncOpenAI client and reuses it once set (providers/litellm.py
-    LiteLLMDriver._client), and LiteLLM sends through a passed client instead of building its own
-    (litellm/llms/openai/openai.py:381-472). The copy keeps every option of the client the driver
-    built (openai/_client.py:1203-1289) and only replaces its HTTP client: the SDK's defaults
-    (openai/_base_client.py:1464-1469) over this transport. An httpx client given a transport
-    mounts no proxies from the environment (httpx/_client.py:1399), so every request goes through
-    the transport.
+    On its first request the driver builds its AsyncOpenAI client over the HTTP client
+    openai.DefaultAsyncHttpxClient(event_hooks=...) returns, with the capture hooks
+    (providers/litellm.py LiteLLMDriver._client), and LiteLLM sends through that client
+    (litellm/llms/openai/openai.py:381-472). Here that HTTP client also gets this transport, so
+    the hooks record every request as in a run. An httpx client given a transport mounts no
+    proxies from the environment (httpx/_client.py:1399), so every request goes through the
+    transport.
     """
     transport = StubTransport(port)
-    client = driver._client()
-    driver._http = client.copy(http_client=DefaultAsyncHttpxClient(transport=transport))
+    monkeypatch.setattr(
+        openai,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: DefaultAsyncHttpxClient(transport=transport, **kwargs),
+    )
     return transport
