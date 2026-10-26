@@ -1063,21 +1063,6 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
     agent.close()
 
 
-def test_an_abort_naming_no_generation_gives_up_the_reply_on(monkeypatch, clock):
-    """As KernelAgent.abort: None names whichever reply is on."""
-    agent = make_agent(monkeypatch, clock)
-    agent.bind_inbox(lambda event: None, ORIGIN)
-    frame = _two_frames(agent, clock)
-    agent.driver.replies.append(Reply(ends_at=100.0))
-    replied, out = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
-    clock.sleep(1.0)
-    agent.abort(None)
-    assert agent.driver.calls[-2:] == [("interrupt", "streaming-7"), ("close",)]
-    assert clock.wait(replied, 1.0)
-    assert out["value"].cancelled
-    agent.close()
-
-
 def test_a_push_waiting_for_a_renewal_goes_in_once_the_reply_is_accepted_whatever_comes_next(
     monkeypatch, clock
 ):

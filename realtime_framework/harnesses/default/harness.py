@@ -1080,7 +1080,7 @@ class _Generation:
     one starts, so it works on this alone; what the agent keeps of a generation is set when it
     starts (DefaultHarness._open)."""
 
-    number: int | None  # the kernel's generation number; None when the legacy loop drives
+    number: int  # the kernel's generation number
     decision: int
     # The decision's output caps and clock (DecisionBudget).
     provider_output_tokens: int | None
@@ -1114,8 +1114,6 @@ class DefaultHarness(VisionAgentBase):
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
         self._provider_usage_started = False
-        # The decision an abort() belongs to: the runner aborts only the one in flight.
-        self._trace_decision = None
         # The generations that have not ended; abort() and close() cancel them.
         self._generations: list[_Generation] = []
         # Kernel generations aborted, and discarded, before their worker started generate().
@@ -1209,15 +1207,11 @@ class DefaultHarness(VisionAgentBase):
                     native_output_limit=self.config.native_output_limit,
                     fps=float(self.config.fps),
                     answer=self._answer,
-                ),
-                initial_observation,
+                )
             )
 
     def discard_pending_observations(self):
-        self._runtime.discard_pending_observations()
-
-    def stream_prefill(self, observation):
-        self._runtime.enqueue(observation)
+        """No frame waits in the agent: generate() is handed its observation."""
 
     def transport_output_token_cap(self, provider_cap):
         if self.driver.capabilities.maps_output_cap:
@@ -1331,10 +1325,9 @@ class DefaultHarness(VisionAgentBase):
         self, number, decision, provider_output_tokens, transport_output_tokens, clock_mode
     ) -> _Generation:
         """Start a generation's state; abort() reaches it until the generation ends. The agent
-        keeps the newest generation's decision, for abort()'s trace, and its action cap, which
-        the runner audits against the decision's allowance once the result is back. A
-        generation aborted before its worker got here keeps neither: it may open after the next
-        one did."""
+        keeps the newest generation's action cap, which the runner audits against the decision's
+        allowance once the result is back. A generation aborted before its worker got here does
+        not keep it: it may open after the next one did."""
         generation = _Generation(
             number,
             decision,
@@ -1348,7 +1341,6 @@ class DefaultHarness(VisionAgentBase):
                 self._cancelled_early.remove(number)
                 generation.cancel.set()
             else:
-                self._trace_decision = decision
                 self._frame_action_max_tokens = native_output_limit(
                     self.config.native_output_limit, provider_output_tokens
                 )
@@ -1359,13 +1351,10 @@ class DefaultHarness(VisionAgentBase):
                 self._generations.append(generation)
         return generation
 
-    def _close(
-        self, generation: _Generation | None = None, number: int | None = None
-    ) -> _Generation:
-        """End a generation: the legacy loop's ``generation``, or the kernel's ``number``."""
+    def _close(self, number: int) -> _Generation:
+        """End the kernel's generation ``number``."""
         with self._generations_lock:
-            if generation is None:
-                (generation,) = [g for g in self._generations if g.number == number]
+            (generation,) = [g for g in self._generations if g.number == number]
             self._generations.remove(generation)
         return generation
 
@@ -1404,7 +1393,7 @@ class DefaultHarness(VisionAgentBase):
         return PendingDecision(generation, decision, result, cancelled, state.staged)
 
     def accept(self, generation: int) -> None:
-        self._write(self._close(number=generation))
+        self._write(self._close(generation))
 
     def discard(self, generation: int) -> None:
         """DiscardResult. At the end of an episode the shell also discards a generation whose
@@ -1420,26 +1409,6 @@ class DefaultHarness(VisionAgentBase):
                 state.discarded = True
                 return
         self._drop(state)
-
-    def stream_generate(self, tick=0):
-        """The legacy loop's decision on the newest prefilled frame. Its result is written at
-        once, unless an abort cancelled the generation."""
-        generation = self._open(
-            None,
-            tick,
-            getattr(self, "_provider_output_token_cap", None),
-            getattr(self, "_transport_output_token_cap", None),
-            getattr(self, "_clock_mode", "token"),
-        )
-        try:
-            result, cancelled = self._generate(generation, self._runtime.drain_observations())
-        finally:
-            self._close(generation)
-        if cancelled:
-            self._drop(generation)
-        else:
-            self._write(generation)
-        return result
 
     def _write(self, generation: _Generation) -> None:
         """An accepted result joins the history: its turn, its action record and its usage."""
@@ -1493,17 +1462,6 @@ class DefaultHarness(VisionAgentBase):
         if generation.cancel.is_set():
             # Aborted before its worker got here: nothing is inspected, entered or sent.
             return self._cancelled_result(0.0), True
-        if not observations:
-            return {
-                "action": None,
-                "thinking": "",
-                "raw": "",
-                "latency": 0.0,
-                "usage": None,
-                "invalid_category": "provider",
-                "invalid_reason": "generation_error",
-                "invalid_detail": "no current observation",
-            }, False
         started = self.clock.monotonic()
         feedback, unattached = self._pending_feedback, self._unattached_feedback
         # The frame opens with the feedback no frame of an accepted result carried yet: all of
@@ -1977,13 +1935,6 @@ class DefaultHarness(VisionAgentBase):
             )
         return result, runtime_result.cancelled
 
-    def commit_action(self, status: str, detail: str = ""):
-        """The legacy loop's report, on the newest action record and turn."""
-        newest = self.action_history[-1] if self.action_history else None
-        feedback = self._report(newest, status, detail)
-        self._pending_feedback = feedback
-        self._runtime.record_execution_feedback(feedback)
-
     def commit(self, outcome):
         """Commit: report decision ``outcome.decision`` on its own action record and turn. A
         decision whose result was never accepted, a move over the per-move cap, has neither: no
@@ -2043,11 +1994,10 @@ class DefaultHarness(VisionAgentBase):
         return feedback
 
     def _attempt_scope(self, generation, request, attempt):
-        number = {} if generation.number is None else {"generation": generation.number}
         return trace_scope(
             phase="decision",
             decision=generation.decision,
-            **number,
+            generation=generation.number,
             generation_id=request.generation_id,
             attempt=attempt,
         )
@@ -2122,22 +2072,19 @@ class DefaultHarness(VisionAgentBase):
                 },
             )
 
-    def abort(self, generation: int | None = None):
+    def abort(self, generation: int):
         super().abort(generation)
         aborted = self._cancel(generation)
-        if generation is None:
-            scope = {"decision": self._trace_decision}
-        else:
-            # A generation aborted before its worker started generate() has no decision yet.
-            scope = {"decision": aborted[0].decision if aborted else None, "generation": generation}
-        with trace_scope(phase="abort", **scope):
+        # A generation aborted before its worker started generate() has no decision yet.
+        decision = aborted[0].decision if aborted else None
+        with trace_scope(phase="abort", decision=decision, generation=generation):
             self._runtime.abort()
 
     def close(self):
-        """Cancel the generations that have not ended, and discard the event kernel's: one the
-        episode ended on gets no AcceptResult or DiscardResult after Termination."""
+        """Cancel the generations that have not ended, and discard them: one the episode ended
+        on gets no AcceptResult or DiscardResult after Termination."""
         with self._generations_lock:
-            unsettled = [g.number for g in self._generations if g.number is not None]
+            unsettled = [g.number for g in self._generations]
         self._cancel()
         for number in unsettled:
             self.discard(number)

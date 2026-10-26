@@ -775,7 +775,7 @@ def test_interrupted_empty_turn_retry_keeps_its_usage(live_env, tmp_path):
     collector raises EmptyInterruptedToolTurnError (harnesses/default/parsing.py
     FunctionCallTurnCollector.finish), a transient failure (providers/gemini/live.py
     GeminiLiveDriver._is_transient) that the harness replays although the attempt had usage
-    (harnesses/default/harness.py stream_generate). The retry rebuilds the session from canonical
+    (harnesses/default/harness.py DefaultHarness._generate). The retry rebuilds the session from canonical
     history and succeeds; the decision keeps the interrupted attempt's usage."""
     live_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     preset = TOOL_TRANSCRIPT

@@ -1244,7 +1244,7 @@ def _x6(script: Script, p: Projection, notes: dict) -> None:
     """Wall clock: a move the per-move cap gave up on changes no earlier record; its feedback,
     which names no action, opens every next frame until a result is accepted (H3; decision 10;
     harnesses/default/harness.py DefaultHarness.commit). Today the report goes to the newest
-    record, and with none it is lost (DefaultHarness.commit_action). A move U9 skipped, whose
+    record, and with none it is lost (legacy_turn.py LegacyTurn.commit_action). A move U9 skipped, whose
     result today's loop accepted, leaves no exchange in the history either. Only moves with no
     accepted result before them are rewritten here, as in the named scripts and the random ones
     (generate.py _capped); the first frame whose result is accepted keeps their feedback in the
@@ -1414,7 +1414,7 @@ RULES = (
     ),
     Rule(
         # The shell runs them on its thread and records what they raise (shell.py _Shell._run,
-        # _raised); today they run inside stream_generate on the bounded call's worker, where an
+        # _raised); today they run inside LegacyTurn.stream_generate on the bounded call's worker, where an
         # accept's failure is the generation's (legacy_loop.py _bounded_call, _run_step) and one of
         # a worker given up on is read by no one.
         "U18",

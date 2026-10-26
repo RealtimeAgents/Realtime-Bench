@@ -3,20 +3,8 @@ from __future__ import annotations
 # Base
 from abc import ABC as ABC
 from abc import abstractmethod as abstractmethod
-from typing import TYPE_CHECKING
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.config import DecisionBudget
-from realtime_framework.entity.model import PendingDecision
-
-if TYPE_CHECKING:  # the entity layer does not import the evaluation package at run time
-    from realtime_framework.evaluation.kernel.events import Outcome
-
-
-class DecisionSetupError(Exception):
-    """configure_decision raised in the legacy turn (StreamingAgent.generate). The legacy loop ran
-    it on its own thread, so its failure, the cause, is the runner's and not the model's (N30);
-    stream_prefill it ran in the call it bounded, whose failure is a generation error."""
 
 
 class StreamingAgent(ABC):
@@ -43,49 +31,9 @@ class StreamingAgent(ABC):
         provisional frame must not leak into the first scored decision.
         """
 
-    def configure_decision(self, budget: DecisionBudget) -> None:
-        """Bind model-native generation limits for the next decision."""
-        self._provider_output_token_cap = budget.provider_output_tokens
-        self._transport_output_token_cap = budget.transport_output_tokens
-        self._clock_mode = budget.clock_mode
-
-    def stream_prefill(self, observation: Observation) -> None:
-        raise NotImplementedError(f"{type(self).__name__} is not a frame-driven adapter")
-
-    def stream_generate(self, tick: int = 0) -> dict:
-        raise NotImplementedError(f"{type(self).__name__} is not a frame-driven adapter")
-
-    def commit_action(self, status: str, detail: str = "") -> None:
-        """Report the outcome of the decision stream_generate last ran; an adapter without
-        feedback reports nothing."""
-
-    def abort(self, generation: int | None = None) -> None:
-        """Interrupt a generation in flight: ``generation`` is the event kernel's number of it,
-        None whichever is active. An adapter with nothing to interrupt does nothing."""
-
-    # The event kernel's agent (evaluation/shell.py KernelAgent). These defaults run the legacy
-    # turn: stream_generate writes the history itself and marks a result stale once an abort has
-    # cancelled it, so accepting and discarding have nothing left to do.
-
-    def generate(
-        self, generation: int, decision: int, observation: Observation, budget: DecisionBudget
-    ) -> PendingDecision:
-        try:
-            self.configure_decision(budget)
-        except Exception as error:
-            raise DecisionSetupError from error
-        self.stream_prefill(observation)
-        result = self.stream_generate(tick=decision)
-        return PendingDecision(generation, decision, result, cancelled=bool(result.get("stale")))
-
-    def accept(self, generation: int) -> None:
-        pass
-
-    def discard(self, generation: int) -> None:
-        pass
-
-    def commit(self, outcome: Outcome) -> None:
-        self.commit_action(outcome.status, outcome.detail)
+    def abort(self, generation: int) -> None:
+        """Interrupt the event kernel's generation ``generation`` in flight. An adapter with
+        nothing to interrupt does nothing."""
 
 
 from dataclasses import dataclass as dataclass

@@ -239,8 +239,8 @@ def test_a_result_s_usage_is_measured_once_the_agent_has_accepted_it():
 
 
 class GrowingAgent(Agent):
-    """Adds a generation's usage to its own as it generates, as an adapter running the legacy turn
-    (entity/harness.py StreamingAgent.generate) does, and returns results that name none."""
+    """Adds a generation's usage to its own as it generates, and returns results that name
+    none."""
 
     def __init__(self, clock, replies):
         super().__init__(clock, replies)

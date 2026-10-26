@@ -28,7 +28,7 @@ from .build import Episode
 from .fake_env import FakeEnvironment
 
 # Values derived from the agent's real-time decision latency (harnesses/default/harness.py
-# stream_generate), on top of the fields baseline.REAL_TIME_FIELDS already masks. On the token
+# DefaultHarness._generate), on top of the fields baseline.REAL_TIME_FIELDS already masks. On the token
 # clock the last two come from the output tokens instead.
 REAL_TIME_FIELDS = baseline.REAL_TIME_FIELDS | {
     "latency_s",  # InferenceCompleted copies the decision latency (episode_records.py)

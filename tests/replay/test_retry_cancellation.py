@@ -1,16 +1,14 @@
 """An aborted generation sends no further request.
 
 The kernel gives up on a generation with AbortGeneration, which the shell runs as the agent's
-abort(generation) (evaluation/shell.py KernelAgent); the legacy loop calls abort() when its bounded
-wait expires (tests/differential/legacy_loop.py _run_stream_legacy). DefaultHarness.abort sets the
-cancel event of that generation, or of every generation that has not ended, then has the runtime
-close the session (harnesses/default/context.py RealtimeRuntime.abort). Each generation runs every
-attempt with its own event (RealtimeRuntime.run_turn's ``cancel``) and its retries inside
-retry_cancellation. Once the event is set the backoff ends, no attempt starts (entity/model.py
-RequestRetry), and an attempt already under way sends neither its observation nor its request
-(RealtimeRuntime._run_turn). RetryCancelled unwinds to generate, which hands back a cancelled
-result without an action. The kernel discards it, or stream_generate drops it for the legacy
-loop, and nothing joins the history.
+abort(generation) (evaluation/shell.py KernelAgent). DefaultHarness.abort sets the cancel event of
+that generation, then has the runtime close the session (harnesses/default/context.py
+RealtimeRuntime.abort). Each generation runs every attempt with its own event
+(RealtimeRuntime.run_turn's ``cancel``) and its retries inside retry_cancellation. Once the event is
+set the backoff ends, no attempt starts (entity/model.py RequestRetry), and an attempt already under
+way sends neither its observation nor its request (RealtimeRuntime._run_turn). RetryCancelled
+unwinds to generate, which hands back a cancelled result without an action. The kernel discards
+it, and nothing joins the history.
 
 Before this, the next attempt read the epoch afresh, reconnected and kept its reply: a request
 after the abort, and a turn and an action that nobody committed.

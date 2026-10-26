@@ -741,7 +741,7 @@ def test_a_generation_aborted_before_it_starts_leaves_the_next_its_action_cap(tm
     """Generation 1 is aborted before its worker calls generate(); generation 2 opens and
     returns, and only then does generation 1's worker call generate(), with a different cap. The
     runner audits generation 2's result after that (episode_records.py audit_output_caps): the
-    agent still keeps generation 2's cap, and its decision for abort()'s trace."""
+    agent still keeps generation 2's cap."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
@@ -750,7 +750,7 @@ def test_a_generation_aborted_before_it_starts_leaves_the_next_its_action_cap(tm
             agent.abort(1)
             accepted = agent.generate(2, 1, second, DecisionBudget(None, 222, None, "wall"))
             late = agent.generate(1, 0, first, DecisionBudget(None, 111, None, "wall"))
-            kept = (agent._frame_action_max_tokens, agent._trace_decision)
+            kept = agent._frame_action_max_tokens
             agent.accept(2)
             agent.discard(1)
         finally:
@@ -758,7 +758,7 @@ def test_a_generation_aborted_before_it_starts_leaves_the_next_its_action_cap(tm
     assert late.cancelled and not accepted.cancelled
     limit = agent.config.native_output_limit
     assert native_output_limit(limit, 111) != native_output_limit(limit, 222)
-    assert kept == (native_output_limit(limit, 222), 1)
+    assert kept == native_output_limit(limit, 222)
 
 
 def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):

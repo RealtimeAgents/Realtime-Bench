@@ -226,8 +226,7 @@ class GenerationRequest:
     timeout_s: float | None = None
     # Filled by the runtime from the retained history before each provider call.
     canonical: CanonicalRequest | None = None
-    # The event kernel's number of this generation, which the default harness keys the
-    # generation's state by; None when the legacy loop drives the agent and numbers none.
+    # The event kernel's number of this generation, which the agent keys the generation's state by.
     generation: int | None = None
 
 
@@ -302,7 +301,7 @@ class PendingDecision:
 
     generation: int  # the kernel's generation number
     decision: int
-    result: dict  # the decision result, as stream_generate returns it
+    result: dict  # the decision result
     cancelled: bool = False  # the generation was aborted before its result came back
     # What accepting the result writes, kept by the agent; the shell does not read it.
     staged: Any = None
