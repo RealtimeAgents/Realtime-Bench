@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 FOLDER = "tests/config"
 # An audit hook that records and refuses every non-loopback connection and name lookup.
@@ -90,13 +92,16 @@ def test_a_folder_run_alone_makes_no_remote_connection(tmp_path):
     assert json.loads(record.read_text()) == {"exit": 0, "attempts": []}, child.stdout[-4000:]
 
 
-def test_a_run_imports_litellm_without_a_dotenv_or_the_network(tmp_path):
-    """Neither setting LiteLLM's import reads (providers/litellm.py import_litellm) comes from the
-    shell, yet LiteLLM's import neither looks up a host to fetch its model cost map nor loads a
-    .env."""
+@pytest.mark.parametrize(
+    "shell", [{}, {"LITELLM_MODE": "DEV", "LITELLM_LOCAL_MODEL_COST_MAP": "false"}]
+)
+def test_a_run_imports_litellm_without_a_dotenv_or_the_network(tmp_path, shell):
+    """Whether the shell leaves out the two settings LiteLLM's import reads (providers/litellm.py
+    import_litellm) or sets each the other way, LiteLLM's import neither looks up a host to fetch
+    its model cost map nor loads a .env."""
     record = tmp_path / "record.json"
     unset = {"LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_MODE"}
-    environ = {k: v for k, v in os.environ.items() if k not in unset}
+    environ = {k: v for k, v in os.environ.items() if k not in unset} | shell
     child = subprocess.run(
         [sys.executable, "-c", RUN, str(record)],
         cwd=ROOT,
