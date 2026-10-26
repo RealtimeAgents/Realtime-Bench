@@ -993,7 +993,7 @@ class _Shell:
             self.agent.commit(outcome)
         except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
             failure = traceback.format_exc()
-            self.log(f"[default] commit_action({outcome.status}) failed:\n{failure}")
+            self.log(f"[default] commit({outcome.status}) failed:\n{failure}")
             self.post(OutcomeCommitted(outcome.decision, failure))
         else:
             self.post(OutcomeCommitted(outcome.decision))
