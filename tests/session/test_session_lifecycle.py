@@ -293,6 +293,27 @@ def test_close_waits_for_the_abort_for_a_while(interrupt_s, log):
     assert rig.encoder.log == log
 
 
+def test_the_next_use_waits_for_the_abort_for_a_while_and_then_reopens_the_session():
+    """ensure_ready waits for an abort's cleanup as close() does (decision 14): one still running
+    after 10 s, its interrupt stuck, is cancelled, and the connection it was to close is closed
+    before the session is opened anew. The wait is recorded as close()'s is."""
+    with _rig() as rig:
+        trace = rig.encoder._trace = _Trace()
+        rig.encoder.interrupt_s = 60.0
+        abort = rig.thread.submit(rig.encoder.abort(GENERATION))
+        rig.run(rig.ensure_ready())
+        assert rig.clock.wait(abort, 1.0)
+        state = rig.encoder.state
+    assert rig.encoder.log == [
+        ("interrupt", "turn-0"),
+        ("close", 10.0),
+        ("connect", HISTORY, 10.0),
+    ]
+    assert rig.records.calls == [(None, None, None)]
+    assert trace.waits == [("abort_cleanup", 10.0, 10 * S)]
+    assert state == RuntimeState.READY
+
+
 def test_a_close_its_caller_gives_up_on_still_closes():
     """A caller that gives close less time than close waits for a stuck abort: cancelled while it
     waits, close still closes the connection."""

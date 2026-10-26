@@ -30,7 +30,8 @@ from realtime_framework.entity.model import (
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 
-# How long close() waits for an abort's cleanup before it cancels it and closes all the same.
+# How long ensure_ready and close() wait for an abort's cleanup before they cancel it and close
+# the connection all the same (decision 14).
 _CLEANUP_WAIT_S = 10.0
 
 _CONNECT_BACKOFF: contextvars.ContextVar[Callable[[bool], None]] = contextvars.ContextVar(
@@ -86,7 +87,6 @@ class SessionLifecycle:
     (_record_wait), once: what it waits for, how long, and until which time on the operational
     clock. A wait that would last no time, for a cleanup already done or for a generation already
     abandoned is not recorded, and _wait does not take it.
-    ensure_ready's wait for an abort's cleanup has no time bound and is not recorded.
     The encoder's own waits (_wait) end early once their generation is abandoned. A bound on an
     operation (a goAway deadline, a close) ends with the operation, and an abort's close ends the
     operation. An encoder that retries a connect itself also tells the context's connect_backoff
@@ -104,8 +104,8 @@ class SessionLifecycle:
     operational clock; and ``_trace``, which bind_trace sets. ``interrupt`` and
     ``_close_current`` must each end within a bound, whatever a write in progress on the
     connection does: the close fails a write stuck in it, and the interrupt, which the close
-    follows, does not wait for one. That is what ends an abort's cleanup, which ensure_ready
-    waits for without a bound.
+    follows, does not wait for one. That is what ends an abort's cleanup before ensure_ready and
+    close stop waiting for it.
     """
 
     _connected = False
@@ -148,7 +148,7 @@ class SessionLifecycle:
         """Close the connection once the last abort's cleanup is done, or has run for
         _CLEANUP_WAIT_S, or the caller stops waiting, whichever comes first."""
         try:
-            await self._settle(_CLEANUP_WAIT_S)
+            await self._settle()
         finally:
             self._connected = False
             await self._close_current()
@@ -164,13 +164,17 @@ class SessionLifecycle:
         history: CanonicalRequest,
         record: Callable[..., None],
     ) -> HistorySyncResult | None:
-        """Make the session ready for the next generation, once the last abort's cleanup is done.
+        """Make the session ready for the next generation, once the last abort's cleanup is done,
+        or has run for _CLEANUP_WAIT_S, as close() waits for it.
 
-        A ready session is left as it is. A closed one is reopened with ``history``. A dirty one
-        is rebuilt from ``history`` by a runtime_recovery sync, whose result is returned; a
-        recovery that does not leave it exact raises. A failed reopen raises unrecorded.
+        A ready session is left as it is. A closed one is reopened with ``history``, as is one
+        whose abort's cleanup was given up on: the connection that cleanup was to close is
+        closed first. A dirty one is rebuilt from ``history`` by a runtime_recovery sync, whose
+        result is returned; a recovery that does not leave it exact raises. A failed reopen
+        raises unrecorded.
         """
-        await self._settle()
+        if await self._settle():
+            await self._interrupt_and_close(None)
         async with self._session_lock():
             if self._connected and not self._dirty:
                 return None
@@ -234,7 +238,7 @@ class SessionLifecycle:
     async def abort(self, generation: GenerationHandle | None) -> None:
         """Interrupt ``generation`` (None when none had started), then close the connection, as
         far as either works, once the cleanup of the abort before is done. The next ensure_ready
-        waits for this to finish, close for at most _CLEANUP_WAIT_S; a later abort takes its
+        and close wait for this to finish, for at most _CLEANUP_WAIT_S; a later abort takes its
         place as the one they wait for."""
         self._cleanup = asyncio.ensure_future(self._clean_up(self._cleanup, generation))
         await asyncio.wait({self._cleanup})
@@ -293,20 +297,23 @@ class SessionLifecycle:
             pass
         self._connected, self._broken = False, False
 
-    async def _settle(self, timeout: float | None = None) -> None:
-        """Wait for the last abort's cleanup; one still running after ``timeout`` seconds is
-        cancelled."""
+    async def _settle(self) -> bool:
+        """Wait for the last abort's cleanup; one still running after _CLEANUP_WAIT_S is
+        cancelled. Whether it was."""
         cleanup = self._cleanup
         if cleanup is None:
-            return
-        if timeout is not None and not cleanup.done():
-            self._record_wait("abort_cleanup", timeout)
+            return False
+        if not cleanup.done():
+            self._record_wait("abort_cleanup", _CLEANUP_WAIT_S)
+        cancelled = False
         try:
-            await self.clock.wait_for(asyncio.wait({cleanup}), timeout)
+            await self.clock.wait_for(asyncio.wait({cleanup}), _CLEANUP_WAIT_S)
         except TimeoutError:
             cleanup.cancel()
+            cancelled = True
         if self._cleanup is cleanup:
             self._cleanup = None
+        return cancelled
 
     async def _wait(self, wait: str, seconds: float) -> None:
         """Wait ``seconds`` on the operational clock, on an executor thread as RequestRetry's
