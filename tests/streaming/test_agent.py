@@ -1549,16 +1549,16 @@ class _OpenedOnce(OpenAIRealtimeDriver):
         await super()._connect(request)
 
 
-def test_a_push_waiting_out_the_drivers_own_connect_backoff_prepares_the_session_meanwhile(
-    monkeypatch, clock
-):
-    """OpenAI Realtime's driver retries opening the connection itself, under the shared retry
-    policy (decision 39), so a push reopening the session through it waits out the backoffs
-    inside the driver: the session is being prepared from the first handshake until the last
-    (decision 13, review-streaming 中-4). Every handshake is refused, so the driver's retry
-    gives up after its fourth attempt, and the push with it."""
+def test_an_openai_realtime_streaming_connect_is_retried_by_the_readying_alone(monkeypatch, clock):
+    """In native streaming the agent's readying alone retries opening the session, under the
+    shared retry policy (decision 39), and OpenAI Realtime's connect makes one handshake per
+    attempt, as Gemini Live's does (decision 13): each attempt is a session_ready one, and the
+    driver records no connect attempt and no backoff of its own. The session is being prepared
+    from the first handshake until the last. Every handshake is refused, so the readying gives
+    up after its fourth attempt, and the push with it."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    agent = make_agent(monkeypatch, clock, _OpenedOnce, REALTIME)
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, _OpenedOnce, REALTIME, trace=trace)
     posted, handshakes = [], []
     agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
     agent.abort(6)
@@ -1571,6 +1571,9 @@ def test_a_push_waiting_out_the_drivers_own_connect_backoff_prepares_the_session
     with pytest.raises(TransportFailureError):
         agent.push(observation(clock, 1))
     assert len(handshakes) == 4
+    attempts = [(a["kind"], a["outcome"]) for a in trace.of(TraceEvent.MODEL_ATTEMPT_FINISHED)]
+    assert attempts == [("session_ready", "retry")] * 3 + [("session_ready", "failed")]
+    assert trace.of(TraceEvent.SESSION_WAIT) == []
     assert _preparations(posted) == [
         ("SessionPreparing", handshakes[0]),
         ("SessionPrepared", handshakes[-1]),

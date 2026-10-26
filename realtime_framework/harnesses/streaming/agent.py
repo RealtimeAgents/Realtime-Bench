@@ -560,9 +560,10 @@ class NativeStreamingAgent(VisionAgentBase):
     async def _ready(self, view: CanonicalRequest, *, renew: bool) -> None:
         """Ready the session from ``view``, and renew it if the provider asked for that and
         ``renew``. A failure the driver takes as transient is tried again under the shared
-        retry policy (decision 39), as a turn's connect is: nothing was generated on it yet. Each
-        attempt starts over from the session's state, which a failed one left closed or broken,
-        so the next opens it again from ``view``.
+        retry policy (decision 39), as a turn's connect is: nothing was generated on it yet. This
+        is the only retry of opening the session: neither encoder retries its streaming connect
+        itself (decision 13). Each attempt starts over from the session's state, which a failed
+        one left closed or broken, so the next opens it again from ``view``.
 
         From the first attempt that starts preparing the session (session_preparing), through
         the backoffs and the attempts after it, until this returns or raises, the session is
@@ -611,8 +612,7 @@ class NativeStreamingAgent(VisionAgentBase):
     def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
         """One ModelAttemptFinished per readying attempt that failed, for the one that succeeded
         after them, and for one a cancellation stopped. A readying that succeeds at once leaves
-        none, unlike a connect, which records every attempt
-        (OpenAIRealtimeDriver._connect_finished)."""
+        none."""
         with trace_scope(ready_attempt=number):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
