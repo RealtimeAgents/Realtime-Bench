@@ -34,6 +34,7 @@ FORBIDDEN = [
     (lambda o: o.interaction_mode == "turn_based", "FRAME REFERENCE", "a turn names no frame"),
     (lambda o: True, "Latest screen", "decision 42: a frame stays in the context once older"),
     (lambda o: True, "CURRENT-SCREEN", "decision 42"),
+    (lambda o: True, "Use current P/R marks", "decision 11: so is P6"),
     # Decision 6: a streaming action's marks and coordinates are read from the frame it names,
     # however old; a streaming frame is no decision's; no WAIT runs for what is not executed.
     *(

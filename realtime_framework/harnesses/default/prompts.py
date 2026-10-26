@@ -166,9 +166,11 @@ FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.for
 # follow, so it names the screen of its own decision.
 FRAME_PROMPT = "Screen observed for this decision."
 
+# Which screenshot's marks to use, said so that it stays true on an older frame.
+FRAME_MARKS_PROMPT = " Use the newest screenshot's P/R marks when supplied."
 FUNCTION_CALL_FRAME_PROMPT = (
-    FRAME_PROMPT + " Use current P/R marks when supplied. Submit exactly one GUI action by "
-    "calling its function. Do not speak."
+    FRAME_PROMPT + FRAME_MARKS_PROMPT + " Submit exactly one GUI action by calling its function. "
+    "Do not speak."
 )
 # A streamed frame is no decision's: an action names whichever frame it is based on.
 STREAMING_FRAME_PROMPT = "Streamed screenshot; its number is in its FRAME label."
@@ -246,8 +248,7 @@ def system_prompt_for_category(category: str | None, options: PromptOptions) -> 
 # Stateful text-output VLM sessions can under-weight an old system message, so each frame repeats only
 # the wire format. Scenario role and task objective remain exclusively in the session seed.
 TEXT_ACTION_FRAME_PROMPT = (
-    FRAME_PROMPT
-    + " Use current P/R marks when supplied. Output exactly one action and nothing else."
+    FRAME_PROMPT + FRAME_MARKS_PROMPT + " Output exactly one action and nothing else."
 )
 STREAMING_TEXT_ACTION_FRAME_PROMPT = (
     STREAMING_FRAME_PROMPT

@@ -71,7 +71,8 @@ from realtime_framework.entity.records import _jsonable
 # usage to simulated time only under a finite B, as the text-JSON one does; a native-streaming
 # run's instructions, function declarations, frame texts and SoM legends read an action's marks
 # and coordinates from the frame it names, its frames name no decision, its clock note counts
-# replies, and nothing is executed, not WAIT, for a reply without a valid action.
+# replies, and nothing is executed, not WAIT, for a reply without a valid action; a turn's frame
+# text asks for the newest screenshot's marks, not the current ones (P6).
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
