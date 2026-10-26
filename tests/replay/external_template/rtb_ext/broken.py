@@ -74,3 +74,21 @@ class StreamingNoSettings(StreamingNoSwitch):
 
 class StreamingBadSettings(StreamingNoSettings):
     streaming_settings: ClassVar[dict] = {"compression_trigger_tokens": 0}
+
+
+class StreamingNoPush(StreamingNoSettings):
+    streaming_settings: ClassVar[dict] = {}
+
+
+class StreamingNoReply(StreamingNoPush):
+    async def push_frame(self, observation, history):
+        raise NotImplementedError
+
+
+class ChoiceNoDecide(ExternalChatDriver):
+    capabilities = replace(ExternalChatDriver.capabilities, action_channel="choice")
+
+
+class ChoiceNoClassifier(ChoiceNoDecide):
+    async def decide(self, state, question):
+        raise NotImplementedError

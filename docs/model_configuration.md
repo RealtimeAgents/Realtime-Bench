@@ -194,10 +194,13 @@ A model that needs a new wire protocol gets a driver:
    their allowed values, and the reasoning efforts the driver maps; `Compat()` for none) and
    `model_defaults` (per-model ModelConfig defaults, usually `{}`). A driver that lists
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
-   [streaming settings](#streaming-settings) (a dict), and takes `streaming`: the
-   native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`. An external
-   driver without either is refused when its model is loaded, and the tests hold every
-   registered driver to the same checks.
+   [streaming settings](#streaming-settings) (a dict), takes `streaming`: the
+   native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`, and has
+   `push_frame` and `request_reply`, which the agent pushes frames and asks for replies with. A
+   driver whose `action_channel` is `"choice"` has `decide` and `classify_question_error`, which
+   the selection flow (`realtime_framework/providers/decisions/`) asks each question and
+   classifies its failures with. An external driver without any of these is refused when its
+   model is loaded, and the tests hold every registered driver to the same checks.
    Function-call drivers send the function declarations the harness puts in
    `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only

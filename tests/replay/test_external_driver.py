@@ -478,11 +478,38 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
                 "must be a positive integer"
             ),
         ),
+        # The native-streaming agent pushes frames and asks for replies
+        # (harnesses/streaming/agent.py).
+        (
+            "rtb_ext.broken:StreamingNoPush",
+            "'rtb_ext.broken:StreamingNoPush' declares streaming but has no push_frame()",
+        ),
+        (
+            "rtb_ext.broken:StreamingNoReply",
+            "'rtb_ext.broken:StreamingNoReply' declares streaming but has no request_reply()",
+        ),
+        # The selection flow asks a choice API's questions and classifies their failures
+        # (providers/decisions/selection.py).
+        (
+            "rtb_ext.broken:ChoiceNoDecide",
+            (
+                "'rtb_ext.broken:ChoiceNoDecide' declares the choice action channel but has no "
+                "decide()"
+            ),
+        ),
+        (
+            "rtb_ext.broken:ChoiceNoClassifier",
+            (
+                "'rtb_ext.broken:ChoiceNoClassifier' declares the choice action channel but has no "
+                "classify_question_error()"
+            ),
+        ),
     ],
     ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
          "no-context-status", "no-capabilities", "no-deployment", "no-compat", "no-model-defaults",
          "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-switch",
-         "streaming-no-settings", "streaming-bad-settings"],
+         "streaming-no-settings", "streaming-bad-settings", "streaming-no-push",
+         "streaming-no-reply", "choice-no-decide", "choice-no-classifier"],
 )
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")

@@ -432,6 +432,11 @@ _DECLARED_METHODS = {
         "mark_dirty",
     ),
 }
+# What the native-streaming agent pushes frames and asks for replies with
+# (harnesses/streaming/agent.py), and what the selection flow asks a choice API's questions and
+# classifies their failures with (providers/decisions/selection.py).
+_STREAMING_METHODS = ("push_frame", "request_reply")
+_CHOICE_METHODS = ("decide", "classify_question_error")
 
 
 def adapter_class(adapter_type: str) -> type[ModelClient]:
@@ -508,6 +513,17 @@ def _check_driver(target: str, driver: type) -> None:
             )
         # Held to what a model YAML's are, which replace them.
         _streaming_settings(repr(target), target, driver, driver.streaming_settings)
+        for method in _STREAMING_METHODS:
+            if not callable(getattr(driver, method, None)):
+                raise ValueError(  # noqa: TRY004
+                    f"{target!r} declares streaming but has no {method}()"
+                )
+    if driver.capabilities.action_channel == "choice":
+        for method in _CHOICE_METHODS:
+            if not callable(getattr(driver, method, None)):
+                raise ValueError(  # noqa: TRY004
+                    f"{target!r} declares the choice action channel but has no {method}()"
+                )
     estimates = driver.capabilities.request_size_estimation
     if callable(getattr(driver, "request_context_status", None)) and not estimates:
         raise ValueError(
