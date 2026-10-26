@@ -223,7 +223,8 @@ def _invalid_snapshot(snapshot):
 from realtime_framework.entity.config import task_seed
 
 
-def main():
+def _parser() -> argparse.ArgumentParser:
+    """The runner's arguments, as main() parses them and the emergency summary reads them."""
     p = argparse.ArgumentParser()
     p.add_argument(
         "--adapter",
@@ -305,6 +306,11 @@ def main():
         default=os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
         help="Screen recording encoder: cpu uses libx264; gpu uses NVENC.",
     )
+    return p
+
+
+def main():
+    p = _parser()
     a = p.parse_args()
     a.mode = DEFAULT_MODE  # fixed identity field; the runner has one decision loop
     # prepare_episode_report reads the run's identity from the arguments
@@ -1273,36 +1279,25 @@ def set_up_agent(
 
 
 def _write_emergency_setup_summary(error: str):
-    """Persist setup/provision failures that happen before main() enters its episode try/finally."""
-
-    def arg(name, default=None):
-        try:
-            return sys.argv[sys.argv.index(name) + 1]
-        except (ValueError, IndexError):
-            return default
-
-    run_id = arg("--run-id")
-    results_dir = arg("--results-dir", "results")
-    if not run_id:
+    """Persist setup/provision failures that happen before main() enters its episode try/finally,
+    from the arguments main() parsed."""
+    a = _parser().parse_args()
+    if not a.run_id:
         return
-    run_dir = Path(results_dir) / run_id
+    run_dir = Path(a.results_dir) / a.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / "run_summary.json"
     if path.exists():
         return
-    requested_model = arg("--model")
-    model_identity = _model_identity(requested_model, arg("--adapter"))
+    model_identity = _model_identity(a.model, a.adapter)
     mode = DEFAULT_MODE
-    clock_mode = arg("--clock", "token")
-    protocol = arg(
-        "--protocol",
-        "wall-clock" if clock_mode == "wall" else "time-aware-token-v1",
-    )
-    cap_minutes = float(arg("--max-minutes", "5.0"))
-    env_fps = float(arg("--fps", "1.0"))
-    model_input_fps = float(arg("--model-input-fps", str(env_fps)))
+    clock_mode = a.clock or "token"
+    protocol = a.protocol or ("wall-clock" if clock_mode == "wall" else "time-aware-token-v1")
+    cap_minutes = a.max_minutes
+    env_fps = a.fps
+    model_input_fps = env_fps if a.model_input_fps is None else a.model_input_fps
     run_identity = resolve_run_identity(
-        task_id=arg("--task"),
+        task_id=a.task,
         **model_identity,
         mode=mode,
         cap=cap_minutes,
@@ -1310,13 +1305,12 @@ def _write_emergency_setup_summary(error: str):
         harness_hash=harness_fingerprint(),
         fps=env_fps,
         model_input_fps=model_input_fps,
-        interaction_mode=arg("--interaction-mode", "turn_based"),
+        interaction_mode=a.interaction_mode,
     )
-    tokens_per_frame_arg = arg("--tokens-per-frame", str(DEFAULT_TOKENS_PER_FRAME))
     tokens_per_frame = (
         None
-        if clock_mode == "wall" or tokens_per_frame_arg == "unlimited"
-        else int(tokens_per_frame_arg)
+        if clock_mode == "wall" or a.tokens_per_frame == "unlimited"
+        else int(a.tokens_per_frame)
     )
     run_metrics = summarize_run_metrics(
         run_dir / "action_lifecycle.jsonl",
@@ -1333,9 +1327,9 @@ def _write_emergency_setup_summary(error: str):
         path,
         {
             **run_identity,
-            "instance_id": arg("--task"),
+            "instance_id": a.task,
             "max_minutes": cap_minutes,
-            "seed": task_seed(arg("--seed", os.environ.get("SEED", "42"))),
+            "seed": a.seed,
             "clock_mode": clock_mode,
             "tokens_per_frame": tokens_per_frame,
             "world_time_s": None,

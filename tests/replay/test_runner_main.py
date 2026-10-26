@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import traceback
 import types
 from unittest import mock
 
@@ -164,14 +165,25 @@ DESKTOP = types.SimpleNamespace(
 
 
 def run_main(
-    tmp_path, task, agent, clock, guest, *, agent_trace=False, seen=None, clock_mode="wall"
+    tmp_path,
+    task,
+    agent,
+    clock,
+    guest,
+    *,
+    agent_trace=False,
+    seen=None,
+    clock_mode="wall",
+    emergency=False,
 ) -> dict:
     """Run main() for ``task`` and return its run_summary.json. ``clock`` is the operational
     clock; on the wall clock it is world time too, and under the token clock (in pause mode)
     world time is a FrameClock. With ``agent_trace`` the agent gets an AgentTraceSink on the
     episode trace, as ``agent.sink``, as set_up_agent makes one. ``seen`` gets the episode clocks
     main() makes, the keyword arguments it calls set_up_agent with, the environment and keyword
-    arguments it calls run_stream with, and the code main() exits with (None when it returns)."""
+    arguments it calls run_stream with, and the code main() exits with (None when it returns).
+    With ``emergency`` an exception main() lets out goes to the emergency summary, as the
+    __main__ block hands it over, and ``seen["escaped"]`` gets its traceback."""
     seen = {} if seen is None else seen
 
     def episode_clocks(clock_mode, fps):
@@ -217,6 +229,11 @@ def run_main(
             runner.main()
         except SystemExit as exc:  # an unscored cell, after the summary is written
             seen["exit_code"] = exc.code
+        except Exception:
+            if not emergency:
+                raise
+            seen["escaped"] = traceback.format_exc()
+            runner._write_emergency_setup_summary(seen["escaped"])
     return json.loads((tmp_path / "run" / "run_summary.json").read_text())
 
 
@@ -568,3 +585,22 @@ def test_a_generation_that_raises_is_its_generation_error(tmp_path):
         "snapshot_s": QUERY_S + SNAPSHOT_S,
         "snapshot_delay_s": SNAPSHOT_S,
     }
+
+
+def test_the_emergency_summary_reads_the_arguments_as_main_parses_them(tmp_path, monkeypatch):
+    """A failure main() lets out is written as a setup error from the run's arguments (runner.py,
+    the __main__ block): an option written --name=value is the one written --name value."""
+    monkeypatch.chdir(tmp_path)  # where a summary under ./results would go
+    argv = [
+        "runner", "--task", "fake_task", "--model", "fake-model", "--adapter", "anthropic_messages",
+        "--clock=wall", "--fps=2", "--max-minutes=1", "--run-id=run", "--results-dir=out",
+    ]  # fmt: skip
+    with mock.patch.object(sys, "argv", argv):
+        runner._write_emergency_setup_summary("boom")
+    summary = json.loads((tmp_path / "out" / "run" / "run_summary.json").read_text())
+    assert (summary["clock_mode"], summary["protocol"], summary["tokens_per_frame"]) == (
+        "wall", "wall-clock", None,
+    )  # fmt: skip
+    assert (summary["fps"], summary["max_minutes"], summary["stop_reason"]) == (
+        2.0, 1.0, "setup_error",
+    )  # fmt: skip
