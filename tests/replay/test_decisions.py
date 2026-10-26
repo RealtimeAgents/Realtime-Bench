@@ -19,12 +19,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import FIXED_TEXTS, LEDGER_OMISSION
+from realtime_framework.evaluation import episode_records
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
@@ -325,6 +327,65 @@ def test_luna_question_retries_spent(tmp_path, monkeypatch):
     detail = failed["result"]["invalid_detail"]
     assert detail.startswith("TransportFailureError('transient after 3 transport retries: ")
     assert 'RuntimeError("gui_action question 0: DecisionsHTTPError(' in detail
+
+
+def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
+    """Decision 19: decision 1's first question picks compose_text, and its first text-edit
+    question gets HTTP 400 (fatal, not retried). The failed step's usage is that of the question
+    it answered, marked incomplete, as the failed question's is not known; the episode's token
+    totals take it as known but not complete. A failed step is not accepted, so neither the
+    agent's usage nor the provider-usage audit counts it a second time."""
+    key, upstream = APIS["openai_decisions"]
+    with DecisionsStub(upstream=upstream) as stub:
+        config = catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed").model_copy(
+            update={"api_base_url": stub.base_url}
+        )
+        episode = build_episode(
+            config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=key
+        )
+        try:
+            (accepted, failed), _ = run_decisions(
+                episode,
+                [
+                    script.decision("click_P1"),
+                    script.decision("compose_text", Failure(400, "bad request")),
+                ],
+                stub,
+            )
+        finally:
+            episode.finish()
+    result = failed["result"]
+    assert result["invalid_reason"] == "provider_request_failed"
+    lines = (tmp_path / "episode_trace.jsonl").read_text().splitlines()
+    attempts = [
+        e["payload"] for e in map(json.loads, lines) if e["event"] == "ModelAttemptFinished"
+    ]
+    questions = [a for a in attempts if a["kind"] == "choice_question"]
+    assert [(a["scope"]["decision"], a["outcome"]) for a in questions] == [
+        (0, "ok"),
+        (1, "ok"),
+        (1, "failed"),
+    ]
+    answered = questions[1]["usage"]
+    assert result["usage"] == answered
+    assert result["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
+    generations = [a for a in attempts if a["kind"] == "generation"]
+    assert [(a["outcome"], a["usage"]) for a in generations][-1] == ("failed", answered)
+    assert failed["token_usage"] == accepted["token_usage"]
+    rows = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
+    assert [(row["tick"], row["stale"]) for row in map(json.loads, rows)] == [(0, False)]
+    # Settled as the runner settles each result (evaluation/episode_records.py account_tokens).
+    env = SimpleNamespace()
+    episode_records.account_tokens(result, None, env)
+    record = result["token_accounting"]
+    assert record["provider_usage_status"] == "partial"
+    assert record["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
+    inputs = env._token_accounting.summary()["counts"]["provider_input_tokens"]
+    assert (inputs["total"], inputs["known_total"], inputs["complete"]) == (
+        None,
+        answered["input_tokens"],
+        False,
+    )
 
 
 def test_luna_screen_pointer_at_1000_is_the_last_column(tmp_path):

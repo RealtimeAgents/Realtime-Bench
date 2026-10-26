@@ -817,13 +817,17 @@ def test_decision_abort_during_question_backoff(tmp_path, monkeypatch):
     assert _cancelled(tmp_path, "choice_question") == [
         ("RetryCancelled('generation abandoned before attempt 2')", None)
     ]
+    # No question was answered: the generation given up on spent no usage it knows of.
+    assert not (tmp_path / "provider-usage.jsonl").exists()
 
 
 def test_decision_abort_between_questions(tmp_path, monkeypatch):
     """Decision API. Decision 0 clicks the name field. Decision 1's first question picks
     compose_text, and the abort lands before its first text-edit question is asked
     (selection.py _ask). That question sends nothing, and records its first attempt as
-    cancelled."""
+    cancelled. The question answered before is the usage of the generation given up on, kept
+    as for any other model's (decision 37): in its cancelled attempt's record and in a stale
+    provider-usage row, not in the agent's usage."""
     ask = selection_module.ChoiceDecision._ask
     asked, entered, release = [], threading.Event(), threading.Event()
 
@@ -855,3 +859,15 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
     assert len(agent._runtime.turns) == len(agent.action_history) == 1
     assert _questions(tmp_path) == [(0, 0, 1, "ok"), (1, 0, 1, "ok"), (1, 1, 1, "cancelled")]
     assert _attempts(tmp_path) == [(1, "ok", False), (1, "cancelled", None)]
+    attempts = _trace(tmp_path, "ModelAttemptFinished")
+    accepted, answered = (
+        a["usage"] for a in attempts if a["kind"] == "choice_question" and a["outcome"] == "ok"
+    )
+    assert [a["usage"] for a in attempts if a["kind"] == "generation"] == [accepted, answered]
+    rows = map(json.loads, (tmp_path / "provider-usage.jsonl").read_text().splitlines())
+    assert [(r["tick"], r["stale"], r["status"], r["usage"]) for r in rows] == [
+        (0, False, "reported", accepted),
+        (1, True, "reported", answered),
+    ]
+    assert agent.token_usage["responses"] == 1
+    assert agent.token_usage["input_tokens"] == accepted["input_tokens"]

@@ -1064,7 +1064,8 @@ def action_text(action: Action) -> str:
 @dataclass
 class _Staged:
     """What accepting a generation's result writes into the history. Discarding it writes no
-    history: it ends the tool calls and records the usage of a result that came back."""
+    history: it ends the tool calls and records the usage of a result that came back, or of the
+    questions a Decision cancelled before its result answered."""
 
     feedback: str  # the pending feedback when it started
     unattached: str  # and the part of it that no turn carries
@@ -1072,6 +1073,9 @@ class _Staged:
     result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
+    # A cancelled generation's id, and the usage of the Decision questions it answered.
+    generation_id: str | None = None
+    partial_usage: dict | None = None
 
 
 @dataclass
@@ -1148,14 +1152,21 @@ class DefaultHarness(VisionAgentBase):
             clock=self.clock,
         )
 
-    def _record_provider_usage(self, result, observation, tick, *, stale):
+    def _record_provider_usage(self, staged: _Staged, tick, *, stale):
         """Audit harness-visible generations, including providers with inline usage; ``stale``
-        when the result was discarded."""
-        usage = deepcopy(result.output.usage)
+        when the result was discarded. A Decision cancelled before its result has only the usage
+        of the questions it answered."""
+        result = staged.result
+        if result is None:
+            generation_id, usage, missing_reason = staged.generation_id, staged.partial_usage, None
+        else:
+            generation_id, usage = result.generation_id, result.output.usage
+            missing_reason = result.output.token_fields.get("provider_usage_missing_reason")
+        usage = deepcopy(usage)
         record = {
             "schema": "provider-usage-v1",
-            "generation_id": result.generation_id,
-            "observation_id": observation.observation_id,
+            "generation_id": generation_id,
+            "observation_id": staged.observation.observation_id,
             "tick": tick,
             "provider_protocol_family": self.driver.capabilities.protocol_family,
             "provider_upstream": getattr(self.config, "upstream_provider", None),
@@ -1165,10 +1176,7 @@ class DefaultHarness(VisionAgentBase):
             "usage": usage,
             "usage_at_action_commit": deepcopy(usage),
             "missing_reason": (
-                None
-                if usage
-                else result.output.token_fields.get("provider_usage_missing_reason")
-                or "backend_did_not_return_usage"
+                None if usage else missing_reason or "backend_did_not_return_usage"
             ),
             "recorded_unix_s": self.clock.time(),
             "scope": "harness_generation",
@@ -1409,7 +1417,7 @@ class DefaultHarness(VisionAgentBase):
         if staged is None:
             return
         result = staged.result
-        self._record_provider_usage(result, staged.observation, generation.decision, stale=False)
+        self._record_provider_usage(staged, generation.decision, stale=False)
         if self._pending_feedback == staged.feedback:
             self._pending_feedback = ""
         if self._unattached_feedback == staged.unattached:
@@ -1428,10 +1436,8 @@ class DefaultHarness(VisionAgentBase):
         staged = generation.staged
         if staged is None:
             return
-        if staged.result is not None:
-            self._record_provider_usage(
-                staged.result, staged.observation, generation.decision, stale=True
-            )
+        if staged.result is not None or staged.partial_usage is not None:
+            self._record_provider_usage(staged, generation.decision, stale=True)
         self._end_tool_calls(staged, "superseded_by_timeout")
 
     def _end_tool_calls(self, staged: _Staged, outcome: str) -> None:
@@ -1575,6 +1581,7 @@ class DefaultHarness(VisionAgentBase):
         failure_detail = ""
         failure_reason = ""
         final_error = None
+        failure_usage = partial_usage = None
 
         def send(attempt):
             nonlocal collector
@@ -1602,7 +1609,7 @@ class DefaultHarness(VisionAgentBase):
             )
 
         def record(attempt, exc, failure, delay):
-            nonlocal failure_detail, failure_reason, final_error
+            nonlocal failure_detail, failure_reason, final_error, failure_usage, partial_usage
             received = received_output(exc)
             if delay is not None:
                 retry_reasons.append(f"{failure.kind}: {exc!r}"[:300])
@@ -1631,6 +1638,10 @@ class DefaultHarness(VisionAgentBase):
                     f"{len(retry_reasons)} transport retries exhausted: "
                     f"{'; '.join(retry_reasons)}; final error: {exc!r}"
                 )[:500]
+            # A Decision that failed after some of its questions were answered carries their
+            # usage (providers/decisions/driver.py); the failed question's is not known.
+            partial_usage = getattr(exc, "partial_usage", None)
+            failure_usage = collector.usage if partial_usage is None else partial_usage
             self._attempt_failed(
                 generation,
                 request,
@@ -1638,7 +1649,7 @@ class DefaultHarness(VisionAgentBase):
                 exc,
                 failure,
                 received,
-                collector.usage,
+                failure_usage,
                 invalid_reason=failure_reason,
             )
 
@@ -1655,8 +1666,17 @@ class DefaultHarness(VisionAgentBase):
         try:
             with retry_cancellation(generation.cancel):
                 runtime_result = retry.run(send)
-        except RetryCancelled:
-            generation.staged = _Staged(feedback, unattached, inspection_executions)
+        except RetryCancelled as exc:
+            # A Decision given up on after some of its questions were answered carries their
+            # usage, which discarding it records as stale (decision 37).
+            generation.staged = _Staged(
+                feedback,
+                unattached,
+                inspection_executions,
+                observation=prepared[-1],
+                generation_id=request.generation_id,
+                partial_usage=getattr(exc, "partial_usage", None),
+            )
             return self._cancelled_result(self.clock.monotonic() - started)
         except Exception as exc:
             # Only the failure record() kept as final becomes an invalid decision; anything else
@@ -1699,7 +1719,7 @@ class DefaultHarness(VisionAgentBase):
                 "model_output": "",
                 "parsed_action": None,
                 "error": failure_detail,
-                "usage": collector.usage,
+                "usage": failure_usage,
                 "output_chunks": collector.chunks,
                 "transport_reconnect_attempted": bool(retry_reasons),
                 "transport_reconnect_attempts": len(retry_reasons),
@@ -1714,7 +1734,7 @@ class DefaultHarness(VisionAgentBase):
                 "raw": "",
                 "latency": latency,
                 "decision_wall_latency_s": latency,
-                "usage": collector.usage,
+                "usage": failure_usage,
                 "output_chunks": collector.chunks,
                 "invalid_category": "provider",
                 "invalid_reason": failure_reason,
@@ -1727,6 +1747,9 @@ class DefaultHarness(VisionAgentBase):
                 # zero of the frame's usage delta (evaluation/episode_records.py
                 # clock_output_tokens). It still counts as one inference response.
                 result["provider_usage_missing_reason"] = "request_not_sent"
+            if partial_usage is not None:
+                # Its token record is partial: the usage is known, not complete (decision 19).
+                result["provider_usage_missing_reason"] = "failed_request_usage_not_reported"
             return result
 
         output = runtime_result.output
@@ -2044,9 +2067,9 @@ class DefaultHarness(VisionAgentBase):
         """Record the attempt the generation's cancellation stopped: one not yet sent, or one a
         nested request unit's cancellation ended (a session connect, a Decision question). Its
         error is the RetryCancelled that stopped it, which names the attempt of the unit that
-        raised it; what the nested units answered before, a Decision's earlier questions, is in
-        their own records. An attempt whose reply had arrived is recorded by _attempt_finished,
-        with its usage."""
+        raised it. Its usage is that of the questions a Decision answered before, which their own
+        records also hold (decision 37). An attempt whose reply had arrived is recorded by
+        _attempt_finished, with its usage."""
         with self._attempt_scope(generation, request, attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
@@ -2054,7 +2077,7 @@ class DefaultHarness(VisionAgentBase):
                     "kind": "generation",
                     "outcome": "cancelled",
                     "error": repr(exc)[:500],
-                    "usage": None,
+                    "usage": getattr(exc, "partial_usage", None),
                 },
             )
 

@@ -16,6 +16,7 @@ from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.clock import TokenAccounting, summarize_model_timing
 from realtime_framework.evaluation.kernel.events import Invalidated
+from realtime_framework.evaluation.reporting import trajectory_usage
 
 OBSERVATION = Observation(b"png", 1_000.5, 3.0, {"observation_id": "o3"})
 BATCH = [{"observation_id": "o3", "tick": 3.0, "timestamp": 1_000.5}]
@@ -285,6 +286,34 @@ def test_a_call_the_episodes_end_gave_up_on_stays_out_of_the_token_totals():
     summary = env._token_accounting.summary()
     assert summary["responses"] == 2
     assert summary["counts"]["provider_output_tokens"]["complete"] is False
+
+
+def test_a_partial_usage_is_known_but_leaves_the_totals_incomplete():
+    """Decision 19: a failed Decision step reports the usage of the questions it answered and why
+    the rest is missing. Its token record is partial; the episode's known totals take its counts,
+    the totals are no longer complete, and its trajectory usage keeps the reason."""
+    env = _Env()
+    accepted = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    episode_records.account_tokens(accepted, None, env)
+    failed = {
+        "usage": {"input_tokens": 1000, "output_tokens": 1},
+        "provider_usage_missing_reason": "failed_request_usage_not_reported",
+    }
+    episode_records.account_tokens(failed, None, env)
+    record = failed["token_accounting"]
+    assert record["provider_usage_status"] == "partial"
+    assert record["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
+    assert accepted["token_accounting"]["provider_usage_status"] == "reported"
+    summary = env._token_accounting.summary()
+    assert summary["responses"] == 2
+    assert summary["provider_usage_missing_reasons"] == {"failed_request_usage_not_reported": 1}
+    inputs = summary["counts"]["provider_input_tokens"]
+    assert inputs["total"] is None and inputs["complete"] is False
+    assert (inputs["known_total"], inputs["responses_with_count"]) == (2000, 1)
+    usage = trajectory_usage({"usage": failed["usage"], "_token_accounting": record})
+    assert usage["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
+    usage = trajectory_usage({"usage": USAGE, "_token_accounting": accepted["token_accounting"]})
+    assert usage["provider_usage_missing_reason"] is None
 
 
 def test_a_call_whose_decision_goes_unreported_stays_out_of_the_reported_subtotal():

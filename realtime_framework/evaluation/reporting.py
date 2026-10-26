@@ -1683,9 +1683,8 @@ def trajectory_usage(entry):
         "provider_protocol_family": final("provider_protocol_family"),
         "provider_upstream": final("provider_upstream"),
         "provider_usage": raw,
-        "provider_usage_missing_reason": (
-            final("provider_usage_missing_reason") if raw is None else None
-        ),
+        # Also beside a partial usage (evaluation/clock.py token_record).
+        "provider_usage_missing_reason": final("provider_usage_missing_reason"),
     }
 
 
