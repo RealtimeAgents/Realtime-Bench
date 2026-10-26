@@ -81,36 +81,15 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
     reasoning = turn.output_reasoning if policy.reasoning_replay else ""
     if turn.output or reasoning:
         items.append(RequestItem(_output(turn, reasoning=reasoning), Intent("model", "in_order")))
-    if policy.tool_call_replay is not None:
-        exchanges = turn.provider_refs.get("native_tool_exchanges", [])
-        initial_text = turn.provider_refs.get("native_initial_text", "")
-        if exchanges or initial_text:
-            # Item 10: past calls replayed as text, never as calls the model would see as new.
-            transcript = (
-                policy.texts.gemini_tool_history_header
-                + "\n"
-                + json.dumps(exchanges, ensure_ascii=False)
-                if exchanges and policy.tool_call_replay == "tool_transcript"
-                else ""
-            )
-            tools = ContentBlock(
-                f"d{turn.decision}.tools",
-                "tool_exchange",
-                "model",
-                BlockTime(wall_ns=turn.output_wall_ns),
-                text=transcript,
-                based_on=turn.observation.observation_id,
-                initial_text=initial_text,
-                exchanges=tuple(
-                    ToolExchange(
-                        calls=tuple(exchange["function_calls"]),
-                        receipts=tuple(exchange["function_responses"]),
-                        text_after=exchange.get("completion_text", ""),
-                    )
-                    for exchange in exchanges
-                ),
-            )
-            items.append(RequestItem(tools, Intent("model", "in_order")))
+    tools = tool_exchange_block(
+        policy,
+        turn.provider_refs,
+        decision=turn.decision,
+        based_on=turn.observation.observation_id,
+        wall_ns=turn.output_wall_ns,
+    )
+    if tools is not None:
+        items.append(RequestItem(tools, Intent("model", "in_order")))
     # Stateless transports rebuild from this canonical sequence on every request, and a session
     # replays it. Attach each action's actual execution result at its causal position, after the
     # action and its tool rounds, rather than appending a growing duplicate ledger after the
@@ -119,6 +98,48 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
     if policy.feedback == "separate_message" and turn.execution_feedback:
         items.append(RequestItem(_feedback(turn), Intent("input", "in_order")))
     return items
+
+
+def tool_exchange_block(
+    policy: PathPolicy,
+    refs: dict,
+    *,
+    decision: int,
+    based_on: str | None,
+    wall_ns: int | None,
+) -> ContentBlock | None:
+    """The tool rounds of decision ``decision``'s generation, as its encoder reported them
+    (``completed_turn_refs``), in the form context policy item 10 replays them; None when the
+    policy replays no tool calls or the generation had none."""
+    if policy.tool_call_replay is None:
+        return None
+    exchanges = refs.get("native_tool_exchanges", [])
+    initial_text = refs.get("native_initial_text", "")
+    if not (exchanges or initial_text):
+        return None
+    # Item 10: past calls replayed as text, never as calls the model would see as new.
+    transcript = (
+        policy.texts.gemini_tool_history_header + "\n" + json.dumps(exchanges, ensure_ascii=False)
+        if exchanges and policy.tool_call_replay == "tool_transcript"
+        else ""
+    )
+    return ContentBlock(
+        f"d{decision}.tools",
+        "tool_exchange",
+        "model",
+        BlockTime(wall_ns=wall_ns),
+        text=transcript,
+        based_on=based_on,
+        initial_text=initial_text,
+        exchanges=tuple(
+            ToolExchange(
+                calls=tuple(exchange["function_calls"]),
+                receipts=tuple(exchange["function_responses"]),
+                text_after=exchange.get("completion_text", ""),
+            )
+            for exchange in exchanges
+        ),
+    )
 
 
 def _digest_items(policy: PathPolicy, turns: tuple[CanonicalTurn, ...]) -> list[RequestItem]:
