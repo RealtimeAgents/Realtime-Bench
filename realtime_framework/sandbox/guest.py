@@ -9,7 +9,6 @@ import requests as requests
 
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
-from realtime_framework.entity.actions import validate_action
 from realtime_framework.entity.actions import normalize_action
 from realtime_framework.entity.config import GUEST_REQUEST_S
 from realtime_framework.sandbox.budget import bounded
@@ -52,9 +51,6 @@ class GuestClient:
         return base64.b64decode(data["image"])
 
     def execute_action(self, action: Action) -> dict:
-        valid, reason = validate_action(action)
-        if not valid:
-            raise ValueError(f"invalid GUI action: {reason}")
         desktop_action, coordinate_trace = normalize_action(action)
         payload = {
             "action_type": desktop_action.action_type.value,
