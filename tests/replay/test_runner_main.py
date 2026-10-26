@@ -22,6 +22,7 @@ import pytest
 from realtime_framework.clock import Clocks, FrameClock, SystemClock
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.harness import StreamingAgent
+from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import reporting, runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
@@ -133,12 +134,21 @@ class FakeAgent(StreamingAgent):
     def discard_pending_observations(self):
         pass
 
-    def stream_prefill(self, observation):
-        pass
+    def generate(self, generation, decision, observation, budget):
+        return PendingDecision(generation, decision, self.reply(decision))
 
-    def stream_generate(self, tick):
+    def reply(self, decision: int) -> dict:
         self.clock.now += LATENCY_S
         return {"action": Action.click(100, 100), "latency": LATENCY_S}
+
+    def accept(self, generation):
+        pass
+
+    def discard(self, generation):
+        pass
+
+    def commit(self, outcome):
+        pass
 
     def close(self):
         self.clock.now += CLOSE_S
@@ -291,11 +301,11 @@ def test_the_token_clock_s_records_and_agent_read_the_operational_clock(tmp_path
 class RecordingAgent(FakeAgent):
     """Records a request as it generates, and returns once its sink has handed the record over."""
 
-    def stream_generate(self, tick: int) -> dict:
-        self.sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": tick})
+    def reply(self, decision: int) -> dict:
+        self.sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": decision})
         while self.sink._written < 1:
             time.sleep(0.001)
-        return super().stream_generate(tick)
+        return super().reply(decision)
 
 
 def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):
@@ -323,13 +333,13 @@ class TraceFailingAgent(FakeAgent):
     """Its one request record cannot be stored, so its records fail only once the episode is
     over, as main() closes them (agent_trace.close_agent_trace)."""
 
-    def stream_generate(self, tick: int) -> dict:
+    def reply(self, decision: int) -> dict:
         def fail(data):
             raise OSError("disk full")
 
         self.sink._store = fail
-        self.sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": tick}, body=b"{}")
-        return super().stream_generate(tick)
+        self.sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": decision}, body=b"{}")
+        return super().reply(decision)
 
 
 def test_agent_records_that_fail_to_be_written_invalidate_a_solved_run(tmp_path):
@@ -435,8 +445,8 @@ class TwoClickTask(FakeTask):
 class HalfReportingAgent(FakeAgent):
     """Its first reply carries the provider's usage, its second none."""
 
-    def stream_generate(self, tick: int) -> dict:
-        reply = super().stream_generate(tick)
+    def reply(self, decision: int) -> dict:
+        reply = super().reply(decision)
         if not getattr(self, "reported", False):
             self.reported = True
             reply["usage"] = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
@@ -489,7 +499,7 @@ def test_main_records_the_kernel_s_inputs(tmp_path):
 # Two functions in turn: a traceback folds a run of identical frames into one line.
 def _raise_deep(depth):
     if depth == 0:
-        raise RuntimeError("budget rejected")
+        raise RuntimeError("agent failed")
     return _raise_deeper(depth - 1)
 
 
@@ -498,24 +508,24 @@ def _raise_deeper(depth):
 
 
 class FailingAgent(FakeAgent):
-    """Binding its budget raises from deep in a call stack, as an SDK's can: the traceback runs
+    """Accepting its result raises from deep in a call stack, as an SDK's can: the traceback runs
     far past the invalid-run detail's 2000 characters and names the exception last."""
 
-    def configure_decision(self, budget):
+    def accept(self, generation):
         _raise_deep(40)
 
 
-class FailingPrefillAgent(FakeAgent):
-    """Taking the decision's frame raises, as deep."""
+class FailingGenerationAgent(FakeAgent):
+    """Its generation raises, as deep, before it took any time."""
 
-    def stream_prefill(self, observation):
+    def generate(self, generation, decision, observation, budget):
         _raise_deep(40)
 
 
 def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path):
-    """The first decision raises after the loop's first end check, as it binds its budget, which
-    the legacy loop did on its own thread (N30): the run is invalid as the runner's, its detail
-    ends with the exception and the summary's error holds the whole traceback."""
+    """The first decision's result is accepted on the shell's thread, after the loop's first end
+    check and the generation, and accepting it raises (U18): the run is invalid as the runner's,
+    its detail ends with the exception and the summary's error holds the whole traceback."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "deadline_expired", False)
@@ -527,26 +537,25 @@ def test_an_exception_that_escapes_the_loop_keeps_its_cause(tmp_path):
     assert seen["exit_code"] == 1
     error = summary["error"]
     assert error.startswith("Traceback (most recent call last):") and len(error) > 2000
-    assert error.rstrip().endswith("RuntimeError: budget rejected")
+    assert error.rstrip().endswith("RuntimeError: agent failed")
     assert invalid["detail"] == error[-2000:]
     assert summary["outcome"] == "error"
     assert summary["termination"] == {
         "stop_reason": "invalid_run",
-        "end_s": QUERY_S,
-        "snapshot_s": QUERY_S + SNAPSHOT_S,
+        "end_s": QUERY_S + LATENCY_S,
+        "snapshot_s": QUERY_S + LATENCY_S + SNAPSHOT_S,
         "snapshot_delay_s": SNAPSHOT_S,
     }
 
 
-def test_a_frame_the_agent_fails_to_take_is_its_generation_error(tmp_path):
-    """The first decision raises as it takes its frame, which the legacy loop did in the call
-    it bounds (legacy_loop.py _decide): the run is invalid as the provider's generation error,
-    and the summary has no error."""
+def test_a_generation_that_raises_is_its_generation_error(tmp_path):
+    """The first decision's generation raises on its worker (evaluation/shell.py _generate): the
+    run is invalid as the provider's generation error, and the summary has no error."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "deadline_expired", False)
     seen = {}
-    summary = run_main(tmp_path, task, FailingPrefillAgent(clock), clock, guest, seen=seen)
+    summary = run_main(tmp_path, task, FailingGenerationAgent(clock), clock, guest, seen=seen)
 
     invalid = summary["invalid_run"]
     assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")

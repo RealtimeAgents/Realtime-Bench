@@ -26,6 +26,7 @@ import realtime_tasks.registry as tasks
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.actions import MAX_ACTION_DURATION, Action, ActionType, Observation
 from realtime_framework.entity.harness import StreamingAgent
+from realtime_framework.entity.model import PendingDecision
 from realtime_framework.evaluation import runner, shell
 from realtime_framework.evaluation.kernel.turns import READ_FAILURE_LIMIT
 from realtime_framework.sandbox import actions
@@ -51,8 +52,7 @@ DRAG_PATH = {"x1": 0, "y1": 0, "x2": 5, "y2": 5}
 
 
 class ScriptedAgent(StreamingAgent):
-    """An adapter run through StreamingAgent's legacy turn (entity/harness.py); always the same
-    action."""
+    """An agent with always the same action, which keeps the status of each outcome."""
 
     def __init__(self, action: Action):
         self.action = action
@@ -64,14 +64,17 @@ class ScriptedAgent(StreamingAgent):
     def discard_pending_observations(self) -> None:
         pass
 
-    def stream_prefill(self, observation) -> None:
+    def generate(self, generation, decision, observation, budget) -> PendingDecision:
+        return PendingDecision(generation, decision, {"action": self.action, "latency": 0.0})
+
+    def accept(self, generation) -> None:
         pass
 
-    def stream_generate(self, tick: int) -> dict:
-        return {"action": self.action, "latency": 0.0}
+    def discard(self, generation) -> None:
+        pass
 
-    def commit_action(self, status: str, detail: str = "") -> None:
-        self.statuses.append(status)
+    def commit(self, outcome) -> None:
+        self.statuses.append(outcome.status)
 
 
 def _token_clock(task: Task) -> Task:
