@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from realtime_framework.entity.config import task_seed
+from realtime_framework.entity.context_policy import MODEL_PRESETS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -84,6 +85,12 @@ def main(argv=None):
         default=None,
         help="Request terminal usage from streaming endpoints (default: on; "
         "--no-include-usage for endpoints that reject stream_options)",
+    )
+    parser.add_argument(
+        "--context-preset",
+        choices=MODEL_PRESETS,
+        help="Context-policy preset of the endpoint, as a model YAML's context_preset "
+        "(kimi_k3: send Kimi K3 its past reasoning)",
     )
     parser.add_argument("--reasoning-effort", help="Only set if the selected endpoint supports it")
     parser.add_argument(
@@ -160,6 +167,8 @@ def main(argv=None):
             parser.error(
                 "Endpoint options apply to --model; catalog models use their own transport configuration"
             )
+        if args.context_preset is not None:
+            parser.error("A catalog model's YAML names its context_preset; omit --context-preset")
         key = args.catalog_model
     elif args.model and "/" in args.model:
         from realtime_framework.providers.litellm import validate_endpoint
@@ -168,6 +177,11 @@ def main(argv=None):
             parser.error("Use a LiteLLM model name in provider/model-id format")
         if args.include_usage is not None:
             parser.error("LiteLLM collects response usage automatically; omit --include-usage")
+        if args.context_preset is not None:
+            parser.error(
+                "--context-preset applies to an endpoint (--model DEPLOYMENT_ID --base-url URL), "
+                "not a LiteLLM model"
+            )
         try:
             base_url = validate_endpoint(args.base_url) if args.base_url else ""
         except ValueError as exc:
@@ -199,6 +213,7 @@ def main(argv=None):
             BENCHMARK_CONTEXT_COUNTER="estimate",
             BENCHMARK_CONTEXT_IMAGE_TOKENS="4096",
             BENCHMARK_CONTEXT_RESERVE_TOKENS="4096",
+            BENCHMARK_CONTEXT_PRESET=args.context_preset or "",
             STREAM_CHAT_API_KEY_ENV=args.api_key_env or "OPENAI_API_KEY",
         )
         if args.api_key_env and not os.environ.get(args.api_key_env):

@@ -137,3 +137,52 @@ def test_yaml_context_preset(tmp_path, monkeypatch):
             check(config)
     finally:
         catalog._catalog_entries.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "flags, preset", [((), None), (("--context-preset", "kimi_k3"), "kimi_k3")], ids=["none", "k3"]
+)
+def test_trial_context_preset(capsys, flags, preset):
+    """An endpoint given on the command line has no YAML to name a preset in; the trial worker
+    takes it instead, and the runner's inline endpoint (remote-vlm) applies it as a YAML's
+    context_preset."""
+    settings = trial(capsys, "--model", "m", "--base-url", ENDPOINT, *flags)
+    assert os.environ["BENCHMARK_CONTEXT_PRESET"] == (preset or "")
+    assert settings["model_config"]["context_preset"] == preset
+    # What the runner builds from the environment the trial worker hands it.
+    config = catalog.to_model_config("remote-vlm", fps=1.0)
+    assert (config.context_preset, replays_reasoning(config)) == (preset, preset is not None)
+    check(config)
+
+
+def test_inline_endpoint_context_preset_must_be_a_model_preset(monkeypatch):
+    monkeypatch.setenv("BENCHMARK_CONTEXT_PRESET", "jev")
+    with pytest.raises(ValueError) as caught:
+        catalog.to_model_config("remote-vlm", fps=1.0)
+    assert str(caught.value) == "BENCHMARK_CONTEXT_PRESET must be one of ['kimi_k3']"
+
+
+def test_trial_context_preset_choices(capsys):
+    from realtime_framework.evaluation._trial import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--task", WEB, "--model", "m", "--base-url", ENDPOINT, "--context-preset", "jev"])
+    assert caught.value.code == 2
+    assert "argument --context-preset: invalid choice: 'jev'" in capsys.readouterr().err
+
+
+def test_trial_context_preset_of_a_catalog_model(capsys):
+    usage_error(
+        capsys,
+        ["--catalog-model", "my-model", "--context-preset", "kimi_k3"],
+        "A catalog model's YAML names its context_preset; omit --context-preset",
+    )
+
+
+def test_trial_context_preset_of_a_litellm_model(capsys):
+    usage_error(
+        capsys,
+        ["--model", "openai/m", "--context-preset", "kimi_k3"],
+        "--context-preset applies to an endpoint (--model DEPLOYMENT_ID --base-url URL), not a "
+        "LiteLLM model",
+    )

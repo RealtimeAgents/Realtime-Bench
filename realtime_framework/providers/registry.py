@@ -712,6 +712,14 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
             # Same default as YAML presets; STREAM_CHAT_INCLUDE_USAGE below can still override.
             fields.setdefault("chat_include_usage", True)
+            # The trial worker's --context-preset, in place of a YAML's context_preset.
+            preset = os.environ.get("BENCHMARK_CONTEXT_PRESET")
+            if preset:
+                if preset not in MODEL_PRESETS:
+                    raise ValueError(
+                        f"BENCHMARK_CONTEXT_PRESET must be one of {list(MODEL_PRESETS)}"
+                    )
+                fields["context_preset"] = preset
         for field in (
             "context_window_tokens",
             "context_counter",
