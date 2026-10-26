@@ -318,6 +318,25 @@ def test_the_next_use_waits_for_the_abort_for_a_while_and_then_reopens_the_sessi
     assert state == RuntimeState.READY
 
 
+def test_the_next_use_gives_up_every_abort_it_waits_for_after_a_while():
+    """A second abort's cleanup waits for the first one's, whose interrupt is stuck. Given up
+    after 10 s, both are cancelled (decision 14), so the first one's close does not close the
+    session ensure_ready opened then (review-encoders 低 15)."""
+    with _rig() as rig:
+        rig.encoder.interrupt_s = 60.0
+        rig.thread.submit(rig.encoder.abort(GENERATION))
+        rig.thread.submit(rig.encoder.abort(None))
+        rig.run(rig.ensure_ready())
+        rig.run(rig.clock.sleep_async(55.0))
+        state = rig.encoder.state
+    assert rig.encoder.log == [
+        ("interrupt", "turn-0"),
+        ("close", 10.0),
+        ("connect", HISTORY, 10.0),
+    ]
+    assert state == RuntimeState.READY
+
+
 def test_a_close_its_caller_gives_up_on_still_closes():
     """A caller that gives close less time than close waits for a stuck abort: cancelled while it
     waits, close still closes the connection."""

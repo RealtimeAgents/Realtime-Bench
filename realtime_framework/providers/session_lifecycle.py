@@ -251,9 +251,13 @@ class SessionLifecycle:
     ) -> None:
         """An abort's cleanup, once ``before``, the one it takes the place of, is done:
         ensure_ready waits for the last cleanup alone, and the close of one still running would
-        close the session it opens."""
+        close the session it opens. Cancelled while it waits, it cancels ``before`` too."""
         if before is not None:
-            await asyncio.wait({before})
+            try:
+                await asyncio.wait({before})
+            except asyncio.CancelledError:
+                before.cancel()
+                raise
         await self._interrupt_and_close(generation)
 
     def _session_lock(self) -> asyncio.Lock:
