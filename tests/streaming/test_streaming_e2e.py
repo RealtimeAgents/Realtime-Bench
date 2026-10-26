@@ -294,8 +294,9 @@ def _the_episode(episode, call_id: str) -> dict:
     assert episode.logs == []
     assert episode.problems == []  # every message at its time, and the cassette used up
     # As main() reads them (runner.py main).
-    assert (env._stop_reason, getattr(env, "_invalid_run", None)) == ("time_limit", None)
-    assert env._termination == {
+    result = episode.result
+    assert (result.stop_reason, result.invalid_run) == ("time_limit", None)
+    assert result.termination_record == {
         "stop_reason": "time_limit", "end_s": 3.0, "snapshot_s": 3.5, "snapshot_delay_s": 0.5,
     }  # fmt: skip
     (execution,) = env.executions
@@ -412,5 +413,5 @@ def test_a_session_that_departs_from_its_cassette_is_closed_with_the_departure(t
     )
     assert (retried["outcome"], retried["failure_kind"]) == ("retry", "transient")
     assert "code=1011, reason='conn 1 record 16" in retried["error"]
-    env = episode.env
-    assert (env._stop_reason, env._termination["end_s"]) == ("time_limit", 3.0)
+    result = episode.result
+    assert (result.stop_reason, result.termination_record["end_s"]) == ("time_limit", 3.0)

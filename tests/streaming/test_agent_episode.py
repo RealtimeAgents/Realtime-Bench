@@ -95,7 +95,7 @@ def test_every_kernel_command_comes_to_its_agent_call_and_encoder_operation(monk
         agent.driver.replies += [Reply((click,), ends_at=1.0), Reply(ends_at=99.0)] * 2
         _recorded(agent, calls)
         env = _Env(clock)
-        run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=6.0, reply_watchdog_s=2.0),
@@ -103,7 +103,7 @@ def test_every_kernel_command_comes_to_its_agent_call_and_encoder_operation(monk
             log=lambda message: None,
         )
         agent.close()
-    assert not env._invalid_run
+    assert not result.invalid_run
     expected = [entry for entry in map(_command, commands) if entry is not None]
     for kind in ("push", "generate", "accept", "discard", "commit", "abort"):
         assert [c for c in calls if c[0] == kind] == [c for c in expected if c[0] == kind], kind
@@ -140,7 +140,7 @@ def test_a_go_away_during_a_long_reply_leaves_it_to_finish_and_renews_after_it(m
         agent.driver.replies += [Reply(ends_at=1.0)] * 20
         env = _Env(clock)
         env.seconds["execute"] = 0.25
-        run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=14.0),
@@ -148,7 +148,7 @@ def test_a_go_away_during_a_long_reply_leaves_it_to_finish_and_renews_after_it(m
             log=lambda message: None,
         )
         agent.close()
-    assert not env._invalid_run
+    assert not result.invalid_run
     abandoned = [e.data for e in records if e.kind == "GenerationAbandoned"]
     assert all(data["reason"] == "deadline" for data in abandoned), abandoned
     dropped = [e.data["reason"] for e in records if e.kind == "FrameDropped"]
@@ -205,7 +205,7 @@ def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(
         agent.driver.connect_failures = [ConnectionError("1011 internal error")] * 3
         agent.driver.replies += [Reply(ends_at=1.0)] * 20
         env = _Env(clock)
-        run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=20.0),
@@ -213,7 +213,7 @@ def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(
             log=lambda message: None,
         )
         agent.close()
-    assert not env._invalid_run
+    assert not result.invalid_run
     pushed = [e.data for e in records if e.kind == "FramePushed"]
     assert pushed[0].error is None and pushed[0].sent_at > 12.0
     kinds = [e.kind for e in records if e.kind in ("SessionPreparing", "SessionPrepared")]
@@ -303,15 +303,16 @@ def test_a_frame_whose_inspection_is_invalid_invalidates_the_run_whenever_replie
         agent.driver.replies += [Reply(ends_at=1.0)] * 10
         env = _InspectedEnv(clock, "obs-3")
         env.seconds["execute"] = 0.25
-        termination = run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=8.0),
             clocks=Clocks(clock, clock),
             log=lambda message: None,
-        ).termination
+        )
         agent.close()
-    assert env._invalid_run == {
+    termination = result.termination
+    assert result.invalid_run == {
         "category": "harness",
         "reason": "inspection_protocol_error",
         "detail": "interactables_binding_unstable",

@@ -16,11 +16,11 @@ TAP = Action(ActionType.KEY, {"key": "a"})
 
 
 def _ended(episode, end_s: float) -> None:
-    env = episode.env
-    assert env._stop_reason == "won"
-    assert env._termination["stop_reason"] == "won"
-    assert env._termination["end_s"] == end_s
-    assert getattr(env, "_invalid_run", None) is None
+    result = episode.result
+    assert result.stop_reason == "won"
+    assert result.termination_record["stop_reason"] == "won"
+    assert result.termination_record["end_s"] == end_s
+    assert result.invalid_run is None
 
 
 @pytest.mark.parametrize("clock_mode", ["wall", "token"])

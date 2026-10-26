@@ -21,6 +21,7 @@ from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.env_lanes import EnvLanes, Lane
+from realtime_framework.evaluation.episode_end import EpisodeEnd
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Invalidated, SnapshotFrozen, Termination
 from realtime_framework.evaluation.kernel.streaming import StreamingConfig
@@ -61,18 +62,18 @@ def _episode(
     )
     logs = [] if logs is None else logs
     with clock.participant():
-        termination = run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=duration_s),
             clocks=Clocks(clock, clock),
             log=log or logs.append,
             trace=trace,
-        ).termination
+        )
     if trace is not None:
         trace.close()
     assert not env.overlapped, "an operation that holds the gate alone ran with another"
-    return termination, env, agent
+    return result, env, agent
 
 
 def _records(tmp_path) -> list[dict]:
@@ -100,7 +101,7 @@ def test_the_agent_is_told_the_origin_its_arrival_times_count_from():
 
 
 def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp_path):
-    termination, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path)
+    result, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path)
     assert env.intervals == [
         ("check_end", 0.0, 0.5),
         ("capture", 0.5, 0.75),
@@ -134,14 +135,14 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
     assert (committed_at, outcome.status, outcome.call_id) == (4.775, "applied", "c0")
     assert outcome.terminal_after_action is False
     assert (outcome.arrived_at, outcome.frame_age_s) == (1.775, 0.9)
-    assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
-    assert env._termination == {
+    assert result.termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
+    assert result.termination_record == {
         "stop_reason": "time_limit",
         "end_s": 6.0,
         "snapshot_s": 6.5,
         "snapshot_delay_s": 0.5,
     }
-    assert (env._stop_reason, env._termination_snapshot, env._active_end_unix_s) == (
+    assert (result.stop_reason, result.snapshot, result.active_end_unix_s) == (
         "time_limit",
         {"score": 1},
         6.0,
@@ -163,15 +164,15 @@ def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
     """4.8: the deadline falls at 3 s, during the action. The snapshot goes right after it; the
     read due at 2 s waited for the action and was never sent. The presentation ends when the
     snapshot begins, after the action, as on the turn-based shell."""
-    termination, env, agent = _episode(3.0, ONE_CLICK)
+    result, env, agent = _episode(3.0, ONE_CLICK)
     assert env.intervals[4:] == [
         ("check_end", 1.775, 2.275),
         ("capture", 2.275, 2.525),
         ("execute", 2.275, 4.275),
         ("snapshot", 4.275, 4.775),
     ]
-    assert termination == Termination("time_limit", "deadline", 3.0, 4.775, 3.0, 4.775, None)
-    assert env._active_end_unix_s == 4.275
+    assert result.termination == Termination("time_limit", "deadline", 3.0, 4.775, 3.0, 4.775, None)
+    assert result.active_end_unix_s == 4.275
     ((_, outcome),) = agent.committed
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
 
@@ -184,14 +185,16 @@ def test_a_snapshot_waits_for_a_slow_capture_alongside_the_action():
     def slow_capture(env, clock):
         env.durations[("capture", 3)] = 30.0
 
-    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_capture)
+    result, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_capture)
     assert env.intervals[4:] == [
         ("check_end", 1.775, 2.275),
         ("execute", 2.275, 4.275),
         ("capture", 2.275, 32.275),
         ("snapshot", 32.275, 32.775),
     ]
-    assert termination == Termination("time_limit", "deadline", 3.0, 32.775, 3.0, 32.775, None)
+    assert result.termination == Termination(
+        "time_limit", "deadline", 3.0, 32.775, 3.0, 32.775, None
+    )
 
 
 def test_a_snapshot_waits_for_an_action_whose_budget_is_past_a_capture_s():
@@ -204,9 +207,11 @@ def test_a_snapshot_waits_for_an_action_whose_budget_is_past_a_capture_s():
     def long_hold(env, clock):
         env.durations[("execute", 1)] = 150.0
 
-    termination, env, _ = _episode(3.0, [Reply(1.6, (Call(0.9, hold, "h0"),))], env_setup=long_hold)
+    result, env, _ = _episode(3.0, [Reply(1.6, (Call(0.9, hold, "h0"),))], env_setup=long_hold)
     assert env.intervals[-2:] == [("execute", 2.275, 152.275), ("snapshot", 152.275, 152.775)]
-    assert termination == Termination("time_limit", "deadline", 3.0, 152.775, 3.0, 152.775, None)
+    assert result.termination == Termination(
+        "time_limit", "deadline", 3.0, 152.775, 3.0, 152.775, None
+    )
 
 
 def test_the_snapshot_reads_in_its_own_budget_after_waiting_for_the_action():
@@ -216,9 +221,11 @@ def test_the_snapshot_reads_in_its_own_budget_after_waiting_for_the_action():
     def slow_click(env, clock):
         env.durations[("execute", 1)] = 19.0
 
-    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_click)
+    result, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_click)
     assert env.intervals[-1] == ("snapshot", 21.275, 21.775)
-    assert termination == Termination("time_limit", "deadline", 3.0, 21.775, 3.0, 21.775, None)
+    assert result.termination == Termination(
+        "time_limit", "deadline", 3.0, 21.775, 3.0, 21.775, None
+    )
 
 
 def test_a_command_the_shell_fails_to_hand_out_is_a_run_exception(monkeypatch):
@@ -229,9 +236,12 @@ def test_a_command_the_shell_fails_to_hand_out_is_a_run_exception(monkeypatch):
         raise RuntimeError("the capture lane broke")
 
     monkeypatch.setattr(EnvLanes, "capture", capture)
-    termination, env, _ = _episode(3.0, [])
-    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
-    assert "the capture lane broke" in env._loop_error
+    result, _, _ = _episode(3.0, [])
+    assert (result.termination.invalid.category, result.termination.invalid.reason) == (
+        "runner",
+        "run_exception",
+    )
+    assert "the capture lane broke" in result.loop_error
 
 
 def test_a_snapshot_the_action_keeps_waiting_past_its_budget_fails():
@@ -241,15 +251,15 @@ def test_a_snapshot_the_action_keeps_waiting_past_its_budget_fails():
     def slow_action(env, clock):
         env.durations[("execute", 1)] = 130.0
 
-    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_action)
+    result, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_action)
     assert ("execute", 2.275, 132.275) in env.intervals
     assert "snapshot" not in [name for name, _, _ in env.intervals]
-    assert termination.stop_reason == "invalid_run"
-    assert termination.snapshot_at is None
-    assert termination.invalid.reason == "evaluation_snapshot_failed"
-    assert "the environment was still busy 120s later" in termination.invalid.detail
-    assert env._termination_snapshot_captured is False
-    assert env._invalid_run["reason"] == "evaluation_snapshot_failed"
+    assert result.termination.stop_reason == "invalid_run"
+    assert result.termination.snapshot_at is None
+    assert result.termination.invalid.reason == "evaluation_snapshot_failed"
+    assert "the environment was still busy 120s later" in result.termination.invalid.detail
+    assert result.snapshot_captured is False
+    assert result.invalid_run["reason"] == "evaluation_snapshot_failed"
 
 
 def test_an_end_check_due_during_an_action_reads_once_the_action_is_done():
@@ -260,8 +270,12 @@ def test_an_end_check_due_during_an_action_reads_once_the_action_is_done():
     def ends(env, clock):
         env.ends_at = 2.5
 
-    termination, env, _ = _episode(10.0, ONE_CLICK, env_setup=ends)
-    assert (termination.stop_reason, termination.cause, termination.ended_at) == (
+    result, env, _ = _episode(10.0, ONE_CLICK, env_setup=ends)
+    assert (
+        result.termination.stop_reason,
+        result.termination.cause,
+        result.termination.ended_at,
+    ) == (
         "goal",
         "environment",
         4.275,
@@ -276,8 +290,8 @@ def test_a_capture_that_cannot_keep_up_skips_the_beats_it_misses(tmp_path):
     def slow_capture(env, clock):
         env.seconds["capture"] = 1.5
 
-    termination, env, _ = _episode(6.0, [], tmp_path=tmp_path, env_setup=slow_capture)
-    assert termination.invalid is None and termination.stop_reason == "time_limit"
+    result, env, _ = _episode(6.0, [], tmp_path=tmp_path, env_setup=slow_capture)
+    assert result.termination.invalid is None and result.termination.stop_reason == "time_limit"
     records = _records(tmp_path)
     dropped = _kernel(records, "FrameDropped")
     captures = [interval for interval in env.intervals if interval[0] == "capture"]
@@ -303,8 +317,10 @@ def test_an_invalid_run_the_release_timer_reports_is_posted_once(tmp_path):
 
         env.during["execute"] = latch
 
-    termination, _, _ = _episode(6.0, ONE_CLICK, tmp_path=tmp_path, env_setup=release_fails)
-    assert termination.invalid == Invalidated("environment", "wall_key_release_failed", "keyup")
+    result, _, _ = _episode(6.0, ONE_CLICK, tmp_path=tmp_path, env_setup=release_fails)
+    assert result.termination.invalid == Invalidated(
+        "environment", "wall_key_release_failed", "keyup"
+    )
     records = _records(tmp_path)
     assert [r["payload"] for r in records if r["event"] == "RunInvalidated"] == [invalid]
 
@@ -322,9 +338,9 @@ def test_the_environment_keeps_its_own_record_of_the_invalid_run_it_latched():
 
         env.during["execute"] = latch
 
-    termination, env, _ = _episode(6.0, ONE_CLICK, env_setup=release_fails)
-    assert termination.invalid.detail == detail[-2000:]
-    assert env._invalid_run == invalid
+    result, _, _ = _episode(6.0, ONE_CLICK, env_setup=release_fails)
+    assert result.termination.invalid.detail == detail[-2000:]
+    assert result.invalid_run == invalid
 
 
 class _SlowActionRows:
@@ -412,8 +428,8 @@ def test_the_episode_finishes_once_the_action_outlasting_the_snapshots_wait_retu
     def endless_click(env, clock):
         env.seconds["execute"] = 200.0
 
-    termination, _, agent = _episode(6.0, ONE_CLICK, env_setup=endless_click)
-    assert termination.invalid.reason == "evaluation_snapshot_failed"
+    result, _, agent = _episode(6.0, ONE_CLICK, env_setup=endless_click)
+    assert result.termination.invalid.reason == "evaluation_snapshot_failed"
     ((committed_at, outcome),) = agent.committed
     assert committed_at == 202.275
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
@@ -449,19 +465,22 @@ def test_a_command_the_shell_fails_to_run_is_answered_and_the_episode_finishes(m
     kernel/streaming.py): one whose run raises is answered with the failure, and the run is
     invalid for the shell's exception."""
     breaks(monkeypatch)
-    termination, env, _ = _episode(6.0, ONE_CLICK)
-    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
-    assert "the shell broke" in env._loop_error
+    result, _, _ = _episode(6.0, ONE_CLICK)
+    assert (result.termination.invalid.category, result.termination.invalid.reason) == (
+        "runner",
+        "run_exception",
+    )
+    assert "the shell broke" in result.loop_error
 
 
 def test_a_stuck_reply_is_given_up_and_the_next_one_starts_once_its_abort_returned():
     """A reply that never ends is stuck after the 30 s watchdog (kernel/streaming.py); the shell
     aborts it on the abort lane, and the next reply starts once the abort returned."""
-    termination, _, agent = _episode(32.0, [])
+    result, _, agent = _episode(32.0, [])
     assert agent.aborted[0] == (1, 30.875)
     assert agent.started[:2] == [(1, "obs-1", 0.875), (2, agent.started[1][1], 30.875)]
     assert 1 in agent.discarded
-    assert termination.stop_reason == "time_limit"
+    assert result.termination.stop_reason == "time_limit"
 
 
 def _slow_abort(seconds: float):
@@ -480,7 +499,7 @@ def _slow_abort(seconds: float):
 def test_the_next_reply_waits_for_a_slow_abort_and_the_episode_goes_on_meanwhile():
     """The stuck reply's abort takes 3 s: the next reply starts once it returned, and meanwhile
     the state is read and frames are captured, which wait for the rebuilt session."""
-    termination, env, agent = _episode(36.0, [], agent_setup=_slow_abort(3.0))
+    result, env, agent = _episode(36.0, [], agent_setup=_slow_abort(3.0))
     assert agent.aborted[0] == (1, 33.875)
     assert agent.started[1][2] == 33.875
     during = [(name, start) for name, start, _ in env.intervals if 30.875 < start < 33.875]
@@ -493,7 +512,7 @@ def test_the_next_reply_waits_for_a_slow_abort_and_the_episode_goes_on_meanwhile
         ("capture", 33.5),
     ]
     assert all(not 30.875 < at < 33.875 for _, at in agent.pushed)
-    assert termination.invalid is None
+    assert result.termination.invalid is None
 
 
 def test_a_reply_whose_worker_just_ended_is_aborted_all_the_same_to_close_the_session():
@@ -525,11 +544,11 @@ def test_a_reply_whose_worker_just_ended_is_aborted_all_the_same_to_close_the_se
         agent.push, agent.abort, agent.commit = stuck, closing, slow
 
     replies = [Reply(11.825, (Call(10.85, Action.wait(0.5), "w"),))]
-    termination, _, agent = _episode(20.0, replies, agent_setup=stuck_third_push)
+    result, _, agent = _episode(20.0, replies, agent_setup=stuck_third_push)
     assert agent.ended[0] == (1, 12.7)
     assert agent.aborted == [(1, 12.825), (2, 20.0)]
     assert agent.started[1][2] == 12.825
-    assert termination.invalid is None
+    assert result.termination.invalid is None
 
 
 def test_a_slow_abort_holds_up_neither_the_read_after_an_action_nor_the_snapshot():
@@ -545,13 +564,11 @@ def test_a_slow_abort_holds_up_neither_the_read_after_an_action_nor_the_snapshot
         env.durations[("execute", 1)] = 1.0
 
     replies = [Reply(calls=(Call(29.575, CLICK, "c0"),))]
-    termination, env, agent = _episode(
-        37.5, replies, env_setup=env_setup, agent_setup=_slow_abort(10.0)
-    )
+    result, env, agent = _episode(37.5, replies, env_setup=env_setup, agent_setup=_slow_abort(10.0))
     reads = [start for name, start, _ in env.intervals if name == "check_end" and start > 30]
     assert reads[:3] == [31.25, 32.0, 33.0]
-    assert termination == Termination("time_limit", "deadline", 37.5, 38.0, 37.5, 38.0, None)
-    assert env._termination["snapshot_delay_s"] == 0.5
+    assert result.termination == Termination("time_limit", "deadline", 37.5, 38.0, 37.5, 38.0, None)
+    assert result.termination_record["snapshot_delay_s"] == 0.5
     assert agent.aborted == [(1, 40.425)]
 
 
@@ -563,9 +580,12 @@ def test_the_shells_own_failure_on_a_lane_invalidates_the_run_as_a_run_exception
         raise RuntimeError("fingerprint failed")
 
     monkeypatch.setattr(episode_records, "observation_fingerprint", fingerprint)
-    termination, env, _ = _episode(6.0, ONE_CLICK)
-    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
-    assert "fingerprint failed" in env._loop_error
+    result, _, _ = _episode(6.0, ONE_CLICK)
+    assert (result.termination.invalid.category, result.termination.invalid.reason) == (
+        "runner",
+        "run_exception",
+    )
+    assert "fingerprint failed" in result.loop_error
 
 
 def _step_breaks(monkeypatch, when) -> None:
@@ -597,14 +617,18 @@ def test_a_snapshot_whose_thread_did_not_start_is_answered_as_failed(monkeypatch
     the wrap-up does not wait for that snapshot."""
     if kernel_breaks:
         _step_breaks(monkeypatch, lambda kernel, semantic: kernel.ending is not None)
-    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=_no_snapshot_thread)
-    assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
+    result, _, _ = _episode(3.0, ONE_CLICK, env_setup=_no_snapshot_thread)
+    assert (
+        result.termination.stop_reason,
+        result.termination.ended_at,
+        result.termination.snapshot_at,
+    ) == (
         "invalid_run",
         3.0,
         None,
     )
-    assert termination.invalid.reason == "run_exception"
-    assert "RuntimeError: no thread" in env._loop_error
+    assert result.termination.invalid.reason == "run_exception"
+    assert "RuntimeError: no thread" in result.loop_error
 
 
 def test_a_snapshot_whose_thread_raised_is_answered_as_failed(monkeypatch):
@@ -615,10 +639,10 @@ def test_a_snapshot_whose_thread_raised_is_answered_as_failed(monkeypatch):
         raise RuntimeError("no turn")
 
     monkeypatch.setattr(EnvLanes, "freeze_turn", freeze_turn)
-    termination, env, _ = _episode(3.0, ONE_CLICK)
-    assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
-    assert termination.invalid.reason == "run_exception"
-    assert "RuntimeError: no turn" in env._loop_error
+    result, _, _ = _episode(3.0, ONE_CLICK)
+    assert (result.termination.stop_reason, result.termination.snapshot_at) == ("invalid_run", None)
+    assert result.termination.invalid.reason == "run_exception"
+    assert "RuntimeError: no turn" in result.loop_error
 
 
 @pytest.mark.parametrize("first", ["snapshot", "kernel"])
@@ -650,41 +674,39 @@ def test_the_first_of_a_failed_snapshot_and_a_kernel_that_raises_is_the_error(mo
         _step_breaks(monkeypatch, lambda kernel, semantic: bool(answered))
     else:
         _step_breaks(monkeypatch, lambda kernel, semantic: kernel.ending is not None)
-    termination, env, _ = _episode(
-        3.0, ONE_CLICK, env_setup=lambda env, clock: clocks.append(clock)
-    )
-    assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
+    result, _, _ = _episode(3.0, ONE_CLICK, env_setup=lambda env, clock: clocks.append(clock))
+    assert (result.termination.stop_reason, result.termination.snapshot_at) == ("invalid_run", None)
     error = "RuntimeError: no turn" if first == "snapshot" else "RuntimeError: step broke"
-    assert error in env._loop_error
-    assert error in termination.invalid.detail and error in env._invalid_run["detail"]
-
-
-def _refuses_the_record(monkeypatch) -> None:
-    setattr_ = FakeEnv.__setattr__
-
-    def refusing(env, name, value):
-        if name == "_termination":
-            raise RuntimeError("read-only")
-        setattr_(env, name, value)
-
-    monkeypatch.setattr(FakeEnv, "__setattr__", refusing)
+    assert error in result.loop_error
+    assert error in result.termination.invalid.detail and error in result.invalid_run["detail"]
 
 
 @pytest.mark.parametrize("kernel_breaks", [False, True], ids=["kernel-holds", "kernel-raises"])
 def test_an_episode_whose_termination_record_raises_still_ends(monkeypatch, kernel_breaks):
-    """The environment refuses the termination record. The episode ends all the same and
-    returns how it ended, its verdict latched first: main() reads it whatever else was written.
-    A wrap-up that fails so is logged."""
-    _refuses_the_record(monkeypatch)
+    """Writing the termination raises past its verdict: the log of a failure the environment
+    reported once the snapshot was frozen, or of the kernel's run_exception as the first failure,
+    raises, stdout gone. The episode ends all the same and returns how it ended, its verdict
+    written first: main() is handed it whatever else was written. A wrap-up that fails so is
+    logged."""
+    logs: list[str] = []
+
+    def log(line: str) -> None:
+        if "only logged" in line or line.startswith("[invalid-run] runner:run_exception"):
+            raise BrokenPipeError("stdout closed")
+        logs.append(line)
+
     if kernel_breaks:
         _step_breaks(monkeypatch, lambda kernel, semantic: semantic >= 2.0)
-    logs: list[str] = []
-    termination, env, _ = _episode(3.0, ONE_CLICK, logs=logs)
-    assert termination.stop_reason == ("invalid_run" if kernel_breaks else "time_limit")
-    assert env._stop_reason == termination.stop_reason
+    env_setup = None if kernel_breaks else _gives_up_during_the_release
+    result, _, _ = _episode(3.0, ONE_CLICK, env_setup=env_setup, log=log)
+    assert result.termination.stop_reason == ("invalid_run" if kernel_breaks else "time_limit")
+    assert result.stop_reason == result.termination.stop_reason
     if kernel_breaks:
-        assert env._invalid_run["reason"] == "run_exception"
+        assert result.invalid_run["reason"] == "run_exception"
         assert any(line.startswith("[streaming] wrapping up the episode failed") for line in logs)
+    else:
+        assert result.invalid_run is None
+        assert any(line.startswith("[streaming] shell raised:") for line in logs)
 
 
 class _UnwritableRows:
@@ -712,18 +734,19 @@ def test_a_record_of_the_last_batch_that_cannot_be_written_invalidates_the_run(k
         clock = FakeClock()
         env, logs = FakeEnv(clock), []
         with clock.participant():
-            termination = run_streaming_episode(
+            result = run_streaming_episode(
                 FakeAgent(clock, ONE_CLICK),
                 env,
                 StreamingConfig(duration_s=5.0),
                 clocks=Clocks(clock, clock),
                 log=logs.append,
                 trace=_UnwritableRows(kind),
-            ).termination
-        return termination, env, logs
+            )
+        return result, logs
 
-    control, _, _ = episode(None)
-    termination, env, logs = episode(kind)
+    control = episode(None)[0].termination
+    result, logs = episode(kind)
+    termination = result.termination
     assert control.invalid is None
     assert "OSError: trace disk full" in termination.invalid.detail
     assert termination == Termination(
@@ -735,9 +758,9 @@ def test_a_record_of_the_last_batch_that_cannot_be_written_invalidates_the_run(k
         control.ops_snapshot_at,
         Invalidated("harness", "episode_trace_write_failed", termination.invalid.detail),
     )
-    assert env._stop_reason == "invalid_run"
-    assert env._invalid_run["reason"] == "episode_trace_write_failed"
-    assert env._termination["stop_reason"] == "invalid_run"
+    assert result.stop_reason == "invalid_run"
+    assert result.invalid_run["reason"] == "episode_trace_write_failed"
+    assert result.termination_record["stop_reason"] == "invalid_run"
     assert any(line.startswith("[invalid-run] harness:episode_trace_write_failed") for line in logs)
 
 
@@ -756,11 +779,11 @@ def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
         env.release_inputs = release_inputs
 
     logs: list[str] = []
-    termination, env, _ = _episode(6.0, ONE_CLICK, env_setup=release_fails, logs=logs)
+    result, env, _ = _episode(6.0, ONE_CLICK, env_setup=release_fails, logs=logs)
     assert env.released_at == 6.5
-    assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
-    assert (env._stop_reason, env._invalid_run) == ("time_limit", None)
-    assert getattr(env, "_loop_error", None) is None
+    assert result.termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
+    assert (result.stop_reason, result.invalid_run) == ("time_limit", None)
+    assert result.loop_error is None
     (logged,) = [line for line in logs if line.startswith("[cleanup]")]
     assert logged.startswith("[cleanup] failed to release stateful inputs:")
     assert "RuntimeError: the page is gone" in logged
@@ -814,14 +837,14 @@ def test_a_failure_the_environment_reports_once_the_snapshot_is_frozen_is_only_l
     wall clock's key-release timer gives a key up for good after it, at 6.75 s while the reply's
     abort still runs, which the episode waits for, or during the release of the inputs: the
     failure is only logged, as one of the cleanup's own is, and the termination and the run's
-    record on env both say the run is valid."""
+    verdict both say the run is valid."""
     logs: list[str] = []
-    termination, env, _ = _episode(
+    result, env, _ = _episode(
         6.0, ONE_CLICK, env_setup=env_setup, agent_setup=agent_setup, logs=logs
     )
     assert env.released_at == released_at
-    assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
-    assert (env._stop_reason, env._invalid_run) == ("time_limit", None)
+    assert result.termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
+    assert (result.stop_reason, result.invalid_run) == ("time_limit", None)
     (logged,) = [line for line in logs if line.startswith("[cleanup]")]
     assert logged == (
         "[cleanup] environment:wall_key_release_failed once the snapshot was frozen, only "
@@ -847,9 +870,12 @@ def test_a_log_that_raises_on_a_lane_loses_the_line_only(monkeypatch):
         raise RuntimeError("fingerprint failed")
 
     monkeypatch.setattr(episode_records, "observation_fingerprint", fingerprint)
-    termination, env, _ = _episode(6.0, ONE_CLICK, log=_log_raising_on("[streaming] shell raised"))
-    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
-    assert "fingerprint failed" in env._loop_error
+    result, _, _ = _episode(6.0, ONE_CLICK, log=_log_raising_on("[streaming] shell raised"))
+    assert (result.termination.invalid.category, result.termination.invalid.reason) == (
+        "runner",
+        "run_exception",
+    )
+    assert "fingerprint failed" in result.loop_error
 
 
 def test_a_log_that_raises_on_a_reply_worker_loses_the_line_only():
@@ -883,10 +909,10 @@ def test_a_snapshot_read_that_raises_any_exception_fails_the_snapshot():
 
         env.task.evaluation_snapshot = snapshot
 
-    termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=cancelled)
-    assert (termination.stop_reason, termination.snapshot_at) == ("invalid_run", None)
-    assert termination.invalid.reason == "evaluation_snapshot_failed"
-    assert "RetryCancelled" in env._termination_snapshot_error
+    result, _, _ = _episode(3.0, ONE_CLICK, env_setup=cancelled)
+    assert (result.termination.stop_reason, result.termination.snapshot_at) == ("invalid_run", None)
+    assert result.termination.invalid.reason == "evaluation_snapshot_failed"
+    assert "RetryCancelled" in result.snapshot_error
 
 
 def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch, tmp_path):
@@ -903,8 +929,12 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
 
     monkeypatch.setattr(Kernel, "step", broken)
     logs: list[str] = []
-    termination, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path, logs=logs)
-    assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
+    result, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path, logs=logs)
+    assert (
+        result.termination.stop_reason,
+        result.termination.ended_at,
+        result.termination.snapshot_at,
+    ) == (
         "invalid_run",
         3.0,
         4.775,
@@ -914,17 +944,20 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     assert written["payload"]["reason"] == "run_exception"
     assert (written["kernel_seq"], written["semantic"], written["ops"]) == (None, 3.0, 3.0)
     assert any(line.startswith("[invalid-run] runner:run_exception") for line in logs)
-    assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
+    assert (result.termination.invalid.category, result.termination.invalid.reason) == (
+        "runner",
+        "run_exception",
+    )
     assert env.intervals[-1] == ("snapshot", 4.275, 4.775)
     assert env.released_at == 4.775
-    assert env._termination == {
+    assert result.termination_record == {
         "stop_reason": "invalid_run",
         "end_s": 3.0,
         "snapshot_s": 4.775,
         "snapshot_delay_s": 1.775,
     }
-    assert env._invalid_run["reason"] == "run_exception"
-    assert "RuntimeError: step broke" in env._loop_error
+    assert result.invalid_run["reason"] == "run_exception"
+    assert "RuntimeError: step broke" in result.loop_error
     assert agent.aborted == [(2, 3.0)]
 
 
@@ -934,14 +967,14 @@ def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monke
     and the end stays the deadline, the first end signal (decision 32). The snapshot's thread
     takes a moment of real time after the read, before it writes its reading: the wait, not
     the gate the inputs are released at, is what the wrap-up has it by."""
-    setattr_ = FakeEnv.__setattr__
+    setattr_ = EpisodeEnd.__setattr__
 
-    def slow_after_the_read(env, name, value):
-        if name == "_termination_snapshot_error":
+    def slow_after_the_read(end, name, value):
+        if name == "snapshot_error":
             time.sleep(0.3)
-        setattr_(env, name, value)
+        setattr_(end, name, value)
 
-    monkeypatch.setattr(FakeEnv, "__setattr__", slow_after_the_read)
+    monkeypatch.setattr(EpisodeEnd, "__setattr__", slow_after_the_read)
     step = Kernel.step
 
     def broken(self, semantic, ops=None):
@@ -950,8 +983,12 @@ def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monke
         return step(self, semantic, ops)
 
     monkeypatch.setattr(Kernel, "step", broken)
-    termination, env, _ = _episode(3.0, ONE_CLICK)
-    assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
+    result, env, _ = _episode(3.0, ONE_CLICK)
+    assert (
+        result.termination.stop_reason,
+        result.termination.ended_at,
+        result.termination.snapshot_at,
+    ) == (
         "invalid_run",
         3.0,
         4.775,
@@ -959,7 +996,7 @@ def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monke
     assert [interval for interval in env.intervals if interval[0] == "snapshot"] == [
         ("snapshot", 4.275, 4.775)
     ]
-    assert termination.invalid.reason == "run_exception"
+    assert result.termination.invalid.reason == "run_exception"
 
 
 def test_a_push_that_raises_any_exception_loses_that_frame_only():
@@ -998,6 +1035,6 @@ def test_a_frozen_stream_is_left_on_the_environment_as_the_turn_based_shell_leav
 
         env.capture = capture
 
-    termination, env, _ = _episode(6.0, [], env_setup=same_frame)
-    assert termination.invalid.reason == "observation_stream_frozen"
-    assert (env._stream_frozen, env._stream_freeze_count) == (True, 1)
+    result, _, _ = _episode(6.0, [], env_setup=same_frame)
+    assert result.termination.invalid.reason == "observation_stream_frozen"
+    assert (result.stream_frozen, result.stream_freeze_count) == (True, 1)

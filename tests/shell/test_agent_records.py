@@ -462,9 +462,9 @@ def test_a_kernel_that_raises_numbering_the_last_records_leaves_the_finished_epi
         agent_trace_pack=tmp_path / "episode_blobs.pack",
     )
     assert episode.invalid is None
-    assert episode.env._stop_reason == "game_decided"
+    assert episode.result.stop_reason == "game_decided"
     assert [call for call, _, _ in episode.env.calls].count("release_inputs") == 1
-    assert getattr(episode.env, "_loop_error", None) is None
+    assert episode.result.loop_error is None
     records = _agent_records(episode.trace)
     assert [record["payload"]["index"] for record in records] == list(range(200))
     assert [record["kernel_seq"] for record in records] == [None] * 200

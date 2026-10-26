@@ -22,6 +22,7 @@ from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.sandbox.actions import TAP_HOLD_S, ActionRejected, GuestEnvironment
 from tests.fake_clock import FakeClock
 from tests.replay.baseline import REAL_TIME_FIELDS, Normalizer, action_record
@@ -520,13 +521,13 @@ class TokenWorld(_Latched, TokenEnvironment, LegacyStateReads, GuestEnvironment)
 def replay(script: Script, run_dir: Path, driver=drivers.legacy) -> Projection:
     config = turn_config(script)
     if script.clock == "wall":
-        env = _replay_wall(script, run_dir, driver, config)
+        env, result = _replay_wall(script, run_dir, driver, config)
     else:
-        env = _replay_token(script, run_dir, driver, config)
-    return project(script, env, driver.__name__)
+        env, result = _replay_token(script, run_dir, driver, config)
+    return project(script, env, result, driver.__name__)
 
 
-def _replay_wall(script, run_dir, driver, config) -> WallEnvironment:
+def _replay_wall(script, run_dir, driver, config) -> tuple[WallEnvironment, EpisodeResult]:
     clock = FakeClock(wall_origin=ORIGIN)
     box = []
     with (
@@ -550,12 +551,12 @@ def _replay_wall(script, run_dir, driver, config) -> WallEnvironment:
         )
         env = WallEnvironment(_frames(episode.frames, script), clock, script)
         box.append(env)
-        _drive(episode, env, script, driver, config, Clocks(clock, clock), env.now)
+        result = _drive(episode, env, script, driver, config, Clocks(clock, clock), env.now)
         env.requests = _requests(stub)
-    return env
+    return env, result
 
 
-def _replay_token(script, run_dir, driver, config) -> TokenWorld:
+def _replay_token(script, run_dir, driver, config) -> tuple[TokenWorld, EpisodeResult]:
     entry = catalog.get(OPENROUTER_MODEL_KEY)
     model = catalog.to_model_config(
         OPENROUTER_MODEL_KEY,
@@ -580,11 +581,11 @@ def _replay_token(script, run_dir, driver, config) -> TokenWorld:
             env_fps=script.env_fps,
         )
         env = TokenWorld(_frames(episode.frames, script), task, script)
-        _drive(
+        result = _drive(
             episode, env, script, driver, config, Clocks(env.clocks.semantic, env.clock), env.now
         )
         env.requests = _requests(stub)
-    return env
+    return env, result
 
 
 def _requests(stub) -> list[dict]:
@@ -597,11 +598,11 @@ def _requests(stub) -> list[dict]:
     ]
 
 
-def _drive(episode, env, script, driver, config, clocks, now) -> None:
+def _drive(episode, env, script, driver, config, clocks, now) -> EpisodeResult:
     """Run the episode under ``driver``, today's loop on the agent as it calls it
     (legacy_turn.py), recording what the agent is told, when a generation returns and when one
     is aborted; then drain the abandoned workers and close as main() does (evaluation/runner.py
-    main)."""
+    main). How the episode came out, as the driver hands it back."""
     agent = LegacyTurn(episode.agent) if driver is drivers.legacy else episode.agent
     commit, abort, generate = agent.commit, agent.abort, agent.generate
 
@@ -633,8 +634,9 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
     if isinstance(agent, LegacyTurn):
         commit_action = agent.commit_action
         agent.commit_action = recording_commit
+    result = None
     try:
-        driver(
+        result = driver(
             agent,
             env,
             config,
@@ -642,10 +644,12 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
             log=lambda line: env.log("runner.log", line=line),
             trace=_Trace(env, now),
         )
+        return result
     finally:
-        env._drain_abandoned()
+        if result is not None:
+            result.drain_abandoned()
         env.usage = episode_records.usage_snapshot(agent)
-        env.subtotal = _subtotal(getattr(env, "_token_accounting", None))
+        env.subtotal = _subtotal(None if result is None else result.token_accounting)
         episode.finish()
 
 
@@ -733,9 +737,10 @@ def _unaborted(abandoned, aborted: set, generated: dict) -> list[int]:
     ]
 
 
-def project(script: Script, env, side: str) -> Projection:
+def project(script: Script, env, episode_result: EpisodeResult, side: str) -> Projection:
     """The environment's log, in order: the runner's trace events and calls into the
-    environment, what the agent was told, and what the subclasses above log (``diff.*``)."""
+    environment, what the agent was told, and what the subclasses above log (``diff.*``); and
+    how the episode came out, as the driver handed it back."""
     token = script.mode == "token"
     seconds = 1.0 / script.env_fps
     decisions: dict[int, dict] = {}
@@ -889,8 +894,7 @@ def project(script: Script, env, side: str) -> Projection:
             aborted.add(call["generation"])
         elif name == "diff.generated":
             generated[call["generation"]] = call["at"]
-    invalid = getattr(env, "_invalid_run", None)
-    termination = env._termination
+    invalid, termination = episode_result.invalid_run, episode_result.termination_record
     if first_end is None:
         ended_by, ended_at = None, None
     else:
@@ -939,7 +943,7 @@ def project(script: Script, env, side: str) -> Projection:
         "ended_by": ended_by,
         "ended_at": ended_at,
         "ended_before_commit": ended_before_commit,
-        "loop_error": getattr(env, "_loop_error", None),
+        "loop_error": episode_result.loop_error,
         # Today's loop: whether the think budget ran out, which a failed snapshot read leaves out
         # of its stop reason (legacy_loop.py _finalize).
         "think_exhausted": getattr(env, "_think_exhausted", False),

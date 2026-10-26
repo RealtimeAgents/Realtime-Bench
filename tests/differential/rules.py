@@ -697,7 +697,7 @@ def _ka(script: Script, p: Projection, notes: dict) -> None:
     loop also charges the seconds it waited for the call it gave up to the think budget
     (legacy_loop.py _run_step, _charge); the kernel charges accepted results only
     (turns.py TurnPolicy._accept), so the summary's think_spent_s leaves that call out
-    (runner.py, from env._think_spent). Neither side's projection has it."""
+    (runner.py, from the shell's EpisodeResult). Neither side's projection has it."""
     if not _ended_by_the_deadline(script, p, notes):
         return
     deadline, facts = script.duration_s, p.facts

@@ -148,7 +148,7 @@ def test_replaying_the_recorded_inputs_reproduces_the_episode_log(
     kernel, entries = replay_inputs(episode.config, lines)
     assert entries == logged
     assert kernel.termination is not None
-    assert kernel.termination.stop_reason == episode.env._stop_reason
+    assert kernel.termination.stop_reason == episode.result.stop_reason
     written = {}
     for record in episode.trace.records:
         written.setdefault(record["kernel_seq"], (record["semantic"], record["ops"]))
@@ -173,7 +173,7 @@ def test_an_input_the_log_cannot_hold_leaves_the_episode_to_finish(tmp_path):
         "wall", 2.0, [Reply(0.5)] * 2, inputs_log=tmp_path / "inputs.jsonl", env_type=_LockedResult
     )
     assert episode.statuses() == ["applied", "applied"]
-    assert episode.env._stop_reason == "time_limit"
+    assert episode.result.stop_reason == "time_limit"
     assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
     lines = (tmp_path / "inputs.jsonl").read_text().splitlines()
     assert "end" not in [json.loads(line)["call"] for line in lines]
@@ -261,7 +261,7 @@ def test_an_inputs_log_that_fails_to_close_leaves_the_episode_as_it_ended(monkey
     _opens(monkeypatch, _FullDisk)
     episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)], inputs_log=tmp_path / "in.jsonl")
     assert episode.invalid is None
-    assert episode.env._termination["stop_reason"] == "time_limit"
+    assert episode.result.termination_record["stop_reason"] == "time_limit"
     assert episode.env.names().count("release_inputs") == 1
     assert any(line.startswith("[default] kernel inputs log write failed") for line in episode.logs)
 

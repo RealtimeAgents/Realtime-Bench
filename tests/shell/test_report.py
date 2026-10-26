@@ -130,11 +130,11 @@ def test_a_wall_clock_episode_is_scored_whatever_became_of_its_last_generation(
     tmp_path, replies, world, solved, outcome, responses
 ):
     episode = run("wall", 3.0, replies, world)
-    env = episode.env
-    accounting = env._token_accounting.summary()
+    env, result = episode.env, episode.result
+    accounting = result.token_accounting.summary()
     assert accounting["responses"] == responses
     task = _task(
-        tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0, solved=solved
+        tmp_path, env.lifecycle, accounting, result.termination_record, horizon_s=3.0, solved=solved
     )
     assert (task["status"], task["outcome"], task.get("error")) == ("scored", outcome, None)
     assert task["charged_tokens"] == [40] * len(env.lifecycle)
@@ -147,14 +147,14 @@ def test_a_move_over_the_per_move_cap_leaves_a_valid_run_scored(tmp_path):
     checked against have a known total but no total."""
     replies = [Reply(0.5, CLICK, fields=USAGE), Reply(hang=True), Reply(0.5, CLICK, fields=USAGE)]
     episode = run("wall", 3.0, replies, World(), per_move_cap_s=1.0)
-    env = episode.env
-    accounting = env._token_accounting.summary()
+    env, result = episode.env, episode.result
+    accounting = result.token_accounting.summary()
     assert episode.statuses() == ["applied", "skipped_timeout", "applied"]
     assert [record["clock_output_tokens"] for record in env.lifecycle] == [40, None, 40]
     clock = accounting["counts"]["clock_output_tokens"]
     assert "reported_decisions" not in accounting
     assert (clock["total"], clock["known_total"]) == (None, 80)
-    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0)
+    task = _task(tmp_path, env.lifecycle, accounting, result.termination_record, horizon_s=3.0)
     assert (task["status"], task["outcome"], task.get("error")) == ("scored", "timeout", None)
     assert (task["charged_tokens"], task["charged_tokens_complete"]) == ([], False)
 
@@ -169,11 +169,11 @@ def test_a_move_skipped_with_its_settled_result_leaves_a_valid_run_scored(tmp_pa
     replies.append(Reply(hang=True))
     world = World(slow_checks=[(0.5, 0.6, 0.6)])
     episode = run("wall", 4.0, replies, world, fps=2.0, per_move_cap_s=1.0)
-    env = episode.env
-    accounting = env._token_accounting.summary()
+    env, result = episode.env, episode.result
+    accounting = result.token_accounting.summary()
     assert episode.statuses() == ["skipped_timeout", "applied", "applied", "applied"]
     assert accounting["responses"] == 5
-    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=4.0)
+    task = _task(tmp_path, env.lifecycle, accounting, result.termination_record, horizon_s=4.0)
     assert (task["status"], task["outcome"], task.get("error")) == ("scored", "timeout", None)
     assert task["charged_tokens"] == [40] * 4
 
@@ -192,8 +192,8 @@ def test_a_token_accounting_unlike_the_lifecycle_is_not_scored(tmp_path, counts)
     its 40 tokens, and so does the token accounting's subtotal of reported decisions. Without
     that subtotal, or with one of its counts changed, the report refuses the run."""
     episode = run("wall", 3.0, [Reply(0.5, CLICK, fields=USAGE), Reply(hang=True)], World())
-    env = episode.env
-    accounting = env._token_accounting.summary()
+    env, result = episode.env, episode.result
+    accounting = result.token_accounting.summary()
     subtotal = accounting["reported_decisions"]["counts"]["clock_output_tokens"]
     assert subtotal == {
         "total": 40, "known_total": 40, "responses_with_count": 1, "complete": True,
@@ -202,7 +202,7 @@ def test_a_token_accounting_unlike_the_lifecycle_is_not_scored(tmp_path, counts)
         del accounting["reported_decisions"]
     else:
         subtotal.update(counts)
-    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0)
+    task = _task(tmp_path, env.lifecycle, accounting, result.termination_record, horizon_s=3.0)
     assert (task["status"], task["outcome"], task.get("error")) == (
         "invalid",
         "error",
@@ -216,10 +216,12 @@ def test_a_decision_recorded_twice_is_not_scored(tmp_path):
     second's."""
     replies = [Reply(0.5, CLICK, fields=USAGE)] * 2 + [Reply(0.5, Action.wait(5.0), fields=USAGE)]
     episode = run("wall", 3.0, replies, World())
-    env = episode.env
+    env, result = episode.env, episode.result
     first, _, third = env.lifecycle
-    accounting = env._token_accounting.summary()
-    task = _task(tmp_path, [first, first, third], accounting, env._termination, horizon_s=3.0)
+    accounting = result.token_accounting.summary()
+    task = _task(
+        tmp_path, [first, first, third], accounting, result.termination_record, horizon_s=3.0
+    )
     assert (task["status"], task["outcome"], task.get("error")) == (
         "invalid",
         "error",
@@ -235,13 +237,13 @@ def test_a_subtotal_of_another_number_of_decisions_is_not_scored(tmp_path, left_
     refused: with a decision without a count, the counts alone cannot tell."""
     replies = [Reply(0.5, CLICK, fields=USAGE), Reply(0.5, CLICK), Reply(hang=True)]
     episode = run("wall", 3.0, replies, World())
-    env = episode.env
-    accounting = env._token_accounting.summary()
+    env, result = episode.env, episode.result
+    accounting = result.token_accounting.summary()
     reported = accounting["reported_decisions"]
     assert [record["clock_output_tokens"] for record in env.lifecycle] == [40, None]
     assert reported["responses"] == 2
     reported["responses"] -= left_out
-    task = _task(tmp_path, env.lifecycle, accounting, env._termination, horizon_s=3.0)
+    task = _task(tmp_path, env.lifecycle, accounting, result.termination_record, horizon_s=3.0)
     assert (task["status"], task["outcome"], task.get("error")) == (
         "invalid",
         "error",

@@ -28,6 +28,7 @@ from realtime_framework.entity.actions import MAX_ACTION_DURATION, Action, Actio
 from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.evaluation import runner, shell
+from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.kernel.turns import READ_FAILURE_LIMIT
 from realtime_framework.sandbox import actions
 from realtime_framework.sandbox.browser.cdp import client_for, close_port
@@ -146,24 +147,27 @@ def _wall_environment(guest: FakeGuest) -> actions.GuestEnvironment:
     )
 
 
-def _run(env, action: Action = CLICK) -> tuple[ScriptedAgent, float]:
-    """Three decisions of run_stream, each taking ``action``; returns the agent and the wall time
-    taken."""
+def _run(env, action: Action = CLICK) -> tuple[ScriptedAgent, float, EpisodeResult]:
+    """Three decisions of run_stream, each taking ``action``; returns the agent, the wall time
+    taken and how the episode came out."""
     agent = ScriptedAgent(action)
     started = time.monotonic()
-    runner.run_stream(agent, env, duration_s=3.0, log=lambda line: None, clock_mode="token")
-    return agent, time.monotonic() - started
+    result = runner.run_stream(
+        agent, env, duration_s=3.0, log=lambda line: None, clock_mode="token"
+    )
+    return agent, time.monotonic() - started, result
 
 
 def _spent_the_budget(elapsed: float, operations: int = 1) -> None:
     assert operations * BUDGET - 0.05 <= elapsed < operations * BUDGET + SLACK, elapsed
 
 
-def _invalid(env, reason: str, operation: str, budget: float = BUDGET) -> None:
-    """The run is invalid for ``reason``, and the detail names ``operation``'s exceeded budget."""
-    assert env._invalid_run["category"] == "environment"
-    assert env._invalid_run["reason"] == reason
-    assert f"{operation} took longer than {budget:g} s" in env._invalid_run["detail"]
+def _invalid(invalid: dict, reason: str, operation: str, budget: float = BUDGET) -> None:
+    """The run is invalid for ``reason``, and the detail of its record names ``operation``'s
+    exceeded budget."""
+    assert invalid["category"] == "environment"
+    assert invalid["reason"] == reason
+    assert f"{operation} took longer than {budget:g} s" in invalid["detail"]
 
 
 def test_an_action_budget_extends_only_for_text_input():
@@ -195,10 +199,10 @@ def test_a_run_within_its_budgets_reads_acts_captures_and_freezes(game, monkeypa
         # FakeCDP runs no page clock; reading, acting, capturing and freezing are what count here.
         monkeypatch.setattr(task, "advance_clock", lambda frames=1, key_events=(): None)
         env = _environment(guest, task, stop_check=task.episode_over)
-        agent, _ = _run(env)
-    assert getattr(env, "_invalid_run", None) is None
-    assert env._stop_reason == "tick_limit"
-    assert env._termination_snapshot["state"] == PLAYING
+        agent, _, result = _run(env)
+    assert result.invalid_run is None
+    assert result.stop_reason == "tick_limit"
+    assert result.snapshot["state"] == PLAYING
     assert agent.statuses == ["applied"] * 3
     assert len(guest.actions) == 3
 
@@ -207,8 +211,8 @@ def test_a_slow_action_fails_within_its_budget(budgets):
     budgets(action_s=BUDGET)
     with FakeGuest(action_delay=5) as guest:
         env = _environment(guest)
-        agent, elapsed = _run(env)
-    _invalid(env, "action_execution_failed", "click action")
+        agent, elapsed, result = _run(env)
+    _invalid(result.invalid_run, "action_execution_failed", "click action")
     assert agent.statuses == ["invalid_run"]
     _spent_the_budget(elapsed)
 
@@ -276,7 +280,7 @@ def test_a_wall_key_command_waits_for_a_key_release_in_flight_only_while_its_bud
         guest.command_delay = 0.0
         env.release_inputs()
     assert status == "failed"
-    _invalid(env, "action_execution_failed", f"{action.action_type.value} action")
+    _invalid(env._invalid_run, "action_execution_failed", f"{action.action_type.value} action")
     _spent_the_budget(elapsed)
     pressed = [command["command"] for command in guest.commands if "keydown" in command["command"]]
     assert pressed == [f"xdotool keydown -- {key}" for key in keydowns]
@@ -321,7 +325,7 @@ def test_a_failed_wall_tap_counts_its_keys_as_held_only_while_its_budget_lasts(b
         recorded = "b" in env._wall_holds
         env.release_inputs()
     assert status == "failed"
-    _invalid(env, "action_execution_failed", "key action", 1.0)
+    _invalid(env._invalid_run, "action_execution_failed", "key action", 1.0)
     assert 1.0 - 0.05 <= elapsed < 1.0 + SLACK, elapsed
     assert not recorded
 
@@ -340,7 +344,7 @@ def test_a_wall_xdotool_command_gets_what_is_left_of_the_action_s_budget(budgets
         guest.command_delay = 0.0
         env.release_inputs()
     assert status == "failed"
-    _invalid(env, "action_execution_failed", "key action")
+    _invalid(env._invalid_run, "action_execution_failed", "key action")
     _spent_the_budget(elapsed)
 
 
@@ -348,8 +352,8 @@ def test_a_slow_capture_fails_within_its_budget(budgets):
     budgets(capture_s=BUDGET)
     with FakeGuest(screenshot_delay=5) as guest:
         env = _environment(guest)
-        agent, elapsed = _run(env)
-    _invalid(env, "observation_capture_failed", "capture")
+        agent, elapsed, result = _run(env)
+    _invalid(result.invalid_run, "observation_capture_failed", "capture")
     assert agent.statuses == []
     _spent_the_budget(elapsed)
 
@@ -370,11 +374,11 @@ def test_a_state_read_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, 
         held.wait(5)
         try:
             env = _environment(guest, stop_check=task.episode_over)
-            agent, elapsed = _run(env)
+            agent, elapsed, result = _run(env)
         finally:
             release.set()
             holder.join(5)
-    _invalid(env, "terminal_state_check_failed", "state read")
+    _invalid(result.invalid_run, "terminal_state_check_failed", "state read")
     assert fake.commands == []
     _spent_the_budget(elapsed, READ_FAILURE_LIMIT)
 
@@ -386,9 +390,9 @@ def test_a_clock_advance_with_a_slow_connect_fails_within_its_budget(budgets, ga
         # Only the advance is timed here; the snapshot read at the freeze would connect again.
         monkeypatch.setattr(task, "evaluation_snapshot", None)
         env = _environment(guest, task)
-        agent, elapsed = _run(env)
-    _invalid(env, "clock_advance_failed", "clock advance")
-    assert env._stop_reason == "invalid_run"
+        agent, elapsed, result = _run(env)
+    _invalid(result.invalid_run, "clock_advance_failed", "clock advance")
+    assert result.stop_reason == "invalid_run"
     assert len(guest.actions) == 1
     assert fake.commands == []
     _spent_the_budget(elapsed)
@@ -414,11 +418,11 @@ def test_a_token_key_waiting_for_the_cdp_lock_fails_within_its_budget(budgets, g
         held.wait(5)
         try:
             env = _environment(guest, task)
-            agent, elapsed = _run(env, TAP)
+            agent, elapsed, result = _run(env, TAP)
         finally:
             release.set()
             holder.join(5)
-    _invalid(env, "action_execution_failed", "key press")
+    _invalid(result.invalid_run, "action_execution_failed", "key press")
     assert agent.statuses == ["invalid_run"]
     assert fake.commands == []
     _spent_the_budget(elapsed)
@@ -485,13 +489,13 @@ def _timed(
     return env, task
 
 
-def _run_on(clock: FakeClock, env) -> ScriptedAgent:
-    """Three decisions of run_stream on ``clock``, each clicking."""
+def _run_on(clock: FakeClock, env) -> tuple[ScriptedAgent, EpisodeResult]:
+    """Three decisions of run_stream on ``clock``, each clicking; and how the episode came out."""
     agent = ScriptedAgent(CLICK)
-    runner.run_stream(
+    result = runner.run_stream(
         agent, env, duration_s=3.0, log=lambda line: None, clock_mode="token", clocks=env.clocks
     )
-    return agent
+    return agent, result
 
 
 def _swallowing_the_timeout(clock: FakeClock) -> None:
@@ -519,10 +523,10 @@ def test_a_state_read_whose_task_swallows_the_timeout_fails_within_its_budget():
 
     env, _ = _timed(clock, _ClockGuest(), stop_check=episode_over)
     with clock.participant():
-        agent = _run_on(clock, env)
+        agent, result = _run_on(clock, env)
         assert clock.monotonic() == READ_FAILURE_LIMIT * 120.0
-    _invalid(env, "terminal_state_check_failed", "state read", 120.0)
-    assert env._invalid_run["detail"].rstrip().endswith("returned no state)")
+    _invalid(result.invalid_run, "terminal_state_check_failed", "state read", 120.0)
+    assert result.invalid_run["detail"].rstrip().endswith("returned no state)")
     assert agent.statuses == ["applied"]
     assert read_at == [0, 0, 1]
 
@@ -540,10 +544,10 @@ def test_the_snapshot_read_at_the_freeze_fails_within_its_short_budget():
     task.evaluation_snapshot = evaluation_snapshot
     env, _ = _timed(clock, _ClockGuest(), task, stop_check=lambda: True)
     with clock.participant():
-        agent = _run_on(clock, env)
+        agent, result = _run_on(clock, env)
         assert clock.monotonic() == 16.0
-    _invalid(env, "evaluation_snapshot_failed", "snapshot read", 16.0)
-    assert env._termination_snapshot_captured is False
+    _invalid(result.invalid_run, "evaluation_snapshot_failed", "snapshot read", 16.0)
+    assert result.snapshot_captured is False
     assert agent.statuses == []
 
 
@@ -558,7 +562,7 @@ def test_an_action_and_its_page_barrier_share_one_budget():
     with clock.participant():
         assert env.execute(drag) == "failed"
         assert clock.monotonic() == 20.0
-    _invalid(env, "action_execution_failed", "drag action", 20.0)
+    _invalid(env._invalid_run, "action_execution_failed", "drag action", 20.0)
     assert guest.actions == [ActionType.DRAG]
 
 
@@ -594,7 +598,7 @@ def test_a_frame_render_has_a_clock_advance_s_budget(seconds):
     if seconds < budget:
         assert getattr(env, "_invalid_run", None) is None
     else:
-        _invalid(env, "frame_render_failed", "frame render", budget)
+        _invalid(env._invalid_run, "frame_render_failed", "frame render", budget)
 
 
 def _raise_the_budget_s_words(clock: FakeClock) -> None:
@@ -796,7 +800,7 @@ def test_a_token_key_event_past_its_budget_fails_the_action(held, action, index,
     with clock.participant():
         assert env.execute(action) == "failed"
         assert clock.monotonic() == budget
-    _invalid(env, "action_execution_failed", operation, budget)
+    _invalid(env._invalid_run, "action_execution_failed", operation, budget)
 
 
 def test_a_tap_s_frame_between_its_press_and_release_keeps_its_own_budgets():
@@ -847,7 +851,7 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
     with clock.participant(), pytest.raises(BudgetExceeded):
         env.release_keys(env.last_held_keys)
     assert clock.monotonic() == budget
-    _invalid(env, "clock_key_release_failed", "key release", budget)
+    _invalid(env._invalid_run, "clock_key_release_failed", "key release", budget)
 
 
 @pytest.mark.parametrize(

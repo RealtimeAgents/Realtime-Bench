@@ -23,6 +23,7 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
+from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.shell import run_episode
 from realtime_framework.sandbox.actions import TAP_HOLD_S
@@ -339,15 +340,19 @@ class Episode:
     agent: Agent
     trace: Trace | None
     clock: FakeClock
-    timeline: list
+    result: EpisodeResult
     logs: list[str]
+
+    @property
+    def timeline(self) -> list:
+        return self.result.timeline
 
     def statuses(self) -> list[str]:
         return [outcome.status for outcome in self.agent.outcomes]
 
     @property
     def invalid(self) -> dict | None:
-        return getattr(self.env, "_invalid_run", None)
+        return self.result.invalid_run
 
 
 def run(
@@ -401,5 +406,5 @@ def run(
             agent_trace=agent.sink,
             inputs_log=inputs_log,
         )
-        env._drain_abandoned()
-    return Episode(turn, env, agent, trace, clock, result.timeline, logs)
+        result.drain_abandoned()
+    return Episode(turn, env, agent, trace, clock, result, logs)

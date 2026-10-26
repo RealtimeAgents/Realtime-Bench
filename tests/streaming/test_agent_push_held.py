@@ -33,7 +33,7 @@ def test_a_reply_longer_than_the_push_watchdog_after_a_go_away_runs_to_its_end(m
         agent.driver.replies += [Reply(ends_at=1.0)] * 20
         env = _Env(clock)
         env.seconds["execute"] = 0.25
-        run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=20.0),
@@ -41,7 +41,7 @@ def test_a_reply_longer_than_the_push_watchdog_after_a_go_away_runs_to_its_end(m
             log=lambda message: None,
         )
         agent.close()
-    assert not env._invalid_run
+    assert not result.invalid_run
     abandoned = [e.data for e in records if e.kind == "GenerationAbandoned"]
     assert all(data["reason"] == "deadline" for data in abandoned), abandoned
     assert [e.kind for e in records if e.kind in ("SessionPreparing", "SessionPrepared")][:2] == [
@@ -86,7 +86,7 @@ def test_a_push_waiting_while_a_reply_reopens_the_session_is_held(monkeypatch):
         agent.driver.connect_s = 0.5
         agent.driver.replies += [Reply(ends_at=40.0)] + [Reply(ends_at=1.0)] * 40
         env = _Env(clock)
-        run_streaming_episode(
+        result = run_streaming_episode(
             agent,
             env,
             StreamingConfig(duration_s=50.0),
@@ -94,7 +94,7 @@ def test_a_push_waiting_while_a_reply_reopens_the_session_is_held(monkeypatch):
             log=lambda message: None,
         )
         agent.close()
-    assert not env._invalid_run
+    assert not result.invalid_run
     abandoned = [
         (e.data["generation"], e.data["reason"]) for e in records if e.kind == "GenerationAbandoned"
     ]

@@ -53,7 +53,7 @@ def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     A wait is the kernel's own timer and never reaches the environment; the hold's keys are
     released by the environment's timer at the time the kernel gave."""
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5, HOLD), Reply(0.5, WAIT)])
-    env, agent = episode.env, episode.agent
+    env, agent, result = episode.env, episode.agent, episode.result
     assert _calls(episode) == [
         ("check_end", 0.0),  # the loop top
         ("capture", 0.0),
@@ -97,20 +97,20 @@ def test_a_wall_episode_runs_each_decision_on_the_environment_and_the_agent():
     ]
     assert [record["status"] for record in env.lifecycle] == ["applied", "applied", "wait"]
     assert env.frame_ages == [0.5, 0.5, 0.5]
-    assert env._termination == {
+    assert result.termination_record == {
         "stop_reason": "time_limit",
         "end_s": 3.0,
         "snapshot_s": 3.0,
         "snapshot_delay_s": 0.0,
     }
-    assert env._stop_reason == "time_limit"
-    assert env._termination_snapshot_captured is True
-    assert env._termination_snapshot == {"tick": 3}
-    assert env._termination_snapshot_error is None
-    assert env._active_end_unix_s == ORIGIN + 3.0
-    assert env._think_spent == 1.5
-    assert env._dropped_intermediate_frames == 0
-    assert getattr(env, "_invalid_run", None) is None
+    assert result.stop_reason == "time_limit"
+    assert result.snapshot_captured is True
+    assert result.snapshot == {"tick": 3}
+    assert result.snapshot_error is None
+    assert result.active_end_unix_s == ORIGIN + 3.0
+    assert result.think_spent == 1.5
+    assert result.dropped_intermediate_frames == 0
+    assert result.invalid_run is None
     assert not hasattr(env, "kernel_counts_reads")
     assert env.horizon is None
     assert episode.trace.checkpoints == 3
@@ -138,7 +138,7 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
         Reply(0.0, CLICK, output_tokens=100),
     ]
     episode = run("token", 2.0, replies, fps=2.0, tokens_per_frame=100)
-    env = episode.env
+    env, result = episode.env, episode.result
     assert [
         (call, time, details.get("step") or details.get("keys"))
         for call, time, details in env.calls
@@ -192,7 +192,7 @@ def test_a_token_episode_advances_releases_and_renders_through_the_environment()
         DecisionBudget(100, 100, 100, "token"),
     ]
     # Ticks to world seconds: the horizon's 4 ticks at 2 fps.
-    assert env._termination == {
+    assert result.termination_record == {
         "stop_reason": "tick_limit",
         "end_s": 2.0,
         "snapshot_s": 2.0,
@@ -346,7 +346,7 @@ def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_
         if r["event"] == "KernelRecord" and r["payload"]["kind"] == "GenerationFinished"
     ]
     assert [echo.generation for echo in echoes] == [1]
-    assert episode.env._token_accounting.summary()["responses"] == 2
+    assert episode.result.token_accounting.summary()["responses"] == 2
     reported = next(line for line in episode.logs if " -> " in line)
     assert reported.endswith("-> skipped_timeout TIMEOUT")
 
@@ -368,7 +368,7 @@ def test_a_result_back_after_the_cap_while_the_shell_is_busy_is_never_settled():
         (0, True),
         (1, None),
     ]
-    assert episode.env._token_accounting.summary()["responses"] == 2
+    assert episode.result.token_accounting.summary()["responses"] == 2
     assert ("accept", 1) not in agent.calls and ("discard", 1) in agent.calls
 
 
@@ -419,7 +419,7 @@ def test_a_generation_given_up_on_a_bound_and_a_spent_think_budget_are_logged():
     cut = run("wall", 3.0, [Reply(0.5), Reply(hang=True)])
     assert "[default] k=1 generation TIMED OUT (>2.0s, wall_deadline) — discarded" in cut.logs
     spent = run("wall", 5.0, [Reply(1.0), Reply(1.0)], think_budget_s=1.5)
-    assert spent.env._stop_reason == "think_budget"
+    assert spent.result.stop_reason == "think_budget"
     assert "[think] deliberation budget exhausted: 2.0s >= 1.5s -> forfeit" in spent.logs
 
 
@@ -461,7 +461,7 @@ def test_a_generation_given_up_on_at_the_tasks_end_did_not_time_out():
     """The task ends at 1.5 s and the end check at 2 s sees it: the call is given up on, but no
     bound came, so nothing is logged or recorded as timed out."""
     episode = run("wall", 3.0, [Reply(hang=True)], World(ends_at=1.5, end_reason="won"))
-    assert episode.env._termination["stop_reason"] == "won"
+    assert episode.result.termination_record["stop_reason"] == "won"
     assert not any("TIMED OUT" in line for line in episode.logs)
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p["stale"], p["timed_out"]) for p in completed] == [(0, True, False)]
@@ -504,7 +504,7 @@ def test_a_generation_the_episode_ended_on_is_recorded_as_a_call_given_up_on(
     assert completed[1]["harness_abort_reason"] == reason
     rows = [(row["decision"], row.get("harness_abort_reason")) for row in episode.agent.trajectory]
     assert rows == [(0, None), (1, reason)]
-    summary = episode.env._token_accounting.summary()
+    summary = episode.result.token_accounting.summary()
     assert summary["responses"] == 1 and summary["provider_usage_missing_reasons"] == {}
     assert summary["counts"]["provider_output_tokens"]["complete"] is True
     assert summary["counts"]["provider_output_tokens"]["total"] == 20
@@ -518,7 +518,7 @@ def test_a_call_the_tasks_end_gave_up_on_ran_until_the_end_signal():
     to it."""
     world = World(ends_at=1.5, end_reason="won", slow_checks=[(2.0, 2.5, 0.3)])
     episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)], world)
-    assert episode.env._termination["end_s"] == 2.0
+    assert episode.result.termination_record["end_s"] == 2.0
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p["latency_s"]) for p in completed] == [(0, 0.5), (1, 1.0)]
 
@@ -529,7 +529,7 @@ def test_a_settled_result_the_tasks_end_gave_up_on_is_not_logged_as_timed_out():
     logged about one."""
     world = World(ends_at=0.5, end_reason="won", slow_checks=[(1.0, 1.5, 1.0)])
     episode = run("wall", 3.0, [Reply(1.9)], world)
-    assert episode.env._termination["stop_reason"] == "won"
+    assert episode.result.termination_record["stop_reason"] == "won"
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p["stale"]) for p in completed] == [(0, False)]
     assert not any("settled past" in line or "TIMED OUT" in line for line in episode.logs)
@@ -541,7 +541,7 @@ def test_a_generation_the_tasks_end_gave_up_on_needs_no_inspection_proof():
     world = World(ends_at=0.5, end_reason="won")
     episode = run("wall", 3.0, [Reply(hang=True)], world, agent_type=_ToolAgent)
     assert episode.invalid is None
-    assert episode.env._termination["stop_reason"] == "won"
+    assert episode.result.termination_record["stop_reason"] == "won"
     assert [row.get("harness_abort_reason") for row in episode.agent.trajectory] == ["task_end"]
 
 
@@ -568,7 +568,7 @@ def test_a_result_back_while_the_shell_was_busy_at_the_deadline_is_recorded_as_i
     assert [(p["decision"], p["timed_out"], p["latency_s"]) for p in payloads] == [completed]
     if seconds < 3.0:
         assert episode.agent.calls == [("abort", 1), ("discard", 1)]
-    assert episode.env._termination["stop_reason"] == "time_limit"
+    assert episode.result.termination_record["stop_reason"] == "time_limit"
 
 
 def test_a_generation_the_deadline_gave_up_on_is_recorded_as_the_runner_records_it():
@@ -589,7 +589,7 @@ def test_a_generation_the_deadline_gave_up_on_is_recorded_as_the_runner_records_
         for row in episode.agent.trajectory
     ]
     assert rows == [(0, None, None), (1, True, "wall_deadline")]
-    summary = episode.env._token_accounting.summary()
+    summary = episode.result.token_accounting.summary()
     assert summary["responses"] == 2
     assert summary["provider_usage_missing_reasons"]["generation_aborted_at_wall_timeout"] == 1
     assert summary["counts"]["provider_output_tokens"]["complete"] is False
@@ -614,8 +614,8 @@ def test_a_paused_decision_lands_on_its_frame_and_moves_one_frame_on():
     episode = run("token", 2.0, [Reply(0.25), Reply(0.25)])
     assert episode.statuses() == ["applied", "applied"]
     assert episode.timeline == [(0, 0, 0.0, 0.0, CLICK), (1, 1, 0.0, 1.0, CLICK)]
-    assert episode.env._termination["stop_reason"] == "tick_limit"
-    assert episode.env._termination["end_s"] == 2.0
+    assert episode.result.termination_record["stop_reason"] == "tick_limit"
+    assert episode.result.termination_record["end_s"] == 2.0
 
 
 def test_a_frame_and_a_result_are_let_go_once_the_decision_is_over():
@@ -629,13 +629,13 @@ def test_a_frame_and_a_result_are_let_go_once_the_decision_is_over():
 
 def test_without_a_snapshot_reader_the_termination_has_no_snapshot_time():
     episode = run("wall", 1.0, [Reply(0.5)], World(snapshotter=False))
-    assert episode.env._termination == {
+    assert episode.result.termination_record == {
         "stop_reason": "time_limit",
         "end_s": 1.0,
         "snapshot_s": None,
         "snapshot_delay_s": None,
     }
-    assert episode.env._termination_snapshot_captured is False
+    assert episode.result.snapshot_captured is False
     assert episode.invalid is None
 
 
@@ -643,21 +643,21 @@ def test_the_snapshot_is_timed_when_its_read_returned():
     """The read at the 1 s deadline takes 0.5 s; the termination record has when it returned and
     how late that was (legacy_loop.py _finalize)."""
     episode = run("wall", 1.0, [Reply(0.5)], World(snapshot_s=0.5))
-    assert episode.env._termination == {
+    assert episode.result.termination_record == {
         "stop_reason": "time_limit",
         "end_s": 1.0,
         "snapshot_s": 1.5,
         "snapshot_delay_s": 0.5,
     }
-    assert episode.env._active_end_unix_s == ORIGIN + 1.0
+    assert episode.result.active_end_unix_s == ORIGIN + 1.0
 
 
 def test_a_snapshot_read_over_its_budget_invalidates_the_run():
     """The freeze reads the snapshot within 16 s (decision 3); a read of 17 s fails."""
     episode = run("wall", 1.0, [Reply(0.5)], World(snapshot_s=17.0))
     assert episode.invalid["reason"] == "evaluation_snapshot_failed"
-    assert "snapshot read took longer than 16 s" in episode.env._termination_snapshot_error
-    assert episode.env._termination["snapshot_s"] is None
+    assert "snapshot read took longer than 16 s" in episode.result.snapshot_error
+    assert episode.result.termination_record["snapshot_s"] is None
 
 
 def test_the_token_end_time_is_kept_to_nine_places():
@@ -666,7 +666,7 @@ def test_the_token_end_time_is_kept_to_nine_places():
     reply = Reply(0.0, CLICK, output_tokens=10**6)
     episode = run("token", 15.0, [reply], fps=29.97, tokens_per_frame=100)
     assert episode.statuses() == ["not_applied_tick_limit"]
-    assert episode.env._termination["end_s"] == 15.0
+    assert episode.result.termination_record["end_s"] == 15.0
 
 
 def test_the_wall_delay_is_the_latency_in_environment_ticks():
@@ -680,7 +680,7 @@ def test_the_frames_a_token_decision_crossed_are_counted_as_dropped():
     replies = [Reply(0.0, CLICK, output_tokens=250), Reply(0.0, CLICK, output_tokens=100)]
     episode = run("token", 5.0, replies, tokens_per_frame=100)
     assert episode.env.lifecycle[0]["dropped_intermediate_frames"] == 2
-    assert episode.env._dropped_intermediate_frames == sum(
+    assert episode.result.dropped_intermediate_frames == sum(
         record["dropped_intermediate_frames"] for record in episode.env.lifecycle
     )
 

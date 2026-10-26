@@ -67,10 +67,10 @@ def test_task_end_at_the_horizon_is_a_timeout(monkeypatch, tmp_path, ends_at, ou
         env = TokenEnvironment(
             episode.frames, task, max_minutes=MAX_MINUTES, stop_check=episode_over
         )
-        run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
 
-    assert env._termination == {
+    assert result.termination_record == {
         "stop_reason": HANDOVER,
         "end_s": ends_at,
         "snapshot_s": ends_at,
@@ -80,9 +80,9 @@ def test_task_end_at_the_horizon_is_a_timeout(monkeypatch, tmp_path, ends_at, ou
     summary = {
         "invalid_run": None,
         "solved": False,
-        "stop_reason": env._stop_reason,
-        "termination": env._termination,
-        "world_time_s": env._termination["end_s"],
+        "stop_reason": result.stop_reason,
+        "termination": result.termination_record,
+        "world_time_s": result.termination_record["end_s"],
         "max_minutes": MAX_MINUTES,
     }
     assert episode_outcome(summary)["outcome"] == outcome

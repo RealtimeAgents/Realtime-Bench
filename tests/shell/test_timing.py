@@ -64,8 +64,8 @@ def test_a_result_just_before_the_deadline_is_handled_before_it(seconds, statuse
     else:
         assert executed == []
         assert episode.agent.calls[0] == ("abort", 1)
-    assert episode.env._termination["stop_reason"] == "time_limit"
-    assert episode.env._termination["end_s"] == 3.0
+    assert episode.result.termination_record["stop_reason"] == "time_limit"
+    assert episode.result.termination_record["end_s"] == 3.0
 
 
 def test_a_result_is_settled_though_every_end_check_takes_a_frame():
@@ -101,7 +101,7 @@ def test_an_action_accepted_across_the_deadline_does_not_land():
     assert episode.agent.calls[0] == ("accept", 1)
     assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
     assert episode.statuses() == ["not_applied_time_limit"]
-    assert episode.env._termination["stop_reason"] == "time_limit"
+    assert episode.result.termination_record["stop_reason"] == "time_limit"
 
 
 def test_the_check_before_landing_is_asked_once_the_result_is_accepted():
@@ -112,8 +112,8 @@ def test_the_check_before_landing_is_asked_once_the_result_is_accepted():
     episode = run("wall", 10.0, [Reply(2.995)], world, fps=60.0, agent_type=_SlowAccept)
     assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
     assert episode.statuses() == ["not_applied_terminal"]
-    assert episode.env._termination["stop_reason"] == "won"
-    assert episode.env._termination["end_s"] == pytest.approx(3.005)
+    assert episode.result.termination_record["stop_reason"] == "won"
+    assert episode.result.termination_record["end_s"] == pytest.approx(3.005)
 
 
 def test_an_end_a_check_saw_before_the_deadline_is_the_tasks_though_it_answers_after():
@@ -127,8 +127,8 @@ def test_an_end_a_check_saw_before_the_deadline_is_the_tasks_though_it_answers_a
     episode = run("wall", 5.0, replies, world, fps=60.0, input_fps=1.0, agent_type=_SlowAccept)
     assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
     assert episode.statuses() == ["not_applied_terminal"]
-    assert episode.env._termination["stop_reason"] == "won"
-    assert episode.env._termination["end_s"] == pytest.approx(4.21)
+    assert episode.result.termination_record["stop_reason"] == "won"
+    assert episode.result.termination_record["end_s"] == pytest.approx(4.21)
 
 
 def test_an_action_does_not_land_on_an_older_read_once_a_later_one_saw_the_end():
@@ -140,8 +140,8 @@ def test_an_action_does_not_land_on_an_older_read_once_a_later_one_saw_the_end()
     episode = run("wall", 10.0, [Reply(1.945), Reply(30.0)], world, agent_type=_SlowAccept)
     assert [call for call, _, _ in episode.env.calls if call == "execute"] == []
     assert episode.statuses() == ["not_applied_terminal"]
-    assert episode.env._termination["stop_reason"] == "won"
-    assert episode.env._termination["end_s"] == pytest.approx(3.205)
+    assert episode.result.termination_record["stop_reason"] == "won"
+    assert episode.result.termination_record["end_s"] == pytest.approx(3.205)
 
 
 def test_a_result_settled_across_the_deadline_does_not_land():
@@ -157,7 +157,7 @@ def test_a_result_settled_across_the_deadline_does_not_land():
     assert [p["decision"] for p in episode.trace.payloads("InferenceCompleted")] == [0]
     assert len(episode.agent.trajectory) == 1
     assert episode.agent.calls == [("abort", 1), ("discard", 1)]
-    assert episode.env._termination["stop_reason"] == "time_limit"
+    assert episode.result.termination_record["stop_reason"] == "time_limit"
     line = "[default] k=0 generation back in 2.995s, settled past its wall_deadline — discarded"
     assert line in episode.logs
     numbers = [record["kernel_seq"] for record in episode.trace.records]
@@ -258,7 +258,7 @@ def test_the_token_watchdog_is_due_on_the_operational_clock_once_the_world_has_m
     timing = RunnerTimingConfig(provider_watchdog_s=7.0)
     episode = run("token", 30.0, replies, tokens_per_frame=100, timing=timing)
     assert episode.invalid["reason"] == "generation_watchdog_timeout"
-    assert episode.env._termination["end_s"] == 10.0
+    assert episode.result.termination_record["end_s"] == 10.0
     assert episode.clock.monotonic() == 7.0
 
 
@@ -277,7 +277,7 @@ def test_a_generation_the_watchdog_gave_up_on_is_recorded_as_the_runner_records_
     assert [(row["decision"], row["invalid_reason"]) for row in rows] == [
         (0, "generation_watchdog_timeout")
     ]
-    assert episode.env._token_accounting.summary()["responses"] == 1
+    assert episode.result.token_accounting.summary()["responses"] == 1
     assert "[default] k=0 generation TIMED OUT (>7.0s, provider_watchdog) — discarded" in (
         episode.logs
     )
@@ -294,8 +294,8 @@ def test_the_token_watchdog_runs_on_operational_seconds_from_the_environment(mon
         "reason": "generation_watchdog_timeout",
         "detail": "generation exceeded 7s",
     }
-    assert episode.env._stop_reason == "invalid_run"
-    assert episode.env._termination["end_s"] == 0.0
+    assert episode.result.stop_reason == "invalid_run"
+    assert episode.result.termination_record["end_s"] == 0.0
     assert episode.agent.calls == [("abort", 1)]
     fired = [
         record
@@ -321,8 +321,8 @@ def test_the_frozen_stream_threshold_follows_its_environment_variable(
     episode = run("wall", 10.0, [Reply(0.5)] * 5, World(frozen_from=1), timing=timing)
     assert len(episode.statuses()) == committed
     assert episode.invalid["reason"] == "observation_stream_frozen"
-    assert episode.env._stream_frozen is True
-    assert episode.env._stream_freeze_count == 1
+    assert episode.result.stream_frozen is True
+    assert episode.result.stream_freeze_count == 1
     assert f"(same id/tick/hash x{timing.observation_freeze_n}); invalidating run" in "\n".join(
         episode.logs
     )

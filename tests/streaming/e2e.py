@@ -19,6 +19,7 @@ from realtime_framework.clock import Clocks
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
+from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from tests.fake_clock import FakeClock
 from tests.replay.fake_env import FakeEnvironment
@@ -36,11 +37,11 @@ SILENCE = bytes(3200)  # 100 ms of 16 kHz PCM, a Gemini Live activity's audio (g
 
 @dataclass
 class Episode:
-    """How the episode ended is left on ``env``, as main() reads it: ``_stop_reason``,
-    ``_termination`` and ``_invalid_run``."""
+    """One episode on the cassette, with how it came out as main() is handed it."""
 
     env: FakeEnvironment
     agent: object
+    result: EpisodeResult  # as run_stream hands it to main()
     trace_path: object
     attempt_id: str  # the episode's in its trace (EpisodeTrace.attempt_id)
     records: list[dict]
@@ -77,16 +78,16 @@ def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=
     with server, real_time_limit(REAL_LIMIT_S, server.drop, clock.monotonic), clock.participant():
         agent = agent_factory(clock, server.port, trace=sink)
         try:
-            timeline = runner.run_stream(
+            result = runner.run_stream(
                 agent, env, clock_mode="wall", duration_s=duration_s, env_fps=1.0, input_fps=1.0,
                 log=logs.append, trace=trace, clocks=Clocks(clock, clock),
                 interaction_mode="streaming",
-            ).timeline  # fmt: skip
-            assert timeline == []  # no turns
+            )  # fmt: skip
+            assert result.timeline == []  # no turns
         finally:
             agent.close()
     assert close_agent_trace(sink) is None
     trace.close()
     validate_episode_trace(path)
     records = [json.loads(line) for line in path.read_text().splitlines()]
-    return Episode(env, agent, path, trace.attempt_id, records, server.finish(), logs)
+    return Episode(env, agent, result, path, trace.attempt_id, records, server.finish(), logs)

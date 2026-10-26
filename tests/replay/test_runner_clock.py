@@ -80,10 +80,10 @@ def _run_on_fake_environment(tmp_path, script, latencies):
     return env, result, arrivals
 
 
-def _ended_at(env) -> float:
+def _ended_at(env, result) -> float:
     """When the episode ended: the shell stamps it as it freezes the snapshot (shell.py
     _freeze)."""
-    return env._active_end_unix_s - env.t0
+    return result.active_end_unix_s - env.t0
 
 
 def test_reply_after_the_deadline_is_dropped(tmp_path):
@@ -95,7 +95,7 @@ def test_reply_after_the_deadline_is_dropped(tmp_path):
     assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3
     assert [e["action"]["action_type"] for e in env.executions] == ["click", "type", "click"]
     check_wall_clock_properties(env, result, "time_limit")
-    assert _ended_at(env) == DEADLINE_S
+    assert _ended_at(env, result) == DEADLINE_S
     assert arrivals == [0.0, 1.0, 2.0, 3.0]
 
 
@@ -118,7 +118,7 @@ def test_retry_backoff_past_the_deadline(tmp_path, monkeypatch):
     env, result, arrivals = _run_on_fake_environment(tmp_path, script, [0.5, 0.5, 0.0, 0.0])
     assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 2
     check_wall_clock_properties(env, result, "time_limit")
-    assert _ended_at(env) == DEADLINE_S
+    assert _ended_at(env, result) == DEADLINE_S
     first, second = TRANSPORT_RETRY.backoff_s[:2]
     jitter = TRANSPORT_RETRY.jitter_ratio
     assert len(arrivals) == 4 and arrivals[:3] == [0.0, 1.0, 2.0]
@@ -126,7 +126,7 @@ def test_retry_backoff_past_the_deadline(tmp_path, monkeypatch):
     assert arrivals[3] + second * (1 - jitter) > DEADLINE_S
     (delay_1, started_1, ended_1, _), (delay_2, started_2, ended_2, ended_at) = backoffs
     assert ended_1 == started_1 + delay_1  # the first backoff waits its delay out
-    assert ended_at == env._active_end_unix_s  # the second ends at the deadline
+    assert ended_at == result.active_end_unix_s  # the second ends at the deadline
     assert ended_2 < started_2 + delay_2
 
 
@@ -177,8 +177,9 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
             return execute(action, **options)
 
         env.execute = recorded_execute
+        result = None
         try:
-            timeline = runner.run_stream(
+            result = runner.run_stream(
                 episode.agent,
                 env,
                 clock_mode="wall",
@@ -187,14 +188,16 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
                 input_fps=1.0,
                 log=lambda line: None,
                 clocks=Clocks(clock, clock),
-            ).timeline
+            )
         finally:
-            env._drain_abandoned()
+            if result is not None:
+                result.drain_abandoned()
             episode.agent.close()
     assert stub.unscripted == 0 and stub.unused_replies == 0
+    timeline = result.timeline
     assert [action.action_type.value for *_, action in timeline] == ["click", "type", "wait"]
     assert executed == ["click", "type"]
-    assert env._stop_reason == "time_limit"
+    assert result.stop_reason == "time_limit"
     lifecycle = [json.loads(line) for line in audit.read_text().splitlines()]
     assert [record["status"] for record in lifecycle] == ["applied", "applied", "wait"]
     waited = lifecycle[2]["execution_result"]
@@ -203,7 +206,7 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
     _, t_k, _, tau_k, _ = timeline[2]
     assert t_k == 2 and tau_k == 2.5
     assert math.isclose(waited["duration_simulated_seconds"], 3.75 - tau_k, abs_tol=1e-6)
-    assert math.isclose(env._active_end_unix_s, deadline, abs_tol=1e-6)
+    assert math.isclose(result.active_end_unix_s, deadline, abs_tol=1e-6)
 
 
 class _HangingAgent:
@@ -258,17 +261,17 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     )
     agent = _HangingAgent(clock)
     with clock.participant():
-        timeline = runner.run_stream(
+        result = runner.run_stream(
             agent,
             env,
             clock_mode="token",
             duration_s=SHORT_MAX_MINUTES * 60,
             log=logs.append,
             clocks=env.clocks,
-        ).timeline
+        )
         ended_at = clock.monotonic()
-        env._drain_abandoned()
-    assert env._invalid_run == {
+        result.drain_abandoned()
+    assert result.invalid_run == {
         "category": "provider",
         "reason": "generation_watchdog_timeout",
         "detail": f"generation exceeded {expected:g}s",
@@ -276,9 +279,9 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     assert ended_at == expected == (300.0 if watchdog_s is None else watchdog_s)
     assert (env.tick_index(), task.world_time()) == (0, 0.0)
     assert agent.aborted.is_set()
-    assert (timeline, agent.outcomes) == ([], [])
+    assert (result.timeline, agent.outcomes) == ([], [])
     line = f"[default] k=0 generation TIMED OUT (>{expected}s, provider_watchdog) — discarded"
     assert line in logs
     # The call's token record names the watchdog for its missing usage.
-    missing = env._token_accounting.summary()["provider_usage_missing_reasons"]
+    missing = result.token_accounting.summary()["provider_usage_missing_reasons"]
     assert missing == {"generation_aborted_at_provider_watchdog": 1}

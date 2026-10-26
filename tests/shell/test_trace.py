@@ -173,7 +173,7 @@ def test_a_failed_trace_write_invalidates_the_run():
     assert episode.invalid["category"] == "harness"
     assert episode.invalid["reason"] == "episode_trace_write_failed"
     assert "OSError: trace disk full" in episode.invalid["detail"]
-    assert episode.env._stop_reason == "invalid_run"
+    assert episode.result.stop_reason == "invalid_run"
     # Nothing is written after the failed write: its InferenceCompleted came last.
     assert episode.trace.events()[-1] == "InferenceCompleted"
 

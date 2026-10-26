@@ -261,7 +261,7 @@ def test_token_clock(case, monkeypatch, tmp_path):
     assert [r["status"] for r in lifecycle] == case.statuses
     assert [r["next_observation_tick"] for r in lifecycle] == pytest.approx(case.next_ticks)
     assert [r["dropped_intermediate_frames"] for r in lifecycle] == case.dropped
-    assert env._stop_reason == case.stop_reason
+    assert result.stop_reason == case.stop_reason
     assert env.tick_index() == pytest.approx(min(case.next_ticks[-1], max_ticks))
     # The task clock moved with the environment, never more than one tick per step
     # (GuestEnvironment.wait_until_tick): its world time at each capture is the observation's
@@ -325,9 +325,9 @@ def test_a_failed_clock_advance_keeps_the_environment_s_reason(monkeypatch, tmp_
             env_fps=60.0,
         )
         env = TokenEnvironment(episode.frames, task, max_minutes=0.09375)
-        run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    assert env._invalid_run == {
+    assert result.invalid_run == {
         "category": "environment",
         "reason": "clock_advance_failed",
         "detail": "page clock did not advance",
@@ -344,8 +344,8 @@ def test_a_failed_clock_advance_keeps_the_environment_s_reason(monkeypatch, tmp_
         "runner.log",
         "env.release_inputs",
     ]
-    assert env._termination_snapshot_captured
-    assert env._termination == {
+    assert result.snapshot_captured
+    assert result.termination_record == {
         "stop_reason": "invalid_run",
         "end_s": 0.75,
         "snapshot_s": 0.75,
@@ -358,7 +358,7 @@ def test_a_failed_clock_advance_keeps_the_environment_s_reason(monkeypatch, tmp_
         for line in logged
     ), logged
     assert any(line.startswith("[default] decision loop raised:") for line in logged)
-    assert "RuntimeError: page clock did not advance" in env._loop_error
+    assert "RuntimeError: page clock did not advance" in result.loop_error
 
 
 class _FrozenTokenEnvironment(TokenEnvironment):
@@ -396,11 +396,11 @@ def test_a_token_stream_that_replays_one_frame_is_judged_frozen(monkeypatch, tmp
             env_fps=60.0,
         )
         env = _FrozenTokenEnvironment(episode.frames, task, max_minutes=0.25)
-        run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    invalid = env._invalid_run
+    invalid = result.invalid_run
     assert (invalid["category"], invalid["reason"]) == ("environment", "observation_stream_frozen")
-    assert env._stream_frozen is True
+    assert result.stream_frozen is True
     assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3
 
 

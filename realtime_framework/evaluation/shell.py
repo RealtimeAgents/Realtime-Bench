@@ -226,12 +226,6 @@ def run_episode(
     ``(k, t_k, d_ticks, tau_k, action)`` for each decision it reported. Build ``config`` with
     ``timing=RUNNER_TIMING``: TurnConfig's default timing reads no STREAM_* variable.
 
-    What main() reads of it is also left on ``env`` as the legacy loop leaves it: the stop
-    reason and the termination record in world seconds (``_stop_reason``, ``_termination``), the
-    frozen snapshot (``_termination_snapshot*``, ``_active_end_unix_s``), ``_invalid_run``,
-    ``_loop_error``, ``_think_spent``, ``_dropped_intermediate_frames``, ``_stream_frozen``, the
-    token accounting and the drain of abandoned workers (``_drain_abandoned``).
-
     ``agent_trace``, the agent's AgentTraceSink on ``trace``, hands the agent's records to the
     kernel during the episode, and the shell writes them in the kernel's order. Once the episode
     is finished the sink writes them itself again, after the shell has written those it handed
@@ -298,7 +292,7 @@ def _invalidated(record: dict) -> Invalidated:
 
 
 def _invalid_record(invalid: Invalidated) -> dict:
-    """An invalid run as the runner keeps it on ``env._invalid_run`` and writes it as
+    """An invalid run as main() is handed it (episode_end.py EpisodeResult) and writes it as
     RunInvalidated: the detail only when there is one (legacy_loop.py ``_invalidate``)."""
     record = {"category": invalid.category, "reason": invalid.reason}
     if invalid.detail:
@@ -403,7 +397,6 @@ class _Shell:
             # Under the kernel's own horizon, a safety net for every advance.
             env.set_episode_horizon(self.config.max_ticks)
         env.on_invalid = self._timer_latched
-        env._drain_abandoned = self._drain_abandoned
         # A replay aid, opened and closed apart from the episode, which goes on without it.
         inputs = None
         if self._inputs_log is not None:
@@ -685,7 +678,7 @@ class _Shell:
         the summary's error (tests/differential/legacy_loop.py _run_stream_legacy, main)."""
         self.log(f"[default] decision loop raised:\n{failure}")
         if self.end.loop_error is None:
-            self.end.loop_error = self.env._loop_error = failure
+            self.end.loop_error = failure
 
     def _unanswered(self, command, failure: str):
         """The answer to a command whose run raised, so that the kernel, which waits for it, can
@@ -882,7 +875,7 @@ class _Shell:
         # A result that names none has none: the agents create_agent makes name theirs
         # (harnesses/registry.py). The episode has no accounting until a result is settled.
         if self._token_accounting is None:
-            self._token_accounting = self.env._token_accounting = TokenAccounting()
+            self._token_accounting = TokenAccounting()
         episode_records.account_tokens(r, held.remaining, self._token_accounting)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:
@@ -1094,8 +1087,8 @@ class _Shell:
         """Read the scorer's snapshot; the error of a read that failed."""
         env, end = self.env, self.end
         # The presentation boundary precedes the scorer's snapshot.
-        end.active_end_unix_s = env._active_end_unix_s = self.clocks.operational.time()
-        end.snapshot_captured = env._termination_snapshot_captured = False
+        end.active_end_unix_s = self.clocks.operational.time()
+        end.snapshot_captured = False
         # The Task base class has none (realtime_tasks/types.py).
         snapshotter = getattr(env.task, "evaluation_snapshot", None)
         error = None
@@ -1109,11 +1102,9 @@ class _Shell:
                     snapshot = self._env(snapshotter)
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
-                end.snapshot_error = env._termination_snapshot_error = error
+                end.snapshot_error = error
             else:
-                end.snapshot = env._termination_snapshot = snapshot
-                end.snapshot_captured = env._termination_snapshot_captured = True
-                end.snapshot_error = env._termination_snapshot_error = None
+                end.snapshot, end.snapshot_captured, end.snapshot_error = snapshot, True, None
                 self._snapshot_read = True
         return error
 
@@ -1138,7 +1129,7 @@ class _Shell:
     ) -> None:
         env, end = self.env, self.end
         end.termination = termination
-        # The verdict first: main() reads it whatever else could be written (runner.py main).
+        # The verdict first: main() is handed it whatever else could be written (runner.py main).
         invalid, latched = termination.invalid, end.latched(env)
         # The record of a failure the environment latched itself is its own, the detail whole.
         verdict = latched
@@ -1151,10 +1142,8 @@ class _Shell:
         late = latched if invalid is None else None
         if late is not None:
             verdict = None
-        if verdict is not latched:
-            env._invalid_run = verdict
         end.judged, end.invalid_run = True, verdict
-        end.stop_reason = env._stop_reason = termination.stop_reason
+        end.stop_reason = termination.stop_reason
         ticks_per_s = self.config.env_fps if self.token else 1.0
         end_s = termination.ended_at / ticks_per_s
         # A snapshot read whose reading after it failed is one the kernel took as failed.
@@ -1163,16 +1152,14 @@ class _Shell:
             if self._snapshot_read and termination.snapshot_at is not None
             else None
         )
-        end.termination_record = env._termination = {
+        end.termination_record = {
             "stop_reason": termination.stop_reason,
             "end_s": round(end_s, 9),
             "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
             "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
         }
-        end.think_spent = env._think_spent = think_spent
-        end.dropped_intermediate_frames = env._dropped_intermediate_frames = (
-            dropped_intermediate_frames
-        )
+        end.think_spent = think_spent
+        end.dropped_intermediate_frames = dropped_intermediate_frames
         if late is not None:
             self.log(_only_logged(late))
 
@@ -1313,10 +1300,7 @@ class _Shell:
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
             if invalid.reason == "observation_stream_frozen":
-                env, end = self.env, self.end
-                end.stream_freeze_count += 1
-                env._stream_freeze_count = end.stream_freeze_count
-                env._stream_frozen = True
+                self.end.stream_freeze_count += 1
                 self.log(
                     "[default] observation stream FROZEN (same id/tick/hash x"
                     f"{self.config.timing.observation_freeze_n}); invalidating run"

@@ -46,12 +46,12 @@ class _RaisingCommit(Agent):
 
 def _finalized(episode, at: float) -> None:
     """The snapshot was frozen and the inputs released after it; the run ended at ``at``."""
-    env = episode.env
+    env, result = episode.env, episode.result
     assert [call for call, _, _ in env.calls][-2:] == ["snapshot", "release_inputs"]
-    assert env._termination_snapshot_captured is True
-    assert env._stop_reason == "invalid_run"
-    assert env._termination["stop_reason"] == "invalid_run"
-    assert env._termination["end_s"] == at
+    assert result.snapshot_captured is True
+    assert result.stop_reason == "invalid_run"
+    assert result.termination_record["stop_reason"] == "invalid_run"
+    assert result.termination_record["end_s"] == at
 
 
 def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes():
@@ -64,8 +64,8 @@ def test_an_exception_a_command_raises_invalidates_the_run_and_still_finalizes()
     assert episode.invalid["category"] == "runner"
     assert episode.invalid["reason"] == "run_exception"
     assert "RuntimeError: accept broke" in episode.invalid["detail"]
-    assert episode.env._loop_error.startswith("Traceback")
-    assert "accept broke" in episode.env._loop_error
+    assert episode.result.loop_error.startswith("Traceback")
+    assert "accept broke" in episode.result.loop_error
     raised = [line for line in episode.logs if line.startswith("[default] decision loop raised:")]
     assert len(raised) == 1
     assert episode.statuses() == ["invalid_run"]
@@ -108,14 +108,14 @@ def test_a_token_batch_runs_nothing_in_the_world_after_the_shell_invalidated_the
     assert skipped not in [call for call, _, _ in episode.env.calls]
     assert episode.statuses() == [status]
     assert episode.invalid["reason"] == reason
-    assert episode.env._stop_reason == "invalid_run"
+    assert episode.result.stop_reason == "invalid_run"
 
 
 def test_a_decision_budget_the_adapter_refuses_invalidates_the_run_before_the_generation():
     episode = run("wall", 3.0, [Reply(0.5)], agent_type=_NoTransportCap)
     _finalized(episode, 0.0)
     assert episode.invalid["reason"] == "run_exception"
-    assert "adapter transport output cap" in episode.env._loop_error
+    assert "adapter transport output cap" in episode.result.loop_error
     assert episode.agent.generated == []
     assert "InferenceStarted" not in episode.trace.events()
 
@@ -155,7 +155,7 @@ def test_a_generation_that_raises_is_an_unusable_result():
     assert episode.invalid["category"] == "provider"
     assert episode.invalid["reason"] == "generation_error"
     assert "RuntimeError: provider down" in episode.invalid["detail"]
-    assert getattr(episode.env, "_loop_error", None) is None
+    assert episode.result.loop_error is None
     assert any("k=0 generation failed, recovering" in line for line in episode.logs)
     assert episode.statuses() == []
     completed = episode.trace.payloads("InferenceCompleted")
@@ -178,7 +178,7 @@ def test_a_failed_trajectory_row_of_a_move_over_the_cap_invalidates_the_run():
     assert episode.invalid["category"] == "harness"
     assert episode.invalid["reason"] == "trajectory_write_failed"
     assert "OSError: trajectory disk full" in episode.invalid["detail"]
-    assert episode.env._stop_reason == "invalid_run"
+    assert episode.result.stop_reason == "invalid_run"
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
@@ -201,20 +201,22 @@ def test_a_generation_that_raises_comes_back_failed_though_logging_it_fails():
     assert not any("STILL inside a native call" in line for line in lines)
 
 
-class _UnfinishableEnvironment(Environment):
-    """Refuses the termination record."""
-
-    def __setattr__(self, name, value):
-        if name == "_termination":
-            raise RuntimeError("read-only")
-        super().__setattr__(name, value)
-
-
 def test_the_shell_stops_at_the_finish_though_writing_the_termination_raises():
-    """Nothing more is asked after the finish (kernel/core.py), so the shell stops there."""
-    episode = run("wall", 1.0, [Reply(0.5)], env_type=_UnfinishableEnvironment)
+    """Nothing more is asked after the finish (kernel/core.py), so the shell stops there. Here
+    the termination's last write, the log of a failure the environment reported once the
+    snapshot was frozen (decision 30), raises: stdout is gone."""
+    lines = []
+
+    def log(line: str) -> None:
+        if "only logged" in line:
+            raise BrokenPipeError("stdout closed")
+        lines.append(line)
+
+    world = World(ends_after=1)
+    episode = run("wall", 3.0, [Reply(0.5)], world, env_type=_GivesUpDuringTheRelease, log=log)
     assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
-    assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
+    assert any(line.startswith("[default] decision loop raised:") for line in lines)
+    assert "BrokenPipeError: stdout closed" in episode.result.loop_error
 
 
 def test_a_failed_trajectory_row_of_a_call_the_deadline_cut_invalidates_the_run():
@@ -222,8 +224,8 @@ def test_a_failed_trajectory_row_of_a_call_the_deadline_cut_invalidates_the_run(
     48): a failed write is a harness failure, after the end too (legacy_loop.py _decide)."""
     episode = run("wall", 2.0, [Reply(hang=True)], agent_type=_FirstRowFails)
     assert episode.invalid["reason"] == "trajectory_write_failed"
-    assert episode.env._stop_reason == "invalid_run"
-    assert episode.env._termination["end_s"] == 2.0
+    assert episode.result.stop_reason == "invalid_run"
+    assert episode.result.termination_record["end_s"] == 2.0
 
 
 class _SlowRows(Agent):
@@ -272,7 +274,7 @@ def test_a_result_settled_past_its_bound_still_invalidates_the_run(
         replies, config = [Reply(2.995, raises=raises)], {}
     episode = run("wall", 3.0, replies, agent_type=agent_type, **config)
     assert episode.invalid["reason"] == reason
-    assert episode.env._stop_reason == "invalid_run"
+    assert episode.result.stop_reason == "invalid_run"
 
 
 def _breaks(monkeypatch, owner, name: str, when) -> None:
@@ -290,18 +292,18 @@ def _breaks(monkeypatch, owner, name: str, when) -> None:
 def _wrapped_up(episode, at: float, snapshot_at: float | None = None) -> None:
     """The shell wrapped the episode up without the kernel: the snapshot frozen once and the
     inputs released after it, the run invalid and its termination record written."""
-    env = episode.env
+    env, result = episode.env, episode.result
     calls = [call for call, _, _ in env.calls if call != "check_end"]
     assert calls.count("snapshot") == 1 and calls[-2:] == ["snapshot", "release_inputs"]
-    assert env._termination_snapshot_captured is True
+    assert result.snapshot_captured is True
     snapshot_at = at if snapshot_at is None else snapshot_at
-    assert env._termination == {
+    assert result.termination_record == {
         "stop_reason": "invalid_run",
         "end_s": at,
         "snapshot_s": snapshot_at,
         "snapshot_delay_s": round(snapshot_at - at, 9),
     }
-    assert env._stop_reason == "invalid_run"
+    assert result.stop_reason == "invalid_run"
     assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
@@ -321,7 +323,7 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     invalid = episode.invalid
     assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
     assert "RuntimeError: step broke" in invalid["detail"]
-    assert "RuntimeError: step broke" in episode.env._loop_error
+    assert "RuntimeError: step broke" in episode.result.loop_error
     assert any(line.startswith("[invalid-run] runner:run_exception") for line in episode.logs)
     (written,) = episode.trace.payloads("RunInvalidated")
     assert written["reason"] == "run_exception"
@@ -336,7 +338,7 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
         (0, None),
         (1, "invalid_run"),
     ]
-    assert episode.env._token_accounting.summary()["responses"] == 1
+    assert episode.result.token_accounting.summary()["responses"] == 1
 
 
 def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
@@ -348,7 +350,7 @@ def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)])
     _wrapped_up(episode, 1.5)
     assert episode.invalid["reason"] == "run_exception"
-    assert "RuntimeError: _accept broke" in episode.env._loop_error
+    assert "RuntimeError: _accept broke" in episode.result.loop_error
     assert ("accept", 2) not in episode.agent.calls
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p.get("harness_abort_reason")) for p in completed] == [
@@ -356,7 +358,7 @@ def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
         (1, None),
     ]
     assert [row["decision"] for row in episode.agent.trajectory] == [0, 1]
-    accounting = episode.env._token_accounting.summary()
+    accounting = episode.result.token_accounting.summary()
     assert (accounting["responses"], accounting["reported_decisions"]["responses"]) == (2, 1)
 
 
@@ -380,7 +382,7 @@ def test_a_failed_clock_reading_leaves_the_episode_wrapped_up_by_the_shell():
     episode = run("token", 5.0, replies, tokens_per_frame=100, env_type=_BrokenTicks)
     _wrapped_up(episode, 1.0)
     assert episode.invalid["reason"] == "run_exception"
-    assert "RuntimeError: tick_index broke" in episode.env._loop_error
+    assert "RuntimeError: tick_index broke" in episode.result.loop_error
 
 
 def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monkeypatch):
@@ -400,7 +402,7 @@ def test_a_kernel_that_raises_after_an_invalidation_keeps_the_first_failure(monk
     episode = run("wall", 3.0, [Reply(0.5, raises="provider down")])
     _wrapped_up(episode, 0.5)
     assert episode.invalid["reason"] == "generation_error"
-    assert "RuntimeError: step broke" in episode.env._loop_error
+    assert "RuntimeError: step broke" in episode.result.loop_error
     assert [p["reason"] for p in episode.trace.payloads("RunInvalidated")] == ["generation_error"]
 
 
@@ -496,7 +498,7 @@ def test_a_snapshot_whose_reading_raised_once_still_leaves_a_termination_record(
     replies = [Reply(0.0, CLICK, output_tokens=100)] * 2
     env_type = _TickGoneOnceAfterTheSnapshot
     episode = run("token", 2.0, replies, tokens_per_frame=100, env_type=env_type)
-    termination = episode.env._termination
+    termination = episode.result.termination_record
     assert (termination["end_s"], termination["snapshot_s"]) == (2.0, None)
     assert termination["stop_reason"] == "invalid_run"
     assert episode.invalid["reason"] == "run_exception"
@@ -519,7 +521,7 @@ def test_an_advance_to_the_next_frame_or_the_horizon_that_raises_is_the_summarys
     world = World(advance_errors={failing: "advance failed"})
     episode = run("token", duration, replies, world, tokens_per_frame=tokens_per_frame)
     assert episode.invalid["reason"] == "clock_advance_failed"
-    assert "RuntimeError: advance failed" in episode.env._loop_error
+    assert "RuntimeError: advance failed" in episode.result.loop_error
 
 
 def test_the_summarys_error_is_the_first_traceback(monkeypatch):
@@ -528,8 +530,8 @@ def test_the_summarys_error_is_the_first_traceback(monkeypatch):
     _breaks(monkeypatch, Kernel, "step", lambda kernel, *_: kernel.invalid is not None)
     world = World(advance_errors={1: "advance failed"})
     episode = run("token", 3.0, [Reply(0.0, CLICK, output_tokens=100)], world, tokens_per_frame=100)
-    assert "RuntimeError: advance failed" in episode.env._loop_error
-    assert "step broke" not in episode.env._loop_error
+    assert "RuntimeError: advance failed" in episode.result.loop_error
+    assert "step broke" not in episode.result.loop_error
 
 
 def test_the_first_run_exception_is_the_runs_though_the_kernel_raised_before_taking_it(monkeypatch):
@@ -552,7 +554,7 @@ def test_the_first_run_exception_is_the_runs_though_the_kernel_raised_before_tak
     )
     episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], agent_type=_RaisingAccept)
     assert episode.invalid["reason"] == "run_exception"
-    assert "RuntimeError: accept broke" in episode.env._loop_error
+    assert "RuntimeError: accept broke" in episode.result.loop_error
     assert "RuntimeError: accept broke" in episode.invalid["detail"]
     assert "step broke" not in episode.invalid["detail"]
 
@@ -613,7 +615,7 @@ def test_a_call_started_after_the_read_that_invalidated_the_run_was_asked_ran_no
     replies = [Reply(0.2, CLICK), Reply(hang=True)]
     episode = run("wall", 6.0, replies, world, env_type=_SlowSecondCapture)
     assert episode.invalid["reason"] == "terminal_state_check_failed"
-    assert episode.env._termination["end_s"] == pytest.approx(2.3)
+    assert episode.result.termination_record["end_s"] == pytest.approx(2.3)
     completed = episode.trace.payloads("InferenceCompleted")
     assert [(p["decision"], p.get("harness_abort_reason"), p["latency_s"]) for p in completed] == [
         (0, None, pytest.approx(0.2)),
@@ -639,29 +641,35 @@ def test_a_termination_record_that_cannot_be_written_invalidates_the_run(clock_m
     world, replies = World(ends_at=1.2, end_reason="won"), [Reply(0.5)] * 3
     control = run(clock_mode, 3.0, replies, World(ends_at=1.2, end_reason="won"))
     episode = run(clock_mode, 3.0, replies, world, trace=_TerminationUnwritable())
-    assert control.env._termination["stop_reason"] == "won"
+    assert control.result.termination_record["stop_reason"] == "won"
     assert episode.invalid["reason"] == "episode_trace_write_failed"
     assert "OSError: trace disk full" in episode.invalid["detail"]
-    assert episode.env._stop_reason == "invalid_run"
-    termination = episode.env._termination
-    assert termination == {**control.env._termination, "stop_reason": "invalid_run"}
+    assert episode.result.stop_reason == "invalid_run"
+    termination = episode.result.termination_record
+    assert termination == {**control.result.termination_record, "stop_reason": "invalid_run"}
     assert any(
         line.startswith("[invalid-run] harness:episode_trace_write_failed") for line in episode.logs
     )
 
 
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
-    """The kernel raises, and the environment refuses the termination record: run_episode
-    still returns, and the failure is logged."""
+    """The kernel raises, and the log of its run_exception as the first failure, once the
+    termination is written, raises too: run_episode still returns, and that failure is
+    logged."""
     _breaks(monkeypatch, Kernel, "step", lambda kernel, semantic, ops=None: semantic >= 1.0)
-    episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], env_type=_UnfinishableEnvironment)
+    lines = []
+
+    def log(line: str) -> None:
+        if line.startswith("[invalid-run] runner:run_exception"):
+            raise BrokenPipeError("stdout closed")
+        lines.append(line)
+
+    episode = run("wall", 3.0, [Reply(0.5), Reply(0.5)], log=log)
     assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
-    # The run's verdict is latched first: main() reads it whatever else was written.
+    # The run's verdict is written first: main() is handed it whatever else was written.
     assert episode.invalid["reason"] == "run_exception"
-    assert episode.env._stop_reason == "invalid_run"
-    assert any(
-        line.startswith("[default] wrapping up the episode failed:") for line in episode.logs
-    )
+    assert episode.result.stop_reason == "invalid_run"
+    assert any(line.startswith("[default] wrapping up the episode failed:") for line in lines)
 
 
 def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
@@ -674,8 +682,8 @@ def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
     episode = run("wall", 3.0, [Reply(0.5), Reply(hang=True)], World(on_release=release_fails))
     assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
     assert episode.invalid is None
-    assert episode.env._stop_reason == "time_limit"
-    assert getattr(episode.env, "_loop_error", None) is None
+    assert episode.result.stop_reason == "time_limit"
+    assert episode.result.loop_error is None
     (logged,) = [line for line in episode.logs if line.startswith("[cleanup]")]
     assert logged.startswith("[cleanup] failed to release stateful inputs:")
     assert "RuntimeError: the page is gone" in logged
@@ -714,11 +722,15 @@ def test_a_failure_the_environment_reports_once_the_snapshot_is_frozen_is_only_l
     before that decision's commit, and the inputs are released after it (decision 33). The wall
     clock's key-release timer gives a key up for good during either, after the snapshot: the
     failure is only logged, as one of the cleanup's own is, and the termination record and the
-    run's record on env both say the run is valid."""
+    run's verdict both say the run is valid."""
     episode = run("wall", 3.0, [Reply(0.5)], World(ends_after=1), env_type=env_type)
     assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
     assert episode.invalid is None
-    assert episode.env._stop_reason == episode.env._termination["stop_reason"] == "game_decided"
+    assert (
+        episode.result.stop_reason
+        == episode.result.termination_record["stop_reason"]
+        == "game_decided"
+    )
     assert episode.trace.payloads("RunInvalidated") == []
     (logged,) = [line for line in episode.logs if line.startswith("[cleanup]")]
     assert logged == (
@@ -755,7 +767,7 @@ def test_the_environment_keeps_its_reason_for_a_tap_whose_advance_failed():
     _finalized(episode, 0.0)
     assert episode.invalid == latched
     assert episode.statuses() == ["invalid_run"]
-    assert getattr(episode.env, "_loop_error", None) is None
+    assert episode.result.loop_error is None
 
 
 def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
@@ -776,14 +788,14 @@ def test_a_token_wait_whose_own_step_fails_is_a_failed_action():
     (record,) = episode.env.lifecycle
     assert "RuntimeError: advance failed" in record["execution_result"]["error"]
     assert "ActionApplied" not in episode.trace.events()
-    assert getattr(episode.env, "_loop_error", None) is None
+    assert episode.result.loop_error is None
     assert not any("decision loop raised" in line for line in episode.logs)
 
 
 def test_the_first_failure_is_the_record_though_the_environment_latched_another_after_it():
     """The lifecycle write of decision 0 fails at 1 s and the snapshot read takes until 2 s; the
     key held from 0.25 s fails to come up at 1.25 s, meanwhile, and the environment latches
-    that. The run is invalid for the first failure, on env too (legacy_loop.py _invalidate)."""
+    that. The run's verdict is the first failure too (legacy_loop.py _invalidate)."""
     world = World(release_failures={0}, lifecycle_errors={0}, snapshot_s=1.0)
     episode = run("wall", 4.0, [Reply(0.25, Action.hold_key("a", 1.0)), Reply(0.5)], world)
     assert [call for call, _, _ in episode.env.calls if call != "check_end"][-3:] == [
@@ -818,7 +830,7 @@ def test_the_environment_keeps_its_reason_for_an_advance_that_raised():
         "detail": "advance failed",
     }
     assert "RuntimeError: advance failed" in episode.trace.payloads("RunInvalidated")[0]["detail"]
-    assert "RuntimeError: advance failed" in episode.env._loop_error
+    assert "RuntimeError: advance failed" in episode.result.loop_error
     assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
@@ -845,7 +857,7 @@ def test_a_token_release_or_render_that_raises_invalidates_the_run(world, action
     episode = run("token", 3.0, replies, world, tokens_per_frame=100)
     _finalized(episode, at)
     assert (episode.invalid["category"], episode.invalid["reason"]) == ("environment", reason)
-    assert "RuntimeError" in episode.env._loop_error
+    assert "RuntimeError" in episode.result.loop_error
     assert any(line.startswith("[default] decision loop raised:") for line in episode.logs)
 
 
@@ -888,7 +900,7 @@ def test_the_reads_a_tap_makes_count_toward_three_failed_reads_in_a_row(tap_chec
         assert episode.agent.outcomes[0].terminal_after_action is True
     else:
         assert episode.invalid is None
-        assert episode.env._stop_reason == "tick_limit"
+        assert episode.result.stop_reason == "tick_limit"
 
 
 class _ExecuteRaises(Environment):
@@ -904,7 +916,7 @@ def test_a_command_the_kernel_waits_for_is_answered_though_it_raised():
     episode = run("wall", 3.0, [Reply(0.5)], env_type=_ExecuteRaises)
     _finalized(episode, 0.5)
     assert episode.invalid["reason"] == "run_exception"
-    assert "RuntimeError: execute broke" in episode.env._loop_error
+    assert "RuntimeError: execute broke" in episode.result.loop_error
     assert episode.statuses() == ["invalid_run"]
 
 
@@ -918,7 +930,7 @@ def test_a_tap_read_that_saw_the_end_ends_the_episode_by_the_tasks_reason():
     episode = run("token", 1.0, [Reply(0.0, TAP)], world)
     assert [call for call, _, _ in episode.env.calls].count("check_end") == 1
     assert episode.invalid is None
-    assert episode.env._stop_reason == "target_reached"
+    assert episode.result.stop_reason == "target_reached"
     assert episode.statuses() == ["applied"]
     assert episode.agent.outcomes[0].terminal_after_action is True
 
@@ -983,11 +995,11 @@ def test_failed_feedback_and_a_failed_lifecycle_write_invalidate_the_run():
 
 def test_a_failed_snapshot_read_invalidates_the_run_and_leaves_no_snapshot_time():
     episode = run("wall", 1.0, [Reply(0.5)], World(snapshot_error="state gone"))
-    env = episode.env
+    result = episode.result
     assert episode.invalid["reason"] == "evaluation_snapshot_failed"
-    assert "RuntimeError: state gone" in env._termination_snapshot_error
-    assert env._termination_snapshot_captured is False
-    assert env._termination == {
+    assert "RuntimeError: state gone" in result.snapshot_error
+    assert result.snapshot_captured is False
+    assert result.termination_record == {
         "stop_reason": "invalid_run",
         "end_s": 1.0,
         "snapshot_s": None,

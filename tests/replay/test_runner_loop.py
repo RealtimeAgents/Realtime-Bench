@@ -318,8 +318,8 @@ def _check_finalized(run: Run, *, at: float, raised: str) -> None:
         "task.evaluation_snapshot",
         "env.release_inputs",
     ]
-    assert run.env._termination_snapshot_captured
-    assert run.env._termination == {
+    assert run.result.snapshot_captured
+    assert run.result.termination_record == {
         "stop_reason": "invalid_run",
         "end_s": at,
         "snapshot_s": at,
@@ -346,7 +346,7 @@ def test_two_failed_state_reads_in_a_row_leave_the_run_valid(tmp_path):
         read_failures=frozenset({2, 3}),
     )
     check_wall_clock_properties(run.env, run.result, "time_limit")
-    assert getattr(run.env, "_invalid_run", None) is None
+    assert run.result.invalid_run is None
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"] * 3
     failed = [call["failed"] for call in run.env.calls if "failed" in call]
     assert failed == [2, 3]
@@ -366,14 +366,14 @@ def test_a_third_failed_state_read_in_a_row_invalidates_the_run(tmp_path):
         read_failures=frozenset({4, 5, 6}),
     )
     check_wall_clock_properties(run.env, run.result, "invalid_run")
-    invalid = run.env._invalid_run
+    invalid = run.result.invalid_run
     assert (invalid["category"], invalid["reason"]) == (
         "environment",
         "terminal_state_check_failed",
     )
     assert invalid["detail"].rstrip().endswith("RuntimeError: state read 6 failed")
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"] * 2
-    assert run.env._termination["end_s"] == 1.5
+    assert run.result.termination_record["end_s"] == 1.5
 
 
 def test_agent_exception_is_finalized(tmp_path):
@@ -399,7 +399,7 @@ def test_agent_exception_is_finalized(tmp_path):
             stream=True,
             max_minutes=SHORT_MAX_MINUTES,
         )
-    invalid = run.env._invalid_run
+    invalid = run.result.invalid_run
     assert (invalid["category"], invalid["reason"]) == ("runner", "run_exception")
     assert invalid["detail"].rstrip().endswith("RuntimeError: budget rejected")
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
@@ -430,7 +430,7 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
     with run.env.clock.participant():
         run.env.clock.sleep(TEARDOWN_S)
     assert run.env.past_deadline()
-    termination = run.env._termination
+    termination = run.result.termination_record
     assert termination == {
         "stop_reason": reason,
         "end_s": 2.5,
@@ -441,7 +441,7 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
     summary = {
         "invalid_run": None,
         "solved": solved,
-        "stop_reason": run.env._stop_reason,
+        "stop_reason": run.result.stop_reason,
         "termination": termination,
         "world_time_s": termination["end_s"],
         "max_minutes": SHORT_MAX_MINUTES,
@@ -485,13 +485,13 @@ def test_snapshot_time_is_when_its_read_returns(tmp_path):
         stop_check=_decided_after(3, "task_success"),
         snapshot_seconds=1.5,
     )
-    assert run.env._termination == {
+    assert run.result.termination_record == {
         "stop_reason": "task_success",
         "end_s": 2.5,
         "snapshot_s": 4.0,
         "snapshot_delay_s": 1.5,
     }
-    assert run.env._termination_snapshot["environment_tick"] == 4
+    assert run.result.snapshot["environment_tick"] == 4
 
 
 def _failing_on_the_second_call(method):
@@ -514,7 +514,7 @@ def test_a_generation_that_raises_invalidates_the_run(tmp_path):
     failing = _failing_on_the_second_call(DefaultHarness._generate)
     with mock.patch.object(DefaultHarness, "_generate", failing):
         run = _run(tmp_path, [Step(CLICK_NAME)], [0.5], stream=True, max_minutes=SHORT_MAX_MINUTES)
-    invalid = run.env._invalid_run
+    invalid = run.result.invalid_run
     assert (invalid["category"], invalid["reason"]) == ("provider", "generation_error")
     assert invalid["detail"].rstrip().endswith("RuntimeError: _generate failed")
     completed = [
@@ -543,7 +543,7 @@ def test_a_failed_trajectory_write_invalidates_the_run(tmp_path):
             stream=True,
             max_minutes=SHORT_MAX_MINUTES,
         )
-    invalid = run.env._invalid_run
+    invalid = run.result.invalid_run
     assert (invalid["category"], invalid["reason"]) == ("harness", "trajectory_write_failed")
     assert invalid["detail"].rstrip().endswith("RuntimeError: finalize_decision_audit failed")
     logged = [call["line"] for call in run.env.calls if call["call"] == "runner.log"]

@@ -19,6 +19,7 @@ from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.evaluation import runner
+from realtime_framework.evaluation.episode_end import EpisodeResult
 
 from .clock_task import ClockTask
 from .frames import FrameSource
@@ -58,13 +59,13 @@ def run(
     tokens_per_frame: int | None,
     max_minutes: float,
     script: list[tuple[Action | None, int]],
-) -> tuple[TokenEnvironment, ScriptedAgent]:
+) -> tuple[TokenEnvironment, ScriptedAgent, EpisodeResult]:
     """run_stream with the arguments main() passes for these rates."""
     task = ClockTask(env_fps, tokens_per_frame)
     frames = FrameSource(task, text_observation=False, fps=model_input_fps)
     env = TokenEnvironment(frames, task, max_minutes=max_minutes)
     agent = ScriptedAgent(script)
-    runner.run_stream(
+    result = runner.run_stream(
         agent,
         env,
         clock_mode="token",
@@ -75,7 +76,7 @@ def run(
         log=lambda line: None,
         clocks=Clocks(env.clock, env.clock),
     )
-    return env, agent
+    return env, agent, result
 
 
 def captured_ticks(env: TokenEnvironment) -> list:
@@ -94,11 +95,11 @@ def test_pause_mode_observes_every_model_input_frame_at_the_first_tick_at_or_aft
     21 * (9/7) puts a float above. The kernel's ticks * 7 / 9 and frames * 9 / 7 give both
     exactly (kernel/turns.py _frames, _ticks)."""
     frames = 23
-    env, agent = run(9.0, 7.0, None, 0.0546875, [(None, 0)] * frames)
+    env, agent, result = run(9.0, 7.0, None, 0.0546875, [(None, 0)] * frames)
     assert captured_ticks(env) == [math.ceil(Fraction(9 * k, 7)) for k in range(frames)]
     assert agent.statuses == ["none"] * frames
     assert [r["dropped_intermediate_frames"] for r in lifecycle(env)] == [0] * frames
-    assert env._stop_reason == "tick_limit"
+    assert result.stop_reason == "tick_limit"
 
 
 def test_a_response_past_the_horizon_is_not_applied_when_its_allowance_is_not_whole():
@@ -106,7 +107,7 @@ def test_a_response_past_the_horizon_is_not_applied_when_its_allowance_is_not_wh
     is observed at tick 5. From there 8995 ticks are 2098.83 frames, 537301.33 tokens: a response
     of 10^7 tokens is charged 537301 of them, which would land at 8999.994, inside the horizon.
     The whole response lands past it, so the wait is not applied and the clock stops at 9000."""
-    env, agent = run(30.0, 7.0, 256, 5.0, [(None, 10), (Action.wait(1.0), 10**7)])
+    env, agent, result = run(30.0, 7.0, 256, 5.0, [(None, 10), (Action.wait(1.0), 10**7)])
     records = lifecycle(env)
     assert captured_ticks(env) == [0, 5]
     assert [r["remaining_clock_tokens"] for r in records] == [537600, 537301]
@@ -114,7 +115,7 @@ def test_a_response_past_the_horizon_is_not_applied_when_its_allowance_is_not_wh
     assert agent.statuses == ["none", "not_applied_tick_limit"]
     assert records[1]["action_clock_position"] == 9000.0
     assert env.tick_index() == 9000.0
-    assert env._stop_reason == "tick_limit"
+    assert result.stop_reason == "tick_limit"
 
 
 def test_a_large_allowance_is_rounded_down_within_float_noise():
@@ -122,10 +123,12 @@ def test_a_large_allowance_is_rounded_down_within_float_noise():
     tokens are 529.984 frames, 3312.4 ticks; frame 530 (3312.5) is observed at tick 3313. The
     4187 ticks left are 669.92 frames, exactly 66992000 tokens, which floats put a hundred-
     millionth of a token below. A response of all of them lands on the horizon."""
-    env, agent = run(25.0, 4.0, 100000, 5.0, [(None, 52998400), (Action.wait(1.0), 66992000)])
+    env, agent, result = run(
+        25.0, 4.0, 100000, 5.0, [(None, 52998400), (Action.wait(1.0), 66992000)]
+    )
     records = lifecycle(env)
     assert captured_ticks(env) == [0, 3313]
     assert [r["remaining_clock_tokens"] for r in records] == [120000000, 66992000]
     assert records[1]["post_horizon_output_tokens"] == 0
     assert agent.statuses == ["none", "not_applied_tick_limit"]
-    assert env._stop_reason == "tick_limit"
+    assert result.stop_reason == "tick_limit"
