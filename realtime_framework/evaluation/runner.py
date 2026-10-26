@@ -161,6 +161,17 @@ def _model_identity(requested_model, requested_adapter=None):
     }
 
 
+def _distinct(failures: list[dict]) -> list[dict]:
+    """The failures a run found, each once: a failed snapshot read is found by the kernel and
+    again by main(), with the same category and reason."""
+    found, distinct = set(), []
+    for failure in failures:
+        if (failure["category"], failure["reason"]) not in found:
+            found.add((failure["category"], failure["reason"]))
+            distinct.append(failure)
+    return distinct
+
+
 def task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps):
     """B in the task clock's frames, which are environment ticks. The task clock records
     tokens_per_frame times its fps, the environment's, as the tokens per world second
@@ -223,7 +234,8 @@ def _invalid_snapshot(snapshot):
 from realtime_framework.entity.config import task_seed
 
 
-def main():
+def _parser() -> argparse.ArgumentParser:
+    """The runner's arguments, as main() parses them and the emergency summary reads them."""
     p = argparse.ArgumentParser()
     p.add_argument(
         "--adapter",
@@ -305,6 +317,11 @@ def main():
         default=os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
         help="Screen recording encoder: cpu uses libx264; gpu uses NVENC.",
     )
+    return p
+
+
+def main():
+    p = _parser()
     a = p.parse_args()
     a.mode = DEFAULT_MODE  # fixed identity field; the runner has one decision loop
     # prepare_episode_report reads the run's identity from the arguments
@@ -369,6 +386,10 @@ def main():
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    # A run retried in its run directory: the summary there is moved aside, so that the one in
+    # the directory is this run's, the emergency summary's too.
+    if (run_dir / "run_summary.json").exists():
+        (run_dir / "run_summary.json").replace(run_dir / "run_summary.pre_retry.json")
     episode_trace = EpisodeTrace(
         run_dir / "episode_trace.jsonl", run_id=run_id, clock=clocks.operational
     )
@@ -429,7 +450,7 @@ def main():
     artifact_error = None
     evaluation_path = None
     environment_invalid = False
-    invalid_run = None
+    invalid_runs = []  # every failure main() finds, in the order found
     scene_capture = None
     tool_runtime = None
     loop_time_s = None
@@ -670,11 +691,13 @@ def main():
                 frozen_snapshot = getattr(env, "_termination_snapshot", None)
             snapshot_invalid_reason = _invalid_snapshot(frozen_snapshot)
             if snapshot_invalid_reason:
-                invalid_run = {
-                    "category": "environment",
-                    "reason": snapshot_invalid_reason,
-                    "detail": json.dumps(frozen_snapshot, default=str)[:2000],
-                }
+                invalid_runs.append(
+                    {
+                        "category": "environment",
+                        "reason": snapshot_invalid_reason,
+                        "detail": json.dumps(frozen_snapshot, default=str)[:2000],
+                    }
+                )
             episode_trace.emit(
                 TraceEvent.SNAPSHOT_FROZEN,
                 {
@@ -689,12 +712,13 @@ def main():
             episode_trace.checkpoint()
         except Exception:
             detail = traceback.format_exc()
-            invalid_run = {
+            failure = {
                 "category": "environment",
                 "reason": "evaluation_snapshot_failed",
                 "detail": detail,
             }
-            episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+            invalid_runs.append(failure)
+            episode_trace.emit(TraceEvent.RUN_INVALIDATED, failure)
             print("[invalid-run] evaluation snapshot failed:\n" + detail, flush=True)
         try:
             generation_artifact = capture_generation_artifact(
@@ -736,11 +760,13 @@ def main():
         try:
             agent.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "provider",
-                "reason": "provider_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "provider",
+                    "reason": "provider_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
 
         run_stage = "evaluation"
         if frozen_snapshot is None:
@@ -752,11 +778,13 @@ def main():
                 verification = ctask.evaluate_snapshot(frozen_snapshot)
                 evaluation_invalid_reason = invalid_evaluation(verification)
                 if evaluation_invalid_reason:
-                    invalid_run = invalid_run or {
-                        "category": "evaluator",
-                        "reason": evaluation_invalid_reason,
-                        "detail": json.dumps(verification, default=str)[:2000],
-                    }
+                    invalid_runs.append(
+                        {
+                            "category": "evaluator",
+                            "reason": evaluation_invalid_reason,
+                            "detail": json.dumps(verification, default=str)[:2000],
+                        }
+                    )
                     solved = None
                 else:
                     solved = verification["resolved"]
@@ -774,35 +802,37 @@ def main():
                 episode_trace.checkpoint()
             except Exception:
                 _eval_error = traceback.format_exc()
-                invalid_run = invalid_run or {
+                failure = {
                     "category": "evaluator",
                     "reason": "evaluation_exception",
                     "detail": _eval_error,
                 }
-                episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+                invalid_runs.append(failure)
+                episode_trace.emit(TraceEvent.RUN_INVALIDATED, failure)
                 evaluation_path = str(save_evaluation(run_dir, None, error=_eval_error))
                 print("[invalid-run] evaluator exception:\n" + _eval_error, flush=True)
     except Exception:
         error = traceback.format_exc()
-        invalid_run = (
-            getattr(env, "_invalid_run", None) if env is not None else None
-        ) or invalid_run
-        invalid_run = invalid_run or {
-            "category": (
-                "environment"
-                if isinstance(sys.exc_info()[1], EnvironmentInvalidError)
-                or run_stage == "environment_setup"
-                else "provider"
-                if run_stage == "provider_setup"
-                else "tool"
-                if run_stage == "tool_setup"
-                else "evaluator"
-                if run_stage == "evaluation"
-                else "runner"
-            ),
-            "reason": "environment_preflight_failed" if environment_invalid else "run_exception",
-            "detail": error,
-        }
+        invalid_runs.append(
+            {
+                "category": (
+                    "environment"
+                    if isinstance(sys.exc_info()[1], EnvironmentInvalidError)
+                    or run_stage == "environment_setup"
+                    else "provider"
+                    if run_stage == "provider_setup"
+                    else "tool"
+                    if run_stage == "tool_setup"
+                    else "evaluator"
+                    if run_stage == "evaluation"
+                    else "runner"
+                ),
+                "reason": (
+                    "environment_preflight_failed" if environment_invalid else "run_exception"
+                ),
+                "detail": error,
+            }
+        )
         print("RUN ERROR\n" + error, flush=True)
         if evaluation_path is None:
             try:
@@ -830,287 +860,326 @@ def main():
             if agent is not None:
                 agent.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "provider",
-                "reason": "provider_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "provider",
+                    "reason": "provider_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
         # After the agent is closed: stop new agent records, write the queued ones and fence the
         # writer before the checkpoint below and EpisodeFinished.
         if agent_trace is not None:
-            invalid_run = close_agent_trace(agent_trace, invalid_run)
+            failure = close_agent_trace(agent_trace)
+            if failure is not None:
+                invalid_runs.append(failure)
         try:
             if tool_runtime is not None:
                 tool_runtime.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "tool",
-                "reason": "tool_trace_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "tool",
+                    "reason": "tool_trace_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
         try:
             if scene_capture is not None:
                 scene_capture.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "environment",
-                "reason": "cdp_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "environment",
+                    "reason": "cdp_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
         try:
             episode_trace.checkpoint()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "harness",
-                "reason": "episode_trace_checkpoint_failed",
-                "detail": traceback.format_exc(),
-            }
-    deltas = [x[2] for x in timeline]
-    # Billing uses complete provider-reported cost when available (OpenRouter), otherwise a
-    # versioned catalog rate card with modality and cache-read splits (direct providers).
-    tok = getattr(agent, "token_usage", None) if agent is not None else None
-    adapter_tok = tok
-    tok = {"input_tokens": None, "output_tokens": None, "total_tokens": None, "responses": 0}
-    accounting = getattr(env, "_token_accounting", None) if env is not None else None
-    token_accounting = accounting.summary() if accounting is not None else None
-    if token_accounting is not None:
-        counts = token_accounting["counts"]
-        tok = {
-            name: counts["provider_" + name]["total"]
-            for name in ("input_tokens", "output_tokens", "total_tokens")
-        }
-        tok["responses"] = token_accounting["responses"]
-    cost_accounting = summarize_cost(
-        token_accounting,
-        pricing=(catalog_entry.pricing if catalog_entry is not None else None),
-        provider=(catalog_entry.provider if catalog_entry is not None else None),
-        # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
-        unaccounted="not_accounted_streaming" if a.interaction_mode == "streaming" else None,
-    )
-    from realtime_framework.evaluation.clock import summarize_model_timing
-
-    model_timing = summarize_model_timing(run_dir, interaction_mode=a.interaction_mode)
-    cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
-    cost_known_usd = cost_accounting.get("known_cost_usd")
-    invalid_run = (getattr(env, "_invalid_run", None) if env is not None else None) or invalid_run
-    if environment_invalid:
-        invalid_run = invalid_run or {
-            "category": "environment",
-            "reason": "environment_preflight_failed",
-        }
-    if invalid_run is not None:
-        solved = None
-    run_status = (
-        "invalid"
-        if invalid_run is not None
-        else ("scored" if benchmark_cell_eligible else "experimental")
-    )
-    # The stop reason and the end time are LATCHED by the runner at loop exit (env._stop_reason,
-    # env._termination), so cleanup that crosses the deadline rewrites neither a real environment
-    # terminal state into time_limit nor the episode's length. Any invalid run reports
-    # "invalid_run"; "setup_error" if we never reached the loop.
-    latched = getattr(env, "_stop_reason", None) if env is not None else None
-    termination = getattr(env, "_termination", None) if env is not None else None
-    stop_reason = (
-        "invalid_run"
-        if invalid_run is not None
-        else (latched or ("setup_error" if env is None else "unknown"))
-    )
-    world_time_s = termination["end_s"] if termination is not None else None
-    # The trace holds every record the episode wrote, checkpointed above. A streaming section
-    # that cannot be read leaves the run unscored, as the run metrics below then count it.
-    streaming = None
-    if a.interaction_mode == "streaming":
-        try:
-            streaming = summarize_streaming(
-                run_dir / "episode_trace.jsonl",
-                (runtime_config or {}).get("streaming"),
-                attempt_id=episode_trace.attempt_id,
+            invalid_runs.append(
+                {
+                    "category": "harness",
+                    "reason": "episode_trace_checkpoint_failed",
+                    "detail": traceback.format_exc(),
+                }
             )
-        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
-        except json.JSONDecodeError:
-            invalid_run = invalid_run or {
-                "category": "harness",
-                "reason": "streaming_summary_failed",
-                "detail": traceback.format_exc(),
+    # The environment latches a failure only while the episode runs, before any main() finds.
+    latched_invalid = getattr(env, "_invalid_run", None) if env is not None else None
+    if latched_invalid is not None:
+        invalid_runs.insert(0, latched_invalid)
+    # A failure building the summary leaves one that says so (_write_emergency_summary).
+    try:
+        deltas = [x[2] for x in timeline]
+        # Billing uses complete provider-reported cost when available (OpenRouter), otherwise a
+        # versioned catalog rate card with modality and cache-read splits (direct providers).
+        tok = getattr(agent, "token_usage", None) if agent is not None else None
+        adapter_tok = tok
+        tok = {"input_tokens": None, "output_tokens": None, "total_tokens": None, "responses": 0}
+        accounting = getattr(env, "_token_accounting", None) if env is not None else None
+        token_accounting = accounting.summary() if accounting is not None else None
+        if token_accounting is not None:
+            counts = token_accounting["counts"]
+            tok = {
+                name: counts["provider_" + name]["total"]
+                for name in ("input_tokens", "output_tokens", "total_tokens")
             }
+            tok["responses"] = token_accounting["responses"]
+        cost_accounting = summarize_cost(
+            token_accounting,
+            pricing=(catalog_entry.pricing if catalog_entry is not None else None),
+            provider=(catalog_entry.provider if catalog_entry is not None else None),
+            # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
+            unaccounted="not_accounted_streaming" if a.interaction_mode == "streaming" else None,
+        )
+        from realtime_framework.evaluation.clock import summarize_model_timing
+
+        model_timing = summarize_model_timing(run_dir, interaction_mode=a.interaction_mode)
+        cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
+        cost_known_usd = cost_accounting.get("known_cost_usd")
+        invalid_run = invalid_runs[0] if invalid_runs else None
+        if invalid_run is not None:
+            solved = None
+        run_status = (
+            "invalid"
+            if invalid_run is not None
+            else ("scored" if benchmark_cell_eligible else "experimental")
+        )
+        # The stop reason and the end time are LATCHED by the runner at loop exit
+        # (env._stop_reason, env._termination), so cleanup that crosses the deadline rewrites
+        # neither a real environment terminal state into time_limit nor the episode's length.
+        # Any invalid run reports "invalid_run"; "setup_error" if we never reached the loop.
+        latched = getattr(env, "_stop_reason", None) if env is not None else None
+        termination = getattr(env, "_termination", None) if env is not None else None
+        stop_reason = (
+            "invalid_run"
+            if invalid_run is not None
+            else (latched or ("setup_error" if env is None else "unknown"))
+        )
+        world_time_s = termination["end_s"] if termination is not None else None
+        # The trace holds every record the episode wrote, checkpointed above. A streaming section
+        # that cannot be read leaves the run unscored, as the run metrics below then count it.
+        streaming = None
+        if a.interaction_mode == "streaming":
+            try:
+                streaming = summarize_streaming(
+                    run_dir / "episode_trace.jsonl",
+                    (runtime_config or {}).get("streaming"),
+                    attempt_id=episode_trace.attempt_id,
+                )
+            # A record written in part has the next one after it on its line (EpisodeTrace.emit).
+            except json.JSONDecodeError:
+                invalid_runs.append(
+                    {
+                        "category": "harness",
+                        "reason": "streaming_summary_failed",
+                        "detail": traceback.format_exc(),
+                    }
+                )
+                invalid_run = invalid_runs[0]
+                solved = None
+                run_status = "invalid"
+                stop_reason = "invalid_run"
+        try:
+            run_metrics = summarize_run_metrics(
+                run_dir / "action_lifecycle.jsonl",
+                total_decisions=len(timeline),
+                solved=solved,
+                clock_mode=a.clock,
+                tokens_per_frame=tokens_per_frame,
+                fps=model_input_fps,
+                termination=termination,
+                horizon_s=a.max_minutes * 60,
+            )
+        except Exception:
+            metrics_error = traceback.format_exc()
+            invalid_runs.append(
+                {
+                    "category": "harness",
+                    "reason": "run_metrics_aggregation_failed",
+                    "detail": metrics_error,
+                }
+            )
+            invalid_run = invalid_runs[0]
             solved = None
             run_status = "invalid"
             stop_reason = "invalid_run"
-    try:
-        run_metrics = summarize_run_metrics(
-            run_dir / "action_lifecycle.jsonl",
-            total_decisions=len(timeline),
-            solved=solved,
-            clock_mode=a.clock,
-            tokens_per_frame=tokens_per_frame,
-            fps=model_input_fps,
-            termination=termination,
-            horizon_s=a.max_minutes * 60,
-        )
-    except Exception:
-        metrics_error = traceback.format_exc()
-        invalid_run = invalid_run or {
-            "category": "harness",
-            "reason": "run_metrics_aggregation_failed",
-            "detail": metrics_error,
+            run_metrics = summarize_run_metrics(
+                run_dir / "missing-action-lifecycle.jsonl",
+                total_decisions=len(timeline),
+                solved=None,
+                clock_mode=a.clock,
+                tokens_per_frame=tokens_per_frame,
+                fps=model_input_fps,
+                termination=None,
+                horizon_s=a.max_minutes * 60,
+                validate_decision_count=False,
+            )
+            run_metrics["run_metrics_error"] = metrics_error
+        effective_model_identity = {
+            "adapter": cfg.adapter_type if cfg else requested_model_identity["adapter"],
+            "model": requested_model_identity["model"],
+            "backend_model": cfg.model_name if cfg else requested_model_identity["backend_model"],
         }
-        solved = None
-        run_status = "invalid"
-        stop_reason = "invalid_run"
-        run_metrics = summarize_run_metrics(
-            run_dir / "missing-action-lifecycle.jsonl",
-            total_decisions=len(timeline),
-            solved=None,
-            clock_mode=a.clock,
-            tokens_per_frame=tokens_per_frame,
-            fps=model_input_fps,
-            termination=None,
-            horizon_s=a.max_minutes * 60,
-            validate_decision_count=False,
+        run_identity = resolve_run_identity(
+            task_id=a.task,
+            ctask=ctask,
+            **effective_model_identity,
+            mode=a.mode,
+            cap=a.max_minutes,
+            protocol=protocol,
+            harness_hash=harness_hash,
+            fps=env_fps,
+            model_input_fps=model_input_fps,
+            interaction_mode=a.interaction_mode,
+            runtime_config_hash=runtime_config_hash,
         )
-        run_metrics["run_metrics_error"] = metrics_error
-    effective_model_identity = {
-        "adapter": cfg.adapter_type if cfg else requested_model_identity["adapter"],
-        "model": requested_model_identity["model"],
-        "backend_model": cfg.model_name if cfg else requested_model_identity["backend_model"],
-    }
-    run_identity = resolve_run_identity(
-        task_id=a.task,
-        ctask=ctask,
-        **effective_model_identity,
-        mode=a.mode,
-        cap=a.max_minutes,
-        protocol=protocol,
-        harness_hash=harness_hash,
-        fps=env_fps,
-        model_input_fps=model_input_fps,
-        interaction_mode=a.interaction_mode,
-        runtime_config_hash=runtime_config_hash,
-    )
-    summ = {
-        **run_identity,
-        "instance_id": a.task,
-        "task_description": task,
-        "reasoning_effort": reasoning_effort,
-        "benchmark_eligible": benchmark_cell_eligible,
-        "comparison_scope": comparison_scope,
-        "interactables_protocol": (INTERACTABLES_PROTOCOL if tool_runtime is not None else None),
-        "interactables_schema": (INTERACTABLES_SCHEMA if tool_runtime is not None else None),
-        "interactables_representation": (
-            INTERACTABLES_REPRESENTATION if tool_runtime is not None else None
-        ),
-        "interactables_artifact": ("tool_calls.jsonl" if tool_runtime is not None else None),
-        "run_status": run_status,
-        "invalid_run": invalid_run,
-        "solved": solved,
-        "decisions": len(timeline),
-        "actions_executed": getattr(env, "actions", 0) if env is not None else 0,
-        "actions_failed": getattr(env, "failed", 0) if env is not None else 0,
-        "avg_delta_ticks": round(sum(deltas) / len(deltas), 2) if deltas else None,
-        "token_usage": tok,
-        "cost_usd": cost_usd,
-        "cost_known_usd": cost_known_usd,
-        "cost_status": cost_accounting.get("status"),
-        "cost_source": cost_accounting.get("source"),
-        "cost_accounting": cost_accounting,
-        "token_usage_source": "provider_reported_inference_responses",
-        "token_accounting": token_accounting,
-        "token_clock_sources": (
-            token_accounting.get("clock_sources") if token_accounting is not None else None
-        ),
-        "adapter_token_usage": adapter_tok,
-        "adapter_token_usage_note": "Adapter-native cumulative counters; not used for the action clock or billing.",
-        "token_accounting_source": (
-            ",".join(token_accounting.get("clock_sources") or []) or None
-            if token_accounting is not None
-            else None
-        ),
-        "stop_reason": stop_reason,
-        "failure_attribution": ((invalid_run or {}).get("category") if invalid_run else None),
-        "environment_valid": (
-            False
-            if (invalid_run or {}).get("category") == "environment" or environment_invalid
-            else None
-        ),
-        "loop_stop_reason": latched,
-        "termination": termination,
-        "max_minutes": a.max_minutes,
-        "seed": a.seed,
-        "applied_seed": getattr(ctask, "applied_seed", None),
-        "clock_mode": a.clock,
-        "tokens_per_frame": tokens_per_frame,
-        "dropped_intermediate_frames": int(getattr(env, "_dropped_intermediate_frames", 0) or 0)
-        if env is not None
-        else 0,
-        "output_clock_policy": OUTPUT_CLOCK_POLICY,
-        "tokens_per_world_second": (
-            tokens_per_frame * model_input_fps
-            if a.clock == "token" and tokens_per_frame is not None
-            else None
-        ),
-        "world_time_s": world_time_s,
-        "last_clock_advance": (
-            getattr(ctask, "_last_clock_advance", None) if ctask is not None else None
-        ),
-        "think_budget_s": think_budget,
-        "per_move_cap_s": per_move_cap,
-        "think_spent_s": round(getattr(env, "_think_spent", 0.0), 1) if env is not None else 0.0,
-        "runtime_config": runtime_config,
-        "observation_stream_frozen": bool(getattr(env, "_stream_frozen", False))
-        if env is not None
-        else False,
-        "observation_stream_freeze_count": int(getattr(env, "_stream_freeze_count", 0) or 0)
-        if env is not None
-        else 0,
-        "loop_time_s": loop_time_s,
-        "active_wall_time_s": (active_loop or {}).get("active_wall_time_s"),
-        "active_loop_artifact": "active-loop.json"
-        if (run_dir / "active-loop.json").is_file()
-        else None,
-        "captures": len(getattr(env, "capture_times", [])) if env is not None else 0,
-        "effective_capture_fps": _effective_capture_fps(env),
-        "avg_capture_latency_s": _metric_avg(env, "capture_latencies"),
-        "max_capture_latency_s": _metric_max(env, "capture_latencies"),
-        "avg_frame_age_at_action_s": _metric_avg(env, "frame_ages"),
-        "max_frame_age_at_action_s": _metric_max(env, "frame_ages"),
-        "action_lifecycle_artifact": (
-            "action_lifecycle.jsonl" if (run_dir / "action_lifecycle.jsonl").is_file() else None
-        ),
-        "wall_time_s": model_timing["wall_time_s"],
-        "model_timing": model_timing,
-        "total_run_time_s": round(clocks.operational.time() - t0, 1),
-        "verification": verification,
-        "error": error,
-        "generation_artifact": (
-            "generation_artifact/manifest.json" if generation_artifact is not None else None
-        ),
-        "artifact_error": artifact_error,
-        "evaluation_artifact": ("evaluation.json" if evaluation_path is not None else None),
-        # Partial-credit progress headline (None for games without partial credit).
-        "progress": (verification or {}).get("progress"),
-        **run_metrics,
-    }
-    if invalid_run is not None:
-        episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
-    episode_trace.emit(
-        TraceEvent.EPISODE_FINISHED,
-        {
+        failures = _distinct(invalid_runs)
+        summ = {
+            **run_identity,
+            "instance_id": a.task,
+            "task_description": task,
+            "reasoning_effort": reasoning_effort,
+            "benchmark_eligible": benchmark_cell_eligible,
+            "comparison_scope": comparison_scope,
+            "interactables_protocol": (
+                INTERACTABLES_PROTOCOL if tool_runtime is not None else None
+            ),
+            "interactables_schema": (INTERACTABLES_SCHEMA if tool_runtime is not None else None),
+            "interactables_representation": (
+                INTERACTABLES_REPRESENTATION if tool_runtime is not None else None
+            ),
+            "interactables_artifact": ("tool_calls.jsonl" if tool_runtime is not None else None),
             "run_status": run_status,
-            **episode_outcome(summ),
-            "stop_reason": stop_reason,
-            "resolved": solved,
+            "invalid_run": invalid_run,
+            # Each failure after the run's too, which a re-evaluation keeps
+            # (reporting.reevaluate_main).
+            **({"invalid_runs": failures} if len(failures) > 1 else {}),
+            "solved": solved,
             "decisions": len(timeline),
             "actions_executed": getattr(env, "actions", 0) if env is not None else 0,
+            "actions_failed": getattr(env, "failed", 0) if env is not None else 0,
+            "avg_delta_ticks": round(sum(deltas) / len(deltas), 2) if deltas else None,
+            "token_usage": tok,
+            "cost_usd": cost_usd,
+            "cost_known_usd": cost_known_usd,
+            "cost_status": cost_accounting.get("status"),
+            "cost_source": cost_accounting.get("source"),
+            "cost_accounting": cost_accounting,
+            "token_usage_source": "provider_reported_inference_responses",
+            "token_accounting": token_accounting,
+            "token_clock_sources": (
+                token_accounting.get("clock_sources") if token_accounting is not None else None
+            ),
+            "adapter_token_usage": adapter_tok,
+            "adapter_token_usage_note": "Adapter-native cumulative counters; not used for the action clock or billing.",
+            "token_accounting_source": (
+                ",".join(token_accounting.get("clock_sources") or []) or None
+                if token_accounting is not None
+                else None
+            ),
+            "stop_reason": stop_reason,
+            "failure_attribution": ((invalid_run or {}).get("category") if invalid_run else None),
+            "environment_valid": (
+                False
+                if (invalid_run or {}).get("category") == "environment" or environment_invalid
+                else None
+            ),
+            "loop_stop_reason": latched,
+            "termination": termination,
+            "max_minutes": a.max_minutes,
+            "seed": a.seed,
+            "applied_seed": getattr(ctask, "applied_seed", None),
+            "clock_mode": a.clock,
+            "tokens_per_frame": tokens_per_frame,
+            "dropped_intermediate_frames": int(getattr(env, "_dropped_intermediate_frames", 0) or 0)
+            if env is not None
+            else 0,
+            "output_clock_policy": OUTPUT_CLOCK_POLICY,
+            "tokens_per_world_second": (
+                tokens_per_frame * model_input_fps
+                if a.clock == "token" and tokens_per_frame is not None
+                else None
+            ),
             "world_time_s": world_time_s,
-        },
-    )
-    summ.update(episode_outcome(summ))
-    summ["episode_trace"] = episode_trace.describe()
-    episode_trace.close()
-    if a.interaction_mode == "streaming":
-        summ["streaming"] = streaming
-    _atomic_write_json(run_dir / "run_summary.json", summ)
+            "last_clock_advance": (
+                getattr(ctask, "_last_clock_advance", None) if ctask is not None else None
+            ),
+            "think_budget_s": think_budget,
+            "per_move_cap_s": per_move_cap,
+            "think_spent_s": (
+                round(getattr(env, "_think_spent", 0.0), 1) if env is not None else 0.0
+            ),
+            "runtime_config": runtime_config,
+            "observation_stream_frozen": bool(getattr(env, "_stream_frozen", False))
+            if env is not None
+            else False,
+            "observation_stream_freeze_count": int(getattr(env, "_stream_freeze_count", 0) or 0)
+            if env is not None
+            else 0,
+            "loop_time_s": loop_time_s,
+            "active_wall_time_s": (active_loop or {}).get("active_wall_time_s"),
+            "active_loop_artifact": "active-loop.json"
+            if (run_dir / "active-loop.json").is_file()
+            else None,
+            "captures": len(getattr(env, "capture_times", [])) if env is not None else 0,
+            "effective_capture_fps": _effective_capture_fps(env),
+            "avg_capture_latency_s": _metric_avg(env, "capture_latencies"),
+            "max_capture_latency_s": _metric_max(env, "capture_latencies"),
+            "avg_frame_age_at_action_s": _metric_avg(env, "frame_ages"),
+            "max_frame_age_at_action_s": _metric_max(env, "frame_ages"),
+            "action_lifecycle_artifact": (
+                "action_lifecycle.jsonl" if (run_dir / "action_lifecycle.jsonl").is_file() else None
+            ),
+            "wall_time_s": model_timing["wall_time_s"],
+            "model_timing": model_timing,
+            "total_run_time_s": round(clocks.operational.time() - t0, 1),
+            "verification": verification,
+            "error": error,
+            "generation_artifact": (
+                "generation_artifact/manifest.json" if generation_artifact is not None else None
+            ),
+            "artifact_error": artifact_error,
+            "evaluation_artifact": ("evaluation.json" if evaluation_path is not None else None),
+            # Partial-credit progress headline (None for games without partial credit).
+            "progress": (verification or {}).get("progress"),
+            **run_metrics,
+        }
+        if invalid_run is not None:
+            episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+        episode_trace.emit(
+            TraceEvent.EPISODE_FINISHED,
+            {
+                "run_status": run_status,
+                **episode_outcome(summ),
+                "stop_reason": stop_reason,
+                "resolved": solved,
+                "decisions": len(timeline),
+                "actions_executed": getattr(env, "actions", 0) if env is not None else 0,
+                "world_time_s": world_time_s,
+            },
+        )
+        summ.update(episode_outcome(summ))
+        summ["episode_trace"] = episode_trace.describe()
+        episode_trace.close()
+        if a.interaction_mode == "streaming":
+            summ["streaming"] = streaming
+        _atomic_write_json(run_dir / "run_summary.json", summ)
+    except Exception:
+        detail = traceback.format_exc()
+        invalid_runs.append(
+            {"category": "harness", "reason": "run_summary_failed", "detail": detail}
+        )
+        print("[invalid-run] run summary failed:\n" + detail, flush=True)
+        _write_emergency_summary(
+            detail,
+            _distinct(invalid_runs),
+            "invalid_run",
+            decisions=len(timeline),
+            actions_executed=getattr(env, "actions", 0) if env is not None else 0,
+        )
+        raise SystemExit(1) from None
     from realtime_framework.evaluation.reporting import finalize_video
 
     finalize_video(run_dir)
@@ -1274,35 +1343,39 @@ def set_up_agent(
 
 def _write_emergency_setup_summary(error: str):
     """Persist setup/provision failures that happen before main() enters its episode try/finally."""
+    _write_emergency_summary(
+        error, [{"category": "runner", "reason": "setup_error", "detail": error}], "setup_error"
+    )
 
-    def arg(name, default=None):
-        try:
-            return sys.argv[sys.argv.index(name) + 1]
-        except (ValueError, IndexError):
-            return default
 
-    run_id = arg("--run-id")
-    results_dir = arg("--results-dir", "results")
-    if not run_id:
+def _write_emergency_summary(
+    error: str,
+    failures: list[dict],
+    stop_reason: str,
+    *,
+    decisions: int = 0,
+    actions_executed: int = 0,
+):
+    """The summary of an invalid run main() wrote none for, from the arguments main() parsed: a
+    failure to set up, or one building the summary after the episode (main). The run is invalid
+    for the first of ``failures``, each a different one."""
+    a = _parser().parse_args()
+    if not a.run_id:
         return
-    run_dir = Path(results_dir) / run_id
+    run_dir = Path(a.results_dir) / a.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / "run_summary.json"
     if path.exists():
         return
-    requested_model = arg("--model")
-    model_identity = _model_identity(requested_model, arg("--adapter"))
+    model_identity = _model_identity(a.model, a.adapter)
     mode = DEFAULT_MODE
-    clock_mode = arg("--clock", "token")
-    protocol = arg(
-        "--protocol",
-        "wall-clock" if clock_mode == "wall" else "time-aware-token-v1",
-    )
-    cap_minutes = float(arg("--max-minutes", "5.0"))
-    env_fps = float(arg("--fps", "1.0"))
-    model_input_fps = float(arg("--model-input-fps", str(env_fps)))
+    clock_mode = a.clock or "token"
+    protocol = a.protocol or ("wall-clock" if clock_mode == "wall" else "time-aware-token-v1")
+    cap_minutes = a.max_minutes
+    env_fps = a.fps
+    model_input_fps = env_fps if a.model_input_fps is None else a.model_input_fps
     run_identity = resolve_run_identity(
-        task_id=arg("--task"),
+        task_id=a.task,
         **model_identity,
         mode=mode,
         cap=cap_minutes,
@@ -1310,45 +1383,49 @@ def _write_emergency_setup_summary(error: str):
         harness_hash=harness_fingerprint(),
         fps=env_fps,
         model_input_fps=model_input_fps,
-        interaction_mode=arg("--interaction-mode", "turn_based"),
+        interaction_mode=a.interaction_mode,
     )
-    tokens_per_frame_arg = arg("--tokens-per-frame", str(DEFAULT_TOKENS_PER_FRAME))
     tokens_per_frame = (
         None
-        if clock_mode == "wall" or tokens_per_frame_arg == "unlimited"
-        else int(tokens_per_frame_arg)
+        if clock_mode == "wall" or a.tokens_per_frame == "unlimited"
+        else int(a.tokens_per_frame)
     )
+    # No decision lifecycle: a run that failed to set up wrote none, one in a run directory used
+    # before is an earlier run's, and one main() could not summarize may be what failed.
     run_metrics = summarize_run_metrics(
-        run_dir / "action_lifecycle.jsonl",
-        total_decisions=0,
+        run_dir / "missing-action-lifecycle.jsonl",
+        total_decisions=decisions,
         solved=None,
         clock_mode=clock_mode,
         tokens_per_frame=tokens_per_frame,
         fps=model_input_fps,
         termination=None,
         horizon_s=cap_minutes * 60,
+        validate_decision_count=False,
     )
     cost_accounting = summarize_cost(None)
+    invalid_run = failures[0]
     _atomic_write_json(
         path,
         {
             **run_identity,
-            "instance_id": arg("--task"),
+            "instance_id": a.task,
             "max_minutes": cap_minutes,
-            "seed": task_seed(arg("--seed", os.environ.get("SEED", "42"))),
+            "seed": a.seed,
             "clock_mode": clock_mode,
             "tokens_per_frame": tokens_per_frame,
             "world_time_s": None,
             "run_status": "invalid",
-            "invalid_run": {"category": "runner", "reason": "setup_error", "detail": error},
+            "invalid_run": invalid_run,
+            **({"invalid_runs": failures} if len(failures) > 1 else {}),
             "outcome": "error",
-            "error_category": "runner",
-            "error_reason": "setup_error",
-            "failure_attribution": "runner",
+            "error_category": invalid_run["category"],
+            "error_reason": invalid_run["reason"],
+            "failure_attribution": invalid_run["category"],
             "solved": None,
-            "decisions": 0,
-            "actions_executed": 0,
-            "stop_reason": "setup_error",
+            "decisions": decisions,
+            "actions_executed": actions_executed,
+            "stop_reason": stop_reason,
             "loop_stop_reason": None,
             "termination": None,
             "verification": None,

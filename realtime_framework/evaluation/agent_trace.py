@@ -400,12 +400,12 @@ class AgentTraceSink:
         }
 
 
-def close_agent_trace(sink: AgentTraceSink, invalid_run, *, timeout=AGENT_TRACE_FLUSH_S):
+def close_agent_trace(sink: AgentTraceSink, *, timeout=AGENT_TRACE_FLUSH_S) -> dict | None:
     """Finish the agent's records before the runner checkpoints and writes EpisodeFinished.
 
     Captures after this point are only counted. The runner thread writes AgentTraceClosed after
     the writer is fenced, so no agent record follows it. A writer error or a flush that does not
-    finish within ``timeout`` invalidates the run; an earlier invalid reason is kept.
+    finish within ``timeout`` invalidates the run: the invalid run is returned, None otherwise.
     """
     summary = sink.finish(timeout)
     try:
@@ -413,7 +413,7 @@ def close_agent_trace(sink: AgentTraceSink, invalid_run, *, timeout=AGENT_TRACE_
     except Exception:  # noqa: BLE001 - the chain cannot record the close
         summary["error"] = summary["error"] or traceback.format_exc()
     if summary["error"]:
-        return invalid_run or {
+        return {
             "category": "harness",
             "reason": "agent_trace_write_failed",
             # The end of the traceback, which names the exception; the whole text is in
@@ -421,11 +421,11 @@ def close_agent_trace(sink: AgentTraceSink, invalid_run, *, timeout=AGENT_TRACE_
             "detail": summary["error"][-2000:],
         }
     if summary["pending_at_timeout"] is not None:
-        return invalid_run or {
+        return {
             "category": "harness",
             "reason": "agent_trace_flush_timeout",
             "detail": (
                 f"{summary['pending_at_timeout']} agent trace records unwritten after {timeout:g}s"
             ),
         }
-    return invalid_run
+    return None
