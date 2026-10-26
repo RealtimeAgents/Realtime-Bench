@@ -443,8 +443,8 @@ runtime:
 
 def test_a_run_plan_carries_the_mode_to_the_runner(tmp_path):
     """``rtbench run -c PLAN``, as tests/config/test_frame_rates.py follows the frame rates: the
-    plan's runtime becomes the Harbor agent's options, the trial's task.json and command, the
-    trial's plan, and the runner's arguments, which its episode start records."""
+    plan's runtime becomes the Harbor agent's options, the trial's task.json and command, and the
+    plan of the trial's launch file, which the runner reads and its episode start records."""
     plan = tmp_path / "turn_based.yaml"
     plan.write_text(PLAN.format(mode="turn_based"))
     entry = f"harbor:{plan}"
@@ -462,7 +462,8 @@ def test_a_run_plan_carries_the_mode_to_the_runner(tmp_path):
     assert argv[argv.index("--interaction-mode") + 1] == "turn_based"
     assert cell["trial"]["settings"]["plan"]["runtime"]["interaction_mode"] == "turn_based"
     argv = cell["runner_argv"]
-    assert argv[argv.index("--interaction-mode") + 1] == "turn_based"
+    assert argv[argv.index("--launch") + 1] == "<results>/wall_clock_launch.json"
+    assert "--interaction-mode" not in argv
     assert cell["run"]["interaction_mode"] == "turn_based"
     assert cell["runtime_config"]["interaction_mode"] == "turn_based"
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
@@ -482,7 +483,7 @@ def test_each_step_passes_streaming_on(
 ):
     """The same steps in this interpreter, where a driver can declare streaming: the value each
     step receives is the one it hands on, not its default."""
-    from realtime_framework.evaluation import _trial, harbor_cli
+    from realtime_framework.evaluation import _trial, harbor_cli, runner
     from realtime_framework.evaluation.harbor import ApptainerEnvironment, RealtimeBenchOptions
 
     plan = tmp_path / "streaming.yaml"
@@ -510,8 +511,10 @@ def test_each_step_passes_streaming_on(
     assert _trial.main([*trial_argv, "--dry-run"]) == 0
     settings = json.loads(capsys.readouterr().out)
     assert settings["plan"]["runtime"]["interaction_mode"] == "streaming"
-    runner_argv = _trial.runner_arguments(settings["plan"])
-    assert runner_argv[runner_argv.index("--interaction-mode") + 1] == "streaming"
+    (tmp_path / _trial.LAUNCH_FILE).write_text(json.dumps(settings))
+    parser = runner._parser()
+    arguments = parser.parse_args(_trial.runner_arguments(tmp_path))
+    assert runner._run_spec(parser, arguments).interaction_mode == "streaming"
 
 
 def _trial_launch(capsys, interaction_mode) -> dict:

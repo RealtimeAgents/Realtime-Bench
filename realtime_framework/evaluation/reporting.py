@@ -8,6 +8,7 @@ import json as json
 from pathlib import Path as Path
 import time as time
 
+from realtime_framework.evaluation._trial import LAUNCH_FILE
 from realtime_framework.evaluation.config import configuration_sha256
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
 
@@ -1676,7 +1677,7 @@ def report(root):
                 "tasks": rows,
             }
         )
-    launch_path = root / "wall_clock_launch.json"
+    launch_path = root / LAUNCH_FILE
     if launch_path.is_file():
         launch = json.loads(launch_path.read_text())
         output["integration"] = {

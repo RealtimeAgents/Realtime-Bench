@@ -231,6 +231,7 @@ def _invalid_snapshot(snapshot):
 from realtime_framework.evaluation.config import runner_run_spec
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
+from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import PROTOCOLS
 from realtime_framework.evaluation.run_spec import RunSpec
 
@@ -240,13 +241,18 @@ def _parser() -> argparse.ArgumentParser:
     option not given is None, which takes the runner's default (evaluation/run_spec.py)."""
     p = argparse.ArgumentParser()
     p.add_argument(
+        "--launch",
+        type=Path,
+        help="the Harbor trial worker's launch file (evaluation/_trial.py), whose plan gives the "
+        "run options, the model, its reasoning effort and the task in place of their arguments",
+    )
+    p.add_argument(
         "--adapter",
         default=None,
         help="adapter_type; optional when --model is a catalog key (then it is derived).",
     )
     p.add_argument(
         "--model",
-        required=True,
         help="a catalog key (realtime_framework/providers/registry.py) OR a raw backend id / local model path",
     )
     p.add_argument("--fps", type=float, default=None)
@@ -282,7 +288,7 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="model-native reasoning effort; catalog models validate their own range.",
     )
-    p.add_argument("--task", required=True, help="registered task id")
+    p.add_argument("--task", help="registered task id")
     p.add_argument("--seed", default=None, help="task seed (default: SEED where it is set)")
     p.add_argument("--max-minutes", type=float, default=None)
     p.add_argument(
@@ -324,19 +330,40 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+# What a launch file gives in place of the runner's arguments.
+_LAUNCHED = (
+    "adapter", "model", "task", "reasoning_effort", "clock", "tokens_per_frame", "fps",
+    "model_input_fps", "interaction_mode", "max_minutes", "seed", "protocol", "think_budget_s",
+    "per_move_cap_s",
+)  # fmt: skip
+
+
 def _run_spec(p: argparse.ArgumentParser, a) -> RunSpec:
-    """The run options main() runs with, from the arguments ``a`` it parsed with ``p``."""
-    try:
-        return runner_run_spec(a)
-    except ValueError as exc:
-        p.error(str(exc))
+    """The run options main() runs with, from the arguments ``a`` it parsed with ``p``, or from
+    the plan of the launch file they name, whose model, reasoning effort and task are set in
+    ``a``."""
+    if a.launch is None:
+        if a.model is None or a.task is None:
+            p.error("--model and --task are required without --launch")
+        try:
+            return runner_run_spec(a)
+        except ValueError as exc:
+            p.error(str(exc))
+    given = [name for name in _LAUNCHED if getattr(a, name) is not None]
+    if given:
+        p.error(f"--launch gives {', '.join(given)}; omit them")
+    plan = json.loads(a.launch.read_text())["plan"]
+    (model,) = plan["models"]
+    (a.task,) = plan["tasks"]
+    a.model, a.reasoning_effort = model["key"], model["reasoning_effort"]
+    return RunSpec(**{option: plan["runtime"][option] for option in PLAN_OPTIONS})
 
 
 def main():
     p = _parser()
     a = p.parse_args()
-    apply_run_defaults(a)
     spec = _run_spec(p, a)
+    apply_run_defaults(a)
     # spec.fps is the environment's frame rate (task clock, ticks, loop, scored world time);
     # spec.model_input_fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
     env_fps, model_input_fps = spec.fps, spec.model_input_fps

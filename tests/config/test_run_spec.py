@@ -5,11 +5,16 @@ entry points differ on purpose (ENTRY_DEFAULTS)."""
 from __future__ import annotations
 
 import dataclasses
+import os
+from pathlib import Path
 
 import pytest
 
+import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.config import DEFAULT_TASK_SEED, DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.evaluation.run_spec import RunSpec, run_spec
+
+GEMINI, WEB = "gemini-3.8-live", "rt_waitlist_fit"
 
 
 def test_a_spec_is_frozen_and_refuses_an_option_it_does_not_declare():
@@ -114,3 +119,69 @@ def test_each_option_is_checked_where_it_is_declared(options, message):
 def test_a_legacy_protocol_label_keeps_its_caps():
     spec = run_spec("runner", clock_mode="wall", protocol="legacy", think_budget_s=5.0)
     assert (spec.protocol, spec.think_budget_s) == ("legacy", 5.0)
+
+
+@pytest.fixture
+def environment():
+    """_trial.main writes os.environ (evaluation/_trial.py)."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+def _launch(tmp_path, capsys, *argv) -> Path:
+    """The launch file of a trial worker's dry run on ``argv``, where it writes it."""
+    from realtime_framework.evaluation import _trial
+
+    assert _trial.main([*argv, "--dry-run"]) == 0
+    (tmp_path / _trial.LAUNCH_FILE).write_text(capsys.readouterr().out)
+    return tmp_path
+
+
+def test_the_runner_runs_the_options_the_trial_worker_wrote(environment, tmp_path, capsys):
+    """The trial worker parses its options once and writes them into its launch file; the runner
+    it execs reads them, the model, its reasoning effort and the task from there (runner.py
+    --launch), not from a command line rebuilt for it."""
+    from realtime_framework.evaluation import _trial, runner
+
+    os.environ.pop("SEED", None)
+    root = _launch(
+        tmp_path, capsys, "--catalog-model", GEMINI, "--task", WEB, "--fps", "2",
+        "--model-input-fps", "1", "--duration-minutes", "3", "--seed", "7",
+    )  # fmt: skip
+    parser = runner._parser()
+    arguments = parser.parse_args(_trial.runner_arguments(root))
+    spec = runner._run_spec(parser, arguments)
+    assert spec == run_spec("trial", fps=2.0, model_input_fps=1.0, duration_minutes=3.0, seed=7)
+    effort = catalog.get(GEMINI).defaults["reasoning_effort"]
+    assert (arguments.model, arguments.task, arguments.reasoning_effort) == (GEMINI, WEB, effort)
+
+
+@pytest.mark.parametrize(
+    "argv, given", [(["--fps", "2"], "fps"), (["--model", GEMINI, "--seed", "1"], "model, seed")]
+)
+def test_the_runner_refuses_what_its_launch_file_gives(
+    environment, tmp_path, capsys, argv, given
+):
+    from realtime_framework.evaluation import _trial, runner
+
+    root = _launch(tmp_path, capsys, "--catalog-model", GEMINI, "--task", WEB)
+    parser = runner._parser()
+    arguments = parser.parse_args([*_trial.runner_arguments(root), *argv])
+    with pytest.raises(SystemExit) as caught:
+        runner._run_spec(parser, arguments)
+    assert caught.value.code == 2
+    assert capsys.readouterr().err.strip().endswith(f"error: --launch gives {given}; omit them")
+
+
+def test_the_runner_needs_a_model_and_a_task_without_a_launch_file(capsys):
+    from realtime_framework.evaluation import runner
+
+    parser = runner._parser()
+    with pytest.raises(SystemExit) as caught:
+        runner._run_spec(parser, parser.parse_args(["--model", GEMINI]))
+    assert caught.value.code == 2
+    assert capsys.readouterr().err.strip().endswith(
+        "error: --model and --task are required without --launch"
+    )

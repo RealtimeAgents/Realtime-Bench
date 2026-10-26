@@ -38,8 +38,8 @@ def test_video_cap_reads_the_model_input_rate():
 @pytest.fixture(scope="module")
 def runner_cells(tmp_path_factory):
     """Gemini Live through runner.main(): on the wall clock at 2/1, on the token clock at 60/1
-    with B=100, and at 2/2, which its cap refuses. Each cell is one task of the probe's run; the
-    arguments are those _trial passes (evaluation/_trial.py main)."""
+    with B=100, and at 2/2, which its cap refuses. Each cell is one task of the probe's run, on
+    the runner's own arguments."""
     wall = ["--clock", "wall", "--protocol", "wall-clock"]
     token = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
     runs = [
@@ -379,16 +379,16 @@ def environment():
 def test_a_harbor_trial_carries_both_rates_to_the_runner(environment, tmp_path, monkeypatch):
     """``rtbench run -c PLAN`` through Harbor's environment: it fixes the trial's identity
     (ApptainerEnvironment.resolve), writes it as the verifier's task.json and launches the trial
-    worker (run_benchmark), which execs the runner (evaluation/_trial.py main). The worker runs in
-    this interpreter, as in tests/replay/test_external_driver.py resolved_request; the exec is
-    captured."""
+    worker (run_benchmark), which execs the runner on its launch file (evaluation/_trial.py main).
+    The worker runs in this interpreter, as in tests/replay/test_external_driver.py
+    resolved_request; the exec is captured, and its arguments parsed as the runner parses them."""
     import asyncio
     import contextlib
     import io
 
     from harbor.environments.base import ExecResult
 
-    from realtime_framework.evaluation import _trial, harbor, harbor_cli
+    from realtime_framework.evaluation import _trial, harbor, harbor_cli, runner
 
     plan = tmp_path / "split.yaml"
     plan.write_text(PLAN)
@@ -455,8 +455,9 @@ def test_a_harbor_trial_carries_both_rates_to_the_runner(environment, tmp_path, 
     task = json.loads((trial.staging / "tests" / "task.json").read_text())
     assert (task["fps"], task["model_input_fps"]) == (2.0, 1.0)
     (argv,) = runner_argv
-    assert argv[argv.index("--fps") + 1] == "2.0"
-    assert argv[argv.index("--model-input-fps") + 1] == "1.0"
+    parser = runner._parser()
+    spec = runner._run_spec(parser, parser.parse_args(argv[3:]))  # after "python -m ...runner"
+    assert (spec.fps, spec.model_input_fps) == (2.0, 1.0)
 
 
 def test_ak_fps_on_a_run_plan_without_a_model_input_rate_sets_both(tmp_path, monkeypatch):

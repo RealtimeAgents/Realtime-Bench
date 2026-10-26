@@ -15,42 +15,41 @@ from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import MODEL_PRESETS
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
+from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import PROTOCOLS
 from realtime_framework.evaluation.run_spec import run_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def runner_arguments(plan):
-    """The runner arguments for the one model and task of ``plan``, except its output paths."""
-    runtime = plan["runtime"]
-    (model,) = plan["models"]
-    (task,) = plan["tasks"]
-    tokens_per_frame = runtime["tokens_per_frame"]
-    return [
-        "--model",
-        model["key"],
-        "--task",
-        task,
-        "--clock",
-        runtime["clock_mode"],
-        "--tokens-per-frame",
-        str(tokens_per_frame) if tokens_per_frame is not None else "unlimited",
-        "--fps",
-        str(runtime["fps"]),
-        "--model-input-fps",
-        str(runtime["model_input_fps"]),
-        "--interaction-mode",
-        runtime["interaction_mode"],
-        "--max-minutes",
-        str(runtime["duration_minutes"]),
-        "--seed",
-        str(runtime["seed"]),
-        "--reasoning-effort",
-        model["reasoning_effort"],
-        "--protocol",
-        runtime["protocol"],
-    ]
+LAUNCH_FILE = "wall_clock_launch.json"
+
+
+def runner_arguments(result_root: Path) -> list[str]:
+    """The runner arguments for the launch file in ``result_root``, whose plan gives the runner
+    its run options, model and task, except the episode's output paths."""
+    return ["--launch", str(result_root / LAUNCH_FILE), "--report-root", str(result_root)]
+
+
+def runner_environment(plan) -> dict:
+    """The variables the runner's fresh interpreter receives before any module-level defaults are
+    loaded: the suite, the desktop's graphics mode and recording encoder, and the lane's."""
+    lane = plan["execution"]["lane"]
+    offset = lane * 1000
+    return {
+        "PYTHONPATH": str(ROOT),
+        "TASK_SUITE": plan["suite"],
+        "SANDBOX_GRAPHICS_MODE": plan["runtime"]["graphics_mode"],
+        "SCREEN_RECORDING_ENCODER": plan["runtime"]["recording_encoder"],
+        "TASK_PORT_OFFSET": str(offset),
+        "SANDBOX_DISPLAY_NUMBER": str(99 + lane),
+        "SANDBOX_CONTAINER": f"streaming-agent-sandbox-L{lane}",
+        "RT_SUITE_CONTAINER": f"rt-realtime-suite-L{lane}",
+        "GUEST_AGENT_PORT": str(6010 + offset),
+        "VNC_PORT": str(6011 + offset),
+        "NOVNC_PORT": str(6012 + offset),
+        "RT_SUITE_PORT": str(6014 + offset),
+    }
 
 
 def main(argv=None):
@@ -263,15 +262,7 @@ def main(argv=None):
         "benchmark_id": "harbor-trial",
         "suite": args.suite,
         "runtime": {
-            "mode": spec.mode,
-            "clock_mode": spec.clock_mode,
-            "tokens_per_frame": spec.tokens_per_frame,
-            "fps": spec.fps,
-            "model_input_fps": spec.model_input_fps,
-            "interaction_mode": spec.interaction_mode,
-            "duration_minutes": spec.duration_minutes,
-            "seed": spec.seed,
-            "protocol": spec.protocol,
+            **{option: getattr(spec, option) for option in PLAN_OPTIONS},
             "graphics_mode": os.environ.get("SANDBOX_GRAPHICS_MODE", "cpu"),
             "recording_encoder": os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
         },
@@ -356,40 +347,22 @@ def main(argv=None):
             if attempt == 4:
                 parser.error("Unable to allocate a unique run timestamp; retry shortly")
             time.sleep(1)
-    (result_root / "wall_clock_launch.json").write_text(json.dumps(settings, indent=2) + "\n")
+    (result_root / LAUNCH_FILE).write_text(json.dumps(settings, indent=2) + "\n")
     if args.run_root_output:
         locator = args.run_root_output.resolve()
         locator.parent.mkdir(parents=True, exist_ok=True)
         locator.write_text(json.dumps({"run_root": str(result_root)}) + "\n")
 
-    # The fresh interpreter receives lane settings before any module-level defaults are loaded.
-    offset = args.lane * 1000
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(ROOT),
-        "TASK_SUITE": args.suite,
-        "SANDBOX_GRAPHICS_MODE": plan["runtime"]["graphics_mode"],
-        "SCREEN_RECORDING_ENCODER": plan["runtime"]["recording_encoder"],
-        "TASK_PORT_OFFSET": str(offset),
-        "SANDBOX_DISPLAY_NUMBER": str(99 + args.lane),
-        "SANDBOX_CONTAINER": f"streaming-agent-sandbox-L{args.lane}",
-        "RT_SUITE_CONTAINER": f"rt-realtime-suite-L{args.lane}",
-        "GUEST_AGENT_PORT": str(6010 + offset),
-        "VNC_PORT": str(6011 + offset),
-        "NOVNC_PORT": str(6012 + offset),
-        "RT_SUITE_PORT": str(6014 + offset),
-    }
+    env = {**os.environ, **runner_environment(plan)}
     command = [
         entry.python_env,
         "-m",
         "realtime_framework.evaluation.runner",
-        *runner_arguments(plan),
+        *runner_arguments(result_root),
         "--results-dir",
         str(result_root / key),
         "--run-id",
         selected[0].split("__", 1)[-1].replace("/", "_"),
-        "--report-root",
-        str(result_root),
     ]
     if args.report_output:
         command += ["--report-output", str(args.report_output.resolve())]

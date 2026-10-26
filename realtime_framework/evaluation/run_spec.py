@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 from realtime_framework.entity.config import DEFAULT_TASK_SEED
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
@@ -119,6 +119,13 @@ class RunSpec:
             think_budget_s=self.think_budget_s,
             per_move_cap_s=self.per_move_cap_s,
         )
+
+
+# The options a run plan's runtime and the plan of the trial worker's launch file carry, in their
+# order; the deliberation caps are the runner's alone.
+PLAN_OPTIONS = tuple(
+    field.name for field in fields(RunSpec) if field.name not in ("think_budget_s", "per_move_cap_s")
+)
 
 
 def run_spec(entry: str, **given) -> RunSpec:

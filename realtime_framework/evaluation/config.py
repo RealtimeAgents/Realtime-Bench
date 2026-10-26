@@ -23,6 +23,7 @@ import argparse as argparse
 import re as re
 import sys as sys
 
+from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import run_spec
 
 
@@ -187,17 +188,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
     if unknown:
         raise ValueError(f"Unknown benchmark fields: {sorted(unknown)}")
     runtime = _required_mapping(raw.get("runtime", {}), "runtime")
-    unknown = set(runtime) - {
-        "mode",
-        "clock_mode",
-        "fps",
-        "model_input_fps",
-        "interaction_mode",
-        "tokens_per_frame",
-        "duration_minutes",
-        "seed",
-        "protocol",
-    }
+    unknown = set(runtime) - set(PLAN_OPTIONS)
     if unknown:
         raise ValueError(f"Unknown runtime fields: {sorted(unknown)}")
     try:

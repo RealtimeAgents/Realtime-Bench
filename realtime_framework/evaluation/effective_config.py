@@ -272,6 +272,7 @@ def _probe_runner(request: dict) -> dict:
     import realtime_tasks.registry as tasks
     from realtime_framework.entity.config import EnvironmentConfig
     from realtime_framework.entity.context_policy import current_context_policy
+    from realtime_framework.evaluation._trial import LAUNCH_FILE
 
     settings = {}
     for group, field, variable, parse, default in _IMPORT_SETTINGS:
@@ -359,9 +360,13 @@ def _probe_runner(request: dict) -> dict:
     runner.run_stream = run_stream
     scratch = Path(request["scratch"])
     results = {}
-    for index, (model, task, argv) in enumerate(request["runs"]):
+    for index, (model, task, argv, *launch) in enumerate(request["runs"]):
         results_dir = scratch / f"run-{index}"
-        argv = [results_dir.as_posix() if arg == "<results>" else arg for arg in argv]
+        if launch:
+            # The trial's settings, as the trial worker writes them (evaluation/_trial.py main).
+            results_dir.mkdir(parents=True)
+            (results_dir / LAUNCH_FILE).write_text(json.dumps(launch[0]))
+        argv = [arg.replace("<results>", results_dir.as_posix()) for arg in argv]
         state.clear()
         state.update(attribution=dict(attribution), claimed=set(), start=_snapshot())
         _fresh_catalog()
@@ -483,32 +488,15 @@ def _probe_trial(request: dict) -> dict:
 
 def _trial_command(plan: dict) -> tuple[list[str], str]:
     """The runner argv and interpreter _trial execs, after writing the runner's environment into
-    os.environ (evaluation/_trial.py main)."""
+    os.environ (evaluation/_trial.py main). The argv reads the launch file in ``<results>``, where
+    the runner probe writes the trial's settings."""
     import realtime_framework.evaluation._trial as trial
     import realtime_framework.providers.registry as catalog
 
-    runtime = plan["runtime"]
-    lane = plan["execution"]["lane"]
-    offset = lane * 1000
-    os.environ.update(
-        {
-            "PYTHONPATH": str(ROOT),
-            "TASK_SUITE": plan["suite"],
-            "SANDBOX_GRAPHICS_MODE": runtime["graphics_mode"],
-            "SCREEN_RECORDING_ENCODER": runtime["recording_encoder"],
-            "TASK_PORT_OFFSET": str(offset),
-            "SANDBOX_DISPLAY_NUMBER": str(99 + lane),
-            "SANDBOX_CONTAINER": f"streaming-agent-sandbox-L{lane}",
-            "RT_SUITE_CONTAINER": f"rt-realtime-suite-L{lane}",
-            "GUEST_AGENT_PORT": str(6010 + offset),
-            "VNC_PORT": str(6011 + offset),
-            "NOVNC_PORT": str(6012 + offset),
-            "RT_SUITE_PORT": str(6014 + offset),
-        }
-    )
+    os.environ.update(trial.runner_environment(plan))
     (model,) = plan["models"]
     # --results-dir and --run-id only name output paths
-    argv = [*trial.runner_arguments(plan), "--report-root", "<results>"]
+    argv = trial.runner_arguments(Path("<results>"))
     return argv, catalog.get(model["key"]).python_env
 
 
@@ -718,7 +706,7 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
                     record["python"],
                 )
                 runs_by_environment.setdefault(key, []).append(
-                    (model, task, record["runner_argv"])
+                    (model, task, record["runner_argv"], record["settings"])
                 )
     process = {}
     for (environ, attribution, python), runs in runs_by_environment.items():
