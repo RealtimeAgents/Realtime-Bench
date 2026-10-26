@@ -124,7 +124,7 @@ def from_trace(run_dir: Path) -> list[dict]:
 
     The trace records no handshake (providers/capture.py, its docstring) and no close: the
     recording connection captures handshake failures, sends and receives only (capture.py
-    sync_ws_connection, async_ws_connection). So a
+    async_ws_connection). So a
     connection opens before its first message, and the cassette has no closes. A session whose
     server closed a connection converts all the same, into one whose client waits on that
     connection when it is replayed, which the replay reports as a connection left open; replaying

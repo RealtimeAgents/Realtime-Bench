@@ -3,6 +3,7 @@ replay WebSocket stub): what the abandoned generation leaves to the next one."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 
@@ -107,13 +108,13 @@ def _hold_the_next_open(realtime):
         manager = connect(**kwargs)
 
         class Held:
-            def __enter__(self):
+            async def __aenter__(self):
                 entered.set()
-                assert release.wait(WAIT_S)
-                return manager.__enter__()
+                assert await asyncio.to_thread(release.wait, WAIT_S)
+                return await manager.__aenter__()
 
-            def __exit__(self, *exc):
-                return manager.__exit__(*exc)
+            async def __aexit__(self, *exc):
+                return await manager.__aexit__(*exc)
 
         return Held()
 
@@ -212,8 +213,8 @@ def test_a_repair_whose_rebuild_spends_its_connect_retries_keeps_the_generation(
 
 def test_closing_the_runtime_abandons_a_generation_that_reopens_the_session(tmp_path):
     """The runtime closes while generation 2's second attempt reopens the session, before the
-    agent cancelled anything: the generation is abandoned all the same, and the connection it
-    opened after the close is closed again."""
+    agent cancelled anything: the generation is abandoned all the same, and the close cancels the
+    reopen's handshake, so no connection opens after it."""
     with RealtimeStub(realtime_replies([STEP, STEP]), drop_responses=(2,)) as stub:
         episode = _episode(stub, tmp_path)
         agent, runtime = episode.agent, episode.agent._runtime
@@ -232,17 +233,17 @@ def test_closing_the_runtime_abandons_a_generation_that_reopens_the_session(tmp_
             episode.finish()
         connections = stub.finish()
     assert abandoned.result["stale"]
-    # The driver holds no connection: the one the reopen made is closed.
+    # The driver holds no connection, and the reopen made none.
     assert left == (False, None)
-    assert len(connections) == 2 and stub.violations == []
+    assert len(connections) == 1 and stub.violations == []
 
 
-def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
+def test_an_abort_during_a_rebuild_leaves_no_session_open(tmp_path):
     """Response 2 is dropped before any output, so generation 2's second attempt rebuilds the
     session (the driver's ensure_ready). The kernel aborts generation 2 before the rebuild's
-    connection exists, so the abort's close finds nothing to close; the rebuild then opens
-    connection 2 and replays the history on it. The abandoned generation must not leave the
-    runtime ready on that connection: it is closed, and decision 2 opens connection 3."""
+    connection exists: the abort's close cancels the rebuild's handshake. The abandoned
+    generation must not leave the runtime ready on a connection of its own: none opens, and
+    decision 2 opens connection 2."""
     with RealtimeStub(realtime_replies([STEP, STEP, STEP]), drop_responses=(2,)) as stub:
         episode = _episode(stub, tmp_path)
         agent, runtime = episode.agent, episode.agent._runtime
@@ -259,7 +260,7 @@ def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
             abandoned = _joined(box, done)
             agent.discard(2)
             wait_for_abort(agent, WAIT_S)
-            # The driver holds no connection: the one the rebuild opened is closed.
+            # The driver holds no connection, and the rebuild made none.
             left = (agent.driver._connected, runtime.state.value, agent.driver._conn)
             _generate(episode, 3, 2)
             agent.accept(3)
@@ -269,5 +270,5 @@ def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
         responses = [r["connection"] for r in stub.responses]
     assert abandoned.result["stale"]
     assert left == (False, "dirty", None)
-    assert len(connections) == 3 and responses == [1, 1, 3]
+    assert len(connections) == 2 and responses == [1, 1, 2]
     assert stub.violations == []

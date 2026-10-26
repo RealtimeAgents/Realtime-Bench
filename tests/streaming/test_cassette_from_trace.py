@@ -4,7 +4,7 @@ clock.
 The OpenAI Realtime driver runs two turns in real time against a WebSocket stub
 (tests/agent_trace/stubs.py), with an agent trace sink as the runner gives it. The cassette
 converted from that trace then serves the same two turns to the same driver on the fake clock,
-through clocked_connection, and the strict cursor finds no difference.
+and the strict cursor finds no difference.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from tests.replay import baseline
 from tests.replay.ws_gemini_live import WireNormalizer
 
 from . import ws_cassette
-from .clocked_ws import CassetteServer, clocked_connection
+from .clocked_ws import CassetteServer
 from .e2e import LIVE_PATH
 from .openai_session import driver_for, frame_png, run_on_fake_clock, run_turns
 
@@ -122,9 +122,7 @@ def test_a_traced_session_becomes_a_cassette_that_replays_on_the_fake_clock(tmp_
     clock = FakeClock()
     with CassetteServer(records, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED)
-        connection = driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         replayed = run_on_fake_clock(clock, run_turns(driver, 2))
-    assert connection.opened == 1
     assert server.finish() == []
     assert server.paths == ["/v1/realtime?model=gpt-realtime-2"]
     assert [text for text, _ in replayed] == [text for text, _ in recorded] == list(REPLY_TEXTS)
@@ -146,7 +144,7 @@ def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
     trace = EpisodeTrace(tmp_path / "episode_trace.jsonl", run_id="cassette", clock=clock)
     trace.emit("ActiveLoopStarted", {"start_unix_s": time.time(), "clock_mode": "wall"})
     sink = AgentTraceSink(trace, tmp_path / "episode_blobs.pack", clock=clock)
-    # As providers/capture.py sync_ws_connection's send records a write that raised.
+    # As providers/capture.py async_ws_connection's send records a write that raised.
     sink.capture(
         TraceEvent.SESSION_MESSAGE,
         {
@@ -237,7 +235,7 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_its_cursor_follows(
 
 
 def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path):
-    """M3: the trace records no close (providers/capture.py sync_ws_connection), so the stub's
+    """M3: the trace records no close (providers/capture.py async_ws_connection), so the stub's
     close in the second reply is not in the cassette. The replayed driver waits for that reply on
     the open connection until the fake clock's limit. Given up there, it closes the connection as
     its cleanup (openai_session.py run_on_fake_clock), after the connection's last record, which
@@ -261,7 +259,6 @@ def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path)
     clock = FakeClock()
     with CassetteServer(records, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         with pytest.raises(AssertionError, match="the coroutine did not finish"):
             run_on_fake_clock(clock, run_turns(driver, 2), timeout=30.0)
         (connection,) = server._connections

@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import queue
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -333,23 +331,20 @@ class _FakeConnection:
     many recv calls run at once."""
 
     def __init__(self):
-        self.queue: queue.Queue = queue.Queue()
+        self.queue: asyncio.Queue = asyncio.Queue()
         self.in_flight = 0
         self.most_in_flight = 0
-        self._lock = threading.Lock()
 
-    def recv(self):
-        with self._lock:
-            self.in_flight += 1
-            self.most_in_flight = max(self.most_in_flight, self.in_flight)
+    async def recv(self):
+        self.in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self.in_flight)
         try:
-            item = self.queue.get(timeout=5)
+            item = await asyncio.wait_for(self.queue.get(), 5)
             if isinstance(item, Exception):
                 raise item
             return item
         finally:
-            with self._lock:
-                self.in_flight -= 1
+            self.in_flight -= 1
 
 
 def _clean_close() -> ConnectionClosedOK:
@@ -376,8 +371,8 @@ def test_a_clean_close_during_an_edit_fails_it_with_that_close():
     connection, closed = _FakeConnection(), _clean_close()
     core, _, batch = _waiting_edit()
     session = _Session(1, connection, core)
-    connection.queue.put(deleted(batch.operations[0].item_id))
-    connection.queue.put(closed)
+    connection.queue.put_nowait(deleted(batch.operations[0].item_id))
+    connection.queue.put_nowait(closed)
     with pytest.raises(ConnectionClosedOK) as raised:
         _within(OpenAIRealtimeDriver._wait_for_item_edits(session))
     assert raised.value is closed
@@ -414,7 +409,7 @@ def test_two_waiters_share_one_read():
             text,
             finished,
         ):
-            connection.queue.put(event)
+            connection.queue.put_nowait(event)
         await asyncio.gather(edit, response)
         return connection, core, generation, batch
 
@@ -439,7 +434,7 @@ def test_a_failed_read_raises_in_every_waiter():
         edit = asyncio.create_task(OpenAIRealtimeDriver._wait_for_item_edits(session))
         response = asyncio.create_task(session.receive_until(lambda: generation.events))
         await _waiting(connection)
-        connection.queue.put(failure)
+        connection.queue.put_nowait(failure)
         raised = await asyncio.gather(edit, response, return_exceptions=True)
         # A waiter that comes later raises it too, without reading again.
         try:
@@ -475,7 +470,7 @@ def test_a_clean_close_mid_reply_ends_the_generation_with_a_fatal_error():
     session = _Session(3, connection, core)
     created, added, text, _ = response_events()
     for event in (created, added, text, _clean_close()):
-        connection.queue.put(event)
+        connection.queue.put_nowait(event)
     handle = GenerationHandle("turn-0", opaque=(session, generation))
 
     async def collect():
@@ -496,7 +491,7 @@ def test_events_end_when_the_connection_closes():
     session = _Session(3, connection, core)
     created, *_ = response_events()
     for event in (created, error(None), _clean_close()):
-        connection.queue.put(event)
+        connection.queue.put_nowait(event)
     handle = GenerationHandle("turn-0", opaque=(session, generation))
 
     async def collect():
@@ -514,7 +509,11 @@ class _CancellingConnection(_FakeConnection):
     def __init__(self):
         super().__init__()
         self.cancels: list[dict] = []
-        self.response = SimpleNamespace(cancel=lambda **kwargs: self.cancels.append(kwargs))
+
+        async def cancel(**kwargs):
+            self.cancels.append(kwargs)
+
+        self.response = SimpleNamespace(cancel=cancel)
 
 
 def test_an_error_naming_the_interrupt_s_cancel_is_not_fatal():
@@ -534,7 +533,7 @@ def test_an_error_naming_the_interrupt_s_cancel_is_not_fatal():
         await driver.interrupt(handle)
         (cancel,) = connection.cancels
         for event in (error(cancel["event_id"]), _clean_close()):
-            connection.queue.put(event)
+            connection.queue.put_nowait(event)
         return [event async for event in driver.events(handle)]
 
     events = _within(collect())
@@ -548,7 +547,7 @@ def test_an_operation_whose_send_fails_is_unknown():
     observation = core.observe(view([turn(0, "a0"), turn(1)]))
     session = _Session(1, _FakeConnection(), core)
 
-    def send(conn, operation):
+    async def send(conn, operation):
         raise ConnectionError("send failed")
 
     driver._send = send

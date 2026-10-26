@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
-import threading
 from functools import partial
 from types import SimpleNamespace
 
@@ -72,7 +71,7 @@ from tests.session.test_openai_realtime_session import (
     streaming_view,
 )
 
-from .clocked_ws import CassetteServer, clocked_connection
+from .clocked_ws import CassetteServer
 from .openai_session import (
     MODEL_KEY,
     SYSTEM_INSTRUCTION,
@@ -127,11 +126,11 @@ def test_a_streaming_session_reads_each_event_as_it_arrives():
         reply = core.start_reply()
         created, added, _, finished = response_events()
         for event in (done(pushed.item_id), created, added):
-            connection.queue.put(event)
+            connection.queue.put_nowait(event)
         await until(lambda: len(reply.events) == 2)
         waiter = asyncio.create_task(session.receive_until(lambda: len(reply.events) == 4))
         for event in (text_done("event_7", "{}"), finished, _clean_close()):
-            connection.queue.put(event)
+            connection.queue.put_nowait(event)
         await waiter
         await session.receive_until(lambda: False)
         return connection, core, session, reply, pushed
@@ -156,9 +155,9 @@ class _ScopedConnection(_FakeConnection):
         super().__init__()
         self.scopes: list[dict | None] = []
 
-    def recv(self):
+    async def recv(self):
         self.scopes.append(current_trace_scope())
-        return super().recv()
+        return await super().recv()
 
 
 def test_the_streaming_reader_reads_in_no_scope_of_the_call_that_opened_the_connection():
@@ -171,7 +170,7 @@ def test_the_streaming_reader_reads_in_no_scope_of_the_call_that_opened_the_conn
         session = _Session(1, connection, new_core())
         with trace_scope(decision=2, generation=2):
             session.read_continuously(Ticks())
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
         await session.receive_until(lambda: False)
         return connection.scopes
 
@@ -189,10 +188,10 @@ def test_a_failed_read_ends_the_streaming_reader_and_raises_in_every_waiter():
         waiters = [
             asyncio.create_task(session.receive_until(lambda: reply.events)) for _ in range(2)
         ]
-        connection.queue.put(failure)
+        connection.queue.put_nowait(failure)
         raised = await asyncio.gather(*waiters, return_exceptions=True)
         ended = session._reader.done()
-        connection.queue.put(_clean_close())  # ends a reader that went on reading
+        connection.queue.put_nowait(_clean_close())  # ends a reader that went on reading
         return raised, ended, session
 
     raised, ended, session = _within(scenario())
@@ -213,7 +212,7 @@ def test_an_event_the_core_fails_on_ends_the_streaming_reader_and_raises_in_ever
         reply = core.start_reply()
         waiter = asyncio.create_task(session.receive_until(lambda: reply.events))
         for event in (error(pushed.event_id), error(pushed.event_id)):
-            connection.queue.put(event)
+            connection.queue.put_nowait(event)
         (raised,) = await asyncio.gather(waiter, return_exceptions=True)
         return session, raised
 
@@ -230,8 +229,8 @@ class _ClosingManager:
     def __init__(self, connection: _FakeConnection) -> None:
         self.connection = connection
 
-    def __exit__(self, *exc_info) -> None:
-        self.connection.queue.put(_clean_close())
+    async def __aexit__(self, *exc_info) -> None:
+        self.connection.queue.put_nowait(_clean_close())
 
 
 def test_closing_a_streaming_session_lets_its_reader_end():
@@ -256,49 +255,52 @@ def test_closing_a_streaming_session_lets_its_reader_end():
 class _FailingManager:
     """The SDK's connection manager whose close raises, which may leave the connection open."""
 
-    def __exit__(self, *exc_info) -> None:
+    async def __aexit__(self, *exc_info) -> None:
         raise RuntimeError("close failed")
 
 
 class _StuckConnection:
-    """An SDK connection whose writes block on a socket that does not drain, until it is closed;
-    its close_socket() closes it, which fails every write stuck in it."""
+    """An SDK connection whose writes wait for a socket that does not drain, until the connection
+    is dropped (for at most 5 s on the loop's clock); its transport's abort() drops it, which
+    fails every write stuck in it."""
 
     def __init__(self) -> None:
-        self._open = threading.Event()
-        self._connection = self
-        self.writing = threading.Event()
+        self.dropped = asyncio.Event()
+        self._connection = self.transport = self
+        self.writing = asyncio.Event()
         self.conversation = SimpleNamespace(item=SimpleNamespace(create=self.write))
         self.response = SimpleNamespace(cancel=self.write)
 
-    def write(self, **kwargs) -> None:
+    async def write(self, **kwargs) -> None:
         self.writing.set()
-        if not self._open.wait(timeout=5):
-            raise AssertionError("the socket was never closed")
+        try:
+            await asyncio.wait_for(self.dropped.wait(), 5)
+        except TimeoutError:
+            raise AssertionError("the connection was never dropped") from None
         raise ConnectionClosedError(None, None)
 
-    def close_socket(self) -> None:
-        self._open.set()
+    def abort(self) -> None:
+        self.dropped.set()
 
 
 class _StuckManager:
-    """The SDK's connection manager whose close blocks on the same undraining socket."""
+    """The SDK's connection manager whose close waits on the same undraining socket."""
 
     def __init__(self, connection: _StuckConnection) -> None:
         self.connection = connection
 
-    def __exit__(self, *exc_info) -> None:
-        self.connection._open.wait(timeout=5)
+    async def __aexit__(self, *exc_info) -> None:
+        await asyncio.wait_for(self.connection.dropped.wait(), 5)
 
 
 @pytest.mark.parametrize("on_reply", [False, True])
 def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatch, on_reply):
     """A push stuck in a write that does not drain holds the session and the connection's
     writes. An abort of the reply on the session, as the kernel's push watchdog gives one up,
-    writes its cancel behind that write, and gives the cancel up at its bound (review-encoders
-    中 1); the abort's close then waits on the same write until its own bound and drops the
-    socket under it: the push fails, the close returns, and the session is freed for the next
-    ensure_ready to rebuild."""
+    writes its cancel, which waits for that write to drain, and gives the cancel up at its bound
+    (review-encoders 中 1); the abort's close then waits on the same write until its own bound
+    and drops the connection under it: the push fails, the close returns, and the session is
+    freed for the next ensure_ready to rebuild."""
     monkeypatch.setattr(openai_realtime, "_CONNECTION_CLOSE_TIMEOUT_S", 0.05)
     monkeypatch.setattr(openai_realtime, "_INTERRUPT_TIMEOUT_S", 0.05)
 
@@ -308,7 +310,7 @@ def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatc
         driver._session, driver._conn, driver._cm = session, connection, _StuckManager(connection)
         view = streaming_view(stream("F"))
         push = asyncio.ensure_future(driver.push_frame(_observation(1), view))
-        await until(connection.writing.is_set)
+        await connection.writing.wait()
         reply = session.core.start_reply() if on_reply else None
         handle = GenerationHandle("streaming-1", opaque=(session, reply)) if on_reply else None
         await asyncio.wait_for(driver.abort(handle), 2)
@@ -320,44 +322,22 @@ def test_an_abort_fails_a_push_stuck_in_a_write_and_frees_the_session(monkeypatc
     assert left_session is None and connected is False
 
 
-class _ClockedStuckConnection(_StuckConnection):
-    """_StuckConnection on the fake clock: a write stuck in it and a close stuck on it wait on
-    the clock, which so moves on while they are stuck, for at most 30 s."""
-
-    def __init__(self, clock: FakeClock) -> None:
-        self._clock = clock
-        self._open = clock.event()
-        self._connection = self
-        self.writing = clock.event()
-
-    def write(self) -> None:
-        self.writing.set()
-        if not self._clock.wait(self._open, 30):
-            raise AssertionError("the socket was never closed")
-        raise ConnectionClosedError(None, None)
-
-
-class _ClockedStuckManager(_StuckManager):
-    def __exit__(self, *exc_info) -> None:
-        self.connection._clock.wait(self.connection._open, 30)
-
-
-def test_an_abort_drops_a_socket_its_close_is_stuck_on_after_one_second():
+def test_an_abort_drops_a_connection_its_close_is_stuck_on_after_one_second():
     """A close stuck on a write that does not drain is bounded at 1 s on the driver's clock, as
-    Gemini Live's is (decision N49): the abort drops the socket then, which fails the push stuck
-    in the same write. Until then the abort holds up the session, and the next reply with it."""
+    Gemini Live's is (decision N49): the abort drops the connection then, which fails the push
+    stuck in the same write. Until then the abort holds up the session, and the next reply with
+    it. On the fake clock's loop the stuck write and close wait on the clock too."""
     clock = FakeClock()
 
     async def scenario():
-        driver, connection = _offline_driver(streaming=True), _ClockedStuckConnection(clock)
+        driver, connection = _offline_driver(streaming=True), _StuckConnection()
         driver.clock = clock
         session = _Session(1, connection, new_core())
         driver._session, driver._conn = session, connection
-        driver._cm = _ClockedStuckManager(connection)
-        driver._send = lambda conn, operation: conn.write()
+        driver._cm = _StuckManager(connection)
         view = streaming_view(stream("F"))
         push = asyncio.ensure_future(driver.push_frame(_observation(1), view))
-        await asyncio.to_thread(clock.wait, connection.writing, None)
+        await connection.writing.wait()
         await driver.abort(None)
         aborted = clock.monotonic()
         (failure,) = await asyncio.gather(push, return_exceptions=True)
@@ -368,46 +348,52 @@ def test_an_abort_drops_a_socket_its_close_is_stuck_on_after_one_second():
     assert isinstance(failure, ConnectionClosedError)
 
 
-class _SocketConnection(_FakeConnection):
-    """The fake connection as the SDK holds websockets' (``_connection``), whose
-    close_socket() ends the read in flight, as websockets' does."""
+class _DroppableConnection(_FakeConnection):
+    """The fake connection as the SDK holds websockets' (``_connection``), whose transport's
+    abort() drops it, as websockets' does; ``dropped`` says whether it was."""
+
+    dropped = False
 
     @property
     def _connection(self):
         return self
 
-    def close_socket(self) -> None:
-        self.queue.put(ConnectionClosedError(None, None))
+    @property
+    def transport(self):
+        return self
+
+    def abort(self) -> None:
+        self.dropped = True
 
 
-def test_a_failed_close_cancels_the_reader_and_ends_its_waiters():
-    """A close that raises may leave the connection open, so the reader is cancelled instead of
-    waited for; whoever waits on the session then raises rather than waiting for good. The
-    cancelled reader closes the socket, which ends the read its thread is blocked in."""
+def test_a_failed_close_drops_the_connection_and_cancels_the_reader():
+    """A close that raises may leave the connection open, so it is dropped and the reader is
+    cancelled instead of waited for; whoever waits on the session then raises rather than
+    waiting for good, and the read in flight ends with the reader."""
 
     async def scenario():
-        driver, connection = _offline_driver(), _SocketConnection()
+        driver, connection = _offline_driver(), _DroppableConnection()
         session = _Session(1, connection, new_core())
         session.read_continuously(Ticks())
         reply = session.core.start_reply()
         waiter = asyncio.create_task(session.receive_until(lambda: reply.events))
-        driver._session, driver._cm = session, _FailingManager()
+        driver._session, driver._conn, driver._cm = session, connection, _FailingManager()
         await until(lambda: connection.in_flight == 1)
         await driver._close_current()
         cancelled = session._reader.cancelled()
         raised = await asyncio.gather(waiter, return_exceptions=True)
-        await until(lambda: connection.in_flight == 0, timeout=1.0)
-        return cancelled, raised
+        return cancelled, raised, connection
 
-    cancelled, (raised,) = _within(scenario())
-    assert cancelled
+    cancelled, (raised,), connection = _within(scenario())
+    assert cancelled and connection.dropped
     assert isinstance(raised, ConnectionError)
+    assert connection.in_flight == 0
 
 
-def test_stopping_the_loop_under_a_streaming_reader_closes_its_socket():
-    """An execution thread stopped with the connection still open cancels the reader, which
-    closes the socket: no thread is left blocked in a read."""
-    connection, execution = _SocketConnection(), ExecutionThread(SystemClock(), "reader")
+def test_stopping_the_loop_under_a_streaming_reader_ends_its_read():
+    """An execution thread stopped with the connection still open cancels the reader, and its
+    read with it: no read is left in flight."""
+    connection, execution = _FakeConnection(), ExecutionThread(SystemClock(), "reader")
     execution.start()
 
     async def start():
@@ -469,7 +455,11 @@ async def answering(server: Server, blocks):
     session = _Session(1, connection, new_core())
     session.read_continuously(Ticks())
     driver._session, driver._conn = session, connection
-    driver._send = lambda conn, operation: conn.queue.put(server.answer(operation))
+
+    async def send(conn, operation):
+        conn.queue.put_nowait(server.answer(operation))
+
+    driver._send = send
     replay = session.core.replay_streaming(streaming_view(list(blocks), frames=5))
     await driver._send_all(session, replay)
     await session.receive_until(lambda: all(map(session.core.settled, replay)))
@@ -484,7 +474,7 @@ def test_a_refused_frame_raises_though_the_feedback_pushed_before_it_went_in():
         driver, connection = await answering(_Answers({"f2.frame"}), stream("FR"))
         with pytest.raises(RuntimeError, match="^OpenAI Realtime refused f2.frame: "):
             await driver.push_frame(_observation(2), streaming_view(stream("FRBF"), frames=5))
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
         return driver._session.core
 
     assert sorted(_within(scenario()).frames) == ["d1.feedback", "f1.frame"]
@@ -497,7 +487,7 @@ def test_a_fold_the_server_fails_leaves_the_session_dirty():
     async def scenario():
         driver, connection = await answering(_Answers(deletes_fail=True), stream("F"))
         await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=1))
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
         return driver
 
     driver = _within(scenario())
@@ -513,13 +503,13 @@ def test_a_push_of_a_frame_the_session_holds_waits_for_its_confirmation():
     async def scenario():
         driver, connection = await answering(Server(), stream("FF"))
         await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=5))
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
         driver, connection = await answering(_Answers({"f2.frame"}), stream("F"))
         view = streaming_view(stream("FF"), frames=5)
         await driver._send_all(driver._session, driver._session.core.push(view))
         with pytest.raises(RuntimeError, match="^OpenAI Realtime refused f2.frame: "):
             await driver.push_frame(_observation(2), view)
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
 
     _within(scenario())
 
@@ -527,7 +517,11 @@ def test_a_push_of_a_frame_the_session_holds_waits_for_its_confirmation():
 def test_a_connection_that_closes_before_the_frame_is_confirmed_fails_the_push():
     async def scenario():
         driver, _ = await answering(Server(), stream("F"))
-        driver._send = lambda conn, operation: conn.queue.put(_clean_close())
+
+        async def send(conn, operation):
+            conn.queue.put_nowait(_clean_close())
+
+        driver._send = send
         with pytest.raises(ConnectionClosedOK):
             await driver.push_frame(_observation(2), streaming_view(stream("FF"), frames=5))
 
@@ -704,7 +698,6 @@ def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
 
     with CassetteServer(RECORDS, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         events, handle, session = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
 
@@ -799,7 +792,6 @@ def test_each_streaming_message_is_traced_under_the_reply_it_was_read_for():
 
     with CassetteServer(SCOPED_READS, clock) as server:
         driver = driver_for(server.port, clock, trace, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
     reply = {"phase": "decision", "generation": 1}
@@ -855,7 +847,6 @@ def test_a_rebuilt_streaming_session_takes_pushes_once_its_replay_is_confirmed()
 
     with CassetteServer(REBUILT, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         connected, session = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
     assert connected == 0.3
@@ -909,7 +900,6 @@ def test_a_connection_the_server_ends_leaves_the_session_to_be_rebuilt(code):
 
     with CassetteServer(_closed_by_server(code), clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         ended, rebuilt = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
     assert (ended, rebuilt) == (RuntimeState.DIRTY, RuntimeState.READY)
@@ -945,7 +935,6 @@ def test_a_rebuild_whose_connection_closes_before_its_replay_is_confirmed_raises
 
     with CassetteServer(CLOSED_BEFORE_CONFIRMED, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
 
@@ -984,7 +973,6 @@ def test_a_rebuild_raises_a_retryable_failure_as_it_is_for_the_retry_around_it()
 
     with CassetteServer(REBUILD_CLOSED_BEFORE_CONFIRMED, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         failure = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
     assert driver.classify_transport_error(failure).retryable
@@ -1039,7 +1027,6 @@ def test_a_push_during_a_rebuild_goes_out_once_the_rebuilt_session_took_its_repl
 
     with CassetteServer(REBUILT, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         pushed, session = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
     assert pushed == 0.3
@@ -1095,7 +1082,7 @@ class _Wire:
             cancel=partial(self._write, "response.cancel"),
         )
 
-    def _write(self, kind: str, **kwargs) -> None:
+    async def _write(self, kind: str, **kwargs) -> None:
         self.written.append((kind, kwargs))
 
 
@@ -1192,7 +1179,6 @@ def test_a_push_tells_when_its_frame_went_out_and_when_the_server_confirmed_it()
 
     with CassetteServer(CONFIRMED_LATER, clock) as server:
         driver = driver_for(server.port, clock, UNTRACED, streaming=True)
-        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
         receipt = run_on_fake_clock(clock, scenario(driver))
     assert server.finish() == []
     assert receipt == PushReceipt(written_at=0.0, confirmed_at=0.4)

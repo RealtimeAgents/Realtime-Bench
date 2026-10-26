@@ -127,14 +127,17 @@ def test_an_openai_realtime_connect_backs_off_on_the_agent_clock():
     driver = create_agent(config, clock=clock, trace=trace).driver
     attempts = []
 
-    @contextlib.contextmanager
-    def connection():
+    async def update(**arguments):
+        pass
+
+    @contextlib.asynccontextmanager
+    async def connection():
         number = len(attempts)
         yield SimpleNamespace(
             _connection=SimpleNamespace(
                 trace_connection_number=number, trace_connection_id=f"openai_realtime.ws-{number}"
             ),
-            session=SimpleNamespace(update=lambda **arguments: None),
+            session=SimpleNamespace(update=update),
         )
 
     def connect(*, model, websocket_connection_options):

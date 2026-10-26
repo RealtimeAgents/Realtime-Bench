@@ -38,7 +38,6 @@ from tests.replay import baseline
 from tests.replay.fake_env import FakeEnvironment
 from tests.replay.frames import screenshot
 from tests.replay.ws_gemini_live import QUEUED_RESPONSE, WireNormalizer
-from tests.streaming.clocked_ws import clocked_connection
 from tests.streaming.e2e import LIVE_PATH, SILENCE, run_e2e
 from tests.streaming.fake_live import RecordingToolRuntime
 from tests.streaming.ws_cassette import RealtimeNormalizer
@@ -124,8 +123,6 @@ def realtime_agent(log_dir):
             "gpt-realtime-2", fps=1.0, reasoning_effort="low", api_key="sk-replay"
         ).model_copy(update={"api_base_url": f"http://127.0.0.1:{port}/v1"})
         agent = _agent(config, log_dir, trace, clock)
-        # The SDK's synchronous connection reads on a thread the fake clock does not know.
-        agent.driver._ws_connection = clocked_connection(agent.driver._ws_connection, clock)
         return _initialized(agent, clock)
 
     return build

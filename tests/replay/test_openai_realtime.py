@@ -34,7 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from openai.resources.realtime.realtime import RealtimeSessionResource
+from openai.resources.realtime.realtime import AsyncRealtimeSessionResource
 from websockets.exceptions import ConnectionClosedError
 
 import realtime_framework.entity.model as model_module
@@ -377,7 +377,7 @@ def test_dropped_response_reconnects(tmp_path):
     the decision because nothing was received (harness.py DefaultHarness._generate). The runtime
     rebuilds the session on a new connection through connect(), replays canonical history
     (context.py RealtimeRuntime.run_turn; openai_realtime.py
-    OpenAIRealtimeDriver._connect.open_session; openai_realtime_session.py
+    OpenAIRealtimeDriver._open; openai_realtime_session.py
     RealtimeSessionCore.replay) and sends the same observation again under a new item id."""
     steps = LONG_SCENARIO[:4]
     with RealtimeStub(replies(steps), drop_responses=(3,)) as stub:
@@ -462,7 +462,7 @@ def test_dropped_response_after_archive_replays_ledger(tmp_path):
 def test_rejected_upgrade_retries_connect(tmp_path):
     """connect()'s retry: a refused upgrade (HTTP 503, TRANSIENT through its response's status,
     providers/openai_realtime.py OpenAIRealtimeDriver.classify_transport_error) fails one
-    open_session attempt, and connect() tries a new connection after the shared backoff
+    _open_session attempt, and connect() tries a new connection after the shared backoff
     (providers/openai_realtime.py OpenAIRealtimeDriver._connect)."""
     steps = LONG_SCENARIO[:2]
     with RealtimeStub(replies(steps), reject_upgrades=(1,)) as stub:
@@ -483,16 +483,16 @@ def test_connect_that_fails_after_the_upgrade_closes_its_connection(tmp_path, mo
     dropped connection (ConnectionClosedError, TRANSIENT). The attempt closes the connection it
     opened (providers/openai_realtime.py _connect) before connect() opens a new one after the
     shared backoff; the episode runs on that one."""
-    update = RealtimeSessionResource.update
+    update = AsyncRealtimeSessionResource.update
     failed = []
 
-    def update_once(self, **kwargs):
+    async def update_once(self, **kwargs):
         if not failed:
             failed.append(kwargs)
             raise ConnectionClosedError(None, None)
-        return update(self, **kwargs)
+        return await update(self, **kwargs)
 
-    monkeypatch.setattr(RealtimeSessionResource, "update", update_once)
+    monkeypatch.setattr(AsyncRealtimeSessionResource, "update", update_once)
     steps = LONG_SCENARIO[:2]
     with RealtimeStub(replies(steps)) as stub:
         records = _run(stub, steps, tmp_path, "failed-session-update")

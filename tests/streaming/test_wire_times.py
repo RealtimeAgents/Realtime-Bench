@@ -86,13 +86,13 @@ def test_an_openai_push_is_written_once_its_frame_write_returned():
         session.read_continuously(clock)
         driver._session, driver._conn = session, connection
 
-        def send(conn, operation):
+        async def send(conn, operation):
             clock.now += 0.25
-            conn.queue.put(server.answer(operation))
+            conn.queue.put_nowait(server.answer(operation))
 
         driver._send = send
         receipt = await driver.push_frame(_observation(1), streaming_view(stream("F"), frames=5))
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
         await session.receive_until(lambda: False)
         return receipt
 
@@ -110,12 +110,12 @@ def test_an_openai_reply_s_completed_text_keeps_the_time_it_came_off_the_wire():
         reply = core.start_reply()
         created, added, _, finished = response_events()
         for event in (created, added, text_done("event_7", "{}"), finished):
-            connection.queue.put(event)
+            connection.queue.put_nowait(event)
         await until(lambda: len(reply.events) == 4)
         clock.now = 7.0
         handle = GenerationHandle("reply-1", opaque=(session, reply))
         events = [event async for event in _openai_driver(clock).events(handle)]
-        connection.queue.put(_clean_close())
+        connection.queue.put_nowait(_clean_close())
         await session.receive_until(lambda: False)
         return events
 

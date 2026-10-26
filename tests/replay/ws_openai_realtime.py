@@ -1,15 +1,15 @@
 """Scripted OpenAI Realtime WebSocket server on 127.0.0.1, and the replay step loop for it.
 
-The openai_realtime driver reaches the server through the OpenAI SDK's synchronous realtime
-client (providers/openai_realtime.py OpenAIRealtimeDriver.__init__,
-OpenAIRealtimeDriver._connect.open_session). With ``ModelConfig.api_base_url`` set to ``base_url``,
-the SDK connects to ``ws://127.0.0.1:<port>/v1/realtime?model=<model>``
-(openai/resources/realtime/realtime.py:1151-1200). The server runs on the websockets library the SDK
-uses, without a message size limit: client frames carry base64 screenshots.
+The openai_realtime driver reaches the server through the OpenAI SDK's async realtime client
+(providers/openai_realtime.py OpenAIRealtimeDriver.__init__, OpenAIRealtimeDriver._open). With
+``ModelConfig.api_base_url`` set to ``base_url``, the SDK connects to
+``ws://127.0.0.1:<port>/v1/realtime?model=<model>`` (openai/resources/realtime/realtime.py:
+683-732). The server runs on the websockets library the SDK uses, without a message size limit:
+client frames carry base64 screenshots.
 
 Each connection keeps an ordered item list and answers the client events the driver sends:
 - session.update gets session.updated; the driver never reads either (openai_realtime.py
-  OpenAIRealtimeDriver._connect.open_session).
+  OpenAIRealtimeDriver._open).
 - conversation.item.create inserts the item at the end, at the start (``previous_item_id``
   "root") or right after its anchor, and gets conversation.item.added and conversation.item.done.
   The in-place compaction waits for ``.done`` (openai_realtime_session.py _CREATE_ACKS,
@@ -26,7 +26,7 @@ Before a create or delete is applied it is checked: a unique item id of at most 
 (openai_realtime.py _CLIENT_ID_MAX_LENGTH), an existing anchor, content parts the SDK allows for the
 role (openai/types/realtime/realtime_conversation_item_{user,system,assistant}_message.py) minus
 audio, since the session is text only (openai_realtime.py
-OpenAIRealtimeDriver._connect.open_session), and an existing delete target. A failed check is a
+OpenAIRealtimeDriver._open), and an existing delete target. A failed check is a
 violation; the tests assert there are none.
 
 Errors always echo the client event they answer. The driver treats an error without one as fatal
@@ -34,8 +34,8 @@ for the generation that reads it, and as a failure of any in-place edit it is wa
 (openai_realtime_session.py RealtimeSessionCore.finish_edit, RealtimeSessionCore.receive;
 openai_realtime.py OpenAIRealtimeDriver.events). After any error the stub sends nothing more on that
 connection but keeps recording. The client sends a whole edit batch before it reads; acks it never
-reads would fill its receive queue, stop its reader and stall its close handshake for the close
-timeout (websockets/sync/connection.py:87-95, 811, 989-993).
+reads would fill its receive queue, pause its reading and stall its close handshake for the close
+timeout (websockets/asyncio/messages.py:276, connection.py:907-925, 1003).
 
 Scripted faults:
 - ``drop_responses``: answer these response.create calls (1-based, over the session) with
@@ -245,8 +245,8 @@ class RealtimeStub:
 
     def wait_for_session_update(self) -> None:
         """Each connect sends session.update and reads no reply (openai_realtime.py
-        OpenAIRealtimeDriver._connect.open_session), so initialize() can return before the stub has
-        recorded it."""
+        OpenAIRealtimeDriver._open), so initialize() can return before the stub has recorded
+        it."""
         with self._lock:
             recorded = self._lock.wait_for(
                 lambda: any(e["type"] == "session.update" for e in self.connections[-1].events),

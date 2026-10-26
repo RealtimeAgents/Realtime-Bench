@@ -786,11 +786,11 @@ class _FakeConnectionManager:
     def __init__(self, number: int, log: list, fail: frozenset = frozenset()):
         self.number, self.log, self.fail = number, log, fail
 
-    def __enter__(self):
+    async def __aenter__(self):
         number, log, fail = self.number, self.log, self.fail
 
         def client_event(kind):
-            def send(**arguments):
+            async def send(**arguments):
                 if kind in fail:
                     raise ConnectionError("connection dropped")
                 log.append((number, kind, arguments))
@@ -813,7 +813,7 @@ class _FakeConnectionManager:
             ),
         )
 
-    def __exit__(self, *exc):
+    async def __aexit__(self, *exc):
         self.log.append((self.number, "close", {}))
 
 
@@ -937,10 +937,10 @@ def test_openai_realtime_recovers_after_an_abandoned_rebuild():
     assert records.calls[0][0].reason == "runtime_recovery"
 
 
-def _hold_handshakes(driver: OpenAIRealtimeDriver) -> tuple[threading.Event, threading.Event]:
+def _hold_handshakes(driver: OpenAIRealtimeDriver) -> tuple[asyncio.Event, asyncio.Event]:
     """Each opening handshake on ``driver``'s fake SDK sets the first event, then lasts until the
-    second one is set."""
-    handshaking, finish = threading.Event(), threading.Event()
+    second one is set; one cancelled meanwhile logs ("handshake_cancelled")."""
+    handshaking, finish = asyncio.Event(), asyncio.Event()
     realtime = driver.client.realtime
     connect = realtime.connect
 
@@ -948,13 +948,17 @@ def _hold_handshakes(driver: OpenAIRealtimeDriver) -> tuple[threading.Event, thr
         def __init__(self, manager):
             self.manager = manager
 
-        def __enter__(self):
+        async def __aenter__(self):
             handshaking.set()
-            finish.wait(5)
-            return self.manager.__enter__()
+            try:
+                await finish.wait()
+            except asyncio.CancelledError:
+                self.manager.log.append((self.manager.number, "handshake_cancelled", {}))
+                raise
+            return await self.manager.__aenter__()
 
-        def __exit__(self, *exc):
-            self.manager.__exit__(*exc)
+        async def __aexit__(self, *exc):
+            await self.manager.__aexit__(*exc)
 
     realtime.connect = lambda **arguments: Held(connect(**arguments))
     return handshaking, finish
@@ -966,11 +970,11 @@ def test_openai_realtime_replays_nothing_once_its_generation_is_abandoned_during
 ):
     """The generation is abandoned while ensure_ready's reopen is in its opening handshake, past
     the connect retry's last check; the abort's close has not come yet, or came during the
-    handshake and found nothing open. Nothing more of an abandoned generation goes out: the
-    connection that opens is closed again before the history is replayed onto it (after a close
-    meanwhile, before its session.update even), so no delivery is recorded. The reopen raises
-    RetryCancelled, as an abandoned one does instead of failing, unrecorded; the handshake itself
-    succeeded and is recorded so."""
+    handshake and cancelled it. Nothing more of an abandoned generation goes out: the connection
+    that opens is closed again before the history is replayed onto it, or never opens, so no
+    delivery is recorded. The reopen raises RetryCancelled, as an abandoned one does instead of
+    failing, unrecorded; the attempt returned, its session ended by the close or about to be, and
+    is recorded as one that did."""
     driver, log = _openai()
     trace = _Trace()
     driver.bind_trace(trace)
@@ -982,7 +986,7 @@ def test_openai_realtime_replays_nothing_once_its_generation_is_abandoned_during
         with retry_cancellation(abandoned):
             ready = asyncio.ensure_future(driver.ensure_ready(SEED, view([turn(0, "a0")]), records))
         try:
-            await asyncio.to_thread(handshaking.wait, 5)
+            await asyncio.wait_for(handshaking.wait(), 5)
             abandoned.set()
             if closed:
                 await driver.abort(None)
@@ -993,7 +997,9 @@ def test_openai_realtime_replays_nothing_once_its_generation_is_abandoned_during
         return raised.value
 
     cancelled = asyncio.run(run())
-    assert _sent(log) == ([] if closed else [(1, "session.update")]) + [(1, "close")]
+    assert _sent(log) == (
+        [(1, "handshake_cancelled")] if closed else [(1, "session.update"), (1, "close")]
+    )
     assert [(event, payload.get("outcome")) for event, payload, _ in trace.events] == [
         (TraceEvent.MODEL_ATTEMPT_FINISHED, "ok")
     ]
@@ -1002,26 +1008,25 @@ def test_openai_realtime_replays_nothing_once_its_generation_is_abandoned_during
     assert not driver._connected and driver._session is None and driver._cm is None
 
 
-def test_openai_realtime_closes_a_connection_whose_handshake_outlived_its_connect():
-    """RealtimeRuntime.start bounds the first connect (harnesses/default/context.py), but the
-    opening handshake runs on a thread the bound cannot stop. The close that follows finds
-    nothing open yet; the connection the handshake opens after it is closed at once instead of
-    being kept, open for good, by a driver that was closed."""
+def test_openai_realtime_cancels_the_handshake_of_a_connect_cut_short():
+    """RealtimeRuntime.start bounds the first connect (harnesses/default/context.py): the bound
+    cancels the connect and its opening handshake with it, so no connection opens after it, to
+    be kept, open for good, by a driver that was closed."""
     driver, log = _openai()
     handshaking, finish = _hold_handshakes(driver)
 
     async def run():
         connecting = asyncio.ensure_future(driver.connect(ConnectRequest(seed=SEED)))
         try:
-            await asyncio.to_thread(handshaking.wait, 5)
+            await asyncio.wait_for(handshaking.wait(), 5)
             connecting.cancel()  # the bound passed
             await asyncio.wait({connecting})
             await driver.close()
         finally:
             finish.set()
 
-    asyncio.run(run())  # returns once the executor's threads, the handshake's too, have ended
-    assert _sent(log) == [(1, "close")]
+    asyncio.run(run())
+    assert _sent(log) == [(1, "handshake_cancelled")]
     assert driver._cm is None and driver._conn is None and driver._session is None
 
 
