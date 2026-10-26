@@ -182,19 +182,26 @@ def _fresh_catalog() -> None:
 
 
 class _Agent:
-    """Stands in for the harness create_agent() returns; main() only sets and calls these."""
+    """Stands in for the harness create_agent() returns; main() only sets and calls these. What
+    it sets is what the harness builds its system block from."""
 
     driver = None
     token_usage = None
 
-    def __init__(self, config):
+    def __init__(self, config, interaction_mode):
         self.config = config
+        self.interaction_mode = interaction_mode
 
     def bind_tool_runtime(self, runtime):
         pass
 
     def initialize(self, task_instruction, initial_observation):
-        pass
+        self.task_instruction = task_instruction
+
+    def _system_instruction_text(self, frame_reference_rules):
+        from realtime_framework.harnesses.default.harness import VisionAgentBase
+
+        return VisionAgentBase._system_instruction_text(self, frame_reference_rules)
 
     def discard_pending_observations(self):
         pass
@@ -314,10 +321,15 @@ def _probe_runner(request: dict) -> dict:
             "detailed_history_turns": policy.turns.keep,
             "detailed_history_drop_block_size": policy.turns.block,
         }
-        return _Agent(config)
+        state["prompts"] = policy.prompts
+        return _Agent(config, interaction_mode)
 
     def run_stream(adapter, env, **loop):
+        from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
+
         _attribute(state["attribution"], state["start"], "runner", claimed=state["claimed"])
+        # As each agent's initialize() builds it (harnesses/default/harness.py, streaming/agent.py).
+        profile = INTERACTION_PROFILES[state["prompts"][adapter.task_category]]
         state["loop"] = {
             "run_stream": {
                 key: loop[key]
@@ -339,7 +351,7 @@ def _probe_runner(request: dict) -> dict:
                 "category": env.task.category,
                 "seed": env.task.seed,
                 "task_clock": env.task.clock_snapshot(),
-                "system_prompt_sha256": _sha256(adapter.system_prompt_override),
+                "system_prompt_sha256": _sha256(profile.system_instruction(adapter)),
                 "instruction_sha256": _sha256(env.task.description()),
             },
         }
