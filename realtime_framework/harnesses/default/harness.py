@@ -698,6 +698,7 @@ from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PRO
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
+from realtime_framework.harnesses.default.prompts import GROUNDING_FAILED_FEEDBACK
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
@@ -865,6 +866,7 @@ from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
 from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
+from realtime_framework.harnesses.default.frames import GROUNDING_FAILED
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
 from realtime_framework.harnesses.default.frames import FrameRecord
 from realtime_framework.harnesses.default.frames import FrameTable
@@ -1005,11 +1007,16 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
     cannot be found; the frame and its age are recorded. A turn-based action uses ``own_frame``,
     the one its generation sent: an abandoned generation may enter its frame later. ``execution``
     is the decision's inspection; its tool trace records the resolution.
+
+    Output whose one action names a mark its frame does not have is a grounding failure, not
+    output without an action: the protocol records the action asked for and the mark.
     """
     frames = agent.frames
     streaming = agent.interaction_mode == "streaming"
     # (action, its frame, its frame field, why no frame was found) of each parsed candidate.
     candidates = []
+    # (action, the mark, the resolution) of each parsed candidate naming a mark its frame lacks.
+    unknown_marks = []
     # The resolution this output made: under streaming ``execution`` is the frame's, which
     # holds the last resolution of any call on the frame.
     grounding = None
@@ -1027,19 +1034,29 @@ def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
         if frame is not None:
             runtime = getattr(agent, "tool_runtime", None)
             if runtime is not None and execution is not None:
-                parsed = runtime.resolve_action(parsed, frame.marks, execution)
+                asked, parsed = parsed, runtime.resolve_action(parsed, frame.marks, execution)
                 grounding = execution["reference_resolution"]
                 if streaming:
                     # The decision's inspection row names the frame whose marks resolved it.
                     execution["reference_resolution"].update(
                         frame=frame.frame, observation_id=frame.observation_id
                     )
+                if parsed is None:
+                    # Resolution stops at the first reference that fails.
+                    failed = (grounding.get("resolutions") or [{}])[-1]
+                    if failed.get("error") == "mark_not_in_observation":
+                        unknown_marks.append((asked, failed["mark"], grounding))
         if parsed is not None:
             candidates.append((parsed, frame, reference, error))
         return parsed
 
     resolution = resolve_action_output(text, parse_and_ground, framed=streaming)
     action_protocol = resolution.metadata()
+    if resolution.protocol_failure == "invalid_action_output" and unknown_marks:
+        asked, mark, grounding = unknown_marks[0]
+        action_protocol.update(
+            protocol_failure=GROUNDING_FAILED, requested=action_text(asked), unknown_mark=mark
+        )
     frame = own_frame
     if streaming and resolution.valid:
         frame, reference, error = next(
@@ -1792,21 +1809,27 @@ class DefaultHarness(VisionAgentBase):
             if not native_protocol_failure:
                 action_protocol["source"] = "native_function_call"
         executed = action_text(action)
+        record = {
+            "action": output.text,
+            "thinking": thinking,
+            "executed": executed,
+            "observation_tick": action_observation.observation.tick_number,
+            "observation_timestamp": action_observation.observation.timestamp,
+            "parse_failed": bool(action_protocol.get("protocol_failure")),
+            "protocol_failure": action_protocol.get("protocol_failure"),
+            "parse_mode": action_protocol.get("parse_mode"),
+        }
+        if action_protocol.get("protocol_failure") == GROUNDING_FAILED:
+            record.update(
+                requested=action_protocol["requested"],
+                unknown_mark=action_protocol["unknown_mark"],
+            )
         generation.staged = _Staged(
             unattached,
             inspection_executions,
             runtime_result,
             action_observation,
-            {
-                "action": output.text,
-                "thinking": thinking,
-                "executed": executed,
-                "observation_tick": action_observation.observation.tick_number,
-                "observation_timestamp": action_observation.observation.timestamp,
-                "parse_failed": bool(action_protocol.get("protocol_failure")),
-                "protocol_failure": action_protocol.get("protocol_failure"),
-                "parse_mode": action_protocol.get("parse_mode"),
-            },
+            record,
         )
 
         token_fields = dict(output.token_fields)
@@ -1967,7 +1990,10 @@ class DefaultHarness(VisionAgentBase):
         ``replacement`` is the wait the kernel ran in place of a done or fail."""
         last = entry or {}
         parse_failed = bool(last.get("parse_failed"))
-        requested = "invalid_action" if parse_failed else (last.get("executed") or "none")
+        # A grounding failure's record keeps the action asked for (parse_grounded_action).
+        requested = last.get("requested") or (
+            "invalid_action" if parse_failed else (last.get("executed") or "none")
+        )
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
         replaced = replacement is not None and status in landed_statuses
@@ -1981,10 +2007,16 @@ class DefaultHarness(VisionAgentBase):
         feedback = f"EXECUTION RESULT: actual={executed}; requested={requested}; status={status}."
         if detail:
             feedback += f" Detail: {detail}"
-        note = action_result_note(
-            "none" if parse_failed else status,
-            last.get("protocol_failure", "") if parse_failed else detail,
-        )
+        if "unknown_mark" in last:
+            note = (
+                GROUNDING_FAILED_FEEDBACK.format(mark=last["unknown_mark"])
+                + f" ({GROUNDING_FAILED})"
+            )
+        else:
+            note = action_result_note(
+                "none" if parse_failed else status,
+                last.get("protocol_failure", "") if parse_failed else detail,
+            )
         if note:
             feedback += " " + note
         if replaced:

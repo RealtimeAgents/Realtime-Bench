@@ -96,7 +96,7 @@ from realtime_framework.evaluation.kernel.streaming import (
     SessionPreparing,
 )
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
-from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
+from realtime_framework.harnesses.default.frames import GROUNDING_FAILED, FrameRecord, FrameTable
 from realtime_framework.harnesses.default.harness import (
     INTERACTION_PROFILES,
     VisionAgentBase,
@@ -223,8 +223,11 @@ class NativeStreamingAgent(VisionAgentBase):
         # between its attempts to ready it ("backoff") or waiting for the renewal ("renewal").
         self._preparing: set[str] = set()
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
-        # What each action asked for (action_text), by its outcome's (decision, call id).
-        self._requested: dict[tuple[int, str], str] = {}
+        # What each action asked for (action_text), by its outcome's (decision, call id); a
+        # reply's outcome, which has no call id, holds what its grounding failure asked for, and
+        # the mark that frame does not have.
+        self._requested: dict[tuple[int, str | None], str] = {}
+        self._unknown_marks: dict[tuple[int, None], str] = {}
         # The generation of each call an action was posted for, which a cancellation names.
         self._generation_of: dict[str, int] = {}
         super().__init__(config, log_dir, trace=trace)
@@ -848,6 +851,10 @@ class NativeStreamingAgent(VisionAgentBase):
         )
         reply.grounding.append({"call_id": call_id, "grounding": protocol.get("grounding")})
         if protocol["protocol_failure"] is not None:
+            if reply.protocol_failure is None and protocol["protocol_failure"] == GROUNDING_FAILED:
+                with self._lock:
+                    self._requested[(reply.decision, None)] = protocol["requested"]
+                    self._unknown_marks[(reply.decision, None)] = protocol["unknown_mark"]
             reply.protocol_failure = reply.protocol_failure or protocol["protocol_failure"]
             return
         reference = protocol["frame_reference"]
@@ -940,8 +947,9 @@ class NativeStreamingAgent(VisionAgentBase):
         """Commit: the outcome's feedback joins the view, on the action its call handed over, or
         on the reply when it came to no action."""
         with self._lock:
-            requested = self._requested.pop((outcome.decision, outcome.call_id), "none")
-            feedback = execution_feedback(outcome, requested)
+            key = (outcome.decision, outcome.call_id)
+            requested = self._requested.pop(key, "none")
+            feedback = execution_feedback(outcome, requested, self._unknown_marks.pop(key, None))
             self._blocks.append(
                 feedback_block(outcome.decision, outcome.call_id, feedback, self.clock.time_ns())
             )

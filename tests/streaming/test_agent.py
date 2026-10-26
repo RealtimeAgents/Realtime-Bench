@@ -24,6 +24,7 @@ from realtime_framework.evaluation.kernel.streaming import (
 )
 from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
+    GROUNDING_FAILED,
     INVALID_GROUNDING_FRAME,
     MISSING_FRAME,
 )
@@ -980,7 +981,7 @@ def test_a_replys_row_keeps_the_grounding_of_each_of_its_calls(monkeypatch, cloc
     r = agent.generate(0, 0, frame, BUDGET).result
     agent.accept(0)
     agent.close()
-    assert r["action_protocol"]["protocol_failure"] == "invalid_action_output"
+    assert r["action_protocol"]["protocol_failure"] == GROUNDING_FAILED
     assert [arrival.call_id for arrival in posted] == ["c2"]
     [row] = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
     assert [
@@ -992,6 +993,45 @@ def test_a_replys_row_keeps_the_grounding_of_each_of_its_calls(monkeypatch, cloc
         )
         for entry in row["grounding"]
     ] == [("c1", 1, False, "mark_not_in_observation"), ("c2", 2, True, None)]
+
+
+class _OneMark(RecordingToolRuntime):
+    """Every frame has the one mark P1."""
+
+    def inspect(self, observation, **fields) -> dict:
+        marks = {"P1": {"kind": "point", "point": [10, 20]}}
+        return {**super().inspect(observation, **fields), "marks": marks}
+
+    def resolve_action(self, action, marks, execution):
+        resolved, execution["reference_resolution"] = resolve_action_references(action, marks)
+        return resolved
+
+
+def test_a_call_naming_a_mark_its_frame_lacks_is_the_replys_grounding_failure(monkeypatch, clock):
+    """Nothing runs for it, and the reply's feedback names the mark and the action asked for."""
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_tool_runtime(_OneMark())
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    call = Call(0.25, "c1", "click", {"target": "P9", "frame": 1})
+    agent.driver.replies.append(Reply((call,), ends_at=1.0))
+    r = agent.generate(0, 0, frame, BUDGET).result
+    agent.accept(0)
+    assert posted == []
+    assert r["action_protocol"]["protocol_failure"] == GROUNDING_FAILED
+    agent.commit(_outcome(0, "none", protocol_failure=GROUNDING_FAILED))
+    agent.push(observation(clock, 3))
+    items = agent.driver.views[-1].items
+    assert [item.block.id for item in items][3:] == ["d0.output", "d0.feedback", "f3.frame"]
+    assert items[4].block.text == (
+        "EXECUTION RESULT: actual=none; requested=click {'target': 'P9'}; status=none. "
+        "NOTE: your reply held an action naming P9, which is not a mark of the screenshot the "
+        "action is based on (grounding_failed); nothing ran for it. Actions the reply handed "
+        "over, if any, have their own feedback."
+    )
+    assert agent.action_history[-1]["requested"] == "click {'target': 'P9'}"
+    agent.close()
 
 
 def test_feedback_says_what_the_model_asked_for_not_what_ran(monkeypatch, clock):

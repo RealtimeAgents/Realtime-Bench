@@ -248,6 +248,10 @@ INVALID_ACTION_FEEDBACK = (
     "NOTE: your previous response was not exactly one valid action, so WAIT was executed. "
     "Output one actual action with its arguments and nothing else."
 )
+GROUNDING_FAILED_FEEDBACK = (
+    "NOTE: your previous action names {mark}, which is not a mark of the screenshot it was based "
+    "on, so WAIT was executed."
+)
 UNSUPPORTED_TERMINAL_ACTION_FEEDBACK = (
     "NOTE: your previous action was done or fail, which are not available actions, so WAIT was "
     "executed. The environment determines when the episode ends."

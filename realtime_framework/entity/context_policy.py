@@ -64,7 +64,9 @@ from realtime_framework.entity.records import _jsonable
 # front of the next frame; the streaming harness's feedback says that a superseded action was
 # replaced while it waited, why a cancelled call did not run, and that a reply's protocol failure
 # leaves each action it handed over its own feedback (harnesses/streaming/feedback.py); the SoM
-# mark badges of a streaming screenshot keep clear of its frame number.
+# mark badges of a streaming screenshot keep clear of its frame number; an action naming a mark
+# its frame does not have is a grounding failure, whose feedback names the mark and the action
+# asked for, not output without a valid action.
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).

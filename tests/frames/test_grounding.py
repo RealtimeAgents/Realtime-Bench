@@ -6,6 +6,7 @@ A model-image point becomes the screen pixel nearest it, half to even, kept on t
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -13,6 +14,7 @@ from PIL import Image
 from realtime_framework.entity.actions import FrameGeometry, Observation, normalize_action
 from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
+    GROUNDING_FAILED,
     INVALID_FRAME_SYNTAX,
     INVALID_GROUNDING_FRAME,
     MISSING_FRAME,
@@ -152,6 +154,45 @@ def test_an_action_without_a_usable_frame_is_refused(monkeypatch, clock, frame, 
         error,
     )
     assert result["action_protocol"]["protocol_failure"] is None
+
+
+def _request_texts(received) -> str:
+    texts = []
+    for message in json.loads(received.body)["messages"]:
+        content = message["content"]
+        if isinstance(content, str):
+            texts.append(content)
+        else:
+            texts += [item["text"] for item in content if item["type"] == "text"]
+    return "\n".join(texts)
+
+
+def test_an_action_naming_a_mark_its_frame_lacks_is_a_grounding_failure(tmp_path):
+    """Its format is right, so the model is told that the mark is not in that screenshot, not
+    that its response held no valid action; WAIT runs, and the record keeps what it asked for."""
+    steps = [
+        Step('{"action": "click", "target": "P9"}', status="wait"),
+        Step('{"action": "wait"}', status="wait"),
+    ]
+    with ChatCompletionsStub(replies(steps)) as stub:
+        episode = open_episode(stub, tmp_path)
+        try:
+            results = [decide(episode, k, step.status)[1] for k, step in enumerate(steps)]
+        finally:
+            episode.finish()
+    protocol = results[0]["action_protocol"]
+    assert protocol["protocol_failure"] == GROUNDING_FAILED
+    assert protocol["grounding"]["resolutions"] == [
+        {"error": "mark_not_in_observation", "mark": "P9", "reference": "P9"}
+    ]
+    assert results[0]["action"].action_type.value == "wait"
+    entry = episode.agent.action_history[0]
+    assert (entry["requested"], entry["executed"]) == ("click {'target': 'P9'}", "wait()")
+    assert (
+        "EXECUTION RESULT: actual=wait(); requested=click {'target': 'P9'}; status=wait. "
+        "NOTE: your previous action names P9, which is not a mark of the screenshot it was based "
+        "on, so WAIT was executed. (grounding_failed)"
+    ) in _request_texts(stub.requests[1])
 
 
 def test_turn_based_actions_name_no_frame(tmp_path):

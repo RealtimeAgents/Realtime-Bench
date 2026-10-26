@@ -24,6 +24,12 @@ INVALID_GROUNDING_FRAME = "invalid_grounding_frame"
 MISSING_FRAME = "missing_frame"
 INVALID_FRAME_SYNTAX = "invalid_frame_syntax"
 FRAME_NOT_IN_TABLE = "frame_not_in_table"
+# The protocol failure of an action that parsed but names a mark its frame does not have: WAIT runs
+# in its place on the turn-based clock, and nothing under streaming.
+GROUNDING_FAILED = "grounding_failed"
+# The protocol failure of an action that parsed but names a mark its frame does not have: WAIT runs
+# in its place on the turn-based clock, and nothing under streaming.
+GROUNDING_FAILED = "grounding_failed"
 
 
 @dataclass
