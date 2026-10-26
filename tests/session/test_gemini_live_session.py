@@ -196,6 +196,11 @@ def clean_reply(core: SessionCore, generation_id: str, handle: str) -> None:
         arrive(core, received)
 
 
+def renewal_handle(core: SessionCore) -> str | None:
+    """The handle a goAway renewal after a clean generation resumes with, None to rebuild."""
+    return core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True)
+
+
 def frame_content(k: int, text: str | None = None) -> Content:
     image = view([turn(k)]).items[1].block.image
     return Content("user", (Part(text=text or f"frame {k}"), Part(image=image)))
@@ -207,7 +212,7 @@ def test_new_session_then_rebuild():
     assert (first.mode, first.release_grace, first.seed) == ("new_session", False, ())
     assert core.connection == 1
     assert core.delivery == {("setup",): Delivery.CONFIRMED}
-    assert not core.last_turn_clean  # nothing on the session yet: no handle to resume
+    assert renewal_handle(core) is None  # nothing on the session yet: no handle to resume
 
     rebuild = plan(core, view([turn(k) for k in range(10)]))
     assert core.connection is None  # the open connection is closed first
@@ -224,7 +229,7 @@ def test_new_session_then_rebuild():
         ("setup",): Delivery.CONFIRMED,
         **{("block", block_id): Delivery.SENT for block_id in seeded},
     }
-    assert core.last_turn_clean and not core.renewal_required
+    assert renewal_handle(core) is None and not core.renewal_required
 
 
 def test_seed_batches_keep_each_exchange_whole():
@@ -642,12 +647,10 @@ def test_go_away_resumes_after_a_clean_turn():
 
     received = receive(core, server_content(turnComplete=True), now=112.0)
     assert received.complete and received.ends and not received.contaminated
-    assert core.resume_handle == "handle-0" and core.last_turn_clean
+    assert core.resume_handle == "handle-0"
     assert core.replies == {}
 
-    assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) == (
-        "handle-0"
-    )
+    assert renewal_handle(core) == "handle-0"
     assert core.resume_handle_for("go_away", force_rebuild=True, generation_clean=True) is None
     assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=False) is None
     assert (
@@ -667,7 +670,7 @@ def test_go_away_resumes_after_a_clean_turn():
     assert core.go_away_deadline is None  # it belonged to the closed connection
     core.connected(resume)
     assert core.connection == 2
-    assert core.last_turn_clean and not core.renewal_required
+    assert renewal_handle(core) == "handle-0" and not core.renewal_required
 
 
 def test_a_later_go_away_that_gives_more_time_leaves_the_earliest_deadline():
@@ -698,7 +701,7 @@ def test_resume_failure_rebuilds():
     assert core.resume_handle is None
     core.connected(rebuild)
     assert core.connection == 2  # the refused resume never counted as a connection
-    assert core.last_turn_clean and not core.renewal_required
+    assert renewal_handle(core) is None and not core.renewal_required
 
 
 def test_interrupted_or_unresumable_turn_does_not_resume():
@@ -708,26 +711,26 @@ def test_interrupted_or_unresumable_turn_does_not_resume():
     assert core.resume_handle == "handle-0"
 
     start_turn(core, "turn-1")
-    assert core.resume_handle is None and not core.last_turn_clean
+    assert core.resume_handle is None
     assert receive(core, update("handle-1")).generation == 2  # the second on this connection
     received = receive(core, server_content(interrupted=True))
     assert received.interrupted and received.contaminated and not received.ends
     received = receive(core, server_content(turnComplete=True))
     assert received.complete and received.contaminated and not received.interrupted
-    assert core.resume_handle is None and not core.last_turn_clean
-    assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) is None
+    assert core.resume_handle is None
+    assert renewal_handle(core) is None
 
     # The next observation drops the interrupted turn's candidate: a clean turn without an
     # update of its own has no handle to promote.
     start_turn(core, "turn-2")
     receive(core, server_content(turnComplete=True))
-    assert core.resume_handle is None and core.last_turn_clean
+    assert renewal_handle(core) is None
 
     start_turn(core, "turn-3")
     receive(core, update("handle-3"))
     receive(core, update(None))  # not resumable any more
     receive(core, server_content(turnComplete=True))
-    assert core.resume_handle is None and core.last_turn_clean
+    assert renewal_handle(core) is None
 
 
 def test_extended_thinking_spans_intermediate_turn_complete():
@@ -745,11 +748,11 @@ def test_extended_thinking_spans_intermediate_turn_complete():
         assert not received.complete and not received.ends
         assert (received.generation, received.generation_id) == (1, "turn-0")
     assert received.status == "IN_PROGRESS"
-    assert core.resume_handle is None and not core.last_turn_clean
+    assert renewal_handle(core) is None
 
     received = receive(core, server_content(interactionStatus="IDLE"))
     assert received.status == "IDLE" and received.complete and received.ends
-    assert core.resume_handle == "handle-0" and core.last_turn_clean
+    assert renewal_handle(core) == "handle-0"
     assert core.replies == {}
 
 
@@ -760,7 +763,7 @@ def test_idle_ends_a_turn_complete_interaction_uncleanly():
     receive(core, update("handle-0"))
     received = receive(core, server_content(interactionStatus="IDLE"))
     assert received.ends and not received.complete
-    assert core.resume_handle is None and not core.last_turn_clean
+    assert renewal_handle(core) is None
 
 
 def test_reply_read_after_close_keeps_its_generation():
@@ -791,7 +794,6 @@ def test_reply_read_after_close_keeps_its_generation():
     # Connection 1's clean completion does not promote connection 2's candidate mid-turn.
     assert (core.resume_handle, core.candidate_resume_handle) == (None, "handle-2")
     assert not core.renewal_required and core.go_away_deadline is None
-    assert not core.last_turn_clean
     current = receive(core, server_content(turnComplete=True))
     assert (current.connection, current.generation, current.generation_id) == (2, 1, "turn-1")
     assert current.complete and core.replies == {}
@@ -810,7 +812,6 @@ def test_an_orphan_message_changes_nothing():
             core.candidate_resume_handle,
             core.renewal_required,
             core.go_away_deadline,
-            core.last_turn_clean,
             dict(core.replies),
         )
 

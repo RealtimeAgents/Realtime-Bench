@@ -327,7 +327,6 @@ class SessionCore:
         # The clean-boundary state a turn-based renewal resumes by; streaming reads none of it.
         self.candidate_resume_handle: str | None = None  # latest resumption update of this turn
         self.resume_handle: str | None = None  # promoted at a clean interaction boundary
-        self.last_turn_clean = False
         # (id, name) of the tool calls received and not yet acknowledged.
         self.pending_calls: list[tuple] = []
         self.go_away_deadline: float | None = None  # on the driver's monotonic clock
@@ -505,7 +504,6 @@ class SessionCore:
         self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
         self.renewal_required = False
-        self.last_turn_clean = connect.resume_handle is not None or bool(connect.seeded)
 
     def closed(self) -> None:
         self.connection = None
@@ -526,7 +524,7 @@ class SessionCore:
         if self.streaming:
             resumes = reason == "go_away" and not force_rebuild
             return self.latest_resume_handle if resumes else None
-        if reason == "go_away" and not force_rebuild and self.last_turn_clean and generation_clean:
+        if reason == "go_away" and not force_rebuild and generation_clean:
             return self.resume_handle
         return None
 
@@ -601,7 +599,6 @@ class SessionCore:
             + tuple(("block", block.id) for block in (frame, prefix) if block is not None),
             tuple(_feedback_content(item) for item in feedback),
         )
-        self.last_turn_clean = False
         self.resume_handle = None
         self.candidate_resume_handle = None
         self.sending(observation.keys)
@@ -704,8 +701,6 @@ class SessionCore:
         generation.interrupted = generation.interrupted or interrupted
         if connection == self.connection:
             control = self._control(message, clean=complete and not generation.interrupted, now=now)
-            if complete:
-                self.last_turn_clean = not generation.interrupted
         else:
             # Read from a closed connection: the session is no longer there to change.
             control = {}
