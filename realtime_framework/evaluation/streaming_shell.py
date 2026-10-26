@@ -52,7 +52,16 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
-from realtime_framework.evaluation.episode_end import EpisodeEnd, EpisodeResult
+from realtime_framework.evaluation.episode_end import (
+    EpisodeEnd,
+    EpisodeResult,
+    escaped_termination,
+    invalid_line,
+    invalid_record,
+    only_logged,
+    record_run_exception,
+    with_unheard,
+)
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
@@ -87,14 +96,7 @@ from realtime_framework.evaluation.kernel.streaming import (
     StreamingConfig,
     StreamingPolicy,
 )
-from realtime_framework.evaluation.shell import (
-    KernelAgent,
-    ShellEnvironment,
-    _escaped_termination,
-    _invalid_record,
-    _only_logged,
-    _with_unheard,
-)
+from realtime_framework.evaluation.shell import KernelAgent, ShellEnvironment
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.guest import action_timeout
@@ -468,7 +470,7 @@ class _StreamingShell:
         over whatever comes of writing it, and its verdict goes first: main() reads it whatever
         else could be written."""
         env, end = self.env, self.end
-        termination = end.termination = _with_unheard(termination, self._unheard, self.log)
+        termination = end.termination = with_unheard(termination, self._unheard, self.log)
         late = None
         try:
             end.stop_reason = termination.stop_reason
@@ -479,7 +481,7 @@ class _StreamingShell:
                 latched is None
                 or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
             ):
-                verdict = _invalid_record(invalid)
+                verdict = invalid_record(invalid)
             # The kernel was not told of one latched once the snapshot was frozen (decision 30).
             late = latched if invalid is None else None
             if late is not None:
@@ -498,7 +500,7 @@ class _StreamingShell:
             self._push_lane.close()
             self._abort_lane.close()
         if late is not None:
-            self.log(_only_logged(late))
+            self.log(only_logged(late))
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell
@@ -520,26 +522,17 @@ class _StreamingShell:
                 self.clocks.operational.wait(self._frozen, None)
             self._write_executions()  # of an action the kernel did not take the answer of
             self._handle(ReleaseInputs())
-            termination = _escaped_termination(
+            termination = escaped_termination(
                 self.kernel, self._now, self._now, self._frozen_at, self.end.loop_error, latched
             )
             self._finish(termination)
-            # The run_exception is the first failure: recorded as the turn-based shell does.
             if first:
-                record = _invalid_record(termination.invalid)
-                self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
-                if self.trace is not None and not self._trace_failed:
-                    self.trace.emit(
-                        TraceEvent.RUN_INVALIDATED,
-                        record,
-                        kernel_seq=None,
-                        semantic=self._now,
-                        ops=self._now,
-                    )
+                trace = None if self._trace_failed else self.trace
+                record_run_exception(trace, termination.invalid, self._now, self._now, self.log)
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
         if self.end.termination is None:  # how it ended, as far as the wrap-up got
-            self.end.termination = _escaped_termination(
+            self.end.termination = escaped_termination(
                 self.kernel, self._now, self._now, self._frozen_at, self.end.loop_error, latched
             )
 
@@ -552,12 +545,8 @@ class _StreamingShell:
             if invalid.reason == "observation_stream_frozen":
                 # What main() reads for the run summary, as the turn-based shell counts it.
                 self.end.stream_freeze_count += 1
-            self.log(
-                f"[invalid-run] {invalid.category}:{invalid.reason}"
-                + (f" — {invalid.detail}" if invalid.detail else "")
-            )
-            payload = _invalid_record(invalid)
-            self._write(TraceEvent.RUN_INVALIDATED, payload, entry)
+            self.log(invalid_line(invalid))
+            self._write(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
         else:
             self._write("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
 

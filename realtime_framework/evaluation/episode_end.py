@@ -1,13 +1,96 @@
-"""How an episode ends, as either shell hands it to main() (evaluation/runner.py)."""
+"""How an episode ends, as either shell hands it to main() (evaluation/runner.py), and what the two
+shells share of writing it up, whatever threads they run it on."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.clock import TokenAccounting
-from realtime_framework.evaluation.kernel.events import Termination
+from realtime_framework.evaluation.kernel.core import Kernel
+from realtime_framework.evaluation.kernel.events import Invalidated, Termination
+
+
+def invalidated(record: dict) -> Invalidated:
+    """An invalid-run record the environment latched, as the kernel's event."""
+    return Invalidated(record["category"], record["reason"], record.get("detail"))
+
+
+def invalid_record(invalid: Invalidated) -> dict:
+    """An invalid run as main() is handed it and writes it as RunInvalidated: the detail only when
+    there is one (legacy_loop.py ``_invalidate``)."""
+    record = {"category": invalid.category, "reason": invalid.reason}
+    if invalid.detail:
+        record["detail"] = invalid.detail
+    return record
+
+
+def invalid_line(invalid: Invalidated) -> str:
+    """The log line of an invalid run (legacy_loop.py ``_invalidate``)."""
+    detail = invalid.detail
+    return f"[invalid-run] {invalid.category}:{invalid.reason}" + (f" — {detail}" if detail else "")
+
+
+def only_logged(record: dict) -> str:
+    """The log line of an invalid run the environment latched once the snapshot was frozen: the
+    run's verdict stands, as for a failure of the cleanup's own (decisions 30, 33)."""
+    detail = record.get("detail")
+    return (
+        f"[cleanup] {record['category']}:{record['reason']} once the snapshot was frozen, only "
+        "logged" + (f" — {detail}" if detail else "")
+    )
+
+
+def with_unheard(termination: Termination, unheard: Invalidated | None, log) -> Termination:
+    """A failure a shell found in the batch of the kernel's Finish, such as the termination
+    record's own write, invalidates the run as the kernel would have, at the same end (decision
+    32)."""
+    if unheard is None or termination.invalid is not None:
+        return termination
+    # The end of a traceback names the exception (legacy_loop.py _invalidate).
+    detail = None if unheard.detail is None else unheard.detail[-2000:]
+    invalid = Invalidated(unheard.category, unheard.reason, detail)
+    log(invalid_line(invalid))
+    return replace(termination, stop_reason="invalid_run", invalid=invalid)
+
+
+def escaped_termination(
+    kernel: Kernel,
+    semantic: float,
+    ops: float,
+    snapshot_at: float | None,
+    failure: str,
+    latched: dict | None,
+) -> Termination:
+    """How an episode ended whose kernel, or its shell's reading of the clocks, raised (N11), as
+    a shell tells it without the kernel. The run is invalid for the first failure: the kernel's
+    or the environment's when one was latched, run_exception otherwise, ``failure`` being the
+    first traceback the shell latched, the summary's error. It ended at the first end signal:
+    the kernel's when it had one, else the reading the failure came at."""
+    ending = kernel.ending
+    invalid = kernel.invalid or (
+        invalidated(latched)
+        if latched is not None
+        # The end of a traceback names the exception (legacy_loop.py _invalidate).
+        else Invalidated("runner", "run_exception", failure[-2000:])
+    )
+    if ending is None:
+        return Termination("invalid_run", "invalid", semantic, snapshot_at, ops, None, invalid)
+    return Termination(
+        "invalid_run", ending.cause, ending.at, snapshot_at, ending.ops, None, invalid
+    )
+
+
+def record_run_exception(trace, invalid: Invalidated, semantic: float, ops, log) -> None:
+    """The run_exception a wrap-up (N11) invalidates the run for, the first failure, recorded as
+    the runner records it: logged, and written as RunInvalidated outside the kernel's numbering
+    unless ``trace`` is gone."""
+    record = invalid_record(invalid)
+    log(invalid_line(invalid))
+    if trace is not None:
+        trace.emit(TraceEvent.RUN_INVALIDATED, record, kernel_seq=None, semantic=semantic, ops=ops)
 
 
 @dataclass(frozen=True)

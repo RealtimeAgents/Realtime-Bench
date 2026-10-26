@@ -51,7 +51,7 @@ import threading
 import traceback
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -62,7 +62,17 @@ from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.clock import TokenAccounting
-from realtime_framework.evaluation.episode_end import EpisodeEnd, EpisodeResult
+from realtime_framework.evaluation.episode_end import (
+    EpisodeEnd,
+    EpisodeResult,
+    escaped_termination,
+    invalid_line,
+    invalid_record,
+    invalidated,
+    only_logged,
+    record_run_exception,
+    with_unheard,
+)
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
@@ -286,70 +296,6 @@ class _Decision:
     resolved: dict | None = None  # its ActionResolved payload
 
 
-def _invalidated(record: dict) -> Invalidated:
-    """An invalid-run record the environment latched, as the kernel's event."""
-    return Invalidated(record["category"], record["reason"], record.get("detail"))
-
-
-def _invalid_record(invalid: Invalidated) -> dict:
-    """An invalid run as main() is handed it (episode_end.py EpisodeResult) and writes it as
-    RunInvalidated: the detail only when there is one (legacy_loop.py ``_invalidate``)."""
-    record = {"category": invalid.category, "reason": invalid.reason}
-    if invalid.detail:
-        record["detail"] = invalid.detail
-    return record
-
-
-def _only_logged(record: dict) -> str:
-    """The log line of an invalid run the environment latched once the snapshot was frozen: the
-    run's verdict stands, as for a failure of the cleanup's own (decisions 30, 33)."""
-    detail = record.get("detail")
-    return (
-        f"[cleanup] {record['category']}:{record['reason']} once the snapshot was frozen, only "
-        "logged" + (f" — {detail}" if detail else "")
-    )
-
-
-def _with_unheard(termination: Termination, unheard: Invalidated | None, log) -> Termination:
-    """A failure a shell found in the batch of the kernel's Finish, such as the termination
-    record's own write, invalidates the run as the kernel would have, at the same end (decision
-    32)."""
-    if unheard is None or termination.invalid is not None:
-        return termination
-    # The end of a traceback names the exception (legacy_loop.py _invalidate).
-    detail = None if unheard.detail is None else unheard.detail[-2000:]
-    invalid = Invalidated(unheard.category, unheard.reason, detail)
-    log(f"[invalid-run] {invalid.category}:{invalid.reason}" + (f" — {detail}" if detail else ""))
-    return replace(termination, stop_reason="invalid_run", invalid=invalid)
-
-
-def _escaped_termination(
-    kernel: Kernel,
-    semantic: float,
-    ops: float,
-    snapshot_at: float | None,
-    failure: str,
-    latched: dict | None,
-) -> Termination:
-    """How an episode ended whose kernel, or its shell's reading of the clocks, raised (N11), as
-    a shell tells it without the kernel. The run is invalid for the first failure: the kernel's
-    or the environment's when one was latched, run_exception otherwise, ``failure`` being the
-    first traceback the shell latched, the summary's error. It ended at the first end signal:
-    the kernel's when it had one, else the reading the failure came at."""
-    ending = kernel.ending
-    invalid = kernel.invalid or (
-        _invalidated(latched)
-        if latched is not None
-        # The end of a traceback names the exception (legacy_loop.py _invalidate).
-        else Invalidated("runner", "run_exception", failure[-2000:])
-    )
-    if ending is None:
-        return Termination("invalid_run", "invalid", semantic, snapshot_at, ops, None, invalid)
-    return Termination(
-        "invalid_run", ending.cause, ending.at, snapshot_at, ending.ops, None, invalid
-    )
-
-
 class _Shell:
     def __init__(
         self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, agent_trace, inputs_log
@@ -525,7 +471,7 @@ class _Shell:
         """The wall clock's key-release timer latched an invalid run, on its own thread. Once the
         snapshot is frozen the kernel is not told: the failure is only logged (_terminate)."""
         if self._frozen_at is None:
-            self.post(_invalidated(record))
+            self.post(invalidated(record))
 
     def _record_inputs(self, call: str, events: list, *, raised: bool = False) -> None:
         if self._inputs is None:
@@ -719,7 +665,7 @@ class _Shell:
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
         if invalid is not None and invalid is not latched and self._frozen_at is None:
-            self._invalidate(_invalidated(invalid))
+            self._invalidate(invalidated(invalid))
         return result
 
     def _failure(self, escapes: bool, operation, *args) -> str | None:
@@ -989,12 +935,12 @@ class _Shell:
             # _executed): first, it settles the action where it ran, not after the snapshot read
             # the end asks for.
             self.post(answer)
-            self._invalidate(_invalidated(invalid))
+            self._invalidate(invalidated(invalid))
         else:
             # Latched for a step inside the action, such as a key tap's failed advance: first, it
             # keeps its reason, which the kernel would read from the answer as
             # action_execution_failed.
-            self._invalidate(_invalidated(invalid))
+            self._invalidate(invalidated(invalid))
             self.post(answer)
 
     def _commit(self, outcome: Outcome) -> None:
@@ -1118,7 +1064,7 @@ class _Shell:
         """The termination record main() and the report read, in world seconds to nine places
         (legacy_loop.py ``_termination``); the token clock's are ticks, and a failure the shell
         found in this last batch goes into it (_with_unheard)."""
-        termination = _with_unheard(finish.termination, self._unheard, self.log)
+        termination = with_unheard(finish.termination, self._unheard, self.log)
         try:
             self._terminate(termination, finish.think_spent, finish.dropped_intermediate_frames)
         finally:
@@ -1137,7 +1083,7 @@ class _Shell:
             latched is None
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
-            verdict = _invalid_record(invalid)
+            verdict = invalid_record(invalid)
         # The kernel was not told of one latched once the snapshot was frozen (decision 30).
         late = latched if invalid is None else None
         if late is not None:
@@ -1161,7 +1107,7 @@ class _Shell:
         end.think_spent = think_spent
         end.dropped_intermediate_frames = dropped_intermediate_frames
         if late is not None:
-            self.log(_only_logged(late))
+            self.log(only_logged(late))
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
@@ -1182,7 +1128,7 @@ class _Shell:
                 self._frozen_at = semantic if self.token else self._read()[0]
             self._release_inputs()
             first = self.kernel.invalid is None and latched is None
-            termination = _escaped_termination(
+            termination = escaped_termination(
                 self.kernel,
                 semantic,
                 semantic if ops is None else ops,
@@ -1192,17 +1138,9 @@ class _Shell:
             )
             # No Finish came to carry the policy's counts: they are as far as they got.
             self._terminate(termination, **self.policy.totals)
-            if first:  # the run_exception is the first failure: recorded as the runner does
-                record = _invalid_record(termination.invalid)
-                self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
-                if self.trace is not None and not self._trace_failed:
-                    self.trace.emit(
-                        TraceEvent.RUN_INVALIDATED,
-                        record,
-                        kernel_seq=None,
-                        semantic=semantic,
-                        ops=ops,
-                    )
+            if first:
+                trace = None if self._trace_failed else self.trace
+                record_run_exception(trace, termination.invalid, semantic, ops, self.log)
             self._record_unfinished(termination, semantic, ops)
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[default] wrapping up the episode failed:\n" + traceback.format_exc())
@@ -1305,11 +1243,8 @@ class _Shell:
                     "[default] observation stream FROZEN (same id/tick/hash x"
                     f"{self.config.timing.observation_freeze_n}); invalidating run"
                 )
-            self.log(
-                f"[invalid-run] {invalid.category}:{invalid.reason}"
-                + (f" — {invalid.detail}" if invalid.detail else "")
-            )
-            self._emit(TraceEvent.RUN_INVALIDATED, _invalid_record(invalid), entry)
+            self.log(invalid_line(invalid))
+            self._emit(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
         else:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
             if kind == "GenerationAbandoned":
