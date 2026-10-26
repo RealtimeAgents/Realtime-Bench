@@ -322,7 +322,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     @staticmethod
     def classify_transport_error(exc: BaseException) -> TransportFailure:
         """Classify a failed turn, which the harness retries on a rebuilt session, or a failed
-        connect attempt, which connect() retries.
+        connect attempt, which a turn-based connect() retries, and the native-streaming agent's
+        readying of the session.
 
         Realtime WebSocket writes are not automatically replayed by the SDK. The harness retries
         only when it has received no output or usage for the failed turn, so rebuilding from
@@ -505,42 +506,16 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 }
             )
 
-        async def send(attempt):
-            if attempt > 1:
-                self._backing_off(False)
+        if self.streaming:
+            # One attempt, as Gemini Live's connect makes: native streaming's readying retries
+            # the whole connect under the shared policy (decision 13).
             try:
-                with trace_scope(connect_attempt=attempt):
-                    await asyncio.to_thread(open_session, self._epoch)
+                await asyncio.to_thread(open_session, self._epoch)
             except Exception:
                 await self._close_current()
                 raise
-            self._connect_finished(attempt, "ok")
-
-        def record(attempt, exc, failure, delay):
-            self._connect_finished(
-                attempt, "failed" if delay is None else "retry", exc, failure, delay
-            )
-            if delay is None:
-                raise TransportFailureError(failure, exc, attempt - 1) from exc
-            # RequestRetry waits the delay on self.clock once this returns, unless the
-            # generation was abandoned.
-            if not retry_cancel_event().is_set():
-                with trace_scope(connect_attempt=attempt):
-                    self._record_wait("connect_backoff", delay)
-                self._backing_off(True)
-
-        # The session the connect resumes: the newest retained frame, or none at all.
-        items = () if request.history is None else request.history.items
-        frames = [item.block.id for item in items if item.block.kind == "frame"]
-        key = f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:connect"
-        retry = RequestRetry(
-            key,
-            self.classify_transport_error,
-            record,
-            cancelled=lambda attempt, exc: self._connect_finished(attempt, "cancelled", exc),
-            clock=self.clock,
-        )
-        await retry.run_async(send)
+        else:
+            await self._open_retried(request, open_session)
         if retry_cancel_event().is_set():
             # Abandoned while the connection opened: nothing of the generation goes out on it,
             # and the abort closes only what was open when it came.
@@ -575,6 +550,44 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 raise session.closed
         else:
             await self._send_all(session, session.core.replay(request.history))
+
+    async def _open_retried(self, request: ConnectRequest, open_session) -> None:
+        """Turn-based: run ``open_session`` under the shared retry policy (decision 39); a failed
+        attempt closes what it opened."""
+
+        async def send(attempt):
+            try:
+                with trace_scope(connect_attempt=attempt):
+                    await asyncio.to_thread(open_session, self._epoch)
+            except Exception:
+                await self._close_current()
+                raise
+            self._connect_finished(attempt, "ok")
+
+        def record(attempt, exc, failure, delay):
+            self._connect_finished(
+                attempt, "failed" if delay is None else "retry", exc, failure, delay
+            )
+            if delay is None:
+                raise TransportFailureError(failure, exc, attempt - 1) from exc
+            # RequestRetry waits the delay on self.clock once this returns, unless the
+            # generation was abandoned.
+            if not retry_cancel_event().is_set():
+                with trace_scope(connect_attempt=attempt):
+                    self._record_wait("connect_backoff", delay)
+
+        # The session the connect resumes: the newest retained frame, or none at all.
+        items = () if request.history is None else request.history.items
+        frames = [item.block.id for item in items if item.block.kind == "frame"]
+        key = f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:connect"
+        retry = RequestRetry(
+            key,
+            self.classify_transport_error,
+            record,
+            cancelled=lambda attempt, exc: self._connect_finished(attempt, "cancelled", exc),
+            clock=self.clock,
+        )
+        await retry.run_async(send)
 
     def _connect_finished(self, attempt, outcome, error=None, failure=None, delay=None) -> None:
         """One ModelAttemptFinished per open_session attempt of the shared connect retry, and one

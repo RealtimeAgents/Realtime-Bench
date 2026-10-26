@@ -10,9 +10,12 @@ push and each reply readies the session first, and renews the connection the pro
 renew, except a push while a reply is on the session: readying it then would close the reply's
 connection, or rebuild the session without the reply's output. A push the session refuses until
 it is renewed, as Gemini Live's after a goAway, waits for that reply instead, at a gate of its
-own, between a PushHeld and a PushResumed to the kernel; whether it waits is decided on the
-execution thread, where the goAway is read. A push is held the same way while it waits out a
-backoff between attempts to reopen the session, and while it waits for a reply readying it.
+own; whether it waits is decided on the execution thread, where the goAway is read. While a reply
+readies the session, attempts and backoffs alike, which its own watchdog bounds, while a push
+waits out a backoff between its own attempts to ready it, and while a push waits at its gate for
+the renewal, the kernel is told the session is being prepared, and once nothing prepares it any
+more (decision 13): a push waiting for the session meanwhile is not stuck in it. The push watchdog
+times a push's own attempts, which nothing else bounds.
 
 A push enters the frame in the frame table, which draws its number on the screenshot, and once the
 driver put it into the session records it as sent and confirmed when the driver's receipt says it
@@ -43,7 +46,9 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import TYPE_CHECKING
 
 from realtime_framework.clock import SystemClock
@@ -87,8 +92,8 @@ from realtime_framework.entity.request import (
 from realtime_framework.evaluation.kernel.streaming import (
     ActionArrived,
     CallsCancelled,
-    PushHeld,
-    PushResumed,
+    SessionPrepared,
+    SessionPreparing,
 )
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameRecord, FrameTable
@@ -108,7 +113,7 @@ from realtime_framework.harnesses.streaming.history import (
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
-from realtime_framework.providers.session_lifecycle import RenewalRequired, connect_backoff
+from realtime_framework.providers.session_lifecycle import RenewalRequired, session_preparing
 
 if TYPE_CHECKING:
     from realtime_framework.evaluation.kernel.events import Outcome
@@ -117,8 +122,8 @@ logger = logging.getLogger(__name__)
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
-# How long the session may take to open as the episode starts, as a turn's first connect
-# (RealtimeRuntime.start).
+# How long the session may take to open as the episode starts, its retries included, as a turn's
+# first connect (RealtimeRuntime.start).
 _OPEN_TIMEOUT_S = 60.0
 # How long an abort or close waits on the execution thread: longer than an abort takes, within
 # its interrupt's bound and its close's, and than the session waits for an abort's cleanup, with
@@ -214,6 +219,9 @@ class NativeStreamingAgent(VisionAgentBase):
         # without its output. Each push waiting for them holds a gate, opened once none is.
         self._on_session: set[int] = set()
         self._gates: list[threading.Event] = []
+        # What prepares the session: a reply readying it ("reply"), a push waiting out a backoff
+        # between its attempts to ready it ("backoff") or waiting for the renewal ("renewal").
+        self._preparing: set[str] = set()
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
         # What each action asked for (action_text), by its outcome's (decision, call id).
         self._requested: dict[tuple[int, str], str] = {}
@@ -276,10 +284,7 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             view = self._view()
         with trace_scope(phase="initialize"):
-            self._execution.run(
-                self.driver.connect(ConnectRequest(seed=self._seed, history=view)),
-                timeout=_OPEN_TIMEOUT_S,
-            )
+            self._execution.run(self._open(view), timeout=_OPEN_TIMEOUT_S)
 
     def discard_pending_observations(self):
         """No frame waits in the agent: a frame goes into the session only when pushed."""
@@ -397,10 +402,12 @@ class NativeStreamingAgent(VisionAgentBase):
                 while (gate := self._execution.run(self._push(key, pushed))) is not None:
                     if gate.is_set():
                         continue
-                    # Held for the session's renewal, which is no push stuck in it.
-                    self._post(PushHeld(key))
-                    self.clock.wait(gate, None)
-                    self._post(PushResumed(key))
+                    # The session waits for its renewal, which is no push stuck in it.
+                    self._preparing_session("renewal", True)
+                    try:
+                        self.clock.wait(gate, None)
+                    finally:
+                        self._preparing_session("renewal", False)
         except BaseException:
             self._finish_inspection(pushed, "push_failed")
             raise
@@ -415,18 +422,8 @@ class NativeStreamingAgent(VisionAgentBase):
         reader applies a goAway, and the gate opens once the reply is off (_off), whatever goes
         on the session after it; a goAway read while the push waits for the session, which
         refuses the frame unwritten (RenewalRequired), is taken the same way. The frames
-        captured meanwhile wait in the policy's slot, not counted as failed pushes.
-
-        A push that waits for the session while a reply readies it, through the retries of a
-        reconnect as well, or asks for itself, waits for that reply, not stuck in the session:
-        the kernel is told it is held until it has the session (decision N48), and the reply's
-        own watchdog bounds the wait."""
-        held = self._readying.locked()
-        if held:
-            self._post(PushHeld(key))
+        captured meanwhile wait in the policy's slot, not counted as failed pushes."""
         async with self._readying:
-            if held:
-                self._post(PushResumed(key))
             self._stop_if_closed()
             with self._lock:
                 view = self._view()
@@ -436,7 +433,7 @@ class NativeStreamingAgent(VisionAgentBase):
                     self._gates.append(gate)
                     return gate
             if not on_session:
-                await self._ready(view, renew=True, push=key)
+                await self._ready(view, renew=True, push=True)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
             view = self._view([*self._blocks, block])
@@ -561,28 +558,58 @@ class NativeStreamingAgent(VisionAgentBase):
             self._retire()
         return PendingDecision(generation, decision, self._result(reply, latency))
 
-    async def _ready(self, view: CanonicalRequest, *, renew: bool, push: str | None = None) -> None:
-        """Ready the session from ``view``, and renew it if the provider asked for that and
-        ``renew``. A failure the driver takes as transient is tried again under the shared
-        retry policy (decision 39), as a turn's connect is: nothing was generated on it yet. Each
-        attempt starts over from the session's state, which a failed one left closed or broken,
-        so the next opens it again from ``view``.
+    async def _ready(self, view: CanonicalRequest, *, renew: bool, push: bool = False) -> None:
+        """Ready the session from ``view`` for a reply, or for a ``push``, and renew it if the
+        provider asked for that and ``renew``, as _retried tries it. Each attempt starts over
+        from the session's state, which a failed one left closed or broken, so the next opens it
+        again from ``view``.
 
-        For the push of observation ``push``, the kernel is told it is held while it waits out
-        a backoff, this retry's or one of the driver's own retry of its connect (OpenAI
-        Realtime's), and resumed as the next attempt starts (decision N48): the backoff is longer
-        than the push watchdog, which still times each attempt."""
+        The session is being prepared (_preparing_session) while a reply readies it, from its
+        first attempt that starts preparing the session (session_preparing) until this returns
+        or raises: the reply's own watchdog bounds that. A push readying it is held only while it
+        waits out a backoff: the push watchdog times each of its attempts, which nothing else
+        bounds (decision N48)."""
 
-        def hold(waiting: bool) -> None:
-            if push is not None:
-                self._post(PushHeld(push) if waiting else PushResumed(push))
-
-        async def attempt(number: int) -> None:
-            if number > 1:
-                hold(False)
+        async def attempt() -> None:
             await self.driver.ensure_ready(self._seed, view, self._record_session)
             if renew:
                 await self.driver.renew(self._seed, view, self._record_session)
+
+        if push:
+            try:
+                await self._retried(view, attempt, partial(self._preparing_session, "backoff"))
+            finally:
+                self._preparing_session("backoff", False)
+            return
+        try:
+            with session_preparing(lambda: self._preparing_session("reply", True)):
+                await self._retried(view, attempt)
+        finally:
+            self._preparing_session("reply", False)
+
+    async def _open(self, view: CanonicalRequest) -> None:
+        """Open the session from ``view`` as the episode starts, as _retried tries it."""
+        await self._retried(
+            view, lambda: self.driver.connect(ConnectRequest(seed=self._seed, history=view))
+        )
+
+    async def _retried(
+        self,
+        view: CanonicalRequest,
+        attempt,
+        backing_off: Callable[[bool], None] = lambda waiting: None,
+    ) -> None:
+        """Run ``attempt()``, which opens or readies the session from ``view``, and try it again
+        on a failure the driver takes as transient, under the shared retry policy (decision
+        39), as a turn's connect is: nothing was generated on the session yet. This is the only
+        retry of opening a native-streaming session: neither encoder retries its streaming
+        connect itself (decision 13). ``backing_off(True)`` is told as a backoff starts, and
+        ``backing_off(False)`` as the attempt after it does."""
+
+        async def tried(number: int) -> None:
+            if number > 1:
+                backing_off(False)
+            await attempt()
             if number > 1:
                 self._ready_finished(number, "ok")
 
@@ -592,23 +619,34 @@ class NativeStreamingAgent(VisionAgentBase):
             )
             if delay is None:
                 raise TransportFailureError(failure, exc, number - 1) from exc
-            hold(True)
+            backing_off(True)
 
         frames = [item.block.id for item in view.items if item.block.kind == "frame"]
-        with connect_backoff(hold):
-            await RequestRetry(
-                f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:ready",
-                self.driver.classify_transport_error,
-                record,
-                cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
-                clock=self.clock,
-            ).run_async(attempt)
+        await RequestRetry(
+            f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:ready",
+            self.driver.classify_transport_error,
+            record,
+            cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
+            clock=self.clock,
+        ).run_async(tried)
+
+    def _preparing_session(self, who: str, preparing: bool) -> None:
+        """``who``, a reply readying the session or a push waiting for it, starts or stops
+        preparing the session: the kernel hears when the session starts being prepared, and when
+        nothing prepares it any more (SessionPreparing, SessionPrepared), in that order."""
+        with self._lock:
+            was = bool(self._preparing)
+            if preparing:
+                self._preparing.add(who)
+            else:
+                self._preparing.discard(who)
+            if was != bool(self._preparing):
+                self._post(SessionPreparing() if preparing else SessionPrepared())
 
     def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
-        """One ModelAttemptFinished per readying attempt that failed, for the one that succeeded
-        after them, and for one a cancellation stopped. A readying that succeeds at once leaves
-        none, unlike a connect, which records every attempt
-        (OpenAIRealtimeDriver._connect_finished)."""
+        """One ModelAttemptFinished per attempt to open or ready the session that failed
+        (_retried), for the one that succeeded after them, and for one a cancellation stopped.
+        One that succeeds at once leaves none."""
         with trace_scope(ready_attempt=number):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,
