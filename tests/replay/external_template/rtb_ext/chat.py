@@ -22,6 +22,7 @@ from realtime_framework.entity.events import (
 from realtime_framework.entity.model import (
     FATAL,
     TRANSIENT,
+    Compat,
     Deployment,
     GenerationHandle,
     HistorySyncResult,
@@ -80,6 +81,7 @@ class ExternalChatDriver:
     deployment = Deployment(
         family="vlm", provider="replay-external", key_env="REPLAY_EXT_API_KEY", vendor="replay"
     )
+    compat = Compat()
     model_defaults: ClassVar[dict[str, dict]] = {}
 
     def __init__(self, config, *, clock=None):

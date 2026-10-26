@@ -15,6 +15,7 @@ def not_a_class(config):
 class NotAnEncoder:
     capabilities = ExternalChatDriver.capabilities
     deployment = ExternalChatDriver.deployment
+    compat = ExternalChatDriver.compat
     model_defaults: ClassVar[dict[str, dict]] = {}
 
 
@@ -35,6 +36,10 @@ class NoCapabilities(ExternalChatDriver):
 
 class NoDeployment(ExternalChatDriver):
     deployment = None
+
+
+class NoCompat(ExternalChatDriver):
+    compat = None
 
 
 class NoModelDefaults(ExternalChatDriver):

@@ -25,6 +25,7 @@ from websockets.exceptions import ConnectionClosedOK as ConnectionClosedOK
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.providers.registry import load_project_secrets
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import GenerationBoundary
@@ -263,6 +264,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         vendor="openai",
         litellm_provider="openai",
     )
+    compat = Compat()
     model_defaults: ClassVar[dict[str, dict]] = {}
     # The API's native-streaming settings: a frame older than the newest retained_frames folds in
     # place, as a turn-based one does. A placeholder, the turn-based visual budget (20 s at

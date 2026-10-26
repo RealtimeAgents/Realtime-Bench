@@ -40,6 +40,7 @@ from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import retry_cancel_event
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
@@ -436,16 +437,16 @@ class ChatDeployment(Deployment):
 
 
 @dataclass(frozen=True)
-class ChatCompat:
+class ChatCompat(Compat):
     """Named restrictions and special requirements of one API."""
 
     # "model_prefix": Anthropic/Gemini models behind OpenRouter; "always": every request.
     cache_breakpoint: str | None = None
     strip_image_detail: bool = False
     # Each request sends the decision cap, else the declared native limit, else omits the
-    # parameter (provider default). APIs that require the parameter reject an undeclared limit.
+    # parameter (provider default); an API that requires it (output_limit_required) refuses an
+    # undeclared limit.
     output_limit_param: str = "max_tokens"
-    output_limit_required: bool = False
 
 
 class _AuditedSDKStream:

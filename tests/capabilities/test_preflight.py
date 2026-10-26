@@ -293,8 +293,8 @@ def test_output_limit_required():
     )
     fails(
         lambda: episode(config),
-        "The anthropic_messages API requires max_tokens; declare endpoint.native_output_limit "
-        "in the model YAML",
+        "The anthropic_messages API requires an output limit on every request; declare "
+        "endpoint.native_output_limit in the model YAML",
     )
 
 
@@ -320,11 +320,11 @@ def gemini(**fields):
 @pytest.mark.parametrize(
     "options, message",
     [
-        ({"bogus": 1}, "Unknown Gemini Live provider_options: ['bogus']"),
+        ({"bogus": 1}, "Unknown gemini_live provider_options: ['bogus']"),
         (
             {"tool_behavior": "sometimes"},
             (
-                "Gemini Live tool_behavior must be one of ['blocking', 'non_blocking'], "
+                "gemini_live tool_behavior must be one of ['blocking', 'non_blocking'], "
                 "got 'sometimes'"
             ),
         ),
@@ -410,7 +410,8 @@ def test_gemini_model_contract(config, message):
 def test_gemini_reasoning_effort(effort):
     fails(
         lambda: episode(preset("gemini-live", reasoning_effort=effort)),
-        "Gemini Live reasoning_effort must be one of none, fixed, minimal, low, medium, or high",
+        "gemini_live reasoning_effort must be one of ['fixed', 'none', 'minimal', 'low', "
+        f"'medium', 'high'], got {effort!r}",
     )
 
 

@@ -85,8 +85,8 @@ _LITELLM = "realtime_framework.providers.litellm:"
 # The adapter_type of a ModelConfig is one of these keys, each naming its driver class
 # ("package.module:Class"), imported when the API is first looked up (loading the catalog looks
 # up every API a model YAML names), or an external driver (below).
-# The class declares the API's capabilities, deployment and per-model defaults; adding a protocol
-# means adding a driver module and one row here.
+# The class declares the API's capabilities, deployment, compat flags and per-model defaults;
+# adding a protocol means adding a driver module and one row here.
 APIS = {
     "litellm": _LITELLM + "DirectLiteLLMDriver",
     "chat_completions": _LITELLM + "ChatCompletionsDriver",
@@ -368,7 +368,7 @@ Only the selected implementation is imported, so optional SDKs never affect othe
 import inspect as inspect
 from importlib import import_module as import_module
 
-from realtime_framework.entity.model import Deployment, ModelClient, RealtimeCapabilities
+from realtime_framework.entity.model import Compat, Deployment, ModelClient, RealtimeCapabilities
 
 # RealtimeDriver's methods, plus bind_trace, which the harness calls on every driver it builds.
 _DRIVER_METHODS = (
@@ -384,6 +384,7 @@ _DRIVER_METHODS = (
 _DRIVER_DECLARATIONS = (
     ("capabilities", RealtimeCapabilities),
     ("deployment", Deployment),
+    ("compat", Compat),
     ("model_defaults", dict),
 )
 # Capability flags and the methods they commit a driver to. The runtime calls

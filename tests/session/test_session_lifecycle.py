@@ -22,6 +22,7 @@ from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
     TRANSIENT,
     TRANSPORT_RETRY,
+    Compat,
     ConnectRequest,
     Deployment,
     GenerationHandle,
@@ -655,6 +656,7 @@ def test_a_persistent_session_must_manage_itself():
         "__init__": lambda self, config, *, clock=None: None,
         "capabilities": RealtimeCapabilities("replay_session", persistent_session=True),
         "deployment": Deployment(family="streaming", provider="replay", key_env=None),
+        "compat": Compat(),
         "model_defaults": {},
         **{name: lambda self, *args: None for name in catalog._DRIVER_METHODS},
     }

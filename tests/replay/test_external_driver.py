@@ -343,6 +343,34 @@ def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
     check_episode(replayed, clock_mode="wall", task=ReplayTask(), env_fps=replayed.fps)
 
 
+REQUIRED_OUTPUT_LIMIT = '''
+from realtime_framework.entity.model import Compat
+
+from rtb_ext.chat import ExternalChatDriver
+
+
+class RequiredOutputLimit(ExternalChatDriver):
+    compat = Compat(output_limit_required=True)
+'''
+
+
+def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(external):
+    """The pre-run checks read the compat flags a driver declares, whatever its class: one that
+    sends an output limit with every request (Compat.output_limit_required) refuses a model
+    without a declared native limit (check_config)."""
+    (external.site / "rtb_ext" / "limit.py").write_text(REQUIRED_OUTPUT_LIMIT)
+    api = "rtb_ext.limit:RequiredOutputLimit"
+    write_model(external.models, api, key="ext-limit")
+    config = catalog.to_model_config("ext-limit", fps=1.0, reasoning_effort="low")
+    check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=config.fps)
+    unlimited = config.model_copy(update={"native_output_limit": None})
+    fails(
+        lambda: check_episode(unlimited, clock_mode="wall", task=ReplayTask(), env_fps=config.fps),
+        f"The {api} API requires an output limit on every request; declare "
+        "endpoint.native_output_limit in the model YAML",
+    )
+
+
 # Refused at load: catalog.get is the first lookup of every entry point.
 
 
@@ -397,6 +425,10 @@ def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
             "'rtb_ext.broken:NoDeployment' declares no deployment (a Deployment class attribute)",
         ),
         (
+            "rtb_ext.broken:NoCompat",
+            "'rtb_ext.broken:NoCompat' declares no compat (a Compat class attribute)",
+        ),
+        (
             "rtb_ext.broken:NoModelDefaults",
             "'rtb_ext.broken:NoModelDefaults' declares no model_defaults (a dict class attribute)",
         ),
@@ -448,7 +480,7 @@ def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
         ),
     ],
     ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
-         "no-context-status", "no-capabilities", "no-deployment", "no-model-defaults",
+         "no-context-status", "no-capabilities", "no-deployment", "no-compat", "no-model-defaults",
          "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-switch",
          "streaming-no-settings", "streaming-bad-settings"],
 )

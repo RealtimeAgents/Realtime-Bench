@@ -13,6 +13,7 @@ from typing import ClassVar as ClassVar
 
 from realtime_framework.clock import Clock
 from realtime_framework.clock import SystemClock
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
@@ -228,6 +229,7 @@ class GeminiLiveDriver(SessionLifecycle):
         vendor="google",
         litellm_provider="gemini",
     )
+    compat = Compat(provider_options=LIVE_OPTIONS, reasoning_efforts=LIVE_REASONING_EFFORTS)
     model_defaults: ClassVar[dict[str, dict]] = {
         # 3.1 Flash Live has no asynchronous function calling: a call blocks until its
         # response, and response scheduling does not apply.

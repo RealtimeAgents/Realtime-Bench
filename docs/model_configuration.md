@@ -167,8 +167,11 @@ A model that needs a new wire protocol gets a driver:
    beside what the client sent; the run identity records it, and no run is refused for it. The
    pre-run checks (`providers/preflight.py`) read the rest; an undeclared value counts as
    unsupported, and a context policy the driver cannot render is refused.
-   Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
-   `model_defaults` (per-model ModelConfig defaults, usually `{}`). A driver that lists
+   Declare `deployment` (`Deployment`: catalog family and provider, default key variable),
+   `compat` (`Compat`: the API's restrictions the pre-run checks read: whether every request
+   sends an output limit, the `provider_options` a model may set with their allowed values, and
+   the reasoning efforts the driver maps; `Compat()` for none) and `model_defaults` (per-model
+   ModelConfig defaults, usually `{}`). A driver that lists
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
    [streaming settings](#streaming-settings) (a dict), and takes `streaming`: the
    native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`. An external
@@ -197,7 +200,7 @@ official: `rtbench upload` refuses them. To put the model on the leaderboard, co
 driver as a [model API](#add-a-model-api).
 
 1. Write the driver class as in steps 1-4 above, in your own package. Declare `capabilities`,
-   `deployment` and `model_defaults` as class attributes. Set `finite_frame_budget`,
+   `deployment`, `compat` and `model_defaults` as class attributes. Set `finite_frame_budget`,
    `wall_clock_only` and `accepts_reasoning_effort` explicitly: their defaults claim that the
    driver reports complete usage on a finite token clock, runs on any clock and accepts every
    reasoning effort. Declare `roles` (the request roles you map, e.g.

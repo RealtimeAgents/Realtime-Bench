@@ -22,13 +22,7 @@ for the API key, and are now reported ahead of a missing key.
 from __future__ import annotations
 
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.providers.gemini.live import (
-    LIVE_OPTIONS,
-    LIVE_REASONING_EFFORTS,
-    GeminiLiveDriver,
-    live_options,
-)
-from realtime_framework.providers.litellm import LiteLLMDriver
+from realtime_framework.providers.gemini.live import GeminiLiveDriver, live_options
 from realtime_framework.providers.registry import adapter_class
 
 _GEMINI_EXTENDED_THINKING = "gemini-3.8-live-extended-thinking"
@@ -141,15 +135,14 @@ def validate_model_interaction(
 def check_config(driver, config) -> None:
     """Static model-config rules, in the order the driver's constructor applied them; the
     context reserve, which the estimating APIs also checked before each request, comes last."""
-    if issubclass(driver, LiteLLMDriver):
-        compat = driver.compat
-        if compat.output_limit_required and config.native_output_limit is None:
-            raise ValueError(
-                f"The {config.adapter_type} API requires {compat.output_limit_param}; "
-                "declare endpoint.native_output_limit in the model YAML"
-            )
-    elif issubclass(driver, GeminiLiveDriver):
-        _check_live_options(config)
+    compat = driver.compat
+    if compat.output_limit_required and config.native_output_limit is None:
+        raise ValueError(
+            f"The {config.adapter_type} API requires an output limit on every request; "
+            "declare endpoint.native_output_limit in the model YAML"
+        )
+    check_provider_options(compat, config)
+    if issubclass(driver, GeminiLiveDriver):
         _check_live_model_contract(config)
     if (
         driver.capabilities.request_size_estimation
@@ -159,15 +152,16 @@ def check_config(driver, config) -> None:
         raise ValueError("Context capacity must exceed generation reserve")
 
 
-def _check_live_options(config) -> None:
-    options = config.provider_options
-    unknown = set(options) - set(LIVE_OPTIONS)
+def check_provider_options(compat, config) -> None:
+    """The model's provider_options against the option table its API's compat declares."""
+    api, options = config.adapter_type, config.provider_options
+    unknown = set(options) - set(compat.provider_options)
     if unknown:
-        raise ValueError(f"Unknown Gemini Live provider_options: {sorted(unknown)}")
-    for name, (default, allowed) in LIVE_OPTIONS.items():
+        raise ValueError(f"Unknown {api} provider_options: {sorted(unknown)}")
+    for name, (default, allowed) in compat.provider_options.items():
         value = options.get(name, default)
         if value not in allowed:
-            raise ValueError(f"Gemini Live {name} must be one of {list(allowed)}, got {value!r}")
+            raise ValueError(f"{api} {name} must be one of {list(allowed)}, got {value!r}")
 
 
 def _check_live_model_contract(config) -> None:
@@ -236,13 +230,12 @@ def check_fps(driver, model_input_fps) -> None:
 
 def check_session_config(driver, config) -> None:
     """Settings a driver applied when its session connected, after the frame-rate check."""
-    if (
-        issubclass(driver, GeminiLiveDriver)
-        and config.reasoning_effort not in LIVE_REASONING_EFFORTS
-    ):
+    efforts = driver.compat.reasoning_efforts
+    if efforts is not None and config.reasoning_effort not in efforts:
+        named = [effort for effort in efforts if effort is not None]
         raise ValueError(
-            "Gemini Live reasoning_effort must be one of "
-            "none, fixed, minimal, low, medium, or high"
+            f"{config.adapter_type} reasoning_effort must be one of {named}, "
+            f"got {config.reasoning_effort!r}"
         )
 
 

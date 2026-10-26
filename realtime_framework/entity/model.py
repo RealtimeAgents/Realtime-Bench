@@ -122,6 +122,21 @@ class Deployment:
     litellm_provider: str | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class Compat:
+    """Named restrictions and special requirements of a registered API: those the pre-run checks
+    (providers/preflight.py check_config, check_session_config) read of every API. A driver
+    family's compat adds its own."""
+
+    # Every request sends an output limit, so a model without a declared native limit cannot run.
+    output_limit_required: bool = False
+    # The ModelConfig.provider_options the encoder reads: each name, its default and its allowed
+    # values. Any other option is refused.
+    provider_options: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
+    # The reasoning_effort values the encoder maps (None: the provider default); None takes any.
+    reasoning_efforts: tuple[str | None, ...] | None = None
+
+
 @dataclass(frozen=True)
 class SessionSeed:
     system_instruction: str

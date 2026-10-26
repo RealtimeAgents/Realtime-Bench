@@ -26,6 +26,7 @@ from realtime_framework.entity.model import (
     REFUSED,
     TRANSIENT,
     ChoiceReply,
+    Compat,
     Deployment,
     RealtimeCapabilities,
     TransportFailure,
@@ -64,6 +65,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
         request_size_estimation=True,
     )
     deployment = Deployment(family="vlm", provider="openrouter", key_env="OPENROUTER_API_KEY")
+    compat = Compat()
     pin_route = True
     # Per-model catalog defaults (providers/registry.py).
     model_defaults: ClassVar[dict[str, dict]] = {
