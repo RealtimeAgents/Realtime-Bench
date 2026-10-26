@@ -126,16 +126,19 @@ def api_reasoning_efforts(api: str) -> list[str]:
 
 @lru_cache(maxsize=1)
 def _litellm_model_map() -> dict:
-    """LiteLLM's bundled model map, read from the pinned package's own file.
+    """LiteLLM's bundled model map, read from the pinned package's own file, so the limits read
+    here stay fixed by the locked version.
 
-    Locating that file imports litellm (importlib.resources imports the package), and the import
-    fetches a newer map over the network unless LITELLM_LOCAL_MODEL_COST_MAP is set. The limits
-    read here come from the bundled file either way, so they stay fixed by the locked version.
+    Locating that file imports litellm (importlib.resources imports the package), which
+    import_litellm does first, so that importing it neither loads a .env nor fetches a map.
     """
     import json
     from importlib.resources import files
 
+    from realtime_framework.providers.litellm import import_litellm
+
     try:
+        import_litellm()
         text = files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text()
     except (ModuleNotFoundError, FileNotFoundError):
         return {}

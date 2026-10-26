@@ -69,6 +69,21 @@ _END = object()
 
 
 # Helpers
+def import_litellm():
+    """Import LiteLLM without the two things its import does by default: load the first .env
+    found above its package directory (litellm/__init__.py:29-30, skipped unless LITELLM_MODE is
+    DEV) and replace its bundled model map with one fetched over the network
+    (litellm/litellm_core_utils/get_model_cost_map.py:646, skipped when
+    LITELLM_LOCAL_MODEL_COST_MAP is true). LiteLLM reads both settings at its first import and
+    checks requests against the map (whether a Moonshot model takes reasoning_effort, for one), so
+    a run then depends only on its own environment and the locked version."""
+    os.environ["LITELLM_MODE"] = "PRODUCTION"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
+    import litellm as litellm
+
+    return litellm
+
+
 def pace_request(owner) -> None:
     """Apply the optional process-wide minimum interval between provider requests.
 
@@ -509,8 +524,7 @@ class LiteLLMDriver:
     @staticmethod
     def _load_sdk():
         # Import lazily; constructing a native realtime driver does not load LiteLLM.
-        import litellm as litellm
-
+        litellm = import_litellm()
         if version("litellm") != LITELLM_VERSION:
             raise RuntimeError(
                 f"Use litellm=={LITELLM_VERSION}; raw usage auditing is version-validated"
