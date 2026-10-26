@@ -263,26 +263,35 @@ def test_a_capture_runs_while_an_action_runs():
 
 
 def test_an_end_check_holds_the_gate_alone_and_waits_for_the_action():
-    """4.9: an end check runs alone. Asked during the action it waits for it; a capture asked
-    meanwhile goes past it and runs alongside the action, and one asked once the action is done
-    waits behind it. So the check waits at most for the action and one capture."""
+    """4.9: an end check runs alone. Asked during the action it waits for it, and a capture asked
+    once it runs waits behind it."""
     clock, env, inbox, lanes = _lanes()
     with clock.participant():
         lanes.execute(Execute(0, CLICK), lambda record: None)
         clock.sleep(0.5)
         lanes.check_end(CheckEnd(1))
-        clock.sleep(1.375)
-        lanes.capture(_frame)  # at 1.875: runs to 2.125, past the action's end
-        inbox.wait_for(2)
-        lanes.capture(_frame)  # at 2.125, while the check runs
-        inbox.wait_for(4)
+        inbox.wait_for(1)
+        lanes.capture(_frame)  # at 2.0, while the check runs
+        inbox.wait_for(3)
     lanes.close()
     assert env.intervals == [
         ("execute", 0.0, 2.0),
-        ("capture", 1.875, 2.125),
-        ("check_end", 2.125, 2.625),
-        ("capture", 2.625, 2.875),
+        ("check_end", 2.0, 2.5),
+        ("capture", 2.5, 2.75),
     ]
+
+
+def test_the_snapshot_finds_the_action_executing_holding_the_gate():
+    """No action waits for the gate (kernel/streaming.py _proceed): one that waits behind an end
+    check when the snapshot is asked for fails an assertion."""
+    clock, _, inbox, lanes = _lanes()
+    with clock.participant():
+        lanes.check_end(CheckEnd(1))
+        lanes.execute(Execute(0, CLICK), lambda record: None)
+        with pytest.raises(AssertionError, match="the action executing waits for the gate"):
+            lanes.freeze_turn()
+        inbox.wait_for(2)
+    lanes.close()
 
 
 def test_a_lane_closed_right_after_its_command_ends_once_it_answered():

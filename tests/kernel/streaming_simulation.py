@@ -14,9 +14,8 @@ snapshot only alone, first come first served. An operation reads the task, press
 its frame once it holds the lock, not when it was asked for. The snapshot runs on a thread of its
 own and goes ahead of those waiting, after those holding the lock (``EnvLanes.freeze_turn``); the
 shell bounds that wait by the larger of the action's budget and the capture's (N32), which no
-script here runs into. Unlike the gate, a capture does not go past what waits to hold the lock
-alone while an action holds it: the policy never sends one then. Commit runs on the shell's own
-thread and occupies it; an abort runs on a lane of its own, off the lock.
+script here runs into. Commit runs on the shell's own thread and occupies it; an abort runs on a
+lane of its own, off the lock.
 
 Every command is checked as it runs (one generation in flight at most; nothing captured, pushed,
 started, asked or executed at or after the deadline or after the end, but the read after an action

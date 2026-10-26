@@ -9,6 +9,8 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from realtime_framework.evaluation.env_lanes import ACTION, ALONE, CAPTURE, EnvGate
 
 
@@ -60,17 +62,27 @@ def test_an_action_asked_after_an_end_check_waiting_goes_after_it():
     assert action.is_set()
 
 
-def test_the_snapshot_goes_right_after_an_action_still_waiting_and_ahead_of_the_rest():
-    """An end check holds the gate; an action and another end check wait. The snapshot, asked to
-    go after that action and ahead of the rest, takes the place right behind the action."""
+def test_the_snapshot_asked_ahead_goes_before_every_operation_waiting():
+    """An end check holds the gate; an action and another end check wait. The snapshot, asked
+    ahead of them, goes first once the check is done."""
     _, gate = _gate()
     check = gate.reserve(ALONE)
     action = gate.reserve(ACTION)
     later = gate.reserve(ALONE)
-    snapshot = gate.reserve(ALONE, after=action, ahead=True)
+    snapshot = gate.reserve(ALONE, ahead=True)
     gate.call(lambda: None, turn=check)
-    assert (action.is_set(), snapshot.is_set(), later.is_set()) == (True, False, False)
-    gate.call(lambda: None, turn=action)
-    assert (snapshot.is_set(), later.is_set()) == (True, False)
+    assert (snapshot.is_set(), action.is_set(), later.is_set()) == (True, False, False)
     gate.call(lambda: None, turn=snapshot)
+    assert (action.is_set(), later.is_set()) == (True, False)
+    gate.call(lambda: None, turn=action)
     assert later.is_set()
+
+
+def test_a_capture_asked_for_while_an_operation_waits_to_hold_the_gate_alone_fails():
+    """The streaming policy sends no capture while an end check or the snapshot waits
+    (kernel/streaming.py _proceed): an action holds the gate and an end check waits for it."""
+    _, gate = _gate()
+    gate.reserve(ACTION)
+    gate.reserve(ALONE)
+    with pytest.raises(AssertionError, match="waits to hold the gate alone"):
+        gate.reserve(CAPTURE)
