@@ -339,7 +339,12 @@ class RecordingToolRuntime:
     def inspect(self, observation, *, requested_observation_id, **sizes) -> dict:
         call_id = f"inspection-{len(self._pending) + len(self.rows)}"
         self._pending.add(call_id)
-        proof = {"valid": True, "call_id": call_id, "observation_id": requested_observation_id}
+        proof = {
+            "valid": True,
+            "call_id": call_id,
+            "observation_id": requested_observation_id,
+            "requested_observation_id": requested_observation_id,
+        }
         return {"text": "", "proof": proof, "marks": {}}
 
     def finish(self, execution, *, action_latency_s=0.0, raw_action_output="", outcome=""):
@@ -389,6 +394,7 @@ def make_agent(
     monkeypatch.setattr(agent_module, "adapter_class", lambda adapter_type: driver)
     config = catalog.to_model_config(model, fps=1.0, reasoning_effort="fixed")
     agent = NativeStreamingAgent(config, log_dir, trace=trace, clock=clock)
+    agent.bind_tool_runtime(RecordingToolRuntime())
     agent.task_category = "realtime"
     agent.prompt_options = STREAMING
     agent.initialize("Click the button.", observation(clock, 0))

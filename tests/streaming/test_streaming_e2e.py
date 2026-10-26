@@ -29,13 +29,18 @@ from realtime_framework.harnesses.default.prompts import (
 from realtime_framework.harnesses.registry import configure_agent, create_agent
 from realtime_framework.providers import registry as catalog
 from realtime_framework.sandbox.observation.capture import prepare_for_model
-from realtime_framework.sandbox.observation.som import render_frame_number
+from realtime_framework.sandbox.observation.som import (
+    FRAME_INTERACTABLES_HEADER,
+    observation_prompt_with_interactables,
+    render_frame_number,
+)
 from tests.replay import baseline
 from tests.replay.fake_env import FakeEnvironment
 from tests.replay.frames import screenshot
 from tests.replay.ws_gemini_live import QUEUED_RESPONSE, WireNormalizer
 from tests.streaming.clocked_ws import clocked_connection
 from tests.streaming.e2e import LIVE_PATH, SILENCE, run_e2e
+from tests.streaming.fake_live import RecordingToolRuntime
 from tests.streaming.ws_cassette import RealtimeNormalizer
 
 FRAMES = [f"replay-form:{n:06d}" for n in (1, 2, 3)]  # tests/replay/frames.py ids, captures 0-2
@@ -101,7 +106,16 @@ def _initialized(agent, clock):
 
 
 def _agent(config, log_dir, trace, clock):
-    return create_agent(config, log_dir, trace=trace, clock=clock, interaction_mode="streaming")
+    """The agent as the runner sets it up, with a tool runtime whose inspections find no element
+    (runner.py set_up_agent)."""
+    agent = create_agent(config, log_dir, trace=trace, clock=clock, interaction_mode="streaming")
+    agent.bind_tool_runtime(RecordingToolRuntime())
+    return agent
+
+
+def _frame_text(prompt: str) -> str:
+    """A frame's text: its prompt and the interactables its inspection found, none."""
+    return observation_prompt_with_interactables(prompt, "", FRAME_INTERACTABLES_HEADER)
 
 
 def realtime_agent(log_dir):
@@ -154,7 +168,7 @@ def _realtime_push(n: int, content: list[dict], at: float, previous: str | None)
 
 def _realtime_frame(n: int) -> list[dict]:
     return [
-        {"type": "input_text", "text": STREAMING_TEXT_ACTION_FRAME_PROMPT},
+        {"type": "input_text", "text": _frame_text(STREAMING_TEXT_ACTION_FRAME_PROMPT)},
         {"type": "input_image", "image_url": f"data:image/png;{_frame(n)}"},
     ]
 
@@ -218,7 +232,7 @@ def _live_push(n: int, at: float) -> list[dict]:
     """Capture ``n`` (from 0) going in at ``at``: its image, then its text."""
     return [
         _live_input(at, video={"data": _frame(n), "mime_type": "image/png"}),
-        _live_input(at, text=STREAMING_FUNCTION_CALL_FRAME_PROMPT),
+        _live_input(at, text=_frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT)),
     ]
 
 

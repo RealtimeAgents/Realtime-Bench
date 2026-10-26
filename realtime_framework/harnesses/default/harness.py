@@ -965,48 +965,34 @@ def bind_observation(agent, observation, prompt, tick):
     streaming = agent.interaction_mode == "streaming"
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
-    execution = None
-    runtime = getattr(agent, "tool_runtime", None)
-    if runtime is not None:
-        expected = metadata.get("observation_id") or "missing-observation-id"
-        width, height = agent.interaction_profile.inspection_size(prepared.geometry)
-        execution = runtime.inspect(
-            observation,
-            requested_observation_id=expected,
-            tick=getattr(observation, "tick_number", tick),
-            model_width=width,
-            model_height=height,
-            model_image_bytes=prepared.data,
-            model_image_mime_subtype=prepared.mime_subtype,
-            # A streaming push enters its frame on the shell's one push lane, so no other frame
-            # takes this number before the frame table gives it to this one.
-            frame_number=agent.frames.next_frame() if streaming else None,
-        )
-        prompt = observation_prompt_with_interactables(
-            prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
-        )
+    expected = metadata.get("observation_id") or "missing-observation-id"
+    width, height = agent.interaction_profile.inspection_size(prepared.geometry)
+    execution = agent.tool_runtime.inspect(
+        observation,
+        requested_observation_id=expected,
+        tick=getattr(observation, "tick_number", tick),
+        model_width=width,
+        model_height=height,
+        model_image_bytes=prepared.data,
+        model_image_mime_subtype=prepared.mime_subtype,
+        # A streaming push enters its frame on the shell's one push lane, so no other frame
+        # takes this number before the frame table gives it to this one.
+        frame_number=agent.frames.next_frame() if streaming else None,
+    )
+    prompt = observation_prompt_with_interactables(
+        prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
+    )
     value = ProviderObservation(
         observation=observation,
         prompt=prompt,
-        image_bytes=(
-            execution.get("image_bytes")
-            if execution and execution.get("image_bytes")
-            else prepared.data
-        ),
-        mime_type=(
-            f"image/{execution.get('image_mime_subtype')}"
-            if execution and execution.get("image_mime_subtype")
-            else f"image/{prepared.mime_subtype}"
-        ),
+        image_bytes=execution.get("image_bytes") or prepared.data,
+        mime_type=f"image/{execution.get('image_mime_subtype') or prepared.mime_subtype}",
         image_detail=prepared.detail,
         geometry=prepared.geometry.to_dict(),
-        inspection=execution.get("proof") if execution else None,
+        inspection=execution["proof"],
     )
     frame = agent.frames.register(
-        value.observation_id,
-        observation.timestamp,
-        value.geometry,
-        execution["marks"] if execution else None,
+        value.observation_id, observation.timestamp, value.geometry, execution["marks"]
     )
     if streaming:
         value.image_bytes = render_frame_number(value.image_bytes, frame.frame)
@@ -1036,11 +1022,11 @@ class _Grounded:
         return failed["mark"] if failed.get("error") == "mark_not_in_observation" else None
 
 
-def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
+def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
     """Parse one action from model output and interpret it against its frame-table entry: the
-    frame's marks resolve its element references, where ``resolve``, as when the agent inspects
-    its frames, and its geometry binds its coordinates. The action, its protocol, and the last
-    resolution the output made, which the inspection's tool trace records.
+    frame's marks resolve its element references and its geometry binds its coordinates. The
+    action, its protocol, and the last resolution the output made, which the inspection's tool
+    trace records.
 
     A streaming action names its frame, however old, and is rejected (no action) when that frame
     cannot be found; the frame and its age are recorded. A turn-based action uses ``own_frame``,
@@ -1066,7 +1052,7 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
         frame, error = frames.locate(reference) if streaming else (own_frame, None)
         if asked is None:
             return None
-        if frame is None or not resolve:
+        if frame is None:
             return _Grounded(asked, asked, frame, reference, error)
         action, resolution = resolve_action_references(asked, frame.marks)
         if streaming:
@@ -1113,8 +1099,7 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
     action = agent.interaction_profile.bind_action(
         decision.action, FrameGeometry.from_dict(frame.geometry)
     )
-    if resolve:
-        action_protocol["grounding"] = grounding
+    action_protocol["grounding"] = grounding
     return action, action_protocol, last
 
 
@@ -1300,15 +1285,11 @@ class DefaultHarness(VisionAgentBase):
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
-            runtime = getattr(self, "tool_runtime", None)
-            if runtime is not None:
-                for execution in inspections:
-                    if execution is None:
-                        continue
-                    try:
-                        runtime.finish(execution, outcome="observation_preparation_error")
-                    except Exception:  # noqa: BLE001, S110 - preserve the preparation failure
-                        pass
+            for execution in inspections:
+                try:
+                    self.tool_runtime.finish(execution, outcome="observation_preparation_error")
+                except Exception:  # noqa: BLE001, S110 - preserve the preparation failure
+                    pass
             raise
         # (ChoiceRequirements, SelectionMaterial) of this decision's observation, for the request.
         choice = None
@@ -1477,8 +1458,6 @@ class DefaultHarness(VisionAgentBase):
         result = staged.result
         latency, text = (0.0, "") if result is None else (result.latency_s, result.output.text)
         for index, execution in enumerate(staged.inspections):
-            if execution is None:
-                continue
             self.tool_runtime.finish(
                 execution,
                 action_latency_s=latency,
@@ -1528,17 +1507,11 @@ class DefaultHarness(VisionAgentBase):
             }
         newest_proof = prepared[-1].inspection
         invalid_proof = next(
-            (
-                value.inspection
-                for value in prepared
-                if value.inspection is not None and not value.inspection.get("valid")
-            ),
-            None,
+            (value.inspection for value in prepared if not value.inspection.get("valid")), None
         )
         if invalid_proof is not None:
             for execution in inspection_executions:
-                if execution is not None:
-                    self.tool_runtime.finish(execution, outcome="inspection_protocol_error")
+                self.tool_runtime.finish(execution, outcome="inspection_protocol_error")
             latency = self.clock.monotonic() - started
             result = self._invalid_observation_result(invalid_proof, latency)
             result["decision_wall_latency_s"] = latency
@@ -1727,12 +1700,9 @@ class DefaultHarness(VisionAgentBase):
         if failure_detail:
             latency = self.clock.monotonic() - started
             for execution in inspection_executions:
-                if execution is not None:
-                    self.tool_runtime.finish(
-                        execution,
-                        action_latency_s=latency,
-                        outcome="action_round_error",
-                    )
+                self.tool_runtime.finish(
+                    execution, action_latency_s=latency, outcome="action_round_error"
+                )
             log_entry = {
                 "type": "decision",
                 "tick": tick,
@@ -1778,7 +1748,7 @@ class DefaultHarness(VisionAgentBase):
 
         output = runtime_result.output
         action_observation = prepared[-1]
-        newest_execution = inspection_executions[-1] if inspection_executions else None
+        newest_execution = inspection_executions[-1]
         newest_proof = action_observation.inspection
 
         native_protocol_failure = output.token_fields.get("protocol_failure")
@@ -1799,15 +1769,10 @@ class DefaultHarness(VisionAgentBase):
             action = self.interaction_profile.bind_action(
                 action, FrameGeometry.from_dict(action_observation.geometry)
             )
-            if newest_execution is not None:
-                action_protocol["grounding"] = newest_execution.get("reference_resolution")
+            action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
             action, action_protocol, resolution = parse_grounded_action(
-                self,
-                output.text,
-                self.clock.time(),
-                generation.frame,
-                resolve=newest_execution is not None,
+                self, output.text, self.clock.time(), generation.frame
             )
             if resolution is not None:
                 newest_execution["reference_resolution"] = resolution

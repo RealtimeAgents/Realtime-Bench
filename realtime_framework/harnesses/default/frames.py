@@ -36,7 +36,7 @@ class FrameRecord:
     # Observation.timestamp: wall time, or simulated seconds on the token clock (sandbox/actions.py).
     captured_at: float
     geometry: dict  # FrameGeometry of the image the model is sent
-    marks: dict | None  # the SoM mark map; None when the frame had no inspection
+    marks: dict  # the SoM mark map
     # Streaming: "prepared" until its session push went out, then "sent".
     send_status: str = "prepared"
     # When it was sent: when its push receipt says it was written (decision N43).
@@ -62,7 +62,7 @@ class FrameTable:
             return len(self._frames) + 1
 
     def register(
-        self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None
+        self, observation_id: str, captured_at: float, geometry: dict, marks: dict
     ) -> FrameRecord:
         with self._lock:
             frame = len(self._frames) + 1
