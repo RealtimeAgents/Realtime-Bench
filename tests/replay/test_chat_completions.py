@@ -310,9 +310,11 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
     Settled as the runner settles each result, it leaves the clock's output count unknown and
     gives the clock no source, though it still counts as one inference response."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
-        # Below the first request's estimate of 9459 (test_history_overflow_ledger).
+        # The window less the reserve is below the first request's estimate of 9459
+        # (test_history_overflow_ledger); the reserve holds the native limit, as the pre-run checks
+        # require (providers/preflight.py check_config).
         config = chat_completions_config(stub.base_url, stream=False).model_copy(
-            update={"context_window_tokens": 6096, "context_reserve_tokens": 1000}
+            update={"context_window_tokens": 8192, "context_reserve_tokens": 4096}
         )
         episode = build_episode(
             config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key=MODEL_KEY

@@ -303,6 +303,24 @@ def test_context_reserve():
     fails(lambda: episode(preset("my-model")), "Context capacity must exceed generation reserve")
 
 
+def test_context_reserve_below_the_output_limit():
+    """With a context window, chat_completions reserves at least the output limit each request
+    sends, so a request the window admits leaves room for the reply."""
+    os.environ["BENCHMARK_CONTEXT_WINDOW_TOKENS"] = "100000"  # providers/registry.py to_model_config
+    os.environ["BENCHMARK_CONTEXT_RESERVE_TOKENS"] = "4096"
+    declared = {"native_output_limit": 8192, "native_output_limit_source": "endpoint"}
+    config = preset("my-model").model_copy(update=declared)
+    fails(
+        lambda: episode(config),
+        "The context reserve (4096 tokens) is below the output limit each request sends "
+        "(8192 tokens); set BENCHMARK_CONTEXT_RESERVE_TOKENS to at least 8192, or lower "
+        "endpoint.native_output_limit in the model YAML",
+    )
+    episode(config.model_copy(update={"context_reserve_tokens": 8192}))
+    episode(config.model_copy(update={"context_window_tokens": None}))
+    episode(preset("my-model"))
+
+
 @pytest.mark.parametrize("key", ["jev-1.13", "gpt-6-luna-decisions"])
 def test_context_reserve_of_a_choice_api(key):
     """Every API that estimates its requests against a window, not only chat_completions."""
