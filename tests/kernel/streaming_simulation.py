@@ -663,6 +663,20 @@ class Simulation:
             frame = math.floor(after[2] * self.config.env_fps + 1e-9)
             if frame == math.floor(before[2] * self.config.env_fps + 1e-9):
                 assert any(asked < i < then for i in acts), f"frame {frame} read twice"
+        # An action executes only once a read asked since it arrived, or at that very reading, said
+        # the task goes on: it found no end, or it failed, which tells nothing (decision 12).
+        world = self.world
+        arrived = [entry.semantic for entry in self.entries("ActionArrived")]
+        for index, data in self.resolved().items():
+            start = data["started_at"]
+            if start is None or data["status"] == "wait":
+                continue
+            assert any(
+                arrived[index] <= asked
+                and released <= start
+                and (n in world.check_errors or world.ends_at is None or took < world.ends_at)
+                for n, (_, asked, took, released, _) in enumerate(reads, 1)
+            ), f"action {index} executed at {start} with no read since it arrived"
         applied = {
             data["started_at"]: data
             for data in self.resolved().values()

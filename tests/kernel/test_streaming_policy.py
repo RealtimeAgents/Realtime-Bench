@@ -410,6 +410,19 @@ def test_of_three_actions_a_reply_hands_over_at_once_the_first_and_the_last_exec
     assert sim.checks == [0.0, 1.0, 1.5, 2.25, 3.0, 4.0]
 
 
+def test_an_action_whose_read_waited_for_a_capture_holds_the_lane_while_that_read_runs():
+    """At 2 environment frames a second the reads due at 1 and 1.5 wait for the capture running
+    from 1 to 1.75; the click arriving at 1.625 waits behind them. The read asked at 1.75, which
+    takes until 2.25, is the one before the click, which holds the lane while it runs: the typing
+    arriving at 1.9 waits instead of taking its place, and executes after the click."""
+    calls = (Call(1.625, CLICK, "a"), Call(1.9, TYPE, "b"))
+    world = World(replies=[Reply(10.0, calls=calls)], capture_times={2: 0.75}, check_times={3: 0.5})
+    sim = _run(world, 3.0, env_fps=2.0)
+    assert sim.statuses() == ["applied", "applied"]
+    assert sim.executed == [(2.25, CLICK), (2.25, TYPE)]
+    assert sim.checks == [0.0, 0.5, 1.75, 2.25, 2.25, 2.5]
+
+
 def test_a_read_asked_at_the_reading_an_action_arrives_at_counts_for_it():
     """Reads take 0.25 s. A click and a typing arrive together at 1.5, and the read asked for the
     click then counts for the typing too. The click's call is cancelled at 1.625 while that read

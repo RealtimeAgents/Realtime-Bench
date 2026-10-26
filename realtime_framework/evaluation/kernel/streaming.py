@@ -902,9 +902,15 @@ class StreamingPolicy:
     def _ask(self) -> None:
         """Read the state now: no capture or action is out, so the read samples the task now, the
         time its end is dated by, but for the read after an action, which stands for one as the
-        action finished. It is this frame's read, and whichever came due meanwhile."""
+        action finished. It is this frame's read, and whichever came due meanwhile. An action
+        waiting, which arrived before, takes the lane for it: it is the read before that action
+        (decision 12)."""
         if "read" in self._line:
             self._line.remove("read")
+        if self._lane is _Lane.IDLE and self.waiting is not None:
+            self.current, self.waiting, self._lane = self.waiting, None, _Lane.PRE_CHECK
+            if "action" in self._line:
+                self._line.remove("action")
         kernel = self.kernel
         self._read_frame = self._frame()
         request = kernel.request()
@@ -916,7 +922,8 @@ class StreamingPolicy:
         kernel = self.kernel
         asked_at = self._asked.pop(event.request)
         # No action executes while a read is out: one holding the lane is the one this read
-        # follows, which stands for one as the action finished (N31).
+        # follows, which stands for one as the action finished (N31), or the one it comes before
+        # (decision 12).
         at = self.current.finished_at if self._lane is _Lane.POST_CHECK else asked_at
         # A read that fails once the episode is over still counts.
         if self._count_read(event.error, at):
