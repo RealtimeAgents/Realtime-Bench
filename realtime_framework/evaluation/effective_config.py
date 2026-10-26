@@ -19,14 +19,14 @@ guest, the browser, the task server, the model driver and the recorder. The repl
 the repository .env load it performs today (harnesses/registry.py create_agent).
 
 The first catalog lookup of every entry point imports LiteLLM (providers/registry.py
-_litellm_model_map), which loads a .env and fetches LiteLLM's model cost map
-(litellm/__init__.py:29-30). The probes set LITELLM_LOCAL_MODEL_COST_MAP=true so nothing leaves the
-machine; no exported value reads that map.
+_litellm_model_map) as a run does, without loading a .env or fetching LiteLLM's model cost map
+(providers/litellm.py import_litellm). The probes also set LITELLM_LOCAL_MODEL_COST_MAP=true, so
+nothing leaves the machine; no exported value reads that map.
 
 Only non-secret setting variables are exported. Each value names the layer that set it last:
 ``shell`` (the environment given to the entry point), ``.env.local`` (Harbor), ``harbor``,
-``.env``, ``_trial``, ``runner`` or ``litellm .env``. Machine paths in arguments are replaced with
-placeholders; image paths and interpreters stay, as the runtime-config hash records them.
+``.env``, ``_trial`` or ``runner``. Machine paths in arguments are replaced with placeholders;
+image paths and interpreters stay, as the runtime-config hash records them.
 """
 
 from __future__ import annotations
@@ -67,8 +67,6 @@ _EXTRA_VARIABLES = frozenset(
         # Read at call time, not recorded (LiteLLMDriver._transport_kwargs, GeminiLiveDriver).
         "OPENROUTER_REFERER", "OPENROUTER_TITLE", "GEMINI_API_KEY_START_SLOT",
         "OPENAI_ORG_ID", "OPENAI_PROJECT_ID",
-        # Whether importing LiteLLM loads a .env (litellm/__init__.py:29-30).
-        "LITELLM_MODE", "LITELLM_DEV_ENV_HOT_RELOAD",
     }
 )
 
@@ -176,55 +174,11 @@ def _load_env_file(path, attribution: dict) -> set:
     return _attribute(attribution, before, ".env")
 
 
-def _fresh_catalog(state: dict) -> None:
-    """Make the next catalog lookup load it as a fresh process does.
-
-    That lookup imports LiteLLM, whose import loads a .env (providers/registry.py
-    _litellm_model_map). The module stays imported after the first cell, so the load is repeated
-    here for the later cells.
-    """
+def _fresh_catalog() -> None:
+    """Make the next catalog lookup load it as a fresh process does."""
     import realtime_framework.providers.registry as registry
 
-    if not hasattr(registry._litellm_model_map, "cache_clear"):  # already wrapped
-        registry._catalog_entries.cache_clear()
-        return
-    model_map = registry._litellm_model_map
-
-    def litellm_model_map():
-        before = _snapshot()
-        value = model_map()
-        _litellm_env_file(state["attribution"])
-        state.setdefault("claimed", set()).update(
-            _attribute(state["attribution"], before, "litellm .env")
-        )
-        return value
-
-    registry._litellm_model_map = litellm_model_map
     registry._catalog_entries.cache_clear()
-
-
-def _litellm_env_file(attribution: dict) -> set:
-    """What importing LiteLLM loads (litellm/__init__.py:29-30): python-dotenv's find_dotenv() walks
-    up from the litellm package directory and loads the first .env, without overriding."""
-    if os.getenv("LITELLM_MODE", "DEV") != "DEV":
-        return set()
-    import importlib.util
-
-    import dotenv
-
-    spec = importlib.util.find_spec("litellm")
-    if spec is None or spec.origin is None:
-        return set()
-    start = Path(spec.origin).resolve().parent
-    for directory in (start, *start.parents):
-        if (directory / ".env").is_file():
-            before = _snapshot()
-            dotenv.load_dotenv(
-                directory / ".env",
-                override=os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True",
-            )
-            return _attribute(attribution, before, "litellm .env")
-    return set()
 
 
 class _Agent:
@@ -400,7 +354,7 @@ def _probe_runner(request: dict) -> dict:
         argv = [results_dir.as_posix() if arg == "<results>" else arg for arg in argv]
         state.clear()
         state.update(attribution=dict(attribution), claimed=set(), start=_snapshot())
-        _fresh_catalog(state)
+        _fresh_catalog()
         with _restored_environ():
             sys.argv = ["runner", *argv, "--results-dir", str(results_dir), "--run-id", "run"]
             record = {"error": None}
@@ -495,8 +449,8 @@ def _probe_trial(request: dict) -> dict:
     registry.load_project_secrets = load_project_secrets
     results = {}
     for model, task, argv in request["runs"]:
-        state.update(attribution=dict(request["attribution"]), loaded=set(), claimed=set())
-        _fresh_catalog(state)
+        state.update(attribution=dict(request["attribution"]), loaded=set())
+        _fresh_catalog()
         record = {"error": None}
         with _restored_environ():
             before = _snapshot()
@@ -510,8 +464,7 @@ def _probe_trial(request: dict) -> dict:
                 settings = json.loads(output.getvalue())
                 record["settings"] = settings
                 record["runner_argv"], record["python"] = _trial_command(settings["plan"])
-                claimed = state["loaded"] | state["claimed"]
-                _attribute(state["attribution"], before, "_trial", claimed=claimed)
+                _attribute(state["attribution"], before, "_trial", claimed=state["loaded"])
                 record["runner_environ"] = dict(os.environ)
                 record["attribution"] = state["attribution"]
         results.setdefault(model, {})[task] = record
@@ -567,11 +520,10 @@ def _probe_harbor(request: dict) -> dict:
     from realtime_framework.evaluation.harbor import RealtimeBenchAgent
     from realtime_framework.evaluation.harbor import runtime
 
-    # One process serves every cell, as one rtbench process serves its job: the catalog, and the
-    # LiteLLM .env its first lookup loads, are read once.
-    state = {"attribution": dict(request["attribution"])}
-    attribution = state["attribution"]
-    _fresh_catalog(state)
+    # One process serves every cell, as one rtbench process serves its job: the catalog is read
+    # once.
+    attribution = dict(request["attribution"])
+    _fresh_catalog()
     env_local = Path.cwd() / ".env.local"
     scratch = Path(request["scratch"])
     # suite_dataset links task folders under temp/; the job only needs the selected names.
@@ -647,11 +599,9 @@ def _probe_identity(request: dict) -> dict:
     from realtime_framework.evaluation.config import identity_main
 
     argparse.ArgumentParser.error = _reject
-    state = {}
     results = {}
     for model, task, argv in request["runs"]:
-        state.update(attribution={})
-        _fresh_catalog(state)
+        _fresh_catalog()
         record = {"error": None}
         with _restored_environ():
             output = io.StringIO()
