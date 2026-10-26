@@ -336,10 +336,10 @@ class _ClockedStuckManager(_StuckManager):
         self.connection._clock.wait(self.connection._open, 30)
 
 
-def test_an_abort_drops_a_socket_its_close_is_stuck_on_after_ten_seconds():
-    """A close stuck on a write that does not drain is bounded at 10 s on the driver's clock
-    (decision N49): the abort drops the socket then, which fails the push stuck in the same
-    write. Until then the abort holds up the session, and the next reply with it."""
+def test_an_abort_drops_a_socket_its_close_is_stuck_on_after_one_second():
+    """A close stuck on a write that does not drain is bounded at 1 s on the driver's clock, as
+    Gemini Live's is (decision N49): the abort drops the socket then, which fails the push stuck
+    in the same write. Until then the abort holds up the session, and the next reply with it."""
     clock = FakeClock()
 
     async def scenario():
@@ -358,7 +358,7 @@ def test_an_abort_drops_a_socket_its_close_is_stuck_on_after_ten_seconds():
         return aborted, failure
 
     aborted, failure = run_on_fake_clock(clock, scenario())
-    assert aborted == 10.0
+    assert aborted == 1.0
     assert isinstance(failure, ConnectionClosedError)
 
 

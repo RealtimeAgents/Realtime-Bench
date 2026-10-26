@@ -70,10 +70,10 @@ _CLIENT_ID_MAX_LENGTH = 32
 # What the trace links to an item create as its answers; the first is its acknowledgement. The
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
-# How long a connection's close may take before the socket is dropped under it. A close stuck on
-# a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
-# fails both. Normal closes finish well within it, so it adds no observable wait.
-_CONNECTION_CLOSE_TIMEOUT_S = 10.0
+# How long a connection's close may take before the socket is dropped under it, as Gemini Live's
+# (decision N49). A close stuck on a write that does not drain leaves a streaming push stuck in
+# the same write; dropping the socket fails both.
+_CONNECTION_CLOSE_TIMEOUT_S = 1.0
 # How long a connection may take to open: TCP, TLS and the WebSocket upgrade, in real time
 # (websockets' open_timeout). The session.update after it reads no answer.
 _HANDSHAKE_TIMEOUT_S = 10.0
