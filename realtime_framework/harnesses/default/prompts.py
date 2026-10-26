@@ -37,15 +37,24 @@ GUI_ACTION_EXAMPLES = """- {"action": "click", "target": "P1"|"R1@u,v", "button"
 
 _POINTER_RULES = """- P/R marks belong only to the screenshot that supplies them. Pn is an exact target point.
   Rn@u,v addresses a continuous region using local integers from 0..1000: left/top is 0 and
-  right/bottom is 1000. Never reuse a mark from an earlier screenshot.
+  right/bottom is 1000. {marks}
 - Prefer a supplied mark. If no suitable mark exists, replace target with x/y, start with x1/y1,
   or end with x2/y2 using the screenshot coordinate space. Reference and coordinate forms may be
   mixed for drag endpoints, but never specify both forms for the same point.
-- Use the coordinate contract supplied with the current screenshot. The harness converts image
+- Use the coordinate contract supplied with {screenshot}. The harness converts image
   coordinates to the executor's 1920x1080 desktop space.
 - Pointer coordinates may be omitted for click variants, mouse_down/up, and scroll only to act at
   the current cursor position. When present, x and y must be supplied together.
 """
+TURN_POINTER_RULES = _POINTER_RULES.format(
+    marks="Never reuse a mark from an earlier screenshot.", screenshot="the current screenshot"
+)
+# A streaming action's marks and coordinates are read from the frame it names
+# (FRAME_REFERENCE_RULES).
+STREAMING_POINTER_RULES = _POINTER_RULES.format(
+    marks="An action's marks are read from the screenshot its frame names.",
+    screenshot="the screenshot the action's frame names",
+)
 _TIMING_AND_MODIFIER_RULES = """- duration must be between 0 and 10. For hold_key and wait it is simulated world time under the
   token clock; hold_key defaults to 1 and wait without duration waits for the next observation.
   For move, mouse_down/up, and drag it controls executor-side pointer interpolation only; GUI
@@ -62,33 +71,26 @@ _GESTURE_RULES = """- mouse_down remains active until the matching mouse_up; use
   For a gesture that must react to changing frames, use mouse_down, then move actions on later
   observations, then mouse_up; each step may use that observation's current marks.
 """
-GUI_ACTION_PARAMETER_RULES = _POINTER_RULES + _TIMING_AND_MODIFIER_RULES + "\n" + _GESTURE_RULES
 
-# Function-call wording: the shared rules plus argument-completeness rules for move/drag/scroll
-# and optional fields.
-FUNCTION_CALL_PARAMETER_RULES = (
-    _POINTER_RULES
-    + """- move requires a destination. drag requires end or x2/y2; start or x1/y1 may be omitted to
-  start at the current cursor. Never mix a reference and coordinates for the same endpoint.
-- scroll requires both dx and dy, and they must not both be zero.
-"""
-    + _TIMING_AND_MODIFIER_RULES
-    + """ If no modifier
-  is needed, omit the field entirely; do not send "none", "", or null.
-- Optional fields may be omitted; do not fill unused fields with placeholder values. For example,
-  {"action":"click","target":"P1"} has no x/y or modifier fields.
-"""
-    + _GESTURE_RULES
-)
 
-GUI_JSON_ACTION_SPACE = (
-    "AVAILABLE GUI ACTIONS (canonical JSON):\n"
-    + GUI_ACTION_EXAMPLES
-    + "\n- Prefer canonical JSON with double quotes. The adapter can recover one unambiguous action "
-    "from\n  common wrappers or shorthand, but canonical JSON is shortest and safest.\n"
-    + GUI_ACTION_PARAMETER_RULES
-)
+def _gui_json_action_space(pointer_rules: str) -> str:
+    return (
+        "AVAILABLE GUI ACTIONS (canonical JSON):\n"
+        + GUI_ACTION_EXAMPLES
+        + "\n- Prefer canonical JSON with double quotes. The adapter can recover one unambiguous "
+        "action from\n  common wrappers or shorthand, but canonical JSON is shortest and safest.\n"
+        + pointer_rules
+        + _TIMING_AND_MODIFIER_RULES
+        + "\n"
+        + _GESTURE_RULES
+    )
 
+
+GUI_JSON_ACTION_SPACE = _gui_json_action_space(TURN_POINTER_RULES)
+STREAMING_GUI_JSON_ACTION_SPACE = _gui_json_action_space(STREAMING_POINTER_RULES)
+
+# Native streaming runs nothing for a reply that holds no valid action
+# (harnesses/streaming/feedback.py).
 _STREAM_OUTPUT_CONTRACT = """ACTION OUTPUT
 
 Use your configured or native reasoning internally. Your entire visible response must be exactly
@@ -96,26 +98,51 @@ one valid action from the active action space. Output the action and its argumen
 reasoning, commentary, labels, wrappers, tags, Markdown, ellipses, or placeholders.
 The action is final and immediately executable.{output_tokens}
 The adapter accepts common formatting wrappers when it can recover exactly one unambiguous valid
-action. If it finds no valid action or multiple different actions, the harness executes WAIT.
+action. If it finds no valid action or multiple different actions, {no_action}.
 """
-STREAM_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(output_tokens="")
+STREAM_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(
+    output_tokens="", no_action="the harness executes WAIT"
+)
 # PromptOptions.finite_budget.
 FINITE_BUDGET_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(
-    output_tokens=" All generated output tokens count."
+    output_tokens=" All generated output tokens count.", no_action="the harness executes WAIT"
+)
+# A native-streaming run's (STREAM_OUTPUT_CONTRACT is a turn's), on the wall clock only.
+STREAMING_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(
+    output_tokens="", no_action="nothing is executed for it"
 )
 
 
 # Model/interface-specific native-tool instructions.
-FUNCTION_CALL_ACTION_SPACE = (
-    "AVAILABLE GUI ACTIONS (native function calls):\n"
-    "The examples below describe the same actions and parameters as the shared GUI protocol. "
-    "They are reference notation, NOT text to output: use the example's action value as the "
-    "declared function name and its remaining fields as function arguments. Do not include an "
-    "action argument. Call exactly one declared function; do not output JSON text or speech.\n"
-    + GUI_ACTION_EXAMPLES
-    + "\n"
-    + FUNCTION_CALL_PARAMETER_RULES
-)
+def _function_call_action_space(pointer_rules: str) -> str:
+    """The shared rules plus argument-completeness rules for move/drag/scroll and optional
+    fields."""
+    return (
+        "AVAILABLE GUI ACTIONS (native function calls):\n"
+        "The examples below describe the same actions and parameters as the shared GUI protocol. "
+        "They are reference notation, NOT text to output: use the example's action value as the "
+        "declared function name and its remaining fields as function arguments. Do not include "
+        "an action argument. Call exactly one declared function; do not output JSON text or "
+        "speech.\n"
+        + GUI_ACTION_EXAMPLES
+        + "\n"
+        + pointer_rules
+        + """- move requires a destination. drag requires end or x2/y2; start or x1/y1 may be omitted to
+  start at the current cursor. Never mix a reference and coordinates for the same endpoint.
+- scroll requires both dx and dy, and they must not both be zero.
+"""
+        + _TIMING_AND_MODIFIER_RULES
+        + """ If no modifier
+  is needed, omit the field entirely; do not send "none", "", or null.
+- Optional fields may be omitted; do not fill unused fields with placeholder values. For example,
+  {"action":"click","target":"P1"} has no x/y or modifier fields.
+"""
+        + _GESTURE_RULES
+    )
+
+
+FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(TURN_POINTER_RULES)
+STREAMING_FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(STREAMING_POINTER_RULES)
 _FUNCTION_CALL_OUTPUT_CONTRACT = (
     "NATIVE GUI ACTION PROTOCOL: Do not produce a spoken response or text action. "
     "Reason internally, then call exactly one GUI action function. That call fixes your "
@@ -142,6 +169,12 @@ FRAME_PROMPT = "Screen observed for this decision."
 FUNCTION_CALL_FRAME_PROMPT = (
     FRAME_PROMPT + " Use current P/R marks when supplied. Submit exactly one GUI action by "
     "calling its function. Do not speak."
+)
+# A streamed frame is no decision's: an action names whichever frame it is based on.
+STREAMING_FRAME_PROMPT = "Streamed screenshot; its number is in its FRAME label."
+STREAMING_FUNCTION_CALL_FRAME_PROMPT = (
+    STREAMING_FRAME_PROMPT + " Submit exactly one GUI action by calling its function, with the "
+    "frame it is based on. Do not speak."
 )
 
 # Streaming only: each action names the frame it is based on.
@@ -170,11 +203,13 @@ determines when the episode ends; use wait when no further UI interaction is nee
 SCENARIO_ROLES = {"browser_game": GAME_ROLE, "realtime": REALTIME_WEB_ROLE}
 
 
-def _scenario_prompt(role: str, contract: str) -> str:
-    return "\n\n".join((role, GUI_JSON_ACTION_SPACE, contract))
+def _scenario_prompt(role: str, action_space: str, contract: str) -> str:
+    return "\n\n".join((role, action_space, contract))
 
 
-REALTIME_WEB_SYSTEM_PROMPT = _scenario_prompt(REALTIME_WEB_ROLE, STREAM_OUTPUT_CONTRACT)
+REALTIME_WEB_SYSTEM_PROMPT = _scenario_prompt(
+    REALTIME_WEB_ROLE, GUI_JSON_ACTION_SPACE, STREAM_OUTPUT_CONTRACT
+)
 
 
 def gui_system_prompt(
@@ -201,8 +236,11 @@ def gui_system_prompt(
 def system_prompt_for_category(category: str | None, options: PromptOptions) -> str:
     if category not in SCENARIO_ROLES:
         raise ValueError(f"unsupported task category for scenario prompt: {category!r}")
+    role = SCENARIO_ROLES[category]
+    if options.interaction_mode == "streaming":
+        return _scenario_prompt(role, STREAMING_GUI_JSON_ACTION_SPACE, STREAMING_OUTPUT_CONTRACT)
     contract = FINITE_BUDGET_OUTPUT_CONTRACT if options.finite_budget else STREAM_OUTPUT_CONTRACT
-    return _scenario_prompt(SCENARIO_ROLES[category], contract)
+    return _scenario_prompt(role, GUI_JSON_ACTION_SPACE, contract)
 
 
 # Stateful text-output VLM sessions can under-weight an old system message, so each frame repeats only
@@ -210,6 +248,10 @@ def system_prompt_for_category(category: str | None, options: PromptOptions) -> 
 TEXT_ACTION_FRAME_PROMPT = (
     FRAME_PROMPT
     + " Use current P/R marks when supplied. Output exactly one action and nothing else."
+)
+STREAMING_TEXT_ACTION_FRAME_PROMPT = (
+    STREAMING_FRAME_PROMPT
+    + " Output exactly one action, with the frame it is based on, and nothing else."
 )
 
 
@@ -231,11 +273,13 @@ def budget_clock_prompt(
         "at or after its scheduled time; observed_at_tick in the action ledger counts these ticks. "
     )
     if options.clock_mode == "wall":
+        # A native-streaming run has replies, not decisions.
+        unit = "reply" if options.interaction_mode == "streaming" else "decision"
         return (
             f"WALL CLOCK: observations are scheduled at {fps:g} fps. "
             + ticks
             + "Environment time follows physical elapsed time. Produce at most one action "
-            "per decision and use execution feedback to track which actions were applied."
+            f"per {unit} and use execution feedback to track which actions were applied."
         )
     timing = (
         f"TOKEN CLOCK: observations are scheduled at f={fps:g} frames per simulated second. "

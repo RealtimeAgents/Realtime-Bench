@@ -23,8 +23,8 @@ from realtime_framework.entity.actions import Observation, gui_function_declarat
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.reporting import summarize_streaming
 from realtime_framework.harnesses.default.prompts import (
-    FUNCTION_CALL_FRAME_PROMPT,
-    TEXT_ACTION_FRAME_PROMPT,
+    STREAMING_FUNCTION_CALL_FRAME_PROMPT,
+    STREAMING_TEXT_ACTION_FRAME_PROMPT,
 )
 from realtime_framework.harnesses.registry import configure_agent, create_agent
 from realtime_framework.providers import registry as catalog
@@ -154,7 +154,7 @@ def _realtime_push(n: int, content: list[dict], at: float, previous: str | None)
 
 def _realtime_frame(n: int) -> list[dict]:
     return [
-        {"type": "input_text", "text": TEXT_ACTION_FRAME_PROMPT},
+        {"type": "input_text", "text": STREAMING_TEXT_ACTION_FRAME_PROMPT},
         {"type": "input_image", "image_url": f"data:image/png;{_frame(n)}"},
     ]
 
@@ -218,7 +218,7 @@ def _live_push(n: int, at: float) -> list[dict]:
     """Capture ``n`` (from 0) going in at ``at``: its image, then its text."""
     return [
         _live_input(at, video={"data": _frame(n), "mime_type": "image/png"}),
-        _live_input(at, text=FUNCTION_CALL_FRAME_PROMPT),
+        _live_input(at, text=STREAMING_FUNCTION_CALL_FRAME_PROMPT),
     ]
 
 

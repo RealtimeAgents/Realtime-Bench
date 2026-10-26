@@ -72,6 +72,29 @@ def test_the_runner_records_streaming(runner_cells):
     assert cell["expected_runtime_config_hash"] == cell["runtime_config_hash"]
 
 
+def test_the_export_hashes_the_system_block_the_streaming_agent_sends(runner_cells):
+    """The native-streaming agent's initialize() builds it from the streaming profile its context
+    policy names (harnesses/default/harness.py interaction_profile)."""
+    import realtime_tasks.registry as tasks
+    from realtime_framework.harnesses.default.harness import interaction_profile
+    from realtime_framework.harnesses.registry import configure_agent
+
+    cell = runner_cells[GAME]
+    task = tasks.get(GAME)
+    agent = types.SimpleNamespace(task_instruction=task.description())
+    configure_agent(
+        agent,
+        fps=1.0,
+        tokens_per_frame=None,
+        clock_mode="wall",
+        category=task.category,
+        interaction_mode="streaming",
+    )
+    assert agent.streaming_note == cell["clock_prompt"]
+    sent = interaction_profile("function_call", agent.prompt_options).system_instruction(agent)
+    assert cell["task"]["system_prompt_sha256"] == hashlib.sha256(sent.encode()).hexdigest()
+
+
 def run_main(
     tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="wall", loop=None
 ) -> dict:

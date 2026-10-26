@@ -452,7 +452,8 @@ def build_hybrid_som(
     frame_number: int | None = None,
 ) -> dict:
     """Build the model-facing legend, mark map, and optional marked screenshot. ``frame_number``
-    is the number render_frame_number draws on the marked screenshot after, under streaming."""
+    is the number render_frame_number draws on the marked screenshot after, under streaming,
+    where the legend's marks hold for the actions that name that frame."""
     marks, item_lines = _mark_map(result, text_observation=text_observation)
     obs = result.get("observation") or {}
     binding = result.get("binding") or {}
@@ -460,9 +461,11 @@ def build_hybrid_som(
         f"HYBRID_SOM v1 observation={obs.get('observation_id', '')} "
         f"space={action_width}x{action_height} stable={str(bool(binding.get('stable'))).lower()}"
     )
+    # A streaming action names its frame, whose marks hold for it however old the frame is.
+    scope = "current-only" if frame_number is None else "for actions naming this frame"
     instructions = [
         header,
-        "REF current-only: Pn=point; Rn@u,v=region-local 0..1000; raw coordinates allowed.",
+        f"REF {scope}: Pn=point; Rn@u,v=region-local 0..1000; raw coordinates allowed.",
     ]
     text = "\n".join(instructions + item_lines)
     unavailable = _active_items(result)[1]

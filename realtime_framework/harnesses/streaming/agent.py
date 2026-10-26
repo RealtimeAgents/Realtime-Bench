@@ -98,10 +98,10 @@ from realtime_framework.evaluation.kernel.streaming import (
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import GROUNDING_FAILED, FrameRecord, FrameTable
 from realtime_framework.harnesses.default.harness import (
-    INTERACTION_PROFILES,
     VisionAgentBase,
     action_text,
     bind_observation,
+    interaction_profile,
     parse_grounded_action,
 )
 from realtime_framework.harnesses.default.request import system_block
@@ -250,9 +250,10 @@ class NativeStreamingAgent(VisionAgentBase):
     def initialize(self, task_instruction: str, initial_observation: Observation):
         super().initialize(task_instruction, initial_observation)
         self.frames = FrameTable()
-        self.interaction_profile = INTERACTION_PROFILES[
-            self._context_policy.prompts[self.task_category]  # context policy item 11
-        ]
+        self.interaction_profile = interaction_profile(
+            self._context_policy.prompts[self.task_category],  # context policy item 11
+            self.prompt_options,
+        )
         fixed = self.interaction_profile.system_instruction(self)
         self._system = system_block(fixed, self.clock.time_ns())
         channel = self.driver.capabilities.action_channel

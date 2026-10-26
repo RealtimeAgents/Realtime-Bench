@@ -694,7 +694,11 @@ from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import GROUNDING_FAILED_FEEDBACK
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
 from realtime_framework.harnesses.default.prompts import STREAM_OUTPUT_CONTRACT
+from realtime_framework.harnesses.default.prompts import STREAMING_FUNCTION_CALL_ACTION_SPACE
+from realtime_framework.harnesses.default.prompts import STREAMING_FUNCTION_CALL_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import STREAMING_TEXT_ACTION_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import TEXT_ACTION_FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import PromptOptions
 from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
 from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
@@ -711,19 +715,15 @@ class InteractionProfile:
     # Its output contract under a finite B (PromptOptions.finite_budget), where that differs.
     finite_budget_output_contract: str | None = None
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
-    # How an action names its frame under streaming.
+    # A streaming profile's: how an action names its frame.
     frame_reference_rules: str | None = None
 
     def system_instruction(self, agent) -> str:
         """The episode's, composed for ``agent.prompt_options`` (harnesses/registry.py
-        configure_agent)."""
-        options = agent.prompt_options
-        frame_reference_rules = (
-            self.frame_reference_rules if options.interaction_mode == "streaming" else None
-        )
+        configure_agent), for which the profile was chosen (interaction_profile)."""
         output_contract = (
             self.finite_budget_output_contract
-            if options.finite_budget and self.finite_budget_output_contract
+            if agent.prompt_options.finite_budget and self.finite_budget_output_contract
             else self.output_contract
         )
         if self.action_space is None:
@@ -731,7 +731,7 @@ class InteractionProfile:
                 agent.task_instruction,
                 scenario_prompt=getattr(agent, "system_prompt_override", None),
                 clock_prompt=agent.streaming_note,
-                frame_reference_rules=frame_reference_rules,
+                frame_reference_rules=self.frame_reference_rules,
             )
         return "\n\n".join(
             filter(
@@ -739,7 +739,7 @@ class InteractionProfile:
                 (
                     SCENARIO_ROLES[agent.task_category],
                     self.action_space,
-                    frame_reference_rules,
+                    self.frame_reference_rules,
                     output_contract,
                     getattr(agent, "streaming_note", None),
                     f"TASK:\n{agent.task_instruction}",
@@ -760,16 +760,13 @@ class InteractionProfile:
         return geometry.image_size
 
 
-STANDARD_VLM_PROFILE = InteractionProfile(
-    "standard_vlm", frame_reference_rules=FRAME_REFERENCE_RULES
-)
+STANDARD_VLM_PROFILE = InteractionProfile("standard_vlm")
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
     action_space=FUNCTION_CALL_ACTION_SPACE,
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
     finite_budget_output_contract=FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
-    frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
 )
 # The choice models' profiles.
 JEV_PROFILE = InteractionProfile(
@@ -827,6 +824,33 @@ INTERACTION_PROFILES = {
         MULTIMODAL_GAME_CHOICE_PROFILE,
     )
 }
+# The profiles of a native-streaming run, whose drivers answer in text JSON or function calls.
+# Every action names its frame and is read against it, however old, and its text JSON scenario
+# prompt is streaming's as well (prompts.py system_prompt_for_category).
+STREAMING_INTERACTION_PROFILES = {
+    profile.name: profile
+    for profile in (
+        InteractionProfile(
+            "standard_vlm",
+            frame_prompt=STREAMING_TEXT_ACTION_FRAME_PROMPT,
+            frame_reference_rules=FRAME_REFERENCE_RULES,
+        ),
+        InteractionProfile(
+            "function_call",
+            action_space=STREAMING_FUNCTION_CALL_ACTION_SPACE,
+            output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
+            frame_prompt=STREAMING_FUNCTION_CALL_FRAME_PROMPT,
+            frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
+        ),
+    )
+}
+
+
+def interaction_profile(name: str, options: PromptOptions) -> InteractionProfile:
+    """The profile context policy item 11 names, for a run of ``options``."""
+    if options.interaction_mode == "streaming":
+        return STREAMING_INTERACTION_PROFILES[name]
+    return INTERACTION_PROFILES[name]
 
 
 # Default harness
@@ -1229,9 +1253,10 @@ class DefaultHarness(VisionAgentBase):
         # Each accepted decision's action record, by its index in action_history.
         self._decision_actions: dict[int, int] = {}
         self.frames = FrameTable()
-        self.interaction_profile = INTERACTION_PROFILES[
-            self._context_policy.prompts[self.task_category]  # context policy item 11
-        ]
+        self.interaction_profile = interaction_profile(
+            self._context_policy.prompts[self.task_category],  # context policy item 11
+            self.prompt_options,
+        )
         fixed = self.interaction_profile.system_instruction(self)
         # Its inputs are set before initialize() and never change during the episode.
         self._system_block = system_block(fixed, self.clock.time_ns())

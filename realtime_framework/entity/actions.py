@@ -598,6 +598,12 @@ GUI_FUNCTION_TARGET_DESCRIPTION = (
     "the region center. Never reuse an older screenshot's mark. Choose this reference OR its "
     "raw coordinate pair, never both; omit the unused fields."
 )
+# Streaming: the call's marks are those of the frame it names, however old.
+GUI_FUNCTION_FRAME_TARGET_DESCRIPTION = (
+    "Pn point mark or Rn@u,v region-local mark of the screenshot the frame argument names. For "
+    "scroll, Rn means the region center. Choose this reference OR its raw coordinate pair, never "
+    "both; omit the unused fields."
+)
 
 GUI_FUNCTION_MODIFIER_DESCRIPTION = (
     "Optional: one modifier or a '+'-joined combination of shift, ctrl, alt, and super "
@@ -608,6 +614,11 @@ GUI_FUNCTION_MODIFIER_DESCRIPTION = (
 GUI_FUNCTION_ACTION_DESCRIPTION = (
     "Submit this GUI action using current P/R marks when supplied, or screenshot coordinates "
     "when no suitable mark exists. It is queued for execution according to the active clock setting."
+)
+GUI_FUNCTION_FRAME_ACTION_DESCRIPTION = (
+    "Submit this GUI action using the P/R marks of the screenshot its frame argument names when "
+    "supplied, or that screenshot's coordinates when no suitable mark exists. It is queued for "
+    "execution according to the active clock setting."
 )
 
 GUI_FUNCTION_FRAME_DESCRIPTION = (
@@ -672,7 +683,11 @@ def gui_function_declarations(*, frame_reference: bool = False):
     }
     target = {
         "type": "string",
-        "description": GUI_FUNCTION_TARGET_DESCRIPTION,
+        "description": (
+            GUI_FUNCTION_FRAME_TARGET_DESCRIPTION
+            if frame_reference
+            else GUI_FUNCTION_TARGET_DESCRIPTION
+        ),
         "pattern": r"^(P[1-9][0-9]*|R[1-9][0-9]*(@(1000|[0-9]{1,3}),(1000|[0-9]{1,3}))?)$",
     }
     pointer = {"target": target, "x": coordinate, "y": coordinate}
@@ -785,12 +800,13 @@ def gui_function_declarations(*, frame_reference: bool = False):
         "scroll": "dx and dy are required and must not both be zero. Omit the point for the current cursor.",
         "drag": "Requires end OR x2/y2. Start may be omitted for the current cursor. Choose one form per endpoint.",
     }
+    submit = (
+        GUI_FUNCTION_FRAME_ACTION_DESCRIPTION if frame_reference else GUI_FUNCTION_ACTION_DESCRIPTION
+    )
     return [
         {
             "name": name,
-            "description": " ".join(
-                filter(None, (GUI_FUNCTION_ACTION_DESCRIPTION, action_notes.get(name)))
-            ),
+            "description": " ".join(filter(None, (submit, action_notes.get(name)))),
             "parameters_json_schema": _parameters(props, required, choices),
         }
         for name, (props, required, choices) in specs.items()

@@ -319,11 +319,13 @@ def _probe_runner(request: dict) -> dict:
         return _Agent(config)
 
     def run_stream(adapter, env, **loop):
-        from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
+        from realtime_framework.harnesses.default.harness import interaction_profile
 
         _attribute(state["attribution"], state["start"], "runner", claimed=state["claimed"])
         # As each agent's initialize() builds it (harnesses/default/harness.py, streaming/agent.py).
-        profile = INTERACTION_PROFILES[state["prompts"][adapter.task_category]]
+        profile = interaction_profile(
+            state["prompts"][adapter.task_category], adapter.prompt_options
+        )
         state["loop"] = {
             "run_stream": {
                 key: loop[key]

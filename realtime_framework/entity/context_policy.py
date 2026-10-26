@@ -68,7 +68,10 @@ from realtime_framework.entity.records import _jsonable
 # mark badges of a streaming screenshot keep clear of its frame number; an action naming a mark
 # its frame does not have is a grounding failure, whose feedback names the mark and the action
 # asked for, not output without a valid action; the function-call output contract charges token
-# usage to simulated time only under a finite B, as the text-JSON one does.
+# usage to simulated time only under a finite B, as the text-JSON one does; a native-streaming
+# run's instructions, function declarations, frame texts and SoM legends read an action's marks
+# and coordinates from the frame it names, its frames name no decision, its clock note counts
+# replies, and nothing is executed, not WAIT, for a reply without a valid action.
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).

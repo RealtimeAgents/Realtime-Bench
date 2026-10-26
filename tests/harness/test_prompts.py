@@ -16,7 +16,7 @@ import types
 import pytest
 
 from realtime_framework.entity.actions import gui_function_declarations
-from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
+from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES, interaction_profile
 from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.sandbox.observation.som import build_hybrid_som
 
@@ -34,6 +34,22 @@ FORBIDDEN = [
     (lambda o: o.interaction_mode == "turn_based", "FRAME REFERENCE", "a turn names no frame"),
     (lambda o: True, "Latest screen", "decision 42: a frame stays in the context once older"),
     (lambda o: True, "CURRENT-SCREEN", "decision 42"),
+    # Decision 6: a streaming action's marks and coordinates are read from the frame it names,
+    # however old; a streaming frame is no decision's; no WAIT runs for what is not executed.
+    *(
+        (lambda o: o.interaction_mode == "streaming", sentence, "decision 6")
+        for sentence in (
+            "Never reuse a mark from an earlier screenshot",
+            "Never reuse an older screenshot's mark",
+            "Current-screenshot",
+            "current screenshot",
+            "current P/R marks",
+            "REF current-only",
+            "this decision",
+            "per decision",
+            "the harness executes WAIT",
+        )
+    ),
 ]
 
 
@@ -50,7 +66,6 @@ def _runs():
 
 
 def _compose(name: str, mode: str, clock: str):
-    profile = INTERACTION_PROFILES[name]
     clock_mode, tokens_per_frame = CLOCKS[clock]
     agent = types.SimpleNamespace(task_instruction="Do the task.")
     configure_agent(
@@ -61,6 +76,7 @@ def _compose(name: str, mode: str, clock: str):
         category="browser_game" if name == "multimodal_game_decisions" else "realtime",
         interaction_mode=mode,
     )
+    profile = interaction_profile(name, agent.prompt_options)
     streaming = mode == "streaming"
     legend = build_hybrid_som(
         {"actionable_now": []},
