@@ -386,10 +386,10 @@ def main():
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    # A run id used before: its summary is moved aside, so that the one in the directory is this
-    # run's, the emergency summary's too.
+    # A run retried in its run directory: the summary there is moved aside, so that the one in
+    # the directory is this run's, the emergency summary's too.
     if (run_dir / "run_summary.json").exists():
-        (run_dir / "run_summary.json").replace(run_dir / "run_summary.prev.json")
+        (run_dir / "run_summary.json").replace(run_dir / "run_summary.pre_retry.json")
     episode_trace = EpisodeTrace(
         run_dir / "episode_trace.jsonl", run_id=run_id, clock=clocks.operational
     )

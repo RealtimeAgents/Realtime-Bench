@@ -688,7 +688,7 @@ def test_a_run_that_fails_to_set_up_in_a_used_run_dir_leaves_its_own_summary(tmp
     )
     assert "RuntimeError: guest not ready" in seen["escaped"]
     assert (summary["run_status"], summary["stop_reason"]) == ("invalid", "setup_error")
-    assert (run_dir / "run_summary.prev.json").read_text() == written
+    assert (run_dir / "run_summary.pre_retry.json").read_text() == written
 
 
 def test_the_emergency_summary_reads_the_arguments_as_main_parses_them(tmp_path, monkeypatch):
