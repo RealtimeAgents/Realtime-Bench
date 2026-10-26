@@ -1536,25 +1536,20 @@ def test_a_close_that_outlasts_its_bound_is_logged_not_raised(monkeypatch, clock
     assert "error" in pushing
 
 
-def test_a_push_reopening_the_session_through_its_backoffs_prepares_it_meanwhile(
-    monkeypatch, clock
-):
-    """Reopening the session, the push waits, not stuck (review-final-streaming 中-1): the
-    session is being prepared from the first attempt, through both backoffs and the attempts
-    after them, until the third attempt opened it (decision 13)."""
+def test_a_push_waiting_out_the_backoff_to_reopen_the_session_is_held_meanwhile(monkeypatch, clock):
+    """Between attempts to reopen the session the push waits, not stuck (review-final-streaming
+    中-1): the session is being prepared from each backoff until the next attempt starts, whose
+    own time the push watchdog counts (decisions N48 and 13)."""
     agent = make_agent(monkeypatch, clock)
     posted = []
     agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
     _two_frames(agent, clock)
     agent.abort(6)
     agent.driver.connect_failures = [ConnectionError("1011 internal error")] * 2
-    started, attempts = clock.monotonic(), agent.driver.connect_attempts
     agent.push(observation(clock, 3))
-    (preparing, started_at), (prepared, prepared_at) = _preparations(posted)
-    assert (preparing, prepared) == ("SessionPreparing", "SessionPrepared")
-    assert started_at == started
-    assert prepared_at - started_at >= 3.0  # the backoffs, 1 s and 3 s ± 25%
-    assert agent.driver.connect_attempts - attempts == 3
+    preparations = _preparations(posted)
+    assert [name for name, _ in preparations] == ["SessionPreparing", "SessionPrepared"] * 2
+    assert preparations[1][1] - preparations[0][1] > 0.5  # the first backoff, 1 s ± 25%
     assert agent.driver.calls[-1][:2] == ("push", "obs-3")
     agent.close()
 
@@ -1576,8 +1571,8 @@ def test_an_openai_realtime_streaming_connect_is_retried_by_the_readying_alone(m
     shared retry policy (decision 39), and OpenAI Realtime's connect makes one handshake per
     attempt, as Gemini Live's does (decision 13): each attempt is a session_ready one, and the
     driver records no connect attempt and no backoff of its own. The session is being prepared
-    from the first handshake until the last. Every handshake is refused, so the readying gives
-    up after its fourth attempt, and the push with it."""
+    from each backoff until the next handshake (review-streaming 中-4). Every handshake is
+    refused, so the readying gives up after its fourth attempt, and the push with it."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     trace = RecordingTrace()
     agent = make_agent(monkeypatch, clock, _OpenedOnce, REALTIME, trace=trace)
@@ -1596,8 +1591,8 @@ def test_an_openai_realtime_streaming_connect_is_retried_by_the_readying_alone(m
     attempts = [(a["kind"], a["outcome"]) for a in trace.of(TraceEvent.MODEL_ATTEMPT_FINISHED)]
     assert attempts == [("session_ready", "retry")] * 3 + [("session_ready", "failed")]
     assert trace.of(TraceEvent.SESSION_WAIT) == []
-    assert _preparations(posted) == [
-        ("SessionPreparing", handshakes[0]),
-        ("SessionPrepared", handshakes[-1]),
-    ]
+    preparations = _preparations(posted)
+    assert [name for name, _ in preparations] == ["SessionPreparing", "SessionPrepared"] * 3
+    assert [at for name, at in preparations if name == "SessionPreparing"] == handshakes[:3]
+    assert [at for name, at in preparations if name == "SessionPrepared"] == handshakes[1:]
     agent.close()

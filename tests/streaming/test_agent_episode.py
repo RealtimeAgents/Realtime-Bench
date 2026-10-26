@@ -153,12 +153,36 @@ def test_a_go_away_during_a_long_reply_leaves_it_to_finish_and_renews_after_it(m
     assert calls.index(("go_away", "streaming-1")) < renewal < calls.index(("reply", 2))
 
 
+def test_a_push_whose_own_reopen_never_ends_before_the_first_reply_invalidates_the_run(
+    monkeypatch,
+):
+    """The session is closed as the episode starts, and the first push's attempt to reopen it
+    never ends. Nothing else bounds that attempt: the push watchdog times a push's own attempts
+    (decision N48, which decision 13 keeps), and with no reply to give up the run is invalid 10 s
+    after the push started at 0.75, behind the first read and capture, instead of running to its
+    deadline with no reply."""
+    clock = FakeClock()
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock)
+        agent.abort(99)
+        agent.driver.connect_s = 100.0
+        termination = run_streaming_episode(
+            agent,
+            _Env(clock),
+            StreamingConfig(duration_s=20.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+        agent.close()
+    assert (termination.invalid.reason, termination.ended_at) == ("frame_push_stuck", 10.75)
+
+
 def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(monkeypatch):
     """The session is closed as the episode starts, and the first push's attempts to reopen it
     fail three times: with their backoff (10.4 s for this view) and the attempts it takes over
     12 s, past the push watchdog, with no reply yet to give up. The session is being prepared
-    from the first attempt to the last (decision 13), so the run goes on instead of ending
-    invalid (review-final-streaming 中-1)."""
+    while the push waits between attempts (decisions N48 and 13), so the run goes on instead of
+    ending invalid (review-final-streaming 中-1)."""
     clock, records = FakeClock(), []
     record = _StreamingShell._record
 
@@ -186,4 +210,4 @@ def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(
     pushed = [e.data for e in records if e.kind == "FramePushed"]
     assert pushed[0].error is None and pushed[0].sent_at > 12.0
     kinds = [e.kind for e in records if e.kind in ("SessionPreparing", "SessionPrepared")]
-    assert kinds[:2] == ["SessionPreparing", "SessionPrepared"]
+    assert kinds[:6] == ["SessionPreparing", "SessionPrepared"] * 3

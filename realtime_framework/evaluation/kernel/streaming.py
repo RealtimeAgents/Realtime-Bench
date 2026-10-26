@@ -149,12 +149,12 @@ class FramePushed:
 @dataclass(frozen=True)
 class SessionPreparing:
     """The agent prepares the session, which takes no frame meanwhile, and no push is stuck in
-    it: a push or a reply opens it again, rebuilds or renews it, through the backoffs between
-    attempts of the shared retry; or a push waits for the renewal a goAway asked for until the
-    reply on the session has ended (harnesses/streaming/agent.py). The watchdog of a push out,
-    and of one pushed meanwhile, waits until SessionPrepared (decision 13). The reply's own
-    watchdog bounds a preparation for a reply, or behind one; the shared retry policy and each
-    attempt's own bounds the rest."""
+    it: a reply opens it again, rebuilds or renews it, attempts and backoffs alike, which the
+    reply's own watchdog bounds; a push waits out a backoff between its own attempts to ready
+    it, which the shared retry policy bounds; or a push waits for the renewal a goAway asked for
+    until the reply on the session has ended (harnesses/streaming/agent.py). The watchdog of a
+    push out, and of one pushed meanwhile, waits until SessionPrepared (decision 13); it times a
+    push's own attempts."""
 
     priority: ClassVar[Priority] = Priority.COMPLETION
 
