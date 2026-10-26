@@ -260,8 +260,6 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         server_context="unknown",
         can_compact_history_in_place=True,
         terminal_output_usage=True,
-        classifies_transport_errors=True,
-        maps_output_cap=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
         # The 1 fps native streaming is designed for, until a smoke test finds the rate the API
         # keeps up with (docs/streaming_smoke_test.md).

@@ -75,7 +75,7 @@ class _Encoder(SessionLifecycle):
     sync. ``renewal`` is what connection_renewal_reason returns. The observation and generation
     methods are stubs: these tests drive the session alone."""
 
-    capabilities = RealtimeCapabilities("replay_session", connection_renewal=True)
+    capabilities = RealtimeCapabilities("replay_session")
 
     def __init__(self, clock: FakeClock):
         self.clock = clock

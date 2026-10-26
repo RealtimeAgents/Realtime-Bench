@@ -412,8 +412,6 @@ _STREAMING_CHAT = RealtimeCapabilities(
     feedback_placements=("separate_message",),
     server_context="none",
     terminal_output_usage=True,
-    classifies_transport_errors=True,
-    maps_output_cap=True,
 )
 
 
@@ -1190,8 +1188,6 @@ class ChatCompletionsDriver(LiteLLMDriver):
         terminal_output_usage=False,
         finite_frame_budget=False,
         wall_clock_only=True,
-        # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
-        request_size_estimation=True,
         # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
         # reasoning_content through unchanged, and vLLM and SGLang hand it to the model's chat
         # template. A model that needs it back names a preset that sends it (K3: kimi_k3).
@@ -1213,6 +1209,7 @@ class ChatCompletionsDriver(LiteLLMDriver):
     )
     compat = ChatCompat(strip_image_detail=True)
 
+    # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
     async def request_context_status(self, request):
         """Count the actual pending request, including the newest image and action ledger."""
         limit = self.config.context_window_tokens

@@ -171,9 +171,9 @@ class SessionLifecycle(SessionEncoder):
 
     The encoder provides the connection operations: ``_connect(request)``,
     ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one, and ``interrupt(generation)``; ``capabilities``, with
-    ``connection_renewal_reason()`` where they declare connection_renewal; ``clock``, the
-    operational clock; and ``_trace``, which bind_trace sets. ``interrupt`` and
+    is one, and ``interrupt(generation)``; ``capabilities``; ``connection_renewal_reason()``
+    where the provider asks for new connections; ``clock``, the operational clock; and
+    ``_trace``, which bind_trace sets. ``interrupt`` and
     ``_close_current`` must each end within a bound, whatever a write in progress on the
     connection does: the close fails a write stuck in it, and the interrupt, which the close
     follows, does not wait for one. That is what ends an abort's cleanup before ensure_ready and
@@ -285,9 +285,7 @@ class SessionLifecycle(SessionEncoder):
         ``history``; a renewal that does not leave the session exact raises. None when no renewal
         is due. The caller readies the session first (ensure_ready): one closed or dirty since,
         which may hold what the history does not, is rebuilt then, and owes no renewal."""
-        reason = (
-            self.connection_renewal_reason() if self.capabilities.connection_renewal else None
-        )
+        reason = self.connection_renewal_reason()
         if not reason:
             return None
         self._preparing()

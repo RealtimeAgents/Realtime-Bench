@@ -148,7 +148,6 @@ class FakeLiveDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="fake_live",
         action_channel="function_call",
-        connection_renewal=True,
         feedback_placements=("separate_message",),
     )
     streaming_settings: ClassVar[dict] = {"retained_frames": 2}

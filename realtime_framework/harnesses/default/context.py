@@ -278,9 +278,12 @@ class RealtimeRuntime:
         while True:
             canonical = request_builder(history.turns + tuple(incoming), history.ledger_block())
             request = replace(request, canonical=canonical)
-            if not (self.policy.pressure_archive and self.capabilities.request_size_estimation):
+            if self.session is not None or not self.policy.pressure_archive:
                 break
-            status = dict(await self.driver.request_context_status(request))
+            estimate = await self.driver.request_context_status(request)
+            if estimate is None:
+                break
+            status = dict(estimate)
             physical_metadata.setdefault("request_context_before", status)
             physical_metadata.update(
                 request_context=status,

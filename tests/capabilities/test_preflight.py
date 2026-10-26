@@ -26,7 +26,7 @@ from realtime_framework.entity.context_policy import (
     DecisionHistory,
     current_context_policy,
 )
-from realtime_framework.entity.model import SessionEncoder
+from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.evaluation.config import effective_run_config, load_benchmark
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
@@ -1237,47 +1237,54 @@ def test_decisions_route_is_pinned():
     )
 
 
-# The declarations the harness and runtime read instead of probing for methods
+# What the harness and runtime ask of a driver besides its abstract methods
 
 
-def test_declared_methods_exist():
-    methods = {
-        "classifies_transport_errors": "classify_transport_error",
-        "connection_renewal": "connection_renewal_reason",
-        "request_size_estimation": "request_context_status",
-        "maps_output_cap": "transport_output_token_cap",
+def test_optional_methods_the_registered_drivers_override():
+    """The optional methods each registered driver overrides (entity/model.py implements):
+    every one classifies its failures, Gemini Live's alone renews its connection, three estimate
+    their requests, and all but Gemini Live's and the Decisions APIs' map the output cap."""
+    names = (
+        "classify_transport_error",
+        "connection_renewal_reason",
+        "request_context_status",
+        "transport_output_token_cap",
+    )
+    overriding = {
+        name: {api for api in catalog.APIS if implements(catalog.adapter_class(api), name)}
+        for name in names
     }
+    assert overriding == {
+        "classify_transport_error": {
+            "litellm",
+            "chat_completions",
+            "openrouter",
+            "anthropic_messages",
+            "moonshot",
+            "openai_realtime",
+            "gemini_live",
+            "jev_decisions",
+            "openai_decisions",
+        },
+        "connection_renewal_reason": {"gemini_live"},
+        "request_context_status": {"chat_completions", "openai_decisions", "jev_decisions"},
+        "transport_output_token_cap": {
+            "litellm",
+            "chat_completions",
+            "openrouter",
+            "anthropic_messages",
+            "moonshot",
+            "openai_realtime",
+        },
+    }
+
+
+def test_the_live_apis_stream():
     for api in catalog.APIS:
-        driver = catalog.adapter_class(api)
-        capabilities = driver.capabilities
-        for flag, method in methods.items():
-            if getattr(capabilities, flag):
-                assert callable(getattr(driver, method, None)), (api, method)
-        assert capabilities.request_size_estimation == callable(
-            getattr(driver, "request_context_status", None)
-        ), api
         live = api in {"openai_realtime", "gemini_live"}
-        assert capabilities.interaction_modes == (
+        assert catalog.adapter_class(api).capabilities.interaction_modes == (
             {"turn_based", "streaming"} if live else {"turn_based"}
         ), api
-
-
-def test_context_status_needs_its_declaration():
-    """The runtime asks request_context_status only of an API that declares
-    request_size_estimation (harnesses/default/context.py _run_turn). A driver that has the
-    method without the flag, as the method alone once sufficed, is refused at load instead of
-    never archiving under context pressure."""
-    driver = catalog.adapter_class("chat_completions")
-    undeclared = type(
-        "Undeclared",
-        (driver,),
-        {"capabilities": replace(driver.capabilities, request_size_estimation=False)},
-    )
-    fails(
-        lambda: catalog._check_driver("ext.chat:Undeclared", undeclared),
-        "'ext.chat:Undeclared' has request_context_status() but does not declare "
-        "request_size_estimation",
-    )
 
 
 def test_a_driver_is_stateless_or_a_session():
@@ -1298,21 +1305,18 @@ def test_a_driver_is_stateless_or_a_session():
 
 def test_a_session_declares_no_request_estimate():
     """The runtime archives the history a stateless request carries when it does not fit; a
-    session holds its own, so a session encoder that declares request_size_estimation, with its
-    method, is refused at load."""
+    session holds its own, so a session encoder with request_context_status is refused at
+    load."""
     driver = catalog.adapter_class("gemini_live")
     session = type(
         "Session",
         (driver,),
-        {
-            "capabilities": replace(driver.capabilities, request_size_estimation=True),
-            "request_context_status": lambda self, request: {"pressure": False},
-        },
+        {"request_context_status": lambda self, request: {"pressure": False}},
     )
     fails(
         lambda: catalog._check_driver("ext.live:Session", session),
-        "'ext.live:Session' declares request_size_estimation on a session encoder, whose "
-        "context the runtime cannot archive",
+        "'ext.live:Session' has request_context_status() on a session encoder, whose context "
+        "the runtime cannot archive",
     )
 
 

@@ -71,8 +71,6 @@ class OpenAIDecisionsClient(DecisionEncoder):
         finite_frame_budget=False,
         wall_clock_only=True,
         accepts_reasoning_effort=False,
-        classifies_transport_errors=True,
-        request_size_estimation=True,
     )
     deployment = DecisionsDeployment(
         family="vlm",

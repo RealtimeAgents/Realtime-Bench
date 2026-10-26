@@ -73,8 +73,6 @@ class ExternalChatDriver(StatelessEncoder):
         # Stated explicitly: the defaults claim complete usage on a finite token clock.
         finite_frame_budget=False,
         wall_clock_only=True,
-        classifies_transport_errors=True,
-        request_size_estimation=True,
     )
     deployment = Deployment(
         family="vlm", provider="replay-external", key_env="REPLAY_EXT_API_KEY", vendor="replay"

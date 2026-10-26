@@ -34,10 +34,6 @@ class NoClock(ExternalChatDriver):
         super().__init__(config)
 
 
-class NoContextStatus(ExternalChatDriver):
-    request_context_status = None
-
-
 class NoCapabilities(ExternalChatDriver):
     capabilities = None
 
@@ -52,18 +48,6 @@ class NoCompat(ExternalChatDriver):
 
 class NoModelDefaults(ExternalChatDriver):
     model_defaults = None
-
-
-class ClassifierFlagOnly(ExternalChatDriver):
-    classify_transport_error = None
-
-
-class RenewalFlagOnly(ExternalChatDriver):
-    capabilities = replace(ExternalChatDriver.capabilities, connection_renewal=True)
-
-
-class OutputCapFlagOnly(ExternalChatDriver):
-    capabilities = replace(ExternalChatDriver.capabilities, maps_output_cap=True)
 
 
 class StreamingNoSwitch(ExternalChatDriver):
@@ -90,16 +74,6 @@ class StreamingNoPush(StreamingNoSettings):
 
 class StreamingNoReply(StreamingNoPush):
     async def push_frame(self, observation, history):
-        raise NotImplementedError
-
-
-class StreamingNoClassifier(StreamingNoReply):
-    """Declares no classifier, which the native-streaming agent calls on every failure."""
-
-    capabilities = replace(StreamingNoReply.capabilities, classifies_transport_errors=False)
-    classify_transport_error = None
-
-    async def request_reply(self, request):
         raise NotImplementedError
 
 

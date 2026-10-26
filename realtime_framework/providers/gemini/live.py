@@ -258,8 +258,6 @@ class GeminiLiveDriver(SessionLifecycle):
         max_video_fps=1.0,
         terminal_output_usage=True,
         action_channel="function_call",
-        classifies_transport_errors=True,
-        connection_renewal=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
     )
     deployment = GeminiDeployment(

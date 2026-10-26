@@ -26,6 +26,7 @@ from realtime_framework.entity.context_policy import (
     DecisionHistory,
     current_context_policy,
 )
+from realtime_framework.entity.model import implements
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.providers.registry import APIS, adapter_class
 
@@ -127,7 +128,7 @@ def test_replay_and_pressure_sets():
     # requests (harnesses/default/context.py _run_turn). That is where version 4 had it on, plus
     # JEV, which estimates its digest instead of dropping history for one rejected option.
     assert all(path.pressure_archive for path in paths.values())
-    assert {api for api in APIS if capabilities(api).request_size_estimation} == {
+    assert {api for api in APIS if implements(adapter_class(api), "request_context_status")} == {
         "chat_completions",
         "openai_decisions",
         "jev_decisions",

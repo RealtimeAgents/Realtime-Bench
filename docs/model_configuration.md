@@ -98,8 +98,8 @@ refused before the run, and the run records the preset with its configuration.
 
 The run records each context-policy value as the policy sets it, and two of them say what the
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs
-only where the driver estimates its requests (`request_size_estimation`) and the model has a
-context window (`context_window_tokens`, from the driver's model defaults or
+only where the driver estimates its requests (it overrides `request_context_status`) and the
+model has a context window (`context_window_tokens`, from the driver's model defaults or
 `BENCHMARK_CONTEXT_WINDOW_TOKENS`). There, a request over the window minus its reserve archives
 the oldest turns, a block at a time. On `chat_completions` the reserve
 (`BENCHMARK_CONTEXT_RESERVE_TOKENS`, 4096 by default) must be at least the endpoint's
@@ -188,9 +188,9 @@ A model that needs a new wire protocol gets a driver:
    what became of each content you write (sent, confirmed or refused by the server, or unknown
    after a failed write) with `_record_delivery`. Build HTTP clients with the hooks in
    `realtime_framework/providers/capture.py`, so every request and response is recorded.
-2. Declare `capabilities` (`RealtimeCapabilities`): interruption, usage
+2. Declare `capabilities` (`RealtimeCapabilities`): usage
    timing, `action_channel` (`"text_json"` or `"function_call"`), the clocks the API supports,
-   which optional methods it implements, and what it can render of the context policy: `roles`,
+   and what it can render of the context policy: `roles`,
    `feedback_placements`, `reasoning_replay`, `server_context` and, for function-call sessions,
    `tool_call_replay`. `server_context` is `"unknown"` when the provider keeps items of the
    session the client never sees (reasoning, thoughts, audio), `"none"` when it keeps nothing
@@ -209,8 +209,8 @@ A model that needs a new wire protocol gets a driver:
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
    [streaming settings](#streaming-settings) (a dict), takes `streaming`: the
    native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`, and has
-   `push_frame`, `request_reply` and `classify_transport_error`, which the agent pushes frames,
-   asks for replies and classifies their failures with. A
+   `push_frame` and `request_reply`, which the agent pushes frames and asks for replies with;
+   it classifies their failures with `classify_transport_error`. A
    driver whose `action_channel` is `"choice"` has `decide` and `classify_question_error`, which
    the selection flow (`realtime_framework/providers/decisions/`) asks each question and
    classifies its failures with. An external driver without any of these is refused when its
@@ -219,8 +219,8 @@ A model that needs a new wire protocol gets a driver:
    `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
    provider-measured usage.
-4. Implement `classify_transport_error(exc) -> TransportFailure` and declare
-   `classifies_transport_errors=True`. Do not write a retry loop in the driver or turn on SDK
+4. Override `classify_transport_error(exc) -> TransportFailure`; the default takes every
+   failure as fatal. Do not write a retry loop in the driver or turn on SDK
    retries: the shared executor (`RequestRetry`, `realtime_framework/entity/model.py`) retries
    transient failures of each turn itself, stops once the runner abandons the decision, and
    records every attempt.
@@ -243,25 +243,25 @@ driver as a [model API](#add-a-model-api).
    driver reports complete usage on a finite token clock, runs on any clock and accepts every
    reasoning effort. Declare `roles` (the request roles you map, e.g.
    `("instruction", "input", "model")`), `feedback_placements=("separate_message",)` and
-   `server_context="none"` for a stateless API. Each optional-method flag you set
-   (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
-   `maps_output_cap`) needs its method. A class that subclasses neither `StatelessEncoder` nor
+   `server_context="none"` for a stateless API. The optional methods
+   `classify_transport_error`, `transport_output_token_cap`, `request_context_status` (stateless)
+   and `connection_renewal_reason` (session) each have a default; overriding one takes it up.
+   A class that subclasses neither `StatelessEncoder` nor
    `SessionEncoder`, or both, or leaves out an abstract method of the one it subclasses, is
    refused when its YAML is loaded; a session API subclasses `SessionLifecycle`, which is a
    `SessionEncoder`, as in step 1. The driver runs under the
    `chat_completions` context policy, with the model's [context preset](#context-preset) if it
    names one. Its prompts ask for one JSON action in the visible text, so a driver whose
-   `action_channel` is not `"text_json"` is refused before the run. With
-   `request_size_estimation`, the runtime asks `request_context_status(request)`
+   `action_channel` is not `"text_json"` is refused before the run. Where the driver overrides
+   `request_context_status(request)`, the runtime asks it
    before each request and archives the oldest turns while the request exceeds the context
    window. With no turn left, the earliest archived actions give way to a note in the ledger,
    and stay out for the rest of the episode, as archived turns do; a request that still does
    not fit is not sent, and the run is invalid (`context_exceeded_before_request`).
    Without a declared window the method returns
-   `{"pressure": False, "counter": "unconfigured"}`. The flag, not the method, decides this: a
-   driver that implements `request_context_status` without declaring `request_size_estimation`
-   is refused when its YAML is loaded, and so is a `SessionEncoder` that declares it: the
-   runtime archives the history a stateless request carries, not a session's.
+   `{"pressure": False, "counter": "unconfigured"}`. A `SessionEncoder` that has
+   `request_context_status` is refused when its YAML is loaded: the runtime archives the history
+   a stateless request carries, not a session's.
 2. Install the package into the environment that runs the benchmark, for example
    `uv pip install -e /path/to/your-driver`. `PYTHONPATH` is not enough: each Harbor trial runs
    with `PYTHONPATH` set to this repository.

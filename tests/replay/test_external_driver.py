@@ -440,14 +440,6 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
                 "got an unexpected keyword argument 'clock'"
             ),
         ),
-        # The template declares request_size_estimation: the runtime estimates every request.
-        (
-            "rtb_ext.broken:NoContextStatus",
-            (
-                "'rtb_ext.broken:NoContextStatus' declares request_size_estimation but has no "
-                "request_context_status()"
-            ),
-        ),
         (
             "rtb_ext.broken:NoCapabilities",
             (
@@ -466,27 +458,6 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
         (
             "rtb_ext.broken:NoModelDefaults",
             "'rtb_ext.broken:NoModelDefaults' declares no model_defaults (a dict class attribute)",
-        ),
-        (
-            "rtb_ext.broken:ClassifierFlagOnly",
-            (
-                "'rtb_ext.broken:ClassifierFlagOnly' declares classifies_transport_errors but has "
-                "no classify_transport_error()"
-            ),
-        ),
-        (
-            "rtb_ext.broken:RenewalFlagOnly",
-            (
-                "'rtb_ext.broken:RenewalFlagOnly' declares connection_renewal but has no "
-                "connection_renewal_reason()"
-            ),
-        ),
-        (
-            "rtb_ext.broken:OutputCapFlagOnly",
-            (
-                "'rtb_ext.broken:OutputCapFlagOnly' declares maps_output_cap but has no "
-                "transport_output_token_cap()"
-            ),
         ),
         # The native-streaming agent builds the driver with streaming=True.
         (
@@ -513,7 +484,7 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
                 "must be a positive integer"
             ),
         ),
-        # The native-streaming agent pushes frames, asks for replies and classifies their failures
+        # The native-streaming agent pushes frames and asks for replies
         # (harnesses/streaming/agent.py).
         (
             "rtb_ext.broken:StreamingNoPush",
@@ -522,13 +493,6 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
         (
             "rtb_ext.broken:StreamingNoReply",
             "'rtb_ext.broken:StreamingNoReply' declares streaming but has no request_reply()",
-        ),
-        (
-            "rtb_ext.broken:StreamingNoClassifier",
-            (
-                "'rtb_ext.broken:StreamingNoClassifier' declares streaming but has no "
-                "classify_transport_error()"
-            ),
         ),
         # The selection flow asks a choice API's questions and classifies their failures
         # (providers/decisions/selection.py).
@@ -548,11 +512,9 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
         ),
     ],
     ids=["no-module", "no-attribute", "function", "not-an-encoder", "unfinished", "no-clock",
-         "no-context-status", "no-capabilities", "no-deployment", "no-compat", "no-model-defaults",
-         "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-switch",
-         "streaming-no-settings", "streaming-bad-settings", "streaming-no-push",
-         "streaming-no-reply", "streaming-no-classifier", "choice-no-decide",
-         "choice-no-classifier"],
+         "no-capabilities", "no-deployment", "no-compat", "no-model-defaults",
+         "streaming-no-switch", "streaming-no-settings", "streaming-bad-settings",
+         "streaming-no-push", "streaming-no-reply", "choice-no-decide", "choice-no-classifier"],
 )
 def test_external_driver_rejected(external, api, message):
     write_model(external.models, api, key="ext-bad")

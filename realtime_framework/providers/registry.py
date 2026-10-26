@@ -418,20 +418,10 @@ _DRIVER_DECLARATIONS = (
     ("compat", Compat),
     ("model_defaults", dict),
 )
-# Capability flags and the methods they commit a driver to. The runtime calls
-# request_context_status before each request of an API that declares request_size_estimation,
-# and of no other: a driver with the method but not the flag would never be estimated.
-_DECLARED_METHODS = {
-    "classifies_transport_errors": ("classify_transport_error",),
-    "connection_renewal": ("connection_renewal_reason",),
-    "request_size_estimation": ("request_context_status",),
-    "maps_output_cap": ("transport_output_token_cap",),
-}
-# What the native-streaming agent pushes frames, asks for replies and classifies their failures
-# with, whatever classifies_transport_errors says (harnesses/streaming/agent.py), and what the
-# selection flow asks a choice API's questions and classifies their failures with
-# (providers/decisions/selection.py).
-_STREAMING_METHODS = ("push_frame", "request_reply", "classify_transport_error")
+# What the native-streaming agent pushes frames and asks for replies with
+# (harnesses/streaming/agent.py), and what the selection flow asks a choice API's questions and
+# classifies their failures with (providers/decisions/selection.py).
+_STREAMING_METHODS = ("push_frame", "request_reply")
 _CHOICE_METHODS = ("decide", "classify_question_error")
 
 
@@ -497,10 +487,6 @@ def _check_driver(target: str, driver: type) -> None:
         if not isinstance(getattr(driver, name, None), kind):
             declaration = f"a {kind.__name__} class attribute"
             raise ValueError(f"{target!r} declares no {name} ({declaration})")  # noqa: TRY004
-    for flag, methods in _DECLARED_METHODS.items():
-        for method in methods:
-            if getattr(driver.capabilities, flag) and not callable(getattr(driver, method, None)):
-                raise ValueError(f"{target!r} declares {flag} but has no {method}()")
     if "streaming" in driver.capabilities.interaction_modes:
         # The native-streaming agent builds it so (harnesses/streaming/agent.py).
         try:
@@ -527,15 +513,10 @@ def _check_driver(target: str, driver: type) -> None:
                 raise ValueError(  # noqa: TRY004
                     f"{target!r} declares the choice action channel but has no {method}()"
                 )
-    estimates = driver.capabilities.request_size_estimation
-    if callable(getattr(driver, "request_context_status", None)) and not estimates:
+    if session and hasattr(driver, "request_context_status"):
         raise ValueError(
-            f"{target!r} has request_context_status() but does not declare request_size_estimation"
-        )
-    if estimates and session:
-        raise ValueError(
-            f"{target!r} declares request_size_estimation on a session encoder, whose "
-            "context the runtime cannot archive"
+            f"{target!r} has request_context_status() on a session encoder, whose context the "
+            "runtime cannot archive"
         )
 
 
