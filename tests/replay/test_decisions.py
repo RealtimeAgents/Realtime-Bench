@@ -33,6 +33,7 @@ from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
 from realtime_framework.providers.decisions.questions import GROUP_NOTE
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
+from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
 from . import baseline, baseline_decisions
 from . import scenario_decisions as script
@@ -214,6 +215,17 @@ def _check_luna_history(records: list[dict]) -> None:
     assert not lines[ARCHIVED].startswith("{")  # the retained transcript follows the ledger
 
 
+def _check_luna_frames(records: list[dict]) -> None:
+    """Each observation in a transcript is the frame of its own decision, folded or not, and
+    says nothing that stops being true once newer frames follow (context policy, since 6)."""
+    for record in records:
+        for body in _bodies(record):
+            text = "".join(entry for entry in body["state"] if isinstance(entry, str))
+            assert text.count("Observation: ") == text.count(
+                "Observation: Screen observed for this decision." + FRAME_INTERACTABLES_HEADER
+            ) + text.count("Observation: " + FOLDED_VISUAL_PLACEHOLDER)
+
+
 def _check_jev_history(records: list[dict]) -> None:
     """JEV's digest reads only each older turn's observation id, action and feedback
     (default/request.py _digest_items; decisions/history.py render_digest), and a fold keeps the
@@ -248,6 +260,7 @@ def test_long_scenario(api, tmp_path):
     _check_history_counters(records)
     if api == "openai_decisions":
         _check_luna_history(records)
+        _check_luna_frames(records)
     else:
         _check_jev_history(records)
     _settle("long", header, records, tmp_path)
@@ -265,6 +278,7 @@ def test_luna_game_snapshot(tmp_path):
         scene=script.GAME_SCENE,
     )
     _check_requests("openai_decisions", records)
+    _check_luna_frames(records)
     assert [len(r["requests"]) for r in records] == [5, 5, 4, 5, 1, 4, 1, 1, 1, 1]
     assert all(
         _bodies(r)[0]["questions"]["next_action"]["instructions"] == GAME_INSTRUCTIONS

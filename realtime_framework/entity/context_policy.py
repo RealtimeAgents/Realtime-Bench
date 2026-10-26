@@ -58,8 +58,9 @@ from realtime_framework.entity.records import _jsonable
 # it once for all of them (decision 28). They include: a request still over the window with
 # every turn archived leaves out the earliest archived actions, a note in their place, and JEV's
 # ledger header then says every listed action is kept; Gemini Live and Luna frames name their own
-# screen, as the text-JSON frames do; the clock note names the environment ticks when the two
-# frame rates differ; the notes on a done run as a wait and on a decision with no accepted answer;
+# screen, as the text-JSON frames do, Luna's in its frame text as well; the clock note names the
+# environment ticks when the two frame rates differ; the notes on a done run as a wait and on a
+# decision with no accepted answer;
 # OpenAI Realtime and Gemini Live send each action's execution feedback as its own item, not in
 # front of the next frame; the streaming harness's feedback says that a superseded action was
 # replaced while it waited, why a cancelled call did not run, and that a reply's protocol failure

@@ -790,7 +790,8 @@ MULTIMODAL_CHOICE_PROFILE = InteractionProfile(
         "other input through successive choices of words, characters or Unicode code points, "
         "then finishes to type it. Spaces and casing are explicit."
     ),
-    frame_prompt=JEV_PROFILE.frame_prompt,
+    # Luna's transcript keeps the older frames, which JEV's digest leaves out.
+    frame_prompt="Screen observed for this decision.",
 )
 
 MULTIMODAL_GAME_CHOICE_PROFILE = InteractionProfile(
