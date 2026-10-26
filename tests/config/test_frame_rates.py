@@ -173,7 +173,11 @@ def _main_in_process(monkeypatch, tmp_path, argv, run_stream) -> list:
     monkeypatch.setattr(runner, "episode_clocks", clocks)
     monkeypatch.setattr(runner, "GuestClient", probe._Guest)
     monkeypatch.setattr(runner, "BrowserSceneCapture", probe._Scene)
-    monkeypatch.setattr(runner, "create_agent", lambda config, **kwargs: probe._Agent(config))
+    monkeypatch.setattr(
+        runner,
+        "create_agent",
+        lambda config, **kwargs: probe._Agent(config, kwargs["interaction_mode"]),
+    )
     registered = tasks.get
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
     monkeypatch.setattr(runner, "run_stream", run_stream)
