@@ -6,7 +6,7 @@ import base64
 import json
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import FIXED_TEXTS, current_context_policy
 from realtime_framework.entity.model import (
     ARCHIVED_ACTION_LEDGER_HEADER,
     FOLDED_VISUAL_PLACEHOLDER,
@@ -143,14 +143,14 @@ def test_action_digest():
     assert canonical.history_form == "action_digest"
     assert all(item.block.image is None for item in canonical.items)
     history = [{"observation_id": "o1", "action": "A1", "execution_feedback": "F1"}]
-    assert tuple(render_digest(canonical, compact_ledger=False)) == (
+    assert tuple(render_digest(canonical)) == (
         {"role": "system", "content": "SYSTEM"},
-        {"role": "user", "content": ARCHIVED_ACTION_LEDGER_HEADER + '\n{"decision":1}'},
+        {"role": "user", "content": FIXED_TEXTS.jev_ledger_header + '\n{"decision":1}'},
         {"role": "user", "content": "Recent action and feedback history: " + json.dumps(history)},
         {"role": "user", "content": 'Current observation: {"observation_id": "o3"}'},
     )
-    # A stale first decision leaves no turn: the audit summary still renders the system text.
-    assert tuple(render_digest(request("jev_decisions", []), compact_ledger=False)) == (
+    # A stale first decision leaves no turn: the digest still holds the system text.
+    assert tuple(render_digest(request("jev_decisions", []))) == (
         {"role": "system", "content": "SYSTEM"},
     )
 
@@ -163,9 +163,7 @@ def test_action_digest_keeps_what_a_frame_opened_with():
         k: "Choose." + FRAME_INTERACTABLES_HEADER + json.dumps({"observation_id": f"o{k}"})
         for k in (2, 3)
     }
-    (_, current) = render_digest(
-        request("jev_decisions", [turn(2, frames[2], unattached="N1")]), compact_ledger=False
-    )
+    (_, current) = render_digest(request("jev_decisions", [turn(2, frames[2], unattached="N1")]))
     assert current == {
         "role": "user",
         "content": 'N1\nCurrent observation: {"observation_id": "o2"}',
@@ -176,7 +174,7 @@ def test_action_digest_keeps_what_a_frame_opened_with():
         {"observation_id": "o2", "execution_feedback": "N1"},
         {"observation_id": "o2", "action": "A2", "execution_feedback": "F2"},
     ]
-    assert tuple(render_digest(canonical, compact_ledger=False))[1:] == (
+    assert tuple(render_digest(canonical))[1:] == (
         {"role": "user", "content": "Recent action and feedback history: " + json.dumps(history)},
         {"role": "user", "content": 'Current observation: {"observation_id": "o3"}'},
     )
