@@ -58,7 +58,6 @@ from typing import Any, Protocol
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.config import DecisionBudget
-from realtime_framework.entity.harness import DecisionSetupError
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
@@ -187,8 +186,7 @@ class KernelAgent(Protocol):
         self, generation: int, decision: int, observation: Observation, budget: DecisionBudget
     ) -> PendingDecision:
         """StartGeneration: one generation on ``observation``. It writes no history: the result is
-        held until the kernel accepts or discards it. StreamingAgent's default runs the legacy
-        turn, which writes it at once (entity/harness.py)."""
+        held until the kernel accepts or discards it."""
 
     def accept(self, generation: int) -> None:
         """AcceptResult: write the held result into the history, the action record and the
@@ -200,10 +198,10 @@ class KernelAgent(Protocol):
     def commit(self, outcome: Outcome) -> None:
         """Commit: report the outcome of decision ``outcome.decision`` as its feedback."""
 
-    def abort(self, generation: int | None = None) -> None:
-        """AbortGeneration: interrupt the generation; None interrupts whichever is active. The
-        shell aborts every generation the kernel gives up on, one whose worker has returned too,
-        before it discards that one's result."""
+    def abort(self, generation: int) -> None:
+        """AbortGeneration: interrupt the generation. The shell aborts every generation the
+        kernel gives up on, one whose worker has returned too, before it discards that one's
+        result."""
 
 
 # ---- the shell --------------------------------------------------------------------------------
@@ -268,7 +266,6 @@ class _Generation:
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
-    escaped: str | None = None  # the traceback of a failure that escaped the legacy loop
     echo: Entry | None = None  # the kernel's record of the result, which those are written under
     given_up: bool = False  # the kernel gave it up, and its records are written (_given_up)
 
@@ -374,7 +371,6 @@ class _Shell:
         if self.token:
             # Under the kernel's own horizon, a safety net for every advance.
             env.set_episode_horizon(self.config.max_ticks)
-        self.agent._clock_mode = self.config.clock_mode
         env.on_invalid = lambda record: self.post(_invalidated(record))
         env._drain_abandoned = self._drain_abandoned
         # A replay aid, opened and closed apart from the episode, which goes on without it.
@@ -771,11 +767,6 @@ class _Shell:
                 held.generation, held.decision, held.observation, held.budget
             )
             held.result = pending.result
-        except DecisionSetupError as error:
-            # Settled as an exception that escaped the legacy loop (_settle_returned).
-            held.escaped = "".join(traceback.format_exception(error.__cause__))
-            latency = round(self.clocks.operational.time() - held.started_at, 2)
-            held.result = episode_records.generation_error(latency, held.escaped)
         # Also a cancellation that escaped the agent's retries (entity/model.py RetryCancelled).
         except BaseException:  # noqa: BLE001 - a failed generation invalidates the run
             failure = traceback.format_exc()
@@ -801,14 +792,9 @@ class _Shell:
         _bounded_call). The late result of a generation the kernel gave up on goes back as it
         came, to be discarded: the runner never handled one either. One back before a bound the
         kernel then handled first, busy as the shell was, is settled all the same: the kernel
-        discards it, and its records are its own. A failure to bind the budget, which the legacy
-        loop did on its own thread (DecisionSetupError), invalidates the run as one that escaped
-        that loop, before the kernel gets the result."""
+        discards it, and its records are its own."""
         for _ in range(count):
             held = self._returned.popleft()
-            if held.escaped is not None:
-                self._raised(held.escaped)
-                held.escaped = None
             if self.kernel.generation != held.generation:
                 self.post(GenerationFinished(held.generation, GenerationResult()))
                 continue
@@ -848,8 +834,8 @@ class _Shell:
         )
         # The clock's count is the result's own: an agent that holds its result adds its usage
         # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
-        # A legacy turn's result that names none has none, though its usage grew as it generated:
-        # the agents create_agent makes name theirs (harnesses/registry.py).
+        # A result that names none has none: the agents create_agent makes name theirs
+        # (harnesses/registry.py).
         episode_records.account_tokens(r, held.remaining, self.env)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:

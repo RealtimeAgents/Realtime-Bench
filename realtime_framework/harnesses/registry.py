@@ -27,9 +27,9 @@ def create_agent(
 
 
 def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category, env_fps=None):
-    """Apply the run's clock note, task category, scenario prompt and clock mode before
-    initialize(). ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``;
-    ``env_fps`` is the environment's (``fps`` when omitted)."""
+    """Apply the run's clock note, task category and scenario prompt before initialize().
+    ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``; ``env_fps`` is the
+    environment's (``fps`` when omitted)."""
     from realtime_framework.harnesses.default.prompts import budget_clock_prompt
     from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 
@@ -45,6 +45,3 @@ def configure_agent(agent, *, fps, tokens_per_frame, clock_mode, category, env_f
     )
     # The context policy's prompts (item 11) are keyed by it.
     agent.task_category = category
-    # Copied into every GenerationRequest.clock_mode; no driver reads it any more (the wall-clock
-    # rules are pre-run checks, providers/preflight.py).
-    agent._clock_mode = clock_mode

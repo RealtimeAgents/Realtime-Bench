@@ -34,11 +34,9 @@ class FrameRecord:
     captured_at: float
     geometry: dict  # FrameGeometry of the image the model is sent
     marks: dict | None  # the SoM mark map; None when the frame had no inspection
-    # "prepared" until its request or session push went out, then "sent".
+    # Streaming: "prepared" until its session push went out, then "sent".
     send_status: str = "prepared"
-    # When it was sent: a pushed frame when its push receipt says it was written (decision
-    # N43); a turn's frame once its generation came back, retries and all (harness.py). Only
-    # streaming's age() reads it.
+    # When it was sent: when its push receipt says it was written (decision N43).
     sent_unix_s: float | None = None
     # Streaming: whether the provider confirmed it holds the pushed frame. "acked", when the
     # confirmation arrived (OpenAI Realtime's conversation.item.created or .done); "unknown"
@@ -80,10 +78,6 @@ class FrameTable:
     def record_ack_unknown(self, frame: int) -> None:
         with self._lock:
             self._frames[frame].ack_status = "unknown"
-
-    def latest(self) -> FrameRecord | None:
-        with self._lock:
-            return self._frames.get(len(self._frames))
 
     def locate(self, reference: object) -> tuple[FrameRecord | None, str | None]:
         """The sent frame an action's frame field names, or None and why it cannot be found."""

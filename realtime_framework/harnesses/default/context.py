@@ -56,27 +56,6 @@ def native_output_limit(native_limit: int | None, provider_limit: int | None = N
     return min(limits) if limits else None
 
 
-class CatchupBuffer:
-    """Thread-safe single-observation slot: prefill replaces it and generate consumes it."""
-
-    def __init__(self):
-        self._pending = None
-        self._lock = threading.Lock()
-        self._last = None
-
-    def enqueue(self, observation):
-        with self._lock:
-            self._pending = observation
-            self._last = observation
-
-    def drain(self) -> list:
-        """Return the pending observation, falling back to the latest known frame."""
-        with self._lock:
-            observation, self._pending = self._pending, None
-            observation = observation if observation is not None else self._last
-            return [] if observation is None else [observation]
-
-
 def action_result_note(status: str, detail: str = "") -> str:
     """Return model feedback when a proposed action was not applied."""
     note = ACTION_RESULT_NOTES.get(status, "")
@@ -194,7 +173,6 @@ class RealtimeRuntime:
         # sees does not change back.
         self._omitted_action_count = 0
         self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
-        self._buffer = CatchupBuffer()
 
     @property
     def state(self) -> RuntimeState:
@@ -212,20 +190,9 @@ class RealtimeRuntime:
     def archived_action_count(self) -> int:
         return self._archived_action_count
 
-    def start(self, seed: SessionSeed, initial_observation=None, *, timeout: float = 60.0) -> None:
+    def start(self, seed: SessionSeed, *, timeout: float = 60.0) -> None:
         self._seed = seed
-        if initial_observation is not None:
-            self._buffer.enqueue(initial_observation)
         self.execution.run(self.session.connect(ConnectRequest(seed=seed)), timeout=timeout)
-
-    def enqueue(self, observation) -> None:
-        self._buffer.enqueue(observation)
-
-    def discard_pending_observations(self) -> None:
-        self._buffer = CatchupBuffer()
-
-    def drain_observations(self) -> list:
-        return self._buffer.drain()
 
     def _abandoned(self, cancel: threading.Event) -> bool:
         """Whether the generation of this cancel event was aborted, or the runtime closed."""
@@ -239,10 +206,9 @@ class RealtimeRuntime:
         if self._abandoned(cancel):
             raise RetryCancelled(f"generation abandoned before {before}")
 
-    def record_execution_feedback(self, feedback: str, decision: int | None = None) -> None:
-        """Attach an action's execution feedback to the turn of its decision; with no decision,
-        to the newest turn, as the legacy loop reports."""
-        turns = [turn for turn in self._turns if decision is None or turn.decision == decision]
+    def record_execution_feedback(self, feedback: str, decision: int) -> None:
+        """Attach an action's execution feedback to the turn of its decision."""
+        turns = [turn for turn in self._turns if turn.decision == decision]
         if turns:
             turns[-1].execution_feedback = feedback
             turns[-1].feedback_wall_ns = self.clock.time_ns()
