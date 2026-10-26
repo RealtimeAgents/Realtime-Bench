@@ -29,6 +29,10 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   their YAMLs: their entries' reasoning_efforts changed, and no run hash.
 - The moonshot API names the output limit as sent on the wire, max_tokens: kimi-k3's
   provider_output_limit.parameter and run hashes changed.
+- Every preset declares its output limit on its endpoint, with the value LiteLLM's map gave it, and
+  only the generic litellm API still looks one up: the native_output_limit_source of the eleven
+  presets that took it from the map, their run hashes, and litellm_output_limit of every preset
+  changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

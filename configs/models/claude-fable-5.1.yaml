@@ -3,4 +3,5 @@ endpoint:
   model: anthropic/claude-fable-5.1
   api_key_env: OPENROUTER_API_KEY
   upstream_provider: anthropic
+  native_output_limit: 128000
 reasoning_effort: low

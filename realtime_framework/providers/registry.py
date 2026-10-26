@@ -44,10 +44,11 @@ def load_project_secrets(path: Path = DEFAULT_SECRETS_FILE) -> bool:
 
 Per-model settings no external source supplies (routes, measured context accounting) are
 declared by each API's driver class as ``model_defaults``; a model's wire options are its YAML's
-provider_options. As in Harbor's LiteLLM agents, nothing restates what LiteLLM's bundled model
-map knows: the native output limit comes from that map (see litellm_output_limit), and
-reasoning_effort is the connection YAML's value, passed through for the driver or provider to
-accept or reject. Pricing is not inferred here; unreported cost remains unknown.
+provider_options. The native output limit is the connection YAML's; only the generic litellm API,
+whose model ids are LiteLLM's own, takes an undeclared one from LiteLLM's bundled model map (see
+litellm_output_limit). reasoning_effort is the connection YAML's value, passed through for the
+driver or provider to accept or reject. Pricing is not inferred here; unreported cost remains
+unknown.
 """
 
 CATALOG_POLICY = {
@@ -159,7 +160,8 @@ def litellm_output_limit(api: str, model: str) -> int | None:
 
 
 def resolve_output_limit(definition: dict, declared: int | None = None) -> None:
-    """Set the native output limit: the endpoint's declaration, else LiteLLM's map."""
+    """Set the native output limit: the endpoint's declaration, else LiteLLM's map for an API
+    whose deployment names a LiteLLM provider (the generic litellm API)."""
     if declared is not None:
         definition["native_output_limit"] = declared
         definition["native_output_limit_source"] = "endpoint"

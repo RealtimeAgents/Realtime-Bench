@@ -265,7 +265,6 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         provider="openai",
         key_env="OPENAI_API_KEY",
         vendor="openai",
-        litellm_provider="openai",
     )
     compat = Compat()
     model_defaults: ClassVar[dict[str, dict]] = {}

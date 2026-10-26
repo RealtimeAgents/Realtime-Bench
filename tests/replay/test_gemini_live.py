@@ -61,8 +61,8 @@ API_KEY = "replay-dummy-key"
 # GeminiLiveDriver.capabilities, providers/preflight.py check_fps): B is --tokens-per-frame
 # (entity/config.py DEFAULT_TOKENS_PER_FRAME, evaluation/runner.py main) and the episode has
 # --max-minutes 5 * 60 * fps ticks (runner.py main, kernel/turns.py TurnConfig.max_ticks). The
-# catalog's native limit for these models is LiteLLM's 65536 (providers/registry.py
-# litellm_output_limit, resolve_output_limit), so the runtime cap min(65536, (N - t_k) * B)
+# catalog's native limit for these models is 65536, as their endpoints declare (configs/models/),
+# so the runtime cap min(65536, (N - t_k) * B)
 # (kernel/turns.py _captured, episode_records.py decision_budget) falls below it from t_k = 45 on
 # and is 61696 at the last decision.
 FPS = 1.0

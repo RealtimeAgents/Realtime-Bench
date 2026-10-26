@@ -3,5 +3,6 @@ endpoint:
   model: kimi-k3
   api_key_env: MOONSHOT_API_KEY
   base_url: https://api.moonshot.ai/v1
+  native_output_limit: 1048576
 reasoning_effort: low
 context_preset: kimi_k3

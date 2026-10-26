@@ -2,6 +2,7 @@ endpoint:
   api: gemini_live
   model: gemini-3.8-live-extended-thinking
   api_key_env: GEMINI_API_KEY
+  native_output_limit: 65536
 reasoning_effort: low
 reasoning_efforts: [low, medium, high]
 # Extended Thinking declares its functions asynchronous, has no function scheduling, and stays

@@ -1128,7 +1128,6 @@ class OpenRouterDriver(LiteLLMDriver):
         family="vlm",
         provider="openrouter",
         key_env="OPENROUTER_API_KEY",
-        litellm_provider="openrouter",
         gateway="openrouter",
         default_base_url=DEFAULT_OPENROUTER_BASE_URL,
         base_url_env="OPENROUTER_BASE_URL",
@@ -1153,7 +1152,6 @@ class MoonshotDriver(LiteLLMDriver):
         provider="moonshot",
         key_env="MOONSHOT_API_KEY",
         vendor="moonshot",
-        litellm_provider="moonshot",
         gateway="kimi_compatible",
         default_base_url=DEFAULT_MOONSHOT_BASE_URL,
         base_url_env="MOONSHOT_BASE_URL",
@@ -1180,7 +1178,6 @@ class AnthropicMessagesDriver(LiteLLMDriver):
         provider="anthropic",
         key_env="ANTHROPIC_API_KEY",
         vendor="anthropic",
-        litellm_provider="anthropic",
         gateway="anthropic",
         default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
     )

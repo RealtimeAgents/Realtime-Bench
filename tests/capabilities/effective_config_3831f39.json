@@ -77,7 +77,7 @@
    "key_env": "OPENROUTER_API_KEY",
    "model_name": "anthropic/claude-fable-5.1",
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openrouter",
    "reasoning_efforts": [
@@ -92,7 +92,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 128000,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -109,7 +109,7 @@
    "model_name": "anthropic/claude-fable-5.1",
    "model_revision": null,
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -205,7 +205,7 @@
       "model_name": "anthropic/claude-fable-5.1",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -213,7 +213,7 @@
       "upstream_provider": "anthropic"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -241,7 +241,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "50ef54d61717928e78b1f84d87b5250e6bc2a5849458e114f825f5ab0946509c"
+    "hash": "c6b0eb49c8257e279a0df7a2c9cd119d02477d4a3b43cd5f5484eba5e5bb8335"
    },
    "token/None": {
     "config": {
@@ -331,7 +331,7 @@
       "model_name": "anthropic/claude-fable-5.1",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -339,7 +339,7 @@
       "upstream_provider": "anthropic"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -367,7 +367,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "45727b8513a86d308a2caa63879d2ffde931866a4480d41ad9b4bf1fc454943c"
+    "hash": "41e7686ce03e395f289ad721f0b566ae8d6024337e33aca9ca9df876cd0c8644"
    },
    "wall/None": {
     "config": {
@@ -457,7 +457,7 @@
       "model_name": "anthropic/claude-fable-5.1",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -465,7 +465,7 @@
       "upstream_provider": "anthropic"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -493,7 +493,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9d0bfafc209e57e1ac5ff40b9cffbc6916faa6510cfa631b5f4b554ae2aeb4d3"
+    "hash": "fbe50259db0a69bc5bec3e4e77b4d8a36b2a8885d29cba9e2cde28e8ab674c97"
    }
   },
   "vendor": "anthropic"
@@ -528,7 +528,7 @@
    "key_env": "OPENROUTER_API_KEY",
    "model_name": "anthropic/claude-opus-5",
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openrouter",
    "reasoning_efforts": [
@@ -543,7 +543,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 128000,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -560,7 +560,7 @@
    "model_name": "anthropic/claude-opus-5",
    "model_revision": null,
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -656,7 +656,7 @@
       "model_name": "anthropic/claude-opus-5",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -664,7 +664,7 @@
       "upstream_provider": "anthropic"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -692,7 +692,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "623da4ed73845c174c3c5f76b8e1c3884a118e89f54e46d4be8ec25c8a24b91a"
+    "hash": "288ada37aab726a56e1a4da02fcec5ca0c2491a06f5b80f601a6379357cd2c04"
    },
    "token/None": {
     "config": {
@@ -782,7 +782,7 @@
       "model_name": "anthropic/claude-opus-5",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -790,7 +790,7 @@
       "upstream_provider": "anthropic"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -818,7 +818,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5b06190591350cc183b906f5ff15bbdaaf3dfb74c117054f6b60a8021c24430b"
+    "hash": "473d1762cd7ba611e4d71d09cf512137d76d887dd136baedd6b00b67a9ad4bcb"
    },
    "wall/None": {
     "config": {
@@ -908,7 +908,7 @@
       "model_name": "anthropic/claude-opus-5",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -916,7 +916,7 @@
       "upstream_provider": "anthropic"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -944,7 +944,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "bfd3ef295d97a4efbcf7e5676a55c2a353fb2be452cd642d7347f0e4859b112b"
+    "hash": "d3462ccd8bf88a67b70de0a1588f2a22ea86ced3bd88758f2a8f1dfd09fd5a00"
    }
   },
   "vendor": "anthropic"
@@ -978,7 +978,7 @@
    "key_env": "ANTHROPIC_API_KEY",
    "model_name": "claude-opus-5",
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "anthropic",
    "reasoning_efforts": [
@@ -993,7 +993,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 128000,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "anthropic_messages",
    "api_base_url": null,
@@ -1010,7 +1010,7 @@
    "model_name": "claude-opus-5",
    "model_revision": null,
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -1106,7 +1106,7 @@
       "model_name": "claude-opus-5",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -1114,7 +1114,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -1142,7 +1142,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "05f1a134c32a1f27b0a936803efafaf35fac122a4da9cc860ba61e47e2400129"
+    "hash": "4bdef8f093a970c3726841a9497610ee419ed119273e12f017b25aabef3dbfaf"
    },
    "token/None": {
     "config": {
@@ -1232,7 +1232,7 @@
       "model_name": "claude-opus-5",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -1240,7 +1240,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -1268,7 +1268,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "16ed8470ea7aac6de16db48b8d3097128ee3b5bc998bdc251a038090c3ad9cc5"
+    "hash": "1671a318e45fb6e5acb3ba8968ebdb0358b778949b6b891af8295f04027348a3"
    },
    "wall/None": {
     "config": {
@@ -1358,7 +1358,7 @@
       "model_name": "claude-opus-5",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -1366,7 +1366,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -1394,7 +1394,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9875a7662eb37bd06f79d273eb9c972bc4d4d6a35cdcec4b60f3cc636f26433d"
+    "hash": "ae4fd4e77740c7a3ca7a1607b5e75f59f83a51a58c1fc31fcf4a995460384d64"
    }
   },
   "vendor": "anthropic"
@@ -1444,7 +1444,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 943718,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -1880,7 +1880,7 @@
    "key_env": "OPENROUTER_API_KEY",
    "model_name": "google/gemini-3.8-flash",
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openrouter",
    "reasoning_efforts": [
@@ -1895,7 +1895,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 65536,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -1912,7 +1912,7 @@
    "model_name": "google/gemini-3.8-flash",
    "model_revision": null,
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -2008,7 +2008,7 @@
       "model_name": "google/gemini-3.8-flash",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -2016,7 +2016,7 @@
       "upstream_provider": "google-ai-studio"
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -2044,7 +2044,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b78637cdd35d9b875be378c7ec6d565942f4c0422748f875864ff7d21624379a"
+    "hash": "8447594dbceda2116f1a022de46f8e1c70aedb2224e175094ef505868f44b3c5"
    },
    "token/None": {
     "config": {
@@ -2134,7 +2134,7 @@
       "model_name": "google/gemini-3.8-flash",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -2142,7 +2142,7 @@
       "upstream_provider": "google-ai-studio"
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -2170,7 +2170,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9d2855904afb1620864c37768712531150a62ed35bc42d0ef30bde4d20d8a0c7"
+    "hash": "51bb36c80e946183a3e558a4841688dd45407f493a71deee5e5549b215a840fe"
    },
    "wall/None": {
     "config": {
@@ -2260,7 +2260,7 @@
       "model_name": "google/gemini-3.8-flash",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -2268,7 +2268,7 @@
       "upstream_provider": "google-ai-studio"
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -2296,7 +2296,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "928ae663a06299ef99c09816a3ce6f0c236effb9e86cd6554bab9eca6ada3fe5"
+    "hash": "c385bd11d9d8890339c31ae55d1824ab8b72fd95eeab869dfb4c2449afefccae"
    }
   },
   "vendor": "google"
@@ -2337,7 +2337,7 @@
    "key_env": "GEMINI_API_KEY",
    "model_name": "gemini-3.8-live",
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "gemini",
    "reasoning_efforts": [
@@ -2345,7 +2345,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 65536,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "gemini_live",
    "api_base_url": null,
@@ -2362,7 +2362,7 @@
    "model_name": "gemini-3.8-live",
    "model_revision": null,
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {
     "completion_signal": "turn_complete",
     "history_format": "tool_transcript",
@@ -2464,7 +2464,7 @@
       "model_name": "gemini-3.8-live",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
@@ -2478,7 +2478,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -2497,7 +2497,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2120adf07f7b532c81b9b1deb49a336b92b6a19c915f9adde19349c71d900056"
+    "hash": "8a991bc2c549e950186b31d17a14860e642a8ea16306b5a274443d0a533659d0"
    },
    "token/None": {
     "config": {
@@ -2587,7 +2587,7 @@
       "model_name": "gemini-3.8-live",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
@@ -2601,7 +2601,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -2620,7 +2620,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "30022107242421ae46a6a93590a548f4df314781dc55b6065ff2423c8b79a224"
+    "hash": "159c5d6d1495c98fe19b0e99129d425c5bab8b7821575f0eba2bb4e756f2fdbc"
    },
    "wall/None": {
     "config": {
@@ -2710,7 +2710,7 @@
       "model_name": "gemini-3.8-live",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
@@ -2724,7 +2724,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -2743,7 +2743,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "367f62057344090a327791012a70a4de4033564599cd529523495360a158dbee"
+    "hash": "2489c404e364f2ed614635c75187d6bf27a5cea9b65d75cfe34e72f6f0feed17"
    }
   },
   "vendor": "google"
@@ -2784,7 +2784,7 @@
    "key_env": "GEMINI_API_KEY",
    "model_name": "gemini-3.8-live-extended-thinking",
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "gemini",
    "reasoning_efforts": [
@@ -2793,7 +2793,7 @@
     "high"
    ]
   },
-  "litellm_output_limit": 65536,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "gemini_live",
    "api_base_url": null,
@@ -2810,7 +2810,7 @@
    "model_name": "gemini-3.8-live-extended-thinking",
    "model_revision": null,
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {
     "completion_signal": "interaction_idle",
     "history_format": "tool_transcript",
@@ -2912,7 +2912,7 @@
       "model_name": "gemini-3.8-live-extended-thinking",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "interaction_idle",
        "history_format": "tool_transcript",
@@ -2926,7 +2926,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -2945,7 +2945,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7d2669d9b54065c03ecc3f205c5a8e57418c751ab41f218aaa93a7ad04149106"
+    "hash": "8aee989253341b1d6fc6be5b6076857b2db274206b661cce7962985891ec63dc"
    },
    "token/None": {
     "config": {
@@ -3035,7 +3035,7 @@
       "model_name": "gemini-3.8-live-extended-thinking",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "interaction_idle",
        "history_format": "tool_transcript",
@@ -3049,7 +3049,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -3068,7 +3068,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7f14c91b2c9fac5eb828ee6f733f055fded411202f26b2aed9fe34fa4ab63ace"
+    "hash": "274a5e3b0674695649d4993c911ac57b9fae5893640db441dd4d9bbee954c643"
    },
    "wall/None": {
     "config": {
@@ -3158,7 +3158,7 @@
       "model_name": "gemini-3.8-live-extended-thinking",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "interaction_idle",
        "history_format": "tool_transcript",
@@ -3172,7 +3172,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -3191,7 +3191,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4e2688d4274d4019623c7c72cc7956ab54623c1163336739a9f873430c6b663a"
+    "hash": "64b9b3378fa25fdd1643a998cd42b8442aa8fef5a1d2f3e181523e23f2af0e16"
    }
   },
   "vendor": "google"
@@ -3232,7 +3232,7 @@
    "key_env": "GEMINI_API_KEY",
    "model_name": "gemini-3.1-flash-live-preview",
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "gemini",
    "reasoning_efforts": [
@@ -3247,7 +3247,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 65536,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "gemini_live",
    "api_base_url": null,
@@ -3264,7 +3264,7 @@
    "model_name": "gemini-3.1-flash-live-preview",
    "model_revision": null,
    "native_output_limit": 65536,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {
     "completion_signal": "turn_complete",
     "history_format": "tool_transcript",
@@ -3366,7 +3366,7 @@
       "model_name": "gemini-3.1-flash-live-preview",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
@@ -3380,7 +3380,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -3399,7 +3399,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c25c7438bb82fe33adbd4cdab635704696036bbaea81988abca7f6870c53414c"
+    "hash": "58fc4e56078aaf72ee177ccfe6dd17d355e25c9094fd525bfd727e6df0a00827"
    },
    "token/None": {
     "config": {
@@ -3489,7 +3489,7 @@
       "model_name": "gemini-3.1-flash-live-preview",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
@@ -3503,7 +3503,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -3522,7 +3522,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "badad2bacde321bd2683b330af17dcf7b819644dcd72e30dedf023aa25a41a1d"
+    "hash": "77b0c2135af2f10f4b03fa38186f6b2f5ad5d1fb09b2d06a0e5983dfefa27f39"
    },
    "wall/None": {
     "config": {
@@ -3612,7 +3612,7 @@
       "model_name": "gemini-3.1-flash-live-preview",
       "model_revision": null,
       "native_output_limit": 65536,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
        "history_format": "tool_transcript",
@@ -3626,7 +3626,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 65536,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -3645,7 +3645,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0280374ca2979baef9b6466616e1ea31a2381ab18ec23cba48a3d70c1ccd7f42"
+    "hash": "d4a9caea09d4d32c615a09c019657dc082c62a2abbbf3337066828986d97e520"
    }
   },
   "vendor": "google"
@@ -3680,7 +3680,7 @@
    "key_env": "OPENROUTER_API_KEY",
    "model_name": "openai/gpt-5.6-sol",
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openrouter",
    "reasoning_efforts": [
@@ -3695,7 +3695,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 128000,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -3712,7 +3712,7 @@
    "model_name": "openai/gpt-5.6-sol",
    "model_revision": null,
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -3808,7 +3808,7 @@
       "model_name": "openai/gpt-5.6-sol",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -3816,7 +3816,7 @@
       "upstream_provider": "openai"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -3844,7 +3844,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "afefcc01c0690b5353e0330955c1d791230ba7fe8df8a639f48ad659812dc7d3"
+    "hash": "a605bb8e7c6f46f0e62fa62ecddc483870cb6003a2d788ad591539ab8a49792b"
    },
    "token/None": {
     "config": {
@@ -3934,7 +3934,7 @@
       "model_name": "openai/gpt-5.6-sol",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -3942,7 +3942,7 @@
       "upstream_provider": "openai"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -3970,7 +3970,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c875d20ed8ecaa74677cb1d6f99291f386100e81205a3f2a4ebd09d7baa87a7d"
+    "hash": "da1136d00a0d86a589d0844987d900167abe78d08556e990c5d8762a3fc6c548"
    },
    "wall/None": {
     "config": {
@@ -4060,7 +4060,7 @@
       "model_name": "openai/gpt-5.6-sol",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -4068,7 +4068,7 @@
       "upstream_provider": "openai"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -4096,7 +4096,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e280e874ea090d38cbb5255cc5141cdebb6163e119d1b016213c481af650d50c"
+    "hash": "2c28d26506ac719ce3817099ac9113f2e4a2acb1b1276a50a5309491ff0f0e02"
    }
   },
   "vendor": "openai"
@@ -4131,7 +4131,7 @@
    "key_env": "OPENROUTER_API_KEY",
    "model_name": "openai/gpt-6-astra",
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openrouter",
    "reasoning_efforts": [
@@ -4146,7 +4146,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 128000,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openrouter",
    "api_base_url": null,
@@ -4163,7 +4163,7 @@
    "model_name": "openai/gpt-6-astra",
    "model_revision": null,
    "native_output_limit": 128000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -4259,7 +4259,7 @@
       "model_name": "openai/gpt-6-astra",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -4267,7 +4267,7 @@
       "upstream_provider": "openai"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -4295,7 +4295,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4e92a506a1ec143233f6e07555abc3a473fdf5894ce2df505b824db1168d37c5"
+    "hash": "3b50794854f513cef58070815b36e51e18a84c7031cdbd6d18e68a93f13f91a6"
    },
    "token/None": {
     "config": {
@@ -4385,7 +4385,7 @@
       "model_name": "openai/gpt-6-astra",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -4393,7 +4393,7 @@
       "upstream_provider": "openai"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -4421,7 +4421,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b5574dc4dad8b437fe58e6a5272af6bfe7e30a3145b850d2ddce1478d5248792"
+    "hash": "258f24df82523589ad283d26edaefa40958c7fce454590973d87c555855c1ee2"
    },
    "wall/None": {
     "config": {
@@ -4511,7 +4511,7 @@
       "model_name": "openai/gpt-6-astra",
       "model_revision": null,
       "native_output_limit": 128000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -4519,7 +4519,7 @@
       "upstream_provider": "openai"
      },
      "native_output_limit": 128000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -4547,7 +4547,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b92749a1f8c4aca9c7e0c55ab7a3f9df2c4f24aca57053311bea48b343f0a141"
+    "hash": "016fdb6ebd3f4df0fb4b61f9fdc710d0bacb0e2df793851ffe427d0c80111010"
    }
   },
   "vendor": "openai"
@@ -4772,7 +4772,7 @@
    "key_env": "OPENAI_API_KEY",
    "model_name": "gpt-realtime-2",
    "native_output_limit": 32000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "openai",
    "reasoning_efforts": [
@@ -4787,7 +4787,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 32000,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "openai_realtime",
    "api_base_url": null,
@@ -4804,7 +4804,7 @@
    "model_name": "gpt-realtime-2",
    "model_revision": null,
    "native_output_limit": 32000,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -4900,7 +4900,7 @@
       "model_name": "gpt-realtime-2",
       "model_revision": null,
       "native_output_limit": 32000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -4908,7 +4908,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 32000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -4927,7 +4927,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6f9bc641b8be4db6c4c16065a67013246a8de45c5b60157568220eca1be57bb0"
+    "hash": "2abd1c311667ec2ca52f2154a3a68bbd7e7430e4dc1aad1274191eb64c376232"
    },
    "token/None": {
     "config": {
@@ -5017,7 +5017,7 @@
       "model_name": "gpt-realtime-2",
       "model_revision": null,
       "native_output_limit": 32000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -5025,7 +5025,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 32000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -5044,7 +5044,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "edfd13b75e58e2d981e115ab56d3adc07ed06236de6559fce3fa91a3f65aeb6d"
+    "hash": "3a45cdf332a6238ce201392f9ca38e736903d96fcff0b2ed6ad963833967fa4c"
    },
    "wall/None": {
     "config": {
@@ -5134,7 +5134,7 @@
       "model_name": "gpt-realtime-2",
       "model_revision": null,
       "native_output_limit": 32000,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -5142,7 +5142,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 32000,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -5161,7 +5161,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "dc8754fcb77db1fe6b0a4287b9bc35be892c149dcce2fa3aa2bded9ba56761d2"
+    "hash": "7ffd4dd422cac37fa08774aa749f76855f79c2409125e1cbd0a3222eb7d5b17e"
    }
   },
   "vendor": "openai"
@@ -5386,7 +5386,7 @@
    "key_env": "MOONSHOT_API_KEY",
    "model_name": "kimi-k3",
    "native_output_limit": 1048576,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "moonshot",
    "reasoning_efforts": [
@@ -5401,7 +5401,7 @@
     "fixed"
    ]
   },
-  "litellm_output_limit": 1048576,
+  "litellm_output_limit": null,
   "model_config": {
    "adapter_type": "moonshot",
    "api_base_url": "https://api.moonshot.ai/v1",
@@ -5418,7 +5418,7 @@
    "model_name": "kimi-k3",
    "model_revision": null,
    "native_output_limit": 1048576,
-   "native_output_limit_source": "litellm",
+   "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
    "temperature": null,
@@ -5514,7 +5514,7 @@
       "model_name": "kimi-k3",
       "model_revision": null,
       "native_output_limit": 1048576,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -5522,7 +5522,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 1048576,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -5550,7 +5550,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b33edf13d9427051af15db02e526a01b04f89a3179852a93f07e849fffcd485c"
+    "hash": "7b2aec54cf4d8654760a159bd72aa19ab10a9cd0595ad09f8889af7c0c44a39d"
    },
    "token/None": {
     "config": {
@@ -5640,7 +5640,7 @@
       "model_name": "kimi-k3",
       "model_revision": null,
       "native_output_limit": 1048576,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -5648,7 +5648,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 1048576,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "time-aware-token-v1",
@@ -5676,7 +5676,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4d23753d60a11fb1acedb79b60f2cbd108c944f8d0cb3d1f948617bd982976b7"
+    "hash": "e1ca1cb75177ab8ddc32cacac55e403b1b7cfda7362a835636c972ec26fd0b09"
    },
    "wall/None": {
     "config": {
@@ -5766,7 +5766,7 @@
       "model_name": "kimi-k3",
       "model_revision": null,
       "native_output_limit": 1048576,
-      "native_output_limit_source": "litellm",
+      "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
       "temperature": null,
@@ -5774,7 +5774,7 @@
       "upstream_provider": null
      },
      "native_output_limit": 1048576,
-     "native_output_limit_source": "litellm",
+     "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
      "protocol": "wall-clock",
@@ -5802,7 +5802,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "064da58f39e8750f5423844d60dbb4f653fdf9d5f559bc372804b0e89aad3f3b"
+    "hash": "4d662540d9eb8af012a290e4f716bc2f966b99a9ca35de2ade270da914f53b36"
    }
   },
   "vendor": "moonshot"

@@ -2,6 +2,7 @@ endpoint:
   api: gemini_live
   model: gemini-3.1-flash-live-preview
   api_key_env: GEMINI_API_KEY
+  native_output_limit: 65536
 reasoning_effort: low
 # 3.1 Flash Live has no asynchronous function calling: a call blocks until its response, and
 # response scheduling does not apply.

@@ -233,7 +233,6 @@ class GeminiLiveDriver(SessionLifecycle):
         provider="gemini",
         key_env="GEMINI_API_KEY",
         vendor="google",
-        litellm_provider="gemini",
         fallback_key_env="GOOGLE_API_KEY",
         key_pool_size=9,
         key_slot_env="GEMINI_API_KEY_START_SLOT",
