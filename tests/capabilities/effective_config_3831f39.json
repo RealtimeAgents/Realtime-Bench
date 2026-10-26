@@ -6048,7 +6048,7 @@
    "benchmark_eligible": true,
    "comparison_scope": "model",
    "defaults": {
-    "chat_include_usage": false,
+    "chat_include_usage": true,
     "chat_stream": true,
     "model_revision": null,
     "reasoning_effort": "provider_default",
@@ -6081,7 +6081,7 @@
    "api_base_url": "https://YOUR_HOST/v1",
    "api_key": null,
    "api_key_env": "OPENAI_API_KEY",
-   "chat_include_usage": false,
+   "chat_include_usage": true,
    "chat_stream": true,
    "context_counter": "estimate",
    "context_image_tokens": 4096,
@@ -6189,7 +6189,7 @@
       "adapter_type": "chat_completions",
       "api_base_url": "https://YOUR_HOST/v1",
       "api_key_env": "OPENAI_API_KEY",
-      "chat_include_usage": false,
+      "chat_include_usage": true,
       "chat_stream": true,
       "context_counter": "estimate",
       "context_image_tokens": 4096,
@@ -6236,7 +6236,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b2d1b1ef63090502917ee3923555fa670c991de72926a1d78ca312fd621563c0"
+    "hash": "f24961950e85927eaa391fc844c9e01204a5866eb1b0a32dde9aa05e762ce201"
    }
   },
   "vendor": "compatible"
@@ -6290,7 +6290,7 @@
    "api_base_url": null,
    "api_key": null,
    "api_key_env": "OPENAI_API_KEY",
-   "chat_include_usage": false,
+   "chat_include_usage": true,
    "chat_stream": true,
    "context_counter": "estimate",
    "context_image_tokens": 4096,
@@ -6398,7 +6398,7 @@
       "adapter_type": "chat_completions",
       "api_base_url": null,
       "api_key_env": "OPENAI_API_KEY",
-      "chat_include_usage": false,
+      "chat_include_usage": true,
       "chat_stream": true,
       "context_counter": "estimate",
       "context_image_tokens": 4096,
@@ -6445,7 +6445,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "989b061bd0729c752a36a7c72a1753762d71cec0075ddc453fec0398ca7c840d"
+    "hash": "1a422bb0dd346234a24c01c2368eb6fe284c4adc167412f6b0312066c2653f1a"
    }
   },
   "vendor": "compatible"

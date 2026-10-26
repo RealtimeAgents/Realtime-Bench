@@ -60,6 +60,10 @@ reasoning_effort: high             # optional; `fixed` sends no reasoning settin
 | `anthropic_messages` | The Anthropic Messages API | `native_output_limit` |
 | `package.module:Class` | Your own driver class ([external driver](#use-an-external-driver)) | |
 
+A `chat_completions` endpoint streams its replies and asks for the usage at the end of the stream
+(`stream_options.include_usage`). Set `include_usage: false` for an endpoint that rejects
+`stream_options`, or `stream: false` for complete responses.
+
 ### Output limit
 
 `native_output_limit` caps the output tokens of every request, reasoning included; unless a token

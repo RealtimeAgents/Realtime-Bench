@@ -23,6 +23,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
 - The shared retry executor changed how it retries (stable jitter keys, OpenAI Realtime connects
   under the shared policy, no retry once the decision is abandoned), so transport_retry_policy
   went to v2 and every run hash changed.
+- chat_completions presets and the inline endpoint request stream usage unless they opt out:
+  chat_include_usage of my-model and remote-vlm, and their run hashes, changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the
