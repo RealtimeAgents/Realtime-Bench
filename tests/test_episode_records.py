@@ -190,8 +190,7 @@ def test_clock_output_tokens_prefers_the_response_usage():
     r["usage"] = {"completion_tokens": 31}
     assert episode_records.clock_output_tokens(r) == (31, "provider_reported_output_usage")
     del r["usage"]
-    assert episode_records.clock_output_tokens(r) == (20, "provider_reported_output_usage_delta")
-    del r["frame_usage"]
+    # What the agent's usage grew by is no count of the result's.
     assert episode_records.clock_output_tokens(r) == (10, "native_runtime_output_tokens")
     r["native_received_output_tokens_source"] = "local_token_ids"
     assert episode_records.clock_output_tokens(r) == (10, "local_token_ids")
@@ -215,9 +214,9 @@ def test_clock_output_tokens_takes_only_non_negative_numbers():
     r = {
         "provider_output_tokens": True,
         "usage": {"output_tokens": -1, "completion_tokens": "12"},
-        "frame_usage": {"output_tokens": 7.0},
+        "native_received_output_tokens": 7.0,
     }
-    assert episode_records.clock_output_tokens(r) == (7, "provider_reported_output_usage_delta")
+    assert episode_records.clock_output_tokens(r) == (7, "native_runtime_output_tokens")
 
 
 def test_tokens_within_the_allowance_are_charged_whole():

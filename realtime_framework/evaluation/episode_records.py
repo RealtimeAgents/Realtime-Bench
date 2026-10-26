@@ -18,8 +18,8 @@ wrote: ``annotate_result`` (the observation id the inspection proof is checked a
 ``r`` over any failure already there, so it takes precedence. The kernel's shell measures
 ``frame_usage`` after ``account_tokens``: an agent that holds its result adds its usage only as it
 accepts it, after the clock's count is needed, and the shell measures the frame's usage again then.
-So the shell's count never falls back on ``frame_usage``: a result that names no count has none
-there.
+So the clock's count is the result's own, never what the usage grew by: a result that names no
+count has none.
 
 What the kernel's GenerationResult takes from a settled ``r``: ``action`` is ``r["action"]``, a
 DONE or FAIL as it came; ``output_tokens`` the count before the allowance clamped it, which the
@@ -246,9 +246,6 @@ def clock_output_tokens(r: dict) -> tuple[int | None, str | None]:
         value = _usage_number(r.get("usage"), "output_tokens", "completion_tokens")
         if value is not None:
             return value, "provider_reported_output_usage"
-        value = _usage_number(r.get("frame_usage"), "output_tokens", "completion_tokens")
-        if value is not None:
-            return value, "provider_reported_output_usage_delta"
     value = r.get("native_received_output_tokens")
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
         return int(value), (
