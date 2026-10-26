@@ -64,6 +64,32 @@ def _encoded_frame_has_render_fence(data: str, fence) -> bool:
         return False
 
 
+def _await_render_fence(client, fence, error: str) -> str:
+    """Screenshot the page until a frame shows ``fence``, for up to 5 s, and return that frame
+    (base64 PNG); RuntimeError(``error``) when none did."""
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        client.evaluate(
+            "document.documentElement && document.documentElement.offsetHeight",
+            await_promise=False,
+        )
+        result = _cdp_result(
+            client.call(
+                "Page.captureScreenshot",
+                {
+                    "format": "png",
+                    "fromSurface": True,
+                },
+            ),
+            "Page.captureScreenshot",
+        )
+        candidate = result.get("data")
+        if candidate and _encoded_frame_has_render_fence(candidate, fence):
+            return candidate
+        time.sleep(0.02)
+    raise RuntimeError(error)
+
+
 _RAF_CLOCK_SHIM = r"""
 (() => {
   if (window.__benchmarkClock) return;
@@ -461,30 +487,9 @@ def cdp_advance_rendered_frame(dbg_port, seconds, raf_hz=60.0, key_events=()):
                 await_promise=False,
             )
 
-        data = None
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            client.evaluate(
-                "document.documentElement && document.documentElement.offsetHeight",
-                await_promise=False,
-            )
-            result = _cdp_result(
-                client.call(
-                    "Page.captureScreenshot",
-                    {
-                        "format": "png",
-                        "fromSurface": True,
-                    },
-                ),
-                "Page.captureScreenshot",
-            )
-            candidate = result.get("data")
-            if candidate and _encoded_frame_has_render_fence(candidate, fence):
-                data = candidate
-                break
-            time.sleep(0.02)
-    if not data:
-        raise RuntimeError("compositor did not publish the post-step render fence")
+        data = _await_render_fence(
+            client, fence, "compositor did not publish the post-step render fence"
+        )
     return {
         "ok": True,
         "advanced_ms": seconds * 1000.0,
@@ -521,30 +526,9 @@ def cdp_sync_realtime_frame(dbg_port, benchmark_frame, url_contains):
         fence = client.evaluate(_RENDER_FENCE_EXPRESSION, await_promise=False)
         if not isinstance(fence, dict):
             raise RuntimeError("realtime render fence installation failed")
-        data = None
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            client.evaluate(
-                "document.documentElement && document.documentElement.offsetHeight",
-                await_promise=False,
-            )
-            result = _cdp_result(
-                client.call(
-                    "Page.captureScreenshot",
-                    {
-                        "format": "png",
-                        "fromSurface": True,
-                    },
-                ),
-                "Page.captureScreenshot",
-            )
-            candidate = result.get("data")
-            if candidate and _encoded_frame_has_render_fence(candidate, fence):
-                data = candidate
-                break
-            time.sleep(0.02)
-        if not data:
-            raise RuntimeError("realtime compositor did not publish the render fence")
+        data = _await_render_fence(
+            client, fence, "realtime compositor did not publish the render fence"
+        )
     return {
         "ok": True,
         "benchmark_frame": expected,
