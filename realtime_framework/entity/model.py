@@ -122,6 +122,29 @@ class Deployment:
     litellm_provider: str | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class Compat:
+    """Named restrictions and special requirements of a registered API: those the pre-run checks
+    (providers/preflight.py check_config, check_session_config) read of every API. A driver
+    family's compat adds its own."""
+
+    # Every request sends an output limit, so a model without a declared native limit cannot run.
+    output_limit_required: bool = False
+    # The ModelConfig.provider_options the encoder reads: each name, its default and its allowed
+    # values. Any other option is refused.
+    provider_options: dict[str, tuple[str | bool, tuple[str | bool, ...]]] = field(
+        default_factory=dict
+    )
+    # The options a model must set (in its YAML): their defaults stand in for no model.
+    required_provider_options: tuple[str, ...] = ()
+    # An option value that holds only with another option's value: (name, value) -> (name, value).
+    provider_option_requires: dict[tuple[str, str], tuple[str, str]] = field(
+        default_factory=dict
+    )
+    # The reasoning_effort values the encoder maps (None: the provider default); None takes any.
+    reasoning_efforts: tuple[str | None, ...] | None = None
+
+
 @dataclass(frozen=True)
 class SessionSeed:
     system_instruction: str
@@ -223,7 +246,6 @@ class GenerationRequest:
     provider_output_token_cap: int | None
     transport_output_token_cap: int | str | None
     clock_mode: Literal["token", "wall"]
-    timeout_s: float | None = None
     # Filled by the runtime from the retained history before each provider call.
     canonical: CanonicalRequest | None = None
     # The event kernel's number of this generation, which the agent keys the generation's state by.

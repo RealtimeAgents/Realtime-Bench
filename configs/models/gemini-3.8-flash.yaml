@@ -3,4 +3,7 @@ endpoint:
   model: google/gemini-3.8-flash
   api_key_env: OPENROUTER_API_KEY
   upstream_provider: google-ai-studio
+  native_output_limit: 65536
 reasoning_effort: low
+provider_options:
+  cache_breakpoint: true

@@ -22,17 +22,7 @@ for the API key, and are now reported ahead of a missing key.
 from __future__ import annotations
 
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.providers.gemini.live import (
-    LIVE_OPTIONS,
-    LIVE_REASONING_EFFORTS,
-    GeminiLiveDriver,
-    live_options,
-)
-from realtime_framework.providers.litellm import LiteLLMDriver
 from realtime_framework.providers.registry import adapter_class
-
-_GEMINI_EXTENDED_THINKING = "gemini-3.8-live-extended-thinking"
-_GEMINI_FLASH_LIVE = "gemini-3.1-flash-live-preview"
 
 
 class UnsupportedTokenBudget(ValueError):
@@ -141,16 +131,13 @@ def validate_model_interaction(
 def check_config(driver, config) -> None:
     """Static model-config rules, in the order the driver's constructor applied them; the
     context reserve, which the estimating APIs also checked before each request, comes last."""
-    if issubclass(driver, LiteLLMDriver):
-        compat = driver.compat
-        if compat.output_limit_required and config.native_output_limit is None:
-            raise ValueError(
-                f"The {config.adapter_type} API requires {compat.output_limit_param}; "
-                "declare endpoint.native_output_limit in the model YAML"
-            )
-    elif issubclass(driver, GeminiLiveDriver):
-        _check_live_options(config)
-        _check_live_model_contract(config)
+    compat = driver.compat
+    if compat.output_limit_required and config.native_output_limit is None:
+        raise ValueError(
+            f"The {config.adapter_type} API requires an output limit on every request; "
+            "declare endpoint.native_output_limit in the model YAML"
+        )
+    check_provider_options(compat, config)
     if (
         driver.capabilities.request_size_estimation
         and config.context_window_tokens is not None
@@ -159,55 +146,28 @@ def check_config(driver, config) -> None:
         raise ValueError("Context capacity must exceed generation reserve")
 
 
-def _check_live_options(config) -> None:
-    options = config.provider_options
-    unknown = set(options) - set(LIVE_OPTIONS)
+def check_provider_options(compat, config) -> None:
+    """The model's provider_options against the option table its API's compat declares. What
+    one model of the API takes and another does not is in each model's YAML: its options, and
+    the reasoning efforts the catalog takes for it (providers/registry.py load_definitions)."""
+    api, options, table = config.adapter_type, config.provider_options, compat.provider_options
+    unknown = set(options) - set(table)
     if unknown:
-        raise ValueError(f"Unknown Gemini Live provider_options: {sorted(unknown)}")
-    for name, (default, allowed) in LIVE_OPTIONS.items():
-        value = options.get(name, default)
-        if value not in allowed:
-            raise ValueError(f"Gemini Live {name} must be one of {list(allowed)}, got {value!r}")
-
-
-def _check_live_model_contract(config) -> None:
-    """Reject setup combinations that violate the selected Live model's API contract."""
-    options = live_options(config)
-    model_name = str(config.model_name).rsplit("/", 1)[-1]
-    if model_name == _GEMINI_FLASH_LIVE:
-        # Ahead of the rule below, which would reject blocking with silent responses again.
-        fixes = []
-        if options["tool_behavior"] != "blocking":
-            fixes.append("tool_behavior=blocking")
-        if options["tool_response_scheduling"] == "silent":
-            fixes.append("tool_response_scheduling=omit")
-        if fixes:
+        raise ValueError(f"Unknown {api} provider_options: {sorted(unknown)}")
+    resolved = {name: options.get(name, default) for name, (default, _) in table.items()}
+    for name, (_, allowed) in table.items():
+        if resolved[name] not in allowed:
             raise ValueError(
-                f"{_GEMINI_FLASH_LIVE} calls functions synchronously only; use "
-                + " and ".join(fixes)
+                f"{api} {name} must be one of {list(allowed)}, got {resolved[name]!r}"
             )
-    if (
-        options["tool_response_scheduling"] == "silent"
-        and options["tool_behavior"] != "non_blocking"
-    ):
-        raise ValueError("Silent Gemini tool responses require non-blocking tools")
-    if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
+    missing = [name for name in compat.required_provider_options if name not in options]
+    if missing:
         raise ValueError(
-            "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"
+            f"The {api} API requires provider_options {missing}; set them in the model YAML"
         )
-    if model_name != _GEMINI_EXTENDED_THINKING:
-        return
-    invalid = []
-    if config.reasoning_effort not in {"low", "medium", "high"}:
-        invalid.append("reasoning_effort must be low, medium, or high")
-    if options["tool_behavior"] != "non_blocking":
-        invalid.append("tool_behavior must be non_blocking")
-    if options["completion_signal"] != "interaction_idle":
-        invalid.append("completion_signal must be interaction_idle")
-    if options["tool_response_scheduling"] == "silent":
-        invalid.append("function scheduling is unsupported; use tool_response_scheduling=omit")
-    if invalid:
-        raise ValueError(f"{_GEMINI_EXTENDED_THINKING} requires " + "; ".join(invalid))
+    for (name, value), (other, required) in compat.provider_option_requires.items():
+        if resolved[name] == value and resolved[other] != required:
+            raise ValueError(f"{api} {name}={value} requires {other}={required}")
 
 
 def check_choice_task(driver, task) -> None:
@@ -236,13 +196,12 @@ def check_fps(driver, model_input_fps) -> None:
 
 def check_session_config(driver, config) -> None:
     """Settings a driver applied when its session connected, after the frame-rate check."""
-    if (
-        issubclass(driver, GeminiLiveDriver)
-        and config.reasoning_effort not in LIVE_REASONING_EFFORTS
-    ):
+    efforts = driver.compat.reasoning_efforts
+    if efforts is not None and config.reasoning_effort not in efforts:
+        named = [effort for effort in efforts if effort is not None]
         raise ValueError(
-            "Gemini Live reasoning_effort must be one of "
-            "none, fixed, minimal, low, medium, or high"
+            f"{config.adapter_type} reasoning_effort must be one of {named}, "
+            f"got {config.reasoning_effort!r}"
         )
 
 

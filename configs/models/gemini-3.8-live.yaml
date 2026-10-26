@@ -2,4 +2,13 @@ endpoint:
   api: gemini_live
   model: gemini-3.8-live
   api_key_env: GEMINI_API_KEY
+  native_output_limit: 65536
 reasoning_effort: fixed
+# 3.8 Live has a fixed reasoning profile and rejects thinking_config.
+reasoning_efforts: [provider_default, fixed]
+provider_options:
+  tool_behavior: non_blocking
+  completion_signal: turn_complete
+  input_transport: client_content
+  tool_response_scheduling: silent
+  history_format: tool_transcript

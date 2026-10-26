@@ -186,8 +186,9 @@ class ModelConfig(BaseModel):
     temperature_policy: Literal["provider_default"] = "provider_default"
     temperature: None = None
     reasoning_effort: Optional[str] = "low"
-    # Driver-specific wire options from the driver class's model_defaults (for example Gemini Live
-    # tool scheduling). Each driver validates its own keys; the context policy reads history_format.
+    # Driver-specific wire options from the model YAML's provider_options (for example Gemini Live
+    # tool scheduling), checked against the driver's compat before the run (providers/preflight.py
+    # check_provider_options); the context policy reads history_format.
     provider_options: dict = Field(default_factory=dict)
     # The context-policy preset the model takes in place of its API row's (one of
     # entity/context_policy.py MODEL_PRESETS), from its model YAML's context_preset.

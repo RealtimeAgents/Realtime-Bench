@@ -40,6 +40,7 @@ from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import retry_cancel_event
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
@@ -436,16 +437,19 @@ class ChatDeployment(Deployment):
 
 
 @dataclass(frozen=True)
-class ChatCompat:
+class ChatCompat(Compat):
     """Named restrictions and special requirements of one API."""
 
-    # "model_prefix": Anthropic/Gemini models behind OpenRouter; "always": every request.
-    cache_breakpoint: str | None = None
+    # Cache through the newest message on every request. Elsewhere a model whose provider caches
+    # only at explicit breakpoints (Anthropic's, Gemini's behind OpenRouter) sets the
+    # cache_breakpoint provider option its API declares; OpenAI caches implicitly.
+    cache_breakpoint: bool = False
     strip_image_detail: bool = False
     # Each request sends the decision cap, else the declared native limit, else omits the
-    # parameter (provider default). APIs that require the parameter reject an undeclared limit.
+    # parameter (provider default); an API that requires it (output_limit_required) refuses an
+    # undeclared limit. The name is the request field on the wire, which the run configuration
+    # records.
     output_limit_param: str = "max_tokens"
-    output_limit_required: bool = False
 
 
 class _AuditedSDKStream:
@@ -568,11 +572,7 @@ class LiteLLMDriver:
         messages = list(chat_messages(request.canonical))
         if compat.strip_image_detail:
             _strip_image_detail(messages)
-        if compat.cache_breakpoint == "always" or (
-            compat.cache_breakpoint == "model_prefix"
-            and self.config.model_name.startswith(("anthropic/", "google/"))
-        ):
-            # Anthropic and Gemini use explicit breakpoints; OpenAI uses implicit caching.
+        if compat.cache_breakpoint or self.config.provider_options.get("cache_breakpoint"):
             _mark_cache_breakpoint(messages)
         stream = self._stream_enabled()
         kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
@@ -604,8 +604,6 @@ class LiteLLMDriver:
                 kwargs["reasoning_effort"] = effort
         if extra_body:
             kwargs["extra_body"] = extra_body
-        if request.timeout_s is not None:
-            kwargs["timeout"] = request.timeout_s
         return kwargs
 
     def _client(self):
@@ -1128,13 +1126,12 @@ class OpenRouterDriver(LiteLLMDriver):
         family="vlm",
         provider="openrouter",
         key_env="OPENROUTER_API_KEY",
-        litellm_provider="openrouter",
         gateway="openrouter",
         default_base_url=DEFAULT_OPENROUTER_BASE_URL,
         base_url_env="OPENROUTER_BASE_URL",
         pin_route=True,
     )
-    compat = ChatCompat(cache_breakpoint="model_prefix")
+    compat = ChatCompat(provider_options={"cache_breakpoint": (False, (False, True))})
 
 
 class MoonshotDriver(LiteLLMDriver):
@@ -1153,12 +1150,11 @@ class MoonshotDriver(LiteLLMDriver):
         provider="moonshot",
         key_env="MOONSHOT_API_KEY",
         vendor="moonshot",
-        litellm_provider="moonshot",
         gateway="kimi_compatible",
         default_base_url=DEFAULT_MOONSHOT_BASE_URL,
         base_url_env="MOONSHOT_BASE_URL",
     )
-    compat = ChatCompat(strip_image_detail=True, output_limit_param="max_completion_tokens")
+    compat = ChatCompat(strip_image_detail=True)
 
 
 class AnthropicMessagesDriver(LiteLLMDriver):
@@ -1180,11 +1176,10 @@ class AnthropicMessagesDriver(LiteLLMDriver):
         provider="anthropic",
         key_env="ANTHROPIC_API_KEY",
         vendor="anthropic",
-        litellm_provider="anthropic",
         gateway="anthropic",
         default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
     )
-    compat = ChatCompat(cache_breakpoint="always", output_limit_required=True)
+    compat = ChatCompat(cache_breakpoint=True, output_limit_required=True)
 
 
 class ChatCompletionsDriver(LiteLLMDriver):
@@ -1234,7 +1229,7 @@ class ChatCompletionsDriver(LiteLLMDriver):
                     "add_generation_prompt": True,
                 },
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=request.timeout_s or 30,
+                timeout=30,
             )
             response.raise_for_status()
             result = response.json()

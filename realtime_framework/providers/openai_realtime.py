@@ -25,6 +25,7 @@ from websockets.exceptions import ConnectionClosedOK as ConnectionClosedOK
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.providers.registry import load_project_secrets
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import GenerationBoundary
@@ -73,6 +74,9 @@ _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversat
 # a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
 # fails both. Normal closes finish well within it, so it adds no observable wait.
 _CONNECTION_CLOSE_TIMEOUT_S = 10.0
+# How long a connection may take to open: TCP, TLS and the WebSocket upgrade, in real time
+# (websockets' open_timeout). The session.update after it reads no answer.
+_HANDSHAKE_TIMEOUT_S = 10.0
 # How long an interrupt's cancel may wait to be written. It waits behind a write in progress, and
 # a streaming push stuck in one holds the connection's writes until the abort's close after the
 # interrupt drops the socket; the close needs no cancel to end the response.
@@ -261,8 +265,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         provider="openai",
         key_env="OPENAI_API_KEY",
         vendor="openai",
-        litellm_provider="openai",
     )
+    compat = Compat()
     model_defaults: ClassVar[dict[str, dict]] = {}
     # The API's native-streaming settings: a frame older than the newest retained_frames folds in
     # place, as a turn-based one does. A placeholder, the turn-based visual budget (20 s at
@@ -279,9 +283,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         self.streaming = streaming
         self.streaming_settings = {**self.streaming_settings, **config.streaming}
         load_project_secrets()
-        key = config.api_key or os.environ.get(config.api_key_env or "OPENAI_API_KEY")
+        key = config.api_key or os.environ.get(config.api_key_env or self.deployment.key_env)
         if not key:
-            raise RuntimeError("OpenAI Realtime needs OPENAI_API_KEY or ModelConfig.api_key")
+            raise RuntimeError(
+                f"OpenAI Realtime needs {self.deployment.key_env} or ModelConfig.api_key"
+            )
         kwargs = {"api_key": key}
         if config.api_base_url:
             kwargs["base_url"] = config.api_base_url
@@ -464,7 +470,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         def open_session(epoch):
             cm = self.client.realtime.connect(
                 model=request.seed.model_name,
-                websocket_connection_options={"create_connection": self._ws_connection},
+                websocket_connection_options={
+                    "create_connection": self._ws_connection,
+                    "open_timeout": _HANDSHAKE_TIMEOUT_S,
+                },
             )
             conn = cm.__enter__()
             with self._epoch_lock:

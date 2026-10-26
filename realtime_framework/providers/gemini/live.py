@@ -13,6 +13,7 @@ from typing import ClassVar as ClassVar
 
 from realtime_framework.clock import Clock
 from realtime_framework.clock import SystemClock
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
@@ -55,12 +56,16 @@ logger = logging.getLogger(__name__)
 
 _SESSION_RELEASE_GRACE_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
+# How long a connection may take to open and acknowledge its setup. websockets bounds the opening
+# alone, at 10 s; google-genai then waits for setupComplete without a bound.
+_HANDSHAKE_TIMEOUT_S = 30.0
 
 
-# Wire options carried in ModelConfig.provider_options: (default, allowed values). Gemini 3.8
-# Extended Thinking requires asynchronous tool declarations and remains active across
-# intermediate utterance-level turnComplete messages until interaction_status becomes IDLE.
-# Ordered screenshot/text turns (client_content) avoid synthesizing an audio activity for GUI input.
+# Wire options carried in ModelConfig.provider_options: (default, allowed values). A model sets
+# each in its YAML (GeminiLiveDriver.compat). Gemini 3.8 Extended Thinking requires asynchronous
+# tool declarations and remains active across intermediate utterance-level turnComplete messages
+# until interaction_status becomes IDLE. Ordered screenshot/text turns (client_content) avoid
+# synthesizing an audio activity for GUI input.
 LIVE_PROTOCOL_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
@@ -75,15 +80,6 @@ LIVE_HISTORY_OPTIONS = {
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
 LIVE_OPTIONS = {**LIVE_PROTOCOL_OPTIONS, **LIVE_HISTORY_OPTIONS}
-
-# Per-model presets, merged into the catalog entry's defaults (providers/registry.py).
-_CLIENT_CONTENT_TOOLS = {
-    "tool_behavior": "non_blocking",
-    "completion_signal": "turn_complete",
-    "input_transport": "client_content",
-    "tool_response_scheduling": "silent",
-}
-_TOOL_TRANSCRIPT = {"history_format": "tool_transcript"}  # context policy, see above
 
 
 _RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
@@ -114,6 +110,17 @@ def live_options(config) -> dict:
 
 # reasoning_effort values the session setup maps (GeminiLiveDriver._thinking_config).
 LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "high")
+
+
+@dataclass(frozen=True, kw_only=True)
+class GeminiDeployment(Deployment):
+    """Where Gemini Live connections go: on the default key variable, a pool of keys (key_env,
+    else fallback_key_env, then key_env + "_2" to "_<key_pool_size>"), of which a driver takes
+    the one at the slot key_slot_env names, so that parallel runs can spread over keys."""
+
+    fallback_key_env: str
+    key_pool_size: int
+    key_slot_env: str
 
 
 class GoAwayDeadlineExceeded(RuntimeError):
@@ -221,36 +228,25 @@ class GeminiLiveDriver(SessionLifecycle):
         connection_renewal=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
     )
-    deployment = Deployment(
+    deployment = GeminiDeployment(
         family="streaming",
         provider="gemini",
         key_env="GEMINI_API_KEY",
         vendor="google",
-        litellm_provider="gemini",
+        fallback_key_env="GOOGLE_API_KEY",
+        key_pool_size=9,
+        key_slot_env="GEMINI_API_KEY_START_SLOT",
     )
-    model_defaults: ClassVar[dict[str, dict]] = {
-        # 3.1 Flash Live has no asynchronous function calling: a call blocks until its
-        # response, and response scheduling does not apply.
-        "gemini-3.1-flash-live-preview": {
-            "provider_options": {
-                **_CLIENT_CONTENT_TOOLS,
-                "tool_behavior": "blocking",
-                "tool_response_scheduling": "omit",
-                **_TOOL_TRANSCRIPT,
-            },
+    compat = Compat(
+        provider_options=LIVE_OPTIONS,
+        required_provider_options=tuple(LIVE_PROTOCOL_OPTIONS),
+        # Response scheduling applies to non-blocking functions only.
+        provider_option_requires={
+            ("tool_response_scheduling", "silent"): ("tool_behavior", "non_blocking")
         },
-        "gemini-3.8-live": {
-            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
-        },
-        "gemini-3.8-live-extended-thinking": {
-            "provider_options": {
-                **_CLIENT_CONTENT_TOOLS,
-                "completion_signal": "interaction_idle",
-                "tool_response_scheduling": "omit",
-                **_TOOL_TRANSCRIPT,
-            },
-        },
-    }
+        reasoning_efforts=LIVE_REASONING_EFFORTS,
+    )
+    model_defaults: ClassVar[dict[str, dict]] = {}
     # The API's native-streaming settings: the setup's context_window_compression. Once the
     # session reaches compression_trigger_tokens, the server shortens it to
     # compression_target_tokens, from the start of a user turn, and says nothing of what it
@@ -274,17 +270,24 @@ class GeminiLiveDriver(SessionLifecycle):
         from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
         self.options = live_options(config)
+        deployment = self.deployment
         if config.api_key:
             keys = [config.api_key]
-        elif config.api_key_env and config.api_key_env != "GEMINI_API_KEY":
+        elif config.api_key_env and config.api_key_env != deployment.key_env:
             keys = [os.environ.get(config.api_key_env)]
         else:
-            keys = [os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")]
-            keys.extend(os.environ.get(f"GEMINI_API_KEY_{index}") for index in range(2, 10))
+            keys = [
+                os.environ.get(deployment.key_env) or os.environ.get(deployment.fallback_key_env)
+            ]
+            keys.extend(
+                os.environ.get(f"{deployment.key_env}_{index}")
+                for index in range(2, deployment.key_pool_size + 1)
+            )
         self._api_keys = tuple(dict.fromkeys(key for key in keys if key))
         if not self._api_keys:
             raise RuntimeError(
-                "Gemini Live needs GEMINI_API_KEY/GOOGLE_API_KEY or ModelConfig.api_key"
+                f"Gemini Live needs {deployment.key_env}/{deployment.fallback_key_env} or "
+                "ModelConfig.api_key"
             )
         self.config = config
         self.clock = clock or SystemClock()
@@ -295,13 +298,13 @@ class GeminiLiveDriver(SessionLifecycle):
         self._connection_closed_type = ConnectionClosed
         self._client_type = genai.Client
         self._clients = {}
-        requested_slot_raw = os.environ.get("GEMINI_API_KEY_START_SLOT", "1")
+        requested_slot_raw = os.environ.get(deployment.key_slot_env, "1")
         try:
             requested_slot = int(requested_slot_raw)
         except ValueError as exc:
-            raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer") from exc
+            raise ValueError(f"{deployment.key_slot_env} must be a positive integer") from exc
         if requested_slot < 1:
-            raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer")
+            raise ValueError(f"{deployment.key_slot_env} must be a positive integer")
         self._api_key_requested_slot = requested_slot
         self._api_key_index = (requested_slot - 1) % len(self._api_keys)
         self._ws_connection = async_ws_connection(self, "gemini_live.ws", classify_live_message)
@@ -653,7 +656,7 @@ class GeminiLiveDriver(SessionLifecycle):
         ``connect``'s seed; one that fails on the way is closed again."""
         self._opening_ws = None
         try:
-            session = await cm.__aenter__()
+            session = await self.clock.wait_for(cm.__aenter__(), _HANDSHAKE_TIMEOUT_S)
             # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
             self._opening_ws = session._ws
             if getattr(session, "setup_complete", None) is None:

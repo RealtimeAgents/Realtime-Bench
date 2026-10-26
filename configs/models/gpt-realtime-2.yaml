@@ -2,4 +2,5 @@ endpoint:
   api: openai_realtime
   model: gpt-realtime-2
   api_key_env: OPENAI_API_KEY
+  native_output_limit: 32000
 reasoning_effort: low

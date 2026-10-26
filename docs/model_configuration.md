@@ -64,20 +64,25 @@ A `chat_completions` endpoint streams its replies and asks for the usage at the 
 (`stream_options.include_usage`). Set `include_usage: false` for an endpoint that rejects
 `stream_options`, or `stream: false` for complete responses.
 
+An `openrouter` model whose provider caches prompts only at explicit breakpoints, as Anthropic's
+and Gemini's do, sets `cache_breakpoint: true` in its [provider options](#provider-options): each
+request then marks its newest message as a cache breakpoint. OpenAI's models cache on their own
+and leave it out. `anthropic_messages` marks every request.
+
 ### Output limit
 
 `native_output_limit` caps the output tokens of every request, reasoning included; unless a token
-clock budget is smaller, it is the output limit each request sends. Without it,
-presets on `openrouter`, `moonshot` and `anthropic_messages`, and direct runs, take the model's
-`max_output_tokens` from the model map bundled with the locked LiteLLM version, looked up as
-`provider/model-id`. A `chat_completions` endpoint, or a model the map does not list that way, has
-no limit and gets the provider default.
+clock budget is smaller, it is the output limit each request sends. Every preset in
+`configs/models/` declares it. A preset without it has no limit and gets the provider default,
+except on `api: litellm`.
 
+Direct runs, and presets on `api: litellm` without a limit, take the model's `max_output_tokens`
+from the model map bundled with the locked LiteLLM version, looked up as `provider/model-id`.
 These limits follow LiteLLM, so upgrading it changes them. From LiteLLM 1.104.1 to 1.106.1, 151
 models gained, lost or changed a limit and 54 limits went down, for example
 `openrouter/qwen/qwen3-235b-a22b-2507` from 235929 to 16384 tokens. To keep a limit across
-upgrades, declare it in a preset, as `configs/models/deepseek-v4.1-flash.yaml` does. The run
-records the resolved preset, limit included, so results with different settings are never mixed.
+upgrades, declare it in a preset. The run records the resolved preset, limit included, so results
+with different settings are never mixed.
 
 ### Context preset
 
@@ -104,6 +109,26 @@ archived-action ledger by position and header, whatever ledger role the policy g
 has none either, labels the ledger's entry with that role. Whether either takes effect is not recorded on its own: it follows from the driver code, which the
 harness fingerprint covers (an external driver's identity, for an external driver), and from the
 model configuration, which the run hash covers.
+
+### Reasoning efforts
+
+`reasoning_efforts` (top level, optional) lists the `reasoning_effort` values a model takes when
+it rejects some that its API would send: `configs/models/gemini-3.8-live.yaml` takes only
+`provider_default` and `fixed`, because 3.8 Live rejects a thinking setting. The preset's
+`reasoning_effort` must be one of them, and a run asking for another is refused before it starts,
+from the command line, a run plan or Harbor.
+
+### Provider options
+
+`provider_options` (top level) sets wire options of the API that its driver declares
+(`compat.provider_options`). Of the registered APIs, `openrouter` takes `cache_breakpoint` (`true`
+or `false`, the default), and `gemini_live` takes the options below; a Gemini Live model sets each
+of `tool_behavior`, `completion_signal`, `input_transport` and
+`tool_response_scheduling`: a model without them, a raw model id among them, is refused before
+the run. `history_format` (`native_tools` or `tool_transcript`: how past function calls are
+replayed into a rebuilt session) is optional. The allowed values are in `LIVE_PROTOCOL_OPTIONS`
+(`realtime_framework/providers/gemini/live.py`), and the Gemini presets in `configs/models` set
+the combinations their models need.
 
 ### Streaming settings
 
@@ -167,13 +192,21 @@ A model that needs a new wire protocol gets a driver:
    beside what the client sent; the run identity records it, and no run is refused for it. The
    pre-run checks (`providers/preflight.py`) read the rest; an undeclared value counts as
    unsupported, and a context policy the driver cannot render is refused.
-   Declare `deployment` (`Deployment`: catalog family and provider, default key variable) and
+   Declare `deployment` (`Deployment`: catalog family and provider, default key variable; a
+   driver family's subclass adds where its requests go, as `ChatDeployment`,
+   `DecisionsDeployment` and `GeminiDeployment` do),
+   `compat` (`Compat`: the API's restrictions the pre-run checks read: whether every request
+   sends an output limit, the [provider options](#provider-options) a model may or must set with
+   their allowed values, and the reasoning efforts the driver maps; `Compat()` for none) and
    `model_defaults` (per-model ModelConfig defaults, usually `{}`). A driver that lists
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
-   [streaming settings](#streaming-settings) (a dict), and takes `streaming`: the
-   native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`. An external
-   driver without either is refused when its model is loaded, and the tests hold every
-   registered driver to the same checks.
+   [streaming settings](#streaming-settings) (a dict), takes `streaming`: the
+   native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`, and has
+   `push_frame` and `request_reply`, which the agent pushes frames and asks for replies with. A
+   driver whose `action_channel` is `"choice"` has `decide` and `classify_question_error`, which
+   the selection flow (`realtime_framework/providers/decisions/`) asks each question and
+   classifies its failures with. An external driver without any of these is refused when its
+   model is loaded, and the tests hold every registered driver to the same checks.
    Function-call drivers send the function declarations the harness puts in
    `SessionSeed.answer`.
 3. Emit `TextDelta`, `FunctionCall`, `UsageSnapshot`, and `GenerationBoundary` events. Report only
@@ -197,7 +230,7 @@ official: `rtbench upload` refuses them. To put the model on the leaderboard, co
 driver as a [model API](#add-a-model-api).
 
 1. Write the driver class as in steps 1-4 above, in your own package. Declare `capabilities`,
-   `deployment` and `model_defaults` as class attributes. Set `finite_frame_budget`,
+   `deployment`, `compat` and `model_defaults` as class attributes. Set `finite_frame_budget`,
    `wall_clock_only` and `accepts_reasoning_effort` explicitly: their defaults claim that the
    driver reports complete usage on a finite token clock, runs on any clock and accepts every
    reasoning effort. Declare `roles` (the request roles you map, e.g.
@@ -234,8 +267,8 @@ driver as a [model API](#add-a-model-api).
    ```
 
    `stream`, `include_usage` and `upstream_provider` belong to registered APIs; per-model
-   settings go in the class's `model_defaults`. A framework class is selected by its registered
-   name, not by its path.
+   settings go in the class's `model_defaults`, or in the preset's `provider_options` where
+   `compat` declares them. A framework class is selected by its registered name, not by its path.
 
 Run it with `-m <name>`. Every lookup of the catalog imports the class and checks these
 declarations, so a broken driver stops every run until its preset is fixed or removed. The run
