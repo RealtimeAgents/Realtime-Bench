@@ -92,6 +92,7 @@ from realtime_framework.evaluation.shell import (
     _escaped_termination,
     _invalid_record,
     _only_logged,
+    _with_unheard,
 )
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
@@ -154,6 +155,7 @@ class _StreamingShell:
         self._frozen_at: float | None = None  # the reading it was frozen at
         self._snapshot_read = False
         self._trace_failed = False
+        self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self._loop_error: str | None = None
         self._loop_error_lock = threading.Lock()  # lanes raise on threads of their own
         self._termination: Termination | None = None
@@ -465,10 +467,11 @@ class _StreamingShell:
             return snapshotter()
 
     def _finish(self, termination: Termination) -> None:
-        """The termination record main() and the report read, in seconds to nine places. The
-        episode is over whatever comes of writing it, and its verdict goes first: main() reads
-        it whatever else could be written."""
-        self._termination = termination
+        """The termination record main() and the report read, in seconds to nine places, and a
+        failure the shell found in this last batch goes into it (_with_unheard). The episode is
+        over whatever comes of writing it, and its verdict goes first: main() reads it whatever
+        else could be written."""
+        termination = self._termination = _with_unheard(termination, self._unheard, self.log)
         env = self.env
         late = None
         try:
@@ -574,7 +577,9 @@ class _StreamingShell:
             self.trace.emit(event, payload, **fields)
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             self._trace_failed = True
-            self.post(Invalidated("harness", "episode_trace_write_failed", traceback.format_exc()))
+            self._trace_lost(
+                Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
+            )
 
     def _checkpoint(self) -> None:
         """Make the trace durable at each outcome, as the turn-based shell does at each decision."""
@@ -584,6 +589,15 @@ class _StreamingShell:
             self.trace.checkpoint()
         except Exception:  # noqa: BLE001 - any write failure invalidates the run
             self._trace_failed = True
-            self.post(
+            self._trace_lost(
                 Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
             )
+
+    def _trace_lost(self, invalid: Invalidated) -> None:
+        """Post the trace's failure, which the shell finds on its own thread. A kernel that
+        finished in the step whose batch this is takes no more events: the first such failure
+        goes with its Finish (_finish)."""
+        if self.kernel.termination is None:
+            self.post(invalid)
+        elif self._unheard is None:
+            self._unheard = invalid
