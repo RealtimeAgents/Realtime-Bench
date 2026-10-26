@@ -61,6 +61,7 @@ closed.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from realtime_framework.entity.actions import Action, ActionType
@@ -212,6 +213,14 @@ class CallsCancelled:
     priority: ClassVar[Priority] = Priority.COMPLETION
 
 
+class _Lane(str, Enum):
+    """What the action lane, which one action holds at a time, is doing."""
+
+    IDLE = "idle"
+    EXECUTE = "execute"  # the action's Execute is out
+    POST_CHECK = "post_check"  # the read right after the action, due or out
+
+
 @dataclass
 class _Action:
     index: int  # in arrival order over the episode
@@ -238,10 +247,10 @@ class StreamingPolicy:
         self.generation: int | None = None  # the reply in flight
         self.abandoned: set[int] = set()  # replies given up
         self.actions: list[_Action] = []
-        self.current: _Action | None = None  # the action executing, or the read after it out
+        self.current: _Action | None = None  # the action holding the lane
+        self._lane = _Lane.IDLE  # what it does with it
         self.waiting: _Action | None = None  # the newest action that arrived meanwhile
         self._late: list[_Action] = []  # arrived while the end waited for a read
-        self._executing = False  # its Execute is out
         self.frames_pushed = 0
         self.dropped_frames = 0
         self._decision_of: dict[int, int] = {}  # generation -> decision
@@ -277,7 +286,7 @@ class StreamingPolicy:
         or an end check whose failure invalidates it, or feedback; nor an abort, which the agent
         is to be done with before it is closed. A push changes nothing then."""
         return (
-            self.current is None
+            self._lane is _Lane.IDLE
             and not self._capturing
             and not self._asked
             and not self._commits
@@ -391,9 +400,8 @@ class StreamingPolicy:
             self._queued = None
         self._line.clear()
         self._deadline_due = False
-        if self.current is not None and not self._executing:
-            after, self.current = self.current, None
-            self._resolve(after, "applied", terminal_after_action=True)
+        if self._lane is _Lane.POST_CHECK:
+            self._resolve(self._free(), "applied", terminal_after_action=True)
         if self.waiting is not None:
             waiting, self.waiting = self.waiting, None
             self._resolve(waiting, self._ended())
@@ -417,7 +425,7 @@ class StreamingPolicy:
         coming during it. The action waiting may have gone meanwhile, withdrawn or given up. Past
         the deadline only the read after an action goes, which the end waits for."""
         if self._stopped():
-            waits = self._deadline_due and self.current is not None
+            waits = self._deadline_due and self._lane is _Lane.POST_CHECK
             if waits and not (self._asked or self._capturing):
                 self._ask()
             return
@@ -425,7 +433,7 @@ class StreamingPolicy:
             if self._asked:
                 return
             if operation == "read":
-                if self._executing:
+                if self._lane is _Lane.EXECUTE:
                     continue
                 if not self._capturing:
                     self._ask()
@@ -434,7 +442,7 @@ class StreamingPolicy:
                 self._line.remove(operation)
                 self._capturing = True
                 self.kernel.emit(Capture())
-            elif self.current is None:
+            elif self._lane is _Lane.IDLE:
                 self._line.remove(operation)
                 if self.waiting is not None:
                     waiting, self.waiting = self.waiting, None
@@ -662,14 +670,19 @@ class StreamingPolicy:
                 kernel.record(
                     "KeyReleaseScheduled", decision=a.decision, index=a.index, at=release_at
                 )
-        self.current, self._executing = a, True
+        self.current, self._lane = a, _Lane.EXECUTE
         kernel.emit(Execute(a.decision, action, release_at))
+
+    def _free(self) -> _Action:
+        """The action holding the lane, which it lets go of."""
+        a, self.current, self._lane = self.current, None, _Lane.IDLE
+        return a
 
     def _executed(self, event: ActionExecuted) -> None:
         """Settle the action before an end it brings settles the one waiting, so that the agent
         hears of the two in that order."""
         kernel = self.kernel
-        a, self._executing = self.current, False
+        a = self.current
         # When the action took the environment and returned, as the lane read them; a run that
         # raised before it was read has neither.
         if event.finished_at is None:
@@ -680,21 +693,19 @@ class StreamingPolicy:
         # GuestEnvironment._execution_failed).
         a.execution_result = event.result
         if event.error is not None:
-            self.current = None
-            self._resolve(a, "invalid_run")
+            self._resolve(self._free(), "invalid_run")
             return kernel.invalidate("environment", "action_execution_failed", event.error)
         if event.rejection is not None:
             # A refused action changed nothing to read, as on the turn-based clock.
-            self.current = None
-            self._resolve(a, "rejected", event.rejection)
+            self._resolve(self._free(), "rejected", event.rejection)
             return self._proceed()
         if kernel.ending is not None:
             # The end came while it ran, and the snapshot waited for it: it is the last action.
-            self.current = None
-            return self._resolve(a, "applied", terminal_after_action=True)
+            return self._resolve(self._free(), "applied", terminal_after_action=True)
         # An action can end the task at once: the read after it settles it before anything else
         # starts, once a capture out is answered (decision 31). Its answer was filed before the
         # deadline, so the deadline waits for that read (N31).
+        self._lane = _Lane.POST_CHECK
         if "read" in self._line:
             self._line.remove("read")
         self._line.insert(0, "read")
@@ -841,10 +852,10 @@ class StreamingPolicy:
             return
         if kernel.semantic < self.config.duration_s:
             return
-        if self._asked or (self.current is not None and not self._executing):
+        if self._asked or self._lane is _Lane.POST_CHECK:
             self._deadline_due = True
             self._abandon("deadline")
-        elif at_its_timer or not self._executing:
+        elif at_its_timer or self._lane is not _Lane.EXECUTE:
             kernel.end("deadline", self.config.duration_s)
 
     def _stopped(self) -> bool:
@@ -874,8 +885,9 @@ class StreamingPolicy:
     def _end_checked(self, event: EndChecked) -> None:
         kernel = self.kernel
         asked_at = self._asked.pop(event.request)
-        # The read after an action stands for one as the action finished (N31).
-        at = asked_at if self.current is None else self.current.finished_at
+        # No action executes while a read is out: one holding the lane is the one this read
+        # follows, which stands for one as the action finished (N31).
+        at = self.current.finished_at if self._lane is _Lane.POST_CHECK else asked_at
         # A read that fails once the episode is over still counts.
         if self._count_read(event.error, at):
             return
@@ -885,10 +897,8 @@ class StreamingPolicy:
             return kernel.end("deadline", self.config.duration_s)
         if kernel.ending is not None:
             return
-        # No action executes while a read is out: ``current`` is the one this read follows.
-        if self.current is not None:
-            after, self.current = self.current, None
-            self._resolve(after, "applied")
+        if self._lane is _Lane.POST_CHECK:
+            self._resolve(self._free(), "applied")
         if "capture" in self._line:
             self._line.remove("capture")
             self._line.insert(0, "capture")
