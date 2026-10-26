@@ -187,6 +187,29 @@ def test_an_abort_in_the_sync_after_a_generation_keeps_its_usage(tmp_path, monke
     assert usage["responses"] == 1
 
 
+def test_a_repair_whose_rebuild_spends_its_connect_retries_keeps_the_generation(
+    tmp_path, monkeypatch
+):
+    """Decision 35: response 1 ends incomplete without output items, so the repair after the
+    generation rebuilds the session, and the stub refuses every upgrade after the first. The
+    repair comes back broken instead of raising the spent retries: the turn keeps its output and
+    fails as history_sync_failed, not as a stream interrupted after its output, which drops it."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    replies = realtime_replies([STEP])
+    with _FaultStub(replies, refused=range(2, 12), incomplete=(1,)) as stub:
+        episode = _episode(stub, tmp_path)
+        try:
+            stub.wait_for_session_update()
+            result = _generate(episode, 1, 0).result
+        finally:
+            episode.finish()
+        rejected = [connection.rejected for connection in stub.connections]
+    assert rejected == [None] + [503] * 4
+    assert result["invalid_reason"] == "history_sync_failed"
+    assert result["raw"] == replies[0].text
+    assert result["realtime_runtime"]["history_sync"]["disposition"] == "broken"
+
+
 def test_closing_the_runtime_abandons_a_generation_that_reopens_the_session(tmp_path):
     """The runtime closes while generation 2's second attempt reopens the session, before the
     agent cancelled anything: the generation is abandoned all the same, and the connection it
