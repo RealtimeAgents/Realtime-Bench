@@ -416,7 +416,10 @@ class _StreamingShell:
         error = None
         if snapshotter is not None:
             turn, executing = self.lanes.freeze_turn()
-            # The action, and a capture alongside it (N32).
+            # The action, and a capture alongside it (N32). No valid action's budget is past a
+            # capture's, so the wait is capture_s: text input's equals it, and a timed action's is
+            # at most 20 s (sandbox/guest.py action_timeout). The action's counts if capture_s is
+            # ever below text input's.
             wait = (
                 None
                 if executing is None
