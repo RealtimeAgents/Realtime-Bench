@@ -587,6 +587,39 @@ def test_a_generation_that_raises_is_its_generation_error(tmp_path):
     }
 
 
+class NotReadyGuest(FakeGuest):
+    def wait_until_ready(self, max_wait):
+        return False
+
+
+def test_a_run_that_fails_to_set_up_in_a_used_run_dir_leaves_its_own_summary(tmp_path):
+    """The first run scores; the second, with the same run id, fails before its episode, as the
+    guest is not ready, and main() lets the failure out to the emergency summary. The run
+    directory's summary is the second run's setup error; the first run's is moved aside."""
+    clock, guest = FakeClock(1_000_000.0), FakeGuest()
+    first = run_main(
+        tmp_path, FakeTask(clock, guest, "task_success", True), FakeAgent(clock), clock, guest
+    )
+    assert first["run_status"] == "scored"
+    run_dir = tmp_path / "run"
+    written = (run_dir / "run_summary.json").read_text()
+
+    clock, guest = FakeClock(2_000_000.0), NotReadyGuest()
+    seen = {}
+    summary = run_main(
+        tmp_path,
+        FakeTask(clock, guest, "task_success", True),
+        FakeAgent(clock),
+        clock,
+        guest,
+        seen=seen,
+        emergency=True,
+    )
+    assert "RuntimeError: guest not ready" in seen["escaped"]
+    assert (summary["run_status"], summary["stop_reason"]) == ("invalid", "setup_error")
+    assert (run_dir / "run_summary.prev.json").read_text() == written
+
+
 def test_the_emergency_summary_reads_the_arguments_as_main_parses_them(tmp_path, monkeypatch):
     """A failure main() lets out is written as a setup error from the run's arguments (runner.py,
     the __main__ block): an option written --name=value is the one written --name value."""

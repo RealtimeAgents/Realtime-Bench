@@ -375,6 +375,10 @@ def main():
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    # A run id used before: its summary is moved aside, so that the one in the directory is this
+    # run's, the emergency summary's too.
+    if (run_dir / "run_summary.json").exists():
+        (run_dir / "run_summary.json").replace(run_dir / "run_summary.prev.json")
     episode_trace = EpisodeTrace(
         run_dir / "episode_trace.jsonl", run_id=run_id, clock=clocks.operational
     )
@@ -1312,8 +1316,10 @@ def _write_emergency_setup_summary(error: str):
         if clock_mode == "wall" or a.tokens_per_frame == "unlimited"
         else int(a.tokens_per_frame)
     )
+    # A run that failed to set up made no decision; a lifecycle in a run directory used before is
+    # an earlier run's.
     run_metrics = summarize_run_metrics(
-        run_dir / "action_lifecycle.jsonl",
+        run_dir / "missing-action-lifecycle.jsonl",
         total_decisions=0,
         solved=None,
         clock_mode=clock_mode,
