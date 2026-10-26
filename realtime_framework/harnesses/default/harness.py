@@ -846,6 +846,7 @@ from dataclasses import replace as replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.harnesses.default.parsing import resolve_action_output
+from realtime_framework.harnesses.default.parsing import resolve_structured_output
 from realtime_framework.entity.model import GenerationOutput
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import PendingDecision
@@ -1047,17 +1048,22 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
 
     Output whose one action names a mark its frame does not have is a grounding failure, not
     output without an action: the protocol records the action asked for and the mark.
+
+    A function call or a Decision's choice is the action object itself, which is read as it is;
+    only text JSON is recovered from the forms models wrap it in.
     """
     frames = agent.frames
     streaming = agent.interaction_mode == "streaming"
+    structured = agent.driver.capabilities.action_channel != "text_json"
 
     def ground(body) -> _Grounded | None:
-        if streaming:
+        if structured:
+            asked, reference = structured_action(body)
+        elif streaming:
             asked, reference = agent.interaction_profile.parse_framed_action(agent, body)
-            frame, error = frames.locate(reference)
         else:
             asked, reference = agent.interaction_profile.parse_action(agent, body), None
-            frame, error = own_frame, None
+        frame, error = frames.locate(reference) if streaming else (own_frame, None)
         if asked is None:
             return None
         if frame is None or not resolve:
@@ -1072,7 +1078,11 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
             }
         return _Grounded(asked, action, frame, reference, error, resolution)
 
-    output = resolve_action_output(text, ground, framed=streaming)
+    output = (
+        resolve_structured_output(text, ground)
+        if structured
+        else resolve_action_output(text, ground, framed=streaming)
+    )
     decision = output.decision
     resolutions = [parsed.resolution for parsed in output.parses if parsed.resolution is not None]
     grounding = last = resolutions[-1] if resolutions else None
@@ -1106,6 +1116,15 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
     if resolve:
         action_protocol["grounding"] = grounding
     return action, action_protocol, last
+
+
+def structured_action(body: str) -> tuple[Action | None, object]:
+    """The action of a function call or a Decision's choice, from the JSON action object its
+    channel gave (FunctionCallTurnCollector, the streaming agent's calls, the Decision encoder's
+    choice), and the value of its frame field."""
+    data = json.loads(body)
+    reference = data.pop("frame", None)
+    return ActionTranslator.from_json(data), reference
 
 
 def action_text(action: Action) -> str:
