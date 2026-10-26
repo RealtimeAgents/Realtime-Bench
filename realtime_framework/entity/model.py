@@ -236,7 +236,6 @@ class ConnectRequest:
 @dataclass(frozen=True)
 class GenerationRequest:
     generation_id: str
-    provider_output_token_cap: int | None
     transport_output_token_cap: int | str | None
     # Filled by the runtime from the retained history before each provider call.
     canonical: CanonicalRequest | None = None

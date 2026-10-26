@@ -82,7 +82,7 @@ async def run_turns(driver: OpenAIRealtimeDriver, turns: int) -> list[tuple[str,
             request = build_request(policy, system, (*history, turn), None, answer, call)
             await driver.send_observation(turn.observation, request)
             generation = await driver.start_generation(
-                GenerationRequest(f"turn-{k}", None, "inf", canonical=request)
+                GenerationRequest(f"turn-{k}", "inf", canonical=request)
             )
             text = []
             async for event in driver.events(generation):

@@ -719,7 +719,6 @@ class NativeStreamingAgent(VisionAgentBase):
                     reply.handle = await self.driver.request_reply(
                         GenerationRequest(
                             generation_id=f"streaming-{reply.generation}",
-                            provider_output_token_cap=budget.provider_output_tokens,
                             transport_output_token_cap=budget.transport_output_tokens,
                             canonical=view,
                             generation=reply.generation,

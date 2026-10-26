@@ -826,7 +826,7 @@ def test_openai_realtime_abort_cancels_the_response_and_the_next_use_replays():
     async def run():
         await driver.connect(ConnectRequest(seed=SEED))
         await driver.send_observation(turns[0].observation, view(turns))
-        request = GenerationRequest("turn-0", None, "inf", canonical=view(turns))
+        request = GenerationRequest("turn-0", "inf", canonical=view(turns))
         await driver.abort(await driver.start_generation(request))
         # The decision was discarded: the session reopens with the history before it.
         await driver.ensure_ready(SEED, view([turn(0, "a0")]), records)

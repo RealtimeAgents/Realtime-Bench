@@ -138,7 +138,6 @@ def _generate(config, run_dir: Path, canonical=None, *, cap=4096, driver_class=N
     driver.bind_trace(sink)
     request = GenerationRequest(
         generation_id="behavior-0",
-        provider_output_token_cap=None,
         transport_output_token_cap=cap,
         canonical=canonical or _canonical(config),
     )

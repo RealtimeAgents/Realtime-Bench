@@ -171,7 +171,7 @@ class _Rig:
         call = CallParameters(SEED.model_name, None, None)
         return self.runtime.run_turn(
             [_observation(k)],
-            GenerationRequest(f"turn-{k}", None, "inf"),
+            GenerationRequest(f"turn-{k}", "inf"),
             _Collector(),
             unattached="",
             timeout=WAIT_S,

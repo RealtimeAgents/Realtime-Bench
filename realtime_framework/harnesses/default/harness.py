@@ -1536,7 +1536,6 @@ class DefaultHarness(VisionAgentBase):
         )
         request = GenerationRequest(
             generation_id=f"turn-{tick}-{uuid.uuid4().hex[:12]}",
-            provider_output_token_cap=provider_cap,
             transport_output_token_cap=transport_cap,
             generation=generation.number,
         )
