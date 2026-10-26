@@ -16,7 +16,7 @@ import weakref
 
 import httpx
 
-from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.records import TraceEvent, enter_trace_scope
 
 # Header values kept in the trace, each one a provider path sends.
 KEPT_HEADERS = frozenset(
@@ -296,11 +296,15 @@ def sync_ws_connection(owner, channel: str, classify):
 
     A client message is captured just before it is written, so it always precedes its
     acknowledgement in capture order; a failed write adds a lifecycle record whose state is
-    unknown. A server message is captured when the existing code receives it.
+    unknown. A server message is captured when the existing code receives it, in the trace scope
+    of the call that receives it, or in the one ``trace_read_scope()`` gives as the message comes
+    in, where the driver sets it: a reader whose read began before what it reads for did.
     """
     from websockets.sync.client import ClientConnection
 
     class Connection(_connection_class(ClientConnection, owner, channel, classify)):
+        trace_read_scope = None
+
         def handshake(self, *args, **kwargs):
             try:
                 return super().handshake(*args, **kwargs)
@@ -327,6 +331,10 @@ def sync_ws_connection(owner, channel: str, classify):
 
         def recv(self, timeout=None, decode=None):
             message = super().recv(timeout, decode)
+            if self.trace_read_scope is not None:
+                # Such a read runs on a worker thread, in a copy of its reader's context: the
+                # scope goes to this read alone.
+                enter_trace_scope(self.trace_read_scope())
             _session_capture(self, "server", message)
             return message
 
