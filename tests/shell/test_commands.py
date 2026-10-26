@@ -346,7 +346,7 @@ def test_a_move_over_the_per_move_cap_is_recorded_as_the_runner_records_a_timed_
         if r["event"] == "KernelRecord" and r["payload"]["kind"] == "GenerationFinished"
     ]
     assert [echo.generation for echo in echoes] == [1]
-    assert episode.result.token_accounting.summary()["responses"] == 2
+    assert episode.token_accounting()["responses"] == 2
     reported = next(line for line in episode.logs if " -> " in line)
     assert reported.endswith("-> skipped_timeout TIMEOUT")
 
@@ -368,7 +368,7 @@ def test_a_result_back_after_the_cap_while_the_shell_is_busy_is_never_settled():
         (0, True),
         (1, None),
     ]
-    assert episode.result.token_accounting.summary()["responses"] == 2
+    assert episode.token_accounting()["responses"] == 2
     assert ("accept", 1) not in agent.calls and ("discard", 1) in agent.calls
 
 
@@ -504,7 +504,7 @@ def test_a_generation_the_episode_ended_on_is_recorded_as_a_call_given_up_on(
     assert completed[1]["harness_abort_reason"] == reason
     rows = [(row["decision"], row.get("harness_abort_reason")) for row in episode.agent.trajectory]
     assert rows == [(0, None), (1, reason)]
-    summary = episode.result.token_accounting.summary()
+    summary = episode.token_accounting()
     assert summary["responses"] == 1 and summary["provider_usage_missing_reasons"] == {}
     assert summary["counts"]["provider_output_tokens"]["complete"] is True
     assert summary["counts"]["provider_output_tokens"]["total"] == 20
@@ -589,7 +589,7 @@ def test_a_generation_the_deadline_gave_up_on_is_recorded_as_the_runner_records_
         for row in episode.agent.trajectory
     ]
     assert rows == [(0, None, None), (1, True, "wall_deadline")]
-    summary = episode.result.token_accounting.summary()
+    summary = episode.token_accounting()
     assert summary["responses"] == 2
     assert summary["provider_usage_missing_reasons"]["generation_aborted_at_wall_timeout"] == 1
     assert summary["counts"]["provider_output_tokens"]["complete"] is False

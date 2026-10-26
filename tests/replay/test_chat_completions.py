@@ -339,8 +339,7 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
     # Its token record says why it has no usage (evaluation/clock.py token_record).
     assert token_record(result)["provider_usage_missing_reason"] == "request_not_sent"
     result["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
-    accounting = TokenAccounting()
-    episode_records.account_tokens(result, None, accounting)
+    accounting = TokenAccounting([episode_records.account_tokens(result, None)])
     assert (result["clock_output_tokens"], result["clock_output_tokens_source"]) == (None, None)
     assert (accounting.responses, accounting.clock_sources) == (1, set())
     assert accounting.missing_reasons == {"request_not_sent": 1}

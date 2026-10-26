@@ -647,8 +647,8 @@ def test_the_generation_an_episode_ends_on_is_discarded_with_its_records(tmp_pat
 
 def test_the_row_of_a_call_the_episodes_end_gave_up_on_names_why(tmp_path):
     """N34: the shell's record of a call the task's end gave up on is synthesized and has no
-    reply of the harness's; its trajectory row names why, which the model timing reads to
-    leave it out (evaluation/clock.py summarize_model_timing)."""
+    reply of the harness's; its trajectory row names why, as the token totals and the model
+    timing leave it out (evaluation/clock.py Settlement)."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         try:

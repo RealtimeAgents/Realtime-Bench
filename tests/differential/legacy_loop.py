@@ -48,7 +48,6 @@ from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.runner import RUNNER_TIMING
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
@@ -791,11 +790,10 @@ def _run_stream_legacy(
         usage_after = episode_records.usage_snapshot(adapter)
         if usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(usage_before, usage_after)
-        # The runner kept the episode's token accounting on the environment.
-        accounting = getattr(env, "_token_accounting", None)
-        if accounting is None:
-            accounting = env._token_accounting = TokenAccounting()
-        episode_records.account_tokens(r, remaining_clock_tokens, accounting)
+        # The runner kept the episode's settlements on the environment; it reports every decision.
+        if not hasattr(env, "_settlements"):
+            env._settlements = []
+        env._settlements.append(episode_records.account_tokens(r, remaining_clock_tokens))
         observation_id = metadata.get("observation_id")
         for chunk in episode_records.output_chunks(r, k, observation_id):
             _emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk)

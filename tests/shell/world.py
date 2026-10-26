@@ -23,6 +23,7 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.shell import run_episode
@@ -349,6 +350,10 @@ class Episode:
 
     def statuses(self) -> list[str]:
         return [outcome.status for outcome in self.agent.outcomes]
+
+    def token_accounting(self) -> dict:
+        """The token totals main() takes from the episode's settlements (runner.py main)."""
+        return TokenAccounting(self.result.settlements).summary()
 
     @property
     def invalid(self) -> dict | None:

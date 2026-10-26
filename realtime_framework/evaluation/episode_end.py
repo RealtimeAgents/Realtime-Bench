@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation.clock import TokenAccounting
+from realtime_framework.evaluation.clock import Settlement
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Entry, Invalidated, Termination
 
@@ -169,7 +169,9 @@ class EpisodeResult:
     think_spent: float
     dropped_intermediate_frames: int
     stream_freeze_count: int  # the frames that froze the stream (kernel/turns.py _captured)
-    token_accounting: TokenAccounting | None  # turn-based, once a result was settled
+    # Turn-based: one for each result settled, in order, which main() takes the token totals and
+    # the model timing from (clock.py Settlement); a streaming episode settles none.
+    settlements: tuple[Settlement, ...]
     # Turn-based: wait, bounded, for the workers of generations the kernel gave up on, once the
     # snapshot is frozen and before the agent is closed (shell.py _drain_abandoned).
     drain_abandoned: Callable[[], None] | None
@@ -253,7 +255,7 @@ class EpisodeEnd:
         return late
 
     def result(
-        self, env, timeline: list[tuple], token_accounting=None, drain_abandoned=None
+        self, env, timeline: list[tuple], settlements=(), drain_abandoned=None
     ) -> EpisodeResult:
         return EpisodeResult(
             timeline=timeline,
@@ -269,6 +271,6 @@ class EpisodeEnd:
             think_spent=self.think_spent,
             dropped_intermediate_frames=self.dropped_intermediate_frames,
             stream_freeze_count=self.stream_freeze_count,
-            token_accounting=token_accounting,
+            settlements=tuple(settlements),
             drain_abandoned=drain_abandoned,
         )

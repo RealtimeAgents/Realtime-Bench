@@ -36,7 +36,7 @@ import traceback
 
 from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.config import DecisionBudget
-from realtime_framework.evaluation.clock import TokenAccounting, token_record
+from realtime_framework.evaluation.clock import Settlement, token_record
 from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.sandbox.observation.som import valid_inspection_proof
 
@@ -254,14 +254,11 @@ def clock_output_tokens(r: dict) -> tuple[int | None, str | None]:
     return None, None
 
 
-def account_tokens(
-    r: dict, remaining_clock_tokens: int | None, accounting: TokenAccounting
-) -> None:
-    """Settle the result's clock output tokens and its token record, and add the record to the
-    episode's token accounting: once per result, on the thread that owns the accounting, as
-    nothing locks it. Output past the remaining allowance is billed but not charged to the
-    clock: the clock count stops at the allowance and the excess is kept as post-horizon
-    tokens."""
+def account_tokens(r: dict, remaining_clock_tokens: int | None) -> Settlement:
+    """Settle the result's clock output tokens and its token record, once per result, and return
+    its settlement, which the episode's token accounting and model timing take (clock.py
+    Settlement). Output past the remaining allowance is billed but not charged to the clock: the
+    clock count stops at the allowance and the excess is kept as post-horizon tokens."""
     count, source = clock_output_tokens(r)
     if remaining_clock_tokens is not None and count is not None and count > remaining_clock_tokens:
         r["unclamped_clock_output_tokens"] = count
@@ -294,7 +291,11 @@ def account_tokens(
         "provider_upstream",
     ):
         r[name] = r["token_accounting"].get(name)
-    accounting.add(r["token_accounting"])
+    return Settlement(
+        r["token_accounting"],
+        (r.get("realtime_runtime") or {}).get("provider_call_started_monotonic_ns"),
+        r.get("provider_call_wall_latency_s"),
+    )
 
 
 def audit_output_caps(adapter, r: dict, budget: DecisionBudget) -> None:

@@ -23,6 +23,7 @@ from collections import Counter
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import runner
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.episode_end import EpisodeResult
 
 from . import baseline
@@ -127,7 +128,7 @@ def records(env: FakeEnvironment, agent, result: EpisodeResult) -> list[dict]:
             "active_end_unix_s": result.active_end_unix_s,
             "think_spent": result.think_spent,
             "frame_ages": env.frame_ages,
-            "token_accounting": result.token_accounting.summary(),
+            "token_accounting": TokenAccounting(result.settlements).summary(),
             "timeline": [
                 {
                     "decision": k,

@@ -1185,7 +1185,7 @@ def _u9(script: Script, p: Projection, notes: dict) -> None:
 def _u17(script: Script, p: Projection, notes: dict) -> None:
     """The token accounting's subtotal of the reported decisions, which the report checks the
     lifecycle against, leaves out the response of each decision the kernel gave up on
-    (clock.py TokenAccounting.leave_unreported; U17, N50; evaluation/shell.py _Shell._given_up),
+    (clock.py Settlement, unreported; U17, N50; evaluation/shell.py _Shell._given_up),
     and has none of a decision it never started (_give_up, _drop_after). Today's loop gives
     none up, accounts one response for each decision it started (legacy_loop.py _decide), and
     its subtotal is its totals."""

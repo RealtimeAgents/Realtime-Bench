@@ -22,6 +22,7 @@ from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.sandbox.actions import TAP_HOLD_S, ActionRejected, GuestEnvironment
 from tests.fake_clock import FakeClock
@@ -649,17 +650,17 @@ def _drive(episode, env, script, driver, config, clocks, now) -> EpisodeResult:
         if result is not None:
             result.drain_abandoned()
         env.usage = episode_records.usage_snapshot(agent)
-        env.subtotal = _subtotal(None if result is None else result.token_accounting)
+        env.subtotal = _subtotal(() if result is None else result.settlements)
         episode.finish()
 
 
-def _subtotal(accounting) -> dict | None:
+def _subtotal(settlements) -> dict | None:
     """The clock counts of the reported decisions' responses, which the report checks the
     lifecycle against (reporting.py report): the token accounting's own subtotal once a response
     goes unreported, else its totals (clock.py TokenAccounting.summary; N50)."""
-    if accounting is None:
+    if not settlements:
         return None
-    summary = accounting.summary()
+    summary = TokenAccounting(settlements).summary()
     reported = summary.get("reported_decisions", summary)
     counts = reported["counts"]["clock_output_tokens"]
     return {

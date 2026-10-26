@@ -20,6 +20,7 @@ import realtime_framework.entity.model as model_module
 from realtime_framework.clock import Clocks, FrameClock
 from realtime_framework.entity.model import TRANSPORT_RETRY, PendingDecision
 from realtime_framework.evaluation import runner
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.sandbox.actions import GuestEnvironment
 
 from ..fake_clock import FakeClock
@@ -283,5 +284,5 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
     line = f"[default] k=0 generation TIMED OUT (>{expected}s, provider_watchdog) — discarded"
     assert line in logs
     # The call's token record names the watchdog for its missing usage.
-    missing = result.token_accounting.summary()["provider_usage_missing_reasons"]
+    missing = TokenAccounting(result.settlements).summary()["provider_usage_missing_reasons"]
     assert missing == {"generation_aborted_at_provider_watchdog": 1}

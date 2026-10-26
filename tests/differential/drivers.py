@@ -44,8 +44,7 @@ def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> Epi
         invalid_run=getattr(env, "_invalid_run", None),
         loop_error=getattr(env, "_loop_error", None),
     )
-    accounting = getattr(env, "_token_accounting", None)
-    return end.result(env, timeline, accounting, env._drain_abandoned)
+    return end.result(env, timeline, getattr(env, "_settlements", ()), env._drain_abandoned)
 
 
 def shell(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> EpisodeResult:

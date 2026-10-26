@@ -338,7 +338,7 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
         (0, None),
         (1, "invalid_run"),
     ]
-    assert episode.result.token_accounting.summary()["responses"] == 1
+    assert episode.token_accounting()["responses"] == 1
 
 
 def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch):
@@ -358,7 +358,7 @@ def test_a_policy_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
         (1, None),
     ]
     assert [row["decision"] for row in episode.agent.trajectory] == [0, 1]
-    accounting = episode.result.token_accounting.summary()
+    accounting = episode.token_accounting()
     assert (accounting["responses"], accounting["reported_decisions"]["responses"]) == (2, 1)
 
 

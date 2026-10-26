@@ -277,7 +277,7 @@ def test_a_generation_the_watchdog_gave_up_on_is_recorded_as_the_runner_records_
     assert [(row["decision"], row["invalid_reason"]) for row in rows] == [
         (0, "generation_watchdog_timeout")
     ]
-    assert episode.result.token_accounting.summary()["responses"] == 1
+    assert episode.token_accounting()["responses"] == 1
     assert "[default] k=0 generation TIMED OUT (>7.0s, provider_watchdog) — discarded" in (
         episode.logs
     )

@@ -190,7 +190,7 @@
 | U11 | 出现 | `wall-third-failed-read-during-a-reply` | — | 同上，判无效时放弃（`invalid_run`）。随机脚本不生成墙钟读失败 |
 | U13 | 不比 | — | — | p1b 第七轮：已整理、后被内核丢弃的结果，轨迹行类型是 `decision`。对跑不比轨迹行 |
 | U14 | 已由 N44 消掉 | `wall-a-failed-read-takes-time` 现在两边的结束和快照时刻相同 | — | 读失败判无效，内核原来记在读返回时、旧循环记在发问时；N44 以后内核也记在发问时（`98a60cd`） |
-| U17 | 出现 | 墙钟 15 个，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-third-failed-read-during-a-reply` | 未重扫 | 内核放弃的生成（截止、任务结束、判无效），回复不进已回报决策的 token 小计（`reported_decisions`，`TokenAccounting.leave_unreported`）；规则删掉的决策，内核没有开始。旧循环每个开始了的决策记一次回复，不写小计，小计就是总数。规则从旧的小计里减掉这些决策的回复和 `clock_output_tokens`。投影取 `summary()` 的 `reported_decisions`，没有就取整份，和 `reporting.py` 的读法一样。默认 25 个种子里也出现 |
+| U17 | 出现 | 墙钟 15 个，例如 `runner-late_reply`、`wall-ends-during-a-reply`、`wall-third-failed-read-during-a-reply` | 未重扫 | 内核放弃的生成（截止、任务结束、判无效），回复不进已回报决策的 token 小计（`reported_decisions`；这些生成的结算记录标 `unreported`，`clock.py` `Settlement`）；规则删掉的决策，内核没有开始。旧循环每个开始了的决策记一次回复，不写小计，小计就是总数。规则从旧的小计里减掉这些决策的回复和 `clock_output_tokens`。投影取 `summary()` 的 `reported_decisions`，没有就取整份，和 `reporting.py` 的读法一样。默认 25 个种子里也出现 |
 | U18 | 没有脚本 | — | — | agent 的 accept、discard 抛错：外壳在自己的线程上跑它们，经 `_raised` 记成 `runner:run_exception`；旧循环在有界调用的工作线程上、`stream_generate`（legacy_turn.py）里跑（`accept`、`discard`），accept 那一半抛错记成 `provider:generation_error`，已被放弃的工作线程上抛的没人读，这一局有效。回放里 agent 不抛错（审查低 7） |
 | U21 | 出现 | `wall-an-action-runs-past-the-deadline-and-the-snapshot-takes-time` | 种子 880 | 截止落在一次动作执行里、读快照有耗时：内核读完快照才处理这次执行的回答，`ActionResolved` 的 `environment_tick` 和 outcome 的 `next_observation_tick` 取读完快照时的 tick，越过时限；旧循环取执行返回时的 tick。只影响记录。10-23 全面复查第 38 条定为不修、登记成预期差异（第 7 节）。随机脚本不再避开它，种子 0–4999 里只有 880 落进这种情形 |
 

@@ -123,6 +123,7 @@ from realtime_framework.evaluation.reporting import invalid_evaluation
 from realtime_framework.evaluation.reporting import resolve_run_identity
 from realtime_framework.evaluation.reporting import save_evaluation
 from realtime_framework.evaluation.reporting import summarize_cost
+from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.config import OUTPUT_CLOCK_POLICY
 from realtime_framework.evaluation.config import INTERACTABLES_PROTOCOL
 from realtime_framework.evaluation.config import INTERACTABLES_REPRESENTATION
@@ -939,8 +940,8 @@ def main():
         tok = getattr(agent, "token_usage", None) if agent is not None else None
         adapter_tok = tok
         tok = {"input_tokens": None, "output_tokens": None, "total_tokens": None, "responses": 0}
-        accounting = result.token_accounting if result is not None else None
-        token_accounting = accounting.summary() if accounting is not None else None
+        settlements = result.settlements if result is not None else ()
+        token_accounting = TokenAccounting(settlements).summary() if settlements else None
         if token_accounting is not None:
             counts = token_accounting["counts"]
             tok = {
@@ -955,7 +956,7 @@ def main():
         )
         from realtime_framework.evaluation.clock import summarize_model_timing
 
-        model_timing = summarize_model_timing(run_dir, interaction_mode=spec.interaction_mode)
+        model_timing = summarize_model_timing(settlements, interaction_mode=spec.interaction_mode)
         cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
         cost_known_usd = cost_accounting.get("known_cost_usd")
         invalid_run = invalid_runs[0] if invalid_runs else None

@@ -6,7 +6,6 @@ the payloads of its trace events and its action lifecycle record."""
 from __future__ import annotations
 
 import hashlib
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -220,8 +219,8 @@ def test_clock_output_tokens_takes_only_non_negative_numbers():
 
 
 def test_tokens_within_the_allowance_are_charged_whole():
-    totals, r = TokenAccounting(), {"provider_output_tokens": 300, "remaining_clock_tokens": None}
-    episode_records.account_tokens(r, 2_560, totals)
+    r = {"provider_output_tokens": 300, "remaining_clock_tokens": None}
+    settlement = episode_records.account_tokens(r, 2_560)
     assert r["clock_output_tokens"] == r["action_output_tokens"] == 300
     assert r["clock_output_tokens_source"] == "provider_reported_output_usage"
     assert r["remaining_clock_tokens"] == 2_560
@@ -232,21 +231,22 @@ def test_tokens_within_the_allowance_are_charged_whole():
     )
     assert r["provider_output_tokens"] == accounting["provider_output_tokens"] == 300
     assert "provider_upstream" in r and "provider_token_semantics" in r
+    assert (settlement.record, settlement.outcome) == (accounting, "reported")
+    totals = TokenAccounting([settlement])
     assert totals.responses == 1
     assert totals.sums["clock_output_tokens"] == 300
 
 
 def test_output_past_the_allowance_is_billed_but_not_charged():
-    totals = TokenAccounting()
     r = {"native_received_output_tokens": 500, "native_received_output_tokens_source": "ids"}
-    episode_records.account_tokens(r, 256, totals)
+    totals = TokenAccounting([episode_records.account_tokens(r, 256)])
     assert (r["clock_output_tokens"], r["action_output_tokens"]) == (256, 256)
     assert r["clock_output_tokens_source"] == "episode_horizon_clamped:ids"
     assert (r["unclamped_clock_output_tokens"], r["post_horizon_output_tokens"]) == (500, 244)
     assert totals.responses == 1
     assert totals.sums["post_horizon_output_tokens"] == 244
     r = {"usage": {"output_tokens": 300}}
-    episode_records.account_tokens(r, 0, totals)
+    episode_records.account_tokens(r, 0)
     assert r["clock_output_tokens"] == 0 and r["post_horizon_output_tokens"] == 300
 
 
@@ -261,25 +261,24 @@ USAGE = {
 
 def test_a_call_the_episodes_end_gave_up_on_stays_out_of_the_token_totals():
     """N34: the record of a call the task's end or an invalidation gave up on is synthesized. It
-    keeps its token record, which says so, but the episode's totals leave it out: those of the
-    accepted calls stay complete. One the deadline gave up on still leaves them incomplete
-    (decision 48)."""
-    totals = TokenAccounting()
+    keeps its token record, which says so, and the shell marks its settlement abandoned
+    (shell.py _given_up): the episode's totals leave it out, and those of the accepted calls stay
+    complete. One the deadline gave up on still leaves them incomplete (decision 48)."""
     accepted = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
-    episode_records.account_tokens(accepted, None, totals)
+    settlements = [episode_records.account_tokens(accepted, None)]
     abandoned = episode_records.abandoned_result(0.9, "task_end")
-    episode_records.account_tokens(abandoned, None, totals)
+    settlements.append(episode_records.account_tokens(abandoned, None))
+    settlements[-1].outcome = "abandoned"
     assert abandoned["token_accounting"]["harness_abort_reason"] == "task_end"
     record_reason = abandoned["token_accounting"]["provider_usage_missing_reason"]
     assert record_reason == "generation_aborted_at_task_end"
     assert "harness_abort_reason" not in accepted["token_accounting"]
-    summary = totals.summary()
+    summary = TokenAccounting(settlements).summary()
     assert summary["responses"] == 1 and summary["provider_usage_missing_reasons"] == {}
     assert summary["counts"]["provider_output_tokens"]["complete"] is True
-    episode_records.account_tokens(
-        episode_records.timed_out_result(2.0, "wall_deadline"), 0, totals
-    )
-    summary = totals.summary()
+    cut = episode_records.timed_out_result(2.0, "wall_deadline")
+    settlements.append(episode_records.account_tokens(cut, 0))
+    summary = TokenAccounting(settlements).summary()
     assert summary["responses"] == 2
     assert summary["counts"]["provider_output_tokens"]["complete"] is False
 
@@ -288,14 +287,14 @@ def test_a_partial_usage_is_known_but_leaves_the_totals_incomplete():
     """Decision 19: a failed Decision step reports the usage of the questions it answered and why
     the rest is missing. Its token record is partial; the episode's known totals take its counts,
     the totals are no longer complete, and its trajectory usage keeps the reason."""
-    totals = TokenAccounting()
     accepted = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
-    episode_records.account_tokens(accepted, None, totals)
     failed = {
         "usage": {"input_tokens": 1000, "output_tokens": 1},
         "provider_usage_missing_reason": "failed_request_usage_not_reported",
     }
-    episode_records.account_tokens(failed, None, totals)
+    totals = TokenAccounting(
+        [episode_records.account_tokens(r, None) for r in (accepted, failed)]
+    )
     record = failed["token_accounting"]
     assert record["provider_usage_status"] == "partial"
     assert record["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
@@ -317,17 +316,15 @@ def test_a_call_whose_decision_goes_unreported_stays_out_of_the_reported_subtota
     before it did, and one at the deadline, synthesized without usage. The totals count both, the
     second leaving them incomplete (decision 48); the subtotal of reported decisions leaves them
     out. A summary without one has no subtotal."""
-    totals = TokenAccounting()
     reported = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
-    episode_records.account_tokens(reported, None, totals)
-    assert "reported_decisions" not in totals.summary()
+    settlements = [episode_records.account_tokens(reported, None)]
+    assert "reported_decisions" not in TokenAccounting(settlements).summary()
     settled = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
-    episode_records.account_tokens(settled, None, totals)
     cut = episode_records.timed_out_result(2.0, "wall_deadline")
-    episode_records.account_tokens(cut, None, totals)
     for r in (settled, cut):
-        totals.leave_unreported(r["token_accounting"])
-    summary = totals.summary()
+        settlements.append(episode_records.account_tokens(r, None))
+        settlements[-1].outcome = "unreported"
+    summary = TokenAccounting(settlements).summary()
     clock = summary["counts"]["clock_output_tokens"]
     assert (summary["responses"], clock["known_total"], clock["complete"]) == (3, 40, False)
     assert summary["reported_decisions"] == {
@@ -340,35 +337,41 @@ def test_a_call_whose_decision_goes_unreported_stays_out_of_the_reported_subtota
     }  # fmt: skip
 
 
-def _trajectory(tmp_path, rows: list[dict]):
-    (tmp_path / "trajectory.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    return summarize_model_timing(tmp_path)
-
-
-def test_the_model_timing_leaves_out_a_call_the_episodes_end_gave_up_on(tmp_path):
-    """N34: that call has no provider timing, and the model timing of the calls made stays
+def test_the_model_timing_leaves_out_a_call_the_episodes_end_gave_up_on():
+    """A settlement keeps when its provider call started and how long it took. N34: a call the
+    episode's end gave up on has no provider timing, and the model timing of the calls made stays
     complete. One the deadline gave up on still leaves it partial, with no wall or busy time
     (decision 48)."""
-    called = {
-        "decision": 0,
-        "realtime_runtime": {"provider_call_started_monotonic_ns": 1_000_000_000},
-        "provider_call_wall_latency_s": 0.5,
-    }
-    abandoned = {"decision": 1, "harness_abort_reason": "task_end"}
-    timing = _trajectory(tmp_path, [called, abandoned])
+    called = episode_records.account_tokens(
+        {
+            "realtime_runtime": {"provider_call_started_monotonic_ns": 1_000_000_000},
+            "provider_call_wall_latency_s": 0.5,
+        },
+        None,
+    )
+    assert (called.call_started_ns, called.call_latency_s) == (1_000_000_000, 0.5)
+    abandoned = episode_records.account_tokens(
+        episode_records.abandoned_result(0.9, "task_end"), None
+    )
+    abandoned.outcome = "abandoned"
+    timing = summarize_model_timing([called, abandoned])
     assert (timing["status"], timing["call_count"], timing["wall_time_s"]) == ("complete", 1, 0.5)
-    timing = _trajectory(tmp_path, [called, {"decision": 1}])
+    cut = episode_records.account_tokens(
+        episode_records.timed_out_result(2.0, "wall_deadline"), None
+    )
+    cut.outcome = "unreported"
+    timing = summarize_model_timing([called, cut])
     assert (timing["status"], timing["unfinished_calls"]) == ("partial", 1)
     assert timing["wall_time_s"] is None and timing["busy_time_s"] is None
 
 
 def test_a_result_without_a_count_charges_nothing():
     r = {"provider_usage_missing_reason": "generation_aborted_at_wall_timeout"}
-    episode_records.account_tokens(r, None, TokenAccounting())
+    episode_records.account_tokens(r, None)
     assert r["clock_output_tokens"] is None and r["clock_output_tokens_source"] is None
     assert r["token_accounting"]["provider_usage_status"] == "unavailable"
     r = {"native_received_output_tokens": 40}
-    episode_records.account_tokens(r, None, TokenAccounting())
+    episode_records.account_tokens(r, None)
     assert r["clock_output_tokens"] == 40 and r["post_horizon_output_tokens"] == 0
 
 

@@ -389,8 +389,7 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     rows = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
     assert [(row["tick"], row["stale"]) for row in map(json.loads, rows)] == [(0, False)]
     # Settled as the runner settles each result (evaluation/episode_records.py account_tokens).
-    accounting = TokenAccounting()
-    episode_records.account_tokens(result, None, accounting)
+    accounting = TokenAccounting([episode_records.account_tokens(result, None)])
     record = result["token_accounting"]
     assert record["provider_usage_status"] == "partial"
     assert record["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
