@@ -6068,7 +6068,6 @@
    "benchmark_eligible": true,
    "comparison_scope": "model",
    "defaults": {
-    "chat_include_usage": true,
     "chat_stream": true,
     "model_revision": null,
     "reasoning_effort": "provider_default",

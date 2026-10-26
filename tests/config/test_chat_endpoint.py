@@ -10,6 +10,7 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
+from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.providers.preflight import check_episode
 
@@ -27,14 +28,6 @@ def environment():
     yield
     os.environ.clear()
     os.environ.update(saved)
-
-
-def yaml_defaults(tmp_path, text: str) -> dict:
-    models = tmp_path / "models"
-    models.mkdir()
-    (models / "m.yaml").write_text(text)
-    ((_, definition),) = catalog.load_definitions(models)
-    return definition["defaults"]
 
 
 def trial(capsys, *argv) -> dict:
@@ -61,11 +54,25 @@ def usage_error(capsys, argv, message):
 @pytest.mark.parametrize(
     "setting, expected", [("", True), (", include_usage: false", False)], ids=["default", "off"]
 )
-def test_yaml_stream_usage(tmp_path, setting, expected):
-    defaults = yaml_defaults(
-        tmp_path, f"endpoint: {{api: chat_completions, model: m, base_url: {ENDPOINT}{setting}}}\n"
+def test_yaml_stream_usage(tmp_path, monkeypatch, setting, expected):
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "m.yaml").write_text(
+        f"endpoint: {{api: chat_completions, model: m, base_url: {ENDPOINT}{setting}}}\n"
     )
-    assert defaults["chat_include_usage"] is expected
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+    catalog._catalog_entries.cache_clear()
+    try:
+        assert catalog.to_model_config("m", fps=1.0).chat_include_usage is expected
+    finally:
+        catalog._catalog_entries.cache_clear()
+
+
+def test_built_config_stream_usage():
+    """A chat_completions config built without a YAML, as the runner's --adapter path builds one
+    (evaluation/runner.py main), asks for the usage as a YAML's does; no other API reads it."""
+    assert ModelConfig(adapter_type="chat_completions", model_name="m").chat_include_usage is True
+    assert ModelConfig(adapter_type="openrouter", model_name="m").chat_include_usage is False
 
 
 @pytest.mark.parametrize(

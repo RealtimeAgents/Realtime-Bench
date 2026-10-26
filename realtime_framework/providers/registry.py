@@ -313,10 +313,9 @@ def load_definitions(directory):
         definition["defaults"].setdefault("temperature_policy", "provider_default")
         definition["defaults"]["model_revision"] = settings.get("revision")
         if api == "chat_completions":
-            definition["defaults"].update(
-                chat_stream=settings.get("stream", True),
-                chat_include_usage=settings.get("include_usage", True),
-            )
+            definition["defaults"]["chat_stream"] = settings.get("stream", True)
+            if "include_usage" in settings:
+                definition["defaults"]["chat_include_usage"] = settings["include_usage"]
         if "upstream_provider" in settings:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
         if "provider_options" in value:
@@ -760,8 +759,6 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     if e.adapter_type == "chat_completions":
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
-            # Same default as YAML presets; STREAM_CHAT_INCLUDE_USAGE below can still override.
-            fields.setdefault("chat_include_usage", True)
             # The trial worker's --context-preset, in place of a YAML's context_preset.
             preset = os.environ.get("BENCHMARK_CONTEXT_PRESET")
             if preset:
