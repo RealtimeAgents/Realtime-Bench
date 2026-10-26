@@ -15,15 +15,16 @@ over or past its deadline, its reply was given up, or the frame it names cannot 
 the provider cancels is withdrawn while its action waits; one that executed is recorded as it ran.
 A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
 is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
-a push its watchdog finds stuck, or pushes failing in a row. A push the agent holds while it waits
-for the session (PushHeld) is not stuck, and its watchdog waits. The shell runs the abort on a
-lane of its own while the episode goes on, and answers it (GenerationAborted) once the agent has
-cleaned the session up and closed it, which fails a push stuck in it. Meanwhile no frame goes in
-and no reply starts; then the next reply starts and rebuilds the session from the accepted history
-(phase2.md, 什么时候触发生成). The rebuilt session starts afresh: the pushes failed before count no
-more, nor does the one the abort fails, and its watchdogs count from then. A session that still
-takes no frame after that, or one that takes none before the first reply, when there is none to
-give up, invalidates the run.
+a push its watchdog finds stuck, or pushes failing in a row. While the agent prepares the session
+(SessionPreparing), a push out is not stuck in it, and its watchdog waits until the session is
+prepared (SessionPrepared). The shell runs the abort on a lane of its own while the episode goes
+on, and answers it (GenerationAborted) once the agent has cleaned the session up and closed it,
+which fails a push stuck in it. Meanwhile no frame goes in and no reply starts; then the next
+reply starts and rebuilds the session from the accepted history (phase2.md, 什么时候触发生成).
+The rebuilt session starts afresh: the pushes failed before count no more, nor does the one the
+abort fails, and its watchdogs count from then. A session that still takes no frame after that,
+or one that takes none before the first reply, when there is none to give up, invalidates the
+run.
 Only a watchdog finds a session stuck, so one that stops taking frames less than a watchdog before
 the end, or whose rebuilt session has not had a watchdog's time when the end comes, leaves the run
 valid.
@@ -146,25 +147,22 @@ class FramePushed:
 
 
 @dataclass(frozen=True)
-class PushHeld:
-    """The push waits for the session instead of going in, and is not stuck in it: a session the
-    provider asked to renew takes no frame until the reply on it has ended, as Gemini Live's after
-    a goAway (harnesses/streaming/agent.py ``_push``); a reply readies the session or asks for
-    itself, which the push waits for; or the push waits out a backoff between attempts to reopen
-    the session, of the agent's retry or the encoder's own (decision N48). Its watchdog waits too,
-    until PushResumed; the reply's own watchdog bounds a wait for a reply, and the shared retry
-    policy a backoff."""
-
-    observation_id: str | None
+class SessionPreparing:
+    """The agent prepares the session, which takes no frame meanwhile, and no push is stuck in
+    it: a push or a reply opens it again, rebuilds or renews it, through the backoffs between
+    attempts of the shared retry; or a push waits for the renewal a goAway asked for until the
+    reply on the session has ended (harnesses/streaming/agent.py). The watchdog of a push out,
+    and of one pushed meanwhile, waits until SessionPrepared (decision 13). The reply's own
+    watchdog bounds a preparation for a reply, or behind one; the shared retry policy and each
+    attempt's own bounds the rest."""
 
     priority: ClassVar[Priority] = Priority.COMPLETION
 
 
 @dataclass(frozen=True)
-class PushResumed:
-    """The push held goes on, the session renewed or about to be: its watchdog counts from now."""
-
-    observation_id: str | None
+class SessionPrepared:
+    """The session is prepared, or its preparation gave up: the push out has its whole watchdog
+    from now."""
 
     priority: ClassVar[Priority] = Priority.COMPLETION
 
@@ -252,7 +250,7 @@ class StreamingPolicy:
         self._latest: FrameCaptured | None = None  # the newest frame pushed
         self._capturing = False
         self._pushing: FrameCaptured | None = None
-        self._push_held = False  # it waits for the session (PushHeld)
+        self._preparing = False  # the agent prepares the session (SessionPreparing)
         self._queued: FrameCaptured | None = None  # the newest frame captured meanwhile
         self._failed_pushes = 0  # in a row, on this session
         self._stale_push = False  # the push out was put into a session since given up
@@ -306,8 +304,8 @@ class StreamingPolicy:
                 self._captured(event)
             case FramePushed():
                 self._pushed(event)
-            case PushHeld() | PushResumed():
-                self._held(event)
+            case SessionPreparing() | SessionPrepared():
+                self._prepared(event)
             case GenerationAborted():
                 self._aborted()
             case ActionArrived():
@@ -477,7 +475,8 @@ class StreamingPolicy:
 
     def _push(self, frame: FrameCaptured) -> None:
         self._pushing = frame
-        self._arm_push_watchdog()
+        if not self._preparing:
+            self._arm_push_watchdog()
         self.kernel.emit(PushFrame(frame.observation_id))
 
     def _arm_push_watchdog(self) -> None:
@@ -490,7 +489,6 @@ class StreamingPolicy:
         kernel = self.kernel
         frame, self._pushing = self._pushing, None
         stale, self._stale_push = self._stale_push, False
-        self._push_held = False
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
         # Counted also once the episode is over: every frame captured goes in or is dropped, but
@@ -522,17 +520,17 @@ class StreamingPolicy:
             queued, self._queued = self._queued, None
             self._push(queued)
 
-    def _held(self, event: PushHeld | PushResumed) -> None:
-        """The push out waits for the session's renewal, which is no push stuck: its watchdog
-        waits too, and counts afresh once the push goes on, or once an abort out returned."""
-        pushing = self._pushing
-        if pushing is None or pushing.observation_id != event.observation_id:
+    def _prepared(self, event: SessionPreparing | SessionPrepared) -> None:
+        """The agent starts preparing the session, which is no push stuck in it, or the session
+        is prepared: the watchdog of the push out waits, and counts afresh once the session is
+        prepared, or once an abort out returned."""
+        self._preparing = isinstance(event, SessionPreparing)
+        if self._pushing is None:
             return
         kernel = self.kernel
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
-        self._push_held = isinstance(event, PushHeld)
-        if not self._push_held and self._aborting is None and not self._stopped():
+        if not self._preparing and self._aborting is None and not self._stopped():
             self._arm_push_watchdog()
 
     def _session_stuck(self, reason: str, invalid_reason: str, detail: str) -> None:
@@ -599,7 +597,7 @@ class StreamingPolicy:
             return
         self._start_reply()
         if self._pushing is not None:
-            if not self._push_held:
+            if not self._preparing:
                 self._arm_push_watchdog()
         elif self._queued is not None:
             queued, self._queued = self._queued, None

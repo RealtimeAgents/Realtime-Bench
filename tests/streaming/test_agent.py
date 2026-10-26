@@ -17,7 +17,11 @@ from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.evaluation.kernel.events import Outcome
-from realtime_framework.evaluation.kernel.streaming import CallsCancelled, PushHeld, PushResumed
+from realtime_framework.evaluation.kernel.streaming import (
+    CallsCancelled,
+    SessionPrepared,
+    SessionPreparing,
+)
 from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
     INVALID_GROUNDING_FRAME,
@@ -520,6 +524,7 @@ def test_a_reply_that_fails_partway_raises_and_the_session_is_rebuilt_before_it_
 
 def test_a_renewal_the_provider_asked_for_runs_before_the_next_push(monkeypatch, clock):
     agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
     _two_frames(agent, clock)
     agent.driver.renewal_required = True
     agent.push(observation(clock, 3))
@@ -1012,6 +1017,7 @@ def test_closing_while_a_push_reopens_the_session_closes_what_it_opened(monkeypa
     """The push's reopen is under way when the episode closes the agent: close waits for it and
     closes the session it opened, whether the frame went in first or not."""
     agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
     _two_frames(agent, clock)
     agent.abort(6)
     agent.driver.connect_s = 2.0
@@ -1259,7 +1265,8 @@ def test_a_reply_whose_connection_drops_before_it_said_anything_is_asked_for_aga
 ):
     """Nothing of the reply came before its connection dropped, which the encoder takes as
     transient, so none of its actions went to the kernel: it is asked for again on the session
-    rebuilt from the view after the shared backoff, as a turn is, and its click goes in then."""
+    rebuilt from the view after the shared backoff, as a turn is, and its click goes in then.
+    The kernel hears the session is being prepared while the reply rebuilds it."""
     trace = RecordingTrace()
     agent = make_agent(monkeypatch, clock, trace=trace)
     posted = []
@@ -1274,7 +1281,12 @@ def test_a_reply_whose_connection_drops_before_it_said_anything_is_asked_for_aga
         ("sync", "runtime_recovery"),
         ("reply", 7),
     ]
-    assert [a.call_id for a in posted] == ["c1"]
+    assert [type(event).__name__ for event in posted] == [
+        "SessionPreparing",
+        "SessionPrepared",
+        "ActionArrived",
+    ]
+    assert posted[-1].call_id == "c1"
     assert _reply_attempts(trace) == [("retry", TRANSIENT), ("ok", None)]
     agent.close()
 
@@ -1384,12 +1396,21 @@ def test_closing_ends_a_push_waiting_to_try_reopening_the_session_again(monkeypa
     assert "error" in pushing
 
 
+def _preparations(posted) -> list[tuple[str, float]]:
+    """Each SessionPreparing and SessionPrepared the agent posted, with when."""
+    return [
+        (type(event).__name__, at)
+        for event, at in posted
+        if isinstance(event, (SessionPreparing, SessionPrepared))
+    ]
+
+
 def test_a_push_held_for_a_renewal_tells_the_kernel_when_it_waits_and_when_it_goes_on(
     monkeypatch, clock
 ):
-    """The held push is waiting, not stuck (review-final-streaming 中-2): PushHeld goes to the
-    kernel as it starts waiting, PushResumed once the reply it waits for is off the session,
-    before the frame goes in."""
+    """The held push is waiting, not stuck (review-final-streaming 中-2): the kernel hears the
+    session is being prepared as the push starts waiting for the renewal, and prepared once the
+    reply it waits for is off the session and the push renewed it, before the frame goes in."""
     agent = make_agent(monkeypatch, clock)
     posted = []
     agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
@@ -1402,12 +1423,9 @@ def test_a_push_held_for_a_renewal_tells_the_kernel_when_it_waits_and_when_it_go
     clock.sleep(0.5)
     agent.accept(7)
     assert clock.wait(pushed, 1.0)
-    holds = [
-        (type(event).__name__, event.observation_id, at)
-        for event, at in posted
-        if isinstance(event, (PushHeld, PushResumed))
-    ]
-    assert holds == [("PushHeld", "obs-3", 2.0), ("PushResumed", "obs-3", 3.5)]
+    assert _preparations(posted) == [("SessionPreparing", 2.0), ("SessionPrepared", 3.5)]
+    renewed, pushed_after = (call[:2] for call in agent.driver.calls[-2:])
+    assert (renewed, pushed_after) == (("sync", "go_away"), ("push", "obs-3"))
     agent.close()
 
 
@@ -1438,6 +1456,7 @@ def test_a_reply_refused_for_a_go_away_read_after_its_renewal_check_renews_and_i
 
 def test_a_push_refused_for_a_go_away_read_after_its_check_renews_and_goes_in(monkeypatch, clock):
     agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
     _two_frames(agent, clock)
     agent.driver.go_away_on = ["push"]
     agent.push(observation(clock, 3))
@@ -1470,10 +1489,9 @@ def test_a_push_refused_for_a_go_away_while_a_reply_is_on_waits_for_it(monkeypat
     agent.accept(7)
     assert clock.wait(pushed, 1.0)
     assert "error" not in pushing
-    assert [type(e).__name__ for e in posted if isinstance(e, (PushHeld, PushResumed))] == [
-        "PushHeld",
-        "PushResumed",
-    ]
+    assert [
+        type(e).__name__ for e in posted if isinstance(e, (SessionPreparing, SessionPrepared))
+    ] == ["SessionPreparing", "SessionPrepared"]
     assert agent.driver.calls[-2][:2] == ("sync", "go_away")
     agent.close()
 
@@ -1483,6 +1501,7 @@ def test_a_close_that_outlasts_its_bound_is_logged_not_raised(monkeypatch, clock
     as a turn's close (RealtimeRuntime.close), the timeout is logged and the episode's outcome
     stands; stopping the execution thread ends the push."""
     agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
     _two_frames(agent, clock)
     agent.abort(6)
     agent.driver.connect_s = 20.0
@@ -1495,28 +1514,25 @@ def test_a_close_that_outlasts_its_bound_is_logged_not_raised(monkeypatch, clock
     assert "error" in pushing
 
 
-def test_a_push_waiting_out_the_backoff_to_reopen_the_session_is_held_meanwhile(monkeypatch, clock):
-    """Between attempts to reopen the session the push waits, not stuck (review-final-streaming
-    中-1, decision N48): a PushHeld before each backoff, a PushResumed as the next attempt
-    starts, whose own time its watchdog counts."""
+def test_a_push_reopening_the_session_through_its_backoffs_prepares_it_meanwhile(
+    monkeypatch, clock
+):
+    """Reopening the session, the push waits, not stuck (review-final-streaming 中-1): the
+    session is being prepared from the first attempt, through both backoffs and the attempts
+    after them, until the third attempt opened it (decision 13)."""
     agent = make_agent(monkeypatch, clock)
     posted = []
     agent.bind_inbox(lambda event: posted.append((event, clock.monotonic())), ORIGIN)
     _two_frames(agent, clock)
     agent.abort(6)
     agent.driver.connect_failures = [ConnectionError("1011 internal error")] * 2
+    started, attempts = clock.monotonic(), agent.driver.connect_attempts
     agent.push(observation(clock, 3))
-    holds = [
-        (type(event).__name__, event.observation_id, at)
-        for event, at in posted
-        if isinstance(event, (PushHeld, PushResumed))
-    ]
-    assert [(name, observation_id) for name, observation_id, _ in holds] == [
-        ("PushHeld", "obs-3"),
-        ("PushResumed", "obs-3"),
-    ] * 2
-    held, resumed = holds[0][2], holds[1][2]
-    assert resumed - held > 0.5  # the first backoff, 1 s ± 25%
+    (preparing, started_at), (prepared, prepared_at) = _preparations(posted)
+    assert (preparing, prepared) == ("SessionPreparing", "SessionPrepared")
+    assert started_at == started
+    assert prepared_at - started_at >= 3.0  # the backoffs, 1 s and 3 s ± 25%
+    assert agent.driver.connect_attempts - attempts == 3
     assert agent.driver.calls[-1][:2] == ("push", "obs-3")
     agent.close()
 
@@ -1533,11 +1549,13 @@ class _OpenedOnce(OpenAIRealtimeDriver):
         await super()._connect(request)
 
 
-def test_a_push_waiting_out_the_drivers_own_connect_backoff_is_held_meanwhile(monkeypatch, clock):
+def test_a_push_waiting_out_the_drivers_own_connect_backoff_prepares_the_session_meanwhile(
+    monkeypatch, clock
+):
     """OpenAI Realtime's driver retries opening the connection itself, under the shared retry
     policy (decision 39), so a push reopening the session through it waits out the backoffs
-    inside the driver: it is held for each all the same, and resumed as the next attempt starts
-    (decision N48, review-streaming 中-4). Every handshake is refused, so the driver's retry
+    inside the driver: the session is being prepared from the first handshake until the last
+    (decision 13, review-streaming 中-4). Every handshake is refused, so the driver's retry
     gives up after its fourth attempt, and the push with it."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     agent = make_agent(monkeypatch, clock, _OpenedOnce, REALTIME)
@@ -1552,15 +1570,9 @@ def test_a_push_waiting_out_the_drivers_own_connect_backoff_is_held_meanwhile(mo
     agent.driver.client = SimpleNamespace(realtime=SimpleNamespace(connect=refuse))
     with pytest.raises(TransportFailureError):
         agent.push(observation(clock, 1))
-    holds = [
-        (type(event).__name__, event.observation_id, at)
-        for event, at in posted
-        if isinstance(event, (PushHeld, PushResumed))
+    assert len(handshakes) == 4
+    assert _preparations(posted) == [
+        ("SessionPreparing", handshakes[0]),
+        ("SessionPrepared", handshakes[-1]),
     ]
-    assert [(name, observation_id) for name, observation_id, _ in holds] == [
-        ("PushHeld", "obs-1"),
-        ("PushResumed", "obs-1"),
-    ] * 3
-    assert [at for name, _, at in holds if name == "PushHeld"] == handshakes[:3]
-    assert [at for name, _, at in holds if name == "PushResumed"] == handshakes[1:]
     agent.close()

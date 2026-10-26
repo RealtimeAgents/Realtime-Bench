@@ -506,8 +506,6 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             )
 
         async def send(attempt):
-            if attempt > 1:
-                self._backing_off(False)
             try:
                 with trace_scope(connect_attempt=attempt):
                     await asyncio.to_thread(open_session, self._epoch)
@@ -527,7 +525,6 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             if not retry_cancel_event().is_set():
                 with trace_scope(connect_attempt=attempt):
                     self._record_wait("connect_backoff", delay)
-                self._backing_off(True)
 
         # The session the connect resumes: the newest retained frame, or none at all.
         items = () if request.history is None else request.history.items

@@ -446,5 +446,5 @@ COVERAGE = {
         sim.world.abort_s > 0
         and any(start > at for _, at in sim.aborted for _, start in sim.started)
     ),
-    "a push held for the session's renewal": lambda sim: sim.entries("PushHeld"),
+    "a push held for the session's renewal": lambda sim: sim.entries("SessionPreparing"),
 }

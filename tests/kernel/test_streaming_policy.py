@@ -26,7 +26,11 @@ from realtime_framework.evaluation.kernel.events import (
     StartGeneration,
     Termination,
 )
-from realtime_framework.evaluation.kernel.streaming import StreamingConfig
+from realtime_framework.evaluation.kernel.streaming import (
+    SessionPrepared,
+    SessionPreparing,
+    StreamingConfig,
+)
 from realtime_framework.harnesses.default.frames import (
     FRAME_NOT_IN_TABLE,
     INVALID_GROUNDING_FRAME,
@@ -772,10 +776,27 @@ def test_the_episode_goes_on_while_an_abort_runs():
     assert sim.records[-1].semantic == 14.0
 
 
+def test_a_push_while_the_session_is_being_prepared_has_its_watchdog_once_it_is_prepared():
+    """The agent prepares the session from 0.5 to 8, as a reply that reopens it through the
+    backoffs of the shared retry (decision 13). The push of the frame captured at 1 goes in
+    meanwhile; the next push, from 2, takes until 17. Neither has a watchdog while the session is
+    being prepared, whatever push is out: the second has its whole watchdog from 8, and the reply
+    is not given up for it."""
+    world = World(posts=((0.5, SessionPreparing()), (8.0, SessionPrepared())), push_times={3: 15.0})
+    sim = _run(world, 20.0)
+    # The first push's as it starts, the long push's once the session is prepared, then each
+    # push's from 17 on.
+    armed = [e.semantic for e in sim.entries("TimerSet") if e.data["kind"] == "push_watchdog"]
+    assert armed[:3] == [0.0, 8.0, 17.0]
+    assert sim.data("GenerationAbandoned") == [{"generation": 1, "reason": "deadline"}]
+    assert sim.termination.invalid is None
+
+
 def test_a_push_held_for_the_sessions_renewal_is_not_stuck():
     """The session is to be renewed from 1, so the push of the frame captured then waits for the
-    reply on it, which runs until 14, and says it is held. Its watchdog does not give that reply up:
-    the reply ends on its own and is accepted, and the push goes in once it has."""
+    reply on it, which runs until 14, and the session is being prepared meanwhile. Its watchdog
+    does not give that reply up: the reply ends on its own and is accepted, and the push goes in
+    once it has."""
     sim = _run(World(replies=[Reply(14.0)], renewal_pushes={2}), 20.0)
     assert sim.data("GenerationAbandoned") == [{"generation": 2, "reason": "deadline"}]
     assert sim.accepted == [1]

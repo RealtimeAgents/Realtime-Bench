@@ -43,7 +43,11 @@ from realtime_framework.harnesses.default.execution_thread import ExecutionThrea
 from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
-from realtime_framework.providers.session_lifecycle import SessionLifecycle, StatelessSession
+from realtime_framework.providers.session_lifecycle import (
+    SessionLifecycle,
+    StatelessSession,
+    session_preparing,
+)
 from tests.fake_clock import FakeClock
 
 from .test_gemini_live_receive import (
@@ -326,6 +330,47 @@ def test_a_close_its_caller_gives_up_on_still_closes():
         assert rig.encoder.log == [("interrupt", "turn-0"), ("close", 5.0)]
         assert not rig.encoder._connected
         assert rig.clock.wait(abort, 100.0)  # the abort ends when its interrupt does
+
+
+@pytest.mark.parametrize(
+    "before",
+    ["ready", "closed", "dirty", "cleaning-up", "renewal-due"],
+)
+def test_readying_tells_the_context_as_it_starts_preparing_the_session(before):
+    """ensure_ready and renew tell the context's session_preparing as each starts preparing the
+    session (decision 13): waiting for an abort's cleanup, reopening, rebuilding or renewing it.
+    A ready session they leave as it is tells nothing."""
+    with _rig() as rig:
+        encoder, log = rig.encoder, rig.encoder.log
+        encoder.interrupt_s = 1.0
+        if before == "closed":
+            rig.run(encoder.close())
+        elif before == "dirty":
+            encoder.mark_dirty()
+            encoder.syncs.append(EXACT)
+        elif before == "renewal-due":
+            encoder.renewal = "go_away"
+            encoder.syncs.append(EXACT)
+        log.clear()
+        if before == "cleaning-up":
+            rig.thread.submit(encoder.abort(GENERATION))
+            rig.clock.sleep(0.5)  # the abort's interrupt is under way
+        with session_preparing(lambda: log.append(("preparing",))):
+            rig.run(rig.ensure_ready())
+            rig.run(encoder.renew(SEED, HISTORY, rig.records))
+    assert log == {
+        "ready": [],
+        "closed": [("preparing",), ("connect", HISTORY, 0.0)],
+        "dirty": [("preparing",), ("sync", "runtime_recovery", True, HISTORY)],
+        "cleaning-up": [
+            ("interrupt", "turn-0"),
+            ("preparing",),
+            ("close", 1.0),
+            ("preparing",),
+            ("connect", HISTORY, 1.0),
+        ],
+        "renewal-due": [("preparing",), ("sync", "go_away", False, HISTORY)],
+    }[before]
 
 
 def test_a_dirty_session_is_rebuilt_by_a_recovery_sync():

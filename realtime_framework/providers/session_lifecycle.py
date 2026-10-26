@@ -34,23 +34,23 @@ from realtime_framework.entity.request import CanonicalRequest
 # the connection all the same (decision 14).
 _CLEANUP_WAIT_S = 10.0
 
-_CONNECT_BACKOFF: contextvars.ContextVar[Callable[[bool], None]] = contextvars.ContextVar(
-    "connect_backoff", default=lambda waiting: None
+_PREPARING: contextvars.ContextVar[Callable[[], None]] = contextvars.ContextVar(
+    "session_preparing", default=lambda: None
 )
 
 
 @contextlib.contextmanager
-def connect_backoff(observe: Callable[[bool], None]):
-    """Have the encoder's own retry of a connect, in the operations run in this context, tell
-    ``observe(True)`` as it starts waiting out the backoff before its next attempt, and
-    ``observe(False)`` as that attempt starts: a native-streaming push readying the session is
-    held for the kernel meanwhile (decision N48). Like retry_cancellation, the ContextVar
+def session_preparing(observe: Callable[[], None]):
+    """Have ensure_ready and renew, run in this context, call ``observe()`` as each starts
+    preparing the session: waiting for an abort's cleanup, opening, rebuilding or renewing it. One
+    that leaves a ready session as it is calls nothing. Native streaming tells the kernel the
+    session is being prepared from then on (decision 13). Like retry_cancellation, the ContextVar
     follows the call onto the execution thread."""
-    token = _CONNECT_BACKOFF.set(observe)
+    token = _PREPARING.set(observe)
     try:
         yield
     finally:
-        _CONNECT_BACKOFF.reset(token)
+        _PREPARING.reset(token)
 
 
 class RenewalRequired(RuntimeError):
@@ -89,8 +89,7 @@ class SessionLifecycle:
     abandoned is not recorded, and _wait does not take it.
     The encoder's own waits (_wait) end early once their generation is abandoned. A bound on an
     operation (a goAway deadline, a close) ends with the operation, and an abort's close ends the
-    operation. An encoder that retries a connect itself also tells the context's connect_backoff
-    when each backoff starts and when the attempt after it does (_backing_off).
+    operation.
 
     Whether the session can take the next generation is its state. What became of each content
     the encoder wrote, sent, confirmed or refused by the server, or unknown, its session core
@@ -173,11 +172,14 @@ class SessionLifecycle:
         result is returned; a recovery that does not leave it exact raises. A failed reopen
         raises unrecorded.
         """
+        if self._cleanup is not None and not self._cleanup.done():
+            self._preparing()
         if await self._settle():
             await self._interrupt_and_close(None)
         async with self._session_lock():
             if self._connected and not self._dirty:
                 return None
+            self._preparing()
             self._stop_if_abandoned("its session")
             if self._connected:
                 result = await self._sync(
@@ -214,6 +216,7 @@ class SessionLifecycle:
         )
         if not reason:
             return None
+        self._preparing()
         async with self._session_lock():
             result = await self._sync(HistorySyncRequest(seed, reason, history), record)
         if result.history_state != ProviderHistoryState.EXACT:
@@ -330,10 +333,10 @@ class SessionLifecycle:
             raise RetryCancelled(f"generation abandoned during the {wait} wait")
 
     @staticmethod
-    def _backing_off(waiting: bool) -> None:
-        """The encoder's own retry of a connect starts waiting out a backoff (``waiting``), or
-        starts its next attempt: tell the context's connect_backoff."""
-        _CONNECT_BACKOFF.get()(waiting)
+    def _preparing() -> None:
+        """ensure_ready or renew starts preparing the session: tell the context's
+        session_preparing."""
+        _PREPARING.get()()
 
     def _record_delivery(self, state: str, contents, connection: str | None) -> None:
         """What became of contents the session core wrote on the trace's ``connection``, which

@@ -1,7 +1,7 @@
-"""A push the agent holds for the session's renewal (harnesses/streaming/agent.py ``push``), in a
-whole native-streaming episode on the fake live encoder and the fake clock, as
-test_agent_episode.py runs one: the kernel hears that it is held (kernel/streaming.py PushHeld),
-so its watchdog gives no reply up meanwhile."""
+"""A push that waits for the session while the agent prepares it (harnesses/streaming/agent.py
+``push``), in a whole native-streaming episode on the fake live encoder and the fake clock, as
+test_agent_episode.py runs one: the kernel hears that the session is being prepared
+(kernel/streaming.py SessionPreparing), so its push watchdog gives no reply up meanwhile."""
 
 from __future__ import annotations
 
@@ -44,9 +44,9 @@ def test_a_reply_longer_than_the_push_watchdog_after_a_go_away_runs_to_its_end(m
     assert not env._invalid_run
     abandoned = [e.data for e in records if e.kind == "GenerationAbandoned"]
     assert all(data["reason"] == "deadline" for data in abandoned), abandoned
-    assert [e.kind for e in records if e.kind in ("PushHeld", "PushResumed")][:2] == [
-        "PushHeld",
-        "PushResumed",
+    assert [e.kind for e in records if e.kind in ("SessionPreparing", "SessionPrepared")][:2] == [
+        "SessionPreparing",
+        "SessionPrepared",
     ]
     assert ("c1", "applied") in [(a["call_id"], a["result"]) for a in agent.action_history]
     calls = [c[:2] for c in agent.driver.calls]
@@ -71,8 +71,8 @@ def test_a_push_waiting_while_a_reply_reopens_the_session_is_held(monkeypatch):
     again for three attempts: the next reply reopens it through the shared retry (decision 39),
     which takes 12 s with its backoffs, past the push watchdog of the frame waiting meanwhile for
     the session the reply holds. That push waits for the reply, whose own watchdog bounds the
-    wait, and is not stuck in the session: it is held (decision N48, review-streaming 中-4), so
-    the reply is not given up for it."""
+    wait, and is not stuck in the session: the session is being prepared meanwhile (decision 13,
+    review-streaming 中-4), so the reply is not given up for it."""
     clock, records = FakeClock(), []
     record = _StreamingShell._record
 
@@ -100,5 +100,5 @@ def test_a_push_waiting_while_a_reply_reopens_the_session_is_held(monkeypatch):
     ]
     assert abandoned[0] == (1, "reply_watchdog")
     assert all(reason == "deadline" for _, reason in abandoned[1:]), abandoned
-    assert "PushHeld" in [e.kind for e in records]
+    assert "SessionPreparing" in [e.kind for e in records]
     assert agent.driver.connect_attempts == 5
