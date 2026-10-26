@@ -12,8 +12,10 @@ import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
+import httpx
 import pytest
 
 import realtime_framework.entity.model as model_module
@@ -22,7 +24,7 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, GenerationRequest, ProviderObservation
-from realtime_framework.entity.records import trace_scope, validate_episode_trace
+from realtime_framework.entity.records import TraceEvent, trace_scope, validate_episode_trace
 from realtime_framework.entity.request import (
     AnswerRequirements,
     CallParameters,
@@ -683,3 +685,119 @@ def test_decisions_cookie_stays_out_of_the_trace(tmp_path, monkeypatch):
     )
     # The Decisions httpx client replays the cookie the rejected attempt was served.
     assert _check_account_headers(events, stub, tmp_path) == [[], ["cookie"]]
+
+
+# A generation's end records the responses it left open (capture.py HttpCapture.record_open).
+
+
+class _Responses:
+    """The trace's capture, keeping each response record."""
+
+    def __init__(self):
+        self.records = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        self.records.append((event, payload, body))
+        return len(self.records)
+
+    def of(self, request_seq) -> list[tuple[bool, bytes]]:
+        return [
+            (payload["complete"], b"".join(body))
+            for event, payload, body in self.records
+            if event is TraceEvent.MODEL_RESPONSE_RECEIVED and payload["request_seq"] == request_seq
+        ]
+
+
+class _Chunks(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self):
+        pass
+
+
+class _HeldStream:
+    """LiteLLM's stream as the driver reads it, which ends once released. Its aclose does not reach
+    the HTTP response, as that of LiteLLM's Anthropic iterator does not."""
+
+    def __init__(self, released):
+        self.released = released
+        self.completion_stream = SimpleNamespace(chunk_parser=lambda chunk: chunk)
+
+    def __aiter__(self):
+        return self._events()
+
+    async def _events(self):
+        await self.released.wait()
+        return
+        yield
+
+    async def aclose(self):
+        pass
+
+
+async def _served(capture, chunks):
+    """One response through a capture's hooks; its request's record and its recording stream."""
+    request = httpx.Request("POST", "http://127.0.0.1:9/v1/chat/completions", content=b"{}")
+    await capture._on_request(request)
+    response = httpx.Response(200, stream=_Chunks(chunks), request=request)
+    await capture._on_response(response)
+    return capture._sent[request], response.stream
+
+
+def test_an_abandoned_generation_records_only_the_responses_it_left_open():
+    """The abort closes the client (session_lifecycle.py _interrupt_and_close), and the next
+    generation's client has its own capture. The abandoned generation's events end later: they
+    record the response it left open, and leave the next generation's, still being read, to be
+    recorded once its stream closes."""
+
+    async def scenario():
+        driver = ChatCompletionsDriver(
+            ModelConfig(
+                adapter_type="chat_completions",
+                model_name="replay-vlm",
+                api_base_url="http://127.0.0.1:9/v1",
+            )
+        )
+        trace = _Responses()
+        driver.bind_trace(trace)
+        released = asyncio.Event()
+        stream = _HeldStream(released)
+
+        async def acompletion(**kwargs):
+            return stream
+
+        driver._sdk = SimpleNamespace(acompletion=acompletion)
+        driver._request_kwargs = lambda request: {}
+        abandoned = await driver.start_generation(SimpleNamespace(generation_id="gen-a"))
+        left_open, open_stream = await _served(driver._http_capture, [b"a1", b"a2"])
+        assert await anext(open_stream.__aiter__()) == b"a1"
+
+        async def read():
+            return [event async for event in driver.events(abandoned)]
+
+        reader = asyncio.create_task(read())
+        await asyncio.sleep(0)
+        await driver.interrupt(abandoned)
+        await driver.close()
+
+        driver._client()
+        next_seq, next_stream = await _served(driver._http_capture, [b"b1", b"b2"])
+        chunks = next_stream.__aiter__()
+        assert await anext(chunks) == b"b1"
+        released.set()
+        await reader
+        early = trace.of(next_seq)
+        assert [chunk async for chunk in chunks] == [b"b2"]
+        await next_stream.aclose()
+        await driver.close()
+        return trace.of(left_open), early, trace.of(next_seq)
+
+    left_open, early, next_generation = asyncio.run(scenario())
+    assert left_open == [(False, b"a1")]
+    assert early == []
+    assert next_generation == [(True, b"b1b2")]

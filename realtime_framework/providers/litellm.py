@@ -744,6 +744,8 @@ class LiteLLMDriver:
                 "response": response,
                 "raw_audit": audit,
                 "backend_route": self._backend_route(),
+                # An abort replaces the client, and its capture, before these events end.
+                "http_capture": self._http_capture,
             },
         )
 
@@ -917,7 +919,7 @@ class LiteLLMDriver:
             finally:
                 with self._lock:
                     self._responses.pop(id(response), None)
-                self._http_capture.record_open()
+                generation.metadata["http_capture"].record_open()
 
     @staticmethod
     def _delta_reasoning(delta) -> str:
