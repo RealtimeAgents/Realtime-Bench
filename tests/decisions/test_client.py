@@ -28,6 +28,7 @@ from realtime_framework.entity.model import (
     TransportFailure,
 )
 from realtime_framework.providers.capture import HttpCapture
+from realtime_framework.providers.decisions.driver import DecisionEncoder
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
 
@@ -501,14 +502,21 @@ def test_a_timeout_is_transient(error, api):
 
 
 @pytest.mark.parametrize("api", list(APIS))
-def test_the_client_and_the_one_after_an_abort(api):
-    """Neither model YAML names a base URL (configs/models/), so a run posts to OpenRouter's."""
+def test_the_client_and_the_one_after_an_abort(api, monkeypatch):
+    """Neither model YAML names a base URL (configs/models/), so a run posts to OpenRouter's.
+    An abort closes the client; the next decision's generation opens a new one before it asks
+    its questions (here, none)."""
     client = _client(api, None)
+
+    async def decided(self, request):
+        return request
+
+    monkeypatch.setattr(DecisionEncoder, "start_generation", decided)
 
     async def clients():
         first = client.client
         await client.close()
-        await client.connect(None)
+        await client.start_generation(None)
         await client.close()
         return first, client.client
 

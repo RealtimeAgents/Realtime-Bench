@@ -333,26 +333,22 @@ class OutputCollector(Protocol):
 
 @runtime_checkable
 class RealtimeDriver(Protocol):
+    """What the runtime asks of every driver. A persistent session's also connects, takes each
+    observation (``send_observation(observation, history)``, with the retained history plus this
+    observation's frame, as the request builder renders it) and manages its session
+    (providers/session_lifecycle.py SessionLifecycle); a stateless one sends the whole history
+    with each request."""
+
     capabilities: RealtimeCapabilities
     # The episode's operational clock, which the harness passes as Class(config, clock=clock).
     # The HTTP capture hooks (providers/capture.py) time each response on it.
     clock: Clock
-
-    async def connect(self, request: ConnectRequest) -> None: ...
-
-    # ``history`` is the retained history plus this observation's frame, as the request builder
-    # renders it.
-    async def send_observation(
-        self, observation: ProviderObservation, history: CanonicalRequest
-    ) -> dict[str, Any]: ...
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle: ...
 
     def events(self, generation: GenerationHandle) -> AsyncIterator[ProviderEvent]: ...
 
     async def interrupt(self, generation: GenerationHandle) -> InterruptResult: ...
-
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult: ...
 
     async def close(self) -> None: ...
 

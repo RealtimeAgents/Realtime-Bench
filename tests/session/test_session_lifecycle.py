@@ -29,7 +29,6 @@ from realtime_framework.entity.model import (
     GenerationRequest,
     HistorySyncRequest,
     HistorySyncResult,
-    InterruptResult,
     RealtimeCapabilities,
     RetryCancelled,
     RuntimeState,
@@ -45,7 +44,6 @@ from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from realtime_framework.providers.session_lifecycle import (
     SessionLifecycle,
-    StatelessSession,
     session_preparing,
 )
 from tests.fake_clock import FakeClock
@@ -682,58 +680,6 @@ def test_the_state_says_whether_the_session_can_take_the_next_generation():
     ]
 
 
-class _StatelessDriver:
-    """A stateless driver's protocol operations, logged."""
-
-    capabilities = RealtimeCapabilities("replay_stateless", persistent_session=False)
-
-    def __init__(self):
-        self.log: list[tuple] = []
-
-    async def connect(self, request):
-        self.log.append(("connect", request.history))
-
-    async def sync_history(self, request):
-        self.log.append(("sync", request.reason))
-        return HistorySyncResult(SyncDisposition.EXACT, ProviderHistoryState.EXACT, "stateless")
-
-    async def interrupt(self, generation):
-        self.log.append(("interrupt", generation.generation_id))
-        return InterruptResult(ProviderHistoryState.EXACT)
-
-    async def close(self):
-        self.log.append(("close",))
-
-
-def test_a_stateless_driver_is_readied_and_aborted_as_a_session():
-    """StatelessSession: the driver's connect, sync_history and close stand for the
-    connection operations. After an abort the next generation connects again, which is where a
-    Decisions client remakes the HTTP client the abort closed."""
-    driver = _StatelessDriver()
-    clock = FakeClock()
-    with clock.participant():
-        session = StatelessSession(driver, clock=clock, trace=UNTRACED)
-        thread = ExecutionThread(clock, "stateless-test")
-        thread.start()
-        try:
-            thread.run(session.connect(ConnectRequest(seed=SEED)))
-            thread.run(session.abort(GENERATION))
-            thread.run(session.ensure_ready(SEED, HISTORY, _Records()))
-            session.mark_dirty()
-            thread.run(session.ensure_ready(SEED, HISTORY, _Records()))
-            thread.run(session.close())
-        finally:
-            thread.stop()
-    assert driver.log == [
-        ("connect", None),
-        ("interrupt", "turn-0"),
-        ("close",),
-        ("connect", HISTORY),
-        ("sync", "runtime_recovery"),
-        ("close",),
-    ]
-
-
 def test_a_persistent_session_must_manage_itself():
     """The catalog's check of a driver class (providers/registry.py): one that declares
     persistent_session without any of the operations the runtime calls is refused."""
@@ -746,17 +692,21 @@ def test_a_persistent_session_must_manage_itself():
         **{name: lambda self, *args: None for name in catalog._DRIVER_METHODS},
     }
     lifecycle = ("ensure_ready", "synchronize", "renew", "repair", "abort", "mark_dirty")
-    for missing in lifecycle:
-        methods = {name: getattr(SessionLifecycle, name) for name in lifecycle if name != missing}
+    session = {
+        "connect": SessionLifecycle.connect,
+        "send_observation": lambda self, *args: None,
+        **{name: getattr(SessionLifecycle, name) for name in lifecycle},
+    }
+    for missing in session:
+        methods = {name: method for name, method in session.items() if name != missing}
         driver = type("SessionDriver", (), {**attributes, **methods})
         with pytest.raises(ValueError, match=rf"declares persistent_session but has no {missing}"):
             catalog._check_driver("rtb_ext.session:SessionDriver", driver)
     # The runtime reads the session's state too (RealtimeRuntime.state), a property.
-    methods = {name: getattr(SessionLifecycle, name) for name in lifecycle}
-    driver = type("SessionDriver", (), {**attributes, **methods})
+    driver = type("SessionDriver", (), {**attributes, **session})
     with pytest.raises(ValueError, match=r"declares persistent_session but has no state$"):
         catalog._check_driver("rtb_ext.session:SessionDriver", driver)
-    managed = type("SessionDriver", (), {**attributes, **methods, "state": SessionLifecycle.state})
+    managed = type("SessionDriver", (), {**attributes, **session, "state": SessionLifecycle.state})
     catalog._check_driver("rtb_ext.session:SessionDriver", managed)
 
 

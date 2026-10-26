@@ -61,8 +61,9 @@ from realtime_framework.harnesses.default.history import History
 from realtime_framework.harnesses.default.history import OmitBlock
 from realtime_framework.harnesses.default.history import Retain
 from realtime_framework.harnesses.default.history import Retained
+from realtime_framework.providers.session_lifecycle import AbortCleanup
 from realtime_framework.providers.session_lifecycle import SessionStates
-from realtime_framework.providers.session_lifecycle import StatelessSession
+from realtime_framework.providers.session_lifecycle import record_wait
 from realtime_framework.providers.session_lifecycle import replay_items
 from realtime_framework.providers.session_lifecycle import session_record
 from realtime_framework.sandbox.observation.som import without_observation_interactables
@@ -87,9 +88,11 @@ class RealtimeRuntime:
     """Own the protocol-neutral generation flow around one provider driver: the retained history,
     the requests built from it, and each generation's run.
 
-    The session the driver keeps, its connect, recovery, renewal, repair and abort, belongs to the
-    session encoder (providers/session_lifecycle.py): a live driver is its own, a stateless one is
-    presented as a StatelessSession. The runtime tells it when and from which history.
+    The session a live driver keeps, its connect, recovery, renewal, repair and abort, belongs to
+    the driver (providers/session_lifecycle.py); the runtime tells it when and from which history.
+    A stateless driver keeps nothing between requests, which each carry the whole history: the
+    runtime only aborts it, interrupting its generation and closing it, and has the next
+    generation wait for that cleanup first, as a live driver's next use does.
 
     The synchronous harness may call the agent from disposable worker threads. Every driver
     operation runs on the agent's execution thread instead (``execution``), which the agent starts
@@ -116,11 +119,12 @@ class RealtimeRuntime:
         self.execution = execution
         # The operational clock, which also made the execution thread's loop.
         self.clock = clock or SystemClock()
-        self.session = (
-            driver
-            if self.capabilities.persistent_session
-            else StatelessSession(driver, clock=self.clock, trace=trace)
-        )
+        # A live driver's session; None for a stateless driver, whose aborts' cleanups are the
+        # runtime's, and which is dirty from an abort or a failure until the next generation
+        # readies it.
+        self.session = driver if self.capabilities.persistent_session else None
+        self._aborts = AbortCleanup(self)
+        self._dirty = True
         self._states = SessionStates(trace, self.capabilities.protocol_family)
         # The context-policy items behind this turn's history_block_compaction sync.
         self._compaction_items: list[str] = []
@@ -133,14 +137,20 @@ class RealtimeRuntime:
 
     @property
     def state(self) -> RuntimeState:
-        """The session encoder's state, until the runtime is closed."""
+        """The live session's state, or whether a stateless driver is dirty, until the runtime is
+        closed."""
         with self._lock:
             if self._closed:
                 return RuntimeState.CLOSED
-        return self.session.state
+        if self.session is not None:
+            return self.session.state
+        return RuntimeState.DIRTY if self._dirty else RuntimeState.READY
 
     def start(self, seed: SessionSeed, *, timeout: float = 60.0) -> None:
         self._seed = seed
+        if self.session is None:
+            self._dirty = False
+            return
         self.execution.run(self.session.connect(ConnectRequest(seed=seed)), timeout=timeout)
 
     def _abandoned(self, cancel: threading.Event) -> bool:
@@ -209,7 +219,12 @@ class RealtimeRuntime:
             raise ValueError("each generation accepts exactly one observation")
         seed = self._seed
         history = self.history
-        await self.session.ensure_ready(seed, self.history_view(request_builder), self._recorder())
+        if self.session is not None:
+            await self.session.ensure_ready(
+                seed, self.history_view(request_builder), self._recorder()
+            )
+        else:
+            await self._ready_stateless()
         incoming = [
             CanonicalTurn(observation=value, decision=decision, unattached_feedback=unattached)
             for value in observations
@@ -225,34 +240,34 @@ class RealtimeRuntime:
             ProviderHistoryState.EXACT,
             detail="already synchronized",
         )
-        if retention.changed:
+        if retention.changed and self.session is not None:
             sync = await self.session.synchronize(
                 HistorySyncRequest(
                     seed,
                     "history_block_compaction",
                     self.history_view(request_builder),
-                    force_rebuild=(
-                        self.capabilities.persistent_session
-                        and not self.capabilities.can_compact_history_in_place
-                    ),
+                    force_rebuild=not self.capabilities.can_compact_history_in_place,
                 ),
                 self._recorder(retention.archived),
             )
         physical_metadata = {}
-        renewal = await self.session.renew(
-            seed, self.history_view(request_builder), self._recorder()
-        )
-        if renewal is not None:
-            sync = renewal
+        if self.session is not None:
+            renewal = await self.session.renew(
+                seed, self.history_view(request_builder), self._recorder()
+            )
+            if renewal is not None:
+                sync = renewal
 
         if not incoming:
             raise RuntimeError("no current observation")
         self._stop_if_abandoned(cancel, "its request")
-        view = self.history_view(request_builder, incoming)
-        input_refs = [
-            await self.driver.send_observation(turn.observation, view) for turn in incoming
-        ]
-        input_refs = [refs or {} for refs in input_refs]
+        input_refs = []
+        if self.session is not None:
+            view = self.history_view(request_builder, incoming)
+            input_refs = [
+                await self.driver.send_observation(turn.observation, view) or {}
+                for turn in incoming
+            ]
 
         compactions = 0
         archived_count = 0
@@ -307,7 +322,8 @@ class RealtimeRuntime:
         provider_call_started_wall_time_ns = self.clock.time_ns()
         generation = await self.driver.start_generation(request)
         stream_started_monotonic_ns = self.clock.monotonic_ns()
-        generation.metadata.setdefault("input_refs", input_refs)
+        if self.session is not None:
+            generation.metadata.setdefault("input_refs", input_refs)
         with self._lock:
             self._active_generation = generation
         started = self.clock.monotonic()
@@ -391,7 +407,7 @@ class RealtimeRuntime:
         # and the session that held it is closed, by the abort or by the repair it came during,
         # so the next generation rebuilds from the accepted history.
         repair = None
-        if not cancelled:
+        if not cancelled and self.session is not None:
             try:
                 repair = await self.session.repair(
                     HistorySyncRequest(
@@ -467,22 +483,57 @@ class RealtimeRuntime:
                 )
         except Exception:
             if not self._abandoned(cancel):
-                self.session.mark_dirty()
+                self._mark_dirty()
             raise
         finally:
             with self._lock:
                 self._running.discard(cancel)
 
     def abort(self) -> None:
-        """Interrupt whichever generation is generating, close the session and mark it dirty:
-        the next generation reconnects. The caller has already set the cancel event of each
-        generation it aborts, which stops that generation's requests."""
+        """Interrupt whichever generation is generating, close the session, or the stateless
+        driver, and mark it dirty: the next generation reconnects, or waits for the close. The
+        caller has already set the cancel event of each generation it aborts, which stops that
+        generation's requests."""
         with self._lock:
             if self._closed:
                 return
             generation = self._active_generation
-        self.session.mark_dirty()
-        self.execution.submit(self.session.abort(generation))
+        self._mark_dirty()
+        if self.session is not None:
+            self.execution.submit(self.session.abort(generation))
+        else:
+            self.execution.submit(self._aborts.run(lambda: self._interrupt_and_close(generation)))
+
+    def _mark_dirty(self) -> None:
+        if self.session is not None:
+            self.session.mark_dirty()
+        else:
+            self._dirty = True
+
+    async def _ready_stateless(self) -> None:
+        """A stateless driver takes the next generation once the last abort's cleanup is done,
+        or has run for a while, as a live session does (SessionLifecycle.ensure_ready); one given
+        up on closes the driver again."""
+        if await self._aborts.settle():
+            await self._interrupt_and_close(None)
+        self._dirty = False
+
+    async def _interrupt_and_close(self, generation: GenerationHandle | None) -> None:
+        """A stateless driver's abort: interrupt ``generation`` (None when none had started),
+        then close the driver, as far as either works; a driver closed so reopens what the next
+        generation needs."""
+        if generation is not None:
+            try:
+                await self.driver.interrupt(generation)
+            except Exception:  # noqa: BLE001, S110 - abort remains best-effort
+                pass
+        try:
+            await self.driver.close()
+        except Exception:  # noqa: BLE001, S110 - the driver is closed below all the same
+            pass
+
+    def _record_wait(self, wait: str, seconds: float) -> None:
+        record_wait(self._trace, self.clock, wait, seconds)
 
     def close(self) -> None:
         """Abandon the generations under way, then close the session, once the last abort's
@@ -499,9 +550,20 @@ class RealtimeRuntime:
         if self.execution.running:
             try:
                 # Longer than the session waits for an abort's cleanup, with time to close after.
-                self.execution.run(self.session.close(), timeout=15.0)
+                self.execution.run(
+                    self.session.close() if self.session is not None else self._close_stateless(),
+                    timeout=15.0,
+                )
             except Exception:  # noqa: BLE001, S110 - destructor-style best effort
                 pass
+
+    async def _close_stateless(self) -> None:
+        """Close a stateless driver once the last abort's cleanup is done, or has run for a
+        while, as a live session closes (SessionLifecycle.close)."""
+        try:
+            await self._aborts.settle()
+        finally:
+            await self.driver.close()
 
     # ---- agent trace -------------------------------------------------------------------------
     # Each change to the model-visible history is recorded where it happens, so the history at any
@@ -616,8 +678,6 @@ class RealtimeRuntime:
     def _record_reconnect(self) -> None:
         """The session's ensure_ready replayed the canonical turns on a new session after an
         abort or failure."""
-        if not self.capabilities.persistent_session:
-            return  # a stateless connect sends nothing; the next request carries the history
         record = session_record(None)
         self._history_changed(
             record.kind,

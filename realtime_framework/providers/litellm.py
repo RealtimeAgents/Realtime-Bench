@@ -41,16 +41,11 @@ from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import retry_cancel_event
 from realtime_framework.entity.model import Compat
-from realtime_framework.entity.model import ConnectRequest
 from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
-from realtime_framework.entity.model import HistorySyncRequest
-from realtime_framework.entity.model import HistorySyncResult
 from realtime_framework.entity.model import InterruptResult
-from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
-from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
@@ -546,24 +541,6 @@ class LiteLLMDriver:
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
-
-    # ---- lifecycle -------------------------------------------------------------------------
-
-    async def connect(self, request: ConnectRequest) -> None:
-        return None
-
-    async def send_observation(self, observation: ProviderObservation, history) -> dict:
-        # The complete canonical prompt is sent by start_generation; this hook intentionally has no
-        # transport side effect for stateless APIs.
-        return {"observation_id": observation.observation_id}
-
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
-        return HistorySyncResult(
-            SyncDisposition.EXACT,
-            ProviderHistoryState.EXACT,
-            detail="stateless request history is canonical",
-            provider_metadata={"history_request_recomposed": True},
-        )
 
     # ---- request shaping -------------------------------------------------------------------
 

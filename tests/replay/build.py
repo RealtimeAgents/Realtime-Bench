@@ -35,13 +35,14 @@ from .hermetic import HISTORY_ENV
 
 
 def wait_for_abort(agent, timeout: float) -> None:
-    """Return once the cleanup of the agent's last abort (providers/session_lifecycle.py abort)
-    is done. The abort was submitted first, and the execution thread starts what it is given in
-    order."""
-    session = agent._runtime.session
+    """Return once the cleanup of the agent's last abort (providers/session_lifecycle.py
+    AbortCleanup: the live session's, or the runtime's for a stateless driver) is done. The abort
+    was submitted first, and the execution thread starts what it is given in order."""
+    runtime = agent._runtime
+    aborts = runtime._aborts if runtime.session is None else runtime.session._aborts
 
     async def cleanup_done():
-        await asyncio.wait({session._cleanup})
+        await asyncio.wait({aborts.task})
 
     agent._runtime.execution.run(cleanup_done(), timeout=timeout)
 

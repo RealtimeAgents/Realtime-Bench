@@ -344,28 +344,28 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
 
 
 def test_an_abort_before_the_reply_sends_no_request(tmp_path):
-    """Stateless chat. The kernel aborts generation 1 after its observation step and before its
-    request goes out. The abort closes the HTTP client; the generation does not open a new one
-    for its request but stops before its reply, so the stub sees no request. Its tool call ends
-    as superseded."""
+    """Stateless chat. The kernel aborts generation 1 once its request is built, as it is
+    counted against the context window, and before it goes out. The abort closes the HTTP
+    client; the generation does not open a new one for its request but stops before its reply,
+    so the stub sees no request. Its tool call ends as superseded."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent = episode.agent
         try:
             entered, release = threading.Event(), threading.Event()
-            send_observation = agent.driver.send_observation
+            request_context_status = agent.driver.request_context_status
 
-            async def held(observation, history):
-                refs = await send_observation(observation, history)
+            async def held(request):
+                status = await request_context_status(request)
                 entered.set()
                 await asyncio.to_thread(release.wait, WAIT_S)
-                return refs
+                return status
 
-            agent.driver.send_observation = held
+            agent.driver.request_context_status = held
             observation = episode.frames.capture(0)
             budget = episode.budget(observation.tick_number)
             box, done = _in_worker(lambda: agent.generate(1, 0, observation, budget))
-            assert entered.wait(WAIT_S), "generation 1 reached no observation step"
+            assert entered.wait(WAIT_S), "generation 1 built no request"
             agent.abort(1)
             wait_for_abort(agent, WAIT_S)
             release.set()
@@ -382,15 +382,15 @@ def test_an_abort_before_the_reply_sends_no_request(tmp_path):
 
 @pytest.mark.parametrize("where", ["ready", "retention"])
 def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
-    """The kernel aborts generation 1 once its session is ready, or while the retention policy
-    runs for it (RealtimeRuntime._run_turn). Aborted first, it applies no retention policy to
-    the shared history; in either case it sends no observation and no request."""
+    """The kernel aborts generation 1 once the runtime is ready for it, or while the retention
+    policy runs for it (RealtimeRuntime._run_turn). Aborted first, it applies no retention policy
+    to the shared history; in either case it starts no request."""
     with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
         episode = _chat_episode(stub, tmp_path)
         agent, runtime = episode.agent, episode.agent._runtime
         entered, release = threading.Event(), threading.Event()
-        ensure_ready, write = runtime.session.ensure_ready, agent.history.write
-        sends = _count_calls(agent.driver, "send_observation")
+        ensure_ready, write = runtime._ready_stateless, agent.history.write
+        starts = _count_calls(agent.driver, "start_generation")
         retentions = []
 
         async def ready(*args):
@@ -407,7 +407,7 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
                     release.wait(WAIT_S)
             return write(change)
 
-        runtime.session.ensure_ready, agent.history.write = ready, writing
+        runtime._ready_stateless, agent.history.write = ready, writing
         try:
             box, done = _in_worker(lambda: _generate(episode, 1, 0))
             assert entered.wait(WAIT_S), f"generation 1 never reached {where}"
@@ -417,7 +417,7 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
             agent.discard(1)
         finally:
             episode.finish()
-    assert _cancelled(pending) and stub.requests == [] and sends == []
+    assert _cancelled(pending) and stub.requests == [] and starts == []
     assert len(retentions) == (where == "retention")
 
 
@@ -1129,11 +1129,11 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
 
 
 def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch):
-    """Luna. Generation 1 (decision 0) is aborted while its observation is being sent, and it is
-    still running when generation 2 (decision 1) prepares its own frame and is accepted. When
-    generation 1 then builds its request, which the runtime sizes against the context window, it
-    offers decision 0's candidates, not decision 1's. The abort cancelled it, so it stops before
-    its reply: no question of it is asked."""
+    """Luna. Generation 1 (decision 0) is aborted while the runtime sizes its request against the
+    context window, and it is still running when generation 2 (decision 1) prepares its own frame
+    and is accepted. Generation 1's request, sized once it goes on, offers decision 0's
+    candidates, not decision 1's. The abort cancelled it, so it stops before its reply: no
+    question of it is asked."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
     with DecisionsStub(upstream="openai") as stub:
         episode = _decisions_episode(stub, tmp_path)
@@ -1142,18 +1142,13 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
         try:
             first, second = episode.frames.capture(0), episode.frames.capture(1)
             entered, release = threading.Event(), threading.Event()
-            send_observation, sized = driver.send_observation, driver.request_context_status
-            start_generation = driver.start_generation
-
-            async def held(observation, history):
-                if observation.observation_id == first.metadata["observation_id"]:
-                    entered.set()
-                    await asyncio.to_thread(release.wait, WAIT_S)
-                return await send_observation(observation, history)
-
+            sized, start_generation = driver.request_context_status, driver.start_generation
             offered, started = [], []
 
             async def offering(request):
+                if request.generation == 1 and not entered.is_set():
+                    entered.set()
+                    await asyncio.to_thread(release.wait, WAIT_S)
                 offered.append((request.generation, request.canonical.selection.observation_id))
                 return await sized(request)
 
@@ -1161,11 +1156,11 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
                 started.append(request.generation)
                 return await start_generation(request)
 
-            driver.send_observation, driver.request_context_status = held, offering
+            driver.request_context_status = offering
             driver.start_generation = starting
             budget = episode.budget(first.tick_number)
             box, done = _in_worker(lambda: agent.generate(1, 0, first, budget))
-            assert entered.wait(WAIT_S), "generation 1 sent no observation"
+            assert entered.wait(WAIT_S), "the runtime did not size generation 1's request"
             agent.abort(1)
             wait_for_abort(agent, WAIT_S)
             stub.load(scenario_decisions.WEB_LONG[1].script)
@@ -1357,9 +1352,8 @@ def test_an_abandoned_generation_omits_no_second_block(tmp_path):
 def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
     """Luna, aborted while decision 0's question is under way, as the kernel's per-move cap
     does. The abort closes the Decisions HTTP client (providers/openai_decisions.py close), and
-    the held question then fails on it. Decision 1 connects again first
-    (the session's ensure_ready), which opens a new client, so its questions are sent and
-    answered."""
+    the held question then fails on it. Decision 1's generation opens a new client first
+    (OpenAIDecisionsClient.start_generation), so its questions are sent and answered."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "replay-dummy-key")
     with DecisionsStub(upstream="openai") as stub:
         episode = _decisions_episode(stub, tmp_path)

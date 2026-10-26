@@ -1282,12 +1282,16 @@ def test_context_status_needs_its_declaration():
 def test_a_session_declares_no_request_estimate():
     """The runtime archives the history a stateless request carries when it does not fit; a
     persistent session holds its own, so a driver that declares both is refused at load. The
-    driver manages its session (SessionLifecycle), as persistent_session requires."""
+    driver takes each observation and manages its session (SessionLifecycle), as
+    persistent_session requires."""
     driver = catalog.adapter_class("chat_completions")
     session = type(
         "Session",
         (driver, SessionLifecycle),
-        {"capabilities": replace(driver.capabilities, persistent_session=True)},
+        {
+            "capabilities": replace(driver.capabilities, persistent_session=True),
+            "send_observation": lambda self, observation, history: {},
+        },
     )
     fails(
         lambda: catalog._check_driver("ext.chat:Session", session),

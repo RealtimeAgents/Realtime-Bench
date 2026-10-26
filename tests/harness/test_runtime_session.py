@@ -95,6 +95,34 @@ class _LiveDriver(SessionLifecycle):
         )
 
 
+class _StatelessDriver:
+    """A stateless driver whose operations log; a reply ends exact, held as _LiveDriver's."""
+
+    capabilities = RealtimeCapabilities("replay_stateless", persistent_session=False)
+
+    def __init__(self, clock, trace):
+        self.clock = clock
+        self.log: list[tuple] = []
+        self.hold: threading.Event | None = None
+        self.generating = threading.Event()
+
+    def bind_trace(self, trace) -> None:
+        pass
+
+    async def start_generation(self, request):
+        self.log.append(("start_generation", request.generation_id))
+        return GenerationHandle(request.generation_id)
+
+    events = _LiveDriver.events
+
+    async def interrupt(self, generation):
+        self.log.append(("interrupt", generation.generation_id))
+        return InterruptResult(ProviderHistoryState.EXACT)
+
+    async def close(self):
+        self.log.append(("close",))
+
+
 class _Collector:
     def consume(self, event) -> None:
         pass
@@ -115,10 +143,10 @@ def _observation(k: int) -> ProviderObservation:
 
 
 class _Rig:
-    def __init__(self, turns: Retention | None = None):
+    def __init__(self, turns: Retention | None = None, driver=_LiveDriver):
         clock = SystemClock()
         self.trace = _Trace()
-        self.driver = _LiveDriver(clock, self.trace)
+        self.driver = driver(clock, self.trace)
         policy = current_context_policy().for_path("openai_realtime", {}, None)
         self.policy = policy if turns is None else replace(policy, turns=turns)
         self.execution = ExecutionThread(clock, "runtime-session-test")
@@ -216,6 +244,52 @@ def test_the_sync_after_an_archive_records_the_turns_it_removed():
     assert synced["kind"] == "rebuild"
     assert [turn["decision"] for turn in synced["turns"]] == [0]
     assert ("sync", "history_block_compaction") in rig.driver.log
+
+
+def test_a_stateless_driver_is_aborted_and_readied_without_a_session():
+    """A stateless driver has no session: the runtime only aborts it, closing it here, as no
+    generation is under way, and is dirty until the next generation waited for that cleanup. That
+    generation opens nothing and sends no observation, and the turn it archives is synchronized
+    with nothing: each request carries the whole history."""
+    with _Rig(turns=Retention(keep=1, block=1), driver=_StatelessDriver) as rig:
+        rig.accept(0)
+        rig.trace.events.clear()
+        rig.runtime.abort()
+        aborted = rig.runtime.state
+        rig.accept(1)
+        readied = rig.runtime.state
+    assert (aborted, readied) == (RuntimeState.DIRTY, RuntimeState.READY)
+    assert rig.driver.log == [
+        ("start_generation", "turn-0"),
+        ("close",),
+        ("start_generation", "turn-1"),
+        ("close",),  # the runtime's close
+    ]
+    assert [change["kind"] for change in rig.trace.history_changes()] == ["archive"]
+
+
+def test_an_abort_interrupts_a_stateless_generation_under_way_then_closes_the_driver():
+    """As a live session's abort does, a stateless driver's interrupts the generation that is
+    generating, then closes the driver."""
+    with _Rig(driver=_StatelessDriver) as rig:
+        rig.driver.hold = threading.Event()
+        cancel = rig.runtime.clock.event()
+        outcome = []
+        worker = threading.Thread(target=lambda: outcome.append(rig.turn(0, cancel)))
+        worker.start()
+        assert rig.driver.generating.wait(WAIT_S), "the generation did not start"
+        cancel.set()  # as DefaultHarness._cancel does before it aborts
+        rig.runtime.abort()
+        rig.driver.hold.set()
+        worker.join(WAIT_S)
+        (result,) = outcome
+    assert result.cancelled
+    assert rig.driver.log == [
+        ("start_generation", "turn-0"),
+        ("interrupt", "turn-0"),
+        ("close",),
+        ("close",),  # the runtime's close
+    ]
 
 
 def test_a_runtime_whose_execution_thread_never_started_closes_nothing():

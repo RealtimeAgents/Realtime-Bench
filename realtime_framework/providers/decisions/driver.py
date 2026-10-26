@@ -18,10 +18,8 @@ from realtime_framework.entity.events import (
 from realtime_framework.entity.model import (
     FATAL,
     GenerationHandle,
-    HistorySyncResult,
     InterruptResult,
     RetryCancelled,
-    SyncDisposition,
     TransportFailure,
     TransportFailureError,
     exception_chain,
@@ -41,9 +39,6 @@ class DecisionEncoder:
     driver.
     """
 
-    async def connect(self, request):
-        return None
-
     @staticmethod
     def classify_transport_error(exc):
         """Each Choice question was already retried; keep its reason, never retry the decision."""
@@ -51,9 +46,6 @@ class DecisionEncoder:
             if isinstance(current, TransportFailureError):
                 return current.failure
         return TransportFailure(FATAL)
-
-    async def send_observation(self, observation, history):
-        return {"observation_id": observation.observation_id}
 
     async def start_generation(self, request):
         decision = ChoiceDecision(self, request.canonical, trace=self._trace, clock=self.clock)
@@ -118,10 +110,3 @@ class DecisionEncoder:
 
     async def interrupt(self, generation):
         return InterruptResult(ProviderHistoryState.EXACT)
-
-    async def sync_history(self, request):
-        return HistorySyncResult(
-            SyncDisposition.EXACT,
-            ProviderHistoryState.EXACT,
-            detail="stateless request uses canonical retained history",
-        )

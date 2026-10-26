@@ -115,10 +115,11 @@ class OpenAIDecisionsClient(DecisionEncoder):
             event_hooks=HttpCapture(self, "decisions.http", "choice_question").hooks,
         )
 
-    async def connect(self, request):
-        # An abort closes the client (close below); the decision after it connects again.
+    async def start_generation(self, request):
+        # An abort closes the client (close below); the decision after it opens a new one.
         if self.client.is_closed:
             self.client = self._new_client()
+        return await super().start_generation(request)
 
     def bind_trace(self, trace) -> None:
         self._trace = trace

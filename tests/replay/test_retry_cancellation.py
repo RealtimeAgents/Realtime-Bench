@@ -112,12 +112,12 @@ def _generate_in_worker(episode, observation, decision=0):
 
 
 def _abort_like_the_kernel(agent) -> None:
-    """The shell runs AbortGeneration as abort(generation). Waiting for the cleanup the
-    session's abort runs (providers/session_lifecycle.py) only makes the state below
+    """The shell runs AbortGeneration as abort(generation). Waiting for the cleanup the abort
+    runs (providers/session_lifecycle.py AbortCleanup) only makes the state below
     deterministic."""
     agent.abort(GENERATION)
     wait_for_abort(agent, WAIT_S)
-    assert agent._runtime.session._connected is False  # SessionLifecycle._interrupt_and_close
+    assert agent._runtime.state is RuntimeState.DIRTY  # closed, or a stateless driver's
 
 
 def _discarded(agent, box, done) -> None:
@@ -314,7 +314,6 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
         )
         agent = episode.agent
         try:
-            connects = _count_calls(agent.driver, "connect")
             turns = _count_calls(agent._runtime, "_run_turn")
             observation = episode.frames.capture(0)
             box, done = _generate_in_worker(episode, observation)
@@ -328,7 +327,6 @@ def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa:
     assert stub.unscripted == 0 and stub.unused_replies == 0
     assert len(stub.requests) == 1
     assert len(backoff.calls) == 1
-    assert connects == []  # no reconnect for the abandoned decision
     _check_nothing_kept(agent, turns)
     sent = [
         (r["scope"]["decision"], r["scope"]["generation"], r["scope"]["attempt"])
@@ -607,13 +605,12 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
-def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
-    """Stateless API. Attempt 1 gets HTTP 503, which leaves the session dirty
-    (RealtimeRuntime.run_turn), so attempt 2 first recovers it (the session's ensure_ready,
-    providers/session_lifecycle.py). The abort lands during that recovery. The recovery closes
-    what it rebuilt once it returns, and the attempt stops there (SessionLifecycle._sync): it
-    sends no observation and no request. _run_turn's own checks before each are tested on the
-    agent (tests/harness/test_generations.py)."""
+def test_abort_while_readying_after_a_failure_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
+    """Stateless API. Attempt 1 gets HTTP 503, which leaves the runtime dirty
+    (RealtimeRuntime.run_turn); a stateless driver has no session to recover, so attempt 2 only
+    readies the runtime (RealtimeRuntime._ready_stateless). The abort lands while it does, and
+    the attempt stops at its next check: it sends no request. _run_turn's own checks before each
+    are tested on the agent (tests/harness/test_generations.py)."""
     openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with OpenRouterStub([UNAVAILABLE], route=ROUTE) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
@@ -627,27 +624,29 @@ def test_abort_while_recovering_sends_no_request(openrouter_env, tmp_path):  # n
         )
         agent = episode.agent
         try:
-            syncing, release = threading.Event(), threading.Event()
-            sync_history = agent.driver.sync_history
+            readying, release = threading.Event(), threading.Event()
+            readied = []
+            ready = agent._runtime._ready_stateless
 
-            async def gated_sync(request):
-                syncing.set()
-                await asyncio.to_thread(release.wait, WAIT_S)
-                return await sync_history(request)
+            async def gated_ready():
+                readied.append(None)
+                if len(readied) == 2:  # attempt 2's
+                    readying.set()
+                    await asyncio.to_thread(release.wait, WAIT_S)
+                return await ready()
 
-            agent.driver.sync_history = gated_sync
+            agent._runtime._ready_stateless = gated_ready
             turns = _count_calls(agent._runtime, "_run_turn")
-            sends = _count_calls(agent.driver, "send_observation")
             observation = episode.frames.capture(0)
             box, done = _generate_in_worker(episode, observation)
-            assert syncing.wait(WAIT_S), "attempt 2 did not recover the runtime"
+            assert readying.wait(WAIT_S), "attempt 2 did not ready the runtime"
             _abort_like_the_kernel(agent)
             release.set()
             _discarded(agent, box, done)
         finally:
             episode.finish()
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    assert len(stub.requests) == 1 and len(sends) == 1  # attempt 1's
+    assert len(stub.requests) == 1  # attempt 1's
     assert _requests(turns) == [(GENERATION, True)] * 2
     assert agent.history.turns == () and agent.history.actions == ()
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]

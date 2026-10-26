@@ -25,10 +25,8 @@ from realtime_framework.entity.model import (
     Compat,
     Deployment,
     GenerationHandle,
-    HistorySyncResult,
     InterruptResult,
     RealtimeCapabilities,
-    SyncDisposition,
     TransportFailure,
     classify_http_failure,
     retry_after_seconds,
@@ -93,18 +91,6 @@ class ExternalChatDriver:
 
     def bind_trace(self, trace) -> None:
         self._trace = trace
-
-    async def connect(self, request) -> None:
-        return None
-
-    async def send_observation(self, observation, history) -> dict:
-        # Stateless: start_generation sends the whole canonical request.
-        return {"observation_id": observation.observation_id}
-
-    async def sync_history(self, request) -> HistorySyncResult:
-        return HistorySyncResult(
-            SyncDisposition.EXACT, ProviderHistoryState.EXACT, detail="stateless"
-        )
 
     async def request_context_status(self, request) -> dict:
         # The context policy archives turns when a request exceeds the context window; this

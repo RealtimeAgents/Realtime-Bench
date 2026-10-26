@@ -421,9 +421,8 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
         (
             "rtb_ext.broken:NotAnEncoder",
             (
-                "'rtb_ext.broken:NotAnEncoder' is not a model encoder: missing connect, "
-                "send_observation, start_generation, events, interrupt, sync_history, close, "
-                "bind_trace"
+                "'rtb_ext.broken:NotAnEncoder' is not a model encoder: missing "
+                "start_generation, events, interrupt, close, bind_trace"
             ),
         ),
         # The harness builds every driver as Class(config, clock=clock).

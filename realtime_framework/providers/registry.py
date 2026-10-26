@@ -404,17 +404,9 @@ from importlib import import_module as import_module
 
 from realtime_framework.entity.model import Compat, Deployment, ModelClient, RealtimeCapabilities
 
-# RealtimeDriver's methods, plus bind_trace, which the harness calls on every driver it builds.
-_DRIVER_METHODS = (
-    "connect",
-    "send_observation",
-    "start_generation",
-    "events",
-    "interrupt",
-    "sync_history",
-    "close",
-    "bind_trace",
-)
+# What the runtime asks of every driver, stateless or not: a generation, its events, its
+# interrupt, and the close; and bind_trace, which the harness calls on every driver it builds.
+_DRIVER_METHODS = ("start_generation", "events", "interrupt", "close", "bind_trace")
 _DRIVER_DECLARATIONS = (
     ("capabilities", RealtimeCapabilities),
     ("deployment", Deployment),
@@ -429,9 +421,11 @@ _DECLARED_METHODS = {
     "connection_renewal": ("connection_renewal_reason",),
     "request_size_estimation": ("request_context_status",),
     "maps_output_cap": ("transport_output_token_cap",),
-    # What the runtime readies, syncs, renews, repairs, aborts and marks a persistent session's
-    # encoder with (providers/session_lifecycle.py).
+    # What the runtime opens, gives each observation, readies, syncs, renews, repairs, aborts and
+    # marks a persistent session's encoder with (providers/session_lifecycle.py).
     "persistent_session": (
+        "connect",
+        "send_observation",
         "ensure_ready",
         "synchronize",
         "renew",

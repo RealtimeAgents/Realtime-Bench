@@ -160,18 +160,20 @@ own preset, so the runs keep apart by model name too.
 A model that needs a new wire protocol gets a driver:
 
 1. Write a driver in `realtime_framework/providers/` implementing `RealtimeDriver`
-   (`realtime_framework/entity/model.py`): `connect`, `send_observation`, `start_generation`,
-   `events`, `interrupt`, `sync_history`, `close`, plus `bind_trace(trace)`, which receives the
-   episode trace. The harness builds it as `Driver(config, clock=clock)`, with the episode's
+   (`realtime_framework/entity/model.py`): `start_generation`, `events`, `interrupt`, `close`,
+   plus `bind_trace(trace)`, which receives the episode trace. The harness builds it as
+   `Driver(config, clock=clock)`, with the episode's
    operational clock (`realtime_framework/clock.py`); an external driver whose constructor cannot
    take `clock` is refused when its model is loaded, and the tests hold every registered driver
    to the same check. Keep it as `self.clock`: the capture hooks below time each response on it,
    and the driver's own waits and time reads (a pause between requests, a grace period) go
    through it. Transport timeouts, such as an HTTP client's or a WebSocket receive's, stay in
-   real time. Stateless APIs make `connect` and `sync_history`
-   no-ops and send the canonical request (`GenerationRequest.canonical`,
-   `realtime_framework/entity/request.py`) in their own format; session APIs send each
-   observation and keep native history. A session API (`persistent_session`) also manages its
+   real time. A stateless API sends the canonical request (`GenerationRequest.canonical`,
+   `realtime_framework/entity/request.py`) in its own format with each generation, and the
+   runtime asks it nothing else: an abort interrupts the generation under way and closes the
+   driver, which reopens what the next generation needs. A session API (`persistent_session`)
+   also has `connect` and `send_observation(observation, history)`, sends each observation and
+   keeps native history, and manages its
    session: the runtime calls its `ensure_ready` before each generation, `synchronize` after the
    retained history changed, `renew`, `repair` after each generation, `abort` and `mark_dirty`,
    and reads its `state`. Each of them but `abort` and `mark_dirty` takes the runtime's
@@ -179,7 +181,7 @@ A model that needs a new wire protocol gets a driver:
    the sync request and its result or error, and with `sync=None` once it reopened the session,
    it writes the history change to the trace. A session API inherits `SessionLifecycle`
    (`realtime_framework/providers/session_lifecycle.py`), which implements them, with
-   `connect`, `sync_history` and `close`, over your `_connect`, `_sync_history`,
+   `connect` and `close`, over your `_connect`, `_sync_history`,
    `_close_current` and `interrupt`; it reads `self.clock`, writes its records to the trace
    `bind_trace` gave you, kept as `self._trace`, and `_wait` records a wait and takes it. Record
    what became of each content you write (sent, confirmed or refused by the server, or unknown
@@ -242,8 +244,9 @@ driver as a [model API](#add-a-model-api).
    `("instruction", "input", "model")`), `feedback_placements=("separate_message",)` and
    `server_context="none"` for a stateless API. Each optional-method flag you set
    (`classifies_transport_errors`, `connection_renewal`, `request_size_estimation`,
-   `maps_output_cap`) needs its method, and `persistent_session` needs `ensure_ready`,
-   `synchronize`, `renew`, `repair`, `abort`, `mark_dirty` and `state`. The driver runs under the
+   `maps_output_cap`) needs its method, and `persistent_session` needs `connect`,
+   `send_observation`, `ensure_ready`, `synchronize`, `renew`, `repair`, `abort`, `mark_dirty`
+   and `state`. The driver runs under the
    `chat_completions` context policy, with the model's [context preset](#context-preset) if it
    names one. Its prompts ask for one JSON action in the visible text, so a driver whose
    `action_channel` is not `"text_json"` is refused before the run. With
