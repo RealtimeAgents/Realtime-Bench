@@ -40,6 +40,7 @@ from tests.replay.token_env import TokenEnvironment
 
 from . import drivers
 from .legacy_environment import LegacyStateReads
+from .legacy_turn import LegacyTurn
 from .projection import (
     ONCE,
     Once,
@@ -597,12 +598,12 @@ def _requests(stub) -> list[dict]:
 
 
 def _drive(episode, env, script, driver, config, clocks, now) -> None:
-    """Run the episode under ``driver``, recording what the agent is told, when a generation
-    returns and when one is aborted; then drain the abandoned workers and close as main() does
-    (evaluation/runner.py main)."""
-    agent = episode.agent
-    commit_action, commit, abort = agent.commit_action, agent.commit, agent.abort
-    generate = agent.generate
+    """Run the episode under ``driver``, today's loop on the agent as it calls it
+    (legacy_turn.py), recording what the agent is told, when a generation returns and when one
+    is aborted; then drain the abandoned workers and close as main() does (evaluation/runner.py
+    main)."""
+    agent = LegacyTurn(episode.agent) if driver is drivers.legacy else episode.agent
+    commit, abort, generate = agent.commit, agent.abort, agent.generate
 
     def recording_generate(generation, *args, **kwargs):
         pending = generate(generation, *args, **kwargs)
@@ -627,9 +628,11 @@ def _drive(episode, env, script, driver, config, clocks, now) -> None:
         return abort(*args, **kwargs)
 
     agent.generate = recording_generate
-    agent.commit_action = recording_commit
     agent.commit = recording_outcome
     agent.abort = recording_abort
+    if isinstance(agent, LegacyTurn):
+        commit_action = agent.commit_action
+        agent.commit_action = recording_commit
     try:
         driver(
             agent,

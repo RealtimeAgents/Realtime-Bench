@@ -423,30 +423,6 @@ def test_an_abort_after_the_reply_keeps_nothing(tmp_path):
     assert [r["type"] for r in _jsonl(tmp_path / "trajectory.jsonl")] == ["decision_discarded"]
 
 
-def test_the_legacy_loop_drops_a_reply_its_abort_cancelled(tmp_path):
-    """The legacy loop's bounded wait expires once the reply is back, before the runtime has
-    read its cancel event: stream_generate hands the result back stale and writes nothing."""
-    with ChatCompletionsStub(replies(LONG_SCENARIO[:1])) as stub:
-        episode = _chat_episode(stub, tmp_path)
-        agent = episode.agent
-        try:
-            entered, release = _hold_after_the_reply(agent.driver)
-            observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            agent.stream_prefill(observation)
-            box, done = _in_worker(lambda: agent.stream_generate(tick=0))
-            assert entered.wait(WAIT_S), "decision 0 got no reply"
-            agent.abort()
-            wait_for_abort(agent, WAIT_S)
-            release.set()
-            result = _joined(box, done)
-        finally:
-            episode.finish()
-    assert len(stub.requests) == 1
-    assert result["stale"] is True and result["action"] is None
-    assert agent._runtime.turns == () and agent.action_history == []
-
-
 def test_a_generation_requests_with_its_budget(tmp_path):
     """generate() hands its budget's provider and transport caps and its clock mode to the
     request; the transport cap is the request's max_tokens."""

@@ -20,7 +20,7 @@ from .legacy_loop import _run_stream_legacy
 def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
     """The legacy loop with the arguments main() passed it before the switch, the horizon from the
     episode's minutes as there; the kernel takes it within 1e-9 of a whole tick as that tick
-    (kernel/turns.py TurnConfig)."""
+    (kernel/turns.py TurnConfig). ``agent`` takes the loop's calls (legacy_turn.py LegacyTurn)."""
     return _run_stream_legacy(
         agent,
         env,
@@ -38,8 +38,7 @@ def legacy(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> lis
 
 
 def shell(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list:
-    """run_episode (evaluation/shell.py). Until P2 the agent's kernel methods are the defaults
-    that run the legacy turn (entity/harness.py StreamingAgent.generate). The kernel counts the
+    """run_episode (evaluation/shell.py), on the agent's kernel methods. The kernel counts the
     failed state reads, so the world's environment passes them on as production's does
     (legacy_environment.py LegacyStateReads, replayed.py WallEnvironment)."""
     env.kernel_counts_reads = True
