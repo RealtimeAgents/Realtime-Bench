@@ -220,6 +220,36 @@ def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(
     assert kinds[:6] == ["SessionPreparing", "SessionPrepared"] * 3
 
 
+def test_a_reply_given_up_while_its_click_runs_shows_in_the_sessions_rebuilt_once_it_ran(
+    monkeypatch,
+):
+    """Decision 25: the first reply's click runs from 2.25, after the read asked for it, and its
+    reply never ends: the watchdog gives it up at 2.75, while the read after the click runs, and
+    the next reply reopens the session without it. Once the click is applied, the reply's output
+    stands before the click's result in every session reopened after."""
+    clock = FakeClock()
+    click = Call(0.5, "c1", "click", {"x": 10, "y": 20, "button": "left", "frame": 1})
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock)
+        agent.driver.replies += [Reply((click,), ends_at=99.0)] + [Reply(ends_at=99.0)] * 5
+        env = _Env(clock)
+        env.seconds["execute"] = 0.25
+        run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=6.0, reply_watchdog_s=2.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+        agent.close()
+    assert ("c1", "applied") in [(a["call_id"], a["result"]) for a in agent.action_history]
+    first, *later = [call[1] for call in agent.driver.calls if call[0] == "connect"][1:]
+    assert "d0.output" not in first and "d0.c1.feedback" not in first
+    assert later
+    for ids in later:
+        assert ids.index("d0.output") < ids.index("d0.c1.feedback")
+
+
 class _InspectedEnv(_Env):
     """Captures with the canonical interactables the SoM runtime inspects; those of ``unstable``
     kept changing while it was captured."""

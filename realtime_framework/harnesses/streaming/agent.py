@@ -36,8 +36,10 @@ asked for again under the shared retry policy; a session it leaves other than ex
 before it is used again, and a function call reply must complete.
 
 An accepted reply's output joins the view where the output began, so that a rebuilt session shows
-the model its actions before their results; a discarded one adds nothing. Each outcome the kernel
-commits joins it as its execution feedback (feedback.py), where the policy places it.
+the model its actions before their results; so does the output a reply had when it was given up,
+once an action of it ran, and a reply given up none of whose actions ran adds nothing (decision
+25). Each outcome the kernel commits joins it as its execution feedback (feedback.py), where the
+policy places it.
 """
 
 from __future__ import annotations
@@ -104,7 +106,7 @@ from realtime_framework.harnesses.default.harness import (
     parse_grounded_action,
 )
 from realtime_framework.harnesses.default.request import system_block, tool_exchange_block
-from realtime_framework.harnesses.streaming.feedback import execution_feedback
+from realtime_framework.harnesses.streaming.feedback import RAN, execution_feedback
 from realtime_framework.harnesses.streaming.history import (
     feedback_block,
     frame_block,
@@ -154,7 +156,8 @@ class _Pushed:
 
 @dataclass
 class _Reply:
-    """One reply, from its StartGeneration until the kernel accepts or discards it."""
+    """One reply, from its StartGeneration until the kernel accepts or discards it, and, given
+    up, until its output joins the view."""
 
     generation: int
     decision: int
@@ -178,9 +181,12 @@ class _Reply:
     # None where nothing was resolved against a frame.
     grounding: list[dict] = field(default_factory=list)
     based_on: str | None = None  # the observation id of the frame its first action names
-    # Where in the blocks its output began, which its output goes to once accepted: before the
-    # feedback on its actions and the frames pushed since.
+    # Where in the blocks its output began, which its output goes to once accepted, or once given
+    # up and an action of it ran (decision 25): before the feedback on its actions and the frames
+    # pushed since. The output of an earlier reply going in before it moves it on.
     position: int | None = None
+    ran: bool = False  # an action of it ran (feedback.RAN)
+    kept: list[ContentBlock] | None = None  # its output, as it was given up
 
     @property
     def output(self) -> str:
@@ -216,6 +222,10 @@ class NativeStreamingAgent(VisionAgentBase):
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
+        # The replies whose output may still join the blocks, by decision: from generate() until
+        # accepted, or, given up, until an action of theirs ran, which an action still executing
+        # as its reply was given up reports later.
+        self._unplaced: dict[int, _Reply] = {}
         # The replies on the session: asked for, and not yet accepted, discarded or aborted.
         # Readying the session under one would close its connection, or rebuild the session
         # without its output. Each push waiting for them holds a gate, opened once none is.
@@ -500,6 +510,8 @@ class NativeStreamingAgent(VisionAgentBase):
             if generation in self._aborted_early:
                 self._aborted_early.remove(generation)
                 reply.cancel.set()
+            else:
+                self._unplaced[decision] = reply
         started = self.clock.monotonic()
         outcome = "completed"
         try:
@@ -863,13 +875,15 @@ class NativeStreamingAgent(VisionAgentBase):
     def abort(self, generation: int) -> None:
         """AbortGeneration: give the reply up, interrupt it and close the session, and return
         once that is done, which fails a push stuck in the session. The next push or reply opens
-        the session again from the view."""
+        the session again from the view, which holds the reply's output if an action of it ran
+        (_give_up)."""
         with self._lock:
             reply = self._replies.get(generation)
             if reply is None:
                 self._aborted_early.add(generation)
             else:
                 reply.cancel.set()
+                self._give_up(reply)
         self._states.record(
             "unknown", "generation_aborted", generation_id=f"streaming-{generation}"
         )
@@ -902,19 +916,7 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             reply = self._replies.pop(generation)
             self._off(generation)
-            if reply.output and not reply.failed:
-                wall_ns = self.clock.time_ns()
-                tools = tool_exchange_block(
-                    self._context_policy,
-                    reply.handle.metadata.get("completed_turn_refs") or {},
-                    decision=reply.decision,
-                    based_on=reply.based_on,
-                    wall_ns=wall_ns,
-                )
-                self._blocks[reply.position : reply.position] = [
-                    output_block(reply.decision, reply.output, reply.based_on, wall_ns),
-                    *(() if tools is None else (tools,)),
-                ]
+            self._place(reply, [] if reply.failed else self._output_blocks(reply))
         if reply.failed:
             self._log_reply(reply, "reply_failed")
             return
@@ -922,16 +924,66 @@ class NativeStreamingAgent(VisionAgentBase):
         self._log_reply(reply, "reply")
 
     def discard(self, generation: int) -> None:
-        """DiscardResult: a reply given up adds nothing."""
+        """DiscardResult: a reply given up adds its output where it began once an action of it
+        ran (_give_up), and its usage nothing (decision 37)."""
         with self._lock:
             reply = self._replies.pop(generation)
             self._off(generation)
+            self._give_up(reply)
         self._log_reply(reply, "reply_discarded")
+
+    def _output_blocks(self, reply: _Reply) -> list[ContentBlock]:
+        """The reply's output as it joins the view, with its tool rounds after it where the
+        policy replays them; none for a reply that said nothing. The caller holds the lock."""
+        if not reply.output:
+            return []
+        wall_ns = self.clock.time_ns()
+        tools = tool_exchange_block(
+            self._context_policy,
+            reply.handle.metadata.get("completed_turn_refs") or {},
+            decision=reply.decision,
+            based_on=reply.based_on,
+            wall_ns=wall_ns,
+        )
+        output = output_block(reply.decision, reply.output, reply.based_on, wall_ns)
+        return [output, *(() if tools is None else (tools,))]
+
+    def _give_up(self, reply: _Reply) -> None:
+        """The reply is given up, by its abort or its discard, whichever comes first: its output
+        as it is now joins the view once an action of it ran, and nothing else of it does, so
+        that a session rebuilt from the view shows the model the actions whose results it holds
+        (decision 25). The caller holds the lock."""
+        if reply.kept is None:
+            reply.kept = self._output_blocks(reply)
+        if reply.ran or not reply.kept:
+            self._place(reply, reply.kept)
+
+    def _place(self, reply: _Reply, blocks: list[ContentBlock]) -> None:
+        """The reply's ``blocks`` join the view where its output began, once, moving on where the
+        output of each reply still to join it began, after that place or there and later. The
+        caller holds the lock."""
+        if self._unplaced.pop(reply.decision, None) is None or not blocks:
+            return
+        at = reply.position
+        for offset, block in enumerate(blocks):
+            self._blocks.insert(at + offset, block)
+        for other in self._unplaced.values():
+            if other.position is not None and (
+                other.position > at
+                or (other.position == at and other.generation > reply.generation)
+            ):
+                other.position += len(blocks)
 
     def commit(self, outcome: Outcome) -> None:
         """Commit: the outcome's feedback joins the view, on the action its call handed over, or
-        on the reply when it came to no action."""
+        on the reply when it came to no action. An action of a reply given up that ran brings
+        the reply's output in (_give_up)."""
         with self._lock:
+            reply = self._unplaced.get(outcome.decision)
+            if reply is not None and outcome.status in RAN:
+                reply.ran = True
+                if reply.kept is not None:
+                    self._place(reply, reply.kept)
             key = (outcome.decision, outcome.call_id)
             requested, unknown_mark = self._requested.pop(key, ("none", None))
             feedback = execution_feedback(outcome, requested, unknown_mark)

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 # The statuses of an action that ran: one the environment applied, and a wait, which ends where it
 # arrives (evaluation/kernel/streaming.py).
-_RAN = {"applied", "wait"}
+RAN = {"applied", "wait"}
 # The policy's statuses of an action a newer one took the place of while it waited (SUPERSEDED),
 # of one whose reply was given up (CANCELLED_GENERATION), of one whose call the provider cancelled
 # while it waited (CANCELLED_CALL), and of a reply that came to no action with no protocol
@@ -74,7 +74,7 @@ def execution_feedback(outcome: Outcome, requested: str, unknown_mark: str | Non
     the action names cannot be found. ``unknown_mark`` is the mark of a reply's grounding
     failure, which its frame does not have."""
     status = outcome.status
-    actual = action_text(outcome.action) if status in _RAN else "none"
+    actual = action_text(outcome.action) if status in RAN else "none"
     text = f"EXECUTION RESULT: actual={actual}; requested={requested}; status={status}."
     if status == INVALID_GROUNDING_FRAME:
         return f"{text} {_FRAME_NOTE.format(why=_FRAME_ERRORS[outcome.detail])}"
@@ -89,6 +89,6 @@ def execution_feedback(outcome: Outcome, requested: str, unknown_mark: str | Non
     if note:
         text += " " + note
     # The policy runs a done or fail as a wait (evaluation/kernel/streaming.py _arrived).
-    if status in _RAN and outcome.protocol_failure == "unsupported_terminal_action":
+    if status in RAN and outcome.protocol_failure == "unsupported_terminal_action":
         text += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
     return text

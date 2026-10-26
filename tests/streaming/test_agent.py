@@ -406,7 +406,7 @@ def test_an_accepted_reply_adds_its_output_to_the_view_and_its_usage_to_the_epis
     agent.close()
 
 
-def test_a_discarded_reply_adds_nothing(monkeypatch, clock):
+def test_a_discarded_reply_none_of_whose_actions_ran_adds_nothing(monkeypatch, clock):
     agent = make_agent(monkeypatch, clock)
     agent.bind_inbox(lambda event: None, ORIGIN)
     frame = _two_frames(agent, clock)
@@ -421,6 +421,147 @@ def test_a_discarded_reply_adds_nothing(monkeypatch, clock):
         ("system", "f1.frame", "f2.frame", "f3.frame"),
     )
     assert agent.token_usage["responses"] == 0
+    agent.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "detail", "kept"),
+    [
+        ("applied", "", True),
+        ("wait", "", True),
+        ("rejected", "occluded", False),
+        ("cancelled_generation", "", False),
+    ],
+)
+def test_a_reply_given_up_after_an_action_of_it_ran_keeps_its_output_where_it_began(
+    monkeypatch, clock, status, detail, kept
+):
+    """Decision 25: an action of the reply ran, applied or a wait, before the reply was given
+    up. The session reopened after shows the model the reply's output before that action's
+    result, as an accepted reply's; a reply none of whose actions ran adds nothing. Its usage
+    stays out of the episode's either way (decision 37)."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=100.0))
+    done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    ran = Action.wait() if status == "wait" else posted[0].action
+    agent.commit(_outcome(3, status, "c1", action=ran, detail=detail))
+    agent.abort(7)
+    assert clock.wait(done, 1.0)
+    agent.discard(7)
+    agent.push(observation(clock, 3))
+    output = ("d3.output",) if kept else ()
+    view = ("system", "f1.frame", "f2.frame", *output, "d3.c1.feedback")
+    assert agent.driver.calls[-2:] == [("connect", view), ("push", "obs-3", (*view, "f3.frame"))]
+    if kept:
+        block = agent.driver.views[-1].items[3].block
+        assert (block.kind, block.based_on) == ("model_output", "obs-2")
+        assert block.text == '{"action": "click", "x": 10, "y": 20, "button": "left", "frame": 2}'
+    assert agent.token_usage["responses"] == 0
+    agent.close()
+
+
+def test_a_reply_given_up_while_its_click_runs_keeps_its_output_once_the_click_ran(
+    monkeypatch, clock
+):
+    """Decision 25: the click still executes as its reply is given up, and the next frame goes
+    into a session reopened without the reply. Once the click ran, the reply's output, and its
+    tool rounds after it (decision 24), stand where the output began, before that frame."""
+    agent = make_agent(monkeypatch, clock, _ToolRounds)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=100.0))
+    done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.abort(7)
+    assert clock.wait(done, 1.0)
+    agent.discard(7)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-2] == ("connect", ("system", "f1.frame", "f2.frame"))
+    agent.commit(_outcome(3, "applied", "c1", action=posted[0].action))
+    agent.push(observation(clock, 4))
+    kept = ("d3.output", "d3.tools", "f3.frame", "d3.c1.feedback", "f4.frame")
+    assert agent.driver.calls[-1] == ("push", "obs-4", ("system", "f1.frame", "f2.frame", *kept))
+    agent.close()
+
+
+def test_an_output_kept_late_moves_on_the_place_of_the_reply_after_it(monkeypatch, clock):
+    """Decision 25: the first reply is given up while its click runs, and the second starts on
+    the frame pushed after; the first's output goes in once the click ran, while the second is
+    on. The second's output still goes where it began, after that frame and before the click's
+    result, which came after."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [
+        Reply((_click("c1", 0.25, 2),), ends_at=100.0),
+        Reply((_click("c1", 0.25, 3),), ends_at=1.0),
+    ]
+    done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.abort(7)
+    assert clock.wait(done, 1.0)
+    agent.discard(7)
+    third = observation(clock, 3)
+    agent.push(third)
+    replied, _ = _on_worker(clock, lambda: agent.generate(8, 4, third, BUDGET))
+    clock.sleep(0.5)
+    agent.commit(_outcome(3, "applied", "c1", action=posted[0].action))
+    assert clock.wait(replied, 1.0)
+    agent.accept(8)
+    agent.push(observation(clock, 4))
+    assert agent.driver.calls[-1][2][3:] == (
+        "d3.output",
+        "f3.frame",
+        "d4.output",
+        "d3.c1.feedback",
+        "f4.frame",
+    )
+    agent.close()
+
+
+def test_a_reply_discarded_before_its_abort_keeps_its_output_once_its_click_ran(monkeypatch, clock):
+    """The reply ended as the kernel gave it up: its discard, on the shell's thread, comes
+    before its abort, on the abort lane."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=1.0))
+    agent.generate(7, 3, frame, BUDGET)
+    agent.commit(_outcome(3, "applied", "c1", action=posted[0].action))
+    agent.discard(7)
+    agent.abort(7)
+    agent.push(observation(clock, 3))
+    view = ("system", "f1.frame", "f2.frame", "d3.output", "d3.c1.feedback", "f3.frame")
+    assert agent.driver.calls[-1] == ("push", "obs-3", view)
+    agent.close()
+
+
+def test_a_reply_that_failed_once_given_up_keeps_its_output_once_its_click_ran(monkeypatch, clock):
+    """The kernel gave the reply up, and its stream failed before the abort came: its result is
+    discarded and the run goes on, so it is a reply given up like any other."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    failure = Fail(0.5, RuntimeError("stream broke"))
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2), failure), ends_at=1.0))
+    with pytest.raises(RuntimeError, match="stream broke"):
+        agent.generate(7, 3, frame, BUDGET)
+    agent.commit(_outcome(3, "applied", "c1", action=posted[0].action))
+    agent.discard(7)
+    agent.push(observation(clock, 3))
+    view = ("system", "f1.frame", "f2.frame", "d3.output", "d3.c1.feedback")
+    assert agent.driver.calls[-2:] == [
+        ("sync", "runtime_recovery", view),
+        ("push", "obs-3", (*view, "f3.frame")),
+    ]
     agent.close()
 
 
