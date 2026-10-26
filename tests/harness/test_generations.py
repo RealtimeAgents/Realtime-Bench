@@ -578,7 +578,7 @@ def test_close_cancels_a_generation_in_flight(tmp_path):
         finally:
             episode.finish()
     assert _cancelled(pending) and pending.result["action"] is None
-    assert stub.requests == [] and agent._generations == []
+    assert stub.requests == [] and agent._generations == {}
     calls = _jsonl(tmp_path / "tool_calls.jsonl")
     assert [(call.get("outcome"), call.get("incomplete")) for call in calls] == [(None, True)]
 
@@ -681,7 +681,7 @@ def test_close_discards_the_generation_the_kernel_gave_no_verdict(tmp_path):
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
     rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
     assert rows == [(0, "decision"), (1, "decision")]
-    assert agent.token_usage == usage and agent._generations == []
+    assert agent.token_usage == usage and agent._generations == {}
 
 
 def test_a_generation_discarded_while_it_runs_is_dropped_when_it_returns(tmp_path):

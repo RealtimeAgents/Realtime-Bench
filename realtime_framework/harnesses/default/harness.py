@@ -1150,23 +1150,24 @@ class _Staged:
 
 @dataclass
 class _Generation:
-    """One generation's own state. An abandoned generation can still be running when the next
-    one starts, so it works on this alone; what the agent keeps of a generation is set when it
-    starts (DefaultHarness._open)."""
+    """One kernel generation, from whichever of StartGeneration, AbortGeneration and
+    DiscardResult reaches the agent first until it is accepted, or discarded and dropped. An
+    abandoned generation can still be running when the next one starts, so it works on this
+    alone; what the agent keeps of a generation is set when it starts (DefaultHarness._start)."""
 
     number: int  # the kernel's generation number
-    decision: int
-    # The decision's output caps (DecisionBudget).
-    provider_output_tokens: int | None
-    transport_output_tokens: int | str | None
     cancel: threading.Event  # set by abort() and close(); the runtime stops the generation
+    # "waiting" until its worker starts generate(), "running" until generate() returns, then
+    # "returned"; "discarded" once discard() came before it returned, to drop it then.
+    state: str = "waiting"
+    decision: int | None = None
+    # The decision's output caps (DecisionBudget).
+    provider_output_tokens: int | None = None
+    transport_output_tokens: int | str | None = None
     # (ChoiceRequirements, SelectionMaterial) of its observation, for its requests.
     choice: tuple | None = None
     frame: FrameRecord | None = None  # its observation's frame-table record
     staged: _Staged | None = None
-    # Set as generate() returns; ``discarded`` when discard() came before, to drop it then.
-    returned: bool = False
-    discarded: bool = False
 
 
 class DefaultHarness(VisionAgentBase):
@@ -1184,11 +1185,9 @@ class DefaultHarness(VisionAgentBase):
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
         self._provider_usage_started = False
-        # The generations that have not ended; abort() and close() cancel them.
-        self._generations: list[_Generation] = []
-        # Kernel generations aborted, and discarded, before their worker started generate().
-        self._cancelled_early: set[int] = set()
-        self._discarded_early: set[int] = set()
+        # The generations the kernel named that are not settled, by number; abort() and close()
+        # cancel them.
+        self._generations: dict[int, _Generation] = {}
         self._generations_lock = threading.Lock()
         # The episode's operational clock; the runtime, the driver and the retry wait read it.
         self.clock = clock or SystemClock()
@@ -1380,86 +1379,79 @@ class DefaultHarness(VisionAgentBase):
             "invalid_reason": "inspection_protocol_error",
         }
 
-    def _open(self, number, decision, provider_output_tokens, transport_output_tokens) -> _Generation:
-        """Start a generation's state; abort() reaches it until the generation ends. The agent
-        keeps the newest generation's action cap, which the runner audits against the decision's
-        allowance once the result is back. A generation aborted before its worker got here does
-        not keep it: it may open after the next one did."""
-        generation = _Generation(
-            number,
-            decision,
-            provider_output_tokens,
-            transport_output_tokens,
-            self.clock.event(),
-        )
-        with self._generations_lock:
-            if number in self._cancelled_early:
-                self._cancelled_early.remove(number)
-                generation.cancel.set()
-            else:
-                self._frame_action_max_tokens = native_output_limit(
-                    self.config.native_output_limit, provider_output_tokens
-                )
-            if number in self._discarded_early:
-                self._discarded_early.remove(number)
-                generation.discarded = True
-            else:
-                self._generations.append(generation)
-        return generation
+    def _generation(self, number: int) -> _Generation:
+        """Generation ``number``'s record, made by whichever call names it first. The caller
+        holds the lock."""
+        if number not in self._generations:
+            self._generations[number] = _Generation(number, self.clock.event())
+        return self._generations[number]
 
-    def _close(self, number: int) -> _Generation:
-        """End the kernel's generation ``number``."""
+    def _start(self, number: int, decision: int, budget: DecisionBudget) -> _Generation:
+        """Start generation ``number``, unless it was discarded first. The agent keeps the newest
+        generation's action cap, which the runner audits against the decision's allowance once
+        the result is back. A generation aborted before its worker got here does not keep it: it
+        may start after the next one did."""
         with self._generations_lock:
-            (generation,) = [g for g in self._generations if g.number == number]
-            self._generations.remove(generation)
+            generation = self._generation(number)
+            generation.decision = decision
+            generation.provider_output_tokens = budget.provider_output_tokens
+            generation.transport_output_tokens = budget.transport_output_tokens
+            if not generation.cancel.is_set():
+                self._frame_action_max_tokens = native_output_limit(
+                    self.config.native_output_limit, budget.provider_output_tokens
+                )
+            if generation.state == "waiting":
+                generation.state = "running"
         return generation
 
     def _cancel(self, number: int | None = None) -> list[_Generation]:
-        """Cancel the kernel's generation ``number``, or every generation that has not ended.
-        The kernel can abort a generation before its worker has started generate(); that
-        generation then starts cancelled."""
+        """Cancel the kernel's generation ``number``, or every generation, and return those of
+        them that started. The kernel can abort a generation before its worker has started
+        generate(); that generation then starts cancelled. One discarded before it returned is
+        left to end."""
         with self._generations_lock:
-            cancelled = [g for g in self._generations if number is None or g.number == number]
-            if number is not None and not cancelled:
-                self._cancelled_early.add(number)
+            named = (
+                list(self._generations.values()) if number is None else [self._generation(number)]
+            )
+            cancelled = [generation for generation in named if generation.state != "discarded"]
             for generation in cancelled:
                 generation.cancel.set()
-        return cancelled
+        return [generation for generation in cancelled if generation.state != "waiting"]
 
     def generate(
         self, generation: int, decision: int, observation, budget: DecisionBudget
     ) -> PendingDecision:
         """StartGeneration, on a worker thread. The result is held, not written: accept() writes
         it into the history and discard() drops it."""
-        state = self._open(
-            generation, decision, budget.provider_output_tokens, budget.transport_output_tokens
-        )
+        state = self._start(generation, decision, budget)
         try:
             result = self._generate(state, [observation])
         finally:
             with self._generations_lock:
-                state.returned = True
-                discarded = state.discarded
+                discarded = state.state == "discarded"
+                if discarded:
+                    del self._generations[generation]
+                else:
+                    state.state = "returned"
             if discarded:
                 self._drop(state)
         return PendingDecision(generation, decision, result)
 
     def accept(self, generation: int) -> None:
-        self._write(self._close(generation))
+        with self._generations_lock:
+            state = self._generations.pop(generation)
+        self._write(state)
 
     def discard(self, generation: int) -> None:
         """DiscardResult. At the end of an episode the shell also discards a generation whose
         worker is still running, or has not started generate() yet, which the kernel has
         aborted by then: it is dropped as generate() returns."""
         with self._generations_lock:
-            state = next((g for g in self._generations if g.number == generation), None)
-            if state is None:
-                self._discarded_early.add(generation)
+            state = self._generation(generation)
+            if state.state != "returned":
+                state.state = "discarded"
                 return
-            self._generations.remove(state)
-            if not state.returned:
-                state.discarded = True
-                return
+            del self._generations[generation]
         self._drop(state)
 
     def _write(self, generation: _Generation) -> None:
@@ -2133,11 +2125,8 @@ class DefaultHarness(VisionAgentBase):
     def close(self):
         """Cancel the generations that have not ended, and discard them: one the episode ended
         on gets no AcceptResult or DiscardResult after Termination."""
-        with self._generations_lock:
-            unsettled = [g.number for g in self._generations]
-        self._cancel()
-        for number in unsettled:
-            self.discard(number)
+        for generation in self._cancel():
+            self.discard(generation.number)
         try:
             with trace_scope(phase="close"):
                 self._runtime.close()

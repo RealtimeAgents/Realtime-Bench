@@ -40,7 +40,7 @@ class LegacyTurn:
         result = agent.generate(number, tick, self._observation, self._budget).result
         with agent._generations_lock:
             # close() discards a generation still running; it was dropped as generate() returned.
-            held = any(generation.number == number for generation in agent._generations)
+            held = number in agent._generations
         if held:
             (agent.discard if result.get("stale") else agent.accept)(number)
         return result

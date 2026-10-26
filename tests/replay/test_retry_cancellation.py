@@ -356,8 +356,8 @@ def _stateless_episode(tmp_path):
 def test_next_decision_runs_after_an_abort(openrouter_env, tmp_path):  # noqa: F811
     """Stateless API. Generation 1 is abandoned in its backoff, as above. The abort cancels that
     generation's own event (DefaultHarness.abort); the next generation, for decision 1 on the
-    same agent, starts with a new one (DefaultHarness._open), so it is not cancelled: it sends its
-    request and returns its action."""
+    same agent, starts with a new one (DefaultHarness._generation), so it is not cancelled: it
+    sends its request and returns its action."""
     backoff = _GatedBackoff()
     openrouter_env.setattr(model_module, "_backoff", backoff)
     with OpenRouterStub([UNAVAILABLE, *replies([STEP])], route=ROUTE) as stub:
