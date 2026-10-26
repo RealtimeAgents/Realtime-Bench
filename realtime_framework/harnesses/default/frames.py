@@ -53,6 +53,11 @@ class FrameTable:
         self._frames: dict[int, FrameRecord] = {}
         self._lock = threading.Lock()
 
+    def next_frame(self) -> int:
+        """The number register() gives the next frame."""
+        with self._lock:
+            return len(self._frames) + 1
+
     def register(
         self, observation_id: str, captured_at: float, geometry: dict, marks: dict | None
     ) -> FrameRecord:

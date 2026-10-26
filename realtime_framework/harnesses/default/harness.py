@@ -942,7 +942,8 @@ class _GenerationOutputCollector:
 def bind_observation(agent, observation, prompt, tick):
     """Prepare one capture for the model, attach its read-only interactables and enter it in the
     frame table, whose record of it comes back too. Under streaming the frame's number is drawn
-    on the screenshot."""
+    on the screenshot, and the marks keep clear of it."""
+    streaming = agent.interaction_mode == "streaming"
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
     observation.metadata = metadata
@@ -960,6 +961,9 @@ def bind_observation(agent, observation, prompt, tick):
             model_height=height,
             model_image_bytes=prepared.data,
             model_image_mime_subtype=prepared.mime_subtype,
+            # A streaming push enters its frame on the shell's one push lane, so no other frame
+            # takes this number before the frame table gives it to this one.
+            frame_number=agent.frames.next_frame() if streaming else None,
         )
         prompt = observation_prompt_with_interactables(
             prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
@@ -987,7 +991,7 @@ def bind_observation(agent, observation, prompt, tick):
         value.geometry,
         execution["marks"] if execution else None,
     )
-    if agent.interaction_mode == "streaming":
+    if streaming:
         value.image_bytes = render_frame_number(value.image_bytes, frame.frame)
         value.mime_type = "image/png"
     return value, execution, frame

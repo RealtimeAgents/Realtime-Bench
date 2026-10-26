@@ -1,6 +1,6 @@
 """Under streaming each screenshot carries its frame number in its top-left corner (the frames the
-native-streaming agent pushes: tests/streaming/test_streaming_e2e.py); turn-based screenshots are
-the SoM images, unchanged."""
+native-streaming agent pushes: tests/streaming/test_streaming_e2e.py), and the SoM marks keep
+clear of it; turn-based screenshots are the SoM images, unchanged."""
 
 from __future__ import annotations
 
@@ -9,16 +9,29 @@ import hashlib
 import io
 import json
 
+import pytest
 from PIL import Image, ImageChops
 
+from realtime_framework.sandbox.observation import som
 from realtime_framework.sandbox.observation.som import render_frame_number
+from tests.fake_clock import FakeClock
+from tests.replay import frames as replay_frames
+from tests.replay.frames import FrameSource, ReplayTask
 from tests.replay.scenario import replies
 from tests.replay.steps import Step
 from tests.replay.stub import ChatCompletionsStub
+from tests.streaming.fake_live import make_agent
 
 from .episode import decide, open_episode
 
 STEPS = [Step('{"action": "wait"}', status="wait")] * 3
+
+
+@pytest.fixture
+def clock():
+    clock = FakeClock(wall_origin=1000.0)
+    with clock.participant():
+        yield clock
 
 
 def _png(size=(768, 432), color=(200, 210, 220)) -> bytes:
@@ -46,6 +59,36 @@ def test_each_frame_number_draws_a_different_label():
     source = _png()
     labels = {render_frame_number(source, frame) for frame in (1, 2, 12, 123)}
     assert len(labels) == 4
+
+
+def _corner_probe(frame: int, *, text_observation: bool = False) -> dict:
+    """The replay form with its Name field (mark P1) at the left, just below the browser toolbar,
+    where the first place of its badge is under the frame number."""
+    value = replay_frames.probe(frame, text_observation=text_observation)
+    (name,) = [item for item in value["actionable_now"] if item["id"] == "dom-0001"]
+    name["bbox"] = [10, 90, 100, 120]
+    name["click_point"] = [55, 105]
+    return value
+
+
+def test_the_mark_badges_keep_clear_of_the_frame_number(monkeypatch, clock):
+    badges = {}
+    draw_badge = som._draw_badge
+
+    def recording(draw, box, text, font, color):
+        badges[text] = box
+        draw_badge(draw, box, text, font, color)
+
+    monkeypatch.setattr(som, "_draw_badge", recording)
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_tool_runtime(som.ToolRuntime())
+    source = FrameSource(ReplayTask(), text_observation=False, fps=1.0, probe=_corner_probe)
+    agent.push(source.capture(0))
+    agent.close()
+    frame = badges.pop("FRAME 1")
+    assert sorted(badges) == ["P1", "P2", "P3", "R1", "U1"]
+    for box in badges.values():
+        assert box[2] <= frame[0] or box[0] >= frame[2] or box[3] <= frame[1] or box[1] >= frame[3]
 
 
 def _sent_images(stub) -> list[bytes]:

@@ -319,6 +319,13 @@ def _draw_badge(draw, box, text: str, font, color: tuple[int, int, int, int]) ->
     )
 
 
+def _frame_number_badge(draw, frame: int, font) -> tuple[tuple[int, int, int, int], str]:
+    """The box and text of the badge render_frame_number draws."""
+    label = f"FRAME {frame}"
+    width, height = _badge_size(draw, label, font)
+    return (2, 2, 2 + width, 2 + height), label
+
+
 def _render_marks(
     image_bytes: bytes,
     marks: dict[str, dict],
@@ -326,6 +333,7 @@ def _render_marks(
     *,
     action_width: int,
     action_height: int,
+    frame_number: int | None = None,
 ) -> tuple[bytes, str]:
     with Image.open(io.BytesIO(image_bytes)) as source:
         image = source.convert("RGBA")
@@ -334,6 +342,9 @@ def _render_marks(
     font = _badge_font(image.size)
     sx, sy = image.width / action_width, image.height / action_height
     occupied: list[tuple[int, int, int, int]] = []
+    if frame_number is not None:
+        # The frame number goes over the marks once they are drawn; their badges keep clear of it.
+        occupied.append(_frame_number_badge(draw, frame_number, font)[0])
 
     def badge(
         mark: str,
@@ -423,9 +434,8 @@ def render_frame_number(image_bytes: bytes, frame: int) -> bytes:
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = _badge_font(image.size)
-    label = f"FRAME {frame}"
-    width, height = _badge_size(draw, label, font)
-    _draw_badge(draw, (2, 2, 2 + width, 2 + height), label, font, (20, 20, 20, 235))
+    box, label = _frame_number_badge(draw, frame, font)
+    _draw_badge(draw, box, label, font, (20, 20, 20, 235))
     rendered = Image.alpha_composite(image, overlay).convert("RGB")
     output = io.BytesIO()
     rendered.save(output, format="PNG", optimize=True)
@@ -439,8 +449,10 @@ def build_hybrid_som(
     action_width: int,
     action_height: int,
     text_observation: bool = False,
+    frame_number: int | None = None,
 ) -> dict:
-    """Build the model-facing legend, mark map, and optional marked screenshot."""
+    """Build the model-facing legend, mark map, and optional marked screenshot. ``frame_number``
+    is the number render_frame_number draws on the marked screenshot after, under streaming."""
     marks, item_lines = _mark_map(result, text_observation=text_observation)
     obs = result.get("observation") or {}
     binding = result.get("binding") or {}
@@ -462,6 +474,7 @@ def build_hybrid_som(
             unavailable,
             action_width=action_width,
             action_height=action_height,
+            frame_number=frame_number,
         )
     mark_payload = json.dumps(marks, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return {
@@ -702,8 +715,10 @@ class ToolRuntime:
         raw_model_call: str = "",
         inspection_latency_s: float = 0.0,
         protocol_error: str | None = None,
+        frame_number: int | None = None,
     ) -> dict:
-        """Return the cached result attached to ``observation`` and a runner-verifiable proof."""
+        """Return the cached result attached to ``observation`` and a runner-verifiable proof.
+        ``frame_number``: the number drawn on the marked screenshot under streaming."""
         started = self.clock.time()
         metadata = getattr(observation, "metadata", {}) or {}
         expected = metadata.get("observation_id")
@@ -738,6 +753,7 @@ class ToolRuntime:
                 action_width=model_width,
                 action_height=model_height,
                 text_observation=self.text_observation,
+                frame_number=frame_number,
             )
             text = som["text"]
         elapsed = self.clock.time() - started
