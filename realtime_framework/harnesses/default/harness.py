@@ -964,8 +964,6 @@ def bind_observation(agent, observation, prompt, tick):
     streaming = agent.interaction_mode == "streaming"
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
-    observation.metadata = metadata
-    metadata["model_frame_geometry"] = prepared.geometry.to_dict()
     execution = None
     runtime = getattr(agent, "tool_runtime", None)
     if runtime is not None:
