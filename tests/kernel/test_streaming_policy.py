@@ -27,6 +27,8 @@ from realtime_framework.evaluation.kernel.events import (
     Termination,
 )
 from realtime_framework.evaluation.kernel.streaming import (
+    CANCELLED_CALL,
+    CANCELLED_GENERATION,
     SessionPrepared,
     SessionPreparing,
     StreamingConfig,
@@ -143,13 +145,14 @@ def test_a_grid_point_that_comes_during_a_capture_is_skipped_and_counted():
 
 
 def test_grid_points_that_pass_while_the_shell_is_held_are_skipped_and_counted():
-    """The click's feedback, given once the read after it answers, holds the shell from 0.25 to
-    2.75. The capture due at 1 is made then, and the one due at 2 is skipped."""
+    """The click executes at 0.25 between the reads before and after it; its feedback, given once
+    the read after it answers, holds the shell from 0.25 to 2.75. The capture due at 1 is made
+    then, and the one due at 2 is skipped."""
     world = World(replies=[Reply(5.0, calls=(Call(0.25, CLICK),))], commit_s=2.5)
     sim = _run(world)
     assert sim.captures == [0.0, 2.75, 3.0, 4.0]
     assert sim.data("FrameDropped") == [{"observation_id": None, "reason": "late", "dropped": 1}]
-    assert sim.checks == [0.0, 0.25, 2.75, 3.0, 4.0]
+    assert sim.checks == [0.0, 0.25, 0.25, 2.75, 3.0, 4.0]
 
 
 def test_a_stream_that_repeats_one_frame_invalidates_the_run():
@@ -326,6 +329,132 @@ def test_a_feedback_failure_invalidates_the_run():
     )
 
 
+# ---- the read before an action (decision 12) -------------------------------------------------------
+
+
+def test_an_action_executes_once_a_read_asked_after_it_arrived_says_the_task_goes_on():
+    """Reads take 0.25 s, so the first reply starts at 0.25. The click arrives at 1.5, after the
+    read asked at 1 answered: it holds the lane while the read asked for it runs, and executes
+    once that read answers, at 1.75. The read after it is asked at 2.25."""
+    world = World(replies=[Reply(4.0, calls=(Call(1.25, CLICK, execute_s=0.5),))], check_s=0.25)
+    sim = _run(world)
+    assert sim.executed == [(1.75, CLICK)]
+    assert sim.checks == [0.0, 1.0, 1.5, 2.25, 3.0, 4.0]
+    assert sim.outcomes == [_outcome(0, "applied", 1.75, frame_age_s=0.25, arrived_at=1.5)]
+
+
+@pytest.mark.parametrize("arrives", [2.5, 2.95])
+def test_an_action_arriving_once_the_task_ended_by_itself_does_not_execute(arrives):
+    """The task ends on its own at 2.3, between the reads at 2 and 3. The read asked for the
+    click as it arrives finds the end, which is dated there, and the click does not execute
+    (review-streaming 设计-3: it executed, and the end was dated where it finished)."""
+    reply = Reply(arrives + 0.1, calls=(Call(arrives, CLICK, execute_s=0.25),))
+    sim = _run(World(replies=[reply], ends_at=2.3, end_reason="game_over"), 10.0)
+    assert sim.executed == []
+    assert sim.statuses() == ["not_applied_terminal"]
+    assert sim.checks == [0.0, 1.0, 2.0, arrives]
+    assert _ended(sim) == ("game_over", "environment", arrives, arrives)
+
+
+def test_an_end_the_read_before_an_action_finds_is_dated_where_that_read_was_asked():
+    """Reads take 0.5 s, so the first reply starts at 0.5. The task reports its end from 1.4; the
+    click arrives at 1.5, and the read asked for it then answers at 2: the episode ended at 1.5
+    (N44)."""
+    world = World(replies=[Reply(4.0, calls=(Call(1.0, CLICK),))], check_s=0.5, ends_at=1.4)
+    sim = _run(world)
+    assert sim.executed == []
+    assert sim.checks == [0.0, 1.0, 1.5]
+    assert _ended(sim) == ("game_decided", "environment", 1.5, 2.0)
+
+
+def test_a_third_failed_read_before_an_action_invalidates_the_run_where_that_read_was_asked():
+    """The reads at 0 and 1 fail, and so does the one asked for the click at 1.5, answered at 2:
+    the third in a row invalidates the run from 1.5 (N44), and the click does not execute."""
+    errors = {1: "cdp timeout", 2: "cdp timeout", 3: "cdp timeout"}
+    calls = (Call(1.0, CLICK, execute_s=0.25),)
+    sim = _run(World(replies=[Reply(4.0, calls=calls)], check_s=0.5, check_errors=errors))
+    assert sim.executed == []
+    assert sim.statuses() == ["invalid_run"]
+    assert _ended(sim) == ("invalid_run", "invalid", 1.5, 2.0)
+    assert sim.termination.invalid == Invalidated(
+        "environment", "terminal_state_check_failed", "cdp timeout"
+    )
+
+
+def test_an_action_executes_after_a_failed_read_before_it_as_on_the_turn_based_clock():
+    """A failed read tells nothing, and a turn-based action lands after one (turns.py
+    _end_checked): the click executes once the read asked for it at 1.5 answered, failed, at 2."""
+    world = World(
+        replies=[Reply(4.0, calls=(Call(1.0, CLICK),))],
+        check_s=0.5,
+        check_errors={3: "cdp timeout"},
+    )
+    sim = _run(world)
+    assert sim.executed == [(2.0, CLICK)]
+    assert sim.statuses() == ["applied"]
+    assert sim.termination.invalid is None
+
+
+def test_of_three_actions_a_reply_hands_over_at_once_the_first_and_the_last_execute():
+    """Reads take 0.25 s and actions 0.5 s; the reply hands a click, a typing and a second click
+    over at 1.5. The first click holds the lane while the read asked for it runs, and executes
+    at 1.75; the typing waits, and the second click takes its place (decision 20). The read after
+    the first click was asked since the second arrived, so the second executes as it answers,
+    at 2.5, with no read of its own."""
+    other = Action.click(30, 40)
+    calls = (Call(1.25, CLICK, "a"), Call(1.25, TYPE, "b"), Call(1.25, other, "c"))
+    sim = _run(World(replies=[Reply(4.0, calls=calls)], check_s=0.25, execute_s=0.5))
+    assert sim.statuses() == ["applied", "superseded", "applied"]
+    assert sim.resolved()[1]["superseded_by"] == 2
+    assert sim.executed == [(1.75, CLICK), (2.5, other)]
+    assert sim.checks == [0.0, 1.0, 1.5, 2.25, 3.0, 4.0]
+
+
+def test_a_read_asked_at_the_reading_an_action_arrives_at_counts_for_it():
+    """Reads take 0.25 s. A click and a typing arrive together at 1.5, and the read asked for the
+    click then counts for the typing too. The click's call is cancelled at 1.625 while that read
+    runs, which withdraws the click; the typing executes as the read answers, at 1.75, with no
+    read of its own."""
+    calls = (Call(1.25, CLICK, "a"), Call(1.25, TYPE, "b"))
+    reply = Reply(4.0, calls=calls, cancellations=((1.375, ("a",)),))
+    sim = _run(World(replies=[reply], check_s=0.25))
+    assert sim.statuses() == [CANCELLED_CALL, "applied"]
+    assert sim.executed == [(1.75, TYPE)]
+    assert sim.checks[:4] == [0.0, 1.0, 1.5, 1.75]
+
+
+def test_an_action_whose_reply_is_given_up_while_the_read_before_it_runs_does_not_execute():
+    """Reads take 0.5 s, so the reply starts at 0.5, and its watchdog gives it up at 2. Its click
+    arrives at 1.75, and the read asked for it runs until 2.25."""
+    world = World(replies=[Reply(10.0, calls=(Call(1.25, CLICK),))], check_s=0.5)
+    sim = _run(world, reply_watchdog_s=1.5)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "reply_watchdog"}
+    assert sim.statuses() == [CANCELLED_GENERATION]
+    assert sim.executed == []
+
+
+def test_an_action_whose_read_before_it_answers_past_the_deadline_does_not_execute():
+    """Reads take 0.5 s, so the reply starts at 0.5. The click arrives at 4.75, and the read asked
+    for it answers at 5.25: the deadline waits for it, and then ends the episode."""
+    world = World(replies=[Reply(10.0, calls=(Call(4.25, CLICK),))], check_s=0.5)
+    sim = _run(world)
+    assert sim.executed == []
+    assert sim.statuses() == ["not_applied_time_limit"]
+    assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.25)
+
+
+def test_an_action_whose_read_before_it_is_handled_past_the_deadline_does_not_execute():
+    """Reads take 0.25 s, so the reply starts at 0.25. The click arrives at 4.6, and the read
+    asked for it answers at 4.85, filed at 4.6; the refusal arriving at 4.7 is given as feedback
+    until 5.7, so that answer is handled then, before the deadline's timer: the click does not
+    execute past the deadline."""
+    calls = (Call(4.35, CLICK, "a"), Call(4.45, TYPE, "b", grounding=MISSING_FRAME))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], check_s=0.25, commit_s=1.0))
+    assert sim.executed == []
+    assert sim.statuses() == ["not_applied_time_limit", INVALID_GROUNDING_FRAME]
+    assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.7)
+
+
 # ---- replies ------------------------------------------------------------------------------------
 
 
@@ -375,17 +504,18 @@ def test_a_third_failed_read_asked_before_the_deadline_invalidates_though_it_ans
 
 
 def test_a_third_failed_read_after_an_action_is_dated_where_the_action_finished():
-    """The reads at 0 and 1 fail. The click executes from 1.25 to 1.5 alongside the capture at 1,
-    which takes until 2; the read after the click waits for it and fails too, the third in a row.
-    It stands for a read as the click finished (N31), so the run is invalid from 1.5 (N44)."""
+    """The reads at 1 and 1.25 fail, the second the one asked for the click, which executes after
+    it from 1.25 to 2.25; the capture at 2 runs alongside until 3. The read after the click waits
+    for that capture and fails too, the third in a row. It stands for a read as the click finished
+    (N31), so the run is invalid from 2.25 (N44)."""
     world = World(
-        replies=[Reply(10.0, calls=(Call(1.25, CLICK, execute_s=0.25),))],
-        check_errors={1: "cdp timeout", 2: "cdp timeout", 3: "cdp timeout"},
-        capture_times={2: 1.0},
+        replies=[Reply(10.0, calls=(Call(1.25, CLICK, execute_s=1.0),))],
+        check_errors={2: "cdp timeout", 3: "cdp timeout", 4: "cdp timeout"},
+        capture_times={3: 1.0},
     )
     sim = _run(world, 5.0)
-    assert sim.checks == [0.0, 1.0, 2.0]
-    assert _ended(sim) == ("invalid_run", "invalid", 1.5, 2.0)
+    assert sim.checks == [0.0, 1.0, 1.25, 3.0]
+    assert _ended(sim) == ("invalid_run", "invalid", 2.25, 3.0)
 
 
 # ---- the end ------------------------------------------------------------------------------------
@@ -428,15 +558,16 @@ def test_the_deadline_waits_for_the_read_after_an_execution_answered_before_it(e
 def test_the_deadline_waits_for_the_read_after_an_action_answered_while_the_shell_is_busy(
     input_fps,
 ):
-    """The click finishes at 4.75 and ends the task; its answer comes while the refusal's feedback,
-    from 4.7, holds the shell until 5.7. It is filed where the click finished, before the deadline,
-    so the deadline waits for the read after it (N31), as for an answer filed before the shell
-    was held. At 30 frames a second a grid point between 4.7 and 4.75 is handled at 5.7 first; it
-    leaves the end to the deadline's own timer, which comes after the click's answer."""
+    """The click executes from 0.5, once the read asked for it answered, and finishes at 4.75 and
+    ends the task; its answer comes while the refusal's feedback, from 4.7, holds the shell until
+    5.7. It is filed where the click finished, before the deadline, so the deadline waits for the
+    read after it (N31), as for an answer filed before the shell was held. At 30 frames a second a
+    grid point between 4.7 and 4.75 is handled at 5.7 first; it leaves the end to the deadline's
+    own timer, which comes after the click's answer."""
     calls = (Call(0.5, CLICK, "a", execute_s=4.25), Call(4.7, TYPE, "b", grounding=MISSING_FRAME))
     world = World(replies=[Reply(10.0, calls=calls)], commit_s=1.0, ends_at=4.75)
     sim = _run(world, input_fps=input_fps)
-    assert sim.checks == [0.0, 5.7]
+    assert sim.checks == [0.0, 0.5, 5.7]
     assert _ended(sim) == ("game_decided", "environment", 4.75, 5.7)
     assert sim.resolved()[0]["terminal_after_action"] is True
 
@@ -505,11 +636,12 @@ def test_no_generation_starts_after_the_last_one_before_the_deadline():
 
 
 def test_an_end_an_action_brings_is_dated_by_the_read_that_saw_it():
-    """The click executes from 1 to 4 and the task reports its end from 3.9. The reads due at 1,
-    2 and 3 wait for the click; the one at 4 sees the end."""
+    """The click arrives at 1, and the read asked for it is that frame's. It executes from 1 to 4
+    and the task reports its end from 3.9. The reads due at 2 and 3 wait for the click; the one
+    at 4 sees the end."""
     calls = (Call(1.0, CLICK, execute_s=3.0),)
     sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=3.9), 10.0)
-    assert sim.checks == [0.0, 4.0]
+    assert sim.checks == [0.0, 1.0, 4.0]
     assert _ended(sim) == ("game_decided", "environment", 4.0, 4.0)
 
 
@@ -537,11 +669,11 @@ def test_a_hold_that_waits_for_the_environment_is_held_its_whole_duration():
 
 
 def test_the_state_is_read_right_after_an_action_and_an_end_it_brings_is_found_then():
-    """The click executes from 4.25 to 4.75, after the read at 4, and ends the task. The read
-    right after it finds the end before the deadline."""
+    """The click executes from 4.25 to 4.75, after the read asked for it, and ends the task. The
+    read right after it finds the end before the deadline."""
     calls = (Call(4.25, CLICK, execute_s=0.5),)
     sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=4.75))
-    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 4.75]
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 4.25, 4.75]
     assert _ended(sim) == ("game_decided", "environment", 4.75, 4.75)
     assert sim.resolved()[0]["terminal_after_action"] is True
     assert sim.outcomes[0].terminal_after_action is True
@@ -558,37 +690,38 @@ def test_an_action_waiting_behind_one_that_ends_the_task_never_executes():
 
 
 def test_a_failed_read_after_an_action_lets_the_action_waiting_execute():
-    """The click executes from 2.25 to 2.75 and ends the task; the read after it fails, which tells
-    nothing, as on the turn-based clock. The typing waiting behind it executes then, and the read
-    after the typing finds the end."""
+    """The click executes from 2.25 to 2.75, after the read asked for it, and ends the task; the
+    read after it fails, which tells nothing, as on the turn-based clock. The typing waiting behind
+    it, which that read was asked after, executes then, and the read after the typing finds the
+    end."""
     calls = (Call(2.25, CLICK, execute_s=0.5), Call(2.5, TYPE))
-    errors = {4: "cdp timeout"}
+    errors = {5: "cdp timeout"}
     sim = _run(World(replies=[Reply(10.0, calls=calls)], ends_at=2.75, check_errors=errors), 10.0)
-    assert sim.checks == [0.0, 1.0, 2.0, 2.75, 2.75]
+    assert sim.checks == [0.0, 1.0, 2.0, 2.25, 2.75, 2.75]
     assert sim.executed == [(2.25, CLICK), (2.75, TYPE)]
     assert [data["terminal_after_action"] for data in sim.resolved().values()] == [False, True]
     assert _ended(sim) == ("game_decided", "environment", 2.75, 2.75)
 
 
 def test_an_action_is_settled_by_the_read_after_it():
-    """The click executes from 1.25 to 1.5; the read after it takes until 1.75. The click is applied
-    once that read answers, and only then does the typing waiting behind it execute, followed by
-    its own read."""
+    """The click executes from 1.25 to 1.5, after the read asked for it; the read after it takes
+    until 1.75. The click is applied once that read answers, and only then does the typing waiting
+    behind it execute, followed by its own read."""
     calls = (Call(1.25, CLICK, execute_s=0.25), Call(1.375, TYPE))
-    sim = _run(World(replies=[Reply(10.0, calls=calls)], check_times={3: 0.25}), 3.0)
-    assert sim.checks == [0.0, 1.0, 1.5, 1.75, 2.0]
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], check_times={4: 0.25}), 3.0)
+    assert sim.checks == [0.0, 1.0, 1.25, 1.5, 1.75, 2.0]
     assert sim.executed == [(1.25, CLICK), (1.75, TYPE)]
     click = sim.entries("ActionResolved")[0]
     assert (click.semantic, click.data["finished_at"]) == (1.75, 1.5)
 
 
 def test_a_frame_the_read_after_an_action_read_is_not_read_again_at_its_grid_point():
-    """The click ends at 1.875 as a refused action arrives; the refusal's feedback holds the shell
-    until 2.125. The read after the click is then made in frame 2, before the grid point at 2
-    is handled, which finds frame 2 read."""
+    """The click, executing from 1.25 after the read asked for it, ends at 1.875 as a refused
+    action arrives; the refusal's feedback holds the shell until 2.125. The read after the click
+    is then made in frame 2, before the grid point at 2 is handled, which finds frame 2 read."""
     calls = (Call(1.25, CLICK, execute_s=0.625), Call(1.875, TYPE, grounding=MISSING_FRAME))
     sim = _run(World(replies=[Reply(10.0, calls=calls)], commit_s=0.25), 3.0)
-    assert sim.checks == [0.0, 1.0, 2.125]
+    assert sim.checks == [0.0, 1.0, 1.25, 2.125]
 
 
 # ---- a read across the deadline ---------------------------------------------------------------
@@ -628,10 +761,10 @@ def test_a_reply_that_would_fail_while_the_deadline_waits_for_a_read_leaves_the_
 
 
 def _click_during_a_capture(capture_s: float, ends_at: float | None) -> Simulation:
-    """The click executes from 4.1 to 4.6 alongside the capture due at 4, which takes
-    ``capture_s``; the read after the click waits for that capture."""
+    """The click executes from 3.9, after the read asked for it, to 4.6, alongside the capture
+    due at 4, which takes ``capture_s``; the read after the click waits for that capture."""
     world = World(
-        replies=[Reply(10.0, calls=(Call(4.1, CLICK, "c", execute_s=0.5),))],
+        replies=[Reply(10.0, calls=(Call(3.9, CLICK, "c", execute_s=0.7),))],
         ends_at=ends_at,
         end_reason="goal",
         capture_times={5: capture_s},
@@ -644,7 +777,7 @@ def test_the_deadline_waits_for_the_read_after_an_action_behind_a_capture_across
     the click, made once the capture is done; the end it finds is dated where the click finished,
     as the turn-based clock reads right then."""
     sim = _click_during_a_capture(1.2, ends_at=4.6)
-    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 5.2]
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 3.9, 5.2]
     assert sim.termination == Termination("goal", "environment", 4.6, 5.2, 5.2, 5.2, None)
     assert sim.resolved()[0]["terminal_after_action"] is True
 
@@ -653,13 +786,13 @@ def test_an_end_the_read_after_an_action_finds_is_dated_where_the_action_finishe
     """The capture runs until 4.8, before the deadline; the read after the click waits for it,
     and the end it finds is dated at 4.6 all the same."""
     sim = _click_during_a_capture(0.8, ends_at=4.6)
-    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 4.8]
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 3.9, 4.8]
     assert _ended(sim) == ("goal", "environment", 4.6, 4.8)
 
 
 def test_a_read_after_an_action_past_the_deadline_that_finds_no_end_ends_it_at_the_deadline():
     sim = _click_during_a_capture(1.2, ends_at=None)
-    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 5.2]
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 3.9, 5.2]
     assert sim.termination == Termination("time_limit", "deadline", 5.0, 5.2, 5.2, 5.2, None)
     assert sim.statuses() == ["applied"]
 
@@ -1022,8 +1155,8 @@ def test_an_action_waiting_behind_one_the_guest_refused_then_executes():
     assert sim.statuses() == ["rejected", "applied"]
     assert sim.executed == [(0.25, CLICK), (1.25, TYPE)]
     # The typing, waiting since before the read due at 1 came due, goes first once the refused
-    # click is answered; the read after it stands for the grid's.
-    assert sim.checks == [0.0, 1.25, 2.0, 3.0, 4.0]
+    # click is answered: the read asked for it stands for the grid's.
+    assert sim.checks == [0.0, 0.25, 1.25, 1.25, 2.0, 3.0, 4.0]
 
 
 def test_a_frame_repeated_once_the_episode_is_over_still_invalidates_the_run():
@@ -1078,22 +1211,23 @@ def test_reads_slower_than_the_frames_take_turns_with_the_captures():
 
 
 def test_frames_keep_coming_while_a_long_action_executes():
-    """The click executes from 1 to 6. A capture and an action share the environment, so every
-    grid point captures meanwhile; the reads due wait for the click, and the read right after it
-    stands for them."""
+    """The click executes from 1, after the read asked for it, to 6. A capture and an action share
+    the environment, so every grid point captures meanwhile; the reads due wait for the click, and
+    the read right after it stands for them."""
     sim = _run(World(replies=[Reply(10.0, calls=(Call(1.0, CLICK, execute_s=5.0),))]), 8.0)
     assert sim.captures == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
     assert sim.data("FrameDropped") == []
-    assert sim.checks == [0.0, 6.0, 7.0]
+    assert sim.checks == [0.0, 1.0, 6.0, 7.0]
 
 
-def test_an_action_starts_while_a_capture_runs():
-    """The capture at 1 takes until 1.75; the click arriving at 1.25 executes at once. The read
-    after it waits for the capture."""
+def test_an_action_arriving_during_a_capture_executes_after_it_and_the_read_asked_for_it():
+    """The capture at 1 takes until 1.75; the click arriving at 1.25 holds the lane meanwhile.
+    The read asked for it waits for the capture, as every read does (decision 21, 4.9), and the
+    click executes once that read answers, at 1.75."""
     world = World(replies=[Reply(10.0, calls=(Call(1.25, CLICK),))], capture_times={2: 0.75})
     sim = _run(world, 3.0)
-    assert sim.executed == [(1.25, CLICK)]
-    assert sim.checks == [0.0, 1.0, 1.75, 2.0]
+    assert sim.executed == [(1.75, CLICK)]
+    assert sim.checks == [0.0, 1.0, 1.75, 1.75, 2.0]
 
 
 def test_a_read_that_waits_for_a_capture_holds_back_an_action_due_after_it():

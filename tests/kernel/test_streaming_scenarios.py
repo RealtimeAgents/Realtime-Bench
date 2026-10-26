@@ -129,14 +129,14 @@ def test_a_deadline_during_an_execution_freezes_once_the_action_finishes():
 
 
 def test_an_end_the_task_reports_during_an_execution_settles_the_waiting_action():
-    """The task reports its end from 2, while the click executes from 1 to 4. The read due at 2
-    waits for the click and goes before the typing waiting behind it: it sees the end at 4, and
-    the typing is not applied."""
+    """The task reports its end from 2, while the click executes from 1, after the read asked for
+    it, to 4. The read due at 2 waits for the click and goes before the typing waiting behind it:
+    it sees the end at 4, and the typing is not applied."""
     calls = (Call(1.0, CLICK, execute_s=3.0), Call(1.5, TYPE))
     sim = _run(World(replies=[Reply(3.0, calls=calls)], ends_at=2.0))
     assert sim.statuses() == ["applied", "not_applied_terminal"]
     assert sim.executed == [(1.0, CLICK)]
-    assert sim.checks == [0.0, 4.0]
+    assert sim.checks == [0.0, 1.0, 4.0]
     assert sim.snapshots == [4.0]
     assert sim.termination == Termination("game_decided", "environment", 4.0, 4.0, 4.0, 4.0, None)
 

@@ -31,8 +31,9 @@ from tests.fake_clock import FakeClock
 from .fakes import Call, FakeAgent, FakeEnv, Reply
 
 CLICK = Action(ActionType.CLICK, {"x": 1, "y": 2})
-# The first reply starts on the first frame, pushed at 0.875 s; its click arrives 0.9 s later and
-# executes from 1.775 s to 3.775 s, while the reply ends at 2.475 s.
+# The first reply starts on the first frame, pushed at 0.875 s; its click arrives 0.9 s later, the
+# read asked for it runs until 2.275 s, and the click executes from then to 4.275 s, while the
+# reply ends at 2.475 s.
 ONE_CLICK = [Reply(1.6, (Call(0.9, CLICK, "c0"),))]
 
 
@@ -105,31 +106,32 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
         ("capture", 0.5, 0.75),
         ("check_end", 1.0, 1.5),
         ("capture", 1.5, 1.75),
-        # The beats at 2 s and 3 s are captured alongside the action. The reads due then hold
-        # the gate alone, so they wait for the action, and the read right after the action
-        # stands for them and settles it. Then the capture due at 4 s and the read due with it
-        # take turns, as do those at 5 s.
-        ("capture", 2.0, 2.25),
+        # The read asked for the click as it arrives holds the gate alone, and the beat at 2 s
+        # waits for it. That beat and those at 3 s and 4 s are captured alongside the action. The
+        # reads due meanwhile hold the gate alone, so they wait for the action, and the read right
+        # after the action stands for them and settles it. Then the read due at 5 s and the
+        # capture due with it take turns.
+        ("check_end", 1.775, 2.275),
+        ("capture", 2.275, 2.525),
         ("capture", 3.0, 3.25),
-        ("execute", 1.775, 3.775),
-        ("check_end", 3.775, 4.275),
-        ("capture", 4.275, 4.525),
-        ("check_end", 4.525, 5.025),
-        ("capture", 5.025, 5.275),
-        ("check_end", 5.275, 5.775),
+        ("capture", 4.0, 4.25),
+        ("execute", 2.275, 4.275),
+        ("check_end", 4.275, 4.775),
+        ("check_end", 5.0, 5.5),
+        ("capture", 5.5, 5.75),
         ("snapshot", 6.0, 6.5),
     ]
-    # During the action, frames went out and the next reply started on one captured meanwhile.
+    # During the action, frames went out and the next reply started.
     assert agent.pushed[:4] == [
         ("obs-1", 0.875),
         ("obs-2", 1.875),
-        ("obs-3", 2.375),
+        ("obs-3", 2.65),
         ("obs-4", 3.375),
     ]
-    assert agent.started == [(1, "obs-1", 0.875), (2, "obs-3", 2.475)]
+    assert agent.started == [(1, "obs-1", 0.875), (2, "obs-2", 2.475)]
     assert (agent.accepted, agent.aborted, agent.discarded) == ([1], [(2, 6.0)], [2])
     ((committed_at, outcome),) = agent.committed
-    assert (committed_at, outcome.status, outcome.call_id) == (4.275, "applied", "c0")
+    assert (committed_at, outcome.status, outcome.call_id) == (4.775, "applied", "c0")
     assert outcome.terminal_after_action is False
     assert (outcome.arrived_at, outcome.frame_age_s) == (1.775, 0.9)
     assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
@@ -150,8 +152,8 @@ def test_the_kernel_goes_on_with_frames_and_replies_while_an_action_executes(tmp
     (execution,) = [r["payload"] for r in records if r["event"] == "ActionExecution"]
     assert execution == {
         "decision": 0,
-        "started_unix_s": 1.775,
-        "finished_unix_s": 3.775,
+        "started_unix_s": 2.275,
+        "finished_unix_s": 4.275,
         "coordinate_trace": {"x": 1},
     }
     assert records[-1]["payload"]["kind"] == "Termination"
@@ -163,31 +165,33 @@ def test_the_snapshot_at_the_deadline_waits_for_the_action_executing():
     snapshot begins, after the action, as on the turn-based shell."""
     termination, env, agent = _episode(3.0, ONE_CLICK)
     assert env.intervals[4:] == [
-        ("capture", 2.0, 2.25),
-        ("execute", 1.775, 3.775),
-        ("snapshot", 3.775, 4.275),
+        ("check_end", 1.775, 2.275),
+        ("capture", 2.275, 2.525),
+        ("execute", 2.275, 4.275),
+        ("snapshot", 4.275, 4.775),
     ]
-    assert termination == Termination("time_limit", "deadline", 3.0, 4.275, 3.0, 4.275, None)
-    assert env._active_end_unix_s == 3.775
+    assert termination == Termination("time_limit", "deadline", 3.0, 4.775, 3.0, 4.775, None)
+    assert env._active_end_unix_s == 4.275
     ((_, outcome),) = agent.committed
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
 
 
 def test_a_snapshot_waits_for_a_slow_capture_alongside_the_action():
-    """N32: the capture at 2 s runs alongside the click and takes 30 s, past the click's budget of
-    20 s (sandbox/guest.py action_timeout) but within its own of 120 s. The snapshot, which holds
-    the gate alone, waits for both: its bound is the larger budget, and the run is valid."""
+    """N32: the capture due at 2 s runs alongside the click and takes 30 s, past the click's budget
+    of 20 s (sandbox/guest.py action_timeout) but within its own of 120 s. The snapshot, which
+    holds the gate alone, waits for both: its bound is the larger budget, and the run is valid."""
 
     def slow_capture(env, clock):
         env.durations[("capture", 3)] = 30.0
 
     termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_capture)
     assert env.intervals[4:] == [
-        ("execute", 1.775, 3.775),
-        ("capture", 2.0, 32.0),
-        ("snapshot", 32.0, 32.5),
+        ("check_end", 1.775, 2.275),
+        ("execute", 2.275, 4.275),
+        ("capture", 2.275, 32.275),
+        ("snapshot", 32.275, 32.775),
     ]
-    assert termination == Termination("time_limit", "deadline", 3.0, 32.5, 3.0, 32.5, None)
+    assert termination == Termination("time_limit", "deadline", 3.0, 32.775, 3.0, 32.775, None)
 
 
 def test_a_snapshot_waits_for_an_action_whose_budget_is_past_a_capture_s():
@@ -201,8 +205,8 @@ def test_a_snapshot_waits_for_an_action_whose_budget_is_past_a_capture_s():
         env.durations[("execute", 1)] = 150.0
 
     termination, env, _ = _episode(3.0, [Reply(1.6, (Call(0.9, hold, "h0"),))], env_setup=long_hold)
-    assert env.intervals[-2:] == [("execute", 1.775, 151.775), ("snapshot", 151.775, 152.275)]
-    assert termination == Termination("time_limit", "deadline", 3.0, 152.275, 3.0, 152.275, None)
+    assert env.intervals[-2:] == [("execute", 2.275, 152.275), ("snapshot", 152.275, 152.775)]
+    assert termination == Termination("time_limit", "deadline", 3.0, 152.775, 3.0, 152.775, None)
 
 
 def test_the_snapshot_reads_in_its_own_budget_after_waiting_for_the_action():
@@ -213,8 +217,8 @@ def test_the_snapshot_reads_in_its_own_budget_after_waiting_for_the_action():
         env.durations[("execute", 1)] = 19.0
 
     termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_click)
-    assert env.intervals[-1] == ("snapshot", 20.775, 21.275)
-    assert termination == Termination("time_limit", "deadline", 3.0, 21.275, 3.0, 21.275, None)
+    assert env.intervals[-1] == ("snapshot", 21.275, 21.775)
+    assert termination == Termination("time_limit", "deadline", 3.0, 21.775, 3.0, 21.775, None)
 
 
 def test_a_command_the_shell_fails_to_hand_out_is_a_run_exception(monkeypatch):
@@ -238,7 +242,7 @@ def test_a_snapshot_the_action_keeps_waiting_past_its_budget_fails():
         env.durations[("execute", 1)] = 130.0
 
     termination, env, _ = _episode(3.0, ONE_CLICK, env_setup=slow_action)
-    assert ("execute", 1.775, 131.775) in env.intervals
+    assert ("execute", 2.275, 132.275) in env.intervals
     assert "snapshot" not in [name for name, _, _ in env.intervals]
     assert termination.stop_reason == "invalid_run"
     assert termination.snapshot_at is None
@@ -260,9 +264,9 @@ def test_an_end_check_due_during_an_action_reads_once_the_action_is_done():
     assert (termination.stop_reason, termination.cause, termination.ended_at) == (
         "goal",
         "environment",
-        3.775,
+        4.275,
     )
-    assert env.intervals[-2:] == [("check_end", 3.775, 4.275), ("snapshot", 4.275, 4.775)]
+    assert env.intervals[-2:] == [("check_end", 4.275, 4.775), ("snapshot", 4.775, 5.275)]
 
 
 def test_a_capture_that_cannot_keep_up_skips_the_beats_it_misses(tmp_path):
@@ -341,12 +345,13 @@ class _SlowActionRows:
 
 
 def test_an_action_finished_just_before_the_deadline_is_taken_in_before_it_however_slow_its_row():
-    """The click runs from 1.775 s to 4.995 s and ends the task, and its ActionExecution row
-    takes 10 ms to write. The lane posts the click's answer without waiting for the row, so the
-    read after the click settles it, and the task's end is dated at 4.995 s rather than the
-    deadline's at 5 s; the row still comes before the kernel's record of the answer."""
+    """The click runs from 2.275 s, once the read asked for it answered, to 4.995 s and ends the
+    task, and its ActionExecution row takes 10 ms to write. The lane posts the click's answer
+    without waiting for the row, so the read after the click settles it, and the task's end is
+    dated at 4.995 s rather than the deadline's at 5 s; the row still comes before the kernel's
+    record of the answer."""
     clock = FakeClock()
-    env = FakeEnv(clock, execute_s=3.22)
+    env = FakeEnv(clock, execute_s=2.72)
     env.ends_at = 4.99
     agent = FakeAgent(clock, [Reply(10.0, (Call(0.9, CLICK, "c0"),))])
     trace = _SlowActionRows(clock, 0.01)
@@ -369,12 +374,13 @@ def test_an_action_finished_just_before_the_deadline_is_taken_in_before_it_howev
 
 
 def test_an_action_answer_the_shell_takes_in_late_is_filed_when_the_action_finished():
-    """The click runs from 1.775 s to 4.995 s and ends the task; a wait arrives at 4.9 s, and its
-    feedback holds the shell's thread until 5.1 s, across the deadline at 5 s. The click's answer,
-    taken in then, is filed when the click finished, before the deadline (kernel/core.py step):
-    the read after it settles it, and the task's end is dated at 4.995 s."""
+    """The click runs from 2.275 s, once the read asked for it answered, to 4.995 s and ends the
+    task; a wait arrives at 4.9 s, and its feedback holds the shell's thread until 5.1 s, across
+    the deadline at 5 s. The click's answer, taken in then, is filed when the click finished,
+    before the deadline (kernel/core.py step): the read after it settles it, and the task's end is
+    dated at 4.995 s."""
     clock = FakeClock()
-    env = FakeEnv(clock, execute_s=3.22)
+    env = FakeEnv(clock, execute_s=2.72)
     env.ends_at = 4.99
     agent = FakeAgent(
         clock, [Reply(10.0, (Call(0.9, CLICK, "c0"), Call(4.025, Action.wait(0.5), "w")))]
@@ -409,7 +415,7 @@ def test_the_episode_finishes_once_the_action_outlasting_the_snapshots_wait_retu
     termination, _, agent = _episode(6.0, ONE_CLICK, env_setup=endless_click)
     assert termination.invalid.reason == "evaluation_snapshot_failed"
     ((committed_at, outcome),) = agent.committed
-    assert committed_at == 201.775
+    assert committed_at == 202.275
     assert (outcome.status, outcome.terminal_after_action) == ("applied", True)
 
 
@@ -884,14 +890,14 @@ def test_a_snapshot_read_that_raises_any_exception_fails_the_snapshot():
 
 
 def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeypatch, tmp_path):
-    """N11, as on the turn-based shell: the kernel raises at its step at 2 s, while the click
-    executes and the reply runs. Nothing can be asked of the kernel any more: the shell gives
-    the reply up, takes the snapshot right after the action (4.8), releases the inputs and
+    """N11, as on the turn-based shell: the kernel raises at its step at 3 s, while the click
+    executes and the second reply runs. Nothing can be asked of the kernel any more: the shell
+    gives the reply up, takes the snapshot right after the action (4.8), releases the inputs and
     writes the termination itself. The run is invalid for run_exception."""
     step = Kernel.step
 
     def broken(self, semantic, ops=None):
-        if semantic >= 2.0:
+        if semantic >= 3.0:
             raise RuntimeError("step broke")
         return step(self, semantic, ops)
 
@@ -900,26 +906,26 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     termination, env, agent = _episode(6.0, ONE_CLICK, tmp_path=tmp_path, logs=logs)
     assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
         "invalid_run",
-        2.0,
-        4.275,
+        3.0,
+        4.775,
     )
     # Recorded as the turn-based shell records it, readings and all.
     (written,) = [r for r in _records(tmp_path) if r["event"] == "RunInvalidated"]
     assert written["payload"]["reason"] == "run_exception"
-    assert (written["kernel_seq"], written["semantic"], written["ops"]) == (None, 2.0, 2.0)
+    assert (written["kernel_seq"], written["semantic"], written["ops"]) == (None, 3.0, 3.0)
     assert any(line.startswith("[invalid-run] runner:run_exception") for line in logs)
     assert (termination.invalid.category, termination.invalid.reason) == ("runner", "run_exception")
-    assert env.intervals[-1] == ("snapshot", 3.775, 4.275)
-    assert env.released_at == 4.275
+    assert env.intervals[-1] == ("snapshot", 4.275, 4.775)
+    assert env.released_at == 4.775
     assert env._termination == {
         "stop_reason": "invalid_run",
-        "end_s": 2.0,
-        "snapshot_s": 4.275,
-        "snapshot_delay_s": 2.275,
+        "end_s": 3.0,
+        "snapshot_s": 4.775,
+        "snapshot_delay_s": 1.775,
     }
     assert env._invalid_run["reason"] == "run_exception"
     assert "RuntimeError: step broke" in env._loop_error
-    assert agent.aborted == [(1, 2.0)]
+    assert agent.aborted == [(2, 3.0)]
 
 
 def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monkeypatch):
@@ -948,10 +954,10 @@ def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monke
     assert (termination.stop_reason, termination.ended_at, termination.snapshot_at) == (
         "invalid_run",
         3.0,
-        4.275,
+        4.775,
     )
     assert [interval for interval in env.intervals if interval[0] == "snapshot"] == [
-        ("snapshot", 3.775, 4.275)
+        ("snapshot", 4.275, 4.775)
     ]
     assert termination.invalid.reason == "run_exception"
 

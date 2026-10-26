@@ -11,9 +11,12 @@ its actions as soon as it appears, with the call it came in and the time it came
 
 One action executes at a time; one that arrives meanwhile waits in a single slot, and a newer one
 takes its place and supersedes it. Three refusals keep an action from executing: the episode is
-over or past its deadline, its reply was given up, or the frame it names cannot be found. A call
-the provider cancels is withdrawn while its action waits; one that executed is recorded as it ran.
-A wait ends where it arrives and goes neither into the execution lane nor into its slot. A reply
+over or past its deadline, its reply was given up, or the frame it names cannot be found. An
+action executes only once a read asked since it arrived, or at that very reading, said the task
+goes on (decision 12): it holds the execution lane, not the slot, while the read asked for it
+runs. A call the provider cancels is withdrawn while its action waits or holds the lane for that
+read; one that executed is recorded as it ran. A wait ends where it arrives and goes neither into
+the execution lane nor into its slot. A reply
 is given up only at the end, or when its watchdog finds it stuck, or the session takes no frames:
 a push its watchdog finds stuck, or pushes failing in a row. While the agent prepares the session
 (SessionPreparing), a push out is not stuck in it, and its watchdog waits until the session is
@@ -30,14 +33,17 @@ the end, or whose rebuilt session has not had a watchdog's time when the end com
 valid.
 
 The state is read at most once an environment frame, at the frame's grid point, during replies too,
-and once more right after every action executed: that read settles the action, as the one that
-ended the task or not, before anything else runs, so nothing executes once the task has ended but
-after a failed read, which tells nothing, as on the turn-based clock (turns.py ``_end_checked``).
-A capture out when the action finishes holds that read up, but it stands for one right as the
-action finished: an end it finds is dated there, and the deadline waits for it (N31), as the
-turn-based clock reads right then. A failed read counts as the frame's. Three failed reads in a
-row invalidate the run. Every outcome, the refusals included, is committed to the agent as its
-feedback.
+once more right before an action that arrived since the last read, and once more right after every
+action executed. The read before an action finds whether the task ended before it executes, as the
+turn-based clock reads right before landing (turns.py ``_pre_checked``); an end it finds, and the
+failure of a third read in a row, are dated when it was asked (N44). The read after an action
+settles it, as the one that ended the task or not, before anything else runs, so nothing executes
+once the task has ended but after a failed read, which tells nothing, as on the turn-based clock
+(turns.py ``_end_checked``). A capture out when the action finishes holds that read up, but it
+stands for one right as the action finished: an end it finds is dated there, and the deadline
+waits for it (N31), as the turn-based clock reads right then. A failed read counts as the frame's.
+Three failed reads in a row invalidate the run. Every outcome, the refusals included, is committed
+to the agent as its feedback.
 
 Captures, reads and actions run on lanes of their own. A capture and an action may run at once,
 so that frames keep coming during a long action (phase2.md, native streaming); a read runs only
@@ -217,6 +223,7 @@ class _Lane(str, Enum):
     """What the action lane, which one action holds at a time, is doing."""
 
     IDLE = "idle"
+    PRE_CHECK = "pre_check"  # the read right before the action, due or out
     EXECUTE = "execute"  # the action's Execute is out
     POST_CHECK = "post_check"  # the read right after the action, due or out
 
@@ -228,6 +235,7 @@ class _Action:
     arrival: ActionArrived
     action: Action | None  # a DONE or FAIL became a wait
     protocol_failure: str | None = None
+    reads_from: int = 0  # the first end check whose answer may let it execute (decision 12)
     started_at: float | None = None
     finished_at: float | None = None
     status: str | None = None
@@ -268,6 +276,8 @@ class StreamingPolicy:
         self._aborting: int | None = None
         self._rebuilt = False  # the session was given up for its frames, and none went in since
         self._asked: dict[int, float] = {}  # the end check out: request -> semantic time asked
+        self._last_asked: tuple[int, float | None] = (0, None)  # the newest end check, when asked
+        self._read_on = 0  # the newest end check whose answer let the episode go on
         # The reads, captures and the action waiting that came due while they could not run,
         # in the order they came due.
         self._line: list[str] = []
@@ -388,9 +398,9 @@ class StreamingPolicy:
         self._report()
 
     def on_end(self) -> None:
-        """The reply in flight was given up, and the shell runs its abort; the action waiting will
-        not execute; an action whose read was due is the episode's last, and one executing
-        settles when its answer arrives."""
+        """The reply in flight was given up, and the shell runs its abort; the action whose read
+        before it was due, and the action waiting, will not execute; an action whose read after
+        it was due is the episode's last, and one executing settles when its answer arrives."""
         if self.generation is not None:
             self.abandoned.add(self.generation)
             self._aborting, self.generation = self.generation, None
@@ -402,6 +412,8 @@ class StreamingPolicy:
         self._deadline_due = False
         if self._lane is _Lane.POST_CHECK:
             self._resolve(self._free(), "applied", terminal_after_action=True)
+        elif self._lane is _Lane.PRE_CHECK:
+            self._resolve(self._free(), self._ended())
         if self.waiting is not None:
             waiting, self.waiting = self.waiting, None
             self._resolve(waiting, self._ended())
@@ -422,8 +434,10 @@ class StreamingPolicy:
         that waits for a capture holds back what came due after it, and a capture waiting goes
         before the next read once a read answers, so that reads and captures take turns however
         slow either is; a read that waits for an action holds nothing back, so that frames keep
-        coming during it. The action waiting may have gone meanwhile, withdrawn or given up. Past
-        the deadline only the read after an action goes, which the end waits for."""
+        coming during it. The action waiting may have gone meanwhile, withdrawn or given up. It
+        executes once a read asked since it arrived, or at that very reading, said the task goes
+        on: none did, and it takes the lane for the read before it, which goes first (decision
+        12). Past the deadline only the read after an action goes, which the end waits for."""
         if self._stopped():
             waits = self._deadline_due and self._lane is _Lane.POST_CHECK
             if waits and not (self._asked or self._capturing):
@@ -446,7 +460,14 @@ class StreamingPolicy:
                 self._line.remove(operation)
                 if self.waiting is not None:
                     waiting, self.waiting = self.waiting, None
-                    self._execute(waiting)
+                    if self._read_on >= waiting.reads_from:
+                        self._execute(waiting)
+                    else:
+                        self.current, self._lane = waiting, _Lane.PRE_CHECK
+                        if "read" in self._line:
+                            self._line.remove("read")
+                        self._line.insert(0, "read")
+                        return self._proceed()
 
     # ---- frames -----------------------------------------------------------------------------
 
@@ -575,6 +596,8 @@ class StreamingPolicy:
         generation = self._abandon(reason)
         if generation is None:
             return
+        if self._lane is _Lane.PRE_CHECK and self.current.arrival.generation == generation:
+            self._resolve(self._free(), CANCELLED_GENERATION)
         waiting = self.waiting
         if waiting is not None and waiting.arrival.generation == generation:
             self.waiting = None
@@ -647,6 +670,10 @@ class StreamingPolicy:
                 ),
             }
             return self._resolve(a, "wait")
+        # The first read that tells whether it may execute: one asked from now on, or one asked
+        # at this very reading (decision 12).
+        request, asked_at = self._last_asked
+        a.reads_from = request if asked_at == self.kernel.semantic else request + 1
         if self.waiting is not None:
             self.waiting.superseded_by = a.index
             self._resolve(self.waiting, SUPERSEDED)
@@ -721,6 +748,8 @@ class StreamingPolicy:
             if a is self.waiting and not stopped:
                 self.waiting = None
                 self._resolve(a, CANCELLED_CALL)
+            elif a is self.current and self._lane is _Lane.PRE_CHECK and not stopped:
+                self._resolve(self._free(), CANCELLED_CALL)
             else:
                 # Executed, executing, or resolved otherwise: it stays as it is.
                 self.kernel.record(
@@ -880,6 +909,7 @@ class StreamingPolicy:
         self._read_frame = self._frame()
         request = kernel.request()
         self._asked[request] = kernel.semantic
+        self._last_asked = (request, kernel.semantic)
         kernel.emit(CheckEnd(request))
 
     def _end_checked(self, event: EndChecked) -> None:
@@ -897,8 +927,13 @@ class StreamingPolicy:
             return kernel.end("deadline", self.config.duration_s)
         if kernel.ending is not None:
             return
+        self._read_on = event.request
         if self._lane is _Lane.POST_CHECK:
             self._resolve(self._free(), "applied")
+        elif self._lane is _Lane.PRE_CHECK and not self._stopped():
+            # The read asked for the action holding the lane, since it arrived: it executes now,
+            # unless the deadline passed while the read ran.
+            self._execute(self.current)
         if "capture" in self._line:
             self._line.remove("capture")
             self._line.insert(0, "capture")

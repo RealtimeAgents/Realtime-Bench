@@ -645,17 +645,25 @@ class Simulation:
             for op in gated:
                 if op[0] != "check":
                     assert not (op[2] < read[3] and read[2] < op[3]), f"{op} overlaps {read}"
-        # The state is read at most once a frame, but right after an action; an action applied
-        # that finished before the deadline is followed by that read before another action
-        # executes (decision 31), also when the deadline comes while it waits (N31), unless the
-        # run turns invalid first.
+        # The state is read at most once a frame, but right before an action that arrived since
+        # the read before (decision 12) and right after one; an action applied that finished
+        # before the deadline is followed by that read before another action executes
+        # (decision 31), also when the deadline comes while it waits (N31), unless the run turns
+        # invalid first.
         end = self.entries("EpisodeEnded")[0].seq
         executions = [op for op in gated if op[0] == "execute"]
-        for before, after in itertools.pairwise(reads):
+        asks = [i for i, command in enumerate(commands) if isinstance(command, CheckEnd)]
+        acts = [
+            i
+            for i, command in enumerate(commands)
+            if isinstance(command, Execute)
+            or isinstance(command, Record)
+            and command.entry.kind == "ActionArrived"
+        ]
+        for (before, asked), (after, then) in itertools.pairwise(zip(reads, asks, strict=True)):
             frame = math.floor(after[2] * self.config.env_fps + 1e-9)
             if frame == math.floor(before[2] * self.config.env_fps + 1e-9):
-                between = [op for op in executions if before[4] < op[4] < after[4]]
-                assert between, f"frame {frame} read twice"
+                assert any(asked < i < then for i in acts), f"frame {frame} read twice"
         applied = {
             data["started_at"]: data
             for data in self.resolved().values()

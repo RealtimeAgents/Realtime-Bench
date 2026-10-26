@@ -78,8 +78,9 @@ def _summary(tmp_path, replies, settings, *, confirms=True, duration_s=8.0):
 
 
 def test_the_summary_counts_frames_actions_and_replies(tmp_path):
-    """Three clicks of one reply. The first executes from 1.775 s to 3.775 s; the second waits,
-    and the third takes its place and executes once the read after the first is done."""
+    """Three clicks of one reply. The first executes from 2.275 s, once the read asked for it
+    answered, to 4.275 s; the second waits, and the third takes its place and executes once the
+    read after the first is done."""
     replies = [Reply(3.0, (Call(0.9, CLICK, "a"), Call(1.2, CLICK, "b"), Call(1.5, CLICK, "c")))]
     summary, env, agent = _summary(tmp_path, replies, OPENAI)
     assert summary["schema"] == "realtime_bench.streaming_summary.v1"
@@ -109,13 +110,15 @@ def test_the_summary_counts_frames_actions_and_replies(tmp_path):
     assert actions["arrived"] == 3
     assert actions["outcomes"] == {"applied": 2, "superseded": 1}
     # Each click named the newest frame pushed when it arrived: the first frame, pushed 0.9 s
-    # before the first click, then the frames pushed at 1.875 s and 2.375 s.
+    # before the first click, then the frame pushed at 1.875 s, 0.2 s and 0.5 s before the other
+    # two.
     age = actions["frame_age_s"]
-    assert (age["sample_count"], age["min"], age["max"]) == (3, 0.0, 0.9)
+    assert (age["sample_count"], age["min"], age["max"]) == (3, 0.2, 0.9)
     assert actions["frame_age_frames"]["max"] == 0
-    # The first click executed as it arrived; each ran the fake's 2 s.
+    # The first click executed once the read asked for it answered, 0.5 s after it arrived; each
+    # ran the fake's 2 s.
     assert actions["arrival_to_start_s"]["sample_count"] == 2
-    assert actions["arrival_to_start_s"]["min"] == 0.0
+    assert actions["arrival_to_start_s"]["min"] == 0.5
     assert (actions["execution_s"]["min"], actions["execution_s"]["max"]) == (2.0, 2.0)
 
     replies = summary["replies"]
