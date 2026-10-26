@@ -189,7 +189,7 @@ def test_long_scenario(litellm_environment, tmp_path):
         try:
             records = run_steps(episode, LONG_SCENARIO, stub)
         finally:
-            episode.agent.close()
+            episode.finish()
     assert stub.unscripted == 0, "the agent sent requests beyond the script"
     assert stub.unused_replies == 0, "scripted replies were left unused"
     assert all(len(r["requests"]) == 1 for r in records)

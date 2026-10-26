@@ -4,9 +4,9 @@ wall clock or a TokenEnvironment on the token clock.
 run_stream gets the arguments main() passes (evaluation/runner.py main), with the environment's
 clock as its clocks: on the wall clock the fake clock (tests/fake_clock.py), so the kernel's shell,
 its workers, action timestamps, frame ages and the deadline all run on one clock. After the loop
-the abandoned workers are drained and the agent is closed, in main()'s order, and how the episode
-came out is read off what run_stream hands back, as main() reads it. main() would also call the
-agent's start_episode, which no agent defines.
+the abandoned workers are drained and the agent and its records are closed, in main()'s order,
+and how the episode came out is read off what run_stream hands back, as main() reads it. main()
+would also call the agent's start_episode, which no agent defines.
 
 On the wall clock any agent build_episode returns on the same clock can be driven, given a stub
 that serves on that clock and calls ``env.model_request`` as its ``on_request`` hook (see
@@ -104,7 +104,7 @@ def run_loop(episode: Episode, env) -> EpisodeResult:
     finally:
         if result is not None:
             result.drain_abandoned()
-        agent.close()
+        episode.finish()
 
 
 def records(env: FakeEnvironment, agent, result: EpisodeResult) -> list[dict]:

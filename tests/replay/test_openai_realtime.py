@@ -4,13 +4,11 @@ This API has no request body. A baseline holds the client events of each decisio
 they were sent, per connection; the stub's conversation at each response.create; and the parsed
 action, usage and reported execution result of each decision. GenerationRequest.canonical is
 built every turn (harnesses/default/context.py RealtimeRuntime._run_turn) but the driver takes only
-its newest frame's id from it (providers/openai_realtime.py OpenAIRealtimeDriver.start_generation),
-and the trajectory's input_prompt shows the archived action ledger as a user message
-(harnesses/default/harness.py DefaultHarness._request_messages; providers/litellm.py chat_messages),
-the role the wire item has had since context policy version 3 (openai_realtime_session.py
-RealtimeSessionCore._ledger_create, RealtimeSessionCore._edit_batch; version 1 sent a system item).
-The canonical request is not recorded; the trajectory rows are, with input_prompt as a digest
-(baseline.py).
+its newest frame's id from it (providers/openai_realtime.py OpenAIRealtimeDriver.start_generation);
+the session carries the archived action ledger as a user message, the role the wire item has had
+since context policy version 3 (openai_realtime_session.py RealtimeSessionCore._ledger_create,
+RealtimeSessionCore._edit_batch; version 1 sent a system item). The trajectory rows are recorded,
+each with its decision's canonical requests as digests (baseline.py).
 
 All scripts run on the finite token clock with B=1024 and 61 ticks: decision k may emit
 min(32000, (61 - k) * 1024) tokens (evaluation/kernel/turns.py _captured,

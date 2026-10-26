@@ -135,22 +135,6 @@ class VisionAgentBase(StreamingAgent):
     def token_usage(self) -> dict:
         return dict(self._tok)
 
-    @staticmethod
-    def _prompt_text_summary(messages: list[dict]) -> str:
-        parts = []
-        for message in messages:
-            role = message["role"]
-            content = message["content"]
-            if isinstance(content, str):
-                parts.append(f"[{role}] {content}")
-                continue
-            for item in content:
-                if item["type"] == "text":
-                    parts.append(f"[{role}] {item['text']}")
-                elif item["type"] == "image_url":
-                    parts.append(f"[{role}] <image>")
-        return "\n".join(parts)
-
     def _log_entry(self, entry: dict):
         if not self._trajectory_file:
             return
@@ -898,7 +882,6 @@ from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
-from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.frames import GROUNDING_FAILED
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
@@ -909,8 +892,6 @@ from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import gui_function_declarations
-from realtime_framework.providers.decisions.history import render_digest
-from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 from realtime_framework.sandbox.observation.som import render_frame_number
 from realtime_framework.sandbox.observation.som import resolve_action_references
@@ -1352,14 +1333,6 @@ class DefaultHarness(VisionAgentBase):
         return build_request(
             self._context_policy, self._system_block, turns, ledger, answer, call, selection
         )
-
-    @staticmethod
-    def _request_messages(request) -> tuple[dict, ...]:
-        """The message list the trajectory summarizes for this harness."""
-        if request.history_form == "action_digest":
-            # The summary has always shown the ledger as the runtime keeps it, uncompacted.
-            return tuple(render_digest(request, compact_ledger=False))
-        return chat_messages(request)
 
     @staticmethod
     def _cancelled_result(latency: float) -> dict:
@@ -1934,19 +1907,6 @@ class DefaultHarness(VisionAgentBase):
             if provider_ttft_s is not None
             else None
         )
-        # The retained history after this decision, rendered as a request would carry it: with
-        # this generation's turn, unless it was cancelled. The ledger stops short of the action
-        # record, which it reaches only once that record's turn is archived.
-        audit_ledger = executed_action_ledger(
-            self.action_history,
-            limit=self._runtime.archived_action_count,
-        )
-        audit_turns = self._runtime.turns
-        if not runtime_result.cancelled:
-            audit_turns += (runtime_result.turn,)
-        audit_request = self._build_request(
-            audit_turns, self._runtime.ledger_block(audit_ledger), call, generation.choice
-        )
         log_entry = {
             "type": "decision_discarded" if runtime_result.cancelled else "decision",
             "tick": tick,
@@ -1969,9 +1929,6 @@ class DefaultHarness(VisionAgentBase):
             },
             "action_protocol": action_protocol,
             "inspection": newest_proof,
-            "input_prompt": self._prompt_text_summary(
-                list(self._request_messages(audit_request))
-            ),
             "usage": output.usage,
             "realtime_runtime": runtime_metadata,
             **token_fields,

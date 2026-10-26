@@ -85,7 +85,7 @@ def _play(api, decisions, run_dir, *, task, instruction, scene=None, update=None
         try:
             records, unused = run_decisions(episode, decisions, stub)
         finally:
-            episode.agent.close()
+            episode.finish()
     assert stub.unscripted == 0, "the agent asked questions beyond the script"
     assert not stub.off_script, f"scripted choices were not offered: {stub.off_script}"
     assert not any(unused), f"script entries left unused per decision: {unused}"

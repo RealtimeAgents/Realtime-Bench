@@ -4,8 +4,8 @@ Only non-semantic differences are normalized. Key order never counts. Random ids
 placeholders numbered in order of first appearance, one mapping for the whole session, so equal
 ids stay equal. Fields that hold real elapsed time or real clock readings keep their key and
 their null-ness but not their value. Everything else, model-visible times included, is compared
-exactly. A trajectory row's input_prompt, a text summary of a whole request, is compared by the
-SHA-256 and length of its normalized text.
+exactly. The canonical requests a trajectory record names are compared by the SHA-256 and length
+of their normalized JSON.
 
 Images are compared by their decoded pixels rather than stored: the same pixels encode to
 different PNG bytes under different zlib builds (Pillow's macOS wheels bundle zlib-ng, the Linux
@@ -25,6 +25,7 @@ from pathlib import Path
 from PIL import Image
 
 from realtime_framework.entity.actions import Action
+from realtime_framework.evaluation.agent_trace import load_body
 
 REAL_TIME = "<real time>"
 REAL_TIME_FIELDS = frozenset(
@@ -68,9 +69,10 @@ RANDOM_IDS = (
     ("server_item", re.compile(r"item_srv_\d+")),
 )
 DATA_URL = re.compile(r"data:([^;,]+);base64,(.*)", re.DOTALL)  # providers/litellm.py chat_messages
-# The trajectory's summary of the retained history (harnesses/default/harness.py
-# DefaultHarness._generate).
-DIGESTED_FIELDS = frozenset({"input_prompt"})
+# The canonical requests a decision's attempts were prepared from (trajectory below).
+DIGESTED_FIELDS = frozenset({"canonical_requests"})
+# A canonical request's block times are the agent's wall clock (entity/request.py BlockTime).
+REQUEST_REAL_TIME_FIELDS = frozenset({"wall_ns"})
 # Fields that hold the SHA-256 of an image's bytes.
 IMAGE_SHA256_FIELDS = frozenset(
     {
@@ -126,9 +128,8 @@ class Normalizer:
     def __call__(self, value, key: str | None = None):
         if key in self._real_time_fields and value is not None:
             return REAL_TIME
-        if key in DIGESTED_FIELDS and isinstance(value, str):
-            text = self._string(value)
-            return {"length": len(text), "sha256": hashlib.sha256(text.encode()).hexdigest()}
+        if key in DIGESTED_FIELDS:
+            return [self._digest(record) for record in value]
         if key in IMAGE_SHA256_FIELDS:
             return registered_image(value)
         if isinstance(value, Action):
@@ -146,6 +147,12 @@ class Normalizer:
         if value is None or isinstance(value, (bool, int, float)):
             return value
         raise TypeError(f"no baseline form for {type(value).__name__} at {key!r}")
+
+    def _digest(self, record: dict) -> dict:
+        requests = Normalizer(self._real_time_fields | REQUEST_REAL_TIME_FIELDS)
+        requests._ids, requests._counts = self._ids, self._counts
+        text = json.dumps(requests(record), sort_keys=True, ensure_ascii=False)
+        return {"length": len(text), "sha256": hashlib.sha256(text.encode()).hexdigest()}
 
     def _string(self, value: str) -> str:
         image = DATA_URL.fullmatch(value)
@@ -165,10 +172,31 @@ class Normalizer:
 def trajectory(run_dir: Path) -> list[dict]:
     """The agent's trajectory rows, one record each in the order written
     (harnesses/default/harness.py VisionAgentBase._log_entry,
-    VisionAgentBase.finalize_decision_audit). The viewer and the reports read them
-    (evaluation/harbor_viewer.py:130, evaluation/reporting.py:1176)."""
+    VisionAgentBase.finalize_decision_audit), with the canonical requests its decision's
+    attempts were prepared from, in order: the bodies of their GenerationPrepared records
+    (harnesses/default/context.py RealtimeRuntime._record_generation_prepared). The viewer and
+    the reports read the rows (evaluation/harbor_viewer.py:130, evaluation/reporting.py:1176).
+    The agent's records are read once they are closed (Episode.finish)."""
+    events = [
+        json.loads(line)
+        for line in (run_dir / "episode_trace.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    if not any(event["event"] == "AgentTraceClosed" for event in events):
+        raise RuntimeError("the agent's records are read before they are closed")
+    prepared: dict[int, list[dict]] = {}
+    for event in events:
+        if event["event"] == "GenerationPrepared":
+            payload = event["payload"]
+            body = load_body(run_dir / "episode_blobs.pack", payload["body"])
+            prepared.setdefault(payload["scope"]["decision"], []).append(json.loads(body))
     lines = (run_dir / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()
-    return [{"record": "trajectory", "row": json.loads(line)} for line in lines]
+    rows = [json.loads(line) for line in lines]
+    # A row's decision is its tick: the shell names its "decision" (shell.py _settle), which the
+    # step-driven replays do not.
+    return [
+        {"record": "trajectory", "row": row, "canonical_requests": prepared.get(row["tick"], [])}
+        for row in rows
+    ]
 
 
 def _dumps(value) -> str:

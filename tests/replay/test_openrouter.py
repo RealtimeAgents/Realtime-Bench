@@ -97,7 +97,7 @@ def openrouter_episode(monkeypatch, tmp_path, script, **clock):
         try:
             yield stub, config, episode
         finally:
-            episode.agent.close()
+            episode.finish()
     assert stub.unscripted == 0, "the agent sent requests beyond the script"
     assert stub.unused_replies == 0, "scripted replies were left unused"
 

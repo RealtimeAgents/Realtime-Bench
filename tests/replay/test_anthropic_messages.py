@@ -120,7 +120,7 @@ def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, max_ticks):
         try:
             records = run_steps(episode, steps, stub)
         finally:
-            episode.agent.close()
+            episode.finish()
     assert stub.unscripted == 0, "the agent sent requests beyond the script"
     assert stub.unused_replies == 0, "scripted replies were left unused"
     assert all(len(r["requests"]) == 1 for r in records)
