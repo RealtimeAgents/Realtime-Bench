@@ -26,6 +26,11 @@ CLOCKS = {"wall": ("wall", None), "finite_b": ("token", 256), "pause": ("token",
 # (whether it applies to a run's prompt options, a sentence no prompt of such a run holds, why)
 FORBIDDEN = [
     (lambda o: not o.finite_budget, "All generated output tokens count.", "only B charges tokens"),
+    (
+        lambda o: not o.finite_budget,
+        "thought token usage under the token clock, then advances simulated time",
+        "decision 8: only B charges tokens, in the function-call contract too",
+    ),
     (lambda o: o.interaction_mode == "turn_based", "FRAME REFERENCE", "a turn names no frame"),
     (lambda o: True, "Latest screen", "decision 42: a frame stays in the context once older"),
     (lambda o: True, "CURRENT-SCREEN", "decision 42"),

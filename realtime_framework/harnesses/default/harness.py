@@ -685,6 +685,7 @@ class VisionAgentBase(StreamingAgent):
 
 from dataclasses import dataclass as dataclass
 
+from realtime_framework.harnesses.default.prompts import FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_ACTION_SPACE
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
@@ -707,6 +708,8 @@ class InteractionProfile:
     name: str
     action_space: str | None = None
     output_contract: str = STREAM_OUTPUT_CONTRACT
+    # Its output contract under a finite B (PromptOptions.finite_budget), where that differs.
+    finite_budget_output_contract: str | None = None
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
     # How an action names its frame under streaming.
     frame_reference_rules: str | None = None
@@ -714,10 +717,14 @@ class InteractionProfile:
     def system_instruction(self, agent) -> str:
         """The episode's, composed for ``agent.prompt_options`` (harnesses/registry.py
         configure_agent)."""
+        options = agent.prompt_options
         frame_reference_rules = (
-            self.frame_reference_rules
-            if agent.prompt_options.interaction_mode == "streaming"
-            else None
+            self.frame_reference_rules if options.interaction_mode == "streaming" else None
+        )
+        output_contract = (
+            self.finite_budget_output_contract
+            if options.finite_budget and self.finite_budget_output_contract
+            else self.output_contract
         )
         if self.action_space is None:
             return gui_system_prompt(
@@ -733,7 +740,7 @@ class InteractionProfile:
                     SCENARIO_ROLES[agent.task_category],
                     self.action_space,
                     frame_reference_rules,
-                    self.output_contract,
+                    output_contract,
                     getattr(agent, "streaming_note", None),
                     f"TASK:\n{agent.task_instruction}",
                 ),
@@ -760,6 +767,7 @@ FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
     action_space=FUNCTION_CALL_ACTION_SPACE,
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
+    finite_budget_output_contract=FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
     frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
 )

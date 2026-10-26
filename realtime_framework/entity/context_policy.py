@@ -67,7 +67,8 @@ from realtime_framework.entity.records import _jsonable
 # leaves each action it handed over its own feedback (harnesses/streaming/feedback.py); the SoM
 # mark badges of a streaming screenshot keep clear of its frame number; an action naming a mark
 # its frame does not have is a grounding failure, whose feedback names the mark and the action
-# asked for, not output without a valid action.
+# asked for, not output without a valid action; the function-call output contract charges token
+# usage to simulated time only under a finite B, as the text-JSON one does.
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).

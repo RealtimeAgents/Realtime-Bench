@@ -116,16 +116,24 @@ FUNCTION_CALL_ACTION_SPACE = (
     + "\n"
     + FUNCTION_CALL_PARAMETER_RULES
 )
-FUNCTION_CALL_OUTPUT_CONTRACT = (
+_FUNCTION_CALL_OUTPUT_CONTRACT = (
     "NATIVE GUI ACTION PROTOCOL: Do not produce a spoken response or text action. "
     "Reason internally, then call exactly one GUI action function. That call fixes your "
     "decision. Its response only acknowledges queuing, not execution. After the queue "
-    "acknowledgement, end the turn silently without further calls. The benchmark waits "
-    "for native response plus thought token usage under the token clock, then advances simulated "
-    "time. Under the wall clock, environment time keeps advancing during generation. It executes "
+    "acknowledgement, end the turn silently without further calls. {token_clock} Under the "
+    "wall clock, environment time keeps advancing during generation. It executes "
     "the action only if its timestamp remains inside the task horizon. Otherwise it executes "
     "WAIT. The next observation includes the actual execution result. Do not assume success "
     "from the queue acknowledgement. Use wait when no UI action is needed."
+)
+FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.format(
+    token_clock="Under the token clock, the benchmark does not advance simulated time for native "
+    "response or thought tokens."
+)
+# PromptOptions.finite_budget, as FINITE_BUDGET_OUTPUT_CONTRACT.
+FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.format(
+    token_clock="The benchmark waits for native response plus thought token usage under the "
+    "token clock, then advances simulated time."
 )
 # Shared screenshot marker for the frame prompts. Each frame keeps its text once newer frames
 # follow, so it names the screen of its own decision.
