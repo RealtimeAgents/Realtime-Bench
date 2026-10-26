@@ -422,9 +422,12 @@ stream-oai. From the run of check 1.
   the refused item is not in the session afterwards.
 - `previous_item_id` in the server's acknowledgement of an item: an item the client created names
   the item before it; note what a reply's own items name when a frame went in during the reply.
-  The driver takes `conversation.item.added`, `.created` or `.done` as the acknowledgement
-  (`_ITEM_ACKS` in `openai_realtime.py`); the repository's fake server sends `added` and `done`,
-  and which the real API sends is not checked: note it.
+  The session core takes only `conversation.item.created` or `.done` as the acknowledgement
+  (`_CREATE_ACKS` in `openai_realtime_session.py`), and keeps the `previous_item_id` of whichever
+  comes first; the trace also links `conversation.item.added` to the create (`_ITEM_ACKS` in
+  `openai_realtime.py`), which confirms nothing. The repository's fake server sends `added` and
+  `done`, and which of the three the real API sends for a client create is not checked: note it,
+  and whether the `previous_item_id` on `.created` or `.done` names the item before.
 - When `response.output_text.done` arrives within its reply: its arrival is the action's
   `arrived_at`.
 
