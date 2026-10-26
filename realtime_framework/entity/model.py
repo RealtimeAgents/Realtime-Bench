@@ -403,6 +403,8 @@ running; on the token clock a request without output charges no tokens. Once the
 a decision, none of its request units is sent again, and each records the attempt that stopped.
 """
 
+import hashlib
+
 TRANSIENT = "transient"  # connection loss, timeout, 408, 5xx, overloaded
 RATE_LIMITED = "rate_limited"  # 429 without a quota/billing signal
 QUOTA_EXHAUSTED = "quota_exhausted"  # credits or quota: a retry cannot succeed
@@ -458,8 +460,10 @@ class TransportRetryPolicy:
         if failure.retry_after_s is not None and failure.retry_after_s > self.max_retry_after_s:
             return None
         delay = self.backoff_s[min(retry, len(self.backoff_s)) - 1]
-        # Stable jitter from the request key keeps parallel lanes from retrying in lockstep.
-        unit = sum((i + 1) * ord(c) for i, c in enumerate(f"{key}:{retry}")) % 1001 / 1000.0
+        # Stable jitter from the request key, which names the episode attempt, keeps parallel
+        # episodes from retrying in lockstep.
+        digest = hashlib.sha256(f"{key}:{retry}".encode()).digest()
+        unit = int.from_bytes(digest[:8], "big") / 2**64
         delay *= 1.0 + self.jitter_ratio * (2.0 * unit - 1.0)
         return round(max(delay, failure.retry_after_s or 0.0), 3)
 
@@ -566,7 +570,7 @@ class RequestRetry:
     as a failure. The backoff waits on ``clock``.
     """
 
-    key: str  # the request unit's stable jitter key
+    key: str  # the request unit's stable jitter key, led by the episode attempt (AgentTrace)
     classify: Callable[[BaseException], TransportFailure | None]
     record: Callable[[int, BaseException, TransportFailure, float | None], None]
     cancelled: Callable[[int, RetryCancelled], None]

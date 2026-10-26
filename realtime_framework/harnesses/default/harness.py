@@ -1643,7 +1643,7 @@ class DefaultHarness(VisionAgentBase):
             )
 
         retry = RequestRetry(
-            f"{prepared[-1].observation_id}:turn",
+            f"{self._trace.attempt_id}:{prepared[-1].observation_id}:turn",
             classify,
             record,
             cancelled=lambda attempt, exc: self._attempt_cancelled(

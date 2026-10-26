@@ -187,6 +187,10 @@ class AgentTraceSink:
         self._writer = threading.Thread(target=self._run, name="agent-trace-writer", daemon=True)
         self._writer.start()
 
+    @property
+    def attempt_id(self) -> str:
+        return self.trace.attempt_id
+
     def capture(self, event, payload, *, body=None, classify=None) -> int | None:
         """Queue one record; ``body`` is bytes, str, a list of byte chunks or a request dict.
 
