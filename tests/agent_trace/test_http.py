@@ -801,3 +801,53 @@ def test_an_abandoned_generation_records_only_the_responses_it_left_open():
     assert left_open == [(False, b"a1")]
     assert early == []
     assert next_generation == [(True, b"b1b2")]
+
+
+def test_a_generation_aborted_during_its_request_records_only_its_own_clients_responses():
+    """An abort before a generation's request returns closes the client
+    (session_lifecycle.py _interrupt_and_close with no generation), and the next generation may
+    build its own before the request returns: the generation's end still leaves the next one's
+    responses alone."""
+
+    async def scenario():
+        driver = ChatCompletionsDriver(
+            ModelConfig(
+                adapter_type="chat_completions",
+                model_name="replay-vlm",
+                api_base_url="http://127.0.0.1:9/v1",
+            )
+        )
+        trace = _Responses()
+        driver.bind_trace(trace)
+        requested, answered, released = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        released.set()
+
+        async def acompletion(**kwargs):
+            requested.set()
+            await answered.wait()
+            return _HeldStream(released)
+
+        driver._sdk = SimpleNamespace(acompletion=acompletion)
+        driver._request_kwargs = lambda request: {}
+        starting = asyncio.create_task(
+            driver.start_generation(SimpleNamespace(generation_id="gen-a"))
+        )
+        await requested.wait()
+        await driver.close()
+
+        driver._client()
+        next_seq, next_stream = await _served(driver._http_capture, [b"b1", b"b2"])
+        chunks = next_stream.__aiter__()
+        assert await anext(chunks) == b"b1"
+        answered.set()
+        abandoned = await starting
+        assert [event async for event in driver.events(abandoned)]
+        early = trace.of(next_seq)
+        assert [chunk async for chunk in chunks] == [b"b2"]
+        await next_stream.aclose()
+        await driver.close()
+        return early, trace.of(next_seq)
+
+    early, next_generation = asyncio.run(scenario())
+    assert early == []
+    assert next_generation == [(True, b"b1b2")]
