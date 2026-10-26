@@ -27,6 +27,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   chat_include_usage of my-model and remote-vlm, and their run hashes, changed.
 - gemini-3.8-live and gemini-3.8-live-extended-thinking name the reasoning efforts they take in
   their YAMLs: their entries' reasoning_efforts changed, and no run hash.
+- The moonshot API names the output limit as sent on the wire, max_tokens: kimi-k3's
+  provider_output_limit.parameter and run hashes changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

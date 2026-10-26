@@ -5528,7 +5528,7 @@
      "protocol": "time-aware-token-v1",
      "provider_output_cap_policy": "no_benchmark_derived_provider_cap",
      "provider_output_limit": {
-      "parameter": "max_completion_tokens",
+      "parameter": "max_tokens",
       "uncapped_value": 1048576
      },
      "provider_sdk_versions": {
@@ -5550,7 +5550,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "41ef0ac49f69d30f9e065db9851181aac9c9fb49a8a160e9a216d0486a32961c"
+    "hash": "b33edf13d9427051af15db02e526a01b04f89a3179852a93f07e849fffcd485c"
    },
    "token/None": {
     "config": {
@@ -5654,7 +5654,7 @@
      "protocol": "time-aware-token-v1",
      "provider_output_cap_policy": "no_benchmark_derived_provider_cap",
      "provider_output_limit": {
-      "parameter": "max_completion_tokens",
+      "parameter": "max_tokens",
       "uncapped_value": 1048576
      },
      "provider_sdk_versions": {
@@ -5676,7 +5676,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "061e9c7c02c2d05e51b6db96610e156e78662be702587c46e82da6337e7c053d"
+    "hash": "4d23753d60a11fb1acedb79b60f2cbd108c944f8d0cb3d1f948617bd982976b7"
    },
    "wall/None": {
     "config": {
@@ -5780,7 +5780,7 @@
      "protocol": "wall-clock",
      "provider_output_cap_policy": "no_benchmark_derived_provider_cap",
      "provider_output_limit": {
-      "parameter": "max_completion_tokens",
+      "parameter": "max_tokens",
       "uncapped_value": 1048576
      },
      "provider_sdk_versions": {
@@ -5802,7 +5802,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3d6497efef0b0c93d0d626c9dca056e68c957c8345687b3d98644d352f8d9f45"
+    "hash": "064da58f39e8750f5423844d60dbb4f653fdf9d5f559bc372804b0e89aad3f3b"
    }
   },
   "vendor": "moonshot"

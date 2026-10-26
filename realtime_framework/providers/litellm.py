@@ -445,7 +445,8 @@ class ChatCompat(Compat):
     strip_image_detail: bool = False
     # Each request sends the decision cap, else the declared native limit, else omits the
     # parameter (provider default); an API that requires it (output_limit_required) refuses an
-    # undeclared limit.
+    # undeclared limit. The name is the request field on the wire, which the run configuration
+    # records.
     output_limit_param: str = "max_tokens"
 
 
@@ -1157,7 +1158,7 @@ class MoonshotDriver(LiteLLMDriver):
         default_base_url=DEFAULT_MOONSHOT_BASE_URL,
         base_url_env="MOONSHOT_BASE_URL",
     )
-    compat = ChatCompat(strip_image_detail=True, output_limit_param="max_completion_tokens")
+    compat = ChatCompat(strip_image_detail=True)
 
 
 class AnthropicMessagesDriver(LiteLLMDriver):
