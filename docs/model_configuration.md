@@ -60,6 +60,10 @@ reasoning_effort: high             # optional; `fixed` sends no reasoning settin
 | `anthropic_messages` | The Anthropic Messages API | `native_output_limit` |
 | `package.module:Class` | Your own driver class ([external driver](#use-an-external-driver)) | |
 
+A `chat_completions` endpoint streams its replies and asks for the usage at the end of the stream
+(`stream_options.include_usage`). Set `include_usage: false` for an endpoint that rejects
+`stream_options`, or `stream: false` for complete responses.
+
 ### Output limit
 
 `native_output_limit` caps the output tokens of every request, reasoning included; unless a token
@@ -81,8 +85,11 @@ records the resolved preset, limit included, so results with different settings 
 place of the standard ones. A model can name only `kimi_k3` (`MODEL_PRESETS` in
 `realtime_framework/entity/context_policy.py`), which sends K3's past reasoning back, as Kimi
 requires for K3: `configs/models/kimi-k3.yaml` sets it, and other moonshot models leave it out and
-send none. A preset the API cannot render is refused before the run, and the run records the
-preset with its configuration.
+send none. K3 behind your own endpoint (`api: chat_completions`, served by vLLM or SGLang) names it
+too; no API sends past reasoning without a preset. An endpoint given on the trial worker's command
+line has no YAML (`python -m realtime_framework.evaluation._trial --model DEPLOYMENT_ID
+--base-url URL`) and names it with `--context-preset kimi_k3`. A preset the API cannot render is
+refused before the run, and the run records the preset with its configuration.
 
 The run records each context-policy value as the policy sets it, and two of them say what the
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs

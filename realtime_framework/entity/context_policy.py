@@ -254,7 +254,8 @@ PRESETS = {
     },
     # Kimi's thinking-model guide requires K3's past reasoning_content in multi-turn
     # conversations. The requirement is K3's, so K3's YAML names this preset
-    # (configs/models/kimi-k3.yaml) and other moonshot models send no reasoning back.
+    # (configs/models/kimi-k3.yaml), on moonshot or behind a chat_completions endpoint, and
+    # other models of either API send no reasoning back.
     "kimi_k3": {"reasoning_replay": True},
 }
 # The presets a model config may name; Luna's and JEV's belong to their API rows.

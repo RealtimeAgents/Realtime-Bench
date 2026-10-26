@@ -304,7 +304,7 @@ def load_definitions(directory):
         if api == "chat_completions":
             definition["defaults"].update(
                 chat_stream=settings.get("stream", True),
-                chat_include_usage=settings.get("include_usage", False),
+                chat_include_usage=settings.get("include_usage", True),
             )
         if api in {"openrouter", "openai_decisions"}:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
@@ -710,6 +710,16 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     if e.adapter_type == "chat_completions":
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
+            # Same default as YAML presets; STREAM_CHAT_INCLUDE_USAGE below can still override.
+            fields.setdefault("chat_include_usage", True)
+            # The trial worker's --context-preset, in place of a YAML's context_preset.
+            preset = os.environ.get("BENCHMARK_CONTEXT_PRESET")
+            if preset:
+                if preset not in MODEL_PRESETS:
+                    raise ValueError(
+                        f"BENCHMARK_CONTEXT_PRESET must be one of {list(MODEL_PRESETS)}"
+                    )
+                fields["context_preset"] = preset
         for field in (
             "context_window_tokens",
             "context_counter",

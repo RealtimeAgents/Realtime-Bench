@@ -1196,9 +1196,10 @@ class ChatCompletionsDriver(LiteLLMDriver):
         wall_clock_only=True,
         # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
         request_size_estimation=True,
-        # OpenAI's chat format has no field for past reasoning: LiteLLM passes reasoning_content
-        # through, and whether an endpoint reads it is up to its server.
-        reasoning_replay="unsupported",
+        # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
+        # reasoning_content through unchanged, and vLLM and SGLang hand it to the model's chat
+        # template. A model that needs it back names a preset that sends it (K3: kimi_k3).
+        reasoning_replay="optional",
     )
     protocol = ChatProtocol(
         sdk_provider="openai",
