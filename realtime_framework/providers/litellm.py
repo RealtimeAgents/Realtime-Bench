@@ -605,8 +605,6 @@ class LiteLLMDriver:
                 kwargs["reasoning_effort"] = effort
         if extra_body:
             kwargs["extra_body"] = extra_body
-        if request.timeout_s is not None:
-            kwargs["timeout"] = request.timeout_s
         return kwargs
 
     def _client(self):
@@ -1235,7 +1233,7 @@ class ChatCompletionsDriver(LiteLLMDriver):
                     "add_generation_prompt": True,
                 },
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=request.timeout_s or 30,
+                timeout=30,
             )
             response.raise_for_status()
             result = response.json()

@@ -1536,7 +1536,6 @@ class DefaultHarness(VisionAgentBase):
             provider_output_token_cap=provider_cap,
             transport_output_token_cap=transport_cap,
             clock_mode=generation.clock_mode,
-            timeout_s=None,
             generation=generation.number,
         )
         call = CallParameters(
