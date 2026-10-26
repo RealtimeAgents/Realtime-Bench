@@ -170,7 +170,7 @@ def test_an_abort_in_the_sync_after_a_generation_keeps_its_usage(tmp_path, monke
         finally:
             episode.finish()
         connections = stub.finish()
-    assert abandoned.cancelled and abandoned.result["action"] is None
+    assert abandoned.result["stale"] and abandoned.result["action"] is None
     assert [c["rejected"] for c in connections] == [None, 503]
     generation = [
         (a["scope"]["generation"], a["outcome"], a["usage"] is not None)
@@ -208,7 +208,7 @@ def test_closing_the_runtime_abandons_a_generation_that_reopens_the_session(tmp_
         finally:
             episode.finish()
         connections = stub.finish()
-    assert abandoned.cancelled
+    assert abandoned.result["stale"]
     # The driver holds no connection: the one the reopen made is closed.
     assert left == (False, None)
     assert len(connections) == 2 and stub.violations == []
@@ -244,7 +244,7 @@ def test_an_abort_during_a_rebuild_leaves_the_rebuilt_session_closed(tmp_path):
             episode.finish()
         connections = stub.finish()
         responses = [r["connection"] for r in stub.responses]
-    assert abandoned.cancelled
+    assert abandoned.result["stale"]
     assert left == (False, "dirty", None)
     assert len(connections) == 3 and responses == [1, 1, 3]
     assert stub.violations == []

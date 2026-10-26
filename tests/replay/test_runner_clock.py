@@ -217,7 +217,7 @@ class _HangingAgent:
     def generate(self, generation, decision, observation, budget) -> PendingDecision:
         self.clock.wait(self.aborted, None)
         result = {"action": None, "latency": 0.0, "stale": True}
-        return PendingDecision(generation, decision, result, cancelled=True)
+        return PendingDecision(generation, decision, result)
 
     def accept(self, generation) -> None:
         pass

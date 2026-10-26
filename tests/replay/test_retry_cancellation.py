@@ -125,7 +125,6 @@ def _discarded(agent, box, done) -> None:
     assert done.wait(WAIT_S), "the abandoned worker never returned"
     assert "error" not in box, repr(box.get("error"))
     pending = box["pending"]
-    assert pending.cancelled, pending
     assert pending.result["stale"] is True and pending.result["action"] is None, pending.result
     agent.discard(GENERATION)
 
@@ -380,7 +379,7 @@ def test_next_decision_runs_after_an_abort(openrouter_env, tmp_path):  # noqa: F
             episode.finish()
     assert stub.unscripted == 0 and stub.unused_replies == 0
     assert len(stub.requests) == 2
-    assert not pending.cancelled and pending.result.get("invalid_reason") is None
+    assert "stale" not in pending.result and pending.result.get("invalid_reason") is None
     assert pending.result["action"] is not None
     assert len(agent.action_history) == 1
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None), (1, "ok", False)]
@@ -761,7 +760,7 @@ def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkey
         connections = stub.finish()
     assert stub.violations == [] and stub.unscripted == 0
     assert [c["rejected"] for c in connections] == [None] + [503] * 4
-    assert not pending.cancelled
+    assert "stale" not in pending.result
     assert pending.result["invalid_reason"] == "provider_unavailable"
     assert _attempts(tmp_path) == [(1, "failed", None)]
     assert _connects(tmp_path) == [

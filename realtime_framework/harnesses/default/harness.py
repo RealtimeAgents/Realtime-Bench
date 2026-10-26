@@ -1383,14 +1383,14 @@ class DefaultHarness(VisionAgentBase):
             budget.clock_mode,
         )
         try:
-            result, cancelled = self._generate(state, [observation])
+            result = self._generate(state, [observation])
         finally:
             with self._generations_lock:
                 state.returned = True
                 discarded = state.discarded
             if discarded:
                 self._drop(state)
-        return PendingDecision(generation, decision, result, cancelled, state.staged)
+        return PendingDecision(generation, decision, result)
 
     def accept(self, generation: int) -> None:
         self._write(self._close(generation))
@@ -1454,14 +1454,14 @@ class DefaultHarness(VisionAgentBase):
                 outcome=outcome,
             )
 
-    def _generate(self, generation: _Generation, observations: list) -> tuple[dict, bool]:
-        """One generation: its decision result, and whether an abort cancelled it. Nothing is
-        written into the history; what accepting the result writes is kept in
+    def _generate(self, generation: _Generation, observations: list) -> dict:
+        """One generation: its decision result, marked stale when an abort cancelled it. Nothing
+        is written into the history; what accepting the result writes is kept in
         ``generation.staged``."""
         tick = generation.decision
         if generation.cancel.is_set():
             # Aborted before its worker got here: nothing is inspected, entered or sent.
-            return self._cancelled_result(0.0), True
+            return self._cancelled_result(0.0)
         started = self.clock.monotonic()
         feedback, unattached = self._pending_feedback, self._unattached_feedback
         # The frame opens with the feedback no frame of an accepted result carried yet: all of
@@ -1500,7 +1500,7 @@ class DefaultHarness(VisionAgentBase):
                 "invalid_reason": "observation_preparation_error",
                 "invalid_detail": detail,
                 "_trajectory_entry": log_entry,
-            }, False
+            }
         newest_proof = prepared[-1].inspection
         invalid_proof = next(
             (
@@ -1528,7 +1528,7 @@ class DefaultHarness(VisionAgentBase):
                 "parsed_action": {"action_type": "wait", "parameters": {}},
                 "inspection": invalid_proof,
             }
-            return result, False
+            return result
 
         configured_provider_cap = generation.provider_output_tokens
         provider_cap = None if configured_provider_cap is None else int(configured_provider_cap)
@@ -1665,7 +1665,7 @@ class DefaultHarness(VisionAgentBase):
                 runtime_result = retry.run(send)
         except RetryCancelled:
             generation.staged = _Staged(feedback, unattached, inspection_executions)
-            return self._cancelled_result(self.clock.monotonic() - started), True
+            return self._cancelled_result(self.clock.monotonic() - started)
         except Exception as exc:
             # Only the failure record() kept as final becomes an invalid decision; anything else
             # raised on the way (by record() itself, the backoff, the output check) propagates,
@@ -1737,7 +1737,7 @@ class DefaultHarness(VisionAgentBase):
                 # zero of the frame's usage delta (evaluation/episode_records.py
                 # clock_output_tokens). It still counts as one inference response.
                 result["provider_usage_missing_reason"] = "request_not_sent"
-            return result, False
+            return result
 
         output = runtime_result.output
         action_observation = prepared[-1]
@@ -1933,7 +1933,7 @@ class DefaultHarness(VisionAgentBase):
                     "invalid_detail": sync.detail,
                 }
             )
-        return result, runtime_result.cancelled
+        return result
 
     def commit(self, outcome):
         """Commit: report decision ``outcome.decision`` on its own action record and turn. A

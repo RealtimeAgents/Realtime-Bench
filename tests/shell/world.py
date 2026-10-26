@@ -288,7 +288,7 @@ class Agent:
             "stale": aborted,
             **reply.fields,
         }
-        return PendingDecision(generation, decision, result, cancelled=aborted)
+        return PendingDecision(generation, decision, result)
 
     def accept(self, generation: int) -> None:
         self.calls.append(("accept", generation))

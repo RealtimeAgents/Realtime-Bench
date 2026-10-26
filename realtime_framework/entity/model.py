@@ -302,9 +302,6 @@ class PendingDecision:
     generation: int  # the kernel's generation number
     decision: int
     result: dict  # the decision result
-    cancelled: bool = False  # the generation was aborted before its result came back
-    # What accepting the result writes, kept by the agent; the shell does not read it.
-    staged: Any = None
 
 
 @runtime_checkable

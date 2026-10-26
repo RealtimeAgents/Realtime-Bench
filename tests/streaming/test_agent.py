@@ -450,6 +450,11 @@ def _on_worker(clock, run):
     return done, out
 
 
+def _given_up(agent, generation: int) -> bool:
+    """Whether the reply ended given up; the agent keeps it until it is accepted or discarded."""
+    return agent._replies[generation].cancel.is_set()
+
+
 def test_an_abort_interrupts_the_reply_and_closes_the_session_before_it_returns(monkeypatch, clock):
     agent = make_agent(monkeypatch, clock)
     posted = []
@@ -461,7 +466,7 @@ def test_an_abort_interrupts_the_reply_and_closes_the_session_before_it_returns(
     agent.abort(7)
     assert agent.driver.calls[-2:] == [("interrupt", "streaming-7"), ("close",)]
     assert clock.wait(done, 1.0)
-    assert out["value"].cancelled
+    assert "error" not in out and _given_up(agent, 7)
     assert [a.call_id for a in posted] == ["c1"]
     agent.discard(7)
     agent.push(observation(clock, 3))
@@ -478,8 +483,8 @@ def test_a_reply_aborted_before_its_worker_started_never_starts(monkeypatch, clo
     frame = _two_frames(agent, clock)
     agent.abort(7)
     assert agent.driver.calls[-1] == ("close",)
-    pending = agent.generate(7, 3, frame, BUDGET)
-    assert pending.cancelled
+    agent.generate(7, 3, frame, BUDGET)
+    assert _given_up(agent, 7)
     assert not [call for call in agent.driver.calls if call[0] == "reply"]
     agent.close()
 
@@ -537,7 +542,7 @@ def test_after_a_go_away_during_a_reply_a_push_waits_for_it_and_then_renews(monk
     clock.sleep(1.0)
     pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
     assert clock.wait(replied, 2.0)
-    assert not out["value"].cancelled
+    assert "error" not in out and not _given_up(agent, 7)
     clock.sleep(0.5)
     assert not pushed.is_set()
     agent.accept(7)
@@ -786,7 +791,7 @@ def test_a_reply_aborted_while_a_push_reopens_the_session_is_never_asked_for(mon
     clock.sleep(0.5)
     agent.abort(7)
     assert clock.wait(replied, 5.0) and clock.wait(pushed, 5.0)
-    assert out["value"].cancelled
+    assert "error" not in out and _given_up(agent, 7)
     assert not [call for call in agent.driver.calls if call[0] == "reply"]
     agent.close()
 
@@ -808,7 +813,8 @@ def test_a_reply_given_up_while_its_session_was_readied_is_never_asked_for(monke
 
     agent.driver.ensure_ready = readied_as_it_is_given_up
     agent.driver.replies.append(Reply(ends_at=1.0))
-    assert agent.generate(7, 3, frame, BUDGET).cancelled
+    agent.generate(7, 3, frame, BUDGET)
+    assert _given_up(agent, 7)
     assert not [call for call in agent.driver.calls if call[0] == "reply"]
     agent.close()
 
@@ -1164,8 +1170,8 @@ def test_a_reply_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, 
     agent.abort(6)
     agent.driver.connect_failures = [ConnectionError("1011 internal error")]
     agent.driver.replies.append(Reply(ends_at=1.0))
-    pending = agent.generate(7, 3, frame, BUDGET)
-    assert not pending.cancelled
+    agent.generate(7, 3, frame, BUDGET)
+    assert not _given_up(agent, 7)
     assert agent.driver.connect_attempts == 3  # the episode's first, the failed one, the retry
     assert [call[:2] for call in agent.driver.calls][-2:] == [
         ("connect", ("system", "f1.frame", "f2.frame")),
@@ -1239,8 +1245,8 @@ def test_a_reply_whose_connection_drops_before_it_said_anything_is_asked_for_aga
     agent.bind_inbox(posted.append, ORIGIN)
     frame = _two_frames(agent, clock)
     agent.driver.replies += [Reply((Fail(0.05, DROPPED),)), Reply((_click("c1", 0.5, 2),), 1.0)]
-    pending = agent.generate(7, 3, frame, BUDGET)
-    assert not pending.cancelled
+    agent.generate(7, 3, frame, BUDGET)
+    assert not _given_up(agent, 7)
     assert [call[:2] for call in agent.driver.calls[-4:]] == [
         ("reply", 7),
         ("close",),
@@ -1292,7 +1298,7 @@ def test_a_reply_given_up_while_it_waits_to_be_asked_for_again_is_not(monkeypatc
     clock.sleep(0.5)
     agent.abort(7)
     assert clock.wait(replied, 1.0)
-    assert out["value"].cancelled
+    assert "error" not in out and _given_up(agent, 7)
     assert [call[0] for call in agent.driver.calls].count("reply") == 1
     assert _reply_attempts(trace) == [("retry", TRANSIENT), ("cancelled", None)]
     agent.close()
@@ -1310,7 +1316,7 @@ def test_an_abort_that_drops_a_replys_connection_is_no_failure_of_the_reply(monk
     clock.sleep(0.5)
     agent.abort(7)
     assert clock.wait(replied, 1.0)
-    assert out["value"].cancelled
+    assert "error" not in out and _given_up(agent, 7)
     assert _reply_attempts(trace) == []
     agent.close()
 
@@ -1398,8 +1404,8 @@ def test_a_reply_refused_for_a_go_away_read_after_its_renewal_check_renews_and_i
     frame = _two_frames(agent, clock)
     agent.driver.go_away_on = ["reply"]
     agent.driver.replies.append(Reply(ends_at=1.0))
-    pending = agent.generate(7, 3, frame, BUDGET)
-    assert not pending.cancelled
+    agent.generate(7, 3, frame, BUDGET)
+    assert not _given_up(agent, 7)
     assert [call[:2] for call in agent.driver.calls][-4:] == [
         ("reply", 7),
         ("close",),

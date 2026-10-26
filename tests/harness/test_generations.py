@@ -86,6 +86,11 @@ def _generate(episode, generation: int, decision: int):
     return episode.agent.generate(generation, decision, observation, budget)
 
 
+def _cancelled(pending) -> bool:
+    """generate() hands a cancelled generation's result back stale (DefaultHarness._generate)."""
+    return pending.result.get("stale", False)
+
+
 def _outcome(decision: int, status: str, detail: str = "", **fields) -> Outcome:
     """The kernel's Commit for ``decision``; the clock fields are not part of the feedback."""
     return Outcome(
@@ -245,7 +250,7 @@ def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
             agent.accept(1)
         finally:
             episode.finish()
-    assert (pending.generation, pending.decision, pending.cancelled) == (1, 0, False)
+    assert (pending.generation, pending.decision, _cancelled(pending)) == (1, 0, False)
     assert pending.result["raw"] == CLICK_NAME and pending.result["action"] is not None
     turns, history, usage = held
     assert (turns, history, usage["responses"], usage["output_tokens"]) == ((), [], 0, 0)
@@ -281,7 +286,7 @@ def test_a_discarded_result_writes_no_history(tmp_path):
             usage = agent.token_usage
         finally:
             episode.finish()
-    assert not pending.cancelled and pending.result["action"] is not None
+    assert not _cancelled(pending) and pending.result["action"] is not None
     assert len(stub.requests) == 2
     assert [turn.decision for turn in turns] == [0]
     assert [record["tick"] for record in history] == [1]
@@ -307,7 +312,7 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
             frame = agent.frames.latest()
         finally:
             episode.finish()
-    assert pending.cancelled
+    assert _cancelled(pending)
     assert pending.result["stale"] is True and pending.result["action"] is None
     assert stub.requests == [] and stub.unused_replies == 1
     assert agent._runtime.turns == () and agent.action_history == []
@@ -344,7 +349,7 @@ def test_an_abort_before_the_reply_sends_no_request(tmp_path):
             agent.discard(1)
         finally:
             episode.finish()
-    assert pending.cancelled
+    assert _cancelled(pending)
     assert stub.requests == [] and stub.unused_replies == 1
     assert agent._runtime.turns == () and agent.action_history == []
     outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
@@ -387,7 +392,7 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
             agent.discard(1)
         finally:
             episode.finish()
-    assert pending.cancelled and stub.requests == [] and sends == []
+    assert _cancelled(pending) and stub.requests == [] and sends == []
     assert len(retentions) == (where == "retention")
 
 
@@ -412,7 +417,7 @@ def test_an_abort_after_the_reply_keeps_nothing(tmp_path):
         finally:
             episode.finish()
     assert len(stub.requests) == 1
-    assert pending.cancelled and pending.result["action"] is None
+    assert _cancelled(pending) and pending.result["action"] is None
     assert agent._runtime.turns == () and agent.action_history == []
     attempts = [a for a in _trace(tmp_path, "ModelAttemptFinished") if a["kind"] == "generation"]
     assert [(a["outcome"], a["cancelled"]) for a in attempts] == [("cancelled", True)]
@@ -471,7 +476,7 @@ def test_an_abort_names_one_generation(tmp_path):
             agent.discard(1)
         finally:
             episode.finish()
-    assert first.cancelled and second.cancelled
+    assert _cancelled(first) and _cancelled(second)
     assert stub.requests == [] and stub.unused_replies == 2
 
 
@@ -492,7 +497,7 @@ def test_close_cancels_a_generation_in_flight(tmp_path):
             pending = _joined(box, done)
         finally:
             episode.finish()
-    assert pending.cancelled and pending.result["action"] is None
+    assert _cancelled(pending) and pending.result["action"] is None
     assert stub.requests == [] and agent._generations == []
     calls = _jsonl(tmp_path / "tool_calls.jsonl")
     assert [(call.get("outcome"), call.get("incomplete")) for call in calls] == [(None, True)]
@@ -544,7 +549,7 @@ def test_the_generation_an_episode_ends_on_is_discarded_with_its_records(tmp_pat
             agent.discard(2)
         finally:
             episode.finish()
-    assert not last.cancelled and len(stub.requests) == 2
+    assert not _cancelled(last) and len(stub.requests) == 2
     assert _usage_rows(tmp_path) == [(0, False), (1, True)]
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
     rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
@@ -591,7 +596,7 @@ def test_close_discards_the_generation_the_kernel_gave_no_verdict(tmp_path):
             agent.finalize_decision_audit(last.result)
         finally:
             episode.finish()
-    assert not last.cancelled and len(stub.requests) == 2
+    assert not _cancelled(last) and len(stub.requests) == 2
     assert _usage_rows(tmp_path) == [(0, False), (1, True)]
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
     rows = [(r["tick"], r["type"]) for r in _jsonl(tmp_path / "trajectory.jsonl")]
@@ -624,7 +629,7 @@ def test_a_generation_discarded_while_it_runs_is_dropped_when_it_returns(tmp_pat
             generations = list(agent._generations)
         finally:
             episode.finish()
-    assert last.cancelled and len(stub.requests) == 2
+    assert _cancelled(last) and len(stub.requests) == 2
     assert written == ([(0, False)], ["completed"])
     assert _usage_rows(tmp_path) == [(0, False), (1, True)]
     assert _tool_outcomes(tmp_path) == ["completed", "superseded_by_timeout"]
@@ -646,7 +651,7 @@ def test_a_generation_discarded_before_it_starts_keeps_nothing(tmp_path):
             generations = list(agent._generations)
         finally:
             episode.finish()
-    assert pending.cancelled and stub.requests == [] and generations == []
+    assert _cancelled(pending) and stub.requests == [] and generations == []
     assert agent.action_history == [] and agent._runtime.turns == ()
     assert not (tmp_path / "provider-usage.jsonl").exists()
     assert _jsonl(tmp_path / "tool_calls.jsonl") == []
@@ -700,7 +705,7 @@ def test_a_late_abandoned_frame_leaves_the_next_decision_its_own(tmp_path):
         own.metadata["observation_id"],
         late.metadata["observation_id"],
     )
-    assert table.latest() is late_frame and abandoned.cancelled
+    assert table.latest() is late_frame and _cancelled(abandoned)
     assert own_frame.marks["P3"]["point"] != late_frame.marks["P3"]["point"]
     click = pending.result["action"]
     assert [click.parameters["x"], click.parameters["y"]] == own_frame.marks["P3"]["point"]
@@ -731,7 +736,7 @@ def test_a_late_abandoned_generation_leaves_the_next_its_action_cap(tmp_path):
             agent.discard(1)
         finally:
             episode.finish()
-    assert abandoned.cancelled and not accepted.cancelled
+    assert _cancelled(abandoned) and not _cancelled(accepted)
     limit = agent.config.native_output_limit
     assert native_output_limit(limit, 111) != native_output_limit(limit, 222)
     assert agent._frame_action_max_tokens == native_output_limit(limit, 222)
@@ -755,7 +760,7 @@ def test_a_generation_aborted_before_it_starts_leaves_the_next_its_action_cap(tm
             agent.discard(1)
         finally:
             episode.finish()
-    assert late.cancelled and not accepted.cancelled
+    assert _cancelled(late) and not _cancelled(accepted)
     limit = agent.config.native_output_limit
     assert native_output_limit(limit, 111) != native_output_limit(limit, 222)
     assert kept == native_output_limit(limit, 222)
@@ -862,7 +867,7 @@ def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
             agent.accept(3)
         finally:
             episode.finish()
-    assert skipped.cancelled and stub.held == [True]
+    assert _cancelled(skipped) and stub.held == [True]
     assert agent.action_history[0] == record and record["result"] == "applied"
     first, last = agent._runtime.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
@@ -912,7 +917,7 @@ def test_the_note_outlasts_its_frame_s_screenshot(tmp_path, monkeypatch, api):
             for generation, decision in enumerate(range(last + 1), 1):
                 if decision == 1:
                     agent.abort(generation)
-                    assert _generate(episode, generation, decision).cancelled
+                    assert _cancelled(_generate(episode, generation, decision))
                     agent.commit(_outcome(decision, "skipped_timeout"))
                     agent.discard(generation)
                     continue
@@ -949,7 +954,7 @@ def test_jev_opens_the_next_observation_with_the_note(tmp_path, monkeypatch):
             for generation, decision in enumerate(range(4), 1):
                 if decision == 1:
                     agent.abort(generation)
-                    assert _generate(episode, generation, decision).cancelled
+                    assert _cancelled(_generate(episode, generation, decision))
                     agent.commit(_outcome(decision, "skipped_timeout"))
                     agent.discard(generation)
                     continue
@@ -989,6 +994,14 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
             model_key=REALTIME_MODEL_KEY,
         )
         agent = episode.agent
+        opened, prepare = {}, agent._prepare_observations
+
+        def prepared(observations, tick, prefix=""):
+            values = prepare(observations, tick, prefix)
+            opened[tick] = values[0][-1]
+            return values
+
+        agent._prepare_observations = prepared
         try:
             stub.wait_for_session_update()
             _generate(episode, 1, 0)
@@ -1010,9 +1023,12 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
         finally:
             episode.finish()
         stub.finish()
-    assert skipped.cancelled and skipped.staged.result is not None
+    assert _cancelled(skipped)
+    # Its reply was back: its usage is recorded, stale.
+    usage = [(u["tick"], u["stale"]) for u in _jsonl(tmp_path / "provider-usage.jsonl")]
+    assert usage == [(0, False), (1, True), (2, False)]
     # Decision 0's feedback went as its own item: decision 1's frame opens with none.
-    opening = skipped.staged.observation
+    opening = opened[1]
     assert (opening.feedback_prefix, opening.unattached_feedback) == ("", "")
     assert agent.action_history[0] == record and record["result"] == "applied"
     assert [r["tick"] for r in agent.action_history] == [1, 2]
@@ -1077,7 +1093,7 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
     ids = [frame.metadata["observation_id"] for frame in (first, second)]
     assert offered == [(2, ids[1]), (1, ids[0])]
     assert started == [2]
-    assert abandoned.cancelled and not accepted.cancelled
+    assert _cancelled(abandoned) and not _cancelled(accepted)
     assert stub.unload() == 0 and stub.unscripted == 0 and not stub.off_script
     assert len(stub.requests) == len(scenario_decisions.WEB_LONG[1].script)
     assert [turn.decision for turn in agent._runtime.turns] == [1]
@@ -1122,7 +1138,7 @@ def test_an_abandoned_generation_archives_nothing_under_pressure(tmp_path):
             archived = agent._runtime.archived_action_count
         finally:
             episode.finish()
-    assert abandoned.cancelled and not accepted.cancelled
+    assert _cancelled(abandoned) and not _cancelled(accepted)
     assert len(stub.requests) == 1
     assert (turns, archived) == ([1], 0)
     changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]
@@ -1192,7 +1208,7 @@ def test_an_abandoned_generation_omits_nothing_under_pressure(tmp_path):
         finally:
             episode.finish()
     assert history == ([], 1)  # generation 3 archived decision 0's turn
-    assert abandoned.cancelled and not accepted.cancelled
+    assert _cancelled(abandoned) and not _cancelled(accepted)
     assert len(stub.requests) == 2
     changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]
     assert not [c for c in changes if c.get("kind") == "ledger_omission"]
@@ -1240,7 +1256,7 @@ def test_an_abandoned_generation_omits_no_second_block(tmp_path):
             history = (agent._runtime.archived_action_count, agent._runtime._omitted_action_count)
         finally:
             episode.finish()
-    assert abandoned.cancelled
+    assert _cancelled(abandoned)
     assert len(stub.requests) == len(steps)
     assert history == (12, 10)
     changes = [e["payload"] for e in _jsonl(tmp_path / "episode_trace.jsonl")]

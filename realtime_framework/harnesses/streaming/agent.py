@@ -560,9 +560,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 own.latency += latency
                 own.outcome = outcome
             self._retire()
-        return PendingDecision(
-            generation, decision, self._result(reply, latency), reply.cancel.is_set()
-        )
+        return PendingDecision(generation, decision, self._result(reply, latency))
 
     async def _ready(self, view: CanonicalRequest, *, renew: bool, push: str | None = None) -> None:
         """Ready the session from ``view``, and renew it if the provider asked for that and
