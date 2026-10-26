@@ -1312,8 +1312,7 @@ def set_up_agent(
         text_observation=text_observation,
         clock=clock,
     )
-    if hasattr(agent, "bind_tool_runtime"):
-        agent.bind_tool_runtime(setup.tool_runtime)
+    agent.bind_tool_runtime(setup.tool_runtime)
     setup.stage = "environment_setup"
     # Chrome can start with keyboard focus in its address bar; the model acts on the page.
     try:
