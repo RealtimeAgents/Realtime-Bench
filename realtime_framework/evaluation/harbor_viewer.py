@@ -89,8 +89,6 @@ def export_episode(run_dir, logs_dir, request):
         "action_lifecycle.jsonl",
         "episode_trace.jsonl",
         "tool_calls.jsonl",
-        "runner.out",
-        "deferred-provider-usage.jsonl",
         "provider-usage.jsonl",
         "active-loop.json",
         "recording-timing.json",
@@ -484,7 +482,6 @@ def create_app(folder: Path, *, static_dir: Path | None = None):
                 "action_lifecycle.jsonl",
                 "trajectory.jsonl",
                 "tool_calls.jsonl",
-                "runner.out",
                 "recording-timing.json",
                 "active-loop.json",
             )
