@@ -403,6 +403,7 @@ import inspect as inspect
 from importlib import import_module as import_module
 
 from realtime_framework.entity.model import (
+    ChoiceClient,
     Compat,
     Deployment,
     ModelEncoder,
@@ -419,10 +420,8 @@ _DRIVER_DECLARATIONS = (
     ("model_defaults", dict),
 )
 # What the native-streaming agent pushes frames and asks for replies with
-# (harnesses/streaming/agent.py), and what the selection flow asks a choice API's questions and
-# classifies their failures with (providers/decisions/selection.py).
+# (harnesses/streaming/agent.py).
 _STREAMING_METHODS = ("push_frame", "request_reply")
-_CHOICE_METHODS = ("decide", "classify_question_error")
 
 
 def adapter_class(adapter_type: str) -> type[ModelEncoder]:
@@ -508,7 +507,7 @@ def _check_driver(target: str, driver: type) -> None:
                     f"{target!r} declares streaming but has no {method}()"
                 )
     if driver.capabilities.action_channel == "choice":
-        for method in _CHOICE_METHODS:
+        for method in interface_methods(ChoiceClient):
             if not callable(getattr(driver, method, None)):
                 raise ValueError(  # noqa: TRY004
                     f"{target!r} declares the choice action channel but has no {method}()"

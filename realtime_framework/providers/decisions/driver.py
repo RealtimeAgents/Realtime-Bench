@@ -17,6 +17,7 @@ from realtime_framework.entity.events import (
 )
 from realtime_framework.entity.model import (
     FATAL,
+    ChoiceClient,
     GenerationHandle,
     InterruptResult,
     RetryCancelled,
@@ -31,10 +32,10 @@ from realtime_framework.providers.decisions.selection import SELECTION_POLICY, C
 HISTORY_REPLAY_LABELS = {"turns": "canonical", "action_digest": "action_digest"}
 
 
-class DecisionEncoder(StatelessEncoder):
+class DecisionEncoder(StatelessEncoder, ChoiceClient):
     """The StatelessEncoder half of a Decisions encoder.
 
-    A registered Decision API subclasses it with its protocol (``decide``,
+    A registered Decision API subclasses it with its protocol (ChoiceClient's ``decide`` and
     ``classify_question_error``, ``bind_trace``, ``close``), capabilities (with ``max_choices``),
     deployment and the ``clock`` its constructor takes, so the registered class is the complete
     driver.

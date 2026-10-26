@@ -476,9 +476,11 @@ class ChoiceReply:
     response: dict[str, Any]
 
 
-@runtime_checkable
-class ChoiceClient(Protocol):
-    """A stateless choice-model API (action_channel="choice"): one question per call.
+class ChoiceClient(abc.ABC):
+    """A stateless choice-model API (action_channel="choice"): one question per call, with at
+    most its capabilities' max_choices options. A choice encoder has these methods, which the
+    selection flow (providers/decisions/selection.py) asks each question and classifies its
+    failures with.
 
     The client owns only transport: authentication, failure classification
     (classify_question_error), context-limit detection and response validation. Questions, their
@@ -487,12 +489,13 @@ class ChoiceClient(Protocol):
     runtime through it.
     """
 
-    capabilities: RealtimeCapabilities  # max_choices: options per question
-
+    @abc.abstractmethod
     async def decide(self, state: dict[str, Any] | list, question: dict[str, Any]) -> ChoiceReply:
         """Raise ChoiceContextLimitError when state plus question exceed the context."""
 
-    async def close(self) -> None: ...
+    @abc.abstractmethod
+    def classify_question_error(self, exc: BaseException) -> TransportFailure:
+        """The failure ``exc`` of one question, by which the selection flow retries it."""
 
 
 # Transport failures
