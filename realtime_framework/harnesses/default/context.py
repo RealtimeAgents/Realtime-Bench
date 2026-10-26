@@ -630,9 +630,7 @@ class RealtimeRuntime:
         # thread started; one that never started has no session to close.
         if self.execution.running:
             try:
-                # Longer than the session waits for an abort's cleanup, with time for a Gemini
-                # Live close after; an OpenAI Realtime close stuck on a write may outlast it, and
-                # stopping the execution thread then ends the close.
+                # Longer than the session waits for an abort's cleanup, with time to close after.
                 self.execution.run(self.session.close(), timeout=15.0)
             except Exception:  # noqa: BLE001, S110 - destructor-style best effort
                 pass

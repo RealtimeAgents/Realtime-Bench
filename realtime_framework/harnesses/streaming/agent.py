@@ -122,8 +122,7 @@ TEXT_CALL = "text"
 _OPEN_TIMEOUT_S = 60.0
 # How long an abort or close waits on the execution thread: longer than an abort takes, within
 # its interrupt's bound and its close's, and than the session waits for an abort's cleanup, with
-# time for a Gemini Live close after (RealtimeRuntime.close); an OpenAI Realtime close stuck on a
-# write may outlast it, and stopping the execution thread then ends the close.
+# time for a close after (RealtimeRuntime.close).
 _SESSION_TIMEOUT_S = 15.0
 # The boundaries that end a reply, whose provider history state is the session's after it.
 _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}

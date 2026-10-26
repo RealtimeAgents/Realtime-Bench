@@ -70,10 +70,10 @@ _CLIENT_ID_MAX_LENGTH = 32
 # What the trace links to an item create as its answers; the first is its acknowledgement. The
 # session core confirms a create only on .created or .done (openai_realtime_session._CREATE_ACKS).
 _ITEM_ACKS = {"conversation.item.added", "conversation.item.created", "conversation.item.done"}
-# How long a connection's close may take before the socket is dropped under it. A close stuck on
-# a write that does not drain leaves a streaming push stuck in the same write; dropping the socket
-# fails both. Normal closes finish well within it, so it adds no observable wait.
-_CONNECTION_CLOSE_TIMEOUT_S = 10.0
+# How long a connection's close may take before the socket is dropped under it, as Gemini Live's
+# (decision N49). A close stuck on a write that does not drain leaves a streaming push stuck in
+# the same write; dropping the socket fails both.
+_CONNECTION_CLOSE_TIMEOUT_S = 1.0
 # How long a connection may take to open: TCP, TLS and the WebSocket upgrade, in real time
 # (websockets' open_timeout). The session.update after it reads no answer.
 _HANDSHAKE_TIMEOUT_S = 10.0
@@ -81,13 +81,16 @@ _HANDSHAKE_TIMEOUT_S = 10.0
 # a streaming push stuck in one holds the connection's writes until the abort's close after the
 # interrupt drops the socket; the close needs no cancel to end the response.
 _INTERRUPT_TIMEOUT_S = 1.0
-# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers.
+# The OSErrors of a network or host that is down or unreachable, which no ConnectionError covers,
+# and of the host's ephemeral ports or buffers run out, which pass once some are free again.
 _NETWORK_ERRNOS = {
     errno.ENETUNREACH,
     errno.EHOSTUNREACH,
     errno.ENETDOWN,
     errno.EHOSTDOWN,
     errno.ENETRESET,
+    errno.EADDRNOTAVAIL,
+    errno.ENOBUFS,
 }
 
 
@@ -319,13 +322,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         canonical history cannot duplicate a completed action.
 
         A connect attempt fails below HTTP with a ConnectionError (refused or reset), an OSError
-        naming a network or host that is down or unreachable, a failed name lookup
-        (socket.gaierror), ssl.SSLError or a timeout or, when the connection ends before the
-        upgrade response, with websockets' InvalidMessage caused by EOFError; these are
-        transient. Every other OSError is fatal: a local fault (a permission, a missing file, an
-        invalid argument), and with them EADDRNOTAVAIL, ENOBUFS and an OSError without an errno
-        (a name lookup that returned no address), which can pass, as ephemeral ports or buffers
-        run out, but are not told apart from one.
+        naming a network or host that is down or unreachable or the host's ephemeral ports or
+        buffers run out (EADDRNOTAVAIL, ENOBUFS), a failed name lookup (socket.gaierror, or the
+        plain OSError without an errno of a lookup that returned no address), ssl.SSLError or a
+        timeout or, when the connection ends before the upgrade response, with websockets'
+        InvalidMessage caused by EOFError; these are transient (decision 37). Every other OSError
+        is a local fault (a permission, a missing file, an invalid argument) and fatal.
         """
         transient = (
             ConnectionClosed,
@@ -341,8 +343,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             # A reconnect inside the turn already spent the shared retry budget.
             if isinstance(current, TransportFailureError):
                 return current.failure
-            if isinstance(current, transient) or (
-                isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS
+            if (
+                isinstance(current, transient)
+                or (isinstance(current, OSError) and current.errno in _NETWORK_ERRNOS)
+                # socket.create_connection's, once getaddrinfo returned no address.
+                or (type(current) is OSError and current.errno is None)
             ):
                 return TransportFailure(TRANSIENT)
             # A refused WebSocket upgrade (websockets InvalidStatus) carries its HTTP response.
@@ -851,10 +856,12 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 provider_metadata={"history_session_reconnected": True},
             )
         except Exception as exc:
-            # A connect the shared retry gave up on, or a failure the outer retry may still
-            # retry, propagates as it is: that retry reads its kind and spent budget off it,
-            # which a BROKEN result's text would lose (decision 39).
-            if (
+            # Before a generation, a connect the shared retry gave up on, or a failure the outer
+            # retry may still retry, propagates as it is: that retry reads its kind and spent
+            # budget off it, which a BROKEN result's text would lose (decision 39). A repair
+            # after a generation, the only sync with a current generation, breaks the session
+            # instead, and the turn keeps its result (decision 35).
+            if request.current_generation is None and (
                 isinstance(exc, TransportFailureError)
                 or self.classify_transport_error(exc).retryable
             ):
