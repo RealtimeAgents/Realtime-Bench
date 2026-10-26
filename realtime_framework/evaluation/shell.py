@@ -1035,12 +1035,10 @@ class _Shell:
 
     def _read_snapshot(self) -> str | None:
         """Read the scorer's snapshot; the error of a read that failed."""
-        env, end = self.env, self.end
         # The presentation boundary precedes the scorer's snapshot.
-        end.active_end_unix_s = self.clocks.operational.time()
-        end.snapshot_captured = False
+        self.end.snapshot_begins(self.clocks.operational.time())
         # The Task base class has none (realtime_tasks/types.py).
-        snapshotter = getattr(env.task, "evaluation_snapshot", None)
+        snapshotter = getattr(self.env.task, "evaluation_snapshot", None)
         error = None
         if snapshotter is not None:
             try:
@@ -1052,9 +1050,9 @@ class _Shell:
                     snapshot = self._env(snapshotter)
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
-                end.snapshot_error = error
+                self.end.snapshot_read(None, error)
             else:
-                end.snapshot, end.snapshot_captured, end.snapshot_error = snapshot, True, None
+                self.end.snapshot_read(snapshot, None)
                 self._snapshot_read = True
         return error
 
@@ -1067,7 +1065,7 @@ class _Shell:
     def _finish(self, finish: Finish) -> None:
         """The termination record main() and the report read, in world seconds to nine places
         (legacy_loop.py ``_termination``); the token clock's are ticks, and a failure the shell
-        found in this last batch goes into it (_with_unheard)."""
+        found in this last batch goes into it (episode_end.py with_unheard)."""
         termination = with_unheard(finish.termination, self._unheard, self.log)
         try:
             self._terminate(termination, finish.think_spent, finish.dropped_intermediate_frames)
@@ -1077,37 +1075,10 @@ class _Shell:
     def _terminate(
         self, termination: Termination, think_spent: float, dropped_intermediate_frames: int
     ) -> None:
-        env, end = self.env, self.end
-        end.termination = termination
-        # The verdict first: main() is handed it whatever else could be written (runner.py main).
-        invalid, latched = termination.invalid, end.latched(env)
-        # The record of a failure the environment latched itself is its own, the detail whole.
-        verdict = latched
-        if invalid is not None and (
-            latched is None
-            or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
-        ):
-            verdict = invalid_record(invalid)
-        # The kernel was not told of one latched once the snapshot was frozen (decision 30).
-        late = latched if invalid is None else None
-        if late is not None:
-            verdict = None
-        end.judged, end.invalid_run = True, verdict
-        end.stop_reason = termination.stop_reason
-        ticks_per_s = self.config.env_fps if self.token else 1.0
-        end_s = termination.ended_at / ticks_per_s
-        # A snapshot read whose reading after it failed is one the kernel took as failed.
-        snapshot_s = (
-            termination.snapshot_at / ticks_per_s
-            if self._snapshot_read and termination.snapshot_at is not None
-            else None
+        end = self.end
+        late = end.terminate(
+            termination, self.env, self._snapshot_read, self.config.env_fps if self.token else 1.0
         )
-        end.termination_record = {
-            "stop_reason": termination.stop_reason,
-            "end_s": round(end_s, 9),
-            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-        }
         end.think_spent = think_spent
         end.dropped_intermediate_frames = dropped_intermediate_frames
         if late is not None:

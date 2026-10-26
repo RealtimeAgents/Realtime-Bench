@@ -200,6 +200,55 @@ class EpisodeEnd:
         the environment latched itself."""
         return self.invalid_run if self.judged else getattr(env, "_invalid_run", None)
 
+    def snapshot_begins(self, at: float) -> None:
+        """A read of the scorer's snapshot begins at ``at``, Unix seconds: the presentation
+        boundary."""
+        self.active_end_unix_s, self.snapshot_captured = at, False
+
+    def snapshot_read(self, snapshot, error: str | None) -> None:
+        """The read returned ``snapshot``, or failed with ``error``."""
+        if error is None:
+            self.snapshot, self.snapshot_captured = snapshot, True
+        self.snapshot_error = error
+
+    def terminate(
+        self, termination: Termination, env, snapshot_read: bool, ticks_per_s: float = 1.0
+    ) -> dict | None:
+        """Write how the episode ended, the verdict first: main() is handed it whatever else
+        could be written. The termination record is in world seconds to nine places
+        (legacy_loop.py ``_termination``), of semantic times counted ``ticks_per_s`` to the
+        second; a snapshot read whose reading after it failed, not ``snapshot_read``, is one the
+        kernel took as failed. Returns a failure the environment latched once the snapshot was
+        frozen, which the kernel was not told of and which is only logged (decision 30)."""
+        self.termination = termination
+        invalid, latched = termination.invalid, self.latched(env)
+        late = latched if invalid is None else None
+        # The record of a failure the environment latched itself is its own, the detail whole.
+        if invalid is None:
+            verdict = None
+        elif latched is not None and (latched["category"], latched["reason"]) == (
+            invalid.category,
+            invalid.reason,
+        ):
+            verdict = latched
+        else:
+            verdict = invalid_record(invalid)
+        self.judged, self.invalid_run = True, verdict
+        self.stop_reason = termination.stop_reason
+        end_s = termination.ended_at / ticks_per_s
+        snapshot_s = (
+            termination.snapshot_at / ticks_per_s
+            if snapshot_read and termination.snapshot_at is not None
+            else None
+        )
+        self.termination_record = {
+            "stop_reason": termination.stop_reason,
+            "end_s": round(end_s, 9),
+            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
+            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
+        }
+        return late
+
     def result(
         self, env, timeline: list[tuple], token_accounting=None, drain_abandoned=None
     ) -> EpisodeResult:

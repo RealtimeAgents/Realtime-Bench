@@ -408,13 +408,12 @@ class _StreamingShell:
     def _freeze(self) -> None:
         """The snapshot, next after the action executing (4.8), on its own thread (_freezing). A
         read that raises fails the snapshot, a cancellation's too."""
-        env, end, clock = self.env, self.end, self.clocks.operational
+        end = self.end
         # The presentation boundary precedes the scorer's snapshot; it moves to when the read
         # begins, once the gate is the snapshot's.
-        end.active_end_unix_s = clock.time()
-        end.snapshot_captured = False
+        end.snapshot_begins(self.clocks.operational.time())
         # The Task base class has none (realtime_tasks/types.py).
-        snapshotter = getattr(env.task, "evaluation_snapshot", None)
+        snapshotter = getattr(self.env.task, "evaluation_snapshot", None)
         error = None
         if snapshotter is not None:
             turn, executing = self.lanes.freeze_turn()
@@ -437,10 +436,10 @@ class _StreamingShell:
                 )
             except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
+                end.snapshot_read(None, error)
             else:
-                end.snapshot, end.snapshot_captured = snapshot, True
+                end.snapshot_read(snapshot, None)
                 self._snapshot_read = True
-        end.snapshot_error = error
         self.lanes.gate.freeze()
         at = self._read()  # when the read returned
         self._frozen_at = at
@@ -467,35 +466,13 @@ class _StreamingShell:
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in seconds to nine places, and a
-        failure the shell found in this last batch goes into it (_with_unheard). The episode is
-        over whatever comes of writing it, and its verdict goes first: main() reads it whatever
-        else could be written."""
-        env, end = self.env, self.end
-        termination = end.termination = with_unheard(termination, self._unheard, self.log)
+        failure the shell found in this last batch goes into it (episode_end.py with_unheard).
+        The episode is over whatever comes of writing it, and its verdict goes first: main() is
+        handed it whatever else could be written."""
+        termination = with_unheard(termination, self._unheard, self.log)
         late = None
         try:
-            end.stop_reason = termination.stop_reason
-            invalid, latched = termination.invalid, end.latched(env)
-            # The record of a failure the environment latched itself is its own, the detail whole.
-            verdict = latched
-            if invalid is not None and (
-                latched is None
-                or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
-            ):
-                verdict = invalid_record(invalid)
-            # The kernel was not told of one latched once the snapshot was frozen (decision 30).
-            late = latched if invalid is None else None
-            if late is not None:
-                verdict = None
-            end.judged, end.invalid_run = True, verdict
-            end_s = termination.ended_at
-            snapshot_s = termination.snapshot_at if self._snapshot_read else None
-            end.termination_record = {
-                "stop_reason": termination.stop_reason,
-                "end_s": round(end_s, 9),
-                "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-                "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-            }
+            late = self.end.terminate(termination, self.env, self._snapshot_read)
         finally:
             self.lanes.close()
             self._push_lane.close()
