@@ -1,4 +1,4 @@
-"""WebSocket server and client connections that run on the fake clock (tests/fake_clock.py).
+"""A WebSocket server that runs on the fake clock (tests/fake_clock.py).
 
 CassetteServer replays a cassette (tests/streaming/ws_cassette.py) on 127.0.0.1 with an
 OS-assigned port. It runs websockets' sans-I/O ServerProtocol on threads the clock starts: one
@@ -12,17 +12,9 @@ come from keeps a message's bytes, not its frame type. Once the cursor finds a p
 connection it found it on is closed with 1011 and the problem as its reason, and every other
 connection is dropped at once.
 
-clocked_connection makes a websockets.sync client connection class wait on the clock instead. The
-connection reads its socket on a thread websockets starts in its constructor
-(websockets/sync/connection.py:130-136, 799-814), which takes no part in the clock, and recv()
-blocks on the message queue that thread fills (websockets/sync/messages.py:72-92). On the fake
-clock a thread blocked like that counts as busy, so time never moves while the client waits for a
-message. The subclass does the reading on a thread the clock starts, which waits until its socket
-turns readable, and recv() waits on the clock until a frame is queued or the connection ends: a
-message is one frame, since the cassette server never splits one.
-Reading never pauses: a paused reader would block on a lock until the client reads
-(sync/connection.py:89-96, 811), which on the fake clock is busy too. Like the server, the client
-waits until what it sent is delivered before it goes on.
+The clients are websockets' asyncio connections, the live drivers' (providers/capture.py
+async_ws_connection), on an event loop the fake clock made: they wait in the loop's select, which
+the clock sees.
 """
 
 from __future__ import annotations
@@ -80,24 +72,6 @@ def real_time_limit(seconds: float, expired: Callable[[], None], progress: Calla
         done.set()
     if hit.is_set():
         raise failure
-
-
-def wait_delivered(sock) -> None:
-    """tests/fake_clock.py's wait_delivered, which looks for the peer's close with a blocking
-    peek. The clocked client reads its socket on another thread, which can take the bytes between
-    that look and the peek; the peek then waits for bytes that never come, holding the protocol
-    lock the reader needs next (websockets/sync/connection.py:833, 1024). This one never blocks:
-    busy until the peer's kernel holds every byte written to ``sock``, or the peer has closed the
-    connection, or the socket has."""
-    while _in_flight(sock):
-        try:
-            if not sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT):
-                return
-        except BlockingIOError:
-            pass  # nothing to read: the peer is still there
-        except OSError:
-            return
-        time.sleep(0.0001)
 
 
 def _in_flight(sock) -> bool:
@@ -384,62 +358,3 @@ class _Connection:
             while self.sock.recv(RECV_BYTES):
                 pass
         self.protocol.receive_eof()
-
-
-def clocked_connection(base, clock):
-    """``base``, a websockets.sync ClientConnection class, waiting on ``clock``. Pass it as
-    ``create_connection`` to websockets.sync.client.connect."""
-
-    class ClockedConnection(base):
-        opened = 0  # connections made with this class, so a test can tell it was used
-
-        def __init__(self, sock, protocol, **kwargs):
-            ClockedConnection.opened += 1
-            self._arrived = clock.event()
-            super().__init__(_ClockedSocket(sock, clock), protocol, **{**kwargs, "max_queue": None})
-
-        def recv_events(self) -> None:
-            clock.start_thread(super().recv_events, name="clocked-ws-reader").join()
-
-        def process_event(self, event) -> None:
-            super().process_event(event)
-            self._arrived.set()
-
-        def close_socket(self) -> None:
-            super().close_socket()
-            self._arrived.set()
-
-        def send_data(self) -> None:
-            super().send_data()
-            # The fake clock looks at its participants one at a time: bytes that reach the
-            # server between its look at the server's socket and its look at this one's would
-            # be seen in neither place. Delivered before anyone waits, they are in the first.
-            wait_delivered(self.socket._sock)
-
-        def recv(self, timeout=None, decode=None):
-            assert timeout is None, "a recv timeout would run on real time"
-            queued = self.recv_messages
-            while queued.frames.empty() and not queued.closed:
-                self._arrived.clear()
-                # Cleared before the check: a frame queued after it sets the event again.
-                if queued.frames.empty() and not queued.closed:
-                    clock.wait(self._arrived, None)
-            return super().recv(timeout, decode)
-
-    return ClockedConnection
-
-
-class _ClockedSocket:
-    """A connection's socket whose ``recv`` first waits on the clock until it turns readable."""
-
-    def __init__(self, sock: socket.socket, clock):
-        self._sock = sock
-        self._clock = clock
-
-    def recv(self, size: int) -> bytes:
-        if self._sock.fileno() >= 0:
-            self._clock.wait_readable(self._sock)
-        return self._sock.recv(size)
-
-    def __getattr__(self, name):
-        return getattr(self._sock, name)
