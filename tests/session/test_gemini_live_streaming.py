@@ -51,7 +51,12 @@ from realtime_framework.harnesses.streaming.history import (
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.gemini.session import Delivery
 from realtime_framework.providers.session_lifecycle import RenewalRequired
-from tests.session.test_gemini_live_receive import DeliveryLog, RecordingClock, server_closed
+from tests.session.test_gemini_live_receive import (
+    DeliveryLog,
+    RecordingClock,
+    server_closed,
+    yaml_options,
+)
 from tests.session.test_gemini_live_session import pushed
 
 MODEL = (
@@ -194,7 +199,7 @@ class Rig:
             model_name=model,
             api_key="replay-dummy-key",
             streaming=streaming_settings or {},
-            **live.GeminiLiveDriver.model_defaults.get(model, {}),
+            provider_options=yaml_options(model),
         )
         self.driver = live.GeminiLiveDriver(
             config, clock=RecordingClock(self.log), streaming=streaming

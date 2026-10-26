@@ -105,6 +105,25 @@ has none either, labels the ledger's entry with that role. Whether either takes 
 harness fingerprint covers (an external driver's identity, for an external driver), and from the
 model configuration, which the run hash covers.
 
+### Reasoning efforts
+
+`reasoning_efforts` (top level, optional) lists the `reasoning_effort` values a model takes when
+it rejects some that its API would send: `configs/models/gemini-3.8-live.yaml` takes only
+`provider_default` and `fixed`, because 3.8 Live rejects a thinking setting. The preset's
+`reasoning_effort` must be one of them, and a run asking for another is refused before it starts,
+from the command line, a run plan or Harbor.
+
+### Provider options
+
+`provider_options` (top level) sets wire options of the API that its driver declares
+(`compat.provider_options`). Of the registered APIs only `gemini_live` takes them, and a Gemini
+Live model sets each of `tool_behavior`, `completion_signal`, `input_transport` and
+`tool_response_scheduling`: a model without them, a raw model id among them, is refused before
+the run. `history_format` (`native_tools` or `tool_transcript`: how past function calls are
+replayed into a rebuilt session) is optional. The allowed values are in `LIVE_PROTOCOL_OPTIONS`
+(`realtime_framework/providers/gemini/live.py`), and the Gemini presets in `configs/models` set
+the combinations their models need.
+
 ### Streaming settings
 
 `streaming` (top level, optional) sets what a live API keeps of a native-streaming session
@@ -169,9 +188,9 @@ A model that needs a new wire protocol gets a driver:
    unsupported, and a context policy the driver cannot render is refused.
    Declare `deployment` (`Deployment`: catalog family and provider, default key variable),
    `compat` (`Compat`: the API's restrictions the pre-run checks read: whether every request
-   sends an output limit, the `provider_options` a model may set with their allowed values, and
-   the reasoning efforts the driver maps; `Compat()` for none) and `model_defaults` (per-model
-   ModelConfig defaults, usually `{}`). A driver that lists
+   sends an output limit, the [provider options](#provider-options) a model may or must set with
+   their allowed values, and the reasoning efforts the driver maps; `Compat()` for none) and
+   `model_defaults` (per-model ModelConfig defaults, usually `{}`). A driver that lists
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
    [streaming settings](#streaming-settings) (a dict), and takes `streaming`: the
    native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`. An external
@@ -237,8 +256,8 @@ driver as a [model API](#add-a-model-api).
    ```
 
    `stream`, `include_usage` and `upstream_provider` belong to registered APIs; per-model
-   settings go in the class's `model_defaults`. A framework class is selected by its registered
-   name, not by its path.
+   settings go in the class's `model_defaults`, or in the preset's `provider_options` where
+   `compat` declares them. A framework class is selected by its registered name, not by its path.
 
 Run it with `-m <name>`. Every lookup of the catalog imports the class and checks these
 declarations, so a broken driver stops every run until its preset is fixed or removed. The run

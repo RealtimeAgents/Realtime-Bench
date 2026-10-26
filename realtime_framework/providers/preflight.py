@@ -22,11 +22,7 @@ for the API key, and are now reported ahead of a missing key.
 from __future__ import annotations
 
 from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.providers.gemini.live import GeminiLiveDriver, live_options
 from realtime_framework.providers.registry import adapter_class
-
-_GEMINI_EXTENDED_THINKING = "gemini-3.8-live-extended-thinking"
-_GEMINI_FLASH_LIVE = "gemini-3.1-flash-live-preview"
 
 
 class UnsupportedTokenBudget(ValueError):
@@ -142,8 +138,6 @@ def check_config(driver, config) -> None:
             "declare endpoint.native_output_limit in the model YAML"
         )
     check_provider_options(compat, config)
-    if issubclass(driver, GeminiLiveDriver):
-        _check_live_model_contract(config)
     if (
         driver.capabilities.request_size_estimation
         and config.context_window_tokens is not None
@@ -153,55 +147,27 @@ def check_config(driver, config) -> None:
 
 
 def check_provider_options(compat, config) -> None:
-    """The model's provider_options against the option table its API's compat declares."""
-    api, options = config.adapter_type, config.provider_options
-    unknown = set(options) - set(compat.provider_options)
+    """The model's provider_options against the option table its API's compat declares. What
+    one model of the API takes and another does not is in each model's YAML: its options, and
+    the reasoning efforts the catalog takes for it (providers/registry.py load_definitions)."""
+    api, options, table = config.adapter_type, config.provider_options, compat.provider_options
+    unknown = set(options) - set(table)
     if unknown:
         raise ValueError(f"Unknown {api} provider_options: {sorted(unknown)}")
-    for name, (default, allowed) in compat.provider_options.items():
-        value = options.get(name, default)
-        if value not in allowed:
-            raise ValueError(f"{api} {name} must be one of {list(allowed)}, got {value!r}")
-
-
-def _check_live_model_contract(config) -> None:
-    """Reject setup combinations that violate the selected Live model's API contract."""
-    options = live_options(config)
-    model_name = str(config.model_name).rsplit("/", 1)[-1]
-    if model_name == _GEMINI_FLASH_LIVE:
-        # Ahead of the rule below, which would reject blocking with silent responses again.
-        fixes = []
-        if options["tool_behavior"] != "blocking":
-            fixes.append("tool_behavior=blocking")
-        if options["tool_response_scheduling"] == "silent":
-            fixes.append("tool_response_scheduling=omit")
-        if fixes:
+    resolved = {name: options.get(name, default) for name, (default, _) in table.items()}
+    for name, (_, allowed) in table.items():
+        if resolved[name] not in allowed:
             raise ValueError(
-                f"{_GEMINI_FLASH_LIVE} calls functions synchronously only; use "
-                + " and ".join(fixes)
+                f"{api} {name} must be one of {list(allowed)}, got {resolved[name]!r}"
             )
-    if (
-        options["tool_response_scheduling"] == "silent"
-        and options["tool_behavior"] != "non_blocking"
-    ):
-        raise ValueError("Silent Gemini tool responses require non-blocking tools")
-    if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
+    missing = [name for name in compat.required_provider_options if name not in options]
+    if missing:
         raise ValueError(
-            "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"
+            f"The {api} API requires provider_options {missing}; set them in the model YAML"
         )
-    if model_name != _GEMINI_EXTENDED_THINKING:
-        return
-    invalid = []
-    if config.reasoning_effort not in {"low", "medium", "high"}:
-        invalid.append("reasoning_effort must be low, medium, or high")
-    if options["tool_behavior"] != "non_blocking":
-        invalid.append("tool_behavior must be non_blocking")
-    if options["completion_signal"] != "interaction_idle":
-        invalid.append("completion_signal must be interaction_idle")
-    if options["tool_response_scheduling"] == "silent":
-        invalid.append("function scheduling is unsupported; use tool_response_scheduling=omit")
-    if invalid:
-        raise ValueError(f"{_GEMINI_EXTENDED_THINKING} requires " + "; ".join(invalid))
+    for (name, value), (other, required) in compat.provider_option_requires.items():
+        if resolved[name] == value and resolved[other] != required:
+            raise ValueError(f"{api} {name}={value} requires {other}={required}")
 
 
 def check_choice_task(driver, task) -> None:

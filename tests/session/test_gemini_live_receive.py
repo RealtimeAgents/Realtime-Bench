@@ -41,10 +41,20 @@ from realtime_framework.entity.model import (
 from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.request import build_request, system_block
+from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.gemini.session import Delivery
 
 HANG = object()  # script step: the server sends nothing more
+
+
+def yaml_options(model: str) -> dict:
+    """The provider_options of the model YAML (configs/models) that names ``model``; a model id
+    no YAML names has none, and the driver takes its defaults (live.py live_options)."""
+    for entry in catalog.CATALOG.values():
+        if entry.model_name == model:
+            return entry.defaults["provider_options"]
+    return {}
 
 
 class FakeSocket:
@@ -138,7 +148,7 @@ class Rig:
             adapter_type="gemini_live",
             model_name=model,
             api_key="replay-dummy-key",
-            **live.GeminiLiveDriver.model_defaults.get(model, {}),
+            provider_options=yaml_options(model),
         )
         self.driver = live.GeminiLiveDriver(config, clock=RecordingClock(self.log))
         self.driver.bind_trace(UNTRACED)

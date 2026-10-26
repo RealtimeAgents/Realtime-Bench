@@ -217,8 +217,8 @@ class ContextPolicy:
             )
         if path.tool_call_replay is None:
             return path
-        # Gemini Live takes the format from its maintained model preset (gemini/live.py
-        # GeminiLiveDriver.model_defaults); other models keep the driver default (LIVE_OPTIONS).
+        # Gemini Live takes the format from the model YAML's provider_options; a model that sets
+        # none keeps the row's.
         return replace(
             path,
             tool_call_replay=provider_options.get("history_format", path.tool_call_replay),

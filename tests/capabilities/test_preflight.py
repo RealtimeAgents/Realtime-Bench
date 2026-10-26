@@ -338,72 +338,63 @@ def test_gemini_options(options, message):
     )
 
 
+# Every wire option of Gemini Live, as a model YAML sets them (GeminiLiveDriver.compat).
+GEMINI_OPTIONS = {
+    "tool_behavior": "non_blocking",
+    "completion_signal": "turn_complete",
+    "input_transport": "client_content",
+    "tool_response_scheduling": "when_idle",
+}
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{}, {name: value for name, value in GEMINI_OPTIONS.items() if name != "input_transport"}],
+    ids=["none", "one-left-out"],
+)
+def test_gemini_model_without_its_options(options):
+    """No driver default stands in for a Gemini Live model's wire options: a model that does not
+    set each one, a raw model id (which has no YAML) or a YAML without them, is refused."""
+    missing = [name for name in GEMINI_OPTIONS if name not in options]
+    fails(
+        lambda: episode(gemini(model_name="gemini-other", provider_options=options)),
+        f"The gemini_live API requires provider_options {missing}; set them in the model YAML",
+    )
+    episode(gemini(model_name="gemini-other", provider_options=GEMINI_OPTIONS))
+
+
+def test_gemini_silent_responses_need_non_blocking_tools():
+    options = {**GEMINI_OPTIONS, "tool_behavior": "blocking", "tool_response_scheduling": "silent"}
+    fails(
+        lambda: episode(gemini(model_name="gemini-other", provider_options=options)),
+        "gemini_live tool_response_scheduling=silent requires tool_behavior=non_blocking",
+    )
+
+
 EXTENDED = "gemini-3.8-live-extended-thinking"
 
 
 @pytest.mark.parametrize(
-    "config, message",
-    [
-        (
-            gemini(model_name="gemini-3.8-live", reasoning_effort="fixed",
-                   provider_options={"tool_response_scheduling": "silent"}),
-            "Silent Gemini tool responses require non-blocking tools",
-        ),
-        (
-            gemini(model_name="gemini-3.1-flash-live-preview",
-                   provider_options={"tool_behavior": "non_blocking"}),
-            "gemini-3.1-flash-live-preview calls functions synchronously only; "
-            "use tool_behavior=blocking",
-        ),
-        # Both 3.1 faults in one message, so fixing one does not raise the other.
-        (
-            gemini(model_name="gemini-3.1-flash-live-preview",
-                   provider_options={"tool_behavior": "non_blocking",
-                                     "tool_response_scheduling": "silent"}),
-            (
-                "gemini-3.1-flash-live-preview calls functions synchronously only; "
-                "use tool_behavior=blocking and tool_response_scheduling=omit"
-            ),
-        ),
-        (
-            gemini(model_name="gemini-3.1-flash-live-preview",
-                   provider_options={"tool_response_scheduling": "silent"}),
-            (
-                "gemini-3.1-flash-live-preview calls functions synchronously only; "
-                "use tool_response_scheduling=omit"
-            ),
-        ),
-        (
-            preset("gemini-3.8-live", reasoning_effort="low"),
-            "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed",
-        ),
-        (
-            preset(EXTENDED, reasoning_effort="none"),
-            f"{EXTENDED} requires reasoning_effort must be low, medium, or high",
-        ),
-        (
-            gemini(model_name=EXTENDED, reasoning_effort="low"),
-            (
-                f"{EXTENDED} requires tool_behavior must be non_blocking; "
-                "completion_signal must be interaction_idle"
-            ),
-        ),
-        (
-            gemini(model_name=EXTENDED, reasoning_effort="low", provider_options={
-                "tool_behavior": "non_blocking", "completion_signal": "interaction_idle",
-                "tool_response_scheduling": "silent",
-            }),
-            (
-                f"{EXTENDED} requires function scheduling is unsupported; "
-                "use tool_response_scheduling=omit"
-            ),
-        ),
-    ],
-    ids=["silent-blocking", "3.1-non-blocking", "3.1-non-blocking-silent", "3.1-silent",
-         "3.8-live-effort", "extended-effort", "extended-options", "extended-silent"],
+    "key, effort, supported",
+    [("gemini-3.8-live", "low", ["provider_default", "fixed"]),
+     (EXTENDED, "none", ["low", "medium", "high"])],
+    ids=["3.8-live", "extended"],
 )
-def test_gemini_model_contract(config, message):
-    fails(lambda: episode(config), message)
+def test_reasoning_efforts_of_a_gemini_model(capsys, tmp_path, key, effort, supported):
+    """3.8 Live rejects thinking_config, and 3.8 Extended Thinking takes low, medium or high
+    only: each YAML names the efforts its model takes (reasoning_efforts), and every entry point
+    holds a run to them before it starts."""
+    message = f"{key} reasoning_effort must be one of {supported}, got {effort!r}"
+    fails(lambda: catalog.validate_reasoning_effort(key, effort), message)
+    usage_error(
+        capsys,
+        runner_main("--model", key, "--task", WEB, "--clock", "wall", "--reasoning-effort", effort),
+        message,
+    )
+    fails(
+        plan(tmp_path, f"models: [{{key: {key}, reasoning_effort: {effort}}}]\n"),
+        f"models[0].reasoning_effort for {key!r} must be one of {supported}",
+    )
 
 
 @pytest.mark.parametrize("effort", ["xhigh", "max"])
@@ -416,17 +407,24 @@ def test_gemini_reasoning_effort(effort):
 
 
 @pytest.mark.parametrize(
-    "key, effort, message",
+    "config, message",
     [
-        # The model contract came from the driver's constructor, before initialize's fps check.
-        ("gemini-3.8-live", "low",
-         "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"),
+        # The provider options are checked with the model config, before initialize's fps check.
+        (
+            gemini(model_name="gemini-other", fps=2.0),
+            f"The gemini_live API requires provider_options {list(GEMINI_OPTIONS)}; set them in "
+            "the model YAML",
+        ),
         # The fps check came from initialize, before the session connect mapped the effort.
-        ("gemini-live", "xhigh", "gemini_live supports at most 1 fps; requested 2"),
+        (
+            preset("gemini-live", fps=2.0, reasoning_effort="xhigh"),
+            "gemini_live supports at most 1 fps; requested 2",
+        ),
     ],
+    ids=["options", "effort"],
 )
-def test_episode_rule_order(key, effort, message):
-    fails(lambda: episode(preset(key, fps=2.0, reasoning_effort=effort)), message)
+def test_episode_rule_order(config, message):
+    fails(lambda: episode(config), message)
 
 
 # The context policy against the encoder's declarations (check_context_policy, the last rule of
@@ -1020,6 +1018,43 @@ def test_streaming_settings_of_a_model_yaml(tmp_path, endpoint, streaming, messa
     models = tmp_path / "models"
     models.mkdir()
     (models / "m.yaml").write_text(f"endpoint: {endpoint}\nstreaming: {streaming}\n")
+    fails(lambda: catalog.load_definitions(models), message)
+
+
+EFFORTS = [*catalog.DEFAULT_EFFORTS, "fixed"]
+
+
+@pytest.mark.parametrize(
+    "fields, message",
+    [
+        (
+            "endpoint: {api: moonshot, model: kimi-k3}\nprovider_options: {tool_behavior: x}\n",
+            "m.yaml: the moonshot API takes no provider_options",
+        ),
+        (
+            "endpoint: {api: gemini_live, model: g}\nprovider_options: [blocking]\n",
+            "m.yaml: provider_options must be a mapping",
+        ),
+        *[
+            (
+                f"endpoint: {{api: gemini_live, model: g}}\nreasoning_efforts: {efforts}\n",
+                f"m.yaml: reasoning_efforts must be distinct values among {EFFORTS}",
+            )
+            for efforts in ("low", "[]", "[ultra]", "[low, low]", "[[low]]")
+        ],
+        # The default effort, provider_default, is not among them.
+        (
+            "endpoint: {api: gemini_live, model: g}\nreasoning_efforts: [fixed]\n",
+            "m.yaml: reasoning_effort must be one of ['fixed']",
+        ),
+    ],
+    ids=["options-not-taken", "options-list", "efforts-string", "efforts-empty",
+         "efforts-unknown", "efforts-repeated", "efforts-nested", "default-effort-left-out"],
+)
+def test_options_and_efforts_of_a_model_yaml(tmp_path, fields, message):
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "m.yaml").write_text(fields)
     fails(lambda: catalog.load_definitions(models), message)
 
 

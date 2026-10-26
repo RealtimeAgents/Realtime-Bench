@@ -133,6 +133,12 @@ class Compat:
     # The ModelConfig.provider_options the encoder reads: each name, its default and its allowed
     # values. Any other option is refused.
     provider_options: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
+    # The options a model must set (in its YAML): their defaults stand in for no model.
+    required_provider_options: tuple[str, ...] = ()
+    # An option value that holds only with another option's value: (name, value) -> (name, value).
+    provider_option_requires: dict[tuple[str, str], tuple[str, str]] = field(
+        default_factory=dict
+    )
     # The reasoning_effort values the encoder maps (None: the provider default); None takes any.
     reasoning_efforts: tuple[str | None, ...] | None = None
 

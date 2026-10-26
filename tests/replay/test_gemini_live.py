@@ -11,16 +11,14 @@ WebSocket, the client frames of every connection in arrival order, plus each dec
 action, usage and commit.
 
 Scripts:
-- the long scenario for the two maintained presets (live.py _CLIENT_CONTENT_TOOLS, _TOOL_TRANSCRIPT,
-  GeminiLiveDriver.model_defaults), which differ in the completion signal and the tool
-  acknowledgement;
-- the driver defaults, reached by a model id without a preset (evaluation/runner.py main):
-  realtime_input observations and native_tools history (live.py LIVE_PROTOCOL_OPTIONS,
-  LIVE_HISTORY_OPTIONS);
+- the long scenario for two maintained models (their YAMLs' provider_options, configs/models),
+  which differ in the completion signal and the tool acknowledgement;
+- a model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS; history_format
+  left to LIVE_HISTORY_OPTIONS): realtime_input observations and native_tools history;
 - a resume that the server rejects, which falls back to replaying the history
   (live.py GeminiLiveDriver._sync_history);
-- the 3.1 Flash Live preset (live.py GeminiLiveDriver.model_defaults) on the driver-default script:
-  blocking calls, acknowledged without scheduling, and a goAway that replays the history.
+- 3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script: blocking calls,
+  acknowledged without scheduling, and a goAway that replays the history.
 """
 
 from __future__ import annotations
@@ -40,6 +38,7 @@ import realtime_framework.providers.registry as catalog
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
+from realtime_framework.providers.gemini.live import LIVE_PROTOCOL_OPTIONS
 
 from . import baseline
 from .build import Episode, build_episode
@@ -160,15 +159,14 @@ def interaction_idle(k: int, usage: dict) -> list[dict]:
 @dataclass(frozen=True)
 class Preset:
     name: str
-    model: str  # catalog key, or the model id of a model without a preset
+    model: str  # catalog key, or a model id no YAML names
     history_format: str
     # what each queued acknowledgement adds (gemini/session.py SessionCore.tool_response_options)
     ack_options: dict
     completion: Callable[[int, dict], list[dict]]
 
 
-# The two maintained presets (live.py _CLIENT_CONTENT_TOOLS, _TOOL_TRANSCRIPT,
-# GeminiLiveDriver.model_defaults) and the driver defaults (live.py LIVE_PROTOCOL_OPTIONS,
+# Two maintained models (configs/models) and the driver defaults (live.py LIVE_PROTOCOL_OPTIONS,
 # LIVE_HISTORY_OPTIONS).
 TOOL_TRANSCRIPT = Preset(
     "tool-transcript",
@@ -185,8 +183,11 @@ EXTENDED_THINKING = Preset(
     interaction_idle,
 )
 DRIVER_DEFAULT = Preset("driver-default", "replay-gemini-live", "native_tools", {}, turn_complete)
+# A model sets each wire option (providers/preflight.py check_provider_options); these are the
+# driver's defaults.
+DRIVER_DEFAULT_OPTIONS = {name: default for name, (default, _) in LIVE_PROTOCOL_OPTIONS.items()}
 # 3.1 Flash Live calls functions synchronously only and has no function scheduling
-# (live.py GeminiLiveDriver.model_defaults; providers/preflight.py _check_live_model_contract).
+# (configs/models/gemini-live.yaml).
 FLASH_LIVE = Preset("flash-live", "gemini-live", "tool_transcript", {}, turn_complete)
 
 
@@ -534,14 +535,18 @@ DEFAULT_SCENARIO = [
 
 
 def test_driver_default_short(live_env, tmp_path):
-    """A model id without a preset runs on the driver defaults (live.py LIVE_PROTOCOL_OPTIONS,
-    LIVE_HISTORY_OPTIONS, live_options). The goAway of decision 1 comes without a resumption handle,
-    so the session is replayed at once (live.py GeminiLiveDriver._sync_history), in the native_tools
-    format with the thought-signature sentinel (gemini/session.py REPLAY_THOUGHT_SIGNATURE,
-    SessionCore._tool_contents)."""
+    """A model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS) and leaves
+    history_format to its default (LIVE_HISTORY_OPTIONS, live_options). The goAway of decision 1
+    comes without a resumption handle, so the session is replayed at once (live.py
+    GeminiLiveDriver._sync_history), in the native_tools format with the thought-signature sentinel
+    (gemini/session.py REPLAY_THOUGHT_SIGNATURE, SessionCore._tool_contents)."""
     preset = DRIVER_DEFAULT
-    config = ModelConfig(  # runner.py main for --adapter gemini_live --model <id>
-        adapter_type="gemini_live", model_name=preset.model, fps=FPS, reasoning_effort="low"
+    config = ModelConfig(
+        adapter_type="gemini_live",
+        model_name=preset.model,
+        fps=FPS,
+        reasoning_effort="low",
+        provider_options=DRIVER_DEFAULT_OPTIONS,
     )
     turns = [
         turn_script(k, step, preset, resumable=k != 1, go_away=k == 1)
@@ -581,8 +586,8 @@ def test_driver_default_short(live_env, tmp_path):
 
 
 def test_flash_live_short(live_env, tmp_path):
-    """The 3.1 Flash Live preset (live.py GeminiLiveDriver.model_defaults) on the driver-default
-    script. Every setup declares the functions BLOCKING (live.py
+    """3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script. Every setup
+    declares the functions BLOCKING (live.py
     GeminiLiveDriver._function_declarations), and each acknowledgement is the queued response alone,
     without scheduling or will_continue (gemini/session.py SessionCore.tool_response_options;
     live.py GeminiLiveDriver._events). The goAway of decision 1 comes without a resumption handle,
@@ -671,7 +676,11 @@ def test_realtime_input_video_follows_the_model_input_rate(live_env, tmp_path):
     clock = _SleepRecordingClock()
     preset = DRIVER_DEFAULT
     config = ModelConfig(
-        adapter_type="gemini_live", model_name=preset.model, fps=0.25, reasoning_effort="low"
+        adapter_type="gemini_live",
+        model_name=preset.model,
+        fps=0.25,
+        reasoning_effort="low",
+        provider_options=DRIVER_DEFAULT_OPTIONS,
     )
     scenario = [Step(CLICK_NAME), Step(CLICK_AGREE), Step(CLICK_NAME)]
     turns = [turn_script(k, step, preset) for k, step in enumerate(scenario)]

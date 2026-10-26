@@ -33,6 +33,7 @@ from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.request import build_request, system_block
+from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.gemini import live
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 
@@ -378,7 +379,7 @@ def test_gemini_live_session(tmp_path, monkeypatch):
                 model_name=model,
                 api_base_url=f"https://127.0.0.1:{stub.port}",
                 api_key_env="REPLAY_TRACE_KEY",
-                **live.GeminiLiveDriver.model_defaults[model],
+                provider_options=catalog.get("gemini-live").defaults["provider_options"],
             )
         )
         original = driver.sync_history

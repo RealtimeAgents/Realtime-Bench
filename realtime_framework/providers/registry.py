@@ -42,12 +42,12 @@ def load_project_secrets(path: Path = DEFAULT_SECRETS_FILE) -> bool:
 # Catalog policy
 """Leaderboard status of catalog cells, independent of user connection YAMLs.
 
-Per-model settings no external source supplies (wire protocol presets, routes, measured context
-accounting) are declared by each API's driver class as ``model_defaults``. As in Harbor's LiteLLM
-agents, nothing restates what LiteLLM's bundled model map knows: the native output limit comes
-from that map (see litellm_output_limit), and reasoning_effort is the connection YAML's value,
-passed through for the driver or provider to accept or reject. Pricing is not inferred here;
-unreported cost remains unknown.
+Per-model settings no external source supplies (routes, measured context accounting) are
+declared by each API's driver class as ``model_defaults``; a model's wire options are its YAML's
+provider_options. As in Harbor's LiteLLM agents, nothing restates what LiteLLM's bundled model
+map knows: the native output limit comes from that map (see litellm_output_limit), and
+reasoning_effort is the connection YAML's value, passed through for the driver or provider to
+accept or reject. Pricing is not inferred here; unreported cost remains unknown.
 """
 
 CATALOG_POLICY = {
@@ -265,12 +265,15 @@ def load_definitions(directory):
         if not isinstance(value, dict):
             raise ValueError(f"{filename}: model definition must be a mapping")  # noqa: TRY004
         if (
-            set(value) - {"endpoint", "reasoning_effort", "context_preset", "streaming"}
+            set(value) - {
+                "endpoint", "reasoning_effort", "reasoning_efforts", "provider_options",
+                "context_preset", "streaming",
+            }
             or "endpoint" not in value
         ):
             raise ValueError(
                 f"{filename}: use an endpoint block, plus optional reasoning_effort, "
-                "context_preset and streaming"
+                "reasoning_efforts, provider_options, context_preset and streaming"
             )
         key = Path(filename).stem
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in seen:
@@ -308,6 +311,29 @@ def load_definitions(directory):
             )
         if api in {"openrouter", "openai_decisions"}:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
+        if "provider_options" in value:
+            # Checked against the driver's compat before the run (providers/preflight.py
+            # check_provider_options), as options that come another way are.
+            if not driver.compat.provider_options:
+                raise ValueError(f"{filename}: the {api} API takes no provider_options")
+            if not isinstance(value["provider_options"], dict):
+                raise ValueError(f"{filename}: provider_options must be a mapping")
+            definition["defaults"]["provider_options"] = dict(value["provider_options"])
+        if "reasoning_efforts" in value:
+            # The efforts this model takes, some of its API's: a model may reject a setting its
+            # API sends.
+            narrowed = value["reasoning_efforts"]
+            if (
+                not isinstance(narrowed, list)
+                or not narrowed
+                or any(effort not in definition["reasoning_efforts"] for effort in narrowed)
+                or len(set(narrowed)) != len(narrowed)
+            ):
+                raise ValueError(
+                    f"{filename}: reasoning_efforts must be distinct values among "
+                    f"{definition['reasoning_efforts']}"
+                )
+            definition["reasoning_efforts"] = narrowed
         effort = value.get(
             "reasoning_effort",
             "provider_default" if driver.capabilities.accepts_reasoning_effort else "fixed",
@@ -498,11 +524,12 @@ def _check_driver(target: str, driver: type) -> None:
 """Load model connection YAMLs and resolve API facts from the driver classes.
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
-catalog identifier. Per-model wire presets are the drivers' model_defaults; users configure
-connections, reasoning effort and the context-policy preset. The loader imports the driver
-module of each API it reads, an external driver's included, with what those modules import (the
-OpenAI SDK, websockets and Pillow among them), and reading LiteLLM's model map imports litellm
-(_litellm_model_map). The Gemini SDK is imported only when its driver is constructed.
+catalog identifier. Users configure connections, reasoning effort and the efforts a model takes,
+wire options (provider_options) and the context-policy preset; the drivers' model_defaults add
+what no YAML states. The loader imports the driver module of each API it reads, an external
+driver's included, with what those modules import (the OpenAI SDK, websockets and Pillow among
+them), and reading LiteLLM's model map imports litellm (_litellm_model_map). The Gemini SDK is
+imported only when its driver is constructed.
 """
 
 import difflib as difflib

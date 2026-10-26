@@ -58,10 +58,11 @@ _SESSION_RELEASE_GRACE_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
 
 
-# Wire options carried in ModelConfig.provider_options: (default, allowed values). Gemini 3.8
-# Extended Thinking requires asynchronous tool declarations and remains active across
-# intermediate utterance-level turnComplete messages until interaction_status becomes IDLE.
-# Ordered screenshot/text turns (client_content) avoid synthesizing an audio activity for GUI input.
+# Wire options carried in ModelConfig.provider_options: (default, allowed values). A model sets
+# each in its YAML (GeminiLiveDriver.compat). Gemini 3.8 Extended Thinking requires asynchronous
+# tool declarations and remains active across intermediate utterance-level turnComplete messages
+# until interaction_status becomes IDLE. Ordered screenshot/text turns (client_content) avoid
+# synthesizing an audio activity for GUI input.
 LIVE_PROTOCOL_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
@@ -76,15 +77,6 @@ LIVE_HISTORY_OPTIONS = {
     "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
 LIVE_OPTIONS = {**LIVE_PROTOCOL_OPTIONS, **LIVE_HISTORY_OPTIONS}
-
-# Per-model presets, merged into the catalog entry's defaults (providers/registry.py).
-_CLIENT_CONTENT_TOOLS = {
-    "tool_behavior": "non_blocking",
-    "completion_signal": "turn_complete",
-    "input_transport": "client_content",
-    "tool_response_scheduling": "silent",
-}
-_TOOL_TRANSCRIPT = {"history_format": "tool_transcript"}  # context policy, see above
 
 
 _RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
@@ -229,30 +221,16 @@ class GeminiLiveDriver(SessionLifecycle):
         vendor="google",
         litellm_provider="gemini",
     )
-    compat = Compat(provider_options=LIVE_OPTIONS, reasoning_efforts=LIVE_REASONING_EFFORTS)
-    model_defaults: ClassVar[dict[str, dict]] = {
-        # 3.1 Flash Live has no asynchronous function calling: a call blocks until its
-        # response, and response scheduling does not apply.
-        "gemini-3.1-flash-live-preview": {
-            "provider_options": {
-                **_CLIENT_CONTENT_TOOLS,
-                "tool_behavior": "blocking",
-                "tool_response_scheduling": "omit",
-                **_TOOL_TRANSCRIPT,
-            },
+    compat = Compat(
+        provider_options=LIVE_OPTIONS,
+        required_provider_options=tuple(LIVE_PROTOCOL_OPTIONS),
+        # Response scheduling applies to non-blocking functions only.
+        provider_option_requires={
+            ("tool_response_scheduling", "silent"): ("tool_behavior", "non_blocking")
         },
-        "gemini-3.8-live": {
-            "provider_options": {**_CLIENT_CONTENT_TOOLS, **_TOOL_TRANSCRIPT},
-        },
-        "gemini-3.8-live-extended-thinking": {
-            "provider_options": {
-                **_CLIENT_CONTENT_TOOLS,
-                "completion_signal": "interaction_idle",
-                "tool_response_scheduling": "omit",
-                **_TOOL_TRANSCRIPT,
-            },
-        },
-    }
+        reasoning_efforts=LIVE_REASONING_EFFORTS,
+    )
+    model_defaults: ClassVar[dict[str, dict]] = {}
     # The API's native-streaming settings: the setup's context_window_compression. Once the
     # session reaches compression_trigger_tokens, the server shortens it to
     # compression_target_tokens, from the start of a user turn, and says nothing of what it
