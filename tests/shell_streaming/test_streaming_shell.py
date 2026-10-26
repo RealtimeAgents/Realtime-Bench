@@ -706,6 +706,69 @@ def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
     assert "RuntimeError: the page is gone" in logged
 
 
+def _gives_up_the_key(env, clock) -> None:
+    """The wall clock's key-release timer gives a key up for good: it latches the run invalid
+    and, on its own thread, reports it through on_invalid (sandbox/actions.py
+    _wall_release_due)."""
+    invalid = {"category": "environment", "reason": "wall_key_release_failed", "detail": "keyup"}
+    env._invalid_run = invalid
+    clock.start_thread(lambda: env.on_invalid(invalid), name="release-timer")
+
+
+def _gives_up_during_the_release(env, clock):
+    release = env.release_inputs
+
+    def release_inputs():
+        release()
+        _gives_up_the_key(env, clock)
+
+    env.release_inputs = release_inputs
+
+
+def _gives_up_while_the_abort_runs(env, clock):
+    clock.timer(6.75, lambda: _gives_up_the_key(env, clock))
+
+
+def _abort_takes_a_second(agent, clock):
+    abort = agent.abort
+
+    def slow_abort(generation=None):
+        abort(generation)
+        clock.sleep(1.0)
+
+    agent.abort = slow_abort
+
+
+@pytest.mark.parametrize(
+    ("env_setup", "agent_setup", "released_at"),
+    [
+        (_gives_up_while_the_abort_runs, _abort_takes_a_second, 7.0),
+        (_gives_up_during_the_release, None, 6.5),
+    ],
+    ids=["abort", "release"],
+)
+def test_a_failure_the_environment_reports_once_the_snapshot_is_frozen_is_only_logged(
+    env_setup, agent_setup, released_at
+):
+    """Decision 30, as on the turn-based shell: the snapshot is read from 6 s to 6.5 s. The
+    wall clock's key-release timer gives a key up for good after it, at 6.75 s while the reply's
+    abort still runs, which the episode waits for, or during the release of the inputs: the
+    failure is only logged, as one of the cleanup's own is, and the termination and the run's
+    record on env both say the run is valid."""
+    logs: list[str] = []
+    termination, env, _ = _episode(
+        6.0, ONE_CLICK, env_setup=env_setup, agent_setup=agent_setup, logs=logs
+    )
+    assert env.released_at == released_at
+    assert termination == Termination("time_limit", "deadline", 6.0, 6.5, 6.0, 6.5, None)
+    assert (env._stop_reason, env._invalid_run) == ("time_limit", None)
+    (logged,) = [line for line in logs if line.startswith("[cleanup]")]
+    assert logged == (
+        "[cleanup] environment:wall_key_release_failed once the snapshot was frozen, only "
+        "logged — keyup"
+    )
+
+
 def _log_raising_on(prefix: str):
     """A log whose stdout is gone for the lines that start with ``prefix``."""
 

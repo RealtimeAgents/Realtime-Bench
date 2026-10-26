@@ -91,6 +91,7 @@ from realtime_framework.evaluation.shell import (
     ShellEnvironment,
     _escaped_termination,
     _invalid_record,
+    _only_logged,
 )
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
@@ -436,6 +437,7 @@ class _StreamingShell:
                 env._termination_snapshot_captured = True
                 self._snapshot_read = True
         env._termination_snapshot_error = error
+        self.lanes.gate.freeze()
         at = self._read()  # when the read returned
         self._frozen_at = at
         self.post(SnapshotFrozen(at, at, error))
@@ -464,6 +466,7 @@ class _StreamingShell:
         it whatever else could be written."""
         self._termination = termination
         env = self.env
+        late = None
         try:
             env._stop_reason = termination.stop_reason
             invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
@@ -473,6 +476,10 @@ class _StreamingShell:
                 or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
             ):
                 env._invalid_run = _invalid_record(invalid)
+            # The kernel was not told of one latched once the snapshot was frozen (decision 30).
+            late = latched if invalid is None else None
+            if late is not None:
+                env._invalid_run = None
             end_s = termination.ended_at
             snapshot_s = termination.snapshot_at if self._snapshot_read else None
             env._termination = {
@@ -485,6 +492,8 @@ class _StreamingShell:
             self.lanes.close()
             self._push_lane.close()
             self._abort_lane.close()
+        if late is not None:
+            self.log(_only_logged(late))
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell

@@ -134,7 +134,9 @@ class ShellEnvironment(Protocol):
     _last_rejected_by_guest: bool
     frame_ages: list[float]  # each reported decision's frame age, which the shell appends
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
-    # key-release timer, on its own thread, invalidates the run.
+    # key-release timer, on its own thread, invalidates the run. Once the snapshot is frozen, an
+    # invalid run the environment latches is only logged, and the run's record is the
+    # termination's (decision 30).
     on_invalid: Callable[[dict], None] | None
 
     def capture(self) -> Observation: ...
@@ -300,6 +302,16 @@ def _invalid_record(invalid: Invalidated) -> dict:
     return record
 
 
+def _only_logged(record: dict) -> str:
+    """The log line of an invalid run the environment latched once the snapshot was frozen: the
+    run's verdict stands, as for a failure of the cleanup's own (decisions 30, 33)."""
+    detail = record.get("detail")
+    return (
+        f"[cleanup] {record['category']}:{record['reason']} once the snapshot was frozen, only "
+        "logged" + (f" — {detail}" if detail else "")
+    )
+
+
 def _escaped_termination(
     kernel: Kernel,
     semantic: float,
@@ -371,7 +383,7 @@ class _Shell:
         if self.token:
             # Under the kernel's own horizon, a safety net for every advance.
             env.set_episode_horizon(self.config.max_ticks)
-        env.on_invalid = lambda record: self.post(_invalidated(record))
+        env.on_invalid = self._timer_latched
         env._drain_abandoned = self._drain_abandoned
         # A replay aid, opened and closed apart from the episode, which goes on without it.
         inputs = None
@@ -496,6 +508,12 @@ class _Shell:
             self.kernel.post(event)
             self._posted.append(event)
         self._wake.set()
+
+    def _timer_latched(self, record: dict) -> None:
+        """The wall clock's key-release timer latched an invalid run, on its own thread. Once the
+        snapshot is frozen the kernel is not told: the failure is only logged (_terminate)."""
+        if self._frozen_at is None:
+            self.post(_invalidated(record))
 
     def _record_inputs(self, call: str, events: list, *, raised: bool = False) -> None:
         if self._inputs is None:
@@ -677,12 +695,13 @@ class _Shell:
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
         itself in an operation that returned goes to the kernel with its own reason before the
-        command's answer (an action's, see _execute). One that raised raises here, with no post:
-        its caller answers with the error."""
+        command's answer (an action's, see _execute), unless the snapshot is frozen: then it is
+        only logged (_terminate). One that raised raises here, with no post: its caller answers
+        with the error."""
         latched = getattr(self.env, "_invalid_run", None)
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
-        if invalid is not None and invalid is not latched:
+        if invalid is not None and invalid is not latched and self._frozen_at is None:
             self._invalidate(_invalidated(invalid))
         return result
 
@@ -1106,6 +1125,10 @@ class _Shell:
             or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
         ):
             env._invalid_run = _invalid_record(invalid)
+        # The kernel was not told of one latched once the snapshot was frozen (decision 30).
+        late = latched if invalid is None else None
+        if late is not None:
+            env._invalid_run = None
         env._stop_reason = termination.stop_reason
         ticks_per_s = self.config.env_fps if self.token else 1.0
         end_s = termination.ended_at / ticks_per_s
@@ -1123,6 +1146,8 @@ class _Shell:
         }
         env._think_spent = self.policy.spent
         env._dropped_intermediate_frames = self.policy.dropped_frames
+        if late is not None:
+            self.log(_only_logged(late))
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no

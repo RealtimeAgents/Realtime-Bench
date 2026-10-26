@@ -47,8 +47,9 @@ whoever sends those all the same, and tests/shell_streaming/test_env_gate.py hol
 
 Like the turn-based shell, the gate compares ``_invalid_run`` before and after each operation and
 posts what the environment latched itself before the operation's answer; it posts each record
-once. The wall clock's key-release timer latches one on its own thread and reports it through
-``on_invalid`` (GuestEnvironment._wall_release_due), which the shell points at ``latched``.
+once, and none once the snapshot is frozen (``freeze``). The wall clock's key-release timer
+latches one on its own thread and reports it through ``on_invalid``
+(GuestEnvironment._wall_release_due), which the shell points at ``latched``.
 
 Answers. A capture's is what the shell makes of the Observation: the shell keeps the frame for the
 agent and knows its identity for the frozen-stream check. An action's is ActionExecuted, read from
@@ -110,6 +111,7 @@ class EnvGate:
         self._holders: dict[threading.Event, str] = {}  # turn -> its kind
         self._line: deque[tuple[threading.Event, str]] = deque()  # in the order they asked
         self._posted: dict | None = None
+        self._frozen = False
 
     def reserve(
         self, kind: str = ALONE, *, after: threading.Event | None = None, ahead=False
@@ -157,15 +159,21 @@ class EnvGate:
                 self._grant()
 
     def latched(self, record: dict) -> None:
-        """Post the invalid-run record the environment latched itself, unless it was posted.
-        Posted under the mutex: an operation that finds the record claimed must not post its
-        answer before the claim's post. The kernel's inbox takes no gate lock, so no lock is
-        taken the other way round."""
+        """Post the invalid-run record the environment latched itself, unless it was posted or
+        the snapshot is frozen. Posted under the mutex: an operation that finds the record
+        claimed must not post its answer before the claim's post. The kernel's inbox takes no
+        gate lock, so no lock is taken the other way round."""
         with self._mutex:
-            if record is self._posted:
+            if record is self._posted or self._frozen:
                 return
             self._posted = record
             self._post(Invalidated(record["category"], record["reason"], record.get("detail")))
+
+    def freeze(self) -> None:
+        """The snapshot is frozen: what the environment latches from now on is only logged, as
+        the shell finishes the episode (decision 30)."""
+        with self._mutex:
+            self._frozen = True
 
     def _grant(self) -> None:
         """Give the gate to the waiters that may have it now, in line order (caller holds the

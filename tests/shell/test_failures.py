@@ -681,6 +681,52 @@ def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
     assert "RuntimeError: the page is gone" in logged
 
 
+class _GivesUpTheKey(Environment):
+    """The wall clock's key-release timer gives a key up for good: it latches the run invalid
+    and reports it through on_invalid (sandbox/actions.py _wall_release_due)."""
+
+    def _gives_up(self) -> None:
+        self._invalid_run = {
+            "category": "environment",
+            "reason": "wall_key_release_failed",
+            "detail": "keyup failed",
+        }
+        self.on_invalid(self._invalid_run)
+
+
+class _GivesUpDuringTheLastCommit(_GivesUpTheKey):
+    def record_lifecycle(self, record: dict) -> None:
+        super().record_lifecycle(record)
+        self._gives_up()
+
+
+class _GivesUpDuringTheRelease(_GivesUpTheKey):
+    def release_inputs(self) -> None:
+        super().release_inputs()
+        self._gives_up()
+
+
+@pytest.mark.parametrize(
+    "env_type", [_GivesUpDuringTheLastCommit, _GivesUpDuringTheRelease], ids=["commit", "release"]
+)
+def test_a_failure_the_environment_reports_once_the_snapshot_is_frozen_is_only_logged(env_type):
+    """Decision 30: the task ends right after decision 0's action, so the snapshot is read
+    before that decision's commit, and the inputs are released after it (decision 33). The wall
+    clock's key-release timer gives a key up for good during either, after the snapshot: the
+    failure is only logged, as one of the cleanup's own is, and the termination record and the
+    run's record on env both say the run is valid."""
+    episode = run("wall", 3.0, [Reply(0.5)], World(ends_after=1), env_type=env_type)
+    assert [call for call, _, _ in episode.env.calls][-2:] == ["snapshot", "release_inputs"]
+    assert episode.invalid is None
+    assert episode.env._stop_reason == episode.env._termination["stop_reason"] == "game_decided"
+    assert episode.trace.payloads("RunInvalidated") == []
+    (logged,) = [line for line in episode.logs if line.startswith("[cleanup]")]
+    assert logged == (
+        "[cleanup] environment:wall_key_release_failed once the snapshot was frozen, only "
+        "logged — keyup failed"
+    )
+
+
 class _Cancelled(BaseException):
     """As entity/model.py RetryCancelled, which is not an Exception."""
 
