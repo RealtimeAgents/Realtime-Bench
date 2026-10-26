@@ -912,8 +912,7 @@ def main():
     # A failure building the summary leaves one that says so (_write_emergency_summary).
     try:
         deltas = [x[2] for x in timeline]
-        # Billing uses complete provider-reported cost when available (OpenRouter), otherwise a
-        # versioned catalog rate card with modality and cache-read splits (direct providers).
+        # Billing uses the provider-reported cost (OpenRouter's) when it is complete.
         tok = getattr(agent, "token_usage", None) if agent is not None else None
         adapter_tok = tok
         tok = {"input_tokens": None, "output_tokens": None, "total_tokens": None, "responses": 0}
@@ -928,8 +927,6 @@ def main():
             tok["responses"] = token_accounting["responses"]
         cost_accounting = summarize_cost(
             token_accounting,
-            pricing=(catalog_entry.pricing if catalog_entry is not None else None),
-            provider=(catalog_entry.provider if catalog_entry is not None else None),
             # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
             unaccounted="not_accounted_streaming" if a.interaction_mode == "streaming" else None,
         )

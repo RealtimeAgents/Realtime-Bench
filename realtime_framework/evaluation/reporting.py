@@ -185,23 +185,6 @@ def save_evaluation(run_dir: Path, evaluation, *, error=None) -> Path:
 from decimal import Decimal as Decimal
 from decimal import InvalidOperation as InvalidOperation
 
-_MODALITY_COUNT = {
-    "text": "provider_text_input_tokens",
-    "image": "provider_image_input_tokens",
-    "video": "provider_video_input_tokens",
-    "audio": "provider_audio_input_tokens",
-}
-_CACHED_MODALITY_COUNT = {
-    "text": "provider_cached_text_input_tokens",
-    "image": "provider_cached_image_input_tokens",
-    "video": "provider_cached_video_input_tokens",
-    "audio": "provider_cached_audio_input_tokens",
-}
-_OUTPUT_MODALITY_COUNT = {
-    "text": "provider_text_output_tokens",
-    "audio": "provider_audio_output_tokens",
-}
-
 
 def _amount(value) -> Decimal | None:
     if isinstance(value, bool) or value is None:
@@ -217,12 +200,6 @@ def _json_amount(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.000000001")))
 
 
-def _complete_count(summary: dict, name: str) -> int | None:
-    value = (summary.get("counts") or {}).get(name) or {}
-    total = value.get("total") if value.get("complete") else None
-    return total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else None
-
-
 def _result(
     summary: dict,
     *,
@@ -231,9 +208,6 @@ def _result(
     reason: str | None,
     total: Decimal | None = None,
     known: Decimal | None = None,
-    rate_card=None,
-    components=None,
-    assumptions=None,
 ) -> dict:
     reported = summary.get("provider_reported_cost") or {}
     return {
@@ -246,37 +220,28 @@ def _result(
         "known_cost_usd": _json_amount(known) if known is not None else None,
         "reason": reason,
         "provider_reported_cost": reported,
-        "rate_card": rate_card,
-        "components": components or [],
-        "assumptions": assumptions or [],
+        # No catalog model has a rate card: the cost is the provider's or unknown.
+        "rate_card": None,
+        "components": [],
+        "assumptions": [],
     }
 
 
-def _unavailable(summary: dict, reason: str, *, rate_card=None, status="unavailable") -> dict:
+def _unavailable(summary: dict, reason: str) -> dict:
     reported = summary.get("provider_reported_cost") or {}
     known = _amount(reported.get("known_total_usd"))
     return _result(
         summary,
         source="provider_reported_usage_cost" if known is not None else "unavailable",
-        status="partial" if known is not None else status,
+        status="partial" if known is not None else "unavailable",
         reason=reason,
         known=known,
-        rate_card=rate_card,
     )
 
 
-def summarize_cost(
-    token_accounting: dict | None,
-    *,
-    pricing: dict | None = None,
-    provider: str | None = None,
-    unaccounted: str | None = None,
-) -> dict:
-    """Prefer a complete provider invoice amount, otherwise apply a versioned rate card.
-
-    A complete rate-card result requires complete provider totals and cache splits. Modality
-    details must reconcile unless the catalog explicitly declares a billing modality for the
-    unclassified positive remainder; missing data is never silently priced as text.
+def summarize_cost(token_accounting: dict | None, *, unaccounted: str | None = None) -> dict:
+    """The run's cost: the provider's reported total when it is complete, else unavailable, or
+    partial with the cost the provider did report.
     ``unaccounted`` is why a run accounts no response though it made some.
     """
     if not isinstance(token_accounting, dict) or not token_accounting.get("responses"):
@@ -293,260 +258,12 @@ def summarize_cost(
             total=reported_total,
             known=reported_total,
         )
-
-    if provider == "local":
-        return _unavailable(
-            token_accounting,
-            "local_compute_cost_not_monetized",
-            rate_card=pricing,
-            status="unmonetized",
-        )
-    if not isinstance(pricing, dict):
-        reason = (
-            "provider_reported_cost_incomplete"
-            if reported.get("responses_with_cost")
-            else "no_provider_cost_or_rate_card"
-        )
-        return _unavailable(token_accounting, reason)
-    if pricing.get("currency") != "USD" or pricing.get("unit") != "per_million_tokens":
-        return _unavailable(token_accounting, "unsupported_rate_card", rate_card=pricing)
-
-    rates = pricing.get("rates") or {}
-    input_rates = rates.get("input") or {}
-    cached_rates = rates.get("cached_input") or {}
-    cache_write_rates = {
-        "5m": rates.get("cache_write_5m_input") or {},
-        "1h": rates.get("cache_write_1h_input") or {},
-    }
-    output_rates = rates.get("output") or {}
-    provider_input = _complete_count(token_accounting, "provider_input_tokens")
-    provider_output = _complete_count(token_accounting, "provider_billed_output_tokens")
-    provider_cached = _complete_count(token_accounting, "provider_cached_input_tokens")
-    if provider_input is None or provider_output is None or provider_cached is None:
-        return _unavailable(
-            token_accounting,
-            "incomplete_provider_token_totals",
-            rate_card=pricing,
-        )
-
-    input_counts = {}
-    for modality in input_rates:
-        count = _complete_count(token_accounting, _MODALITY_COUNT.get(modality, ""))
-        if count is None:
-            return _unavailable(
-                token_accounting,
-                f"missing_{modality}_input_tokens",
-                rate_card=pricing,
-            )
-        input_counts[modality] = count
-    classified_input = sum(input_counts.values())
-    if classified_input > provider_input:
-        return _unavailable(
-            token_accounting,
-            "input_modalities_exceed_provider_total",
-            rate_card=pricing,
-        )
-    unclassified_input = provider_input - classified_input
-    unclassified_modality = pricing.get("unclassified_input_modality")
-    if unclassified_input and unclassified_modality not in input_rates:
-        return _unavailable(
-            token_accounting,
-            "input_modalities_do_not_reconcile",
-            rate_card=pricing,
-        )
-
-    cached_counts = {modality: 0 for modality in input_counts}
-    if provider_cached:
-        for modality in input_counts:
-            if modality not in cached_rates:
-                return _unavailable(
-                    token_accounting,
-                    f"missing_{modality}_cached_input_rate",
-                    rate_card=pricing,
-                )
-            count = _complete_count(
-                token_accounting,
-                _CACHED_MODALITY_COUNT.get(modality, ""),
-            )
-            if count is None:
-                return _unavailable(
-                    token_accounting,
-                    f"missing_cached_{modality}_input_tokens",
-                    rate_card=pricing,
-                )
-            cached_counts[modality] = count
-        if sum(cached_counts.values()) != provider_cached:
-            return _unavailable(
-                token_accounting,
-                "cached_modalities_do_not_reconcile",
-                rate_card=pricing,
-            )
-
-    cache_write_counts = {"5m": 0, "1h": 0}
-    provider_cache_write = _complete_count(
-        token_accounting,
-        "provider_cache_write_input_tokens",
+    reason = (
+        "provider_reported_cost_incomplete"
+        if reported.get("responses_with_cost")
+        else "no_provider_cost_or_rate_card"
     )
-    has_cache_write_rates = any(cache_write_rates.values())
-    if has_cache_write_rates:
-        if provider_cache_write is None:
-            return _unavailable(
-                token_accounting,
-                "missing_cache_write_input_tokens",
-                rate_card=pricing,
-            )
-        for ttl in cache_write_counts:
-            count = _complete_count(
-                token_accounting,
-                f"provider_cache_write_{ttl}_input_tokens",
-            )
-            if count is None:
-                return _unavailable(
-                    token_accounting,
-                    f"missing_cache_write_{ttl}_input_tokens",
-                    rate_card=pricing,
-                )
-            cache_write_counts[ttl] = count
-        if sum(cache_write_counts.values()) != provider_cache_write:
-            return _unavailable(
-                token_accounting,
-                "cache_write_ttls_do_not_reconcile",
-                rate_card=pricing,
-            )
-    elif provider_cache_write:
-        return _unavailable(
-            token_accounting,
-            "missing_cache_write_input_rate",
-            rate_card=pricing,
-        )
-
-    cache_write_modality = pricing.get("cache_write_input_modality")
-    if provider_cache_write and cache_write_modality not in input_counts:
-        return _unavailable(
-            token_accounting,
-            "missing_cache_write_input_modality",
-            rate_card=pricing,
-        )
-    for ttl, count in cache_write_counts.items():
-        if count and cache_write_modality not in cache_write_rates[ttl]:
-            return _unavailable(
-                token_accounting,
-                f"missing_cache_write_{ttl}_input_rate",
-                rate_card=pricing,
-            )
-
-    components = []
-    total = Decimal(0)
-
-    def add_component(kind: str, modality: str, tokens: int, rate_value) -> bool:
-        nonlocal total
-        rate = _amount(rate_value)
-        if rate is None:
-            return False
-        cost = Decimal(tokens) * rate / Decimal(1_000_000)
-        total += cost
-        components.append(
-            {
-                "kind": kind,
-                "modality": modality,
-                "tokens": tokens,
-                "rate_per_million_tokens_usd": float(rate),
-                "cost_usd": _json_amount(cost),
-            }
-        )
-        return True
-
-    for modality, count in input_counts.items():
-        cached = cached_counts[modality]
-        cache_written = sum(cache_write_counts.values()) if modality == cache_write_modality else 0
-        if cached + cache_written > count:
-            return _unavailable(
-                token_accounting,
-                f"cached_or_cache_written_{modality}_exceeds_input",
-                rate_card=pricing,
-            )
-        if not add_component(
-            "input",
-            modality,
-            count - cached - cache_written,
-            input_rates[modality],
-        ):
-            return _unavailable(token_accounting, "invalid_input_rate", rate_card=pricing)
-        if cached and not add_component("cached_input", modality, cached, cached_rates[modality]):
-            return _unavailable(token_accounting, "invalid_cached_rate", rate_card=pricing)
-
-    for ttl, count in cache_write_counts.items():
-        if not count:
-            continue
-        if not add_component(
-            "cache_write_input",
-            cache_write_modality,
-            count,
-            cache_write_rates[ttl][cache_write_modality],
-        ):
-            return _unavailable(
-                token_accounting,
-                f"invalid_cache_write_{ttl}_rate",
-                rate_card=pricing,
-            )
-        components[-1]["cache_ttl"] = ttl
-
-    assumptions = []
-    if unclassified_input:
-        if not add_component(
-            "input",
-            "unclassified",
-            unclassified_input,
-            input_rates[unclassified_modality],
-        ):
-            return _unavailable(token_accounting, "invalid_input_rate", rate_card=pricing)
-        components[-1]["rate_basis_modality"] = unclassified_modality
-        assumptions.append(
-            {
-                "type": "unclassified_input_priced_as",
-                "modality": unclassified_modality,
-                "tokens": unclassified_input,
-            }
-        )
-
-    output_counts = {}
-    for modality in output_rates:
-        count = _complete_count(
-            token_accounting,
-            _OUTPUT_MODALITY_COUNT.get(modality, ""),
-        )
-        if count is None:
-            return _unavailable(
-                token_accounting,
-                f"missing_{modality}_output_tokens",
-                rate_card=pricing,
-            )
-        output_counts[modality] = count
-    if sum(output_counts.values()) != provider_output:
-        return _unavailable(
-            token_accounting,
-            "output_modalities_do_not_reconcile",
-            rate_card=pricing,
-        )
-    for modality, count in output_counts.items():
-        if not add_component("output", modality, count, output_rates[modality]):
-            return _unavailable(token_accounting, "invalid_output_rate", rate_card=pricing)
-
-    return _result(
-        token_accounting,
-        source=(
-            "catalog_rate_card_with_declared_fallback"
-            if unclassified_input
-            else "catalog_rate_card"
-        ),
-        status="complete",
-        reason=None,
-        total=total,
-        known=total,
-        rate_card=pricing,
-        components=components,
-        assumptions=assumptions,
-    )
+    return _unavailable(token_accounting, reason)
 
 
 # Run metrics
@@ -1204,61 +921,20 @@ def atomic_json(path, value):
         pending.unlink(missing_ok=True)
 
 
-def digest(path):
-    h = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def recording_origin(run_dir, trace):
+def recording_origin(run_dir):
     metadata = read_json(run_dir / "recording-timing.json")
-    if finite(metadata.get("first_frame_unix_s")):
-        return {
-            "recording_start_unix_s": metadata["first_frame_unix_s"],
-            "basis": "x11_first_input_pts",
-            "precision": "ffmpeg input timestamp",
-        }
-    log = (
-        (run_dir / "runner.out").read_text(errors="replace")
-        if (run_dir / "runner.out").exists()
-        else ""
-    )
-    pattern = r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+) .*Screen recording "
-    starts = re.findall(pattern + "started", log, re.M)
-    ends = re.findall(pattern + "saved", log, re.M)
-    if len(starts) != 1 or len(ends) != 1 or "falling back to frame-composited" in log:
+    if not finite(metadata.get("first_frame_unix_s")):
         raise ValueError(
             "Missing/ambiguous screen-recorder timestamps or frame-composited recording"
         )
-    parse = lambda value: (
-        datetime.strptime(value, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc).timestamp()
-    )
-    # Recording is saved immediately before score/final trace events. Infer the log
-    # timezone in 15-minute increments, then require a close independent match.
-    anchors = [
-        e["wall_time_ns"] / 1e9 for e in trace if e["event"] in {"ScoreProduced", "EpisodeFinished"}
-    ]
-    matches = []
-    for anchor in anchors:
-        shift = round((anchor - parse(ends[0])) / 900) * 900
-        residual = anchor - parse(ends[0]) - shift
-        if abs(shift) <= 14 * 3600 and -1 <= residual <= 5:
-            matches.append((abs(residual), shift, residual))
-    if not matches:
-        raise ValueError("Recorder log timezone cannot be verified against final trace events")
-    _, shift, residual = min(matches)
     return {
-        "recording_start_unix_s": parse(starts[0]) + shift,
-        "basis": "legacy_recorder_launch_log",
-        "log_to_utc_s": shift,
-        "end_check_residual_s": residual,
-        "precision": "Approximate: legacy recorder launch log, first-frame PTS unavailable",
+        "recording_start_unix_s": metadata["first_frame_unix_s"],
+        "basis": "x11_first_input_pts",
+        "precision": "ffmpeg input timestamp",
     }
 
 
@@ -1341,7 +1017,7 @@ def active_timeline(run_dir):
     trace = _active_trace(run_dir)
     life = rows(run_dir / "action_lifecycle.jsonl")
     start, end, boundary = active_interval(run_dir, trace)
-    alignment = recording_origin(run_dir, trace)
+    alignment = recording_origin(run_dir)
     begin = start - alignment["recording_start_unix_s"]
     finish = end - alignment["recording_start_unix_s"]
     if begin < -0.5 or finish <= 0:
