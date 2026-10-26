@@ -469,7 +469,7 @@ def test_a_kernel_that_raises_numbering_the_last_records_leaves_the_finished_epi
     assert [record["payload"]["index"] for record in records] == list(range(200))
     assert [record["kernel_seq"] for record in records] == [None] * 200
     assert any("numbering the agent's last records failed" in line for line in episode.logs)
-    assert close_agent_trace(episode.agent.sink, episode.invalid) is None
+    assert close_agent_trace(episode.agent.sink) is None
 
 
 def test_a_record_that_fails_to_be_written_after_the_end_invalidates_the_run(tmp_path):
@@ -488,6 +488,6 @@ def test_a_record_that_fails_to_be_written_after_the_end_invalidates_the_run(tmp
         agent_trace_pack=tmp_path / "episode_blobs.pack",
     )
     assert episode.invalid is None
-    invalid = close_agent_trace(episode.agent.sink, episode.invalid)
+    invalid = close_agent_trace(episode.agent.sink)
     assert (invalid["category"], invalid["reason"]) == ("harness", "agent_trace_write_failed")
     assert "OSError: trace disk full" in invalid["detail"]

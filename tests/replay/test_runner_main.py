@@ -21,7 +21,7 @@ from unittest import mock
 import pytest
 
 from realtime_framework.clock import Clocks, FrameClock, SystemClock
-from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
@@ -175,6 +175,8 @@ def run_main(
     seen=None,
     clock_mode="wall",
     emergency=False,
+    scene_capture=None,
+    model_args=("--model", "fake-model", "--adapter", "anthropic_messages"),
 ) -> dict:
     """Run main() for ``task`` and return its run_summary.json. ``clock`` is the operational
     clock; on the wall clock it is world time too, and under the token clock (in pause mode)
@@ -183,7 +185,8 @@ def run_main(
     main() makes, the keyword arguments it calls set_up_agent with, the environment and keyword
     arguments it calls run_stream with, and the code main() exits with (None when it returns).
     With ``emergency`` an exception main() lets out goes to the emergency summary, as the
-    __main__ block hands it over, and ``seen["escaped"]`` gets its traceback."""
+    __main__ block hands it over, and ``seen["escaped"]`` gets its traceback. ``scene_capture``
+    is the one set_up_agent opens, and ``model_args`` name the model."""
     seen = {} if seen is None else seen
 
     def episode_clocks(clock_mode, fps):
@@ -194,6 +197,7 @@ def run_main(
     def set_up_agent(setup, *args, **kwargs):
         seen["set_up_agent"] = kwargs
         setup.agent = agent
+        setup.scene_capture = scene_capture
         if agent_trace:
             pack = kwargs["run_dir"] / "episode_blobs.pack"
             sink = AgentTraceSink(kwargs["episode_trace"], pack, clock=kwargs["clock"])
@@ -209,7 +213,7 @@ def run_main(
     if clock_mode == "token":
         clock_args += ["--tokens-per-frame", "unlimited"]
     argv = [
-        "runner", "--task", "fake_task", "--model", "fake-model", "--adapter", "anthropic_messages",
+        "runner", "--task", "fake_task", *model_args,
         *clock_args, "--fps", str(FPS), "--max-minutes", str(MAX_MINUTES),
         "--run-id", "run", "--results-dir", str(tmp_path),
     ]  # fmt: skip
@@ -417,6 +421,7 @@ def test_a_run_whose_snapshot_failed_scores_no_state_read_after_it(tmp_path):
     task = FailingSnapshotTask(clock, guest, "task_success", True)
     summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
     assert summary["invalid_run"]["reason"] == "evaluation_snapshot_failed"
+    assert "invalid_runs" not in summary  # the kernel and main() find the one failure
     assert (task.reads, summary["verification"]) == (1, None)
     run_dir = tmp_path / "run"
     trace = (run_dir / "episode_trace.jsonl").read_text().splitlines()
@@ -449,6 +454,72 @@ def test_a_re_evaluation_judges_an_unscorable_evaluation_as_the_run_did(tmp_path
     reporting.reevaluate_main()
     replaced = json.loads((run_dir / "run_summary.json").read_text())
     assert replaced["invalid_run"]["reason"] == "evaluation_backend_unhealthy"
+
+
+class FailingCloseCapture:
+    """The scene capture set_up_agent opens, whose close() fails as a CDP socket's can."""
+
+    def __init__(self, clock):
+        self.clock = clock
+
+    def capture(self, tick):
+        return Observation(b"", self.clock.time(), tick)
+
+    def close(self):
+        raise RuntimeError("CDP socket gone")
+
+
+def _reevaluated(run_dir, verification, monkeypatch) -> dict:
+    """reevaluate --replace-summary, the saved state's evaluation stubbed."""
+    monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (verification, {}))
+    monkeypatch.setattr(sys, "argv", ["reevaluate", str(run_dir), "--replace-summary"])
+    reporting.reevaluate_main()
+    return json.loads((run_dir / "run_summary.json").read_text())
+
+
+def test_a_failure_after_the_first_is_kept_and_keeps_a_re_evaluated_run_invalid(
+    tmp_path, monkeypatch
+):
+    """The evaluator says its backend was unhealthy, and then the scene capture fails to close.
+    The run is invalid for the first, and its summary lists both. A re-evaluation whose evaluator
+    answers healthy leaves it invalid for the other."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = UnhealthyTask(clock, guest, "task_success", True)
+    summary = run_main(
+        tmp_path, task, FakeAgent(clock), clock, guest, scene_capture=FailingCloseCapture(clock)
+    )
+    assert summary["invalid_run"]["reason"] == "evaluation_backend_unhealthy"
+    assert [(r["category"], r["reason"]) for r in summary["invalid_runs"]] == [
+        ("evaluator", "evaluation_backend_unhealthy"),
+        ("environment", "cdp_close_failed"),
+    ]
+    replaced = _reevaluated(
+        tmp_path / "run", {"resolved": True, "evaluation_version": 1}, monkeypatch
+    )
+    assert (replaced["run_status"], replaced["invalid_run"]["reason"]) == (
+        "invalid", "cdp_close_failed",
+    )  # fmt: skip
+    assert (replaced["stop_reason"], replaced["outcome"]) == ("invalid_run", "error")
+    assert not scored(tmp_path)
+
+
+def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(tmp_path, monkeypatch):
+    """jev-1.13 is excluded from maintained results and runs only with ALLOW_EXPERIMENTAL_MODEL:
+    its run is experimental, and so is it re-evaluated, with the progress of the new
+    evaluation."""
+    monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(
+        tmp_path, task, FakeAgent(clock), clock, guest, model_args=("--model", "jev-1.13")
+    )
+    assert (summary["run_status"], summary["benchmark_eligible"]) == ("experimental", False)
+    verification = {"resolved": True, "evaluation_version": 1, "progress": 0.5}
+    replaced = _reevaluated(tmp_path / "run", verification, monkeypatch)
+    assert (replaced["run_status"], replaced["progress"]) == ("experimental", 0.5)
+    assert not scored(tmp_path)
 
 
 class TwoClickTask(FakeTask):

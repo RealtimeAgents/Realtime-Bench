@@ -46,7 +46,7 @@ def test_records_are_stamped_on_the_operational_clock(tmp_path):
     with clock.participant():
         clock.sleep(2.5)
     sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"decision": 0})
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     started, request, closed = _events(tmp_path)
     assert (started["wall_time_ns"], started["monotonic_ns"]) == (1_000 * S, 0)
@@ -109,7 +109,7 @@ def test_capture_does_no_io_or_hashing_on_the_caller_thread(tmp_path, monkeypatc
     trace.emit = recorded_emit
     for index in range(5):
         sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"index": index}, body=BODY)
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     caller = threading.get_ident()
     assert seen["hash"] and seen["write"] and seen["emit"]
     assert caller not in seen["hash"] | seen["write"] | seen["emit"]
@@ -135,7 +135,7 @@ def test_concurrent_captures_and_runner_emits_form_one_chain(tmp_path):
         trace.emit(TraceEvent.OBSERVATION_CAPTURED, {"decision": index})
     for thread in threads:
         thread.join()
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.emit(TraceEvent.EPISODE_FINISHED, {})
     trace.close()
 
@@ -158,7 +158,7 @@ def test_close_drops_late_captures_and_precedes_episode_finished(tmp_path):
     trace.emit(TraceEvent.SNAPSHOT_FROZEN, {})
     trace.emit(TraceEvent.SCORE_PRODUCED, {})
     closed = []
-    closing = threading.Thread(target=lambda: closed.append(close_agent_trace(sink, None)))
+    closing = threading.Thread(target=lambda: closed.append(close_agent_trace(sink)))
     closing.start()
     while not sink._sealed:
         threading.Event().wait(0.01)
@@ -185,8 +185,7 @@ def test_close_drops_late_captures_and_precedes_episode_finished(tmp_path):
 
 def test_writer_error_invalidates_the_run(tmp_path):
     """What close_agent_trace returns after a writer error: an invalid run,
-    agent_trace_write_failed, whose detail names the error AgentTraceClosed records; or, for a
-    run that was invalid already, its earlier reason."""
+    agent_trace_write_failed, whose detail names the error AgentTraceClosed records."""
     _, sink = _open(tmp_path)
 
     def fail(data):
@@ -195,18 +194,12 @@ def test_writer_error_invalidates_the_run(tmp_path):
     sink._store = fail
     sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
     sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
-    invalid_run = close_agent_trace(sink, None)
+    invalid_run = close_agent_trace(sink)
     assert invalid_run["category"] == "harness"
     assert invalid_run["reason"] == "agent_trace_write_failed"
     assert "disk full" in invalid_run["detail"]
     (close,) = [e["payload"] for e in _events(tmp_path) if e["event"] == "AgentTraceClosed"]
     assert close["written"] == 0 and close["captures"] == 2 and "disk full" in close["error"]
-
-    earlier = {"category": "environment", "reason": "evaluation_snapshot_failed"}
-    _, other = _open(tmp_path / "earlier")
-    other._store = fail
-    other.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
-    assert close_agent_trace(other, earlier) is earlier
 
 
 def test_a_close_record_the_trace_cannot_write_is_an_agent_trace_write_failure(tmp_path):
@@ -222,7 +215,7 @@ def test_a_close_record_the_trace_cannot_write_is_an_agent_trace_write_failure(t
 
     trace.emit = refuse_the_close
     sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
-    invalid_run = close_agent_trace(sink, None)
+    invalid_run = close_agent_trace(sink)
     assert invalid_run["category"] == "harness"
     assert invalid_run["reason"] == "agent_trace_write_failed"
     assert "disk full" in invalid_run["detail"]
@@ -240,7 +233,7 @@ def test_a_long_write_error_keeps_its_exception_line(tmp_path):
 
     sink._store = fail
     sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"{}")
-    invalid_run = close_agent_trace(sink, None)
+    invalid_run = close_agent_trace(sink)
     (close,) = [e["payload"] for e in _events(tmp_path) if e["event"] == "AgentTraceClosed"]
     assert len(close["error"]) > 2000
     assert invalid_run["detail"] == close["error"][-2000:]
@@ -254,7 +247,7 @@ def test_blocked_writer_times_out_and_never_emits_after_the_fence(tmp_path):
     sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"b")
     entered.wait()
     # The writer waits until released, so the bound is reached however fast the machine is.
-    invalid_run = close_agent_trace(sink, None, timeout=0.2)
+    invalid_run = close_agent_trace(sink, timeout=0.2)
     assert invalid_run["reason"] == "agent_trace_flush_timeout"
     trace.emit(TraceEvent.EPISODE_FINISHED, {})
     release.set()
@@ -264,15 +257,3 @@ def test_blocked_writer_times_out_and_never_emits_after_the_fence(tmp_path):
     events = _events(tmp_path)
     assert [e["event"] for e in events] == ["AgentTraceClosed", "EpisodeFinished"]
     assert events[0]["payload"]["pending_at_timeout"] == 2
-
-
-def test_a_flush_timeout_keeps_an_earlier_invalid_reason(tmp_path):
-    _, sink = _open(tmp_path)
-    entered, release = _block_writer(sink)
-    sink.capture(TraceEvent.MODEL_REQUEST_SENT, {"channel": "test"}, body=b"a")
-    entered.wait()
-    earlier = {"category": "environment", "reason": "evaluation_snapshot_failed"}
-    invalid_run = close_agent_trace(sink, earlier, timeout=0.2)
-    release.set()
-    sink._writer.join(10)
-    assert invalid_run is earlier

@@ -60,7 +60,7 @@ def _record(run_dir, bodies, *, session=()) -> tuple[list[dict], dict]:
             body=message,
             classify=classify_realtime_message,
         )
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     lines = (run_dir / "episode_trace.jsonl").read_text().splitlines()
     events = [e for e in map(json.loads, lines) if e["attempt_id"] == trace.attempt_id]

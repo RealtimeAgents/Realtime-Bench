@@ -83,7 +83,7 @@ def _record_session(run_dir, answer=_realtime):
             finally:
                 loop.close()
     finally:
-        assert close_agent_trace(sink, None) is None
+        assert close_agent_trace(sink) is None
         trace.close()
     (connection,) = stub.connections
     return connection, deltas
@@ -157,7 +157,7 @@ def test_a_failed_send_has_no_cassette_form_yet(tmp_path):
             "state": "unknown",
         },
     )
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     with pytest.raises(ValueError, match="send_failed"):
         ws_cassette.from_trace(tmp_path)
@@ -183,7 +183,7 @@ def _live_trace(run_dir, messages, channel="gemini_live.ws") -> None:
             body=json.dumps(message),
             classify=_CLASSIFY[channel],
         )
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
 
 

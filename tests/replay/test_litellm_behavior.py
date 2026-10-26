@@ -158,7 +158,7 @@ def _generate(config, run_dir: Path, canonical=None, *, cap=4096, driver_class=N
     except Exception as exc:  # noqa: BLE001 - the failure is what several tests assert on
         error = exc
     finally:
-        close_agent_trace(sink, None)
+        close_agent_trace(sink)
         trace.close()
     lines = (run_dir / "episode_trace.jsonl").read_text().splitlines()
     failure = None if error is None else driver.classify_transport_error(error).kind

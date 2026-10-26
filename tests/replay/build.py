@@ -71,7 +71,7 @@ class Episode:
         Returns the invalid-run value closing the agent records produced (None when complete).
         """
         self.agent.close()
-        invalid_run = close_agent_trace(self.agent_trace, None)
+        invalid_run = close_agent_trace(self.agent_trace)
         self.trace.close()
         return invalid_run
 

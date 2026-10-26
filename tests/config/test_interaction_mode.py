@@ -372,7 +372,9 @@ def test_a_reevaluation_compares_the_mode(tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="identity mismatch for interaction_mode"):
         reporting.reevaluate_main()
-    summary.write_text(json.dumps({**identity, "stop_reason": "terminal"}))
+    summary.write_text(
+        json.dumps({**identity, "stop_reason": "terminal", "benchmark_eligible": True})
+    )
     reporting.reevaluate_main()
     assert json.loads(summary.read_text())["solved"] is True
 

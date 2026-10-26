@@ -2179,11 +2179,15 @@ def reevaluate_main():
                     )
         if sp.exists() and not backup.exists():
             shutil.copy2(sp, backup)
-        prior_invalid = summary.get("invalid_run")
-        persistent_invalid = (
-            prior_invalid
-            if isinstance(prior_invalid, dict) and prior_invalid.get("category") != "evaluator"
-            else None
+        # The first failure the evaluation did not decide; a summary lists its failures only when
+        # there was more than one (runner.py main).
+        persistent_invalid = next(
+            (
+                prior
+                for prior in summary.get("invalid_runs") or [summary.get("invalid_run")]
+                if isinstance(prior, dict) and prior.get("category") != "evaluator"
+            ),
+            None,
         )
         replacement_invalid = (
             {
@@ -2198,7 +2202,9 @@ def reevaluate_main():
             reported_invalid_reason = replacement_invalid.get("reason")
         summary.update(
             {
-                "run_status": "invalid" if replacement_invalid else "scored",
+                "run_status": "invalid"
+                if replacement_invalid
+                else ("scored" if summary["benchmark_eligible"] else "experimental"),
                 "invalid_run": replacement_invalid,
                 "failure_attribution": (
                     (replacement_invalid or {}).get("category") if replacement_invalid else None
@@ -2208,6 +2214,7 @@ def reevaluate_main():
                 else summary.get("loop_stop_reason") or summary.get("stop_reason"),
                 "solved": None if replacement_invalid else result.get("resolved"),
                 "verification": result,
+                "progress": (result or {}).get("progress"),
                 "evaluation_artifact": out.name,
                 "reevaluated_from_saved_artifact": True,
             }

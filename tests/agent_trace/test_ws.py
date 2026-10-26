@@ -118,7 +118,7 @@ def _run(driver, run_dir: Path, turns: int):
         with trace_scope(phase="close"):
             runtime.close()
         execution.stop()
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     validate_episode_trace(run_dir / "episode_trace.jsonl")
     assert_no_secret(run_dir, KEY)

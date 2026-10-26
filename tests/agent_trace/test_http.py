@@ -384,7 +384,7 @@ def test_vllm_tokenize_is_recorded(status, tmp_path, monkeypatch):
             else:
                 with pytest.raises(Exception, match="500"):
                     asyncio.run(driver.request_context_status(request))
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     events = _events(tmp_path)
     (sent,) = _payloads(events, "ModelRequestSent")
@@ -405,7 +405,7 @@ def test_vllm_tokenize_connect_error_is_recorded(tmp_path, monkeypatch):
     driver, request, trace, sink = _tokenize_driver(origin, monkeypatch, tmp_path)
     with pytest.raises(Exception, match="onnect"):
         asyncio.run(driver.request_context_status(request))
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     events = _events(tmp_path)
     (sent,) = _payloads(events, "ModelRequestSent")
@@ -524,7 +524,7 @@ def _decide(client_type, model, provider, script, run_dir, monkeypatch, *, serve
                 await client.close()
 
         result = asyncio.run(run())
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     _assert_no_key(run_dir)
     return result, _events(run_dir), stub

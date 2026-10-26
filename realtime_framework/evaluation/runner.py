@@ -161,6 +161,17 @@ def _model_identity(requested_model, requested_adapter=None):
     }
 
 
+def _distinct(failures: list[dict]) -> list[dict]:
+    """The failures a run found, each once: a failed snapshot read is found by the kernel and
+    again by main(), with the same category and reason."""
+    found, distinct = set(), []
+    for failure in failures:
+        if (failure["category"], failure["reason"]) not in found:
+            found.add((failure["category"], failure["reason"]))
+            distinct.append(failure)
+    return distinct
+
+
 def task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps):
     """B in the task clock's frames, which are environment ticks. The task clock records
     tokens_per_frame times its fps, the environment's, as the tokens per world second
@@ -439,7 +450,7 @@ def main():
     artifact_error = None
     evaluation_path = None
     environment_invalid = False
-    invalid_run = None
+    invalid_runs = []  # every failure main() finds, in the order found
     scene_capture = None
     tool_runtime = None
     loop_time_s = None
@@ -680,11 +691,13 @@ def main():
                 frozen_snapshot = getattr(env, "_termination_snapshot", None)
             snapshot_invalid_reason = _invalid_snapshot(frozen_snapshot)
             if snapshot_invalid_reason:
-                invalid_run = {
-                    "category": "environment",
-                    "reason": snapshot_invalid_reason,
-                    "detail": json.dumps(frozen_snapshot, default=str)[:2000],
-                }
+                invalid_runs.append(
+                    {
+                        "category": "environment",
+                        "reason": snapshot_invalid_reason,
+                        "detail": json.dumps(frozen_snapshot, default=str)[:2000],
+                    }
+                )
             episode_trace.emit(
                 TraceEvent.SNAPSHOT_FROZEN,
                 {
@@ -699,12 +712,13 @@ def main():
             episode_trace.checkpoint()
         except Exception:
             detail = traceback.format_exc()
-            invalid_run = {
+            failure = {
                 "category": "environment",
                 "reason": "evaluation_snapshot_failed",
                 "detail": detail,
             }
-            episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+            invalid_runs.append(failure)
+            episode_trace.emit(TraceEvent.RUN_INVALIDATED, failure)
             print("[invalid-run] evaluation snapshot failed:\n" + detail, flush=True)
         try:
             generation_artifact = capture_generation_artifact(
@@ -746,11 +760,13 @@ def main():
         try:
             agent.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "provider",
-                "reason": "provider_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "provider",
+                    "reason": "provider_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
 
         run_stage = "evaluation"
         if frozen_snapshot is None:
@@ -762,11 +778,13 @@ def main():
                 verification = ctask.evaluate_snapshot(frozen_snapshot)
                 evaluation_invalid_reason = invalid_evaluation(verification)
                 if evaluation_invalid_reason:
-                    invalid_run = invalid_run or {
-                        "category": "evaluator",
-                        "reason": evaluation_invalid_reason,
-                        "detail": json.dumps(verification, default=str)[:2000],
-                    }
+                    invalid_runs.append(
+                        {
+                            "category": "evaluator",
+                            "reason": evaluation_invalid_reason,
+                            "detail": json.dumps(verification, default=str)[:2000],
+                        }
+                    )
                     solved = None
                 else:
                     solved = verification["resolved"]
@@ -784,35 +802,37 @@ def main():
                 episode_trace.checkpoint()
             except Exception:
                 _eval_error = traceback.format_exc()
-                invalid_run = invalid_run or {
+                failure = {
                     "category": "evaluator",
                     "reason": "evaluation_exception",
                     "detail": _eval_error,
                 }
-                episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+                invalid_runs.append(failure)
+                episode_trace.emit(TraceEvent.RUN_INVALIDATED, failure)
                 evaluation_path = str(save_evaluation(run_dir, None, error=_eval_error))
                 print("[invalid-run] evaluator exception:\n" + _eval_error, flush=True)
     except Exception:
         error = traceback.format_exc()
-        invalid_run = (
-            getattr(env, "_invalid_run", None) if env is not None else None
-        ) or invalid_run
-        invalid_run = invalid_run or {
-            "category": (
-                "environment"
-                if isinstance(sys.exc_info()[1], EnvironmentInvalidError)
-                or run_stage == "environment_setup"
-                else "provider"
-                if run_stage == "provider_setup"
-                else "tool"
-                if run_stage == "tool_setup"
-                else "evaluator"
-                if run_stage == "evaluation"
-                else "runner"
-            ),
-            "reason": "environment_preflight_failed" if environment_invalid else "run_exception",
-            "detail": error,
-        }
+        invalid_runs.append(
+            {
+                "category": (
+                    "environment"
+                    if isinstance(sys.exc_info()[1], EnvironmentInvalidError)
+                    or run_stage == "environment_setup"
+                    else "provider"
+                    if run_stage == "provider_setup"
+                    else "tool"
+                    if run_stage == "tool_setup"
+                    else "evaluator"
+                    if run_stage == "evaluation"
+                    else "runner"
+                ),
+                "reason": (
+                    "environment_preflight_failed" if environment_invalid else "run_exception"
+                ),
+                "detail": error,
+            }
+        )
         print("RUN ERROR\n" + error, flush=True)
         if evaluation_path is None:
             try:
@@ -840,41 +860,51 @@ def main():
             if agent is not None:
                 agent.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "provider",
-                "reason": "provider_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "provider",
+                    "reason": "provider_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
         # After the agent is closed: stop new agent records, write the queued ones and fence the
         # writer before the checkpoint below and EpisodeFinished.
         if agent_trace is not None:
-            invalid_run = close_agent_trace(agent_trace, invalid_run)
+            failure = close_agent_trace(agent_trace)
+            if failure is not None:
+                invalid_runs.append(failure)
         try:
             if tool_runtime is not None:
                 tool_runtime.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "tool",
-                "reason": "tool_trace_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "tool",
+                    "reason": "tool_trace_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
         try:
             if scene_capture is not None:
                 scene_capture.close()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "environment",
-                "reason": "cdp_close_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "environment",
+                    "reason": "cdp_close_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
         try:
             episode_trace.checkpoint()
         except Exception:
-            invalid_run = invalid_run or {
-                "category": "harness",
-                "reason": "episode_trace_checkpoint_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "harness",
+                    "reason": "episode_trace_checkpoint_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
     deltas = [x[2] for x in timeline]
     # Billing uses complete provider-reported cost when available (OpenRouter), otherwise a
     # versioned catalog rate card with modality and cache-read splits (direct providers).
@@ -902,12 +932,11 @@ def main():
     model_timing = summarize_model_timing(run_dir, interaction_mode=a.interaction_mode)
     cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
     cost_known_usd = cost_accounting.get("known_cost_usd")
-    invalid_run = (getattr(env, "_invalid_run", None) if env is not None else None) or invalid_run
-    if environment_invalid:
-        invalid_run = invalid_run or {
-            "category": "environment",
-            "reason": "environment_preflight_failed",
-        }
+    # The environment latches a failure only while the episode runs, before any main() finds.
+    latched_invalid = getattr(env, "_invalid_run", None) if env is not None else None
+    if latched_invalid is not None:
+        invalid_runs.insert(0, latched_invalid)
+    invalid_run = invalid_runs[0] if invalid_runs else None
     if invalid_run is not None:
         solved = None
     run_status = (
@@ -939,11 +968,14 @@ def main():
             )
         # A record written in part has the next one after it on its line (EpisodeTrace.emit).
         except json.JSONDecodeError:
-            invalid_run = invalid_run or {
-                "category": "harness",
-                "reason": "streaming_summary_failed",
-                "detail": traceback.format_exc(),
-            }
+            invalid_runs.append(
+                {
+                    "category": "harness",
+                    "reason": "streaming_summary_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
+            invalid_run = invalid_runs[0]
             solved = None
             run_status = "invalid"
             stop_reason = "invalid_run"
@@ -960,11 +992,14 @@ def main():
         )
     except Exception:
         metrics_error = traceback.format_exc()
-        invalid_run = invalid_run or {
-            "category": "harness",
-            "reason": "run_metrics_aggregation_failed",
-            "detail": metrics_error,
-        }
+        invalid_runs.append(
+            {
+                "category": "harness",
+                "reason": "run_metrics_aggregation_failed",
+                "detail": metrics_error,
+            }
+        )
+        invalid_run = invalid_runs[0]
         solved = None
         run_status = "invalid"
         stop_reason = "invalid_run"
@@ -998,6 +1033,7 @@ def main():
         interaction_mode=a.interaction_mode,
         runtime_config_hash=runtime_config_hash,
     )
+    failures = _distinct(invalid_runs)
     summ = {
         **run_identity,
         "instance_id": a.task,
@@ -1013,6 +1049,8 @@ def main():
         "interactables_artifact": ("tool_calls.jsonl" if tool_runtime is not None else None),
         "run_status": run_status,
         "invalid_run": invalid_run,
+        # Each failure after the run's too, which a re-evaluation keeps (reporting.reevaluate_main).
+        **({"invalid_runs": failures} if len(failures) > 1 else {}),
         "solved": solved,
         "decisions": len(timeline),
         "actions_executed": getattr(env, "actions", 0) if env is not None else 0,

@@ -85,7 +85,7 @@ def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=
             assert timeline == []  # no turns
         finally:
             agent.close()
-    assert close_agent_trace(sink, None) is None
+    assert close_agent_trace(sink) is None
     trace.close()
     validate_episode_trace(path)
     records = [json.loads(line) for line in path.read_text().splitlines()]
