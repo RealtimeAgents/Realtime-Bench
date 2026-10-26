@@ -49,7 +49,6 @@ class LegacyTurn:
         agent = self._agent
         newest = agent.action_history[-1] if agent.action_history else None
         feedback = agent._report(newest, status, detail)
-        agent._pending_feedback = feedback
         turns = agent._runtime.turns
         if turns:
             agent._runtime.record_execution_feedback(feedback, turns[-1].decision)

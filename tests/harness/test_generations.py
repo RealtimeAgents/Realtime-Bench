@@ -869,7 +869,7 @@ def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
     assert agent.action_history[0] == record and record["result"] == "applied"
     first, last = agent._runtime.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    assert (last.observation.feedback_prefix, last.observation.unattached_feedback) == ("", NOTE)
+    assert last.observation.unattached_feedback == NOTE
     messages = json.loads(stub.requests[2].body)["messages"]
     replied = [m["content"] for m in messages].index(CLICK_NAME)
     assert messages[replied + 1] == {"role": "user", "content": feedback}
@@ -1027,12 +1027,12 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
     assert usage == [(0, False), (1, True), (2, False)]
     # Decision 0's feedback went as its own item: decision 1's frame opens with none.
     opening = opened[1]
-    assert (opening.feedback_prefix, opening.unattached_feedback) == ("", "")
+    assert opening.unattached_feedback == ""
     assert agent.action_history[0] == record and record["result"] == "applied"
     assert [r["tick"] for r in agent.action_history] == [1, 2]
     first, last = agent._runtime.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    assert (last.observation.feedback_prefix, last.observation.unattached_feedback) == ("", NOTE)
+    assert last.observation.unattached_feedback == NOTE
     for view in (stub.views[1], stub.views[-1]):
         items = [(role, text) for _, role, text, _ in view]
         replied = items.index(("assistant", CLICK_NAME))

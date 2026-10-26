@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import replace
 
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.context_policy import current_context_policy
@@ -15,7 +14,6 @@ from realtime_framework.entity.model import (
     ProviderObservation,
 )
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
-from realtime_framework.harnesses.default.context import session_frame_text
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
@@ -28,9 +26,7 @@ SYSTEM = system_block("SYSTEM", None)
 LEDGER = ledger_block('{"decision":1}', 1, None)
 
 
-def turn(
-    k, prompt="FRAME", *, output="", feedback="", prefix="", unattached="", **refs
-) -> CanonicalTurn:
+def turn(k, prompt="FRAME", *, output="", feedback="", unattached="", **refs) -> CanonicalTurn:
     observation = ProviderObservation(
         observation=Observation(b"raw", 100.0 + k, float(k), {"observation_id": f"o{k}"}),
         prompt=prompt,
@@ -38,7 +34,6 @@ def turn(
         mime_type="image/png",
         image_detail="auto",
         geometry={},
-        feedback_prefix=prefix,
         unattached_feedback=unattached,
     )
     return CanonicalTurn(
@@ -77,13 +72,6 @@ def test_stateless_turns_and_ledger():
     )
 
 
-def frame_prefix_request(turns):
-    """openai_realtime's path under the frame-prefix placement of feedback (item 3). No API
-    takes it now; the feedback no turn carries still goes ahead of the next frame this way."""
-    policy = replace(POLICY.paths["openai_realtime"], feedback="frame_prefix")
-    return build_request(policy, SYSTEM, tuple(turns), None, ANSWER, CALL)
-
-
 def test_live_feedback_is_its_own_block_after_the_action():
     exchange = {"function_calls": [], "function_responses": [], "completion_text": ""}
     first = turn(1, output="A1", feedback="F1", native_tool_exchanges=[exchange])
@@ -101,31 +89,6 @@ def test_live_feedback_is_its_own_block_after_the_action():
             "d2.frame",
         ]
         assert canonical.items[-2].intent.position == "in_order"
-
-
-def test_session_prefix_is_rejoined_and_feedback_stays_on_the_turn():
-    first = turn(1, output="A1", feedback="F1")
-    second = turn(2, prefix="F1")
-    assert session_frame_text(second.observation) == "F1\nFRAME"
-    canonical = frame_prefix_request([first, second])
-    kinds = [(item.block.id, item.intent.position) for item in canonical.items]
-    assert kinds == [
-        ("system", "head"),
-        ("d1.frame", "in_order"),
-        ("d1.output", "in_order"),
-        ("d2.prefix", "frame_prefix"),
-        ("d2.frame", "in_order"),
-    ]
-    messages = chat_messages(canonical)
-    assert messages[-1]["content"][0]["text"] == "F1\nFRAME"
-    assert all(message["content"] != "F1" for message in messages)
-    # Folding drops the prefix, as the frame prompt was dropped before.
-    second.fold_visual()
-    assert session_frame_text(second.observation) == ""
-    assert chat_messages(frame_prefix_request([first, second]))[-1] == {
-        "role": "user",
-        "content": FOLDED_VISUAL_PLACEHOLDER,
-    }
 
 
 def test_ledger_is_an_input():

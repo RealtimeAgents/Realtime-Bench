@@ -170,8 +170,7 @@ def _frame(policy: PathPolicy, turn: CanonicalTurn) -> ContentBlock:
 
 
 def _prefix(turn: CanonicalTurn, frame: ContentBlock) -> ContentBlock | None:
-    observation = turn.observation
-    text = "\n".join(filter(None, (observation.feedback_prefix, observation.unattached_feedback)))
+    text = turn.observation.unattached_feedback
     if not text:
         return None
     return ContentBlock(

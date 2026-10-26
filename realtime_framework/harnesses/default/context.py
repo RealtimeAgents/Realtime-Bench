@@ -105,14 +105,6 @@ from realtime_framework.sandbox.observation.som import without_observation_inter
 RequestBuilder = Callable[[tuple[CanonicalTurn, ...], ContentBlock | None], CanonicalRequest]
 
 
-def session_frame_text(observation) -> str:
-    """A frame's prompt after the feedback the frame_prefix placement opens it with, as one
-    text, which the history_som_* counts read. No live driver declares that placement now: for
-    them it is the prompt."""
-    prefix = observation.feedback_prefix
-    return f"{prefix}\n{observation.prompt}" if prefix else observation.prompt
-
-
 class RequestExceedsContext(RuntimeError):
     """The request did not fit the declared context window, so it was never sent."""
 
@@ -481,13 +473,13 @@ class RealtimeRuntime:
         provider_metadata.update(
             {
                 "history_som_retained_blocks": sum(
-                    without_observation_interactables(session_frame_text(turn.observation))
-                    != session_frame_text(turn.observation)
+                    without_observation_interactables(turn.observation.prompt)
+                    != turn.observation.prompt
                     for turn in self._turns
                 ),
                 "history_som_current_blocks": sum(
-                    without_observation_interactables(session_frame_text(turn.observation))
-                    != session_frame_text(turn.observation)
+                    without_observation_interactables(turn.observation.prompt)
+                    != turn.observation.prompt
                     for turn in incoming
                 ),
             }

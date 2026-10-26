@@ -72,7 +72,7 @@ def turn(k: int, output: str = "", feedback: str = "") -> CanonicalTurn:
         mime_type="image/png",
         image_detail="auto",
         geometry={},
-        feedback_prefix=feedback,
+        unattached_feedback=feedback,
     )
     return CanonicalTurn(observation=observation, output=output, decision=k)
 
@@ -652,13 +652,13 @@ def stream(script: str) -> list:
     return blocks
 
 
-def streaming_view(blocks, frames: int = 2, feedback: str = "separate_message"):
+def streaming_view(blocks, frames: int = 2):
     """The streaming history view of the blocks: the frames older than the newest ``frames``
     folded to the turn-based placeholder (decision 23), every reply and feedback kept (decision
-    4.6), and the feedback where the policy's ``feedback`` places it."""
+    4.6)."""
     return history_view(
         blocks,
-        policy=replace(POLICY, feedback=feedback),
+        policy=POLICY,
         system=SYSTEM,
         retained_frames=frames,
         answer=ANSWER,
@@ -748,9 +748,9 @@ class Live:
     """A native-streaming session as its reader sees it (arrived): the core, and the server,
     which answers each operation sent, in order."""
 
-    def __init__(self, blocks=(), frames: int = 2, feedback: str = "separate_message"):
+    def __init__(self, blocks=(), frames: int = 2):
         self.core, self.server, self.replies = new_core(), Server(), 0
-        view = streaming_view(list(blocks), frames, feedback) if blocks else None
+        view = streaming_view(list(blocks), frames) if blocks else None
         self.deliver(self.core.replay_streaming(view))
 
     def send(self, operations) -> list:
@@ -820,47 +820,6 @@ def test_a_fold_puts_the_placeholder_where_the_frame_was_on_the_server():
     live.core.finish_edit()
     assert len(replacements(batch)) == 2
     assert in_place(live, before, batch)
-
-
-def test_frame_prefix_feedback_goes_into_the_frame_after_it():
-    """Under the frame_prefix placement the view puts the feedback since the frame before in
-    front of the next frame, as a turn-based frame carries it: a rebuild and a push write it into
-    that frame's item, which edits leave alone until the frame folds; then the feedback gives way
-    to the placeholder with it, after the frame before. The feedback since the newest frame waits
-    at the end of the view for the next frame, and nothing of it is written yet."""
-    replayed = new_core().replay_streaming(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
-    assert [(op.role, op.text) for op in replayed] == [
-        ("user", "frame 1"),
-        ("assistant", "r1"),
-        ("user", "frame 2"),
-        ("user", "fb1\nframe 3"),
-    ]
-    waiting = new_core().replay_streaming(streaming_view(stream("FRFB"), 3, "frame_prefix"))
-    assert [op.text for op in waiting] == ["frame 1", "r1", "frame 2"]
-
-    live = Live(stream("FRF"), 3, "frame_prefix")
-    core = live.core
-    (pushed,) = core.push(streaming_view(stream("FRFBF"), 3, "frame_prefix"))
-    assert (pushed.text, core.frames["f3.frame"].text) == ("fb1\nframe 3", "fb1\nframe 3")
-    live.deliver([pushed])
-    live.deliver(core.push(streaming_view(stream("FRFBFF"), 3, "frame_prefix")))
-    item, reply_item = items_of(core), live.server.items[1]
-    older = core.queue_edit(streaming_view(stream("FRFBFF"), 2, "frame_prefix"))
-    assert shape(older.operations) == [
-        ("delete", item["f1.frame"], None, True),
-        ("create", "user", "root", True),
-        ("delete", item["f2.frame"], None, True),
-        ("create", "user", reply_item, True),
-    ]
-    assert (older.visuals_folded, older.prompts_edited) == (2, 2)
-    live.deliver(older.operations)
-    core.finish_edit()
-    batch = core.queue_edit(streaming_view(stream("FRFBFF"), 1, "frame_prefix"))
-    assert shape(batch.operations) == [
-        ("delete", item["f3.frame"], None, True),
-        ("create", "user", older.operations[3].item_id, True),
-    ]
-    assert batch.operations[1].text == TEXTS.folded_visual
 
 
 def test_a_push_names_its_client_event():

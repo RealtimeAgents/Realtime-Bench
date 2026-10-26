@@ -485,8 +485,8 @@ def policy_check(config, **values):
     [
         (
             "gpt-realtime-2",
-            {"feedback": "frame_prefix"},
-            "The openai_realtime API cannot place execution feedback as frame_prefix",
+            {"feedback": "digest"},
+            "The openai_realtime API cannot place execution feedback as digest",
         ),
         (
             "jev-1.13",
