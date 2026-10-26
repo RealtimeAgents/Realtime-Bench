@@ -343,6 +343,35 @@ def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
     check_episode(replayed, clock_mode="wall", task=ReplayTask(), env_fps=replayed.fps)
 
 
+FUNCTION_CALL = '''
+from dataclasses import replace
+
+from rtb_ext.chat import ExternalChatDriver
+
+
+class FunctionCall(ExternalChatDriver):
+    capabilities = replace(ExternalChatDriver.capabilities, action_channel="function_call")
+'''
+
+
+def test_preflight_holds_the_prompts_to_the_action_channel(external):
+    """An external driver runs under the chat_completions row, whose prompts (item 11) ask for one
+    text JSON action. A driver that answers in function calls would get those prompts beside the
+    function declarations, and its replies would be collected as calls, so check_episode refuses
+    it."""
+    (external.site / "rtb_ext" / "function_call.py").write_text(FUNCTION_CALL)
+    api = "rtb_ext.function_call:FunctionCall"
+    write_model(external.models, api, key="ext-function-call")
+    config = catalog.to_model_config("ext-function-call", fps=1.0, reasoning_effort="low")
+    assert catalog.adapter_class(api).capabilities.action_channel == "function_call"
+    assert current_context_policy().for_path(api, {}, None).prompts["realtime"] == "standard_vlm"
+    fails(
+        lambda: check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=config.fps),
+        f"The {api} API answers in function_call; its context policy prompts realtime tasks "
+        "with standard_vlm, which asks for text_json",
+    )
+
+
 REQUIRED_OUTPUT_LIMIT = '''
 from realtime_framework.entity.model import Compat
 

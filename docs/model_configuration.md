@@ -242,7 +242,8 @@ driver as a [model API](#add-a-model-api).
    `maps_output_cap`) needs its method, and `persistent_session` needs `ensure_ready`,
    `synchronize`, `renew`, `repair`, `abort`, `mark_dirty` and `state`. The driver runs under the
    `chat_completions` context policy, with the model's [context preset](#context-preset) if it
-   names one. With
+   names one. Its prompts ask for one JSON action in the visible text, so a driver whose
+   `action_channel` is not `"text_json"` is refused before the run. With
    `request_size_estimation`, the runtime asks `request_context_status(request)`
    before each request and archives the oldest turns while the request exceeds the context
    window. With no turn left, the earliest archived actions give way to a note in the ledger,

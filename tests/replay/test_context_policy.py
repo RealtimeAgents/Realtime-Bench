@@ -22,6 +22,7 @@ from realtime_framework.entity.context_policy import (
     FIXED_TEXTS,
     MODEL_PRESETS,
     PRESETS,
+    PROMPT_CHANNELS,
     DecisionHistory,
     current_context_policy,
 )
@@ -204,6 +205,15 @@ def test_prompts_and_observation_form(api):
         if caps.observation_modality == "screenshot"
         else "observation_json_text"
     )
+
+
+def test_prompt_channels():
+    """Every profile has the action channel it asks for, and each row's profiles ask for its API's
+    (providers/preflight.py check_context_policy)."""
+    assert set(PROMPT_CHANNELS) == set(INTERACTION_PROFILES)
+    for api, path in POLICY.paths.items():
+        channels = {PROMPT_CHANNELS[name] for name in path.prompts.values() if name is not None}
+        assert channels == {capabilities(api).action_channel}, api
 
 
 def test_policy_record_is_json():
