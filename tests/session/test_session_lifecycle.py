@@ -1005,6 +1005,8 @@ class _Trace:
     """An agent trace that keeps what it is given, and the scope: (event, payload, scope). Each
     SessionWait also goes into ``log`` as ("record", wait), beside what the test logs there."""
 
+    attempt_id = "lifecycle"
+
     def __init__(self, log: list | None = None):
         self.events: list[tuple] = []
         self._log = log
@@ -1132,7 +1134,7 @@ def test_openai_realtime_records_the_connect_backoff():
     driver.clock = _FrozenClock(log)
     driver.bind_trace(trace)
     asyncio.run(driver.connect(ConnectRequest(seed=SEED)))
-    delay = TRANSPORT_RETRY.delay_s(1, "empty:connect", TransportFailure(TRANSIENT))
+    delay = TRANSPORT_RETRY.delay_s(1, "lifecycle:empty:connect", TransportFailure(TRANSIENT))
     assert [(event, payload.get("outcome"), scope) for event, payload, scope in trace.events] == [
         (TraceEvent.MODEL_ATTEMPT_FINISHED, "retry", {"connect_attempt": 1}),
         (TraceEvent.SESSION_WAIT, None, {"connect_attempt": 1}),

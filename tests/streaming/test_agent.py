@@ -1181,6 +1181,27 @@ def test_a_reply_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, 
     agent.close()
 
 
+def test_a_reply_and_its_session_readying_back_off_under_the_episode_attempt(monkeypatch, clock):
+    """The jitter keys of a reply's retry and of its session's readying name the episode attempt
+    the agent's trace writes into, then the reply's frame and the newest frame of the view the
+    session is readied from: parallel episodes, whose frames share their ids, back off apart."""
+    keys = []
+    request_retry = agent_module.RequestRetry
+
+    def recorded(key, *args, **kwargs):
+        keys.append(key)
+        return request_retry(key, *args, **kwargs)
+
+    monkeypatch.setattr(agent_module, "RequestRetry", recorded)
+    agent = make_agent(monkeypatch, clock, trace=RecordingTrace())
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply(ends_at=1.0))
+    agent.generate(7, 3, frame, BUDGET)
+    assert keys[-2:] == ["recording:obs-2:reply", "recording:f2.frame:ready"]
+    agent.close()
+
+
 def test_a_push_whose_session_fails_to_reopen_once_is_tried_again(monkeypatch, clock):
     agent = make_agent(monkeypatch, clock)
     agent.bind_inbox(lambda event: None, ORIGIN)

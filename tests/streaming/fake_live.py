@@ -364,6 +364,8 @@ def observation(clock, n: int) -> Observation:
 class RecordingTrace:
     """An episode trace that keeps each capture as (event, payload)."""
 
+    attempt_id = "recording"
+
     def __init__(self):
         self.captured: list[tuple] = []
 

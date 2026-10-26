@@ -598,7 +598,7 @@ class NativeStreamingAgent(VisionAgentBase):
         frames = [item.block.id for item in view.items if item.block.kind == "frame"]
         with connect_backoff(hold):
             await RequestRetry(
-                f"{frames[-1] if frames else 'empty'}:ready",
+                f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:ready",
                 self.driver.classify_transport_error,
                 record,
                 cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
@@ -670,7 +670,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._reply_finished(number, "cancelled", exc)
 
         await RequestRetry(
-            f"{reply.own.value.observation_id}:reply",
+            f"{self._trace.attempt_id}:{reply.own.value.observation_id}:reply",
             classify,
             record,
             cancelled=cancelled,

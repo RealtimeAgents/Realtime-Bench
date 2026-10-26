@@ -70,6 +70,8 @@ def _run(clock: FakeClock, coroutine):
 class _Trace:
     """An agent trace that keeps the event and payload of each record."""
 
+    attempt_id = "clock-wiring"
+
     def __init__(self):
         self.records: list[tuple[TraceEvent, dict]] = []
 
@@ -112,8 +114,8 @@ def test_the_agent_builds_its_driver_runtime_and_execution_thread_on_its_clock()
 
 
 def test_an_openai_realtime_connect_backs_off_on_the_agent_clock():
-    """A refused connect is tried again after the shared backoff (providers/openai_realtime.py
-    _connect)."""
+    """A refused connect is tried again after the shared backoff, jittered by the episode attempt
+    the agent's trace writes into (providers/openai_realtime.py _connect)."""
     clock = FakeClock()
     config = ModelConfig(
         adapter_type="openai_realtime",
@@ -121,7 +123,8 @@ def test_an_openai_realtime_connect_backs_off_on_the_agent_clock():
         api_base_url="http://127.0.0.1:9/v1",  # never connected to
         api_key="sk-clock-wiring",
     )
-    driver = create_agent(config, clock=clock).driver
+    trace = _Trace()
+    driver = create_agent(config, clock=clock, trace=trace).driver
     attempts = []
 
     @contextlib.contextmanager
@@ -149,7 +152,7 @@ def test_an_openai_realtime_connect_backs_off_on_the_agent_clock():
         await driver.close()
 
     _run(clock, connect_and_close())
-    delay = TRANSPORT_RETRY.delay_s(1, "empty:connect", TransportFailure(TRANSIENT))
+    delay = TRANSPORT_RETRY.delay_s(1, "clock-wiring:empty:connect", TransportFailure(TRANSIENT))
     assert attempts == [0.0, delay]
 
 
@@ -266,10 +269,11 @@ def test_an_abandoned_generation_ends_its_request_pacing_at_once(stream, monkeyp
 
 
 def test_a_choice_question_retries_and_is_timed_on_the_agent_clock(monkeypatch):
-    """A question whose first attempt fails is asked again after the shared backoff, and the
-    decision reads each call's latency on the clock (providers/decisions/selection.py)."""
+    """A question whose first attempt fails is asked again after the shared backoff, jittered by
+    the episode attempt, and the decision reads each call's latency on the clock
+    (providers/decisions/selection.py)."""
     clock = FakeClock()
-    driver = create_agent(DECISIONS, clock=clock).driver
+    driver = create_agent(DECISIONS, clock=clock, trace=_Trace()).driver
     asked = []
 
     async def decide(state, question):
@@ -284,7 +288,7 @@ def test_a_choice_question_retries_and_is_timed_on_the_agent_clock(monkeypatch):
     monkeypatch.setattr(driver, "decide", decide)
     request = GenerationRequest("turn-1", None, None, "wall", canonical=_request(DECISIONS))
     metadata = _run(clock, driver.start_generation(request)).metadata
-    delay = TRANSPORT_RETRY.delay_s(1, "obs-1:0", TransportFailure(TRANSIENT))
+    delay = TRANSPORT_RETRY.delay_s(1, "clock-wiring:obs-1:0", TransportFailure(TRANSIENT))
     assert asked == [0.0, delay]
     (call,) = metadata["jev_calls"]
     assert call["latency_s"] == pytest.approx(delay + 2.0)

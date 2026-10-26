@@ -337,7 +337,7 @@ class ChoiceDecision:
         def cancelled(attempt, exc):
             self._attempt_finished(attempt, None, question, "cancelled", error=exc)
 
-        key = f"{self.selection.observation_id}:{len(self.calls)}"
+        key = f"{self.trace.attempt_id}:{self.selection.observation_id}:{len(self.calls)}"
         retry = RequestRetry(key, classify, record, cancelled=cancelled, clock=self.clock)
         return await retry.run_async(send)
 

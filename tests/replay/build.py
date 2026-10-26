@@ -164,8 +164,11 @@ def build_episode(
         return agent
 
     clock = clock or SystemClock()
-    # runner.main() opens the episode trace before it sets up the agent.
-    trace = EpisodeTrace(run_dir / "episode_trace.jsonl", run_id=run_dir.name, clock=clock)
+    # runner.main() opens the episode trace before it sets up the agent. Its attempt id leads the
+    # retry jitter keys (entity/model.py RequestRetry); a fixed one keeps the baselines' backoffs.
+    trace = EpisodeTrace(
+        run_dir / "episode_trace.jsonl", run_id=run_dir.name, attempt_id="replay", clock=clock
+    )
     setup = runner.AgentSetup()
     with (
         mock.patch.object(runner, "create_agent", checked_create_agent),

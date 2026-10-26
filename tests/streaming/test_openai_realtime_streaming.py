@@ -909,8 +909,8 @@ def test_a_rebuild_raises_a_retryable_failure_as_it_is_for_the_retry_around_it()
 
 
 def test_a_connect_retries_under_the_newest_frame_of_its_history(monkeypatch):
-    """The connect retry's jitter key names the session the connect resumes: the newest frame
-    of its history."""
+    """The connect retry's jitter key names the episode attempt and the session the connect
+    resumes: the newest frame of its history."""
     keys = []
 
     class Stop(Exception):
@@ -924,7 +924,7 @@ def test_a_connect_retries_under_the_newest_frame_of_its_history(monkeypatch):
     request = ConnectRequest(seed=SEED, history=streaming_view(stream("FRF")))
     with pytest.raises(Stop):
         _within(_offline_driver()._connect(request))
-    assert keys == ["f2.frame:connect"]
+    assert keys == [f"{UNTRACED.attempt_id}:f2.frame:connect"]
 
 
 def test_a_push_during_a_rebuild_goes_out_once_the_rebuilt_session_took_its_replay():

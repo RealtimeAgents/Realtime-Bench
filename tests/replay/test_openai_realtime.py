@@ -503,6 +503,8 @@ def test_connect_that_fails_after_the_upgrade_closes_its_connection(tmp_path, mo
 class _ConnectAttempts:
     """An agent trace that keeps each connect attempt's outcome and failure kind."""
 
+    attempt_id = "connect-attempts"
+
     def __init__(self):
         self.attempts: list[tuple] = []
 

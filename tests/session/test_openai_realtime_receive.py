@@ -227,6 +227,8 @@ def test_events_carry_their_connection_and_generation():
 class _ServerConnections:
     """An agent trace that keeps the connection id of each server message the driver read."""
 
+    attempt_id = "receive"
+
     def __init__(self):
         self.ids: list[str] = []
 

@@ -520,7 +520,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         # The session the connect resumes: the newest retained frame, or none at all.
         items = () if request.history is None else request.history.items
         frames = [item.block.id for item in items if item.block.kind == "frame"]
-        key = f"{frames[-1] if frames else 'empty'}:connect"
+        key = f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:connect"
         retry = RequestRetry(
             key,
             self.classify_transport_error,

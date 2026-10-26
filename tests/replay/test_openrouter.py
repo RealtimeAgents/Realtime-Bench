@@ -290,9 +290,9 @@ def _retry_scenario(monkeypatch, tmp_path, failure: Failure, scenario: str):
     (classification,) = classified
     runtime = records[0]["result"]["realtime_runtime"]
     assert runtime["transport_reconnect_attempts"] == 1
-    # The first retry waits 1 s +-25%, jittered by the decision's observation
-    # (entity/model.py TransportRetryPolicy).
-    key = f"{records[0]['observation']['observation_id']}:turn"
+    # The first retry waits 1 s +-25%, jittered by the episode attempt and the decision's
+    # observation (entity/model.py TransportRetryPolicy).
+    key = f"{episode.trace.attempt_id}:{records[0]['observation']['observation_id']}:turn"
     assert sleeps.calls == runtime["transport_reconnect_backoff_s"]
     assert sleeps.calls == [TRANSPORT_RETRY.delay_s(1, key, classification[0])]
     assert 0.75 <= sleeps.calls[0] <= 1.25

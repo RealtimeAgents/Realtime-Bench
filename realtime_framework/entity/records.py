@@ -172,12 +172,18 @@ def enter_trace_scope(scope: dict | None) -> None:
 
 
 class AgentTrace(Protocol):
+    # The episode attempt the records go to (EpisodeTrace.attempt_id); retry jitter keys start
+    # with it (entity/model.py RequestRetry).
+    attempt_id: str
+
     def capture(self, event: TraceEvent, payload: dict, *, body=None, classify=None) -> int | None:
         """Queue one record without I/O; return its capture sequence, or None once sealed."""
 
 
 class _Untraced:
     """The write entry of an agent built outside the runner, without an episode trace."""
+
+    attempt_id = "untraced"
 
     def capture(self, event, payload, *, body=None, classify=None) -> None:
         return None

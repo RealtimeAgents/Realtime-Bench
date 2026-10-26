@@ -39,6 +39,8 @@ QUESTION_CAP = 100
 
 
 class _Trace:
+    attempt_id = "selection"
+
     def __init__(self):
         self.events = []
 

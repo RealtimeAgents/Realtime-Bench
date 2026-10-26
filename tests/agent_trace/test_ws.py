@@ -254,8 +254,9 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
         for a in attempts
     ]
     assert connects == [(None, 1, "retry", "transient"), (None, 2, "ok", None), (2, 1, "ok", None)]
+    # Jittered by the episode attempt each record names.
     assert attempts[0]["retry_delay_s"] == TRANSPORT_RETRY.delay_s(
-        1, "empty:connect", TransportFailure(TRANSIENT)
+        1, f"{events[0]['attempt_id']}:empty:connect", TransportFailure(TRANSIENT)
     )
     first, rebuilt = _check_frames(events, stub, "openai_realtime.ws", pack)
     messages = _messages(events, first)
