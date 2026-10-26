@@ -913,6 +913,7 @@ from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 from realtime_framework.sandbox.observation.som import render_frame_number
+from realtime_framework.sandbox.observation.som import resolve_action_references
 
 
 class _GenerationOutputCollector:
@@ -1033,86 +1034,99 @@ def bind_observation(agent, observation, prompt, tick):
     return value, execution, frame
 
 
-def parse_grounded_action(agent, text, execution, arrived_unix_s, own_frame):
+@dataclass(frozen=True)
+class _Grounded:
+    """One body of model output that parsed, read against its frame: the action as the model
+    wrote it, and as the frame's marks resolve it, None when they cannot."""
+
+    asked: Action
+    action: Action | None
+    frame: FrameRecord | None  # None: a streaming action whose frame cannot be found
+    reference: object = None  # streaming: its frame field as written
+    frame_error: str | None = None  # streaming: why its frame cannot be found
+    resolution: dict | None = None  # how the marks resolved it; None when they were not read
+
+    @property
+    def unknown_mark(self) -> str | None:
+        """The mark its frame does not have, which stopped its resolution: resolution stops at
+        the first reference that fails."""
+        if self.action is not None or self.resolution is None:
+            return None
+        failed = (self.resolution.get("resolutions") or [{}])[-1]
+        return failed["mark"] if failed.get("error") == "mark_not_in_observation" else None
+
+
+def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
     """Parse one action from model output and interpret it against its frame-table entry: the
-    frame's marks resolve its element references and its geometry binds its coordinates.
+    frame's marks resolve its element references, where ``resolve``, as when the agent inspects
+    its frames, and its geometry binds its coordinates. The action, its protocol, and the last
+    resolution the output made, which the inspection's tool trace records.
 
     A streaming action names its frame, however old, and is rejected (no action) when that frame
     cannot be found; the frame and its age are recorded. A turn-based action uses ``own_frame``,
-    the one its generation sent: an abandoned generation may enter its frame later. ``execution``
-    is the decision's inspection; its tool trace records the resolution.
+    the one its generation sent: an abandoned generation may enter its frame later.
 
     Output whose one action names a mark its frame does not have is a grounding failure, not
     output without an action: the protocol records the action asked for and the mark.
     """
     frames = agent.frames
     streaming = agent.interaction_mode == "streaming"
-    # (action, its frame, its frame field, why no frame was found) of each parsed candidate.
-    candidates = []
-    # (action, the mark, the resolution) of each parsed candidate naming a mark its frame lacks.
-    unknown_marks = []
-    # The resolution this output made: under streaming ``execution`` is the frame's, which
-    # holds the last resolution of any call on the frame.
-    grounding = None
 
-    def parse_and_ground(body):
-        nonlocal grounding
+    def ground(body) -> _Grounded | None:
         if streaming:
-            parsed, reference = agent.interaction_profile.parse_framed_action(agent, body)
+            asked, reference = agent.interaction_profile.parse_framed_action(agent, body)
             frame, error = frames.locate(reference)
         else:
-            parsed, reference = agent.interaction_profile.parse_action(agent, body), None
+            asked, reference = agent.interaction_profile.parse_action(agent, body), None
             frame, error = own_frame, None
-        if parsed is None:
+        if asked is None:
             return None
-        if frame is not None:
-            runtime = getattr(agent, "tool_runtime", None)
-            if runtime is not None and execution is not None:
-                asked, parsed = parsed, runtime.resolve_action(parsed, frame.marks, execution)
-                grounding = execution["reference_resolution"]
-                if streaming:
-                    # The decision's inspection row names the frame whose marks resolved it.
-                    execution["reference_resolution"].update(
-                        frame=frame.frame, observation_id=frame.observation_id
-                    )
-                if parsed is None:
-                    # Resolution stops at the first reference that fails.
-                    failed = (grounding.get("resolutions") or [{}])[-1]
-                    if failed.get("error") == "mark_not_in_observation":
-                        unknown_marks.append((asked, failed["mark"], grounding))
-        if parsed is not None:
-            candidates.append((parsed, frame, reference, error))
-        return parsed
+        if frame is None or not resolve:
+            return _Grounded(asked, asked, frame, reference, error)
+        action, resolution = resolve_action_references(asked, frame.marks)
+        if streaming:
+            # The inspection row names the frame whose marks resolved it.
+            resolution = {
+                **resolution,
+                "frame": frame.frame,
+                "observation_id": frame.observation_id,
+            }
+        return _Grounded(asked, action, frame, reference, error, resolution)
 
-    resolution = resolve_action_output(text, parse_and_ground, framed=streaming)
-    action_protocol = resolution.metadata()
-    if resolution.protocol_failure == "invalid_action_output" and unknown_marks:
-        asked, mark, grounding = unknown_marks[0]
+    output = resolve_action_output(text, ground, framed=streaming)
+    decision = output.decision
+    resolutions = [parsed.resolution for parsed in output.parses if parsed.resolution is not None]
+    grounding = last = resolutions[-1] if resolutions else None
+    action_protocol = decision.metadata()
+    unknown = next((parsed for parsed in output.parses if parsed.unknown_mark is not None), None)
+    if decision.protocol_failure == "invalid_action_output" and unknown is not None:
+        grounding = unknown.resolution
         action_protocol.update(
-            protocol_failure=GROUNDING_FAILED, requested=action_text(asked), unknown_mark=mark
+            protocol_failure=GROUNDING_FAILED,
+            requested=action_text(unknown.asked),
+            unknown_mark=unknown.unknown_mark,
         )
     frame = own_frame
-    if streaming and resolution.valid:
-        frame, reference, error = next(
-            (f, r, e) for a, f, r, e in candidates if a is resolution.action
-        )
+    if streaming and decision.valid:
+        chosen = output.chosen
+        frame = chosen.frame
         if frame is None:
             action_protocol.update(
                 rejection=INVALID_GROUNDING_FRAME,
-                frame_reference={"frame": reference, "error": error},
+                frame_reference={"frame": chosen.reference, "error": chosen.frame_error},
             )
-            return None, action_protocol
+            return None, action_protocol, last
         action_protocol["frame_reference"] = {
             "frame": frame.frame,
             "observation_id": frame.observation_id,
             **frames.age(frame, arrived_unix_s),
         }
     action = agent.interaction_profile.bind_action(
-        resolution.action, FrameGeometry.from_dict(frame.geometry)
+        decision.action, FrameGeometry.from_dict(frame.geometry)
     )
-    if execution is not None:
+    if resolve:
         action_protocol["grounding"] = grounding
-    return action, action_protocol
+    return action, action_protocol, last
 
 
 def action_text(action: Action) -> str:
@@ -1823,9 +1837,15 @@ class DefaultHarness(VisionAgentBase):
             if newest_execution is not None:
                 action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
-            action, action_protocol = parse_grounded_action(
-                self, output.text, newest_execution, self.clock.time(), generation.frame
+            action, action_protocol, resolution = parse_grounded_action(
+                self,
+                output.text,
+                self.clock.time(),
+                generation.frame,
+                resolve=newest_execution is not None,
             )
+            if resolution is not None:
+                newest_execution["reference_resolution"] = resolution
         thinking = output.reasoning_text
         serialization = output.token_fields.get("action_serialization")
         if serialization in {"native_function_call", "native_function_calls"}:

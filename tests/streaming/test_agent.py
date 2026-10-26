@@ -37,7 +37,6 @@ from realtime_framework.harnesses.streaming.agent import NativeStreamingAgent
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
-from realtime_framework.sandbox.observation.som import resolve_action_references
 from tests.fake_clock import FakeClock
 
 from .fake_live import (
@@ -995,23 +994,20 @@ def test_a_frames_inspection_is_finished_once_with_every_reply_on_it(monkeypatch
     assert runtime.rows[2:] == [("obs-3", "no_reply", "", 0.0), ("obs-4", "no_reply", "", 0.0)]
 
 
+class _OneMark(RecordingToolRuntime):
+    """Every frame has the one mark P1."""
+
+    def inspect(self, observation, **fields) -> dict:
+        marks = {"P1": {"kind": "point", "point": [10, 20]}}
+        return {**super().inspect(observation, **fields), "marks": marks}
+
+
 def test_a_replys_row_keeps_the_grounding_of_each_of_its_calls(monkeypatch, clock, tmp_path):
-    """A reply's calls name elements of frames 1 and 2, each resolved against its frame's marks
-    into the one inspection of the frame the reply started on, which each resolution replaces
-    (sandbox/observation/som.py ToolRuntime.resolve_action). The reply's row keeps each call's:
-    the first names an element frame 1 does not have, and is no action."""
-
-    class MarkingToolRuntime(RecordingToolRuntime):
-        def inspect(self, observation, **fields) -> dict:
-            marks = {"P1": {"kind": "point", "point": [10, 20]}}
-            return {**super().inspect(observation, **fields), "marks": marks}
-
-        def resolve_action(self, action, marks, execution):
-            resolved, execution["reference_resolution"] = resolve_action_references(action, marks)
-            return resolved
-
+    """A reply's calls name elements of frames 1 and 2, each resolved against its frame's marks.
+    The reply's row keeps each call's: the first names an element frame 1 does not have, and is
+    no action."""
     agent = make_agent(monkeypatch, clock, log_dir=tmp_path)
-    agent.bind_tool_runtime(MarkingToolRuntime())
+    agent.bind_tool_runtime(_OneMark())
     posted = []
     agent.bind_inbox(posted.append, ORIGIN)
     frame = _two_frames(agent, clock)
@@ -1033,18 +1029,6 @@ def test_a_replys_row_keeps_the_grounding_of_each_of_its_calls(monkeypatch, cloc
         )
         for entry in row["grounding"]
     ] == [("c1", 1, False, "mark_not_in_observation"), ("c2", 2, True, None)]
-
-
-class _OneMark(RecordingToolRuntime):
-    """Every frame has the one mark P1."""
-
-    def inspect(self, observation, **fields) -> dict:
-        marks = {"P1": {"kind": "point", "point": [10, 20]}}
-        return {**super().inspect(observation, **fields), "marks": marks}
-
-    def resolve_action(self, action, marks, execution):
-        resolved, execution["reference_resolution"] = resolve_action_references(action, marks)
-        return resolved
 
 
 def test_a_call_naming_a_mark_its_frame_lacks_is_the_replys_grounding_failure(monkeypatch, clock):

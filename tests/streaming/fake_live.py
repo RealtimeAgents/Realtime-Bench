@@ -338,10 +338,7 @@ class RecordingToolRuntime:
         call_id = f"inspection-{len(self._pending) + len(self.rows)}"
         self._pending.add(call_id)
         proof = {"valid": True, "call_id": call_id, "observation_id": requested_observation_id}
-        return {"text": "", "proof": proof, "marks": {}, "reference_resolution": {}}
-
-    def resolve_action(self, action, marks, execution):
-        return action
+        return {"text": "", "proof": proof, "marks": {}}
 
     def finish(self, execution, *, action_latency_s=0.0, raw_action_output="", outcome=""):
         call_id = execution["proof"]["call_id"]

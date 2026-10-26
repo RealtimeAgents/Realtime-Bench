@@ -16,6 +16,7 @@ import shlex as shlex
 import xml.etree.ElementTree as ET
 from collections.abc import Callable as Callable
 from dataclasses import dataclass as dataclass
+from typing import Any as Any
 
 from realtime_framework.entity.actions import Action
 
@@ -639,38 +640,61 @@ def _action_key(action: Action) -> str:
 from realtime_framework.entity.harness import Decision as ActionOutputResolution
 
 
+@dataclass(frozen=True)
+class ResolvedOutput:
+    """The one action resolved from model output, and what the parse made of each body it was
+    given that parsed, in the order they were tried: the one the action is, and all of them."""
+
+    decision: ActionOutputResolution
+    chosen: Any = None  # the parse whose action the decision holds; None unless it is valid
+    parses: tuple = ()
+
+
 def resolve_action_output(
     content: str,
-    parse_action: Callable[[str], Action | None],
+    parse: Callable[[str], Any],
     *,
     framed: bool = False,
-) -> ActionOutputResolution:
+) -> ResolvedOutput:
     """Resolve one unambiguous action from canonical or commonly wrapped model output.
-    ``framed``: the canonical form also carries the frame field of a streaming action."""
+    ``parse(body)`` is None for a body that does not parse, otherwise what it made of the body,
+    whose ``action`` is the action, None when the body parsed to none, as an action naming marks
+    its frame lacks. ``framed``: the canonical form also carries the frame field of a streaming
+    action."""
     text = (content or "").strip()
     if len(text) > 1_000_000:
-        return ActionOutputResolution(
-            action=Action.wait(),
-            action_text=None,
-            valid=False,
-            protocol_failure="action_output_too_large",
+        return ResolvedOutput(
+            ActionOutputResolution(
+                action=Action.wait(),
+                action_text=None,
+                valid=False,
+                protocol_failure="action_output_too_large",
+            )
         )
     if not text:
-        return ActionOutputResolution(
-            action=Action.wait(),
-            action_text=None,
-            valid=False,
-            protocol_failure="empty_action_output",
+        return ResolvedOutput(
+            ActionOutputResolution(
+                action=Action.wait(),
+                action_text=None,
+                valid=False,
+                protocol_failure="empty_action_output",
+            )
         )
+    parses = []
 
     def safe_parse(body):
+        """The parse of a body that parsed to an action, else None."""
         try:
-            return parse_action(body)
+            parsed = parse(body)
         except (ValueError, TypeError, KeyError, RecursionError):
             return None
+        if parsed is None:
+            return None
+        parses.append(parsed)
+        return parsed if parsed.action is not None else None
 
-    action = safe_parse(text)
-    if action is not None:
+    chosen = safe_parse(text)
+    if chosen is not None:
         try:
             complete_value = json.loads(text)
         except (TypeError, ValueError):
@@ -678,22 +702,23 @@ def resolve_action_output(
         canonical = _is_canonical_json_action(
             complete_value, _FRAMED_CANONICAL_FIELDS if framed else _CANONICAL_FIELDS
         )
-        return ActionOutputResolution(
-            action=action,
+        decision = ActionOutputResolution(
+            action=chosen.action,
             action_text=text,
             valid=True,
             parse_mode="canonical_json" if canonical else "json_envelope",
             candidate_count=1,
         )
+        return ResolvedOutput(decision, chosen, tuple(parses))
 
     # A complete literal call/shorthand is authoritative, including JSON *inside* text to type.
     whole_action = _shorthand_object(text)
     if whole_action is not None:
         serialized = json.dumps(whole_action, ensure_ascii=False)
-        recovered = safe_parse(serialized)
-        if recovered is not None:
-            return ActionOutputResolution(
-                action=recovered,
+        chosen = safe_parse(serialized)
+        if chosen is not None:
+            decision = ActionOutputResolution(
+                action=chosen.action,
                 action_text=serialized,
                 valid=True,
                 parse_mode="function_call"
@@ -701,8 +726,9 @@ def resolve_action_output(
                 else "text_shorthand",
                 candidate_count=1,
             )
+            return ResolvedOutput(decision, chosen, tuple(parses))
 
-    candidates: list[tuple[_Candidate, Action]] = []
+    candidates: list[tuple[_Candidate, Any]] = []
     seen_text: set[str] = set()
     try:
         decoded = (*_structured_candidates(text), *_text_candidates(text))
@@ -719,18 +745,19 @@ def resolve_action_output(
         else:
             rejected_candidate = True
 
-    unique: dict[str, tuple[_Candidate, Action]] = {}
+    unique: dict[str, tuple[_Candidate, Any]] = {}
     for candidate, recovered in candidates:
-        unique.setdefault(_action_key(recovered), (candidate, recovered))
+        unique.setdefault(_action_key(recovered.action), (candidate, recovered))
     if len(unique) == 1 and not rejected_candidate:
-        candidate, recovered = next(iter(unique.values()))
-        return ActionOutputResolution(
-            action=recovered,
+        candidate, chosen = next(iter(unique.values()))
+        decision = ActionOutputResolution(
+            action=chosen.action,
             action_text=candidate.text,
             valid=True,
             parse_mode=candidate.parse_mode,
             candidate_count=len(unique),
         )
+        return ResolvedOutput(decision, chosen, tuple(parses))
 
     failure = (
         "ambiguous_action_output"
@@ -742,13 +769,14 @@ def resolve_action_output(
         failure,
         text[:200],
     )
-    return ActionOutputResolution(
+    decision = ActionOutputResolution(
         action=Action.wait(),
         action_text=None,
         valid=False,
         protocol_failure=failure,
         candidate_count=len(unique),
     )
+    return ResolvedOutput(decision, None, tuple(parses))
 
 
 # Native tool output

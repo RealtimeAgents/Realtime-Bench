@@ -224,11 +224,10 @@ class NativeStreamingAgent(VisionAgentBase):
         # between its attempts to ready it ("backoff") or waiting for the renewal ("renewal").
         self._preparing: set[str] = set()
         self._aborted_early: set[int] = set()  # aborted before their worker started generate()
-        # What each action asked for (action_text), by its outcome's (decision, call id); a
-        # reply's outcome, which has no call id, holds what its grounding failure asked for, and
-        # the mark that frame does not have.
-        self._requested: dict[tuple[int, str | None], str] = {}
-        self._unknown_marks: dict[tuple[int, None], str] = {}
+        # What each action asked for (action_text), by its outcome's (decision, call id), and the
+        # mark its frame does not have: a reply's outcome, which has no call id, holds what its
+        # grounding failure asked for.
+        self._requested: dict[tuple[int, str | None], tuple[str, str | None]] = {}
         # The generation of each call an action was posted for, which a cancellation names.
         self._generation_of: dict[str, int] = {}
         super().__init__(config, log_dir, trace=trace)
@@ -813,15 +812,22 @@ class NativeStreamingAgent(VisionAgentBase):
         """Parse one action against the frame it names and post it, with the time its message
         came off the wire, ``received_at`` on the clock's monotonic reading."""
         arrived = self._wall(received_at)
-        action, protocol = parse_grounded_action(
-            self, text, reply.own.execution, arrived, reply.own.record
+        execution = reply.own.execution
+        action, protocol, resolution = parse_grounded_action(
+            self, text, arrived, reply.own.record, resolve=execution is not None
         )
+        if resolution is not None:
+            # The inspection of the frame the reply started on keeps the last resolution of any
+            # call of the replies on it.
+            execution["reference_resolution"] = resolution
         reply.grounding.append({"call_id": call_id, "grounding": protocol.get("grounding")})
         if protocol["protocol_failure"] is not None:
             if reply.protocol_failure is None and protocol["protocol_failure"] == GROUNDING_FAILED:
                 with self._lock:
-                    self._requested[(reply.decision, None)] = protocol["requested"]
-                    self._unknown_marks[(reply.decision, None)] = protocol["unknown_mark"]
+                    self._requested[(reply.decision, None)] = (
+                        protocol["requested"],
+                        protocol["unknown_mark"],
+                    )
             reply.protocol_failure = reply.protocol_failure or protocol["protocol_failure"]
             return
         reference = protocol["frame_reference"]
@@ -847,7 +853,8 @@ class NativeStreamingAgent(VisionAgentBase):
             )
         with self._lock:
             self._requested[(reply.decision, call_id)] = (
-                "none" if action is None else action_text(action)
+                "none" if action is None else action_text(action),
+                None,
             )
             self._generation_of[call_id] = reply.generation
         self._post(arrival)
@@ -925,8 +932,8 @@ class NativeStreamingAgent(VisionAgentBase):
         on the reply when it came to no action."""
         with self._lock:
             key = (outcome.decision, outcome.call_id)
-            requested = self._requested.pop(key, "none")
-            feedback = execution_feedback(outcome, requested, self._unknown_marks.pop(key, None))
+            requested, unknown_mark = self._requested.pop(key, ("none", None))
+            feedback = execution_feedback(outcome, requested, unknown_mark)
             self._blocks.append(
                 feedback_block(outcome.decision, outcome.call_id, feedback, self.clock.time_ns())
             )

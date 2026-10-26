@@ -19,7 +19,6 @@ from realtime_framework.harnesses.default.frames import (
     INVALID_GROUNDING_FRAME,
     MISSING_FRAME,
 )
-from realtime_framework.sandbox.observation.som import resolve_action_references
 from tests.fake_clock import FakeClock
 from tests.replay import frames as replay_frames
 from tests.replay.scenario import replies
@@ -75,15 +74,11 @@ def clock():
 
 class _MovingMarks(RecordingToolRuntime):
     """P3 120 px further right in every frame; an action's references resolve against the marks
-    of the frame it names (sandbox/observation/som.py ToolRuntime.resolve_action)."""
+    of the frame it names (harnesses/default/harness.py parse_grounded_action)."""
 
     def inspect(self, observation, **fields) -> dict:
         marks = {"P3": {"kind": "point", "point": [100 + 120 * observation.tick_number, 200]}}
         return {**super().inspect(observation, **fields), "marks": marks}
-
-    def resolve_action(self, action, marks, execution):
-        resolved, execution["reference_resolution"] = resolve_action_references(action, marks)
-        return resolved
 
 
 def test_an_action_uses_the_marks_and_geometry_of_the_frame_it_names(monkeypatch, clock):
@@ -193,6 +188,39 @@ def test_an_action_naming_a_mark_its_frame_lacks_is_a_grounding_failure(tmp_path
         "NOTE: your previous action names P9, which is not a mark of the screenshot it was based "
         "on, so WAIT was executed. (grounding_failed)"
     ) in _request_texts(stub.requests[1])
+
+
+def test_a_turn_based_inspection_row_keeps_the_last_resolution_of_its_output(tmp_path):
+    """The tool trace row of a decision's inspection keeps the last resolution its output made,
+    while its protocol keeps the first naming a mark the frame lacks, as the action asked for: of
+    P9 then P8, the row keeps P8 and the protocol P9. Of two clicks the last, P2, is both; output
+    that parsed to no action made none."""
+    missing = '{"action": "click", "target": "%s"}'
+    steps = [
+        Step(missing % "P9", status="wait"),
+        Step(f"{missing % 'P9'} {missing % 'P8'}", status="wait"),
+        Step(f"{missing % 'P1'} {missing % 'P2'}", status="wait"),
+        Step("no action", status="wait"),
+    ]
+    with ChatCompletionsStub(replies(steps)) as stub:
+        episode = open_episode(stub, tmp_path)
+        try:
+            results = [decide(episode, k, step.status)[1] for k, step in enumerate(steps)]
+        finally:
+            episode.finish()
+    rows = [json.loads(line) for line in (tmp_path / "tool_calls.jsonl").read_text().splitlines()]
+    resolutions = [row["reference_resolution"] for row in rows]
+    grounding = [result["action_protocol"]["grounding"] for result in results]
+
+    def unknown(mark):
+        failure = {"error": "mark_not_in_observation", "mark": mark, "reference": mark}
+        return {"mode": "som", "valid": False, "resolutions": [failure]}
+
+    assert resolutions[:2] == [unknown("P9"), unknown("P8")]
+    assert grounding[:2] == [unknown("P9"), unknown("P9")]
+    assert resolutions[2] == grounding[2]
+    assert resolutions[2]["resolutions"][0]["mark"] == "P2"
+    assert resolutions[3] is grounding[3] is None
 
 
 def test_turn_based_actions_name_no_frame(tmp_path):
