@@ -170,7 +170,11 @@ class ModelConfig(BaseModel):
     api_key_env: Optional[str] = None
     model_revision: str | None = None
     chat_stream: bool = True
-    chat_include_usage: bool = False
+    # A chat_completions stream asks for its usage (stream_options.include_usage) unless the
+    # endpoint rejects stream_options; no other API reads it.
+    chat_include_usage: bool = Field(
+        default_factory=lambda fields: fields["adapter_type"] == "chat_completions"
+    )
     # Physical input capacity, independent of the benchmark's token clock. An estimated
     # counter is explicitly approximate; provider counters can include visual/template tokens.
     context_window_tokens: int | None = Field(default=None, gt=0)

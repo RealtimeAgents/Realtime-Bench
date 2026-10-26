@@ -118,8 +118,12 @@ class VisionAgentBase(StreamingAgent):
         inp = self._usage_number(usage, "input_tokens", "prompt_tokens")
         out = self._usage_number(usage, "output_tokens", "completion_tokens")
         total = self._usage_number(usage, "total_tokens") or inp + out
-        details = usage.get("input_token_details", {}) if isinstance(usage, dict) else {}
-        output_details = usage.get("output_token_details", {}) if isinstance(usage, dict) else {}
+        details, output_details = {}, {}
+        if isinstance(usage, dict):
+            details = usage.get("input_token_details") or usage.get("prompt_tokens_details") or {}
+            output_details = (
+                usage.get("output_token_details") or usage.get("completion_tokens_details") or {}
+            )
         self._tok["input_tokens"] += inp
         self._tok["output_tokens"] += out
         self._tok["total_tokens"] += total
