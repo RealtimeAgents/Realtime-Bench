@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import threading
 from functools import partial
 from types import SimpleNamespace
@@ -36,7 +37,12 @@ from realtime_framework.entity.model import (
     SessionSeed,
     SyncDisposition,
 )
-from realtime_framework.entity.records import UNTRACED, current_trace_scope, trace_scope
+from realtime_framework.entity.records import (
+    UNTRACED,
+    TraceEvent,
+    current_trace_scope,
+    trace_scope,
+)
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
 from realtime_framework.harnesses.default.frames import FrameTable
@@ -155,10 +161,10 @@ class _ScopedConnection(_FakeConnection):
         return super().recv()
 
 
-def test_the_streaming_reader_reads_in_no_generation_scope():
-    """The reader reads for the connection, whatever reply is in progress: the trace records
-    what it reads in no scope, not in that of the call that opened the connection, often a
-    rebuild for an earlier generation."""
+def test_the_streaming_reader_reads_in_no_scope_of_the_call_that_opened_the_connection():
+    """The reader runs in a context of its own, not in a copy of the call's that opened the
+    connection, often a rebuild for an earlier generation: with no reply in flight, what it
+    reads is in no scope (test_each_streaming_message_is_traced_under_the_reply_it_was_read_for)."""
 
     async def scenario():
         connection = _ScopedConnection()
@@ -727,6 +733,82 @@ def test_a_streaming_session_pushes_frames_folds_old_ones_and_keeps_its_reply():
 
 async def _collect(events) -> list:
     return [event async for event in events]
+
+
+# Frame 1 is confirmed before a reply that runs from 0.2 s to 0.3 s; frame 2, pushed after it,
+# is confirmed then.
+SCOPED_READS = [
+    {"conn": 1, "dir": "open", "at": 0.0, "msg": None},
+    c2s(SESSION_UPDATE),
+    push(1, 1, 1),
+    item_done(1, None),
+    c2s(RESPONSE_CREATE),
+    s2c({"type": "response.created", "response": {"id": "resp_1"}}, 0.2),
+    s2c(
+        {
+            "type": "response.done",
+            "response": {"id": "resp_1", "status": "completed", "output": [], "usage": USAGE},
+        },
+        0.3,
+    ),
+    push(2, 2, 2),
+    item_done(2, None),
+    {"conn": 1, "dir": "close", "at": None, "msg": {"by": "client", "code": 1000}},
+]
+
+
+class _ReadScopes:
+    """An agent trace that keeps the type and the trace scope of each server message read."""
+
+    def __init__(self) -> None:
+        self.read: list[tuple[str, dict | None]] = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        if event == TraceEvent.SESSION_MESSAGE and payload["direction"] == "server":
+            self.read.append((json.loads(body)["type"], current_trace_scope()))
+
+
+def test_each_streaming_message_is_traced_under_the_reply_it_was_read_for():
+    """The reader records each message in the scope of the reply in flight as the message comes
+    in, as Gemini Live's reader does (decision 36): also the reply's first, which a read blocked
+    since before the reply started returns. What it reads before the reply and after it is in no
+    scope, not in that of the push the message confirms."""
+    clock, table, blocks = FakeClock(), FrameTable(), []
+    answer = AnswerRequirements("text_json", "standard_vlm")
+    seed = SessionSeed(SYSTEM_INSTRUCTION, MODEL_KEY, None, 1.0, answer)
+    trace = _ReadScopes()
+
+    def frame(k: int):
+        observation = _observation(k)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        blocks.append(frame_block(record, observation))
+        return observation, streaming_view(blocks, frames=2)
+
+    async def scenario(driver):
+        with trace_scope(phase="initialize"):
+            await driver.connect(ConnectRequest(seed=seed))
+        observation, view = frame(1)
+        with trace_scope(phase="push", observation_id="obs-1"):
+            await driver.push_frame(observation, view)
+        with trace_scope(phase="decision", generation=1):
+            request = GenerationRequest("reply-1", None, "inf", "wall", canonical=view)
+            await _collect(driver.events(await driver.request_reply(request)))
+        with trace_scope(phase="push", observation_id="obs-2"):
+            await driver.push_frame(*frame(2))
+        await driver.close()
+
+    with CassetteServer(SCOPED_READS, clock) as server:
+        driver = driver_for(server.port, clock, trace, streaming=True)
+        driver._ws_connection = clocked_connection(driver._ws_connection, clock)
+        run_on_fake_clock(clock, scenario(driver))
+    assert server.finish() == []
+    reply = {"phase": "decision", "generation": 1}
+    assert trace.read == [
+        ("conversation.item.done", None),
+        ("response.created", reply),
+        ("response.done", reply),
+        ("conversation.item.done", None),
+    ]
 
 
 # A rebuilt session replays frames 1 and 2, which the server confirms only at 0.3 s; frame 3,

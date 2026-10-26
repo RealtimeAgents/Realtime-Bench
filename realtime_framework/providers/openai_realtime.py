@@ -57,6 +57,7 @@ from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
 from realtime_framework.entity.model import retry_cancel_event
 from realtime_framework.entity.records import TraceEvent
+from realtime_framework.entity.records import current_trace_scope
 from realtime_framework.entity.records import trace_scope
 from realtime_framework.providers.capture import sync_ws_connection
 from realtime_framework.providers.openai_realtime_session import Delete
@@ -155,6 +156,9 @@ class _Session:
         self._clock = None
         self._read_one: asyncio.Event | None = None
         self._on_lost = lambda: None
+        # Native streaming: the trace scope of the reply in flight, which the trace records what
+        # the reader reads in as it comes in (decision 36); None between replies.
+        self.reply_scope: dict | None = None
         # How the connection ended: closed normally (by either side), or a failed read.
         self.closed: ConnectionClosedOK | None = None
         self.failure: Exception | None = None
@@ -168,8 +172,9 @@ class _Session:
         anyway. A close that may have left the connection open cancels the reader instead,
         which does not call it."""
         self._clock, self._read_one, self._on_lost = clock, asyncio.Event(), on_lost
-        # The reader reads for the connection, whatever reply is in progress, not for the call
-        # that opened it: in an empty context the trace records what it reads in no scope.
+        # The reader reads for whatever reply is in progress, not for the call that opened the
+        # connection: it runs in an empty context, and the trace records each message it reads
+        # in the reply's scope (reply_scope).
         self._reader = asyncio.create_task(self._read_all(), context=contextvars.Context())
 
     async def _read_all(self) -> None:
@@ -237,6 +242,8 @@ class _Session:
                 taken = self.core.receive(event)
             else:
                 taken = self.core.arrived(event, self._clock.monotonic())
+                if not self.core.replying:
+                    self.reply_scope = None
             if not taken:
                 logger.debug(
                     "OpenAI Realtime connection %d: no state takes %s",
@@ -554,6 +561,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         )
         # The history is None when the runtime opens the episode's first session.
         if self.streaming:
+            # The reader's read is under way when a reply starts, so the trace asks the session
+            # for the reply's scope as each message comes in.
+            connection.trace_read_scope = lambda: session.reply_scope
             session.read_continuously(self.clock, self.mark_dirty)
             replay = session.core.replay_streaming(request.history)
             await self._send_all(session, replay)
@@ -677,13 +687,20 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         it in. Its events come as a turn's do. A connection
         carries one reply at a time: asked for before the one in progress ended, it raises and
         writes nothing. It holds the session as push_frame's writes do, so the reply goes to the
-        session it pushed to."""
+        session it pushed to. What the reader reads from its start until its end, or until its
+        response.create failed, the trace records in the scope of the call that asked for it."""
         async with self._session_lock():
             session = self._connected_session()
             if session.core.replying:
                 raise RuntimeError("OpenAI Realtime reply already in progress")
             await self._send_all(session, session.core.push(request.canonical))
-            return await self._create_response(session, session.core.start_reply(), request)
+            reply = session.core.start_reply()
+            session.reply_scope = current_trace_scope()
+            try:
+                return await self._create_response(session, reply, request)
+            except BaseException:
+                session.reply_scope = None
+                raise
 
     async def events(self, generation: GenerationHandle):
         session, core_generation = generation.opaque
