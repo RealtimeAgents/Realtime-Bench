@@ -33,6 +33,13 @@ def page_targets(port: int, timeout: float = 3) -> list[dict]:
     ]
 
 
+# Commands whose effect Chrome keeps on the session that sent them and drops with it: the domain
+# whose events the client waits for, and the scripts for every new document. A session that
+# reconnecting opens sends them again, in order, before anything else, as Playwright adds its init
+# scripts to each new session.
+_SESSION_REGISTRATIONS = frozenset({"Page.enable", "Page.addScriptToEvaluateOnNewDocument"})
+
+
 class PersistentCDPClient:
     """A serialized CDP session bound to one page target."""
 
@@ -43,6 +50,7 @@ class PersistentCDPClient:
         self._socket = None
         self._message_id = 0
         self._events: deque[dict] = deque()
+        self._registrations: list[tuple[str, dict]] = []  # sent again on each new session
         self._lock = threading.RLock()
 
     def _select_target(self, deadline: Deadline) -> dict:
@@ -66,6 +74,8 @@ class PersistentCDPClient:
         return targets[0]
 
     def _ensure_connected(self, deadline: Deadline) -> None:
+        """Open a session unless one is open, and register on it what the closed ones had. A
+        registration that fails closes the session, so the next call registers them again."""
         if self._socket is not None:
             return
         target = self._select_target(deadline)
@@ -77,6 +87,14 @@ class PersistentCDPClient:
             max_size=None,
         )
         self._events.clear()
+        try:
+            for method, params in self._registrations:
+                response = self._command(method, params, deadline)
+                if response.get("error"):
+                    raise RuntimeError(f"CDP {method} on a new session: {response['error']}")
+        except BaseException:
+            self._close_locked()
+            raise
 
     def _recv(self, deadline: Deadline) -> dict:
         if self._socket is None:
@@ -114,28 +132,36 @@ class PersistentCDPClient:
         deadline = Deadline(timeout, f"CDP {method}")
         with self._locked(deadline):
             self._ensure_connected(deadline)
-            self._message_id += 1
-            message_id = self._message_id
-            assert self._socket is not None
             try:
-                self._socket.send(
-                    json.dumps(
-                        {
-                            "id": message_id,
-                            "method": method,
-                            "params": params or {},
-                            **({"sessionId": session_id} if session_id else {}),
-                        }
-                    )
-                )
-                while True:
-                    message = self._recv(deadline)
-                    if message.get("id") == message_id:
-                        return message
-                    self._events.append(message)
+                response = self._command(method, params or {}, deadline, session_id)
             except BaseException:
                 self._close_locked()
                 raise
+            if method in _SESSION_REGISTRATIONS and not response.get("error"):
+                self._registrations.append((method, params or {}))
+            return response
+
+    def _command(
+        self, method: str, params: dict, deadline: Deadline, session_id: str | None = None
+    ) -> dict:
+        self._message_id += 1
+        message_id = self._message_id
+        assert self._socket is not None
+        self._socket.send(
+            json.dumps(
+                {
+                    "id": message_id,
+                    "method": method,
+                    "params": params,
+                    **({"sessionId": session_id} if session_id else {}),
+                }
+            )
+        )
+        while True:
+            message = self._recv(deadline)
+            if message.get("id") == message_id:
+                return message
+            self._events.append(message)
 
     def wait_event(self, method: str, *, timeout: float = 120) -> dict:
         deadline = Deadline(timeout, f"CDP wait for {method}")
