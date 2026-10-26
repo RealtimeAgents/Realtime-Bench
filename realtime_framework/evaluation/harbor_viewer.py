@@ -14,7 +14,6 @@ from harbor.models.trajectories.trajectory import Trajectory
 from harbor.models.trial.result import TimingInfo
 from harbor.viewer.scanner import JobScanner
 
-from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.harbor_results import job_label, job_results
 from realtime_framework.evaluation.reporting import active_interval, browser_metadata, read_json
 
@@ -136,18 +135,14 @@ def export_episode(run_dir, logs_dir, request):
         for event in events
         if event.get("event") == "ObservationCaptured"
     }
-    # The canonical request of each decision's last attempt; a run recorded before
-    # GenerationPrepared carried it has none. Its body is in the pack, which is not exported.
+    # Where the canonical request of each decision's last attempt is in the pack, which is
+    # neither exported nor uploaded: only its locator leaves the run. A run recorded before
+    # GenerationPrepared carried it has none.
     prepared = {
         event["payload"]["scope"]["decision"]: event["payload"]["body"]
         for event in events
         if event.get("event") == "GenerationPrepared" and event["payload"].get("body")
     }
-
-    def canonical_request(decision):
-        body = prepared.get(decision)
-        return None if body is None else json.loads(load_body(run_dir / "episode_blobs.pack", body))
-
     inspections = {row.get("observation_id"): row for row in _rows(raw / "tool_calls.jsonl")}
     referenced = set()
     for row in rows:
@@ -282,7 +277,7 @@ def export_episode(run_dir, logs_dir, request):
                     **measurements,
                     "decision": decision,
                     "observation_id": observation_id,
-                    "canonical_request": canonical_request(decision),
+                    "canonical_request_body": prepared.get(decision),
                     "runtime": row.get("realtime_runtime"),
                 },
             }
@@ -336,9 +331,10 @@ def export_episode(run_dir, logs_dir, request):
                 "not necessarily one internal model call. GUI tools represent submitted actions; "
                 "execution feedback records whether they were applied. Messages are the harness "
                 "recorded outputs. Screenshots are "
-                "raw captures before adapter resizing/mark overlay. The canonical request each "
-                "step's model call was prepared from, before its API encoding, with screenshots "
-                "by SHA-256, is in step.extra. Raw evidence is in "
+                "raw captures before adapter resizing/mark overlay. Each step's extra locates the "
+                "canonical request its model call was prepared from, as the episode trace's "
+                "GenerationPrepared body does, in the run's episode_blobs.pack, which is not "
+                "exported: the request text is not in this file. Raw evidence is in "
                 "benchmark/; recording.mp4 preserves the source recording. The benchmark recording "
                 "player limits playback to the active loop and draws annotations in the browser. "
                 "recording-metadata.json describes playback alignment. "

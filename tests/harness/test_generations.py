@@ -473,9 +473,10 @@ def test_a_generation_records_the_request_it_was_prepared_from(tmp_path):
     assert set(frame["image"]["data"]) == {"byte_length", "sha256"}
 
 
-def test_the_result_export_shows_each_step_the_request_it_was_prepared_from(tmp_path):
+def test_the_result_export_locates_each_steps_request_in_the_pack(tmp_path):
     """The ATIF export of an episode (harbor_viewer.export_episode) gives each agent step the
-    canonical request its generation was prepared from, read from the run's pack."""
+    locator of the canonical request its generation was prepared from, its GenerationPrepared
+    body, and not the request: the request stays in the pack, which is not exported."""
     from realtime_framework.evaluation.harbor_viewer import export_episode
 
     steps = LONG_SCENARIO[:2]
@@ -505,10 +506,16 @@ def test_the_result_export_shows_each_step_the_request_it_was_prepared_from(tmp_
     task = {"task_id": "replay", "suite_id": "replay", "interaction_mode": "turn_based"}
     request = {"task": task, "mode": "default", "model": CHAT_MODEL_KEY}
     export_episode(tmp_path, tmp_path / "logs", request)
-    trajectory = json.loads((tmp_path / "logs" / "trajectory.json").read_text())
-    shown = [step["extra"]["canonical_request"] for step in trajectory["steps"][2::2]]
+    exported = (tmp_path / "logs" / "trajectory.json").read_text()
+    trajectory = json.loads(exported)
+    located = [step["extra"]["canonical_request_body"] for step in trajectory["steps"][2::2]]
+    assert located == [p["body"] for p in _trace(tmp_path, "GenerationPrepared")]
     sent = [json.loads(json.dumps(args[0].canonical.to_record())) for args, _ in started]
-    assert len(sent) == len(steps) and shown == sent
+    pack = tmp_path / "episode_blobs.pack"
+    assert len(sent) == len(steps)
+    assert [json.loads(load_body(pack, body)) for body in located] == sent
+    system = sent[0]["items"][0]["block"]["text"]
+    assert json.dumps(system, ensure_ascii=False)[1:-1] not in exported
 
 
 def test_a_generation_requests_with_its_budget(tmp_path):
