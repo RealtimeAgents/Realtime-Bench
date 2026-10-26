@@ -338,6 +338,24 @@ def test_gemini_options(options, message):
     )
 
 
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"bogus": True}, "Unknown openrouter provider_options: ['bogus']"),
+        (
+            {"cache_breakpoint": "yes"},
+            "openrouter cache_breakpoint must be one of [False, True], got 'yes'",
+        ),
+    ],
+)
+def test_openrouter_options(options, message):
+    """OpenRouter takes the one option its compat declares, cache_breakpoint, as the presets that
+    cache at explicit breakpoints set it."""
+    assert preset("claude-opus-5").provider_options == {"cache_breakpoint": True}
+    episode(preset("claude-opus-5"))
+    fails(lambda: episode(preset("gpt-5.6-sol", provider_options=options)), message)
+
+
 # Every wire option of Gemini Live, as a model YAML sets them (GeminiLiveDriver.compat).
 GEMINI_OPTIONS = {
     "tool_behavior": "non_blocking",

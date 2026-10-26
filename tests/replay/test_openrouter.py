@@ -154,8 +154,9 @@ def check_one_session(actual: list[dict]) -> None:
 
 
 def check_cache_breakpoints(records: list[dict]) -> None:
-    """anthropic/ models get one ephemeral breakpoint, on the last content part of the newest
-    message (providers/litellm.py _mark_cache_breakpoint, LiteLLMDriver._request_kwargs)."""
+    """A model whose YAML sets the cache_breakpoint provider option gets one ephemeral breakpoint,
+    on the last content part of the newest message (providers/litellm.py _mark_cache_breakpoint,
+    LiteLLMDriver._request_kwargs)."""
     for record in records:
         for request in record["requests"]:
             messages = request["body"]["messages"]
@@ -583,13 +584,15 @@ def test_a_route_to_another_upstream_fails_the_decision(openrouter_env, tmp_path
     [("gemini-3.8-flash", "Google AI Studio", True), ("gpt-5.6-sol", "OpenAI", False)],
     ids=["google", "openai"],
 )
-def test_cache_breakpoint_by_model_prefix(key, provider, marked, openrouter_env, tmp_path):
-    """Behind OpenRouter, google/ models get the explicit breakpoint anthropic/ ones get, on the
-    last content part of the newest message (ChatCompat cache_breakpoint "model_prefix",
-    LiteLLMDriver._request_kwargs); openai/ models cache implicitly and get none. The stub
-    reports each catalog entry's pinned upstream as the provider that served it."""
+def test_cache_breakpoint_set_in_the_model_yaml(key, provider, marked, openrouter_env, tmp_path):
+    """Behind OpenRouter, a model whose YAML sets the cache_breakpoint provider option, as the
+    Gemini preset does beside the Anthropic ones, gets the explicit breakpoint on the last content
+    part of the newest message (OpenRouterDriver.compat, LiteLLMDriver._request_kwargs); the OpenAI
+    preset, which caches implicitly, sets none and gets none. The stub reports each catalog entry's
+    pinned upstream as the provider that served it."""
     steps = LONG_SCENARIO[:2]
     entry = catalog.get(key)
+    assert entry.defaults.get("provider_options", {}).get("cache_breakpoint", False) is marked
     route = route_metadata(entry.model_name, provider)
     with OpenRouterStub(replies(steps), route=route) as stub:
         openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)

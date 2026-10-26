@@ -5,3 +5,5 @@ endpoint:
   upstream_provider: google-ai-studio
   native_output_limit: 65536
 reasoning_effort: low
+provider_options:
+  cache_breakpoint: true

@@ -5,3 +5,5 @@ endpoint:
   upstream_provider: anthropic
   native_output_limit: 128000
 reasoning_effort: low
+provider_options:
+  cache_breakpoint: true

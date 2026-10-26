@@ -33,6 +33,9 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   only the generic litellm API still looks one up: the native_output_limit_source of the eleven
   presets that took it from the map, their run hashes, and litellm_output_limit of every preset
   changed.
+- The OpenRouter presets that cache at explicit breakpoints set the cache_breakpoint provider
+  option in their YAMLs: provider_options of claude-opus-5, claude-fable-5.1 and
+  gemini-3.8-flash, and their run hashes, changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

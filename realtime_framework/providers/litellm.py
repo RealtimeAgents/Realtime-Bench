@@ -440,8 +440,10 @@ class ChatDeployment(Deployment):
 class ChatCompat(Compat):
     """Named restrictions and special requirements of one API."""
 
-    # "model_prefix": Anthropic/Gemini models behind OpenRouter; "always": every request.
-    cache_breakpoint: str | None = None
+    # Cache through the newest message on every request. Elsewhere a model whose provider caches
+    # only at explicit breakpoints (Anthropic's, Gemini's behind OpenRouter) sets the
+    # cache_breakpoint provider option its API declares; OpenAI caches implicitly.
+    cache_breakpoint: bool = False
     strip_image_detail: bool = False
     # Each request sends the decision cap, else the declared native limit, else omits the
     # parameter (provider default); an API that requires it (output_limit_required) refuses an
@@ -570,11 +572,7 @@ class LiteLLMDriver:
         messages = list(chat_messages(request.canonical))
         if compat.strip_image_detail:
             _strip_image_detail(messages)
-        if compat.cache_breakpoint == "always" or (
-            compat.cache_breakpoint == "model_prefix"
-            and self.config.model_name.startswith(("anthropic/", "google/"))
-        ):
-            # Anthropic and Gemini use explicit breakpoints; OpenAI uses implicit caching.
+        if compat.cache_breakpoint or self.config.provider_options.get("cache_breakpoint"):
             _mark_cache_breakpoint(messages)
         stream = self._stream_enabled()
         kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
@@ -1133,7 +1131,7 @@ class OpenRouterDriver(LiteLLMDriver):
         base_url_env="OPENROUTER_BASE_URL",
         pin_route=True,
     )
-    compat = ChatCompat(cache_breakpoint="model_prefix")
+    compat = ChatCompat(provider_options={"cache_breakpoint": (False, (False, True))})
 
 
 class MoonshotDriver(LiteLLMDriver):
@@ -1181,7 +1179,7 @@ class AnthropicMessagesDriver(LiteLLMDriver):
         gateway="anthropic",
         default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
     )
-    compat = ChatCompat(cache_breakpoint="always", output_limit_required=True)
+    compat = ChatCompat(cache_breakpoint=True, output_limit_required=True)
 
 
 class ChatCompletionsDriver(LiteLLMDriver):

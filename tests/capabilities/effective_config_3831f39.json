@@ -67,6 +67,9 @@
    "comparison_scope": "model",
    "defaults": {
     "model_revision": null,
+    "provider_options": {
+     "cache_breakpoint": true
+    },
     "reasoning_effort": "low",
     "temperature": null,
     "temperature_policy": "provider_default",
@@ -110,7 +113,9 @@
    "model_revision": null,
    "native_output_limit": 128000,
    "native_output_limit_source": "endpoint",
-   "provider_options": {},
+   "provider_options": {
+    "cache_breakpoint": true
+   },
    "reasoning_effort": "low",
    "temperature": null,
    "temperature_policy": "provider_default",
@@ -206,7 +211,9 @@
       "model_revision": null,
       "native_output_limit": 128000,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -241,7 +248,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c6b0eb49c8257e279a0df7a2c9cd119d02477d4a3b43cd5f5484eba5e5bb8335"
+    "hash": "4ebf08faaed69e6684904c48072763e50eb1b1d5d1fbb41a39322fb2a13a3cfd"
    },
    "token/None": {
     "config": {
@@ -332,7 +339,9 @@
       "model_revision": null,
       "native_output_limit": 128000,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -367,7 +376,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "41e7686ce03e395f289ad721f0b566ae8d6024337e33aca9ca9df876cd0c8644"
+    "hash": "e22bd6027f8120e64f3873771bb9f25d831dc2081ede87264242743e7d37a548"
    },
    "wall/None": {
     "config": {
@@ -458,7 +467,9 @@
       "model_revision": null,
       "native_output_limit": 128000,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -493,7 +504,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fbe50259db0a69bc5bec3e4e77b4d8a36b2a8885d29cba9e2cde28e8ab674c97"
+    "hash": "79ed629952934907f57427a03765a3362af0bced105eb2b6b7a4e3578f67d491"
    }
   },
   "vendor": "anthropic"
@@ -518,6 +529,9 @@
    "comparison_scope": "model",
    "defaults": {
     "model_revision": null,
+    "provider_options": {
+     "cache_breakpoint": true
+    },
     "reasoning_effort": "low",
     "temperature": null,
     "temperature_policy": "provider_default",
@@ -561,7 +575,9 @@
    "model_revision": null,
    "native_output_limit": 128000,
    "native_output_limit_source": "endpoint",
-   "provider_options": {},
+   "provider_options": {
+    "cache_breakpoint": true
+   },
    "reasoning_effort": "low",
    "temperature": null,
    "temperature_policy": "provider_default",
@@ -657,7 +673,9 @@
       "model_revision": null,
       "native_output_limit": 128000,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -692,7 +710,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "288ada37aab726a56e1a4da02fcec5ca0c2491a06f5b80f601a6379357cd2c04"
+    "hash": "aeb5a68fdcaaec5739fc51913e56615b86511995294b5f146bd475cd69cb7eeb"
    },
    "token/None": {
     "config": {
@@ -783,7 +801,9 @@
       "model_revision": null,
       "native_output_limit": 128000,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -818,7 +838,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "473d1762cd7ba611e4d71d09cf512137d76d887dd136baedd6b00b67a9ad4bcb"
+    "hash": "8e8a81d190da54974ac3f5e4d84ac9f57eef57a1c45e83ba283fcff7a6e7c313"
    },
    "wall/None": {
     "config": {
@@ -909,7 +929,9 @@
       "model_revision": null,
       "native_output_limit": 128000,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -944,7 +966,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d3462ccd8bf88a67b70de0a1588f2a22ea86ced3bd88758f2a8f1dfd09fd5a00"
+    "hash": "4bfb1cadb0de022da161cdfbc37a21569ceef80c3906884aa4a3b906ff372d72"
    }
   },
   "vendor": "anthropic"
@@ -1870,6 +1892,9 @@
    "comparison_scope": "model",
    "defaults": {
     "model_revision": null,
+    "provider_options": {
+     "cache_breakpoint": true
+    },
     "reasoning_effort": "low",
     "temperature": null,
     "temperature_policy": "provider_default",
@@ -1913,7 +1938,9 @@
    "model_revision": null,
    "native_output_limit": 65536,
    "native_output_limit_source": "endpoint",
-   "provider_options": {},
+   "provider_options": {
+    "cache_breakpoint": true
+   },
    "reasoning_effort": "low",
    "temperature": null,
    "temperature_policy": "provider_default",
@@ -2009,7 +2036,9 @@
       "model_revision": null,
       "native_output_limit": 65536,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -2044,7 +2073,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8447594dbceda2116f1a022de46f8e1c70aedb2224e175094ef505868f44b3c5"
+    "hash": "845c180a37d5b73d8dea6b379b7e7857b48e70689c0fdc83e588f3781a037203"
    },
    "token/None": {
     "config": {
@@ -2135,7 +2164,9 @@
       "model_revision": null,
       "native_output_limit": 65536,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -2170,7 +2201,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "51bb36c80e946183a3e558a4841688dd45407f493a71deee5e5549b215a840fe"
+    "hash": "0cc512a1cf0e273186fbea17e31ac14cb07cc2ceafef28362ef81838d0bbe5a8"
    },
    "wall/None": {
     "config": {
@@ -2261,7 +2292,9 @@
       "model_revision": null,
       "native_output_limit": 65536,
       "native_output_limit_source": "endpoint",
-      "provider_options": {},
+      "provider_options": {
+       "cache_breakpoint": true
+      },
       "reasoning_effort": "low",
       "temperature": null,
       "temperature_policy": "provider_default",
@@ -2296,7 +2329,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c385bd11d9d8890339c31ae55d1824ab8b72fd95eeab869dfb4c2449afefccae"
+    "hash": "d1905b76016ea0d4332b3d8468ae1181951b835ebd3fbd72685552477aa50e02"
    }
   },
   "vendor": "google"

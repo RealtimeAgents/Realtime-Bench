@@ -132,7 +132,9 @@ class Compat:
     output_limit_required: bool = False
     # The ModelConfig.provider_options the encoder reads: each name, its default and its allowed
     # values. Any other option is refused.
-    provider_options: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
+    provider_options: dict[str, tuple[str | bool, tuple[str | bool, ...]]] = field(
+        default_factory=dict
+    )
     # The options a model must set (in its YAML): their defaults stand in for no model.
     required_provider_options: tuple[str, ...] = ()
     # An option value that holds only with another option's value: (name, value) -> (name, value).

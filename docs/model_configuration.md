@@ -64,6 +64,11 @@ A `chat_completions` endpoint streams its replies and asks for the usage at the 
 (`stream_options.include_usage`). Set `include_usage: false` for an endpoint that rejects
 `stream_options`, or `stream: false` for complete responses.
 
+An `openrouter` model whose provider caches prompts only at explicit breakpoints, as Anthropic's
+and Gemini's do, sets `cache_breakpoint: true` in its [provider options](#provider-options): each
+request then marks its newest message as a cache breakpoint. OpenAI's models cache on their own
+and leave it out. `anthropic_messages` marks every request.
+
 ### Output limit
 
 `native_output_limit` caps the output tokens of every request, reasoning included; unless a token
@@ -116,8 +121,9 @@ from the command line, a run plan or Harbor.
 ### Provider options
 
 `provider_options` (top level) sets wire options of the API that its driver declares
-(`compat.provider_options`). Of the registered APIs only `gemini_live` takes them, and a Gemini
-Live model sets each of `tool_behavior`, `completion_signal`, `input_transport` and
+(`compat.provider_options`). Of the registered APIs, `openrouter` takes `cache_breakpoint` (`true`
+or `false`, the default), and `gemini_live` takes the options below; a Gemini Live model sets each
+of `tool_behavior`, `completion_signal`, `input_transport` and
 `tool_response_scheduling`: a model without them, a raw model id among them, is refused before
 the run. `history_format` (`native_tools` or `tool_transcript`: how past function calls are
 replayed into a rebuilt session) is optional. The allowed values are in `LIVE_PROTOCOL_OPTIONS`
