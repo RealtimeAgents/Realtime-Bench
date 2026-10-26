@@ -19,7 +19,6 @@ import os as os
 import re as re
 import threading as threading
 import uuid as uuid
-from collections.abc import Iterator as Iterator
 from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from dataclasses import replace as replace
@@ -63,7 +62,6 @@ ANTHROPIC_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 ANTHROPIC_REASONING_EFFORTS = (None, "fixed", "none", *ANTHROPIC_EFFORT_LEVELS)
 _REQUEST_GATE = threading.Lock()
 _LAST_REQUEST_AT = [0.0]
-_END = object()
 
 
 # Helpers
@@ -110,22 +108,6 @@ def pace_request(owner) -> None:
             if clock.wait(retry_cancel_event(), wait):
                 raise RetryCancelled("generation abandoned during the request_pacing wait")
         _LAST_REQUEST_AT[0] = clock.time()
-
-
-def _next_or_end(iterator: Iterator):
-    try:
-        return next(iterator)
-    except StopIteration:
-        return _END
-
-
-async def iterate_blocking(iterator: Iterator):
-    """Expose a blocking SDK iterator without blocking the runtime event loop."""
-    while True:
-        value = await asyncio.to_thread(_next_or_end, iterator)
-        if value is _END:
-            return
-        yield value
 
 
 def object_dict(value) -> dict | None:
