@@ -1,7 +1,8 @@
 """Set up an agent with the runner's set_up_agent, without containers or a task server.
 
-runner.main() and build_episode both call set_up_agent (evaluation/runner.py); in place of a
-BrowserSceneCapture on the container's browser, build_episode hands it the synthetic frames.
+runner.main() and build_episode both apply the pre-run rules (providers/preflight.py
+check_episode), then call set_up_agent (evaluation/runner.py); in place of a BrowserSceneCapture on
+the container's browser, build_episode hands it the synthetic frames.
 The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
 frame budget B (None on the wall clock and in pause mode, runner.py main), and ``max_ticks`` is
 the episode length in ticks, the duration_s run_stream receives times its env_fps (runner.py main,
@@ -25,6 +26,7 @@ from realtime_framework.evaluation import runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.registry import create_agent
+from realtime_framework.providers.preflight import check_episode
 from realtime_framework.sandbox.observation import som
 
 from . import baseline
@@ -164,6 +166,10 @@ def build_episode(
         return agent
 
     clock = clock or SystemClock()
+    env_fps = config.fps if env_fps is None else env_fps
+    check_episode(
+        config, clock_mode=clock_mode, task=task, env_fps=env_fps, interaction_mode="turn_based"
+    )
     # runner.main() opens the episode trace before it sets up the agent. Its attempt id leads the
     # retry jitter keys (entity/model.py RequestRetry); a fixed one keeps the baselines' backoffs.
     trace = EpisodeTrace(
@@ -189,7 +195,7 @@ def build_episode(
                 task, text_observation=text_observation, fps=config.fps, **(scene or {})
             ),
             clock=clock,
-            env_fps=config.fps if env_fps is None else env_fps,
+            env_fps=env_fps,
         )
     return Episode(
         agent=setup.agent,

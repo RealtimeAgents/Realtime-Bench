@@ -2,10 +2,10 @@
 
 One test per condition, asserting the exact message each check produced before the checks were
 collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0); the context-policy
-checks came later and are pinned as written. The runner's own rules run in check_episode
-(evaluation/runner.py set_up_agent); its argparse checks and those of identity_main and the
-Harbor trial worker are exercised through their main functions, which fail before any container
-or network is used.
+checks came later and are pinned as written. The runner's own rules run in check_episode, which
+the runner (evaluation/runner.py main) and the Harbor trial worker apply with their argparse
+checks; those and the checks of identity_main are exercised through their main functions, which
+fail before any container or network is used.
 """
 
 from __future__ import annotations
@@ -276,13 +276,33 @@ def test_frame_rate_cap():
     )
 
 
+CHOICE_ON_GAME = "Choice Decisions supports Web task evaluation only: gomoku"
+
+
 def test_text_only_choice_model_on_game():
-    fails(
-        lambda: episode(preset("jev-1.13"), task=GAME),
-        "Choice Decisions supports Web task evaluation only: gomoku",
-    )
+    fails(lambda: episode(preset("jev-1.13"), task=GAME), CHOICE_ON_GAME)
     episode(preset("jev-1.13"), task=WEB)
     episode(preset("gpt-6-luna-decisions"), task=GAME)
+
+
+def test_text_only_choice_model_on_game_runner(capsys, monkeypatch):
+    """A rule only check_episode applies is the runner's argument error, before any container."""
+    monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
+    usage_error(
+        capsys, runner_main("--model", "jev-1.13", "--task", GAME, "--clock", "wall"),
+        CHOICE_ON_GAME,
+    )
+
+
+def test_text_only_choice_model_on_game_trial(capsys, monkeypatch):
+    """And the Harbor trial worker's, whose dry run Harbor's resolve makes (harbor.py resolve)."""
+    from realtime_framework.evaluation._trial import main
+
+    monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
+    usage_error(
+        capsys, lambda: main(["--catalog-model", "jev-1.13", "--task", GAME, "--dry-run"]),
+        CHOICE_ON_GAME,
+    )
 
 
 def test_output_limit_required():

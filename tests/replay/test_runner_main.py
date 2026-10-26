@@ -225,6 +225,8 @@ def run_main(
         mock.patch.object(runner, "R", DESKTOP),
         mock.patch.object(runner, "GuestClient", lambda **_: guest),
         mock.patch.object(runner.custom_tasks, "get", lambda task_id: task),
+        # The fake model and task are set_up_agent's stand-in's, not held to the pre-run rules.
+        mock.patch.object(runner, "check_episode", lambda *args, **kwargs: None),
         mock.patch.object(runner, "set_up_agent", set_up_agent),
         mock.patch.object(runner, "run_stream", run_stream),
     ):

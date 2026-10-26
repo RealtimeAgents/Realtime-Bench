@@ -223,6 +223,8 @@ def main(argv=None):
     # Import after resolving environment-backed endpoint/model settings.
     import realtime_framework.evaluation.config as _yaml
     import realtime_framework.providers.registry as catalog
+    from realtime_framework.providers.preflight import check_episode
+    from realtime_framework.providers.preflight import check_token_budget
     from realtime_framework.providers.preflight import validate_model_interaction
 
     try:
@@ -238,6 +240,9 @@ def main(argv=None):
             model_input_fps=model_input_fps,
             interaction_mode=args.interaction_mode,
             tokens_per_frame=tokens_per_frame,
+        )
+        check_token_budget(
+            entry.adapter_type, clock_mode=args.clock, tokens_per_frame=tokens_per_frame
         )
     except (KeyError, ValueError) as exc:
         parser.error(str(exc))
@@ -286,9 +291,21 @@ def main(argv=None):
             if value:
                 endpoint[field] = value
         plan["models"][0]["endpoint"] = endpoint
+    # The runner looks its task up in the suite TASK_SUITE names (realtime_tasks/registry.py).
+    os.environ["TASK_SUITE"] = args.suite
+    import realtime_tasks.registry as tasks
+
     try:
         resolved_model = catalog.to_model_config(
             key, fps=model_input_fps, reasoning_effort=effort
+        )
+        # The runner's pre-run rules, so that Harbor's resolve refuses what the runner would.
+        check_episode(
+            resolved_model,
+            clock_mode=args.clock,
+            task=tasks.get(args.task),
+            env_fps=args.fps,
+            interaction_mode=args.interaction_mode,
         )
     except (OSError, ValueError, ImportError) as exc:
         parser.error(str(exc))

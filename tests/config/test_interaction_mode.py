@@ -96,14 +96,16 @@ def test_the_export_hashes_the_system_block_the_streaming_agent_sends(runner_cel
 
 
 def run_main(
-    tmp_path, monkeypatch, *argv, agents=None, loops=None, clock_mode="wall", loop=None
-) -> dict:
+    tmp_path, monkeypatch, *argv, agents=None, loops=None, containers=None, clock_mode="wall",
+    loop=None, exit_code=1,
+) -> dict | None:
     """runner.main() in this interpreter with the export probe's stand-ins for the container, the
     guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
     decision loop that fails at once, so the run ends invalid, or that is ``loop(env, trace)``
     and returns its timeline. The interaction mode each agent is
-    built for is appended to ``agents``, and the one the loop is run in to ``loops``;
-    ``clock_mode`` None leaves --clock out. Returns the run summary."""
+    built for is appended to ``agents``, the one the loop is run in to ``loops``, and the
+    configuration of each container started to ``containers``; ``clock_mode`` None leaves --clock
+    out. main() exits with ``exit_code``. Returns the run summary, None when none was written."""
     import sys
 
     import realtime_tasks.registry as tasks
@@ -112,8 +114,10 @@ def run_main(
     from realtime_framework.evaluation import reporting, runner
     from realtime_framework.sandbox import apptainer, desktop
 
-    for name in ("build_image_if_needed", "start_container", "_start_screensaver_keepalive"):
+    containers = [] if containers is None else containers
+    for name in ("build_image_if_needed", "_start_screensaver_keepalive"):
         monkeypatch.setattr(desktop, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(desktop, "start_container", containers.append)
     monkeypatch.setattr(desktop, "_start_screen_recording", lambda run_dir=None: False)
     monkeypatch.setattr(apptainer, "build_image", lambda name: None)  # main() with --report-root
     monkeypatch.setattr(reporting, "finalize_video", lambda run_dir: None)
@@ -153,8 +157,9 @@ def run_main(
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
     with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
         runner.main()
-    assert exited.value.code == 1
-    return json.loads((tmp_path / "run" / "run_summary.json").read_text())
+    assert exited.value.code == exit_code
+    summary = tmp_path / "run" / "run_summary.json"
+    return json.loads(summary.read_text()) if summary.is_file() else None
 
 
 def test_the_run_summary_records_the_mode(tmp_path, monkeypatch):
@@ -247,18 +252,37 @@ def test_a_streaming_run_times_no_model_call(tmp_path, monkeypatch, interaction_
     assert (timing["status"], timing["call_count"], summary["wall_time_s"]) == (status, 0, None)
 
 
-def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch):
+@pytest.mark.parametrize("report", [False, True], ids=["run", "report"])
+def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch, capsys, report):
     """Without --clock the runner runs the token clock (runner.py main), on which streaming is
-    refused. Without --report-root, which refuses it earlier (reporting.prepare_episode_report),
-    the runner's own check refuses the run before it builds the agent (providers/preflight.py
-    check_episode), so no live session is opened. A summary refused before its configuration was
-    resolved has no context control."""
-    agents = []
+    refused. The runner's pre-run check (providers/preflight.py check_episode) refuses it as an
+    argument, before the identity its report expects (reporting.prepare_episode_report), before
+    any container starts and so before any live session is opened; there is no run summary."""
+    agents, containers = [], []
+    report_root = ["--report-root", str(tmp_path / "report")] if report else []
     summary = run_main(
-        tmp_path, monkeypatch, "--interaction-mode", "streaming", agents=agents, clock_mode=None
+        tmp_path, monkeypatch, "--interaction-mode", "streaming", *report_root, agents=agents,
+        containers=containers, clock_mode=None, exit_code=2,
     )
-    assert summary["error"].strip().endswith("ValueError: Streaming requires a wall clock")
-    assert (summary["clock_mode"], agents) == ("token", [])
+    assert capsys.readouterr().err.strip().endswith("error: Streaming requires a wall clock")
+    assert (summary, agents, containers) == (None, [], [])
+    assert not (tmp_path / "summary.json").exists()
+
+
+def test_a_streaming_run_failed_before_its_configuration_has_no_context_control(
+    tmp_path, monkeypatch
+):
+    """A run that fails setting up the agent fails before main() records its run configuration,
+    whose streaming settings its summary's streaming section reads the context control from."""
+    from realtime_framework.evaluation import runner
+
+    def tool_runtime(*args, **kwargs):
+        raise RuntimeError("tool runtime failed")
+
+    monkeypatch.setattr(runner, "ToolRuntime", tool_runtime)
+    summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming")
+    assert summary["error"].strip().endswith("RuntimeError: tool runtime failed")
+    assert summary["runtime_config"] is None
     assert summary["streaming"]["context_control"] is None
     assert summary["streaming"]["frames"]["pushed"] == 0
 

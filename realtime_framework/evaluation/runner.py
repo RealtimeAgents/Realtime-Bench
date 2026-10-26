@@ -382,6 +382,38 @@ def main():
         )
     except UnsupportedTokenBudget as exc:
         p.error(str(exc))
+    # A catalog key (e.g. gpt-realtime-2, claude-opus-5) sets the adapter + backend id/path +
+    # per-model defaults from realtime_framework/providers/registry.py; a raw id/path still works
+    # if --adapter is given. B controls simulated time rather than response length; only the
+    # remaining episode horizon and native model limits can bound a decision.
+    if catalog_entry is None and not a.adapter:
+        p.error("--adapter is required when --model is not a catalog key")
+    # Every pre-run rule on the model, clock, interaction mode and task reads only them, so a run
+    # they refuse is refused here, before any container starts, as an argument error.
+    try:
+        ctask = custom_tasks.get(a.task)
+        if catalog_entry is not None:
+            cfg = catalog.to_model_config(
+                a.model,
+                fps=model_input_fps,
+                reasoning_effort=reasoning_effort,
+            )
+        else:
+            cfg = ModelConfig(
+                adapter_type=a.adapter,
+                model_name=a.model,
+                fps=model_input_fps,
+                reasoning_effort=reasoning_effort,
+            )
+        check_episode(
+            cfg,
+            clock_mode=a.clock,
+            task=ctask,
+            env_fps=env_fps,
+            interaction_mode=a.interaction_mode,
+        )
+    except ValueError as exc:
+        p.error(str(exc))
     clocks = episode_clocks(a.clock, env_fps)
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
@@ -433,11 +465,9 @@ def main():
 
     # Initialize bookkeeping before setup so early failures produce a summary
     # and the finally block can release resources.
-    ctask = None
     task = None
     agent = None
     agent_trace = None
-    cfg = None
     env = None
     think_budget = None
     per_move_cap = None
@@ -463,7 +493,6 @@ def main():
     run_stage = "environment_setup"
     try:
         # -------- provision the registered task --------
-        ctask = custom_tasks.get(a.task)
         ctask.configure_seed(a.seed)
         task = ctask.description()
         ctask.configure_clock(
@@ -474,27 +503,8 @@ def main():
             R.open_local_url_in_container(url, debug_port=getattr(ctask, "dbg_port", None))
         clocks.operational.sleep(5)
 
-        # -------- resolve the model + build the agent --------
-        # A catalog key (e.g. gpt-realtime-2, claude-opus-5) sets the adapter +
-        # backend id/path + per-model defaults from realtime_framework/providers/registry.py; a raw id/path still works
-        # if --adapter is given. B controls simulated time rather than response length; only the
-        # remaining episode horizon and native model limits can bound a decision.
+        # -------- build the agent --------
         run_stage = "provider_setup"
-        if catalog.has(a.model):
-            cfg = catalog.to_model_config(
-                a.model,
-                fps=model_input_fps,
-                reasoning_effort=reasoning_effort,
-            )
-        else:
-            if not a.adapter:
-                p.error("--adapter is required when --model is not a catalog key")
-            cfg = ModelConfig(
-                adapter_type=a.adapter,
-                model_name=a.model,
-                fps=model_input_fps,
-                reasoning_effort=reasoning_effort,
-            )
         setup = AgentSetup()
         try:
             set_up_agent(
@@ -1015,9 +1025,9 @@ def main():
             )
             run_metrics["run_metrics_error"] = metrics_error
         effective_model_identity = {
-            "adapter": cfg.adapter_type if cfg else requested_model_identity["adapter"],
+            "adapter": cfg.adapter_type,
             "model": requested_model_identity["model"],
-            "backend_model": cfg.model_name if cfg else requested_model_identity["backend_model"],
+            "backend_model": cfg.model_name,
         }
         run_identity = resolve_run_identity(
             task_id=a.task,
@@ -1100,9 +1110,7 @@ def main():
                 else None
             ),
             "world_time_s": world_time_s,
-            "last_clock_advance": (
-                getattr(ctask, "_last_clock_advance", None) if ctask is not None else None
-            ),
+            "last_clock_advance": getattr(ctask, "_last_clock_advance", None),
             "think_budget_s": think_budget,
             "per_move_cap_s": per_move_cap,
             "think_spent_s": (
@@ -1244,18 +1252,16 @@ def set_up_agent(
 ) -> None:
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
-    ``instruction`` is the task description and ``model`` the model identity the tool trace
-    records. ``open_capture(text_observation)`` returns the scene capture for the observation
-    form the model's context policy names. ``clock`` is the episode's operational clock, which
-    the agent reads (real time when omitted). ``env_fps`` is the environment frame rate, which may
-    not be below the model-input rate ``cfg.fps`` and which the clock note describes where the two
-    differ. What this makes is recorded in ``setup``.
+    The configuration has passed the pre-run rules (providers/preflight.py check_episode), which
+    main() applies before it starts the container. ``instruction`` is the task description and
+    ``model`` the model identity the tool trace records. ``open_capture(text_observation)``
+    returns the scene capture for the observation form the model's context policy names.
+    ``clock`` is the episode's operational clock, which the agent reads (real time when omitted).
+    ``env_fps`` is the environment frame rate, which may not be below the model-input rate
+    ``cfg.fps`` and which the clock note describes where the two differ. What this makes is
+    recorded in ``setup``.
     """
     clock = clock or SystemClock()
-    # Every pre-run rule on the model, clock, interaction mode and task, before any is built.
-    check_episode(
-        cfg, clock_mode=clock_mode, task=ctask, env_fps=env_fps, interaction_mode=interaction_mode
-    )
     # The agent borrows the episode trace's write entry; the runner still opens and closes it.
     setup.agent_trace = AgentTraceSink(episode_trace, run_dir / "episode_blobs.pack", clock=clock)
     agent = setup.agent = create_agent(

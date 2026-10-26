@@ -120,9 +120,9 @@ def test_pause_mode_steps_to_the_next_frame_where_the_rates_differ():
 
 
 def test_model_input_rate_above_the_cap_is_refused(runner_cells):
-    """--model-input-fps defaults to --fps."""
+    """--model-input-fps defaults to --fps; the runner refuses the rate as an argument."""
     cell = runner_cells[CAPPED]
-    assert cell["error"] == f"ValueError: {CAP_MESSAGE}"
+    assert cell["error"] == f"_Rejected: {CAP_MESSAGE}"
 
 
 WALL_2_1 = ["--clock", "wall", "--fps", "2", "--model-input-fps", "1"]
@@ -269,12 +269,14 @@ def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, mon
     assert (loop["env_fps"], loop["input_fps"], loop["duration_s"]) == (30.0, 7.0, 300.0)
 
 
-def test_main_refuses_a_model_input_rate_above_the_environment_rate(tmp_path, monkeypatch):
-    """The run's error is the pre-run check's (providers/preflight.py check_frame_rates), which
-    set_up_agent makes before it builds the agent (runner.py set_up_agent): the agent is never
-    made, the decision loop never starts, and the run is invalid for the model's configuration,
-    with the environment never judged."""
+def test_main_refuses_a_model_input_rate_above_the_environment_rate(
+    tmp_path, monkeypatch, capsys
+):
+    """The pre-run check's error (providers/preflight.py check_frame_rates), which main() makes
+    before it starts the container (runner.py main), is an argument error: no container is
+    started, no agent is made, the decision loop never starts and no run summary is written."""
     from realtime_framework.evaluation import runner
+    from realtime_framework.sandbox import desktop
 
     loops = []
 
@@ -284,7 +286,8 @@ def test_main_refuses_a_model_input_rate_above_the_environment_rate(tmp_path, mo
 
     argv = ["--model", "claude-opus-5", "--task", WEB, "--clock", "wall", "--fps", "1"]
     _main_in_process(monkeypatch, tmp_path, [*argv, "--model-input-fps", "2"], run_stream)
-    created = []
+    started, created = [], []
+    monkeypatch.setattr(desktop, "start_container", started.append)
     create_agent = runner.create_agent
 
     def recording_create_agent(config, **kwargs):
@@ -292,17 +295,14 @@ def test_main_refuses_a_model_input_rate_above_the_environment_rate(tmp_path, mo
         return create_agent(config, **kwargs)
 
     monkeypatch.setattr(runner, "create_agent", recording_create_agent)
-    with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
+    with pytest.raises(SystemExit) as exited:
         runner.main()
-    assert exited.value.code == 1
-    summary = _run_summary(tmp_path)
-    error = summary["error"].strip()
-    assert error.endswith(
-        "ValueError: The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
+    assert exited.value.code == 2
+    assert capsys.readouterr().err.strip().endswith(
+        "error: The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
     )
-    assert (summary["invalid_run"]["category"], summary["environment_valid"]) == ("provider", None)
-    assert created == []
-    assert loops == []
+    assert not (tmp_path / "run").exists()
+    assert started == created == loops == []
 
 
 def test_a_setup_failure_summary_records_both_rates(tmp_path, monkeypatch):
