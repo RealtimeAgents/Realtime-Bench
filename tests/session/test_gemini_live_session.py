@@ -73,7 +73,6 @@ def turn(k: int, *, calls=("click",), feedback: str = "", text_after: str = "") 
         mime_type="image/png",
         image_detail="auto",
         geometry={},
-        unattached_feedback=feedback,
     )
     exchange = {
         "function_calls": [
@@ -87,7 +86,9 @@ def turn(k: int, *, calls=("click",), feedback: str = "", text_after: str = "") 
         "completion_text": text_after,
     }
     refs = {"native_tool_exchanges": [exchange]} if calls else {}
-    return CanonicalTurn(observation, output="{}", provider_refs=refs, decision=k)
+    return CanonicalTurn(
+        observation, output="{}", unattached_feedback=feedback, provider_refs=refs, decision=k
+    )
 
 
 def view(turns, *, ledger: str = "", history_format: str = "native_tools"):

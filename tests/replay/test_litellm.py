@@ -62,8 +62,8 @@ REASONING_EFFORT = "low"
 
 # With the default policies (entity/config.py effective_visual_fold_policy,
 # effective_detailed_history_policy) a request holding 21 screenshots folds the oldest 10
-# (harnesses/default/context.py apply_active_visual_budget), and one holding 51 turns archives the
-# oldest 10 into the ledger that becomes messages[1] (context.py RealtimeRuntime._retained;
+# (harnesses/default/history.py apply_active_visual_budget), and one holding 51 turns archives the
+# oldest 10 into the ledger that becomes messages[1] (history.py History._retain;
 # harnesses/default/request.py build_request; providers/litellm.py chat_messages). Decision k
 # carries k earlier turns plus its own frame.
 FIRST_FOLD, FOLDED = 20, 10

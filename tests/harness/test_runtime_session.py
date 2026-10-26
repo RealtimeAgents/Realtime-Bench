@@ -28,6 +28,7 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
+from realtime_framework.harnesses.default.history import Accept, History
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
@@ -122,9 +123,13 @@ class _Rig:
         self.policy = policy if turns is None else replace(policy, turns=turns)
         self.execution = ExecutionThread(clock, "runtime-session-test")
         self.runtime = RealtimeRuntime(
-            self.driver, self.policy, trace=self.trace, execution=self.execution, clock=clock
+            self.driver,
+            self.policy,
+            history=History(self.policy),
+            trace=self.trace,
+            execution=self.execution,
+            clock=clock,
         )
-        self.history: list[dict] = []
 
     def __enter__(self):
         self.execution.start()
@@ -142,7 +147,7 @@ class _Rig:
             [_observation(k)],
             GenerationRequest(f"turn-{k}", None, "inf"),
             _Collector(),
-            action_history=self.history,
+            unattached="",
             timeout=WAIT_S,
             request_builder=lambda turns, ledger: build_request(
                 self.policy, system, turns, ledger, ANSWER, call
@@ -153,8 +158,8 @@ class _Rig:
 
     def accept(self, k: int) -> None:
         result = self.turn(k)
-        self.runtime.accept_turn(result.turn)
-        self.history.append({"tick": k + 1, "executed": "wait", "result": "wait"})
+        record = {"observation_tick": k + 1, "requested": "wait", "executed": "wait", "result": "wait"}
+        self.runtime.accept(Accept(k, result.turn, record, ""))
 
 
 def test_an_abort_interrupts_the_generation_under_way_then_closes_the_session():

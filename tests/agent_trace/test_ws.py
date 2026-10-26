@@ -32,6 +32,7 @@ from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agen
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
+from realtime_framework.harnesses.default.history import Accept, History
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers import registry as catalog
 from realtime_framework.providers.gemini import live
@@ -82,8 +83,9 @@ def _run(driver, run_dir: Path, turns: int):
         config.adapter_type, config.provider_options, config.context_preset
     )
     execution = ExecutionThread(SystemClock(), "execution-thread-ws")
-    runtime = RealtimeRuntime(driver, policy, trace=sink, execution=execution)
-    history: list[dict] = []
+    runtime = RealtimeRuntime(
+        driver, policy, history=History(policy), trace=sink, execution=execution
+    )
     channel = driver.capabilities.action_channel
     # As DefaultHarness._answer_requirements declares them (harnesses/default/harness.py).
     declarations = tuple(gui_function_declarations()) if channel == "function_call" else ()
@@ -106,14 +108,19 @@ def _run(driver, run_dir: Path, turns: int):
                     [_observation(k)],
                     request,
                     _Collector(),
-                    action_history=history,
+                    unattached="",
                     timeout=60,
                     request_builder=request_builder,
                     decision=k,
                     cancel=runtime.clock.event(),
                 )
-            runtime.accept_turn(result.turn)
-            history.append({"tick": k + 1, "executed": "wait", "result": "wait"})
+            record = {
+                "observation_tick": k + 1,
+                "requested": "wait",
+                "executed": "wait",
+                "result": "wait",
+            }
+            runtime.accept(Accept(k, result.turn, record, ""))
     finally:
         with trace_scope(phase="close"):
             runtime.close()

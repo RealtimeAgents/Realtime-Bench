@@ -107,7 +107,7 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
             if compact_ledger:
                 lines = [line for line in block.text.splitlines() if line]
                 # Each archived action is a JSON object; the note for omitted ones is not
-                # (harnesses/default/context.py RealtimeRuntime.ledger_block).
+                # (harnesses/default/history.py History.ledger_block).
                 notes = [line for line in lines if not line.startswith("{")]
                 records = [json.loads(line) for line in lines if line.startswith("{")]
                 records = compact_repeated_records(records, ("decision", "observed_at_tick"))

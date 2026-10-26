@@ -72,9 +72,10 @@ def turn(k: int, output: str = "", feedback: str = "") -> CanonicalTurn:
         mime_type="image/png",
         image_detail="auto",
         geometry={},
-        unattached_feedback=feedback,
     )
-    return CanonicalTurn(observation=observation, output=output, decision=k)
+    return CanonicalTurn(
+        observation=observation, output=output, unattached_feedback=feedback, decision=k
+    )
 
 
 def view(turns, ledger: str = ""):

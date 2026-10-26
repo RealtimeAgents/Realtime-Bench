@@ -75,8 +75,8 @@ TOKENS_PER_FRAME, MAX_TICKS = 1024, 61
 
 # With the default policies (entity/config.py effective_visual_fold_policy,
 # effective_detailed_history_policy) a decision that would hold 21 screenshots folds the oldest 10
-# (harnesses/default/context.py apply_active_visual_budget), and one that would hold 51 turns
-# archives the oldest 10 (context.py RealtimeRuntime._retained). Decision k holds k earlier turns
+# (harnesses/default/history.py apply_active_visual_budget), and one that would hold 51 turns
+# archives the oldest 10 (history.py History._retain). Decision k holds k earlier turns
 # plus its own, so decision 50 archives turns 0-9 and also folds turns 30-39. Counted from 1, these
 # are steps 21, 31, 41 and 51.
 FOLDS = {20: range(0, 10), 30: range(10, 20), 40: range(20, 30), 50: range(30, 40)}
@@ -324,7 +324,7 @@ def test_long_scenario(tmp_path):
         assert archived == (len(ARCHIVED) if k == ARCHIVE else 0)
 
     # The archive puts the ledger first, as a user item at root, one JSON line per archived
-    # action (context.py executed_action_ledger; openai_realtime_session.py
+    # action (history.py executed_action_ledger; openai_realtime_session.py
     # RealtimeSessionCore._edit_batch).
     lines = ledger.split("\n")
     assert lines[0] == ARCHIVED_ACTION_LEDGER_HEADER and len(lines) == 1 + len(ARCHIVED)

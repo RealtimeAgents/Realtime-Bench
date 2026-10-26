@@ -247,6 +247,8 @@ class NativeStreamingAgent(VisionAgentBase):
         self._requested: dict[tuple[int, str | None], tuple[str, str | None]] = {}
         # The generation of each call an action was posted for, which a cancellation names.
         self._generation_of: dict[str, int] = {}
+        # Each outcome the kernel committed, as its action's record.
+        self.action_history: list[dict] = []
         super().__init__(config, log_dir, trace=trace)
 
     def _setup_backend(self):

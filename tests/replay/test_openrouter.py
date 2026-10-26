@@ -174,7 +174,7 @@ def check_cache_breakpoints(records: list[dict]) -> None:
 def test_long_scenario(openrouter_env, tmp_path):
     """LONG_SCENARIO on the finite token clock. The first screenshot fold and the first archive
     fall on the same decisions as for chat_completions: both APIs are stateless and share the
-    history policies (harnesses/default/context.py RealtimeRuntime._retained). The scripted statuses
+    history policies (harnesses/default/history.py History._retain). The scripted statuses
     are the wall-clock ones; the last, not_applied_time_limit, cannot occur on the token clock
     (kernel/turns.py start, _past_deadline), but it reaches no request."""
     with openrouter_episode(openrouter_env, tmp_path, replies(LONG_SCENARIO), **TOKEN_CLOCK) as (
@@ -339,7 +339,7 @@ def test_whole_turn_429_with_a_long_retry_after(openrouter_env, tmp_path):
     assert carried[0] is None and 120.0 in carried
     assert sleeps.calls == []
     assert result["invalid_reason"] == "provider_rate_limited"
-    assert agent.action_history == []
+    assert agent.history.actions == ()
     records = [
         {
             "record": "step",

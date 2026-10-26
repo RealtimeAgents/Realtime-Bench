@@ -170,7 +170,7 @@
 | X3 | 不再出现 | — | — | 外壳给每个放弃的生成都合成记录（第 48 条、N10），归 K-a、U10、U11 |
 | X4 | 出现 | `frame_rates-wall-30_7`、`wall-per-move-cap`、`token-horizon-a-few-ulps-past-a-tick` 等 7 个 | 51 | |
 | X5 | 归一化 | — | — | |
-| X6 | 出现 | `wall-per-move-cap`、`wall-over-the-cap-and-the-think-budget`、`wall-the-per-move-cap-falls-during-a-read` | 见第 6 节 | 只写了开头几步被上限放弃、之前没有已接纳结果的情形：每一步的反馈开下一帧，请求只留系统消息和这一帧；第一个被接纳的帧，在它之后的请求里还带着这些反馈，它的回合保留在历史里（`RealtimeRuntime._retained`） |
+| X6 | 出现 | `wall-per-move-cap`、`wall-over-the-cap-and-the-think-budget`、`wall-the-per-move-cap-falls-during-a-read` | 见第 6 节 | 只写了开头几步被上限放弃、之前没有已接纳结果的情形：每一步的反馈开下一帧，请求只留系统消息和这一帧；第一个被接纳的帧，在它之后的请求里还带着这些反馈，它的回合保留在历史里（`History._retain`） |
 | X7 | 出现 | `runner-done_reply` | 252 | |
 | X8 | 不比 | — | — | agent 自己的事件日志 |
 | X9 | 这次看不到 | — | — | P1d |

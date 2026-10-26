@@ -181,7 +181,7 @@ def test_an_action_naming_a_mark_its_frame_lacks_is_a_grounding_failure(tmp_path
         {"error": "mark_not_in_observation", "mark": "P9", "reference": "P9"}
     ]
     assert results[0]["action"].action_type.value == "wait"
-    entry = episode.agent.action_history[0]
+    entry = episode.agent.history.actions[0]
     assert (entry["requested"], entry["executed"]) == ("click {'target': 'P9'}", "wait()")
     assert (
         "EXECUTION RESULT: actual=wait(); requested=click {'target': 'P9'}; status=wait. "

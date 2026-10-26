@@ -556,7 +556,7 @@ def run_steps(episode: Episode, steps: list[Step], stub: RealtimeStub) -> list[d
                 "server_responses": responses,
                 "result": result,
                 "commit": {"status": step.status, "detail": step.detail},
-                "action_history_entry": dict(agent.action_history[-1]),
+                "action_history_entry": dict(agent.history.actions[-1]),
                 "token_usage": agent.token_usage,
             }
         )

@@ -169,9 +169,6 @@ class ProviderObservation:
     image_detail: str
     geometry: dict
     inspection: dict | None = None
-    # A frame opens with the feedback on a decision of which nothing was accepted, which no turn
-    # carries; the fold keeps it.
-    unattached_feedback: str = ""
 
     @property
     def observation_id(self) -> str:
@@ -186,7 +183,9 @@ class CanonicalTurn:
     observation: ProviderObservation
     output: str = ""
     execution_feedback: str = ""
-    action_history_index: int | None = None
+    # Its frame opens with the feedback on decisions of which nothing was accepted, which no
+    # turn carried as its generation started; the fold keeps it.
+    unattached_feedback: str = ""
     visual_folded: bool = False
     provider_refs: dict[str, Any] = field(default_factory=dict)
     # The runner's decision index; a retry rebuilds the turn with the same index.
@@ -219,7 +218,6 @@ class CanonicalTurn:
             image_detail=source.image_detail,
             geometry={},
             inspection=None,
-            unattached_feedback=source.unattached_feedback,
         )
         self.visual_folded = True
 

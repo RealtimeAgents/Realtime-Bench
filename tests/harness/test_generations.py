@@ -24,6 +24,7 @@ from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.harnesses.default.context import native_output_limit
+from realtime_framework.harnesses.default.history import Retain
 from realtime_framework.harnesses.default.prompts import (
     ACTION_RESULT_NOTES,
     UNSUPPORTED_TERMINAL_ACTION_FEEDBACK,
@@ -169,8 +170,8 @@ def _hold_the_frame(agent, decision: int):
     entered, release = threading.Event(), threading.Event()
     prepare = agent._prepare_observations
 
-    def held(observations, tick, prefix=""):
-        prepared = prepare(observations, tick, prefix)
+    def held(observations, tick):
+        prepared = prepare(observations, tick)
         if tick == decision:
             entered.set()
             release.wait(WAIT_S)
@@ -245,7 +246,7 @@ def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
         agent = episode.agent
         try:
             pending = _generate(episode, 1, 0)
-            held = (agent._runtime.turns, list(agent.action_history), agent.token_usage)
+            held = (agent.history.turns, list(agent.history.actions), agent.token_usage)
             written = (tmp_path / "provider-usage.jsonl").exists()
             tool_calls = _jsonl(tmp_path / "tool_calls.jsonl")
             agent.accept(1)
@@ -256,9 +257,9 @@ def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
     turns, history, usage = held
     assert (turns, history, usage["responses"], usage["output_tokens"]) == ((), [], 0, 0)
     assert not written and tool_calls == []
-    (turn,) = agent._runtime.turns
-    assert (turn.decision, turn.output, turn.action_history_index) == (0, CLICK_NAME, 0)
-    (record,) = agent.action_history
+    (turn,) = agent.history.turns
+    assert (turn.decision, turn.output, agent.history.index(0)) == (0, CLICK_NAME, 0)
+    (record,) = agent.history.actions
     assert (record["tick"], record["action"]) == (1, CLICK_NAME)
     assert agent.token_usage["responses"] == 1
     assert [u["stale"] for u in _jsonl(tmp_path / "provider-usage.jsonl")] == [False]
@@ -306,7 +307,7 @@ def test_a_discarded_result_writes_no_history(tmp_path):
             pending = _generate(episode, 2, 1)
             agent.finalize_decision_audit(pending.result)
             agent.discard(2)
-            turns, history = agent._runtime.turns, list(agent.action_history)
+            turns, history = agent.history.turns, list(agent.history.actions)
             usage = agent.token_usage
         finally:
             episode.finish()
@@ -338,7 +339,7 @@ def test_an_abort_before_its_generation_starts_cancels_it(tmp_path):
     assert _cancelled(pending)
     assert pending.result["stale"] is True and pending.result["action"] is None
     assert stub.requests == [] and stub.unused_replies == 1
-    assert agent._runtime.turns == () and agent.action_history == []
+    assert agent.history.turns == () and agent.history.actions == ()
     assert agent.frames._frames == {} and _jsonl(tmp_path / "tool_calls.jsonl") == []
 
 
@@ -374,7 +375,7 @@ def test_an_abort_before_the_reply_sends_no_request(tmp_path):
             episode.finish()
     assert _cancelled(pending)
     assert stub.requests == [] and stub.unused_replies == 1
-    assert agent._runtime.turns == () and agent.action_history == []
+    assert agent.history.turns == () and agent.history.actions == ()
     outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
     assert outcomes == ["superseded_by_timeout"]
 
@@ -388,7 +389,7 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
         episode = _chat_episode(stub, tmp_path)
         agent, runtime = episode.agent, episode.agent._runtime
         entered, release = threading.Event(), threading.Event()
-        ensure_ready, retained = runtime.session.ensure_ready, runtime._retained
+        ensure_ready, write = runtime.session.ensure_ready, agent.history.write
         sends = _count_calls(agent.driver, "send_observation")
         retentions = []
 
@@ -398,14 +399,15 @@ def test_an_abandoned_generation_leaves_the_history_alone(tmp_path, where):
                 entered.set()
                 await asyncio.to_thread(release.wait, WAIT_S)
 
-        def retaining(*args):
-            retentions.append(args)
-            if where == "retention":
-                entered.set()
-                release.wait(WAIT_S)
-            return retained(*args)
+        def writing(change):
+            if isinstance(change, Retain):
+                retentions.append(change)
+                if where == "retention":
+                    entered.set()
+                    release.wait(WAIT_S)
+            return write(change)
 
-        runtime.session.ensure_ready, runtime._retained = ready, retaining
+        runtime.session.ensure_ready, agent.history.write = ready, writing
         try:
             box, done = _in_worker(lambda: _generate(episode, 1, 0))
             assert entered.wait(WAIT_S), f"generation 1 never reached {where}"
@@ -441,7 +443,7 @@ def test_an_abort_after_the_reply_keeps_nothing(tmp_path):
             episode.finish()
     assert len(stub.requests) == 1
     assert _cancelled(pending) and pending.result["action"] is None
-    assert agent._runtime.turns == () and agent.action_history == []
+    assert agent.history.turns == () and agent.history.actions == ()
     attempts = [a for a in _trace(tmp_path, "ModelAttemptFinished") if a["kind"] == "generation"]
     assert [(a["outcome"], a["cancelled"]) for a in attempts] == [("cancelled", True)]
     assert [p["generation"] for p in _trace(tmp_path, "GenerationPrepared")] == [1]
@@ -594,7 +596,7 @@ def test_an_accepted_reply_that_is_no_action_ends_its_tool_call_as_such(tmp_path
             agent.accept(1)
         finally:
             episode.finish()
-    (record,) = agent.action_history
+    (record,) = agent.history.actions
     assert record["parse_failed"] and record["protocol_failure"]
     outcomes = [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")]
     assert outcomes == ["action_protocol_error"]
@@ -732,7 +734,7 @@ def test_a_generation_discarded_before_it_starts_keeps_nothing(tmp_path):
         finally:
             episode.finish()
     assert _cancelled(pending) and stub.requests == [] and generations == []
-    assert agent.action_history == [] and agent._runtime.turns == ()
+    assert agent.history.actions == () and agent.history.turns == ()
     assert not (tmp_path / "provider-usage.jsonl").exists()
     assert _jsonl(tmp_path / "tool_calls.jsonl") == []
 
@@ -862,7 +864,7 @@ def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
             _generate(episode, 3, 2)
         finally:
             episode.finish()
-    first, second = agent.action_history
+    first, second = agent.history.actions
     assert (first["applied"], first["result"]) == (False, "rejected")
     assert first["executed"] == "wait()" and first["requested"].startswith("click ")
     assert (second["applied"], second["result"]) == (True, "applied")
@@ -872,7 +874,7 @@ def test_an_outcome_is_reported_on_its_accepted_decision(tmp_path):
         f"EXECUTION RESULT: actual=wait(); {rejected}",
         f"EXECUTION RESULT: {applied}",
     ]
-    assert [turn.execution_feedback for turn in agent._runtime.turns] == feedback
+    assert [turn.execution_feedback for turn in agent.history.turns] == feedback
     texts = [m["content"] for m in json.loads(stub.requests[2].body)["messages"]]
     for reply, text in zip((CLICK_NAME, LONG_SCENARIO[1].reply), feedback, strict=True):
         assert texts[texts.index(reply) + 1] == text
@@ -907,10 +909,10 @@ def test_a_done_is_reported_as_the_wait_it_ran(tmp_path, status, executed, note)
             )
         finally:
             episode.finish()
-    (record,) = agent.action_history
+    (record,) = agent.history.actions
     assert (record["requested"], record["executed"], record["result"]) == ("done", executed, status)
     feedback = f"EXECUTION RESULT: actual={executed}; requested=done; status={status}. {note}"
-    assert agent._runtime.turns[0].execution_feedback == feedback
+    assert agent.history.turns[0].execution_feedback == feedback
 
 
 def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
@@ -934,8 +936,8 @@ def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
             _generate(episode, 1, 0)
             agent.accept(1)
             agent.commit(_outcome(0, "applied"))
-            record = dict(agent.action_history[0])
-            feedback = agent._runtime.turns[0].execution_feedback
+            record = dict(agent.history.actions[0])
+            feedback = agent.history.turns[0].execution_feedback
             box, done = _in_worker(lambda: _generate(episode, 2, 1))
             assert arrived.wait(WAIT_S), "decision 1 sent no request"
             agent.abort(2)
@@ -947,10 +949,10 @@ def test_a_move_over_the_cap_opens_the_next_frame_with_its_note(tmp_path):
         finally:
             episode.finish()
     assert _cancelled(skipped) and stub.held == [True]
-    assert agent.action_history[0] == record and record["result"] == "applied"
-    first, last = agent._runtime.turns
+    assert agent.history.actions[0] == record and record["result"] == "applied"
+    first, last = agent.history.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    assert last.observation.unattached_feedback == NOTE
+    assert last.unattached_feedback == NOTE
     messages = json.loads(stub.requests[2].body)["messages"]
     replied = [m["content"] for m in messages].index(CLICK_NAME)
     assert messages[replied + 1] == {"role": "user", "content": feedback}
@@ -972,8 +974,8 @@ def test_a_decision_with_no_accepted_answer_reports_no_action(tmp_path):
         "EXECUTION RESULT: status=none. Detail: no current observation NOTE: no answer was"
         " accepted for a step; no action was executed."
     )
-    assert agent._unattached_feedback == f"{NOTE}\n{other}"
-    assert (agent.action_history, agent._runtime.turns, stub.requests) == ([], (), [])
+    assert agent.history.unattached == f"{NOTE}\n{other}"
+    assert (agent.history.actions, agent.history.turns, stub.requests) == ((), (), [])
 
 
 @pytest.mark.parametrize("api", ["chat", "luna"])
@@ -1005,7 +1007,7 @@ def test_the_note_outlasts_its_frame_s_screenshot(tmp_path, monkeypatch, api):
                 _generate(episode, generation, decision)
                 agent.accept(generation)
                 agent.commit(_outcome(decision, "applied"))
-            (turn,) = [turn for turn in agent._runtime.turns if turn.decision == 2]
+            (turn,) = [turn for turn in agent.history.turns if turn.decision == 2]
         finally:
             episode.finish()
     assert turn.visual_folded
@@ -1041,7 +1043,7 @@ def test_jev_opens_the_next_observation_with_the_note(tmp_path, monkeypatch):
                 _generate(episode, generation, decision)
                 agent.accept(generation)
                 agent.commit(_outcome(decision, "applied"))
-            turns = agent._runtime.turns
+            turns = agent.history.turns
         finally:
             episode.finish()
     ids = [turn.observation.observation_id for turn in turns]
@@ -1073,21 +1075,20 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
             model_key=REALTIME_MODEL_KEY,
         )
         agent = episode.agent
-        opened, prepare = {}, agent._prepare_observations
+        opened, run_turn = {}, agent._runtime.run_turn
 
-        def prepared(observations, tick, prefix=""):
-            values = prepare(observations, tick, prefix)
-            opened[tick] = values[0][-1]
-            return values
+        def recorded(*args, **kwargs):
+            opened[kwargs["decision"]] = kwargs["unattached"]
+            return run_turn(*args, **kwargs)
 
-        agent._prepare_observations = prepared
+        agent._runtime.run_turn = recorded
         try:
             stub.wait_for_session_update()
             _generate(episode, 1, 0)
             agent.accept(1)
             agent.commit(_outcome(0, "applied"))
-            record = dict(agent.action_history[0])
-            feedback = agent._runtime.turns[0].execution_feedback
+            record = dict(agent.history.actions[0])
+            feedback = agent.history.turns[0].execution_feedback
             entered, release = _hold_after_the_reply(agent.driver)
             box, done = _in_worker(lambda: _generate(episode, 2, 1))
             assert entered.wait(WAIT_S), "decision 1 got no reply"
@@ -1107,13 +1108,12 @@ def test_a_move_over_the_cap_changes_no_earlier_record(tmp_path):
     usage = [(u["tick"], u["stale"]) for u in _jsonl(tmp_path / "provider-usage.jsonl")]
     assert usage == [(0, False), (1, True), (2, False)]
     # Decision 0's feedback went as its own item: decision 1's frame opens with none.
-    opening = opened[1]
-    assert opening.unattached_feedback == ""
-    assert agent.action_history[0] == record and record["result"] == "applied"
-    assert [r["tick"] for r in agent.action_history] == [1, 2]
-    first, last = agent._runtime.turns
+    assert opened[1] == ""
+    assert agent.history.actions[0] == record and record["result"] == "applied"
+    assert [r["tick"] for r in agent.history.actions] == [1, 2]
+    first, last = agent.history.turns
     assert (first.decision, first.execution_feedback, last.decision) == (0, feedback, 2)
-    assert last.observation.unattached_feedback == NOTE
+    assert last.unattached_feedback == NOTE
     for view in (stub.views[1], stub.views[-1]):
         items = [(role, text) for _, role, text, _ in view]
         replied = items.index(("assistant", CLICK_NAME))
@@ -1175,7 +1175,7 @@ def test_an_abandoned_generation_keeps_its_own_candidates(tmp_path, monkeypatch)
     assert _cancelled(abandoned) and not _cancelled(accepted)
     assert stub.unload() == 0 and stub.unscripted == 0 and not stub.off_script
     assert len(stub.requests) == len(scenario_decisions.WEB_LONG[1].script)
-    assert [turn.decision for turn in agent._runtime.turns] == [1]
+    assert [turn.decision for turn in agent.history.turns] == [1]
 
 
 def test_an_abandoned_generation_archives_nothing_under_pressure(tmp_path):
@@ -1213,8 +1213,8 @@ def test_an_abandoned_generation_archives_nothing_under_pressure(tmp_path):
             release.set()
             abandoned = _joined(box, done)
             agent.discard(1)
-            turns = [turn.decision for turn in agent._runtime.turns]
-            archived = agent._runtime.archived_action_count
+            turns = [turn.decision for turn in agent.history.turns]
+            archived = agent.history.archived
         finally:
             episode.finish()
     assert _cancelled(abandoned) and not _cancelled(accepted)
@@ -1275,8 +1275,8 @@ def test_an_abandoned_generation_omits_nothing_under_pressure(tmp_path):
             box3, done3 = _in_worker(lambda: agent.generate(3, 2, frames[2], budgets[2]))
             assert replying.wait(WAIT_S), "generation 3 reached no reply"
             history = (
-                [turn.decision for turn in agent._runtime.turns],
-                agent._runtime.archived_action_count,
+                [turn.decision for turn in agent.history.turns],
+                agent.history.archived,
             )
             sized_release.set()
             abandoned = _joined(box2, done2)
@@ -1332,7 +1332,7 @@ def test_an_abandoned_generation_omits_no_second_block(tmp_path):
             release.set()
             abandoned = _joined(box, done)
             agent.discard(13)
-            history = (agent._runtime.archived_action_count, agent._runtime._omitted_action_count)
+            history = (agent.history.archived, agent.history.omitted)
         finally:
             episode.finish()
     assert _cancelled(abandoned)

@@ -37,4 +37,4 @@ def test_the_legacy_loop_drops_a_reply_its_abort_cancelled(tmp_path):
             episode.finish()
     assert len(stub.requests) == 1
     assert result["stale"] is True and result["action"] is None
-    assert agent._runtime.turns == () and agent.action_history == []
+    assert agent.history.turns == () and agent.history.actions == ()

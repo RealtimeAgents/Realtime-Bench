@@ -36,8 +36,8 @@ MODEL_KEY = "replay-model"
 
 # With the default policies (entity/config.py effective_visual_fold_policy,
 # effective_detailed_history_policy) a request holding 21 screenshots folds the oldest 10
-# (harnesses/default/context.py apply_active_visual_budget), and one holding 51 turns archives the
-# oldest 10 (context.py RealtimeRuntime._retained). Decision k carries k earlier turns plus its own
+# (harnesses/default/history.py apply_active_visual_budget), and one holding 51 turns archives the
+# oldest 10 (history.py History._retain). Decision k carries k earlier turns plus its own
 # frame.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10

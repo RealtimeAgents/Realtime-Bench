@@ -63,8 +63,6 @@ class VisionAgentBase(StreamingAgent):
         self.model_name = config.model_name
         self._setup_backend()
         self.task_instruction = ""
-        self.action_history: list[dict] = []
-        self.tick_count = 0
         self.streaming_note: str | None = None
         self.tool_runtime = None
 
@@ -91,8 +89,6 @@ class VisionAgentBase(StreamingAgent):
     def initialize(self, task_instruction: str, initial_observation: Observation):
         del initial_observation
         self.task_instruction = task_instruction
-        self.action_history = []
-        self.tick_count = 0
         self._tok = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -878,6 +874,10 @@ from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollect
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.context import RequestExceedsContext
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
+from realtime_framework.harnesses.default.history import Accept
+from realtime_framework.harnesses.default.history import Commit
+from realtime_framework.harnesses.default.history import History
+from realtime_framework.harnesses.default.history import Unanswered
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
@@ -1212,9 +1212,11 @@ class DefaultHarness(VisionAgentBase):
         self._execution_thread = ExecutionThread(
             self.clock, f"execution-thread-{self.driver.capabilities.protocol_family}"
         )
+        self.history = History(self._context_policy)
         self._runtime = RealtimeRuntime(
             self.driver,
             self._context_policy,
+            history=self.history,
             trace=self._trace,
             execution=self._execution_thread,
             clock=self.clock,
@@ -1257,11 +1259,6 @@ class DefaultHarness(VisionAgentBase):
 
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
-        # The feedback on decisions of which nothing was accepted: no turn carries it, so the
-        # next frame opens with it whatever the policy's feedback placement.
-        self._unattached_feedback = ""
-        # Each accepted decision's action record, by its index in action_history.
-        self._decision_actions: dict[int, int] = {}
         self.frames = FrameTable()
         self.interaction_profile = interaction_profile(
             self._context_policy.prompts[self.task_category],  # context policy item 11
@@ -1291,17 +1288,15 @@ class DefaultHarness(VisionAgentBase):
             return self.driver.transport_output_token_cap(provider_cap)
         return None if provider_cap is None else int(provider_cap)
 
-    def _prepare_observations(self, observations, tick, unattached=""):
+    def _prepare_observations(self, observations, tick):
         """The prepared observations, their inspections, the newest one's answer options, and
         the newest one's frame-table record: the frame the action is based on."""
         prepared_values = []
         inspections = []
         try:
-            for index, observation in enumerate(observations):
+            for observation in observations:
                 prompt = self.interaction_profile.frame_prompt
                 prepared, execution, frame = bind_observation(self, observation, prompt, tick)
-                if index == 0 and unattached:
-                    prepared.unattached_feedback = unattached
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
@@ -1461,12 +1456,9 @@ class DefaultHarness(VisionAgentBase):
             return
         result = staged.result
         self._record_provider_usage(staged, generation.decision, stale=False)
-        if self._unattached_feedback == staged.unattached:
-            self._unattached_feedback = ""
-        self.tick_count += 1
-        self._runtime.accept_turn(result.turn)
-        self._decision_actions[generation.decision] = len(self.action_history)
-        self.action_history.append({"tick": self.tick_count, **staged.record})
+        self._runtime.accept(
+            Accept(generation.decision, result.turn, staged.record, staged.unattached)
+        )
         self._accumulate_usage(result.output.usage)
         self._end_tool_calls(
             staged, "action_protocol_error" if staged.record["protocol_failure"] else "completed"
@@ -1503,10 +1495,10 @@ class DefaultHarness(VisionAgentBase):
             # Aborted before its worker got here: nothing is inspected, entered or sent.
             return self._cancelled_result(0.0)
         started = self.clock.monotonic()
-        unattached = self._unattached_feedback
+        unattached = self.history.unattached
         try:
             prepared, inspection_executions, generation.choice, generation.frame = (
-                self._prepare_observations(observations, tick, unattached)
+                self._prepare_observations(observations, tick)
             )
         except Exception as exc:  # noqa: BLE001 - preparation faults become invalid-run metadata
             latency = self.clock.monotonic() - started
@@ -1588,7 +1580,7 @@ class DefaultHarness(VisionAgentBase):
                 prepared,
                 request,
                 active_collector,
-                action_history=self.action_history,
+                unattached=unattached,
                 timeout=None,
                 request_builder=lambda turns, ledger: self._build_request(
                     turns, ledger, call, generation.choice
@@ -1836,22 +1828,22 @@ class DefaultHarness(VisionAgentBase):
             )
             if not native_protocol_failure:
                 action_protocol["source"] = "native_function_call"
-        executed = action_text(action)
+        protocol_failure = action_protocol.get("protocol_failure")
         record = {
             "action": output.text,
             "thinking": thinking,
-            "executed": executed,
+            # A grounding failure asked for the action it named; other output that is no action
+            # asked for no valid one.
+            "requested": action_protocol.get("requested")
+            or ("invalid_action" if protocol_failure else action_text(action)),
             "observation_tick": action_observation.observation.tick_number,
             "observation_timestamp": action_observation.observation.timestamp,
-            "parse_failed": bool(action_protocol.get("protocol_failure")),
-            "protocol_failure": action_protocol.get("protocol_failure"),
+            "parse_failed": bool(protocol_failure),
+            "protocol_failure": protocol_failure,
             "parse_mode": action_protocol.get("parse_mode"),
         }
-        if action_protocol.get("protocol_failure") == GROUNDING_FAILED:
-            record.update(
-                requested=action_protocol["requested"],
-                unknown_mark=action_protocol["unknown_mark"],
-            )
+        if protocol_failure == GROUNDING_FAILED:
+            record["unknown_mark"] = action_protocol["unknown_mark"]
         generation.staged = _Staged(
             unattached,
             inspection_executions,
@@ -1976,64 +1968,52 @@ class DefaultHarness(VisionAgentBase):
         decision whose result was never accepted, a move over the per-move cap, has neither: no
         earlier record changes, and its feedback, which names no action, opens the next frame
         whatever the policy's feedback placement."""
-        index = self._decision_actions.get(outcome.decision)
-        if index is None:
+        record = self.history.action(outcome.decision)
+        if record is None:
             feedback = f"EXECUTION RESULT: status={outcome.status}."
             if outcome.detail:
                 feedback += f" Detail: {outcome.detail}"
             note = UNANSWERED_STEP_NOTES.get(outcome.status, UNANSWERED_STEP_NOTE)
-            feedback += " " + note
-            self._unattached_feedback = "\n".join(
-                filter(None, (self._unattached_feedback, feedback))
-            )
+            self.history.write(Unanswered(feedback + " " + note))
             return
         # The loop has no terminal actions: the kernel ran a done or fail as this wait.
         unsupported = outcome.protocol_failure == "unsupported_terminal_action"
-        feedback = self._report(
-            self.action_history[index],
-            outcome.status,
-            outcome.detail,
-            outcome.action if unsupported else None,
+        result, feedback = self._report(
+            record, outcome.status, outcome.detail, outcome.action if unsupported else None
         )
-        self._runtime.record_execution_feedback(feedback, outcome.decision)
+        self.history.write(Commit(outcome.decision, result, feedback, self.clock.time_ns()))
 
-    def _report(self, entry: dict | None, status: str, detail: str, replacement=None) -> str:
-        """Mark an action record with its outcome, and return the outcome's feedback.
-        ``replacement`` is the wait the kernel ran in place of a done or fail."""
-        last = entry or {}
-        parse_failed = bool(last.get("parse_failed"))
-        # A grounding failure's record keeps the action asked for (parse_grounded_action).
-        requested = last.get("requested") or (
-            "invalid_action" if parse_failed else (last.get("executed") or "none")
-        )
+    @staticmethod
+    def _report(record: dict, status: str, detail: str, replacement=None) -> tuple[dict, str]:
+        """An action record's outcome: what ran and how, as the record takes them, and the
+        outcome's feedback. ``replacement`` is the wait the kernel ran in place of a done or
+        fail."""
+        parse_failed = record["parse_failed"]
+        requested = record["requested"]
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
         replaced = replacement is not None and status in landed_statuses
         if replaced:
             executed = action_text(replacement)
-        if entry is not None:
-            entry["applied"] = status == "applied"
-            entry["result"] = status
-            entry["requested"] = requested
-            entry["executed"] = executed
+        result = {"applied": status == "applied", "result": status, "executed": executed}
         feedback = f"EXECUTION RESULT: actual={executed}; requested={requested}; status={status}."
         if detail:
             feedback += f" Detail: {detail}"
-        if "unknown_mark" in last:
+        if "unknown_mark" in record:
             note = (
-                GROUNDING_FAILED_FEEDBACK.format(mark=last["unknown_mark"])
+                GROUNDING_FAILED_FEEDBACK.format(mark=record["unknown_mark"])
                 + f" ({GROUNDING_FAILED})"
             )
         else:
             note = action_result_note(
                 "none" if parse_failed else status,
-                last.get("protocol_failure", "") if parse_failed else detail,
+                record["protocol_failure"] if parse_failed else detail,
             )
         if note:
             feedback += " " + note
         if replaced:
             feedback += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
-        return feedback
+        return result, feedback
 
     def _attempt_scope(self, generation, request, attempt):
         return trace_scope(

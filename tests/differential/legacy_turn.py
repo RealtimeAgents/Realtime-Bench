@@ -12,6 +12,7 @@ from __future__ import annotations
 import itertools
 
 from realtime_framework.entity.records import trace_scope
+from realtime_framework.harnesses.default.history import Commit
 
 
 class LegacyTurn:
@@ -46,12 +47,14 @@ class LegacyTurn:
         return result
 
     def commit_action(self, status: str, detail: str = "") -> None:
+        """The newest turn is the newest accepted decision's: before the first there is no
+        record to report on."""
         agent = self._agent
-        newest = agent.action_history[-1] if agent.action_history else None
-        feedback = agent._report(newest, status, detail)
-        turns = agent._runtime.turns
+        turns = agent.history.turns
         if turns:
-            agent._runtime.record_execution_feedback(feedback, turns[-1].decision)
+            decision = turns[-1].decision
+            result, feedback = agent._report(agent.history.action(decision), status, detail)
+            agent.history.write(Commit(decision, result, feedback, agent.clock.time_ns()))
 
     def abort(self) -> None:
         agent = self._agent

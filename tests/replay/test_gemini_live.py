@@ -71,9 +71,9 @@ MAX_TICKS = 300
 FIRST_CAPPED_STEP = 45
 
 # Decision k (0-based) holds k earlier turns plus its own frame. A 21st active screenshot folds the
-# oldest 10 (entity/config.py effective_visual_fold_policy; harnesses/default/context.py
+# oldest 10 (entity/config.py effective_visual_fold_policy; harnesses/default/history.py
 # apply_active_visual_budget) and a 51st turn archives the oldest 10 (config.py
-# effective_detailed_history_policy; context.py RealtimeRuntime._retained). Either change rebuilds
+# effective_detailed_history_policy; history.py History._retain). Either change rebuilds
 # the session, because a persistent Gemini session cannot be edited in place (context.py
 # RealtimeRuntime._run_turn; live.py GeminiLiveDriver.capabilities). Counted from 1, these are
 # decisions 21, 31, 41 and 51.
@@ -318,7 +318,7 @@ def run_live_steps(
                 **record,
                 "frames": step_frames(stub, first),
                 "commit": {"status": step.status, "detail": step.detail},
-                "action_history_entry": dict(agent.action_history[-1]),
+                "action_history_entry": dict(agent.history.actions[-1]),
             }
         )
     return records, results

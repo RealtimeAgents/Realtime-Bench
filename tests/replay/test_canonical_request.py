@@ -34,12 +34,12 @@ def turn(k, prompt="FRAME", *, output="", feedback="", unattached="", **refs) ->
         mime_type="image/png",
         image_detail="auto",
         geometry={},
-        unattached_feedback=unattached,
     )
     return CanonicalTurn(
         observation=observation,
         output=output,
         execution_feedback=feedback,
+        unattached_feedback=unattached,
         provider_refs=dict(refs),
         decision=k,
     )

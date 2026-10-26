@@ -165,7 +165,7 @@ def test_an_abort_in_the_sync_after_a_generation_keeps_its_usage(tmp_path, monke
             release.set()
             abandoned = _joined(box, done)
             agent.discard(2)
-            turns, history = agent._runtime.turns, list(agent.action_history)
+            turns, history = agent.history.turns, list(agent.history.actions)
             usage = agent.token_usage
         finally:
             episode.finish()

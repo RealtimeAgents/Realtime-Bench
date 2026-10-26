@@ -53,7 +53,7 @@ def run_decisions(
     for k, step in enumerate(decisions):
         observation = episode.frames.capture(k)
         first_request = len(stub.requests)
-        history_length = len(agent.action_history)
+        history_length = len(agent.history.actions)
         stub.load(step.script)
         # The budget at t_k (kernel/turns.py _captured, shell.py _start_generation).
         result = decide(agent, k, observation, episode.budget(observation.tick_number))
@@ -77,8 +77,8 @@ def run_decisions(
                 # A failed decision adds no action (harnesses/default/harness.py
                 # DefaultHarness._generate).
                 "action_history_entry": (
-                    dict(agent.action_history[-1])
-                    if len(agent.action_history) > history_length
+                    dict(agent.history.actions[-1])
+                    if len(agent.history.actions) > history_length
                     else None
                 ),
                 "token_usage": agent.token_usage,

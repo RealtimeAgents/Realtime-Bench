@@ -140,7 +140,7 @@ def records(env: FakeEnvironment, agent, result: EpisodeResult) -> list[dict]:
             ],
             "finalize_calls": [_strip(call) for call in env.calls if call["finalizing"]],
             # What the agent holds about each decision once the episode is over.
-            "action_history": agent.action_history,
+            "action_history": agent.history.actions,
         }
     )
     return out

@@ -49,8 +49,8 @@ MAX_TICKS = 60
 TOKENS_PER_FRAME = 32768
 # As for chat_completions: the default policies (entity/config.py effective_visual_fold_policy,
 # effective_detailed_history_policy) fold the oldest 10 screenshots of a request holding 21
-# (harnesses/default/context.py apply_active_visual_budget) and archive the oldest 10 turns of one
-# holding 51 (context.py RealtimeRuntime._retained). Decision k carries k earlier turns.
+# (harnesses/default/history.py apply_active_visual_budget) and archive the oldest 10 turns of one
+# holding 51 (history.py History._retain). Decision k carries k earlier turns.
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 # Two reasoning replies (decisions 0 and 3), each replayed in a later request.

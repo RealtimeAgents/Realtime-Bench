@@ -1271,8 +1271,8 @@ def _x6(script: Script, p: Projection, notes: dict) -> None:
     result today's loop accepted, leaves no exchange in the history either. Only moves with no
     accepted result before them are rewritten here, as in the named scripts and the random ones
     (generate.py _capped); the first frame whose result is accepted keeps their feedback in the
-    history after it, while its turn is kept (harnesses/default/context.py
-    RealtimeRuntime._retained)."""
+    history after it, while its turn is kept (harnesses/default/history.py
+    History._retain)."""
     if not _wall(script):
         return
     note = f"EXECUTION RESULT: status=skipped_timeout. {UNANSWERED_STEP_NOTES['skipped_timeout']}\n"
