@@ -16,7 +16,7 @@ import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import UNTRACED, TraceEvent
-from realtime_framework.evaluation.kernel.events import Outcome
+from realtime_framework.evaluation.kernel.events import Invalidated, Outcome
 from realtime_framework.evaluation.kernel.streaming import (
     CallsCancelled,
     SessionPrepared,
@@ -165,6 +165,41 @@ def test_a_frame_that_went_in_is_recorded_under_its_number(monkeypatch, clock):
         (3, "obs-3"),
     ]
     agent.close()
+
+
+class _Unstable(RecordingToolRuntime):
+    """Every frame's elements kept changing while it was captured (sandbox/observation/som.py
+    ToolRuntime.inspect)."""
+
+    def inspect(self, observation, **fields) -> dict:
+        execution = super().inspect(observation, **fields)
+        execution["proof"].update(valid=False, protocol_error="interactables_binding_unstable")
+        return execution
+
+
+def test_a_frame_whose_inspection_is_invalid_invalidates_the_run_and_does_not_go_in(
+    monkeypatch, clock
+):
+    """As a turn-based decision on such a frame does (harnesses/default/harness.py): the run is
+    invalid for the harness, the frame's inspection is finished with that outcome, and the frame
+    never goes into the session, so that no action can name it."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    runtime = _Unstable()
+    agent.bind_tool_runtime(runtime)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    with pytest.raises(RuntimeError, match="interactables_binding_unstable"):
+        agent.push(observation(clock, 1))
+    assert posted == [
+        Invalidated("harness", "inspection_protocol_error", "interactables_binding_unstable")
+    ]
+    assert runtime.rows == [("obs-1", "inspection_protocol_error", "", 0.0)]
+    assert agent.driver.calls == [("connect", ("system",))]
+    assert trace.of(TraceEvent.FRAME_SENT) == []
+    assert agent.frames.locate(1) == (None, FRAME_NOT_IN_TABLE)
+    agent.close()
+    assert len(runtime.rows) == 1
 
 
 def test_a_push_records_its_frame_sent_and_confirmed_when_its_receipt_says(monkeypatch, clock):

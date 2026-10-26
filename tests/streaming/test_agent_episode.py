@@ -7,7 +7,12 @@ order, and every push and reply to one encoder operation."""
 
 from __future__ import annotations
 
+import hashlib
+
+import pytest
+
 from realtime_framework.clock import Clocks
+from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
     AcceptResult,
@@ -17,6 +22,8 @@ from realtime_framework.evaluation.kernel.events import (
 )
 from realtime_framework.evaluation.kernel.streaming import PushFrame, StreamingConfig
 from realtime_framework.evaluation.streaming_shell import _StreamingShell, run_streaming_episode
+from realtime_framework.sandbox.observation.interactables import canonical_result
+from realtime_framework.sandbox.observation.som import ToolRuntime
 from tests.fake_clock import FakeClock
 from tests.shell_streaming.fakes import FakeEnv
 
@@ -211,3 +218,75 @@ def test_a_push_reopening_the_session_through_its_retries_is_not_taken_as_stuck(
     assert pushed[0].error is None and pushed[0].sent_at > 12.0
     kinds = [e.kind for e in records if e.kind in ("SessionPreparing", "SessionPrepared")]
     assert kinds[:6] == ["SessionPreparing", "SessionPrepared"] * 3
+
+
+class _InspectedEnv(_Env):
+    """Captures with the canonical interactables the SoM runtime inspects; those of ``unstable``
+    kept changing while it was captured."""
+
+    def __init__(self, clock, unstable: str):
+        super().__init__(clock)
+        self.unstable = unstable
+
+    def capture(self):
+        observation = super().capture()
+        observation_id = observation.metadata["observation_id"]
+        digest = hashlib.sha256(observation.screenshot).hexdigest()
+        raw = {
+            "scene": {"status": "ok", "kind": "browser_dom", "target_id": "page-1"},
+            "binding": {"stable": observation_id != self.unstable, "fingerprint": observation_id},
+        }
+        observation.metadata["screenshot_sha256"] = digest
+        observation.metadata["interactables"] = canonical_result(
+            raw,
+            observation_id=observation_id,
+            screenshot_sha256=digest,
+            captured_at=observation.timestamp,
+            frame_geometry=FrameGeometry((64, 48), (64, 48)),
+        )
+        return observation
+
+
+@pytest.mark.parametrize("first_reply_s", [2.3, 3.3])
+def test_a_frame_whose_inspection_is_invalid_invalidates_the_run_whenever_replies_start(
+    monkeypatch, first_reply_s
+):
+    """Frame 3's elements kept changing while it was captured, at 2.75 s. The first reply,
+    started on frame 1, clicks frame 3 at 2.95 s, and ends before frame 3 is the newest or after
+    frame 4 is. Either way the run is invalid as a turn-based decision on that frame makes it,
+    once the frame is inspected, and the frame never goes in, nor does the click run
+    (review-merge bug #1: one timing left the run valid with the click applied, the other
+    invalidated it for the tool)."""
+    clock, records = FakeClock(), []
+    record = _StreamingShell._record
+
+    def recording(shell, entry):
+        records.append(entry)
+        record(shell, entry)
+
+    monkeypatch.setattr(_StreamingShell, "_record", recording)
+    click = Call(2.2, "c3", "click", {"x": 10, "y": 20, "button": "left", "frame": 3})
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock)
+        agent.bind_tool_runtime(ToolRuntime(None, clock=clock))
+        agent.driver.replies += [Reply((click,), ends_at=first_reply_s)]
+        agent.driver.replies += [Reply(ends_at=1.0)] * 10
+        env = _InspectedEnv(clock, "obs-3")
+        env.seconds["execute"] = 0.25
+        termination = run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=8.0),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+        agent.close()
+    assert env._invalid_run == {
+        "category": "harness",
+        "reason": "inspection_protocol_error",
+        "detail": "interactables_binding_unstable",
+    }
+    assert termination.ended_at == 2.75
+    assert [c[1] for c in agent.driver.calls if c[0] == "push"] == ["obs-1", "obs-2"]
+    assert ("c3", "applied") not in [(a["call_id"], a["result"]) for a in agent.action_history]
+    assert env.counts.get("execute", 0) == 0

@@ -49,7 +49,6 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import TYPE_CHECKING
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import (
@@ -89,6 +88,7 @@ from realtime_framework.entity.request import (
     CanonicalRequest,
     ContentBlock,
 )
+from realtime_framework.evaluation.kernel.events import Invalidated, Outcome
 from realtime_framework.evaluation.kernel.streaming import (
     ActionArrived,
     CallsCancelled,
@@ -114,9 +114,6 @@ from realtime_framework.harnesses.streaming.history import (
 )
 from realtime_framework.providers.registry import adapter_class
 from realtime_framework.providers.session_lifecycle import RenewalRequired, session_preparing
-
-if TYPE_CHECKING:
-    from realtime_framework.evaluation.kernel.events import Outcome
 
 logger = logging.getLogger(__name__)
 
@@ -392,11 +389,18 @@ class NativeStreamingAgent(VisionAgentBase):
 
     def push(self, observation: Observation) -> None:
         """Enter the frame in the frame table and put it into the session, readied first, and
-        record it sent. Raises when it did not go in."""
+        record it sent. Raises when it did not go in. A frame whose inspection is invalid, as
+        one whose elements kept changing while it was captured, does not go in: it invalidates
+        the run, as a turn-based decision on it does (harnesses/default/harness.py)."""
         value, execution, record = bind_observation(
             self, observation, self.interaction_profile.frame_prompt, observation.tick_number
         )
         pushed = _Pushed(record, value, execution)
+        proof = value.inspection
+        if proof is not None and not proof.get("valid"):
+            self._finish_inspection(pushed, "inspection_protocol_error")
+            self._post(Invalidated("harness", "inspection_protocol_error", proof["protocol_error"]))
+            raise RuntimeError(f"the frame's inspection is invalid: {proof['protocol_error']}")
         key = observation.metadata.get("observation_id")
         try:
             with (

@@ -337,7 +337,7 @@ class RecordingToolRuntime:
     def inspect(self, observation, *, requested_observation_id, **sizes) -> dict:
         call_id = f"inspection-{len(self._pending) + len(self.rows)}"
         self._pending.add(call_id)
-        proof = {"call_id": call_id, "observation_id": requested_observation_id}
+        proof = {"valid": True, "call_id": call_id, "observation_id": requested_observation_id}
         return {"text": "", "proof": proof, "marks": {}, "reference_resolution": {}}
 
     def resolve_action(self, action, marks, execution):
