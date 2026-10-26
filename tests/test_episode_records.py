@@ -386,15 +386,15 @@ def test_frame_output_tokens_takes_the_settled_clock_count_first():
 # ---- audits and whether the result is usable --------------------------------------------------
 
 
-def test_the_cap_audit_records_the_handoff_and_action_caps():
+def test_the_cap_audit_records_the_action_cap_and_no_handoff():
     budget = DecisionBudget(1_000, 1_000, 1_000, "token")
-    adapter = SimpleNamespace(_frame_handoff_max_tokens=200, _frame_action_max_tokens=800)
+    adapter = SimpleNamespace(_frame_action_max_tokens=800)
     r = {"unclamped_clock_output_tokens": 1_200, "post_horizon_output_tokens": 200}
     episode_records.audit_output_caps(adapter, r, budget)
     assert r == {
         "unclamped_clock_output_tokens": 1_200,
         "post_horizon_output_tokens": 200,
-        "handoff_token_cap": 200,
+        "handoff_token_cap": 0,
         "action_token_cap": 800,
     }
     r = {}
@@ -405,35 +405,6 @@ def test_the_cap_audit_records_the_handoff_and_action_caps():
         "unclamped_clock_output_tokens": None,
         "post_horizon_output_tokens": 0,
     }
-
-
-def test_caps_past_the_provider_allowance_fail_the_audit_of_a_usable_result():
-    budget = DecisionBudget(1_000, 1_000, 1_000, "token")
-    adapter = SimpleNamespace(_frame_handoff_max_tokens=201, _frame_action_max_tokens=800)
-    with pytest.raises(RuntimeError, match=r"handoff=201 \+ action=800 > 1000"):
-        episode_records.audit_output_caps(adapter, {}, budget)
-    r = {"invalid_reason": "inspection_protocol_error"}
-    episode_records.audit_output_caps(adapter, r, budget)
-    assert (r["handoff_token_cap"], r["action_token_cap"]) == (201, 800)
-    episode_records.audit_output_caps(adapter, {}, DecisionBudget(1_000, None, None, "wall"))
-
-
-@pytest.mark.parametrize(
-    "given_up",
-    [
-        episode_records.abandoned_result(0.9, "task_end"),
-        episode_records.timed_out_result(2.0, "wall_deadline"),
-    ],
-    ids=["at-the-end", "at-a-bound"],
-)
-def test_a_call_given_up_on_has_no_caps_of_its_own_to_fail_the_audit(given_up):
-    """It has no output: the adapter's caps may still be the previous decision's, as for a
-    result invalidated before its generation."""
-    budget = DecisionBudget(1_000, 1_000, 1_000, "token")
-    adapter = SimpleNamespace(_frame_handoff_max_tokens=201, _frame_action_max_tokens=800)
-    r = dict(given_up)
-    episode_records.audit_output_caps(adapter, r, budget)
-    assert (r["handoff_token_cap"], r["action_token_cap"]) == (201, 800)
 
 
 class _Audited:
