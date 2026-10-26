@@ -1406,11 +1406,13 @@ def test_closing_ends_a_push_waiting_to_try_reopening_the_session_again(monkeypa
     """A push waits out the backoff between attempts to reopen the session when the episode
     closes the agent: close does not wait for the attempts left, and the push fails."""
     agent = make_agent(monkeypatch, clock)
+    agent.bind_inbox(lambda event: None, ORIGIN)
     _two_frames(agent, clock)
     agent.abort(6)
     agent.driver.connect_failures = [ConnectionError("down")] * 3
     pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
     clock.sleep(0.5)
+    assert not pushed.is_set()  # in the first backoff, 1 s ± 25%
     started = clock.monotonic()
     agent.close()
     assert clock.monotonic() - started < 0.5
