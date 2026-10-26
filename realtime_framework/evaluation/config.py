@@ -211,17 +211,11 @@ def _required_cell_list(value, model_catalog: dict[str, dict], *, wall_clock=Fal
 
 
 def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
+    """A run plan, as ``rtbench run -c`` hands it to Harbor (harbor_cli.py plan_job): a field the
+    job does not carry is refused, not dropped."""
     path = Path(path).expanduser().resolve()
     raw = _required_mapping(load_yaml(path), str(path))
-    unknown = set(raw) - {
-        "benchmark_id",
-        "suite",
-        "runtime",
-        "execution",
-        "models",
-        "cells",
-        "tasks",
-    }
+    unknown = set(raw) - {"suite", "runtime", "models", "cells", "tasks"}
     if unknown:
         raise ValueError(f"Unknown benchmark fields: {sorted(unknown)}")
     runtime = {
@@ -231,18 +225,20 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         "duration_minutes": 5,
         **_required_mapping(raw.get("runtime", {}), "runtime"),
     }
-    runtime.setdefault(
+    unknown = set(runtime) - {
+        "mode",
+        "clock_mode",
+        "fps",
+        "model_input_fps",
+        "interaction_mode",
+        "tokens_per_frame",
+        "duration_minutes",
+        "seed",
         "protocol",
-        "wall-clock" if runtime["clock_mode"] == "wall" else "time-aware-token-v1",
-    )
-    execution = {
-        "lane": 0,
-        "results_dir": "temp",
-        **_required_mapping(raw.get("execution", {}), "execution"),
     }
+    if unknown:
+        raise ValueError(f"Unknown runtime fields: {sorted(unknown)}")
 
-    default_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.stem).strip("_.-") or "benchmark"
-    benchmark_id = _required_id(raw.get("benchmark_id", default_id), "benchmark_id")
     suite_id = raw.get("suite", "public")
     if not isinstance(suite_id, str):
         raise ValueError("suite must be NAME or NAME@MAJOR.MINOR")
@@ -334,17 +330,10 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         or duration_minutes <= 0
     ):
         raise ValueError("runtime.duration_minutes must be positive")
-    protocol = runtime.get("protocol")
-    protocol = _required_id(protocol, "runtime.protocol")
-    if protocol == "time-aware-token-v1" and clock_mode != "token":
-        raise ValueError("time-aware-token-v1 requires token clock mode")
-
-    graphics_mode = runtime.get("graphics_mode", "cpu")
-    if graphics_mode not in {"cpu", "gpu"}:
-        raise ValueError("runtime.graphics_mode must be 'cpu' or 'gpu'")
-    recording_encoder = runtime.get("recording_encoder", "cpu")
-    if recording_encoder not in {"cpu", "gpu"}:
-        raise ValueError("runtime.recording_encoder must be 'cpu' or 'gpu'")
+    # The trial runs the protocol its clock implies (evaluation/_trial.py).
+    protocol = "wall-clock" if clock_mode == "wall" else "time-aware-token-v1"
+    if runtime.get("protocol", protocol) != protocol:
+        raise ValueError(f"runtime.protocol must be {protocol!r} on the {clock_mode} clock")
 
     from realtime_framework.providers.preflight import validate_model_interaction
 
@@ -361,18 +350,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
         )
 
-    lane = execution.get("lane")
-    if type(lane) is not int or lane < 0:
-        raise ValueError("execution.lane must be a non-negative integer")
-    results_dir = execution.get("results_dir")
-    if not isinstance(results_dir, str) or not results_dir.strip() or "\n" in results_dir:
-        raise ValueError("execution.results_dir must be a non-empty single-line path")
-    parallel = execution.get("parallel", False)
-    if type(parallel) is not bool:
-        raise ValueError("execution.parallel must be true or false")
-
     return {
-        "benchmark_id": benchmark_id,
         "suite": suite_id,
         "models": models,
         "cells": cells,
@@ -387,13 +365,6 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             "duration_minutes": duration_minutes,
             "seed": task_seed(runtime.get("seed", DEFAULT_TASK_SEED)),
             "protocol": protocol,
-            "graphics_mode": graphics_mode,
-            "recording_encoder": recording_encoder,
-        },
-        "execution": {
-            "lane": lane,
-            "results_dir": results_dir,
-            "parallel": parallel,
         },
     }
 
