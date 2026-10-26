@@ -437,10 +437,11 @@ _DECLARED_METHODS = {
         "mark_dirty",
     ),
 }
-# What the native-streaming agent pushes frames and asks for replies with
-# (harnesses/streaming/agent.py), and what the selection flow asks a choice API's questions and
-# classifies their failures with (providers/decisions/selection.py).
-_STREAMING_METHODS = ("push_frame", "request_reply")
+# What the native-streaming agent pushes frames, asks for replies and classifies their failures
+# with, whatever classifies_transport_errors says (harnesses/streaming/agent.py), and what the
+# selection flow asks a choice API's questions and classifies their failures with
+# (providers/decisions/selection.py).
+_STREAMING_METHODS = ("push_frame", "request_reply", "classify_transport_error")
 _CHOICE_METHODS = ("decide", "classify_question_error")
 
 

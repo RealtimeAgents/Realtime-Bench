@@ -85,6 +85,16 @@ class StreamingNoReply(StreamingNoPush):
         raise NotImplementedError
 
 
+class StreamingNoClassifier(StreamingNoReply):
+    """Declares no classifier, which the native-streaming agent calls on every failure."""
+
+    capabilities = replace(StreamingNoReply.capabilities, classifies_transport_errors=False)
+    classify_transport_error = None
+
+    async def request_reply(self, request):
+        raise NotImplementedError
+
+
 class ChoiceNoDecide(ExternalChatDriver):
     capabilities = replace(ExternalChatDriver.capabilities, action_channel="choice")
 

@@ -204,7 +204,8 @@ A model that needs a new wire protocol gets a driver:
    `"streaming"` in `interaction_modes` also declares `streaming_settings`, the defaults of its
    [streaming settings](#streaming-settings) (a dict), takes `streaming`: the
    native-streaming agent builds it as `Driver(config, clock=clock, streaming=True)`, and has
-   `push_frame` and `request_reply`, which the agent pushes frames and asks for replies with. A
+   `push_frame`, `request_reply` and `classify_transport_error`, which the agent pushes frames,
+   asks for replies and classifies their failures with. A
    driver whose `action_channel` is `"choice"` has `decide` and `classify_question_error`, which
    the selection flow (`realtime_framework/providers/decisions/`) asks each question and
    classifies its failures with. An external driver without any of these is refused when its
