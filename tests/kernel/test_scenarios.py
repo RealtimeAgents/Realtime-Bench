@@ -129,7 +129,10 @@ def _check_invariants(sim: Simulation) -> None:
     # The termination record is written last; then inputs are released and the episode finishes.
     assert records[-1].kind == "Termination"
     assert records[-1].data == asdict(sim.termination)
-    assert commands[-2:] == [ReleaseInputs(), Finish(sim.termination)]
+    # Finish carries what the policy counted for the run summary.
+    policy = sim.kernel.policy
+    finish = Finish(sim.termination, policy.spent, policy.dropped_frames)
+    assert commands[-2:] == [ReleaseInputs(), finish]
     assert sim.kinds().count("EpisodeEnded") == 1
     ended = next(i for i, command in enumerate(commands) if _is_record(command, "EpisodeEnded"))
     assert isinstance(commands[ended + 1], FreezeSnapshot)

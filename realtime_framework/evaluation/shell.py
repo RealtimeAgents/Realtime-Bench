@@ -652,8 +652,8 @@ class _Shell:
                 self._freeze()
             case ReleaseInputs():
                 self._release_inputs()
-            case Finish(termination=termination):
-                self._finish(termination)
+            case Finish():
+                self._finish(command)
 
     def _raised(self, failure: str) -> None:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
@@ -1112,17 +1112,19 @@ class _Shell:
         except Exception:  # noqa: BLE001 - the snapshot is frozen; cleanup is best effort
             self.log("[cleanup] failed to release stateful inputs:\n" + traceback.format_exc())
 
-    def _finish(self, termination: Termination) -> None:
+    def _finish(self, finish: Finish) -> None:
         """The termination record main() and the report read, in world seconds to nine places
         (legacy_loop.py ``_termination``); the token clock's are ticks, and a failure the shell
         found in this last batch goes into it (_with_unheard)."""
-        termination = _with_unheard(termination, self._unheard, self.log)
+        termination = _with_unheard(finish.termination, self._unheard, self.log)
         try:
-            self._terminate(termination)
+            self._terminate(termination, finish.think_spent, finish.dropped_intermediate_frames)
         finally:
             self._finished = True  # nothing more will be asked (kernel/core.py)
 
-    def _terminate(self, termination: Termination) -> None:
+    def _terminate(
+        self, termination: Termination, think_spent: float, dropped_intermediate_frames: int
+    ) -> None:
         env = self.env
         # The verdict first: main() reads it whatever else could be written (runner.py main).
         invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
@@ -1151,8 +1153,8 @@ class _Shell:
             "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
             "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
         }
-        env._think_spent = self.policy.spent
-        env._dropped_intermediate_frames = self.policy.dropped_frames
+        env._think_spent = think_spent
+        env._dropped_intermediate_frames = dropped_intermediate_frames
         if late is not None:
             self.log(_only_logged(late))
 
@@ -1184,7 +1186,8 @@ class _Shell:
                 self._loop_error,  # this one's, unless a failure the kernel never took came first
                 latched,
             )
-            self._terminate(termination)
+            # No Finish came to carry the policy's counts: they are as far as they got.
+            self._terminate(termination, **self.policy.totals)
             if first:  # the run_exception is the first failure: recorded as the runner does
                 record = _invalid_record(termination.invalid)
                 self.log(f"[invalid-run] runner:run_exception — {record['detail']}")

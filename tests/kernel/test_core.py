@@ -36,6 +36,7 @@ class Policy:
     def __init__(self, merged_clocks: bool = True) -> None:
         self.merged_clocks = merged_clocks
         self.settled = True
+        self.totals: dict = {}
         self.calls: list = []
         self.kernel = None
 
@@ -265,13 +266,15 @@ def _finish(kernel, now: float) -> list:
     ids=["deadline", "horizon", "think-budget", "task-reason", "game-decided"],
 )
 def test_the_stop_reason_comes_from_the_first_end(cause, reason, stop_reason):
-    kernel, _ = _kernel()
+    kernel, policy = _kernel()
+    policy.totals = {"think_spent": 2.5, "dropped_intermediate_frames": 3}
     kernel.end(cause, 30.0, reason=reason)
     kernel._flush()
     commands = _finish(kernel, 30.5)
     assert kernel.termination.stop_reason == stop_reason
     assert kernel.termination.cause == cause
-    assert _others(commands)[-2:] == [ReleaseInputs(), Finish(kernel.termination)]
+    # Finish carries what the policy counted beside the termination.
+    assert _others(commands)[-2:] == [ReleaseInputs(), Finish(kernel.termination, 2.5, 3)]
     assert _kinds(commands)[-1] == "Termination"
 
 

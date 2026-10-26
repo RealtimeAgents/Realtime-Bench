@@ -303,6 +303,12 @@ class StreamingPolicy:
             and self._aborting is None
         )
 
+    @property
+    def totals(self) -> dict:
+        """None of the turn-based counts Finish carries: no budget is charged, and the frames
+        dropped here are counted otherwise (``dropped_frames``)."""
+        return {}
+
     # ---- kernel callbacks -------------------------------------------------------------------
 
     def start(self, kernel) -> None:

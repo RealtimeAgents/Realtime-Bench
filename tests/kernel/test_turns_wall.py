@@ -59,7 +59,9 @@ def _run(sim: Simulation) -> Simulation:
     sim.run()
     assert [entry.seq for entry in sim.records] == list(range(1, len(sim.records) + 1))
     assert sim.records[-1].kind == "Termination"
-    assert sim.commands[-3:] == [Record(sim.records[-1]), ReleaseInputs(), Finish(sim.termination)]
+    policy = sim.kernel.policy
+    finish = Finish(sim.termination, policy.spent, policy.dropped_frames)
+    assert sim.commands[-3:] == [Record(sim.records[-1]), ReleaseInputs(), finish]
     assert _past_the_deadline(sim) == []
     return sim
 

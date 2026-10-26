@@ -211,6 +211,10 @@ class TurnPolicy:
     def settled(self) -> bool:
         return self.phase is _Phase.SETTLED
 
+    @property
+    def totals(self) -> dict:
+        return {"think_spent": self.spent, "dropped_intermediate_frames": self.dropped_frames}
+
     # ---- kernel callbacks -------------------------------------------------------------------
 
     def start(self, kernel) -> None:

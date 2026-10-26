@@ -433,3 +433,8 @@ class Finish:
     """The episode is over; nothing more will be asked."""
 
     termination: Termination
+    # What the turn-based policy counted for the run summary: the deliberation charged to the
+    # legacy budget, in seconds, and on the token clock the input frames the decisions crossed
+    # unobserved. A streaming episode counts neither.
+    think_spent: float = 0.0
+    dropped_intermediate_frames: int = 0
