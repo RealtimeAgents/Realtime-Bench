@@ -186,9 +186,8 @@ def ties(script: Script) -> list[str]:
 def timed_apart(script: Script) -> list[str]:
     """Wall clock, reads and actions taking time: where today's loop then reads the task at other
     times than the kernel and finds what no rule follows: the end before it, or a decision moved
-    to other frames, as all that comes after moves too (REPORT.md section 4); and where an action
-    returns past the end into a snapshot read that takes time, which the shell is still to fix.
-    What each is, for each found."""
+    to other frames, as all that comes after moves too (REPORT.md section 4). What each is, for
+    each found."""
     if script.clock != "wall" or not (script.check_s or script.execute_s):
         return []
     found = []
@@ -197,9 +196,6 @@ def timed_apart(script: Script) -> list[str]:
     for entry in _run(script).records:
         ended = ended or entry.kind == "EpisodeEnded"
         if ended:
-            if entry.kind == "ActionExecuted" and script.snapshot_s:
-                # Filed after the snapshot read, and resolved at the tick then (scenarios.PENDING).
-                found.append(f"decision {entry.data.decision}'s action returns past the end")
             continue
         if entry.kind == "InferenceStarted":
             started[entry.data["decision"]] = entry.semantic

@@ -10,9 +10,10 @@ show between today's loop and the simulation; ``seen`` says where they can.
 U-numbered rules are differences found after the plan's list: U2 by this framework, put on the
 list by N5 (with U3 and U6, which KF5 and p1b's fix of L3 took up); U7 to U13 by p1b, U10 and U11
 recorded by N10 and N34; U14 by this framework, gone since N44 dated a failed read's end as an end
-a read found (K-g); U17 is the plan's (fix-h1), U18 the kernel audit's (低 7). KF-numbered ones
-are kernel-fix's, D47 is p1b's name for decision 47; p1c numbers decision 31, KF5 and KF5d here,
-X18, and the token clock's ticks turned into equal floats X17.
+a read found (K-g); U17 is the plan's (fix-h1), U18 the kernel audit's (低 7); U21 by this
+framework, which the 10-23 review's item 38 keeps (the plan's U19 and U20 are the live drivers'
+only). KF-numbered ones are kernel-fix's, D47 is p1b's name for decision 47; p1c numbers decision
+31, KF5 and KF5d here, X18, and the token clock's ticks turned into equal floats X17.
 
 The old side's times come from its facts: when each generation started and returned, when each
 decision was resolved, executed and committed, and every end check with its answer. Named
@@ -1222,6 +1223,28 @@ def _u2(script: Script, p: Projection, notes: dict) -> None:
         p.episode["invalidation_records"] = 1
 
 
+def _u21(script: Script, p: Projection, notes: dict) -> None:
+    """Wall clock: an action whose execution the deadline falls in resolves at the tick the
+    snapshot was read at, past the horizon when the read takes time. The turn-based shell's
+    ActionExecuted has no finished_at, so the kernel files its answer when the shell posts it,
+    behind the deadline's timer (kernel/core.py Kernel.step): it handles the deadline once the
+    action has returned (_deadline_handled), reads the snapshot, and only then resolves the action,
+    at the tick of that reading (turns.py TurnPolicy._resolve, _tick). Today's loop resolves it at
+    the tick the action returned at. Only these two ticks differ, not how the episode ends or its
+    snapshot; the 10-23 review's item 38 keeps it so."""
+    termination = p.episode["termination"]
+    if termination["snapshot_s"] is None or not _ended_by_the_deadline(script, p, notes):
+        return
+    deadline = script.duration_s
+    tick = _floor(termination["snapshot_s"] * script.env_fps)
+    for d in p.decisions.values():
+        for executed in d["executed"]:
+            returned = executed["at"] + script.execute_s
+            if earlier(executed["at"], deadline) and not earlier(returned, deadline):
+                d["resolved"]["environment_tick"] = tick
+                d["outcome"]["next_observation_tick"] = tick
+
+
 def _x2(script: Script, p: Projection, notes: dict) -> None:
     """The kernel freezes the snapshot before it reports the decision in hand (core.py Kernel.end,
     turns.py TurnPolicy.on_end); today the decision is reported first and the snapshot read after
@@ -1420,6 +1443,11 @@ RULES = (
         "U18",
         "an agent accept or discard that raises is runner:run_exception",
         seen="not scripted: no replayed agent's accept or discard raises",
+    ),
+    Rule(
+        "U21",
+        "an action the wall deadline falls in resolves at the tick the snapshot was read at",
+        _u21,
     ),
     Rule("X2", "the snapshot is frozen before the decision in hand is reported", _x2),
     Rule(

@@ -669,14 +669,7 @@ LATCHED = [
 
 # Named scripts that assert today's outcome where the shell is still to be fixed, with why:
 # they fail until then (test_named.py, xfail strict), and pass once it is.
-PENDING: dict[str, str] = {
-    "wall-an-action-runs-past-the-deadline-and-the-snapshot-takes-time": (
-        "the shell's ActionExecuted has no finished_at, so the kernel files the answer of an action"
-        " that ran past the deadline after it has read the snapshot and resolves the action at the"
-        " tick then, past the horizon (kernel/core.py Kernel.step, turns.py TurnPolicy._tick);"
-        " today's loop resolves it at the tick the action returned at"
-    ),
-}
+PENDING: dict[str, str] = {}
 
 # The task ends at a decision's landing, after its frame was read. The kernel reads before
 # landing on the new reading (N26 (b)), finds the end and lands nothing, as today's loop does;
@@ -894,14 +887,14 @@ ACROSS = [
         name="wall-an-action-runs-past-the-deadline",
     ),
     # The same, the snapshot read taking 1.5 s: today's loop resolves the click at tick 2, where
-    # it returned; the kernel once the snapshot is read, at tick 3 (PENDING).
+    # it returned; the kernel once the snapshot is read, at tick 3 (U21).
     Script(
         "wall",
         2.0,
         _timed(["click", "click"], [1.9, 0.5]),
         execute_s=0.2,
         snapshot_s=1.5,
-        expect=frozenset({"X2"}),
+        expect=frozenset({"U21", "X2"}),
         name="wall-an-action-runs-past-the-deadline-and-the-snapshot-takes-time",
     ),
     # At 4 fps decision 0 lands at 1.6 s and paces to 1.75 s; decision 1's capture runs to 2.05 s,
