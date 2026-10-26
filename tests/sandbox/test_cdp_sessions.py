@@ -13,7 +13,8 @@ import threading
 import pytest
 from websockets.exceptions import ConnectionClosed
 
-from realtime_framework.sandbox.browser import cdp
+from realtime_framework.sandbox.browser import cdp, clock
+from realtime_framework.sandbox.budget import BudgetExceeded
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 
 from .fakes import FakeCDP
@@ -71,6 +72,58 @@ def test_a_connection_the_page_dropped_fails_one_call_and_the_next_call_reconnec
         finally:
             cdp.close_port(fake.port)
         assert fake.connections == 2
+
+
+def test_a_reconnected_session_registers_the_page_scripts_again():
+    """Chrome keeps a script for every new document on the session that registered it, and drops
+    it with the session. The session that reconnecting opens registers the seed and the page guard
+    again, in order, before its first call, so the documents created after it still run them."""
+    with FakeCDP(values={"1": 1}) as fake:
+        client = cdp.client_for(fake.port)
+        try:
+            clock.cdp_install_document_script(fake.port, "seed()")
+            clock.cdp_install_game_page_guard(fake.port)
+            fake.drop()
+            with pytest.raises(ConnectionClosed):
+                client.evaluate("1", timeout=ROOMY)
+            sent = len(fake.commands)
+            assert client.evaluate("1", timeout=ROOMY) == 1
+        finally:
+            cdp.close_port(fake.port)
+        assert fake.connections == 2
+    assert [(c["method"], c["params"].get("source")) for c in fake.commands[sent:]] == [
+        ("Page.enable", None),
+        ("Page.addScriptToEvaluateOnNewDocument", "seed()"),
+        ("Page.enable", None),
+        ("Page.addScriptToEvaluateOnNewDocument", clock._GAME_PAGE_GUARD),
+        ("Runtime.evaluate", None),
+    ]
+
+
+def test_a_session_whose_registrations_fail_is_closed_and_the_next_call_registers_them_again():
+    """The page does not answer the registrations of the reconnected session: the call that
+    reconnected fails, and the next call opens another session and registers them there."""
+    with FakeCDP(values={"1": 1}) as fake:
+        client = cdp.client_for(fake.port)
+        try:
+            clock.cdp_install_document_script(fake.port, "seed()")
+            fake.mode = "flood"
+            fake.drop()
+            with pytest.raises(ConnectionClosed):
+                client.evaluate("1", timeout=ROOMY)
+            with pytest.raises(BudgetExceeded):
+                client.evaluate("1", timeout=0.2)
+            fake.mode = "reply"
+            sent = len(fake.commands)
+            assert client.evaluate("1", timeout=ROOMY) == 1
+        finally:
+            cdp.close_port(fake.port)
+        assert fake.connections == 3
+    assert [c["method"] for c in fake.commands[sent:]] == [
+        "Page.enable",
+        "Page.addScriptToEvaluateOnNewDocument",
+        "Runtime.evaluate",
+    ]
 
 
 def test_a_client_asked_for_by_target_leaves_the_default_client_on_its_page():

@@ -245,7 +245,8 @@ def cdp_install_document_script(dbg_port, source, url=None):
     """Run ``source`` in every document created from now on, then optionally navigate to ``url``.
 
     The script executes before the document's own scripts, in each same-origin frame and again
-    after every reload, for as long as the persistent target session keeps the registration.
+    after every reload. Chrome keeps the registration on the persistent target session, and the
+    client registers it again on each session it reconnects (cdp.py _SESSION_REGISTRATIONS).
     """
     client = client_for(dbg_port)
     with client.transaction():
@@ -263,7 +264,8 @@ def cdp_install_document_script(dbg_port, source, url=None):
 def cdp_install_frame_clock(dbg_port, url):
     """Install the RAF clock before navigating to ``url``.
 
-    The registration and later clock/input/state commands share one persistent target session.
+    The registration and later clock/input/state commands share one persistent target session,
+    and a session the client reconnects registers it again (cdp.py _SESSION_REGISTRATIONS).
     Reload-reset games retain the new-document script; the defensive reset path reinstalls it only
     if Chrome replaces the target or loses the registration.
     """
