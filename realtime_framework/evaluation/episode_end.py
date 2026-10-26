@@ -3,6 +3,7 @@ shells share of writing it up, whatever threads they run it on."""
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.kernel.core import Kernel
-from realtime_framework.evaluation.kernel.events import Invalidated, Termination
+from realtime_framework.evaluation.kernel.events import Entry, Invalidated, Termination
 
 
 def invalidated(record: dict) -> Invalidated:
@@ -83,14 +84,55 @@ def escaped_termination(
     )
 
 
-def record_run_exception(trace, invalid: Invalidated, semantic: float, ops, log) -> None:
+class TraceWriter:
+    """A shell's writes to the episode trace. The first that fails invalidates the run: ``lost``
+    is handed the failure, and nothing more is written."""
+
+    def __init__(self, trace, lost: Callable[[Invalidated], None]) -> None:
+        self.trace = trace
+        self.failed = False
+        self._lost = lost
+
+    def emit(self, event: TraceEvent | str, payload: dict, entry: Entry | None = None) -> None:
+        """Write one record under the kernel's record of it, ``entry``: its number and readings."""
+        if self.trace is None or self.failed:
+            return
+        fields = (
+            {}
+            if entry is None
+            else {"kernel_seq": entry.seq, "semantic": entry.semantic, "ops": entry.ops}
+        )
+        try:
+            self.trace.emit(event, payload, **fields)
+        except Exception:  # noqa: BLE001 - any write failure invalidates the run
+            self.failed = True
+            self._lost(Invalidated("harness", "episode_trace_write_failed", traceback.format_exc()))
+
+    def checkpoint(self) -> None:
+        """Make the trace durable, as a shell does at each outcome it reports."""
+        if self.trace is None or self.failed:
+            return
+        try:
+            self.trace.checkpoint()
+        except Exception:  # noqa: BLE001 - any write failure invalidates the run
+            self.failed = True
+            self._lost(
+                Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
+            )
+
+
+def record_run_exception(
+    writer: TraceWriter, invalid: Invalidated, semantic: float, ops, log
+) -> None:
     """The run_exception a wrap-up (N11) invalidates the run for, the first failure, recorded as
     the runner records it: logged, and written as RunInvalidated outside the kernel's numbering
-    unless ``trace`` is gone."""
+    while the trace takes writes."""
     record = invalid_record(invalid)
     log(invalid_line(invalid))
-    if trace is not None:
-        trace.emit(TraceEvent.RUN_INVALIDATED, record, kernel_seq=None, semantic=semantic, ops=ops)
+    if writer.trace is not None and not writer.failed:
+        writer.trace.emit(
+            TraceEvent.RUN_INVALIDATED, record, kernel_seq=None, semantic=semantic, ops=ops
+        )
 
 
 @dataclass(frozen=True)

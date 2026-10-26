@@ -65,6 +65,7 @@ from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.episode_end import (
     EpisodeEnd,
     EpisodeResult,
+    TraceWriter,
     escaped_termination,
     invalid_line,
     invalid_record,
@@ -301,7 +302,8 @@ class _Shell:
         self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, agent_trace, inputs_log
     ):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
-        self.log, self.trace, self.agent_trace = log, trace, agent_trace
+        self.log, self.agent_trace = log, agent_trace
+        self.writer = TraceWriter(trace, self._trace_lost)
         self._inputs_log = inputs_log
         self.token = config.clock_mode == "token"
         self.policy = TurnPolicy(config)
@@ -332,7 +334,6 @@ class _Shell:
         self._batch_invalid = False  # the shell posted an invalid run during the batch being run
         self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self._snapshot_read = False
-        self._trace_failed = False
         self.end = EpisodeEnd()
         self._drained = False
         self._finished = False
@@ -386,12 +387,13 @@ class _Shell:
         writes them once it has them back."""
         given = [] if self._given is None else [self._given]
         for record in given + list(self._held_records):
-            if self.trace is None or self._trace_failed:
+            writer = self.writer
+            if writer.trace is None or writer.failed:
                 return
             try:
-                self.trace.emit(record.kind, record.data)
+                writer.trace.emit(record.kind, record.data)
             except Exception:  # noqa: BLE001 - the run is invalid already
-                self._trace_failed = True
+                writer.failed = True
 
     def _write_handed(self) -> None:
         """Once the episode is finished: hand the kernel the agent records it has not taken, step
@@ -413,15 +415,17 @@ class _Shell:
                     entry = command.entry
                     if isinstance(entry.data, AgentRecord):
                         unwritten = [record for record in unwritten if record is not entry.data]
-                        self._emit(entry.kind, entry.data.data, entry)
+                        self.writer.emit(entry.kind, entry.data.data, entry)
                     else:
-                        self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
+                        self.writer.emit(
+                            "KernelRecord", {"kind": entry.kind, "data": entry.data}, entry
+                        )
         except Exception:  # noqa: BLE001 - the episode finished; only its last records are left
             self.log(
                 "[default] numbering the agent's last records failed:\n" + traceback.format_exc()
             )
             for record in unwritten:
-                self._emit(record.kind, record.data, Entry(None, *now, record.kind, record))
+                self.writer.emit(record.kind, record.data, Entry(None, *now, record.kind, record))
 
     def _loop(self) -> None:
         self._now = self._read()
@@ -718,7 +722,7 @@ class _Shell:
         )
         usage_before = episode_records.usage_snapshot(self.agent)
         entry, self._started = self._started, None
-        self._emit(
+        self.writer.emit(
             TraceEvent.INFERENCE_STARTED,
             episode_records.inference_started(
                 observation, decision, usage_before, native_output_limit, budget
@@ -1000,7 +1004,7 @@ class _Shell:
             failure = traceback.format_exc()
             self.log(f"[default] lifecycle audit write failed:\n{failure}")
             self._invalidate(Invalidated("harness", "action_lifecycle_write_failed", failure))
-        self._checkpoint()
+        self.writer.checkpoint()
         t_k, tau, action = r["observation_tick"], outcome.action_clock_position, outcome.action
         # The token delay is in input frames; on the wall clock the delay is the decision's
         # latency (kernel/turns.py _accept).
@@ -1139,8 +1143,7 @@ class _Shell:
             # No Finish came to carry the policy's counts: they are as far as they got.
             self._terminate(termination, **self.policy.totals)
             if first:
-                trace = None if self._trace_failed else self.trace
-                record_run_exception(trace, termination.invalid, semantic, ops, self.log)
+                record_run_exception(self.writer, termination.invalid, semantic, ops, self.log)
             self._record_unfinished(termination, semantic, ops)
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[default] wrapping up the episode failed:\n" + traceback.format_exc())
@@ -1179,11 +1182,11 @@ class _Shell:
         kind, data, decision = entry.kind, entry.data, self._decision
         if isinstance(data, AgentRecord):
             self._given = None
-            self._emit(kind, data.data, entry)
+            self.writer.emit(kind, data.data, entry)
         elif kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
         elif kind == "FrameCaptured" and data.error is None and not self._froze():
-            self._emit(
+            self.writer.emit(
                 TraceEvent.OBSERVATION_CAPTURED,
                 episode_records.observation_captured(decision.observation, decision.index),
                 entry,
@@ -1197,7 +1200,7 @@ class _Shell:
             if data.generation not in self._accepting:
                 self._write_inference(held)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
-            self._emit(
+            self.writer.emit(
                 TraceEvent.ACTION_PROPOSED,
                 episode_records.action_proposed(
                     decision.result, data["decision"], data["observation_id"]
@@ -1222,9 +1225,9 @@ class _Shell:
                 execution_result=data.get("execution_result"),
                 coordinate_trace=decision.coordinate_trace,
             )
-            self._emit(TraceEvent.ACTION_RESOLVED, decision.resolved, entry)
+            self.writer.emit(TraceEvent.ACTION_RESOLVED, decision.resolved, entry)
         elif kind == TraceEvent.ACTION_APPLIED.value:
-            self._emit(TraceEvent.ACTION_APPLIED, decision.resolved, entry)
+            self.writer.emit(TraceEvent.ACTION_APPLIED, decision.resolved, entry)
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
             if data["phase"] == "inference_to_action":
                 # The action lands: the runner times its resolution here, whatever comes of it
@@ -1234,7 +1237,7 @@ class _Shell:
                 decision.landed_at = (
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
                 )
-            self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
+            self.writer.emit(TraceEvent.CLOCK_ADVANCED, data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
             if invalid.reason == "observation_stream_frozen":
@@ -1244,9 +1247,9 @@ class _Shell:
                     f"{self.config.timing.observation_freeze_n}); invalidating run"
                 )
             self.log(invalid_line(invalid))
-            self._emit(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
+            self.writer.emit(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
         else:
-            self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
+            self.writer.emit("KernelRecord", {"kind": kind, "data": data}, entry)
             if kind == "GenerationAbandoned":
                 self._given_up(entry)
             elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
@@ -1336,8 +1339,8 @@ class _Shell:
     def _emit_inference(self, inference: tuple[list[dict], dict], entry: Entry) -> None:
         chunks, completed = inference
         for chunk in chunks:
-            self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
-        self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
+            self.writer.emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
+        self.writer.emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the
@@ -1346,30 +1349,10 @@ class _Shell:
         invalid = self.kernel.invalid
         return invalid is not None and invalid.reason == "observation_stream_frozen"
 
-    def _emit(self, event: TraceEvent | str, payload: dict, entry: Entry) -> None:
-        if self.trace is None or self._trace_failed:
-            return
-        try:
-            self.trace.emit(
-                event, payload, kernel_seq=entry.seq, semantic=entry.semantic, ops=entry.ops
-            )
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            if self._finished:  # the kernel handles nothing more (_write_handed)
-                self.agent_trace.fail(traceback.format_exc())
-            else:
-                self._invalidate(
-                    Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
-                )
-
-    def _checkpoint(self) -> None:
-        """Make the trace durable at the end of every decision."""
-        if self.trace is None or self._trace_failed:
-            return
-        try:
-            self.trace.checkpoint()
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            self._invalidate(
-                Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
-            )
+    def _trace_lost(self, invalid: Invalidated) -> None:
+        """A write to the episode trace failed: the run is invalid, which the agent's trace sink
+        is told once the kernel handles nothing more (_write_handed)."""
+        if self._finished:
+            self.agent_trace.fail(invalid.detail)
+        else:
+            self._invalidate(invalid)

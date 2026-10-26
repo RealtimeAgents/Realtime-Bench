@@ -55,6 +55,7 @@ from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
 from realtime_framework.evaluation.episode_end import (
     EpisodeEnd,
     EpisodeResult,
+    TraceWriter,
     escaped_termination,
     invalid_line,
     invalid_record,
@@ -136,7 +137,8 @@ def run_streaming_episode(
 class _StreamingShell:
     def __init__(self, agent, env, config: StreamingConfig, clocks: Clocks, log, trace) -> None:
         self.agent, self.env, self.clocks = agent, env, clocks
-        self.log, self.trace = log, trace
+        self.log = log
+        self.writer = TraceWriter(trace, self._trace_lost)
         self.kernel = Kernel(StreamingPolicy(config))
         clock = clocks.operational
         self.lanes = EnvLanes(env, self.post, clock, raised=self._raised)
@@ -153,7 +155,6 @@ class _StreamingShell:
         self._frozen: threading.Event | None = None  # set once the snapshot FreezeSnapshot took
         self._frozen_at: float | None = None  # the reading it was frozen at
         self._snapshot_read = False
-        self._trace_failed = False
         self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self.end = EpisodeEnd()
         self._loop_error_lock = threading.Lock()  # lanes raise on threads of their own
@@ -381,7 +382,7 @@ class _StreamingShell:
         the kernel record of an answer, which the lane posts after handing its row over."""
         while self._executions:
             record = self._executions.popleft()
-            self._write(
+            self.writer.emit(
                 "ActionExecution",
                 {
                     "decision": record.decision,
@@ -400,7 +401,7 @@ class _StreamingShell:
             self.post(OutcomeCommitted(outcome.decision, failure))
         else:
             self.post(OutcomeCommitted(outcome.decision))
-        self._checkpoint()
+        self.writer.checkpoint()
 
     # ---- the end ------------------------------------------------------------------------------
 
@@ -527,8 +528,9 @@ class _StreamingShell:
             )
             self._finish(termination)
             if first:
-                trace = None if self._trace_failed else self.trace
-                record_run_exception(trace, termination.invalid, self._now, self._now, self.log)
+                record_run_exception(
+                    self.writer, termination.invalid, self._now, self._now, self.log
+                )
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
         if self.end.termination is None:  # how it ended, as far as the wrap-up got
@@ -546,37 +548,9 @@ class _StreamingShell:
                 # What main() reads for the run summary, as the turn-based shell counts it.
                 self.end.stream_freeze_count += 1
             self.log(invalid_line(invalid))
-            self._write(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
+            self.writer.emit(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
         else:
-            self._write("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
-
-    def _write(self, event: TraceEvent | str, payload: dict, entry: Entry | None = None) -> None:
-        if self.trace is None or self._trace_failed:
-            return
-        fields = (
-            {}
-            if entry is None
-            else {"kernel_seq": entry.seq, "semantic": entry.semantic, "ops": entry.ops}
-        )
-        try:
-            self.trace.emit(event, payload, **fields)
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            self._trace_lost(
-                Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
-            )
-
-    def _checkpoint(self) -> None:
-        """Make the trace durable at each outcome, as the turn-based shell does at each decision."""
-        if self.trace is None or self._trace_failed:
-            return
-        try:
-            self.trace.checkpoint()
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            self._trace_lost(
-                Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
-            )
+            self.writer.emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
 
     def _trace_lost(self, invalid: Invalidated) -> None:
         """Post the trace's failure, which the shell finds on its own thread. A kernel that
