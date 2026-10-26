@@ -1277,7 +1277,7 @@ def test_an_abandoned_generation_omits_no_second_block(tmp_path):
 
 
 def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
-    """Luna, aborted while decision 0's question is under way, as the legacy loop's per-move cap
+    """Luna, aborted while decision 0's question is under way, as the kernel's per-move cap
     does. The abort closes the Decisions HTTP client (providers/openai_decisions.py close), and
     the held question then fails on it. Decision 1 connects again first
     (the session's ensure_ready), which opens a new client, so its questions are sent and
@@ -1288,23 +1288,19 @@ def test_a_decision_after_an_abort_sends_its_questions(tmp_path, monkeypatch):
         agent = episode.agent
         try:
             entered, release = _hold_questions(agent.driver)
-            observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            agent.stream_prefill(observation)
-            box, done = _in_worker(lambda: agent.stream_generate(tick=0))
+            box, done = _in_worker(lambda: _generate(episode, 1, 0))
             assert entered.wait(WAIT_S), "decision 0 asked no question"
             closed = agent.driver.client
-            agent.abort()
+            agent.abort(1)
             wait_for_abort(agent, WAIT_S)
             assert closed.is_closed
             release.set()
             _joined(box, done)
+            agent.discard(1)
             assert stub.requests == []
-            observation = episode.frames.capture(1)
             stub.load(scenario_decisions.WEB_LONG[1].script)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            agent.stream_prefill(observation)
-            result = agent.stream_generate(tick=1)
+            result = _generate(episode, 2, 1).result
+            agent.accept(2)
         finally:
             episode.finish()
     assert not result.get("invalid_reason"), result.get("invalid_detail")

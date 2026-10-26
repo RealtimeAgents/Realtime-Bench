@@ -1,11 +1,11 @@
-"""Drive scripted Choice Decisions into an agent, in the order the legacy turn loop calls it.
+"""Drive scripted Choice Decisions into an agent, in the order the kernel's shell calls it.
 
-As in steps.py: per decision the loop (tests/differential/legacy_loop.py _run_stream_legacy)
-captures a frame, binds the budget, prefills and generates (its _decide), hands the result to the
-trajectory writer (episode_records.py finalize_decision_audit) and reports the execution result (its
-_apply). In addition each decision loads its own script into the stub, every question attempt is
-recorded with an allow-list of headers, and an invalid decision ends the episode: run_stream
-invalidates the run without committing an action and stops deciding (kernel/turns.py _unusable).
+As in steps.py: per decision the shell captures a frame, binds the budget, generates, writes the
+result's trajectory row (episode_records.py finalize_decision_audit), accepts it and reports the
+execution result. In addition each decision loads its own script into the stub, every question
+attempt is recorded with an allow-list of headers, and an invalid decision ends the episode: the
+kernel invalidates the run without committing an action and stops deciding (kernel/turns.py
+_unusable).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 
 from .build import Episode
+from .steps import commit, decide
 from .stub_decisions import DecisionsStub
 
 # Headers that change how the endpoint treats a request. The user agent, transfer headers and the
@@ -54,15 +55,12 @@ def run_decisions(
         first_request = len(stub.requests)
         history_length = len(agent.action_history)
         stub.load(step.script)
-        # The budget at t_k (legacy_loop.py _decide).
-        agent.configure_decision(episode.budget(observation.tick_number))
-        agent.stream_prefill(observation)
-        result = agent.stream_generate(tick=k)
-        agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry
+        # The budget at t_k (kernel/turns.py _captured, shell.py _start_generation).
+        result = decide(agent, k, observation, episode.budget(observation.tick_number))
         unused.append(stub.unload())
         invalid = bool(result.get("invalid_reason"))
         if not invalid:
-            agent.commit_action(step.status, step.detail)
+            commit(agent, k, step.status, step.detail)
         records.append(
             {
                 "record": "step",

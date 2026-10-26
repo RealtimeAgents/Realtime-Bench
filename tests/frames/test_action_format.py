@@ -23,7 +23,7 @@ from realtime_framework.harnesses.default.prompts import (
 from tests.replay.build import build_episode
 from tests.replay.frames import ReplayTask
 from tests.replay.scenario import TASK_INSTRUCTION, replies
-from tests.replay.steps import Step
+from tests.replay.steps import Step, commit, decide
 from tests.replay.stub import ChatCompletionsStub
 from tests.replay.test_gemini_live import (  # noqa: F401 - live_env is a fixture
     API_KEY,
@@ -142,11 +142,9 @@ def test_gemini_live_calls_pass_their_frame(live_env, tmp_path):  # noqa: F811
         try:
             for k, step in enumerate(steps):
                 observation = episode.frames.capture(k)
-                agent.configure_decision(episode.budget(observation.tick_number))
-                agent.stream_prefill(observation)
-                results.append(agent.stream_generate(tick=k))
-                agent.finalize_decision_audit(results[-1])
-                agent.commit_action(step.status, step.detail)
+                budget = episode.budget(observation.tick_number)
+                results.append(decide(agent, k, observation, budget))
+                commit(agent, k, step.status, step.detail)
                 stub.wait_until_idle()
         finally:
             agent.close()

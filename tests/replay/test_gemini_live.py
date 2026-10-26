@@ -45,7 +45,7 @@ from . import baseline
 from .build import Episode, build_episode
 from .frames import ReplayTask
 from .scenario import CLICK_AGREE, CLICK_NAME, LONG_SCENARIO, TASK_INSTRUCTION
-from .steps import Step
+from .steps import Step, commit, decide
 from .ws_gemini_live import (
     AWAIT_ACK,
     TRANSCRIPT_HEADER,
@@ -269,12 +269,9 @@ def run_live_steps(
     records, results = [], []
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
-        budget = episode.budget(observation.tick_number)  # t_k: legacy_loop.py _decide
+        budget = episode.budget(observation.tick_number)  # t_k: shell.py _start_generation
         first = len(stub.events)
-        agent.configure_decision(budget)
-        agent.stream_prefill(observation)
-        result = agent.stream_generate(tick=k)
-        agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry
+        result = decide(agent, k, observation, budget)
         results.append(result)
         record = {
             "record": "step",
@@ -313,7 +310,7 @@ def run_live_steps(
             invalid = {name: result.get(name) for name in ("invalid_reason", "invalid_detail")}
             records.append({**record, "frames": step_frames(stub, first), **invalid})
             break
-        agent.commit_action(step.status, step.detail)
+        commit(agent, k, step.status, step.detail)
         stub.wait_until_idle()
         records.append(
             {

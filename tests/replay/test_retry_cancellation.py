@@ -739,8 +739,9 @@ def test_session_abort_during_connect_backoff(tmp_path, monkeypatch):
 
 
 def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkeypatch):
-    """Session API. An abort closes the session, and the next decision reconnects
-    (the session's ensure_ready); every upgrade is refused (HTTP 503). connect() makes the
+    """Session API. The kernel aborts generation 1 before its worker starts generate(), which
+    closes the session, and the next generation reconnects (the session's ensure_ready); every
+    upgrade is refused (HTTP 503). connect() makes the
     shared policy's four attempts and raises TransportFailureError with its retries spent, which
     classify_transport_error passes on (providers/openai_realtime.py), so the turn is not retried
     on top of it: four connects in all, not four per turn attempt."""
@@ -751,12 +752,12 @@ def test_reconnect_that_spends_its_retries_is_not_retried_again(tmp_path, monkey
         agent = episode.agent
         try:
             stub.wait_for_session_update()
-            agent.abort()  # no generation is under way: it only closes the session
+            agent.abort(GENERATION)
             wait_for_abort(agent, WAIT_S)
-            observation = episode.frames.capture(0)
+            observation = episode.frames.capture(1)
             budget = episode.budget(observation.tick_number)
-            pending = agent.generate(GENERATION, 0, observation, budget)
-            agent.discard(GENERATION)
+            pending = agent.generate(GENERATION + 1, 1, observation, budget)
+            agent.discard(GENERATION + 1)
         finally:
             episode.finish()
         connections = stub.finish()

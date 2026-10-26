@@ -27,7 +27,7 @@ from . import baseline
 from .build import ToolRuntime, build_episode
 from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
-from .steps import run_steps
+from .steps import commit, decide, run_steps
 from .stub import ChatCompletionsStub
 from .test_chat_completions import MODEL_KEY, chat_completions_config
 
@@ -236,12 +236,10 @@ def test_luna_choice_parts(tmp_path):
     agent.driver.start_generation = remember_choice
     try:
         for k, (value, _, status) in enumerate(LUNA_STEPS):
-            agent.configure_decision(DecisionBudget(None, None, None, "wall"))
-            agent.stream_prefill(luna_frame(k + 2, value))
-            result = agent.stream_generate(tick=k)
+            budget = DecisionBudget(None, None, None, "wall")
+            result = decide(agent, k, luna_frame(k + 2, value), budget)
             assert not result.get("invalid_reason"), result.get("invalid_detail")
-            agent.finalize_decision_audit(result)
-            agent.commit_action(status, "")
+            commit(agent, k, status)
     finally:
         agent.close()
     assert not script

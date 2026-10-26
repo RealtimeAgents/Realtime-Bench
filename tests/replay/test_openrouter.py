@@ -30,7 +30,7 @@ from . import baseline
 from .build import build_episode
 from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
-from .steps import run_steps
+from .steps import decide, run_steps
 from .stub import Reply
 from .stub_openrouter import Cut, Failure, Held, OpenRouterStub, route_metadata
 from .test_chat_completions import _check_history_changes, _check_rejection_feedback
@@ -332,10 +332,7 @@ def test_whole_turn_429_with_a_long_retry_after(openrouter_env, tmp_path):
         classified = _spy_classifier(episode.agent.driver)
         agent = episode.agent
         observation = episode.frames.capture(0)
-        agent.configure_decision(episode.budget(observation.tick_number))
-        agent.stream_prefill(observation)
-        result = agent.stream_generate(tick=0)
-        agent.finalize_decision_audit(result)
+        result = decide(agent, 0, observation, episode.budget(observation.tick_number))
     ((kind, carried),) = classified
     assert kind == TransportFailure(RATE_LIMITED, 120.0)
     assert carried[0] is None and 120.0 in carried
@@ -389,10 +386,8 @@ def test_an_error_recording_a_retry_propagates(openrouter_env, tmp_path):
 
         agent._attempt_failed = broken
         observation = episode.frames.capture(0)
-        agent.configure_decision(episode.budget(observation.tick_number))
-        agent.stream_prefill(observation)
         with pytest.raises(RuntimeError, match="the trace refused the record"):
-            agent.stream_generate(tick=0)
+            agent.generate(1, 0, observation, episode.budget(observation.tick_number))
     assert len(stub.requests) == 1
 
 
@@ -414,10 +409,8 @@ def test_an_error_recording_the_final_failure_propagates(openrouter_env, tmp_pat
 
         agent._attempt_failed = broken
         observation = episode.frames.capture(0)
-        agent.configure_decision(episode.budget(observation.tick_number))
-        agent.stream_prefill(observation)
         with pytest.raises(RuntimeError, match="the trace refused the record"):
-            agent.stream_generate(tick=0)
+            agent.generate(1, 0, observation, episode.budget(observation.tick_number))
     assert len(stub.requests) == 1
 
 
@@ -425,7 +418,7 @@ def test_partial_output_is_not_retried(openrouter_env, tmp_path):
     """The stream breaks off after its first text chunk: LiteLLM raises MidStreamFallbackError
     over httpx.ReadError, which the classifier takes as TRANSIENT (providers/litellm.py
     classify_transport_error). But the turn already received output, and the harness never sends
-    such a turn again (harnesses/default/harness.py stream_generate, ``replayable``): a retry
+    such a turn again (harnesses/default/harness.py DefaultHarness._generate, ``replayable``): a retry
     could repeat an action. The decision fails as provider_stream_interrupted after one
     request."""
     openrouter_env.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
@@ -438,9 +431,8 @@ def test_partial_output_is_not_retried(openrouter_env, tmp_path):
         classified = _spy_classifier(episode.agent.driver)
         agent = episode.agent
         observation = episode.frames.capture(0)
-        agent.configure_decision(episode.budget(observation.tick_number))
-        agent.stream_prefill(observation)
-        result = agent.stream_generate(tick=0)
+        budget = episode.budget(observation.tick_number)
+        result = agent.generate(1, 0, observation, budget).result
     assert len(stub.requests) == 1
     ((failure, _),) = classified
     assert failure == TransportFailure(TRANSIENT)
@@ -547,7 +539,7 @@ def test_a_route_to_another_upstream_fails_the_decision(openrouter_env, tmp_path
     with the usage (LiteLLMDriver._route_metadata). A provider other than the pinned upstream
     fails the attempt (LiteLLMDriver._check_route), though the reply came complete, and the
     classifier takes the error as FATAL. The action text was already read, so the decision is
-    provider_stream_interrupted (DefaultHarness stream_generate, ``received_output``): it is not
+    provider_stream_interrupted (DefaultHarness._generate, ``received_output``): it is not
     sent again and takes no action."""
     (reply,) = replies(LONG_SCENARIO[:1])
     bedrock = route_metadata("anthropic/claude-opus-5", "Amazon Bedrock")
@@ -564,9 +556,7 @@ def test_a_route_to_another_upstream_fails_the_decision(openrouter_env, tmp_path
         try:
             agent = episode.agent
             observation = episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            agent.stream_prefill(observation)
-            result = agent.stream_generate(tick=0)
+            result = decide(agent, 0, observation, episode.budget(observation.tick_number))
         finally:
             episode.finish()
     assert len(stub.requests) == 1 and stub.unused_replies == 0

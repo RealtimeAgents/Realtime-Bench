@@ -59,6 +59,7 @@ from . import baseline
 from .build import build_episode
 from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, TASK_INSTRUCTION
+from .steps import decide
 from .ws_openai_realtime import FailingListener, RealtimeStub, replies, run_steps
 
 BASELINES = Path(__file__).parent / "baselines"
@@ -607,9 +608,7 @@ def test_a_rebuild_that_spends_its_connect_retries_fails_the_turn(
         try:
             stub.wait_for_session_update()
             agent, observation = episode.agent, episode.frames.capture(0)
-            agent.configure_decision(episode.budget(observation.tick_number))
-            agent.stream_prefill(observation)
-            result = agent.stream_generate(tick=0)
+            result = decide(agent, 0, observation, episode.budget(observation.tick_number))
         finally:
             episode.finish()
         rejected = [connection.rejected for connection in stub.connections]

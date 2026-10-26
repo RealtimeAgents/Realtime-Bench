@@ -44,7 +44,7 @@ from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADE
 from ..replay.build import build_episode
 from ..replay.frames import ReplayTask
 from ..replay.scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
-from ..replay.steps import run_steps
+from ..replay.steps import decide, run_steps
 from ..replay.stub import _completion, _sse
 from .stubs import DROP, Answer, HttpStub
 from .test_pack import assert_no_secret
@@ -208,6 +208,7 @@ def test_hooked_paths_record_the_wire(api, tmp_path, monkeypatch):
         assert request["scope"] == {
             "phase": "decision",
             "decision": k,
+            "generation": k + 1,
             "generation_id": request["scope"]["generation_id"],
             "attempt": 1,
         }
@@ -307,9 +308,8 @@ def test_a_retry_after_reaches_the_retry_policy(api, tmp_path, monkeypatch):
         )
         try:
             observation = episode.frames.capture(0)
-            episode.agent.configure_decision(episode.budget(observation.tick_number))
-            episode.agent.stream_prefill(observation)
-            result = episode.agent.stream_generate(tick=0)
+            budget = episode.budget(observation.tick_number)
+            result = decide(episode.agent, 0, observation, budget)
         finally:
             assert episode.finish() is None
     assert len(stub.requests) == 1

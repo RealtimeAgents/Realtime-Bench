@@ -29,7 +29,7 @@ from . import baseline
 from .build import build_episode
 from .frames import ReplayTask
 from .scenario import LONG_SCENARIO, OUTSIDE_PAGE, TASK_INSTRUCTION, replies
-from .steps import run_steps
+from .steps import decide, run_steps
 from .stub import ChatCompletionsStub
 
 BASELINES = Path(__file__).parent / "baselines"
@@ -324,10 +324,9 @@ def test_context_exceeded_before_request(tmp_path, monkeypatch):
         )
         try:
             observation = episode.frames.capture(0)
-            episode.agent.configure_decision(episode.budget(observation.tick_number))
-            episode.agent.stream_prefill(observation)
+            budget = episode.budget(observation.tick_number)
             usage_before = episode_records.usage_snapshot(episode.agent)
-            result = episode.agent.stream_generate(tick=0)
+            result = decide(episode.agent, 0, observation, budget)
             usage_after = episode_records.usage_snapshot(episode.agent)
         finally:
             episode.finish()

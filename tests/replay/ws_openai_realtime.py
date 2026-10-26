@@ -64,7 +64,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import serve
 
 from .build import Episode
-from .steps import Step
+from .steps import Step, commit, decide
 
 # the driver's client id limit (providers/openai_realtime.py _CLIENT_ID_MAX_LENGTH)
 CLIENT_ID_MAX_LENGTH = 32
@@ -533,12 +533,9 @@ def run_steps(episode: Episode, steps: list[Step], stub: RealtimeStub) -> list[d
     for k, step in enumerate(steps):
         observation = episode.frames.capture(k)
         mark = stub.mark()
-        budget = episode.budget(observation.tick_number)  # t_k: legacy_loop.py _decide
-        agent.configure_decision(budget)
-        agent.stream_prefill(observation)
-        result = agent.stream_generate(tick=k)
-        agent.finalize_decision_audit(result)  # consumes the trajectory hand-off entry
-        agent.commit_action(step.status, step.detail)
+        budget = episode.budget(observation.tick_number)  # t_k: shell.py _start_generation
+        result = decide(agent, k, observation, budget)
+        commit(agent, k, step.status, step.detail)
         client_events, responses = stub.since(mark)
         records.append(
             {
