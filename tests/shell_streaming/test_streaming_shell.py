@@ -68,7 +68,7 @@ def _episode(
             clocks=Clocks(clock, clock),
             log=log or logs.append,
             trace=trace,
-        )
+        ).termination
     if trace is not None:
         trace.close()
     assert not env.overlapped, "an operation that holds the gate alone ran with another"
@@ -363,7 +363,7 @@ def test_an_action_finished_just_before_the_deadline_is_taken_in_before_it_howev
             clocks=Clocks(clock, clock),
             log=lambda message: None,
             trace=trace,
-        )
+        ).termination
     assert (termination.stop_reason, termination.ended_at) == ("goal", 4.995)
     order = [
         event if event != "KernelRecord" else payload["kind"]
@@ -400,7 +400,7 @@ def test_an_action_answer_the_shell_takes_in_late_is_filed_when_the_action_finis
             StreamingConfig(duration_s=5.0),
             clocks=Clocks(clock, clock),
             log=lambda message: None,
-        )
+        ).termination
     assert (termination.stop_reason, termination.ended_at) == ("goal", 4.995)
 
 
@@ -719,7 +719,7 @@ def test_a_record_of_the_last_batch_that_cannot_be_written_invalidates_the_run(k
                 clocks=Clocks(clock, clock),
                 log=logs.append,
                 trace=_UnwritableRows(kind),
-            )
+            ).termination
         return termination, env, logs
 
     control, _, _ = episode(None)
@@ -868,7 +868,7 @@ def test_a_log_that_raises_on_a_reply_worker_loses_the_line_only():
             StreamingConfig(duration_s=6.0),
             clocks=Clocks(clock, clock),
             log=_log_raising_on("[streaming] reply"),
-        )
+        ).termination
     assert termination.stop_reason == "invalid_run"
     assert "the session broke" in termination.invalid.detail
 
@@ -979,7 +979,7 @@ def test_a_push_that_raises_any_exception_loses_that_frame_only():
     with clock.participant():
         termination = run_streaming_episode(
             agent, env, StreamingConfig(duration_s=3.0), clocks=Clocks(clock, clock), log=print
-        )
+        ).termination
     assert termination.invalid is None
     assert agent.started[0][1] == "obs-2"  # the first reply waits for the first frame that went out
 

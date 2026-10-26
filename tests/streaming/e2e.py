@@ -81,7 +81,7 @@ def run_e2e(agent_factory, cassette, tmp_path, *, duration_s: float, normalizer=
                 agent, env, clock_mode="wall", duration_s=duration_s, env_fps=1.0, input_fps=1.0,
                 log=logs.append, trace=trace, clocks=Clocks(clock, clock),
                 interaction_mode="streaming",
-            )  # fmt: skip
+            ).timeline  # fmt: skip
             assert timeline == []  # no turns
         finally:
             agent.close()

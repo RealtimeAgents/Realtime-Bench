@@ -235,13 +235,13 @@ def test_token_clock(case, monkeypatch, tmp_path):
             env_fps=case.env_fps,
         )
         env = TokenEnvironment(episode.frames, task, max_minutes=case.max_minutes)
-        timeline = run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
 
     max_ticks = case.max_minutes * 60 * case.env_fps
     observed = _decision_values(env, TraceEvent.OBSERVATION_CAPTURED.value, "tick")
     assert observed == case.ticks
-    assert [t_k for _, t_k, _, _, _ in timeline] == case.ticks
+    assert [t_k for _, t_k, _, _, _ in result.timeline] == case.ticks
     # Model-visible time: the observation's world seconds.
     stamps = _decision_values(env, TraceEvent.OBSERVATION_CAPTURED.value, "timestamp")
     assert stamps == pytest.approx([tick / case.env_fps for tick in case.ticks])
@@ -252,7 +252,7 @@ def test_token_clock(case, monkeypatch, tmp_path):
     assert [json.loads(request.body)["max_tokens"] for request in stub.requests] == [
         NATIVE_OUTPUT_LIMIT if cap is None else cap for cap in case.remaining
     ]
-    assert [tau for _, _, _, tau, _ in timeline] == pytest.approx(case.action_ticks)
+    assert [tau for _, _, _, tau, _ in result.timeline] == pytest.approx(case.action_ticks)
     # The token delay is in model-input frames: the output charged over B, none in pause mode.
     assert [r["token_delay_frames"] for r in lifecycle] == [
         0.0 if case.tokens_per_frame is None else r["clock_output_tokens"] / case.tokens_per_frame
@@ -288,7 +288,7 @@ def test_token_clock(case, monkeypatch, tmp_path):
         "config": config.model_dump(),
     }
     actual = baseline.Normalizer(TOKEN_REAL_TIME_FIELDS)(
-        [header, *records(env, episode.agent, timeline), *baseline.trajectory(tmp_path)]
+        [header, *records(env, episode.agent, result), *baseline.trajectory(tmp_path)]
     )
     _compare(f"token-{case.name}", header, actual)
 
@@ -511,15 +511,15 @@ def test_wall_clock(case, tmp_path):
             **case.env,
         )
         env_box.append(env)
-        timeline = run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    check_wall_clock_properties(env, case.stop_reason)
+    check_wall_clock_properties(env, result, case.stop_reason)
     assert [status for _, status, _ in commit_statuses(env)] == case.statuses
 
     captures = [call for call in env.calls if call["call"] == "env.capture"]
     assert [call["tick"] for call in captures] == case.ticks
     assert [call["time"] - env.t0 for call in captures] == pytest.approx(case.times)
-    assert [tau for _, _, _, tau, _ in timeline] == pytest.approx(case.action_ticks)
+    assert [tau for _, _, _, tau, _ in result.timeline] == pytest.approx(case.action_ticks)
     lifecycle = [call["record"] for call in env.calls if call["call"] == "env.record_lifecycle"]
     assert [r["status"] for r in lifecycle] == case.statuses
     assert [r["next_observation_tick"] for r in lifecycle] == pytest.approx(case.next_ticks)
@@ -536,6 +536,6 @@ def test_wall_clock(case, tmp_path):
         "config": config.model_dump(),
     }
     actual = baseline.Normalizer(REAL_TIME_FIELDS)(
-        [header, *records(env, episode.agent, timeline), *baseline.trajectory(tmp_path)]
+        [header, *records(env, episode.agent, result), *baseline.trajectory(tmp_path)]
     )
     _compare(f"wall-{case.name}", header, actual)

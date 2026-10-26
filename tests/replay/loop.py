@@ -4,8 +4,9 @@ wall clock or a TokenEnvironment on the token clock.
 run_stream gets the arguments main() passes (evaluation/runner.py main), with the environment's
 clock as its clocks: on the wall clock the fake clock (tests/fake_clock.py), so the kernel's shell,
 its workers, action timestamps, frame ages and the deadline all run on one clock. After the loop
-the abandoned workers are drained and the agent is closed, in main()'s order. main() would also
-call the agent's start_episode, which no agent defines.
+the abandoned workers are drained and the agent is closed, in main()'s order, and how the episode
+came out is read off what run_stream hands back, as main() reads it. main() would also call the
+agent's start_episode, which no agent defines.
 
 On the wall clock any agent build_episode returns on the same clock can be driven, given a stub
 that serves on that clock and calls ``env.model_request`` as its ``on_request`` hook (see
@@ -22,6 +23,7 @@ from collections import Counter
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import runner
+from realtime_framework.evaluation.episode_end import EpisodeResult
 
 from . import baseline
 from .build import Episode
@@ -59,8 +61,9 @@ class RecordingTrace:
         self._env.log("trace.checkpoint")
 
 
-def run_loop(episode: Episode, env) -> list:
-    """Run one episode and return run_stream's timeline; ``env.calls`` holds everything else.
+def run_loop(episode: Episode, env) -> EpisodeResult:
+    """Run one episode and return how it came out, as run_stream hands it back; ``env.calls``
+    holds everything else.
 
     ``env`` is a FakeEnvironment on the wall clock or a TokenEnvironment (token_env.py) on the
     token clock. Its ``fps`` is the environment's rate and the agent's config.fps the
@@ -81,8 +84,9 @@ def run_loop(episode: Episode, env) -> list:
             line = LOGGED_DELIBERATION.sub("δ=<real time>", line)
         env.log("runner.log", line=line)
 
+    result = None
     try:
-        return runner.run_stream(
+        result = runner.run_stream(
             agent,
             env,
             clock_mode=episode.clock_mode,
@@ -96,12 +100,14 @@ def run_loop(episode: Episode, env) -> list:
             trace=RecordingTrace(env),
             clocks=Clocks(env.clock, env.clock),
         )
+        return result
     finally:
-        env._drain_abandoned()
+        if result is not None:
+            result.drain_abandoned()
         agent.close()
 
 
-def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:
+def records(env: FakeEnvironment, agent, result: EpisodeResult) -> list[dict]:
     """One record per decision with its calls in order, then the episode outcome. Calls made
     from the evaluation snapshot on, including those of abandoned workers, go to the outcome."""
     decisions: dict[int, list[dict]] = {}
@@ -112,16 +118,16 @@ def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:
     out.append(
         {
             "record": "outcome",
-            # Left on env by the shell (shell.py _freeze, _finish).
-            "stop_reason": env._stop_reason,
-            "termination": env._termination,
-            "invalid_run": getattr(env, "_invalid_run", None),
-            "termination_snapshot_captured": env._termination_snapshot_captured,
-            "termination_snapshot": getattr(env, "_termination_snapshot", None),
-            "active_end_unix_s": env._active_end_unix_s,
-            "think_spent": env._think_spent,
+            # What the shell hands main() (evaluation/episode_end.py EpisodeResult).
+            "stop_reason": result.stop_reason,
+            "termination": result.termination_record,
+            "invalid_run": result.invalid_run,
+            "termination_snapshot_captured": result.snapshot_captured,
+            "termination_snapshot": result.snapshot,
+            "active_end_unix_s": result.active_end_unix_s,
+            "think_spent": result.think_spent,
             "frame_ages": env.frame_ages,
-            "token_accounting": env._token_accounting.summary(),
+            "token_accounting": result.token_accounting.summary(),
             "timeline": [
                 {
                     "decision": k,
@@ -130,7 +136,7 @@ def records(env: FakeEnvironment, agent, timeline: list) -> list[dict]:
                     "tau_k": tau_k,
                     "action": action,
                 }
-                for k, t_k, d_ticks, tau_k, action in timeline
+                for k, t_k, d_ticks, tau_k, action in result.timeline
             ],
             "finalize_calls": [_strip(call) for call in env.calls if call["finalizing"]],
             # What the agent holds about each decision once the episode is over.
@@ -161,7 +167,9 @@ def commit_statuses(env: FakeEnvironment) -> list[tuple[int, str, str]]:
     ]
 
 
-def check_wall_clock_properties(env: FakeEnvironment, stop_reason: str) -> None:
+def check_wall_clock_properties(
+    env: FakeEnvironment, result: EpisodeResult, stop_reason: str
+) -> None:
     """phase1.md, 回放测试: on the wall clock no action runs after the deadline, no action runs
     twice, and the episode ends for the right reason. The task's end is known once a state read
     sees it, and the kernel reads right before landing an action unless it read at that same
@@ -185,4 +193,4 @@ def check_wall_clock_properties(env: FakeEnvironment, stop_reason: str) -> None:
             payload["status"] == "invalid_run" and k in env.failures
         )
         assert per_decision[k] == int(ran), f"decision {k} is {payload['status']}"
-    assert env._stop_reason == stop_reason
+    assert result.stop_reason == stop_reason

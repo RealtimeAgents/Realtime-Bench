@@ -19,6 +19,7 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.evaluation.effective_config import _runner_entry, export
+from realtime_framework.evaluation.episode_end import EpisodeEnd
 
 GEMINI = "gemini-3.8-live"
 WEB, GAME = "rt_waitlist_fit", "gh_timed_chess"
@@ -193,13 +194,18 @@ def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
     def loop(env, trace):
         with trace.path.open("a") as cut:
             cut.write('{"event": "KernelRecord", "payload": ')
-        env._stop_reason, env._termination = "time_limit", termination
-        # The snapshot the shell froze for the scorer (streaming_shell.py _freeze).
+        # The stop and the snapshot the shell froze for the scorer (streaming_shell.py _finish,
+        # _freeze).
         snapshot = {
             "state": {"ok": True}, "evaluation": {"resolved": True, "evaluation_version": 1},
         }  # fmt: skip
-        env._termination_snapshot, env._termination_snapshot_captured = snapshot, True
-        return []
+        end = EpisodeEnd(
+            stop_reason="time_limit",
+            termination_record=termination,
+            snapshot_captured=True,
+            snapshot=snapshot,
+        )
+        return end.result(env, [])
 
     summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming", loop=loop)
     invalid = summary["invalid_run"]
@@ -217,8 +223,7 @@ def test_a_streaming_run_saves_its_mode_with_its_state(tmp_path, monkeypatch):
     (reporting.reevaluate_main)."""
 
     def loop(env, trace):
-        env._termination_snapshot, env._termination_snapshot_captured = {"state": {}}, True
-        return []
+        return EpisodeEnd(snapshot_captured=True, snapshot={"state": {}}).result(env, [])
 
     summary = run_main(tmp_path, monkeypatch, "--interaction-mode", "streaming", loop=loop)
     manifest = tmp_path / "run" / "generation_artifact" / "manifest.json"
@@ -326,12 +331,13 @@ def test_a_streaming_episode_runs_on_the_streaming_shell(monkeypatch):
     from realtime_framework.evaluation import runner
     from realtime_framework.evaluation.kernel.streaming import StreamingConfig
 
-    episodes = []
-    monkeypatch.setattr(
-        runner,
-        "run_streaming_episode",
-        lambda agent, env, config, **kwargs: episodes.append((agent, env, config, kwargs)),
-    )
+    episodes, result = [], object()
+
+    def run_streaming_episode(agent, env, config, **kwargs):
+        episodes.append((agent, env, config, kwargs))
+        return result
+
+    monkeypatch.setattr(runner, "run_streaming_episode", run_streaming_episode)
     clocks, trace = object(), object()
 
     def streaming(clock_mode):
@@ -340,7 +346,7 @@ def test_a_streaming_episode_runs_on_the_streaming_shell(monkeypatch):
             log=print, trace=trace, clocks=clocks, interaction_mode="streaming",
         )
 
-    assert streaming("wall") == []
+    assert streaming("wall") is result  # as the shell hands it back
     config = StreamingConfig(300.0, 2.0, 1.0, timing=runner.RUNNER_TIMING, clock_mode="wall")
     assert episodes == [
         ("agent", "env", config, {"clocks": clocks, "log": print, "trace": trace})

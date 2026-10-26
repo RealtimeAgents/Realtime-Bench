@@ -52,6 +52,7 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
+from realtime_framework.evaluation.episode_end import EpisodeEnd, EpisodeResult
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
@@ -125,12 +126,12 @@ def run_streaming_episode(
     clocks: Clocks,
     log: Callable[[str], object] = print,
     trace=None,
-) -> Termination:
-    """Run one streaming episode; return how it ended. What main() reads afterwards is left on
-    ``env`` as the turn-based shell leaves it: the stop reason and the termination record
-    (``_stop_reason``, ``_termination``), the frozen snapshot (``_termination_snapshot*``,
-    ``_active_end_unix_s``), ``_invalid_run``, ``_loop_error``, and a frozen stream
-    (``_stream_frozen``, ``_stream_freeze_count``)."""
+) -> EpisodeResult:
+    """Run one streaming episode; return how it came out (episode_end.py). What main() reads of
+    it is also left on ``env`` as the turn-based shell leaves it: the stop reason and the
+    termination record (``_stop_reason``, ``_termination``), the frozen snapshot
+    (``_termination_snapshot*``, ``_active_end_unix_s``), ``_invalid_run``, ``_loop_error``, and
+    a frozen stream (``_stream_frozen``, ``_stream_freeze_count``)."""
     return _StreamingShell(agent, env, config, clocks, log, trace).run()
 
 
@@ -156,18 +157,17 @@ class _StreamingShell:
         self._snapshot_read = False
         self._trace_failed = False
         self._unheard: Invalidated | None = None  # one found once the kernel had finished
-        self._loop_error: str | None = None
+        self.end = EpisodeEnd()
         self._loop_error_lock = threading.Lock()  # lanes raise on threads of their own
-        self._termination: Termination | None = None
 
-    def run(self) -> Termination:
+    def run(self) -> EpisodeResult:
         env = self.env
         env.on_invalid = self.lanes.gate.latched
         self.agent.bind_inbox(self.post, env.t0)
         try:
             self._now = self._read()
             self._run_all(self.kernel.start(self._now))
-            while self._termination is None:
+            while self.end.termination is None:
                 # Cleared before the step takes the inbox: a post the step misses sets it again.
                 self._wake.clear()
                 self._now = self._read()
@@ -178,7 +178,7 @@ class _StreamingShell:
                     self._run_all(commands)
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             self._wrap_up(traceback.format_exc())
-        return self._termination
+        return self.end.result(env, [])
 
     def post(self, event) -> None:
         """Hand the kernel an event, from any thread, and wake the shell."""
@@ -216,8 +216,8 @@ class _StreamingShell:
         """The shell's own code raised, on its thread or on a lane: the run is invalid and the
         episode still finalizes; the first traceback is the loop error (runner.py main)."""
         with self._loop_error_lock:
-            if self._loop_error is None:
-                self._loop_error = self.env._loop_error = failure
+            if self.end.loop_error is None:
+                self.end.loop_error = self.env._loop_error = failure
         self.post(Invalidated("runner", "run_exception", failure))
         self._say(f"[streaming] shell raised:\n{failure}")
 
@@ -409,11 +409,11 @@ class _StreamingShell:
     def _freeze(self) -> None:
         """The snapshot, next after the action executing (4.8), on its own thread (_freezing). A
         read that raises fails the snapshot, a cancellation's too."""
-        env, clock = self.env, self.clocks.operational
+        env, end, clock = self.env, self.end, self.clocks.operational
         # The presentation boundary precedes the scorer's snapshot; it moves to when the read
         # begins, once the gate is the snapshot's.
-        env._active_end_unix_s = clock.time()
-        env._termination_snapshot_captured = False
+        end.active_end_unix_s = env._active_end_unix_s = clock.time()
+        end.snapshot_captured = env._termination_snapshot_captured = False
         # The Task base class has none (realtime_tasks/types.py).
         snapshotter = getattr(env.task, "evaluation_snapshot", None)
         error = None
@@ -439,10 +439,10 @@ class _StreamingShell:
             except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
             else:
-                env._termination_snapshot = snapshot
-                env._termination_snapshot_captured = True
+                end.snapshot = env._termination_snapshot = snapshot
+                end.snapshot_captured = env._termination_snapshot_captured = True
                 self._snapshot_read = True
-        env._termination_snapshot_error = error
+        end.snapshot_error = env._termination_snapshot_error = error
         self.lanes.gate.freeze()
         at = self._read()  # when the read returned
         self._frozen_at = at
@@ -462,7 +462,8 @@ class _StreamingShell:
 
     def _read_snapshot(self, snapshotter):
         clock = self.clocks.operational
-        self.env._active_end_unix_s = clock.time()  # after the action, as on the turn-based shell
+        # After the action, as on the turn-based shell.
+        self.end.active_end_unix_s = self.env._active_end_unix_s = clock.time()
         with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s, clock=clock):
             return snapshotter()
 
@@ -471,25 +472,29 @@ class _StreamingShell:
         failure the shell found in this last batch goes into it (_with_unheard). The episode is
         over whatever comes of writing it, and its verdict goes first: main() reads it whatever
         else could be written."""
-        termination = self._termination = _with_unheard(termination, self._unheard, self.log)
-        env = self.env
+        env, end = self.env, self.end
+        termination = end.termination = _with_unheard(termination, self._unheard, self.log)
         late = None
         try:
-            env._stop_reason = termination.stop_reason
-            invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
+            end.stop_reason = env._stop_reason = termination.stop_reason
+            invalid, latched = termination.invalid, end.latched(env)
             # The record of a failure the environment latched itself is its own, the detail whole.
+            verdict = latched
             if invalid is not None and (
                 latched is None
                 or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
             ):
-                env._invalid_run = _invalid_record(invalid)
+                verdict = _invalid_record(invalid)
             # The kernel was not told of one latched once the snapshot was frozen (decision 30).
             late = latched if invalid is None else None
             if late is not None:
-                env._invalid_run = None
+                verdict = None
+            if verdict is not latched:
+                env._invalid_run = verdict
+            end.judged, end.invalid_run = True, verdict
             end_s = termination.ended_at
             snapshot_s = termination.snapshot_at if self._snapshot_read else None
-            env._termination = {
+            end.termination_record = env._termination = {
                 "stop_reason": termination.stop_reason,
                 "end_s": round(end_s, 9),
                 "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
@@ -509,7 +514,7 @@ class _StreamingShell:
         written. A failure on the way is only logged."""
         self._raised(failure)
         # What the environment latched by now came first; a failure during the wrap-up after.
-        latched = getattr(self.env, "_invalid_run", None)
+        latched = self.end.latched(self.env)
         first = self.kernel.invalid is None and latched is None
         try:
             for generation, done in list(self._replies.items()):
@@ -523,7 +528,7 @@ class _StreamingShell:
             self._write_executions()  # of an action the kernel did not take the answer of
             self._handle(ReleaseInputs())
             termination = _escaped_termination(
-                self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
+                self.kernel, self._now, self._now, self._frozen_at, self.end.loop_error, latched
             )
             self._finish(termination)
             # The run_exception is the first failure: recorded as the turn-based shell does.
@@ -540,9 +545,9 @@ class _StreamingShell:
                     )
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
-        if self._termination is None:  # how it ended, as far as the wrap-up got
-            self._termination = _escaped_termination(
-                self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
+        if self.end.termination is None:  # how it ended, as far as the wrap-up got
+            self.end.termination = _escaped_termination(
+                self.kernel, self._now, self._now, self._frozen_at, self.end.loop_error, latched
             )
 
     # ---- the episode trace --------------------------------------------------------------------
@@ -553,8 +558,9 @@ class _StreamingShell:
             invalid = Invalidated(**entry.data)
             if invalid.reason == "observation_stream_frozen":
                 # What main() reads for the run summary, as the turn-based shell sets it.
-                env = self.env
-                env._stream_freeze_count = getattr(env, "_stream_freeze_count", 0) + 1
+                env, end = self.env, self.end
+                end.stream_freeze_count += 1
+                env._stream_freeze_count = end.stream_freeze_count
                 env._stream_frozen = True
             self.log(
                 f"[invalid-run] {invalid.category}:{invalid.reason}"

@@ -16,6 +16,7 @@ import pytest
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
 from realtime_framework.evaluation.effective_config import _runner_entry, export
+from realtime_framework.evaluation.episode_end import EpisodeEnd
 from realtime_framework.providers.preflight import check_episode
 
 GEMINI = "gemini-3.8-live"
@@ -216,7 +217,9 @@ def test_fallback_recording_after_a_finished_loop_plays_at_the_model_input_rate(
     from realtime_framework.evaluation import runner
 
     argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1]
-    videos = _main_in_process(monkeypatch, tmp_path, argv, lambda adapter, env, **loop: [])
+    videos = _main_in_process(
+        monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, [])
+    )
     with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
         runner.main()
     assert _run_summary(tmp_path)["error"] is None
@@ -230,10 +233,10 @@ def test_a_token_run_summary_charges_b_per_model_input_frame(tmp_path, monkeypat
 
     def run_stream(adapter, env, **loop):
         env.record_lifecycle({"decision": 0, "clock_output_tokens": 50})
-        env._termination_snapshot_captured = True
-        env._termination_snapshot = {"kind": "realtime", "state": {"generation": 0}}
+        snapshot = {"kind": "realtime", "state": {"generation": 0}}
         d_ticks = 50 / 100 * loop["env_fps"] / loop["input_fps"]
-        return [(0, 0, d_ticks, d_ticks, None)]
+        end = EpisodeEnd(snapshot_captured=True, snapshot=snapshot)
+        return end.result(env, [(0, 0, d_ticks, d_ticks, None)])
 
     argv = ["--model", GEMINI, "--task", WEB, *TOKEN_60_1]
     videos = _main_in_process(monkeypatch, tmp_path, argv, run_stream)
@@ -258,7 +261,7 @@ def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, mon
 
     def run_stream(adapter, env, **loop):
         loops.append(loop)
-        return []
+        return EpisodeEnd().result(env, [])
 
     token = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
     argv = ["--model", "claude-opus-5", "--task", WEB, *token, "--fps", "30"]
@@ -282,7 +285,7 @@ def test_main_refuses_a_model_input_rate_above_the_environment_rate(
 
     def run_stream(adapter, env, **loop):
         loops.append(loop)
-        return []
+        return EpisodeEnd().result(env, [])
 
     argv = ["--model", "claude-opus-5", "--task", WEB, "--clock", "wall", "--fps", "1"]
     _main_in_process(monkeypatch, tmp_path, [*argv, "--model-input-fps", "2"], run_stream)
@@ -612,7 +615,9 @@ def test_identity_main_prints_the_hash_runner_main_records(tmp_path, monkeypatch
     from realtime_framework.evaluation.config import identity_main
 
     argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--max-minutes", "5", *rates]
-    _main_in_process(monkeypatch, tmp_path, argv, lambda adapter, env, **loop: [])
+    _main_in_process(
+        monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, [])
+    )
     for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
         monkeypatch.delenv(name)
     assert identity_main(argv) == 0
@@ -632,7 +637,9 @@ def test_the_hash_a_local_report_expects_is_the_one_the_run_records(tmp_path, mo
 
     monkeypatch.setattr(apptainer, "build_image", lambda name: None)
     argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1, "--report-root", str(tmp_path)]
-    _main_in_process(monkeypatch, tmp_path, argv, lambda adapter, env, **loop: [])
+    _main_in_process(
+        monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, [])
+    )
     with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
         runner.main()
     (expected,) = json.loads((tmp_path / "summary.json").read_text())["runs"]

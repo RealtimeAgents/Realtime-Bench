@@ -42,4 +42,4 @@ def shell(agent, env, config: TurnConfig, *, clocks: Clocks, log, trace) -> list
     failed state reads, so the world's environment passes them on as production's does
     (legacy_environment.py LegacyStateReads, replayed.py WallEnvironment)."""
     env.kernel_counts_reads = True
-    return run_episode(agent, env, config, clocks=clocks, log=log, trace=trace)
+    return run_episode(agent, env, config, clocks=clocks, log=log, trace=trace).timeline

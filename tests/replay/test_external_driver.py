@@ -267,9 +267,9 @@ def test_external_driver_through_run_stream(external, tmp_path):
             rejections={k: s.detail for k, s in enumerate(LONG_SCENARIO) if s.status == "rejected"},
         )
         environments.append(env)
-        run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    check_wall_clock_properties(env, "time_limit")
+    check_wall_clock_properties(env, result, "time_limit")
     # The statuses steps.py scripts, but for the last decision's: its reply would come after the
     # deadline, where the kernel gives the generation up, unreported (kernel/turns.py on_end).
     assert commit_statuses(env) == [

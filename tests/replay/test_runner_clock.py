@@ -53,7 +53,8 @@ def _episode(tmp_path, script, clock):
 
 
 def _run_on_fake_environment(tmp_path, script, latencies):
-    """test_runner_loop's episode; returns the environment and when each request arrived."""
+    """test_runner_loop's episode; returns the environment, how the episode came out and when
+    each request arrived."""
     clock = FakeClock(wall_origin=CLOCK_ORIGIN)
     environments, arrivals = [], []
 
@@ -74,9 +75,9 @@ def _run_on_fake_environment(tmp_path, script, latencies):
             reply_latencies=latencies,
         )
         environments.append(env)
-        run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0 and stub.unused_replies == 0
-    return env, arrivals
+    return env, result, arrivals
 
 
 def _ended_at(env) -> float:
@@ -90,10 +91,10 @@ def test_reply_after_the_deadline_is_dropped(tmp_path):
     generation up and the shell aborts the agent (shell.py _abort); the decision is not reported.
     The abort closes the request and cancels the decision's generation, so the abandoned worker
     does not send it again (DefaultHarness.abort; entity/model.py RequestRetry)."""
-    env, arrivals = _run_on_fake_environment(tmp_path, replies(FORM), [0.5, 0.5, 0.5, 3.0])
+    env, result, arrivals = _run_on_fake_environment(tmp_path, replies(FORM), [0.5, 0.5, 0.5, 3.0])
     assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 3
     assert [e["action"]["action_type"] for e in env.executions] == ["click", "type", "click"]
-    check_wall_clock_properties(env, "time_limit")
+    check_wall_clock_properties(env, result, "time_limit")
     assert _ended_at(env) == DEADLINE_S
     assert arrivals == [0.0, 1.0, 2.0, 3.0]
 
@@ -114,9 +115,9 @@ def test_retry_backoff_past_the_deadline(tmp_path, monkeypatch):
     wait = model_module._backoff
     monkeypatch.setattr(model_module, "_backoff", backoff)
     script = [*replies(FORM[:2]), UNAVAILABLE, UNAVAILABLE]
-    env, arrivals = _run_on_fake_environment(tmp_path, script, [0.5, 0.5, 0.0, 0.0])
+    env, result, arrivals = _run_on_fake_environment(tmp_path, script, [0.5, 0.5, 0.0, 0.0])
     assert [status for _, status, _ in commit_statuses(env)] == ["applied"] * 2
-    check_wall_clock_properties(env, "time_limit")
+    check_wall_clock_properties(env, result, "time_limit")
     assert _ended_at(env) == DEADLINE_S
     first, second = TRANSPORT_RETRY.backoff_s[:2]
     jitter = TRANSPORT_RETRY.jitter_ratio
@@ -186,7 +187,7 @@ def test_wait_past_the_deadline_on_guest_environment(tmp_path):
                 input_fps=1.0,
                 log=lambda line: None,
                 clocks=Clocks(clock, clock),
-            )
+            ).timeline
         finally:
             env._drain_abandoned()
             episode.agent.close()
@@ -264,7 +265,7 @@ def test_a_token_generation_past_the_provider_watchdog_invalidates_the_run(monke
             duration_s=SHORT_MAX_MINUTES * 60,
             log=logs.append,
             clocks=env.clocks,
-        )
+        ).timeline
         ended_at = clock.monotonic()
         env._drain_abandoned()
     assert env._invalid_run == {

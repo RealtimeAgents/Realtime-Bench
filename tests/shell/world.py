@@ -391,7 +391,7 @@ def run(
     )
     logs: list[str] = []
     with clock.participant():
-        timeline = run_episode(
+        result = run_episode(
             agent,
             env,
             turn,
@@ -402,4 +402,4 @@ def run(
             inputs_log=inputs_log,
         )
         env._drain_abandoned()
-    return Episode(turn, env, agent, trace, clock, timeline, logs)
+    return Episode(turn, env, agent, trace, clock, result.timeline, logs)

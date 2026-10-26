@@ -179,7 +179,7 @@ def test_a_push_whose_own_reopen_never_ends_before_the_first_reply_invalidates_t
             StreamingConfig(duration_s=20.0),
             clocks=Clocks(clock, clock),
             log=lambda message: None,
-        )
+        ).termination
         agent.close()
     assert (termination.invalid.reason, termination.ended_at) == ("frame_push_stuck", 10.75)
 
@@ -309,7 +309,7 @@ def test_a_frame_whose_inspection_is_invalid_invalidates_the_run_whenever_replie
             StreamingConfig(duration_s=8.0),
             clocks=Clocks(clock, clock),
             log=lambda message: None,
-        )
+        ).termination
         agent.close()
     assert env._invalid_run == {
         "category": "harness",

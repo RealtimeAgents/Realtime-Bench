@@ -542,14 +542,14 @@ def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path):
         )
         env_box.append(env)
         turns = _count_calls(episode.agent._runtime, "_run_turn")
-        timeline = run_loop(episode, env)
+        result = run_loop(episode, env)
     agent = episode.agent
     assert stub.unscripted == 0 and stub.unused_replies == 1
     assert stub.held == [True]
     assert len(stub.requests) == 1
     assert _requests(turns) == [(1, True)]
     assert commit_statuses(env) == []
-    assert timeline == []
+    assert result.timeline == []
     requests = [
         (call["request"], call["hang"], call["finalizing"])
         for call in env.calls

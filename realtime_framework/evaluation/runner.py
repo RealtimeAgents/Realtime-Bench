@@ -38,12 +38,13 @@ def run_stream(
     inputs_log=None,
     interaction_mode="turn_based",
 ):
-    """Run one episode on the event kernel's shell (shell.run_episode) and return its timeline.
-    The horizon in world seconds and the two frame rates are main()'s own values: the kernel's
-    frame arithmetic takes the rates, which tick lengths would give back only to within an ulp.
-    ``agent_trace`` is the agent's AgentTraceSink on ``trace``, whose records the kernel numbers
-    during the episode. ``clocks`` are the episode's (realtime_framework/clock.py), real ones when
-    omitted. ``inputs_log`` is where the shell records what the kernel was given, to replay it.
+    """Run one episode on the event kernel's shell (shell.run_episode) and return how it came out
+    (episode_end.py EpisodeResult), its timeline with it. The horizon in world seconds and the
+    two frame rates are main()'s own values: the kernel's frame arithmetic takes the rates, which
+    tick lengths would give back only to within an ulp. ``agent_trace`` is the agent's
+    AgentTraceSink on ``trace``, whose records the kernel numbers during the episode. ``clocks``
+    are the episode's (realtime_framework/clock.py), real ones when omitted. ``inputs_log`` is
+    where the shell records what the kernel was given, to replay it.
 
     A streaming episode (``interaction_mode`` streaming, on the native-streaming agent) runs on
     the streaming shell instead, which takes neither the token clock nor deliberation caps, writes
@@ -53,7 +54,7 @@ def run_stream(
         streaming = StreamingConfig(
             duration_s, env_fps, input_fps, timing=RUNNER_TIMING, clock_mode=clock_mode
         )
-        run_streaming_episode(
+        return run_streaming_episode(
             adapter,
             env,
             streaming,
@@ -61,7 +62,6 @@ def run_stream(
             log=log,
             trace=trace,
         )
-        return []
     config = TurnConfig(
         clock_mode,
         duration_s,
@@ -489,6 +489,7 @@ def main():
     think_budget = None
     per_move_cap = None
     frozen_snapshot = None
+    result = None  # how the episode came out, as its shell hands it back
     timeline = []
     verification = None
     solved = None
@@ -655,7 +656,7 @@ def main():
             },
         )
         try:
-            timeline = run_stream(
+            result = run_stream(
                 agent,
                 env,
                 clock_mode=spec.clock_mode,
@@ -672,12 +673,18 @@ def main():
                 inputs_log=run_dir / "kernel_inputs.jsonl",
                 interaction_mode=spec.interaction_mode,
             )
-            error = getattr(env, "_loop_error", None)
+            timeline, error = result.timeline, result.loop_error
         finally:
             # The agent's run window is recorded even when the loop ends in an error.
             # Physical diagnostic only; the token-clock horizon is simulated and does not bound wall time.
             loop_time_s = round(clocks.operational.time() - _loop_t0, 1)
-            _active_end = getattr(env, "_active_end_unix_s", clocks.operational.time())
+            _now = clocks.operational.time()
+            # When the snapshot read began; now if none did, or the loop raised.
+            _active_end = (
+                _now
+                if result is None or result.active_end_unix_s is None
+                else result.active_end_unix_s
+            )
             active_loop = {
                 "start_unix_s": _active_start,
                 "end_unix_s": _active_end,
@@ -699,11 +706,10 @@ def main():
         # agent close or verifier work. The same value is stored in the artifact
         # so python -m realtime_framework.evaluation.reporting reevaluate agrees with the summary.
         try:
-            snapshot_error = getattr(env, "_termination_snapshot_error", None)
-            if snapshot_error:
-                raise RuntimeError(snapshot_error)
-            if getattr(env, "_termination_snapshot_captured", False):
-                frozen_snapshot = getattr(env, "_termination_snapshot", None)
+            if result.snapshot_error:
+                raise RuntimeError(result.snapshot_error)
+            if result.snapshot_captured:
+                frozen_snapshot = result.snapshot
             snapshot_invalid_reason = _invalid_snapshot(frozen_snapshot)
             if snapshot_invalid_reason:
                 invalid_runs.append(
@@ -767,9 +773,8 @@ def main():
         # no drift to the score, and before close(), which would otherwise tear the model/session down
         # underneath a live native call. Bounded; _hard_exit covers a worker that never returns.
         try:
-            drain = getattr(env, "_drain_abandoned", None)
-            if drain is not None:
-                drain()
+            if result.drain_abandoned is not None:
+                result.drain_abandoned()
         except Exception:
             pass
         try:
@@ -864,11 +869,10 @@ def main():
                 pass
         try:
             # Same reason as the main path: never close() under a live abandoned native call.
-            # Idempotent, so this is a no-op when the main path already drained. env is None if we
-            # failed before the loop existed, in which case there is nothing to drain.
-            drain = getattr(env, "_drain_abandoned", None)
-            if drain is not None:
-                drain()
+            # Idempotent, so this is a no-op when the main path already drained. A loop that
+            # raised hands no drain back: its workers are left to the hard exit (_hard_exit).
+            if result is not None and result.drain_abandoned is not None:
+                result.drain_abandoned()
         except Exception:
             pass
         try:
@@ -920,8 +924,12 @@ def main():
                     "detail": traceback.format_exc(),
                 }
             )
-    # The environment latches a failure only while the episode runs, before any main() finds.
-    latched_invalid = getattr(env, "_invalid_run", None) if env is not None else None
+    # The environment latches a failure only while the episode runs, before any main() finds:
+    # the shell's verdict, or what the environment latched itself when the loop raised.
+    if result is not None:
+        latched_invalid = result.invalid_run
+    else:
+        latched_invalid = getattr(env, "_invalid_run", None) if env is not None else None
     if latched_invalid is not None:
         invalid_runs.insert(0, latched_invalid)
     # A failure building the summary leaves one that says so (_write_emergency_summary).
@@ -931,7 +939,7 @@ def main():
         tok = getattr(agent, "token_usage", None) if agent is not None else None
         adapter_tok = tok
         tok = {"input_tokens": None, "output_tokens": None, "total_tokens": None, "responses": 0}
-        accounting = getattr(env, "_token_accounting", None) if env is not None else None
+        accounting = result.token_accounting if result is not None else None
         token_accounting = accounting.summary() if accounting is not None else None
         if token_accounting is not None:
             counts = token_accounting["counts"]
@@ -958,12 +966,12 @@ def main():
             if invalid_run is not None
             else ("scored" if benchmark_cell_eligible else "experimental")
         )
-        # The stop reason and the end time are LATCHED by the runner at loop exit
-        # (env._stop_reason, env._termination), so cleanup that crosses the deadline rewrites
+        # The stop reason and the end time are LATCHED by the shell at loop exit (EpisodeResult
+        # stop_reason, termination_record), so cleanup that crosses the deadline rewrites
         # neither a real environment terminal state into time_limit nor the episode's length.
         # Any invalid run reports "invalid_run"; "setup_error" if we never reached the loop.
-        latched = getattr(env, "_stop_reason", None) if env is not None else None
-        termination = getattr(env, "_termination", None) if env is not None else None
+        latched = result.stop_reason if result is not None else None
+        termination = result.termination_record if result is not None else None
         stop_reason = (
             "invalid_run"
             if invalid_run is not None
@@ -1105,9 +1113,9 @@ def main():
             "applied_seed": getattr(ctask, "applied_seed", None),
             "clock_mode": spec.clock_mode,
             "tokens_per_frame": tokens_per_frame,
-            "dropped_intermediate_frames": int(getattr(env, "_dropped_intermediate_frames", 0) or 0)
-            if env is not None
-            else 0,
+            "dropped_intermediate_frames": (
+                result.dropped_intermediate_frames if result is not None else 0
+            ),
             "output_clock_policy": OUTPUT_CLOCK_POLICY,
             "tokens_per_world_second": (
                 tokens_per_frame * model_input_fps
@@ -1118,16 +1126,12 @@ def main():
             "last_clock_advance": getattr(ctask, "_last_clock_advance", None),
             "think_budget_s": think_budget,
             "per_move_cap_s": per_move_cap,
-            "think_spent_s": (
-                round(getattr(env, "_think_spent", 0.0), 1) if env is not None else 0.0
-            ),
+            "think_spent_s": round(result.think_spent, 1) if result is not None else 0.0,
             "runtime_config": runtime_config,
-            "observation_stream_frozen": bool(getattr(env, "_stream_frozen", False))
-            if env is not None
-            else False,
-            "observation_stream_freeze_count": int(getattr(env, "_stream_freeze_count", 0) or 0)
-            if env is not None
-            else 0,
+            "observation_stream_frozen": result is not None and result.stream_frozen,
+            "observation_stream_freeze_count": (
+                result.stream_freeze_count if result is not None else 0
+            ),
             "loop_time_s": loop_time_s,
             "active_wall_time_s": (active_loop or {}).get("active_wall_time_s"),
             "active_loop_artifact": "active-loop.json"

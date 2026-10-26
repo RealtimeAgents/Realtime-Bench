@@ -22,6 +22,7 @@ from unittest import mock
 
 import pytest
 
+from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.reporting import episode_outcome, summarize_run_metrics
 from realtime_framework.harnesses.default.harness import DefaultHarness
 
@@ -75,7 +76,7 @@ class Run:
     env: FakeEnvironment
     stub: ChatCompletionsStub
     agent: object
-    timeline: list
+    result: EpisodeResult
 
 
 def _run(tmp_path, steps: list[Step], latencies: list, *, stream: bool, max_minutes, **env_options):
@@ -106,10 +107,10 @@ def _run(tmp_path, steps: list[Step], latencies: list, *, stream: bool, max_minu
             **env_options,
         )
         env_box.append(env)
-        timeline = run_loop(episode, env)
+        result = run_loop(episode, env)
     assert stub.unscripted == 0, "the agent sent requests beyond the script"
     assert stub.unused_replies == 0, "scripted replies were left unused"
-    return Run(config, env, stub, episode.agent, timeline)
+    return Run(config, env, stub, episode.agent, result)
 
 
 def _compare(name: str, run: Run, header: dict) -> None:
@@ -129,7 +130,7 @@ def _compare(name: str, run: Run, header: dict) -> None:
     actual = baseline.Normalizer(REAL_TIME_FIELDS)(
         [
             header,
-            *records(run.env, run.agent, run.timeline),
+            *records(run.env, run.agent, run.result),
             *baseline.trajectory(run.agent.log_dir),
         ]
     )
@@ -162,7 +163,7 @@ def long_run(request, tmp_path_factory):
 
 
 def test_long_scenario_properties(long_run):
-    check_wall_clock_properties(long_run.env, "time_limit")
+    check_wall_clock_properties(long_run.env, long_run.result, "time_limit")
     assert len(long_run.stub.requests) == len(LONG_SCENARIO)
     # run_stream reports the statuses and details steps.py scripts for the same replies, but for
     # the last decision's: the kernel gives its generation up at the deadline, unreported.
@@ -291,7 +292,7 @@ def short_run(request, tmp_path_factory):
 
 def test_short_case_properties(short_run):
     case, run = short_run
-    check_wall_clock_properties(run.env, case.stop_reason)
+    check_wall_clock_properties(run.env, run.result, case.stop_reason)
     assert len(run.stub.requests) == (case.requests or len(case.steps))
     assert tuple(run.stub.held) == case.held
     assert [status for _, status, _ in commit_statuses(run.env)] == case.statuses
@@ -309,7 +310,7 @@ def test_short_case_baseline(short_run):
 
 
 def _check_finalized(run: Run, *, at: float, raised: str) -> None:
-    check_wall_clock_properties(run.env, "invalid_run")
+    check_wall_clock_properties(run.env, run.result, "invalid_run")
     # Between them the kernel writes its records of the snapshot and the termination.
     assert [
         call["call"] for call in run.env.calls if call["finalizing"] and call["call"] != "trace"
@@ -344,7 +345,7 @@ def test_two_failed_state_reads_in_a_row_leave_the_run_valid(tmp_path):
         max_minutes=SHORT_MAX_MINUTES,
         read_failures=frozenset({2, 3}),
     )
-    check_wall_clock_properties(run.env, "time_limit")
+    check_wall_clock_properties(run.env, run.result, "time_limit")
     assert getattr(run.env, "_invalid_run", None) is None
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"] * 3
     failed = [call["failed"] for call in run.env.calls if "failed" in call]
@@ -364,7 +365,7 @@ def test_a_third_failed_state_read_in_a_row_invalidates_the_run(tmp_path):
         max_minutes=SHORT_MAX_MINUTES,
         read_failures=frozenset({4, 5, 6}),
     )
-    check_wall_clock_properties(run.env, "invalid_run")
+    check_wall_clock_properties(run.env, run.result, "invalid_run")
     invalid = run.env._invalid_run
     assert (invalid["category"], invalid["reason"]) == (
         "environment",
@@ -460,7 +461,7 @@ def test_early_end_with_teardown_past_the_deadline(tmp_path, reason, solved, out
     )
     metrics = summarize_run_metrics(
         lifecycle,
-        total_decisions=len(run.timeline),
+        total_decisions=len(run.result.timeline),
         solved=solved,
         clock_mode="wall",
         tokens_per_frame=None,
@@ -526,7 +527,7 @@ def test_a_generation_that_raises_invalidates_the_run(tmp_path):
         (1, True, "generation_error"),
     ]
     assert [status for _, status, _ in commit_statuses(run.env)] == ["applied"]
-    check_wall_clock_properties(run.env, "invalid_run")
+    check_wall_clock_properties(run.env, run.result, "invalid_run")
 
 
 def test_a_failed_trajectory_write_invalidates_the_run(tmp_path):
@@ -549,7 +550,7 @@ def test_a_failed_trajectory_write_invalidates_the_run(tmp_path):
     assert any(line.startswith("[default] trajectory audit write failed:") for line in logged)
     assert [p["status"] for p in resolved(run.env).values()] == ["applied", "invalid_run"]
     assert [e["action"]["action_type"] for e in run.env.executions] == ["click"]
-    check_wall_clock_properties(run.env, "invalid_run")
+    check_wall_clock_properties(run.env, run.result, "invalid_run")
 
 
 def test_a_worker_given_up_at_the_deadline_is_drained_however_long_the_snapshot_takes(
