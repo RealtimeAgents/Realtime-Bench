@@ -39,7 +39,7 @@ from tests.replay.scenario import (
     TASK_INSTRUCTION,
     replies,
 )
-from tests.replay.steps import Step
+from tests.replay.steps import Step, commit, decide
 from tests.replay.stub import ChatCompletionsStub
 from tests.replay.stub_decisions import DecisionsStub
 from tests.replay.test_chat_completions import LEDGER_WINDOW, chat_completions_config
@@ -262,6 +262,29 @@ def test_a_generation_writes_nothing_until_it_is_accepted(tmp_path):
     assert agent.token_usage["responses"] == 1
     assert [u["stale"] for u in _jsonl(tmp_path / "provider-usage.jsonl")] == [False]
     assert [t["outcome"] for t in _jsonl(tmp_path / "tool_calls.jsonl")] == ["completed"]
+
+
+def test_the_agents_usage_counts_a_chat_replys_cached_and_reasoning_tokens(tmp_path):
+    """The agent's cumulative usage (run_summary.json's adapter_token_usage, and the frame_usage
+    of each InferenceCompleted) reads the cached and reasoning tokens of chat-format usage, under
+    the names billing reads them by (evaluation/clock.py token_record)."""
+    steps = LONG_SCENARIO[:2]
+    scripted = [reply.usage for reply in replies(steps)]
+    with ChatCompletionsStub(replies(steps)) as stub:
+        episode = _chat_episode(stub, tmp_path)
+        try:
+            for k, step in enumerate(steps):
+                observation = episode.frames.capture(k)
+                decide(episode.agent, k, observation, episode.budget(observation.tick_number))
+                commit(episode.agent, k, step.status, step.detail)
+            usage = episode.agent.token_usage
+        finally:
+            episode.finish()
+    cached = sum(u["prompt_tokens_details"]["cached_tokens"] for u in scripted)
+    reasoning = sum(u["completion_tokens_details"]["reasoning_tokens"] for u in scripted)
+    assert cached > 0 and reasoning > 0
+    assert (usage["cached_input_tokens"], usage["reasoning_output_tokens"]) == (cached, reasoning)
+    assert usage["input_tokens"] == sum(u["prompt_tokens"] for u in scripted)
 
 
 def test_a_discarded_result_writes_no_history(tmp_path):
