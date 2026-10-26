@@ -43,9 +43,9 @@ _PREPARING: contextvars.ContextVar[Callable[[], None]] = contextvars.ContextVar(
 def session_preparing(observe: Callable[[], None]):
     """Have ensure_ready and renew, run in this context, call ``observe()`` as each starts
     preparing the session: waiting for an abort's cleanup, opening, rebuilding or renewing it. One
-    that leaves a ready session as it is calls nothing. Native streaming tells the kernel the
-    session is being prepared from then on (decision 13). Like retry_cancellation, the ContextVar
-    follows the call onto the execution thread."""
+    that leaves a ready session as it is calls nothing. A native-streaming reply readying the
+    session tells the kernel the session is being prepared from then on (decision 13). Like
+    retry_cancellation, the ContextVar follows the call onto the execution thread."""
     token = _PREPARING.set(observe)
     try:
         yield
