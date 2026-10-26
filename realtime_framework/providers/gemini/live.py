@@ -39,6 +39,7 @@ from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.records import current_trace_scope
 from realtime_framework.entity.records import enter_trace_scope
 from realtime_framework.entity.request import CanonicalRequest
@@ -355,17 +356,8 @@ class GeminiLiveDriver(SessionLifecycle):
         socket = self._trace_connections.get(connection, self._trace_connection)
         self._record_delivery(state, contents, socket.trace_connection_id)
 
-    @staticmethod
-    def _exception_chain(exc: BaseException):
-        current: BaseException | None = exc
-        seen: set[int] = set()
-        while current is not None and id(current) not in seen:
-            yield current
-            seen.add(id(current))
-            current = current.__cause__ or current.__context__
-
     def _rate_limit_kind(self, exc: BaseException) -> str | None:
-        for current in self._exception_chain(exc):
+        for current in exception_chain(exc):
             code = int(getattr(current, "code", 0) or 0)
             status = str(getattr(current, "status", "") or "").strip().lower()
             detail = (
@@ -385,9 +377,7 @@ class GeminiLiveDriver(SessionLifecycle):
 
     def classify_transport_error(self, exc: BaseException) -> TransportFailure:
         """Classify a failed turn for the harness's shared retry policy."""
-        if any(
-            isinstance(current, GoAwayDeadlineExceeded) for current in self._exception_chain(exc)
-        ):
+        if any(isinstance(current, GoAwayDeadlineExceeded) for current in exception_chain(exc)):
             return TransportFailure(FATAL)
         limited = self._rate_limit_kind(exc)
         if limited is not None:
@@ -407,7 +397,7 @@ class GeminiLiveDriver(SessionLifecycle):
         Generic ABORTED and service-unavailable closes are also transient candidates; other 1008
         policy violations and explicit GoAway deadline failures remain terminal.
         """
-        for current in self._exception_chain(exc):
+        for current in exception_chain(exc):
             if isinstance(current, EmptyInterruptedToolTurnError):
                 return True
             if isinstance(current, self._connection_closed_type):
