@@ -109,6 +109,17 @@ def live_options(config) -> dict:
 LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "high")
 
 
+@dataclass(frozen=True, kw_only=True)
+class GeminiDeployment(Deployment):
+    """Where Gemini Live connections go: on the default key variable, a pool of keys (key_env,
+    else fallback_key_env, then key_env + "_2" to "_<key_pool_size>"), of which a driver takes
+    the one at the slot key_slot_env names, so that parallel runs can spread over keys."""
+
+    fallback_key_env: str
+    key_pool_size: int
+    key_slot_env: str
+
+
 class GoAwayDeadlineExceeded(RuntimeError):
     """An incomplete native turn must remain invalid, even without visible output."""
 
@@ -214,12 +225,15 @@ class GeminiLiveDriver(SessionLifecycle):
         connection_renewal=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
     )
-    deployment = Deployment(
+    deployment = GeminiDeployment(
         family="streaming",
         provider="gemini",
         key_env="GEMINI_API_KEY",
         vendor="google",
         litellm_provider="gemini",
+        fallback_key_env="GOOGLE_API_KEY",
+        key_pool_size=9,
+        key_slot_env="GEMINI_API_KEY_START_SLOT",
     )
     compat = Compat(
         provider_options=LIVE_OPTIONS,
@@ -254,17 +268,24 @@ class GeminiLiveDriver(SessionLifecycle):
         from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
         self.options = live_options(config)
+        deployment = self.deployment
         if config.api_key:
             keys = [config.api_key]
-        elif config.api_key_env and config.api_key_env != "GEMINI_API_KEY":
+        elif config.api_key_env and config.api_key_env != deployment.key_env:
             keys = [os.environ.get(config.api_key_env)]
         else:
-            keys = [os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")]
-            keys.extend(os.environ.get(f"GEMINI_API_KEY_{index}") for index in range(2, 10))
+            keys = [
+                os.environ.get(deployment.key_env) or os.environ.get(deployment.fallback_key_env)
+            ]
+            keys.extend(
+                os.environ.get(f"{deployment.key_env}_{index}")
+                for index in range(2, deployment.key_pool_size + 1)
+            )
         self._api_keys = tuple(dict.fromkeys(key for key in keys if key))
         if not self._api_keys:
             raise RuntimeError(
-                "Gemini Live needs GEMINI_API_KEY/GOOGLE_API_KEY or ModelConfig.api_key"
+                f"Gemini Live needs {deployment.key_env}/{deployment.fallback_key_env} or "
+                "ModelConfig.api_key"
             )
         self.config = config
         self.clock = clock or SystemClock()
@@ -275,13 +296,13 @@ class GeminiLiveDriver(SessionLifecycle):
         self._connection_closed_type = ConnectionClosed
         self._client_type = genai.Client
         self._clients = {}
-        requested_slot_raw = os.environ.get("GEMINI_API_KEY_START_SLOT", "1")
+        requested_slot_raw = os.environ.get(deployment.key_slot_env, "1")
         try:
             requested_slot = int(requested_slot_raw)
         except ValueError as exc:
-            raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer") from exc
+            raise ValueError(f"{deployment.key_slot_env} must be a positive integer") from exc
         if requested_slot < 1:
-            raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer")
+            raise ValueError(f"{deployment.key_slot_env} must be a positive integer")
         self._api_key_requested_slot = requested_slot
         self._api_key_index = (requested_slot - 1) % len(self._api_keys)
         self._ws_connection = async_ws_connection(self, "gemini_live.ws", classify_live_message)

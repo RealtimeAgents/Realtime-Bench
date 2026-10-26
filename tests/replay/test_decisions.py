@@ -124,7 +124,8 @@ def _runtime(record: dict) -> dict:
 
 def _check_requests(api: str, records: list[dict]) -> None:
     """One POST per question attempt (providers/decisions/protocol.py decide), the route block
-    only for Luna (pin_route: providers/openai_decisions.py, providers/jev/decisions.py)."""
+    only for Luna (deployment.pin_route: providers/openai_decisions.py,
+    providers/jev/decisions.py)."""
     for record in records:
         for request in record["requests"]:
             assert request["path"] == "/api/alpha/decisions"

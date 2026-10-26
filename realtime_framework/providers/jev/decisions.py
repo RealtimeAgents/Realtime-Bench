@@ -2,10 +2,14 @@
 
 from typing import ClassVar
 
-from realtime_framework.entity.model import Deployment, RealtimeCapabilities
+from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.providers.context import context_status, estimated_request_tokens
 from realtime_framework.providers.decisions.history import render_digest
-from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
+from realtime_framework.providers.openai_decisions import (
+    DEFAULT_DECISIONS_BASE_URL,
+    DecisionsDeployment,
+    OpenAIDecisionsClient,
+)
 
 
 class JevDecisionsClient(OpenAIDecisionsClient):
@@ -28,9 +32,14 @@ class JevDecisionsClient(OpenAIDecisionsClient):
         classifies_transport_errors=True,
         request_size_estimation=True,
     )
-    deployment = Deployment(family="streaming", provider="openrouter", key_env="OPENROUTER_API_KEY")
-    # Requests carry no provider routing block; responses still validate the TypeSafe route.
-    pin_route = False
+    deployment = DecisionsDeployment(
+        family="streaming",
+        provider="openrouter",
+        key_env="OPENROUTER_API_KEY",
+        default_base_url=DEFAULT_DECISIONS_BASE_URL,
+        # Requests carry no provider routing block; responses still validate the TypeSafe route.
+        pin_route=False,
+    )
     model_defaults: ClassVar[dict[str, dict]] = {
         "typesafe/jev-1.13": {
             "upstream_provider": "typesafe",

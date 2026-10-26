@@ -16,6 +16,7 @@ the HttpCapture hooks, and reports context limits, refusals and Retry-After in o
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import ClassVar
 
 import httpx
@@ -45,6 +46,16 @@ from realtime_framework.providers.decisions.protocol import (
 from realtime_framework.providers.litellm import chat_messages
 
 QUESTION_KEY = "next_action"
+DEFAULT_DECISIONS_BASE_URL = "https://openrouter.ai/api/alpha/"
+
+
+@dataclass(frozen=True, kw_only=True)
+class DecisionsDeployment(Deployment):
+    """Where one Decisions API's questions go: address and route."""
+
+    default_base_url: str
+    # Questions carry OpenRouter's provider routing block, pinning the model's upstream_provider.
+    pin_route: bool
 
 
 class OpenAIDecisionsClient(DecisionEncoder):
@@ -64,9 +75,14 @@ class OpenAIDecisionsClient(DecisionEncoder):
         classifies_transport_errors=True,
         request_size_estimation=True,
     )
-    deployment = Deployment(family="vlm", provider="openrouter", key_env="OPENROUTER_API_KEY")
+    deployment = DecisionsDeployment(
+        family="vlm",
+        provider="openrouter",
+        key_env="OPENROUTER_API_KEY",
+        default_base_url=DEFAULT_DECISIONS_BASE_URL,
+        pin_route=True,
+    )
     compat = Compat()
-    pin_route = True
     # Per-model catalog defaults (providers/registry.py).
     model_defaults: ClassVar[dict[str, dict]] = {
         "openai/gpt-6-luna-decisions": {
@@ -81,9 +97,10 @@ class OpenAIDecisionsClient(DecisionEncoder):
     def __init__(self, config, *, clock=None):
         self.config = config
         self.clock = clock or SystemClock()
-        key = config.api_key or os.environ.get(config.api_key_env or "OPENROUTER_API_KEY")
+        variable = config.api_key_env or self.deployment.key_env
+        key = config.api_key or os.environ.get(variable)
         if not key:
-            raise RuntimeError(f"Decisions requires {config.api_key_env or 'OPENROUTER_API_KEY'}")
+            raise RuntimeError(f"Decisions requires {variable}")
         if not config.upstream_provider:
             raise ValueError("Decisions requires a pinned upstream_provider")
         self.api_key = key
@@ -91,7 +108,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
 
     def _new_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            base_url=self.config.api_base_url or "https://openrouter.ai/api/alpha/",
+            base_url=self.config.api_base_url or self.deployment.default_base_url,
             headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=30.0,
             event_hooks=HttpCapture(self, "decisions.http", "choice_question").hooks,
@@ -114,7 +131,7 @@ class OpenAIDecisionsClient(DecisionEncoder):
                 f"Decisions accepts at most {self.capabilities.max_choices} choices per call"
             )
         extra_body = None
-        if self.pin_route:
+        if self.deployment.pin_route:
             extra_body = {
                 "provider": {
                     "only": [self.config.upstream_provider],

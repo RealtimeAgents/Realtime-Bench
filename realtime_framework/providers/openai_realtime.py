@@ -281,9 +281,11 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         self.streaming = streaming
         self.streaming_settings = {**self.streaming_settings, **config.streaming}
         load_project_secrets()
-        key = config.api_key or os.environ.get(config.api_key_env or "OPENAI_API_KEY")
+        key = config.api_key or os.environ.get(config.api_key_env or self.deployment.key_env)
         if not key:
-            raise RuntimeError("OpenAI Realtime needs OPENAI_API_KEY or ModelConfig.api_key")
+            raise RuntimeError(
+                f"OpenAI Realtime needs {self.deployment.key_env} or ModelConfig.api_key"
+            )
         kwargs = {"api_key": key}
         if config.api_base_url:
             kwargs["base_url"] = config.api_base_url

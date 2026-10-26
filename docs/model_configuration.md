@@ -186,7 +186,9 @@ A model that needs a new wire protocol gets a driver:
    beside what the client sent; the run identity records it, and no run is refused for it. The
    pre-run checks (`providers/preflight.py`) read the rest; an undeclared value counts as
    unsupported, and a context policy the driver cannot render is refused.
-   Declare `deployment` (`Deployment`: catalog family and provider, default key variable),
+   Declare `deployment` (`Deployment`: catalog family and provider, default key variable; a
+   driver family's subclass adds where its requests go, as `ChatDeployment`,
+   `DecisionsDeployment` and `GeminiDeployment` do),
    `compat` (`Compat`: the API's restrictions the pre-run checks read: whether every request
    sends an output limit, the [provider options](#provider-options) a model may or must set with
    their allowed values, and the reasoning efforts the driver maps; `Compat()` for none) and
