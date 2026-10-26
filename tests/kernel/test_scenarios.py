@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 import random
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -785,8 +785,13 @@ def test_in_paused_mode_generation_latency_changes_nothing_in_world_time():
     ]
 
     def world(sim):
-        # Finish carries the termination, whose operational times differ by design.
-        return [c for c in sim.commands if not isinstance(c, Record | SetTimer | Finish)]
+        # Finish carries the termination, and StartGeneration the watchdog's bound, whose
+        # operational times differ by design.
+        return [
+            replace(c, bound_at=None) if isinstance(c, StartGeneration) else c
+            for c in sim.commands
+            if not isinstance(c, Record | SetTimer | Finish)
+        ]
 
     assert world(fast) == world(slow)
     assert _semantics(fast) == _semantics(slow)

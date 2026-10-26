@@ -1495,6 +1495,13 @@ def test_the_watchdog_runs_from_the_operational_reading_at_the_start_of_the_call
         310.0,
         605.0,
     ]
+    # The shell is told the same bound, and that the token clock has no deadline.
+    starts = [c for c in sim.commands if isinstance(c, StartGeneration)]
+    assert [(start.bound_at, start.deadline) for start in starts] == [
+        (300.0, None),
+        (310.0, None),
+        (605.0, None),
+    ]
     assert sim.termination.invalid is None
 
 

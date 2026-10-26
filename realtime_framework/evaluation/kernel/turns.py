@@ -351,23 +351,27 @@ class TurnPolicy:
             if d.remaining <= 0:
                 self.phase = _Phase.HORIZON
                 return self._move(config.max_ticks, self._at_horizon)
-        kernel.start_generation(d.index, d.observation_id, d.t_k, d.remaining)
-        self.phase = _Phase.GENERATE
         # The bound on one call: an operational watchdog on the token clock, the legacy per-move cap
         # on the wall clock, whose deadline is a timer of its own (legacy_loop.py _move_timeout).
-        watchdog = config.timing.provider_watchdog_s
-        if self.token and watchdog > 0:
+        # The shell is told when they fall due, as it settles no result back past them.
+        watchdog, cap = config.timing.provider_watchdog_s, config.per_move_cap_s
+        if self.token:
+            bound_at = kernel.ops + watchdog if watchdog > 0 else None
+        else:
+            cap = None if cap is None else max(0.1, cap)
+            bound_at = None if cap is None else kernel.semantic + cap
+        deadline = None if self.token else config.duration_s
+        kernel.start_generation(d.index, d.observation_id, d.t_k, d.remaining, bound_at, deadline)
+        self.phase = _Phase.GENERATE
+        if bound_at is None:
+            return
+        if self.token:
             d.timeout = kernel.set_timer(
-                "generation_watchdog", Clock.OPS, kernel.ops + watchdog, Priority.CONTROL
+                "generation_watchdog", Clock.OPS, bound_at, Priority.CONTROL
             )
-        elif not self.token and config.per_move_cap_s is not None:
-            bound = max(0.1, config.per_move_cap_s)
+        else:
             d.timeout = kernel.set_timer(
-                "per_move_cap",
-                Clock.SEMANTIC,
-                kernel.semantic + bound,
-                Priority.CONTROL,
-                bound=bound,
+                "per_move_cap", Clock.SEMANTIC, bound_at, Priority.CONTROL, bound=cap
             )
 
     def _at_horizon(self) -> None:

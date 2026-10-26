@@ -1081,6 +1081,13 @@ def test_the_per_move_cap_skips_the_decision_and_the_episode_goes_on(latency):
     replies = [Reply(latency, CLICK), Reply(1.25, CLICK), Reply(10.0, CLICK)]
     sim = _episode(_wall(5.0, per_move_cap_s=2.0), World(replies=replies))
     assert _timers(sim, "per_move_cap") == [2.0, 4.0, 6.0]
+    # The shell is told the same caps, and the deadline.
+    starts = [c for c in sim.commands if isinstance(c, StartGeneration)]
+    assert [(start.bound_at, start.deadline) for start in starts] == [
+        (2.0, 5.0),
+        (4.0, 5.0),
+        (6.0, 5.0),
+    ]
     assert _data(sim, "GenerationAbandoned") == [
         {"generation": 1, "reason": "per_move_cap"},
         {"generation": 3, "reason": "deadline"},

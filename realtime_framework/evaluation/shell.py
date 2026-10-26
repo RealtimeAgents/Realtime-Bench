@@ -260,8 +260,10 @@ class _Generation:
     started_ops: float | None
     done: threading.Event  # set once the worker has handed its result back
     # When its own bound falls due: the wall clock's per-move cap, in semantic seconds, or the
-    # token clock's watchdog, in operational seconds; None without one.
-    bound_at: float | None = None
+    # token clock's watchdog, in operational seconds; and the wall clock's deadline. None
+    # without one (StartGeneration).
+    bound_at: float | None
+    deadline: float | None
     returned_at: float | None = None  # the reading on the bound's clock when it came back
     result: dict | None = None  # as the worker handed it back
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
@@ -787,6 +789,8 @@ class _Shell:
             clock.time(),
             *self._now,
             clock.event(),
+            command.bound_at,
+            command.deadline,
         )
         self._generations[held.generation] = held
         clock.start_thread(lambda: self._generate(held), name=f"generation-{held.generation}")
@@ -847,7 +851,7 @@ class _Shell:
     def _late(self, held: _Generation) -> bool:
         """Whether a bound on the generation, its own or the wall deadline, fell due before its
         result came back; the kernel handles one due at the same time first too."""
-        bounds = [held.bound_at] if self.token else [held.bound_at, self.config.duration_s]
+        bounds = (held.bound_at, held.deadline)
         return any(at is not None and at <= held.returned_at for at in bounds)
 
     def _settle(self, held: _Generation, r: dict) -> tuple[GenerationResult, tuple]:
@@ -1303,12 +1307,7 @@ class _Shell:
             self._emit(TraceEvent.RUN_INVALIDATED, _invalid_record(invalid), entry)
         else:
             self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
-            if kind == "TimerSet" and data["kind"] in ("per_move_cap", "generation_watchdog"):
-                # Set right after the generation it bounds; None when its StartGeneration raised.
-                held = self._generations.get(self.kernel.generation)
-                if held is not None:
-                    held.bound_at = data["at"]
-            elif kind == "GenerationAbandoned":
+            if kind == "GenerationAbandoned":
                 self._given_up(entry)
             elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
                 self.log(
@@ -1371,7 +1370,7 @@ class _Shell:
             timeout = self.config.timing.provider_watchdog_s
         else:
             # The bound, however late the shell got to it: the kernel charges the move that much.
-            due = held.bound_at if bound == "per_move_cap" else self.config.duration_s
+            due = held.bound_at if bound == "per_move_cap" else held.deadline
             seconds = due - held.started_semantic
             r = episode_records.timed_out_result(round(seconds, 2), bound)
             capped = bound == "per_move_cap"

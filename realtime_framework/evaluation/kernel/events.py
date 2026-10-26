@@ -289,6 +289,12 @@ class StartGeneration:
     decision: int
     observation_id: str | None
     remaining_clock_tokens: int | None  # the finite-B allowance left before the horizon
+    # Turn-based: when the generation's own bound falls due, the wall clock's per-move cap in
+    # semantic seconds or the token clock's watchdog in operational seconds, and the wall clock's
+    # deadline; None without one. The kernel's timers give the generation up there, and the
+    # shell settles no result that came back past either (shell.py _late).
+    bound_at: float | None = None
+    deadline: float | None = None
 
 
 @dataclass(frozen=True)

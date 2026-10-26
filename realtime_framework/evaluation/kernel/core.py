@@ -166,7 +166,15 @@ class Kernel:
         if handle is not None:
             self.agenda.cancel(handle)
 
-    def start_generation(self, decision: int, observation_id, observation_tick, remaining) -> int:
+    def start_generation(
+        self,
+        decision: int,
+        observation_id,
+        observation_tick,
+        remaining,
+        bound_at=None,
+        deadline=None,
+    ) -> int:
         generation = next(self._generations)
         self.generation = generation
         self.record(
@@ -177,7 +185,9 @@ class Kernel:
             observation_tick=observation_tick,
             remaining_clock_tokens=remaining,
         )
-        self.emit(StartGeneration(generation, decision, observation_id, remaining))
+        self.emit(
+            StartGeneration(generation, decision, observation_id, remaining, bound_at, deadline)
+        )
         return generation
 
     def abandon_generation(self, reason: str) -> None:
