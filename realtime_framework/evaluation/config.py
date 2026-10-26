@@ -3,50 +3,17 @@ from __future__ import annotations
 from realtime_framework.entity.config import DEFAULT_TASK_SEED, task_seed
 
 #  yaml
-"""Tiny YAML load/dump helpers for benchmark configs, suite manifests and run plans.
-
-Thin wrapper over PyYAML with two conveniences:
-  - UTF-8, block style, keys kept in insertion order (readable, git-friendly diffs);
-  - multi-line strings are emitted as literal `|` blocks instead of quoted one-liners.
-"""
+"""Tiny YAML load helper for benchmark configs, suite manifests and run plans."""
 
 from pathlib import Path as Path
 
 import yaml as yaml
 
 
-class _BlockDumper(yaml.SafeDumper):
-    pass
-
-
-def _str_representer(dumper: yaml.Dumper, data: str):
-    # Literal block style for anything multi-line; plain for the rest.
-    style = "|" if "\n" in data else None
-    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
-
-
-_BlockDumper.add_representer(str, _str_representer)
-
-
 def load_yaml(path) -> dict:
     """Load one YAML file into a dict (empty dict if the file is empty)."""
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def dump_yaml(data: dict, path) -> None:
-    """Write `data` to `path` as readable block-style YAML (dirs auto-created)."""
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(
-            data,
-            f,
-            Dumper=_BlockDumper,
-            sort_keys=False,
-            allow_unicode=True,
-            width=100,
-            default_flow_style=False,
-        )
 
 
 # Benchmark

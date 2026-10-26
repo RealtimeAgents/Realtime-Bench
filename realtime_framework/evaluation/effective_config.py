@@ -52,9 +52,11 @@ CLOCK_ORIGIN = 1_760_000_000.0  # fixed task origin for the replaced task server
 _EXTRA_VARIABLES = frozenset(
     {
         # Lane and child-process settings written by _trial (evaluation/_trial.py main).
-        "PYTHONPATH", "TASK_SUITE", "SEED", "CLOCK_MODE", "TOKENS_PER_FRAME", "TASK_PORT_OFFSET",
-        "SANDBOX_DISPLAY_NUMBER", "SANDBOX_CONTAINER", "RT_SUITE_CONTAINER", "GUEST_AGENT_PORT",
-        "VNC_PORT", "NOVNC_PORT", "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
+        "PYTHONPATH", "TASK_SUITE", "TASK_PORT_OFFSET", "SANDBOX_DISPLAY_NUMBER",
+        "SANDBOX_CONTAINER", "RT_SUITE_CONTAINER", "GUEST_AGENT_PORT", "VNC_PORT", "NOVNC_PORT",
+        "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
+        # The --seed default of the runner's and the trial worker's command lines.
+        "SEED",
         # Interpreters, roots and gates.
         "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
         # Model bridges (providers/registry.py _load_entries, to_model_config).
@@ -488,16 +490,10 @@ def _trial_command(plan: dict) -> tuple[list[str], str]:
     runtime = plan["runtime"]
     lane = plan["execution"]["lane"]
     offset = lane * 1000
-    tokens_per_frame = runtime["tokens_per_frame"]
     os.environ.update(
         {
             "PYTHONPATH": str(ROOT),
             "TASK_SUITE": plan["suite"],
-            "SEED": str(runtime["seed"]),
-            "CLOCK_MODE": runtime["clock_mode"],
-            "TOKENS_PER_FRAME": (
-                str(tokens_per_frame) if tokens_per_frame is not None else "unlimited"
-            ),
             "SANDBOX_GRAPHICS_MODE": runtime["graphics_mode"],
             "SCREEN_RECORDING_ENCODER": runtime["recording_encoder"],
             "TASK_PORT_OFFSET": str(offset),

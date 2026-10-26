@@ -360,7 +360,6 @@ def main(argv=None):
                 parser.error("Unable to allocate a unique run timestamp; retry shortly")
             time.sleep(1)
     (result_root / "wall_clock_launch.json").write_text(json.dumps(settings, indent=2) + "\n")
-    _yaml.dump_yaml(plan, result_root / "plan.yaml")
     if args.run_root_output:
         locator = args.run_root_output.resolve()
         locator.parent.mkdir(parents=True, exist_ok=True)
@@ -372,9 +371,6 @@ def main(argv=None):
         **os.environ,
         "PYTHONPATH": str(ROOT),
         "TASK_SUITE": args.suite,
-        "SEED": str(args.seed),
-        "CLOCK_MODE": args.clock,
-        "TOKENS_PER_FRAME": str(tokens_per_frame) if tokens_per_frame is not None else "unlimited",
         "SANDBOX_GRAPHICS_MODE": plan["runtime"]["graphics_mode"],
         "SCREEN_RECORDING_ENCODER": plan["runtime"]["recording_encoder"],
         "TASK_PORT_OFFSET": str(offset),
