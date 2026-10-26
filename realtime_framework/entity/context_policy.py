@@ -147,7 +147,7 @@ class PathPolicy:
     turns: Retention  # 2 turn retention; archived actions form the ledger
     # 3 execution feedback; under the action digest (item 9) every turn's feedback is in the
     # digest, whatever the value
-    feedback: Literal["separate_message", "frame_prefix", "digest"]
+    feedback: Literal["separate_message", "digest"]
     # 4 role of the archived-action ledger; an encoder without roles places it by position and
     # header (RealtimeCapabilities.labels_instead_of_roles), and the value is at most a label
     # there (providers/decisions/history.py JEV_ROLES)

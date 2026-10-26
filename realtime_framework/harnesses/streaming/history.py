@@ -8,14 +8,9 @@ The view keeps the frames and outputs in that order under their ids, so an encod
 views by id. Only the newest frames keep their screenshots; an older frame folds as a turn-based
 frame does, and never gets its screenshot back. Every output stays, however old.
 
-Feedback goes where the policy places it (PathPolicy.feedback), as in a turn-based request
-(harnesses/default/request.py _turn_items). As its own block, it keeps its id and stays where it
-arrived, after the frames pushed while the action ran. In front of the next frame, the feedback
-accepted since the frame before is one block instead, named after its first feedback, after the
-outputs accepted meanwhile; the frame loses it when it folds. The feedback since the newest frame
-waits for the next one at the end of the view, in the same block, which gains a line with each
-feedback: a session that takes feedback between frames, as Gemini Live's reply trigger does, finds
-it there.
+Each execution feedback is a block of its own, as a turn-based request places it under
+separate_message (harnesses/default/request.py _turn_items): it keeps its id and stays where it
+arrived, after the frames pushed while the action ran.
 """
 
 from __future__ import annotations
@@ -38,9 +33,6 @@ from realtime_framework.entity.request import (
 from realtime_framework.harnesses.default.frames import FrameRecord
 
 _KIND_ROLES = {"frame": "input", "model_output": "model", "execution_feedback": "input"}
-# The feedback placements the view lays out (PathPolicy.feedback), and whether feedback opens the
-# next frame; the action digest is a Decision form no live session takes.
-_FRAME_PREFIX = {"separate_message": False, "frame_prefix": True}
 
 
 def frame_block(frame: FrameRecord, observation: ProviderObservation) -> ContentBlock:
@@ -101,42 +93,16 @@ def history_view(
 ) -> CanonicalRequest:
     """The session the accepted ``blocks`` (frames, outputs and feedback, in the order the
     agent keeps them) make: the system instruction, then every block in order, the frames older
-    than the newest ``retained_frames`` folded, and the feedback where the policy places it."""
-    frame_prefix = _FRAME_PREFIX[policy.feedback]
+    than the newest ``retained_frames`` folded."""
     frames = [index for index, block in enumerate(blocks) if block.kind == "frame"]
     older = set(frames[: max(0, len(frames) - retained_frames)])
     items = [RequestItem(system, Intent("instruction", "head"))]
-    pending: list[ContentBlock] = []  # frame_prefix: the feedback since the frame before
     for index, block in enumerate(blocks):
-        if frame_prefix and block.kind == "execution_feedback":
-            pending.append(block)
-            continue
         if index in older:
-            # The fold placeholder in place of its text and screenshot, without the feedback in
-            # front of it, as a turn-based frame folds (harnesses/default/request.py _frame).
+            # The fold placeholder in place of its text and screenshot, as a turn-based frame
+            # folds (harnesses/default/request.py _frame).
             block = replace(block, text=policy.texts.folded_visual, image=None, folded=True)
-        elif block.kind == "frame" and pending:
-            items.append(RequestItem(_prefix(pending, block), Intent("input", "frame_prefix")))
-        if block.kind == "frame":
-            pending = []
         items.append(RequestItem(block, Intent(_KIND_ROLES[block.kind], "in_order")))
-    if pending:
-        items.append(RequestItem(_prefix(pending, None), Intent("input", "frame_prefix")))
     return CanonicalRequest(
         policy=policy, history_form="turns", items=tuple(items), answer=answer, call=call
-    )
-
-
-def _prefix(feedback: list[ContentBlock], frame: ContentBlock | None) -> ContentBlock:
-    """The feedback accepted since the frame before, in front of ``frame``'s prompt, as a
-    turn-based frame carries the feedback pending when it was prepared; with no frame yet
-    (None), waiting for the next. Named after its first feedback, it keeps its id while it waits
-    and gains lines, and once its frame comes."""
-    return ContentBlock(
-        feedback[0].id.removesuffix("feedback") + "prefix",
-        "execution_feedback",
-        "environment",
-        BlockTime() if frame is None else frame.time,
-        text="\n".join(block.text for block in feedback),
-        attached_to=None if frame is None else frame.id,
     )

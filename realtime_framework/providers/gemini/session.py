@@ -121,7 +121,7 @@ class Push:
 class Trigger:
     """A reply's start as native streaming sends it: one activity on realtime_input, not a client
     turn_complete. It holds the execution feedback no seed or trigger has handed to the session
-    yet, under whichever placement, and the silent audio an activity must hold."""
+    yet, and the silent audio an activity must hold."""
 
     inputs: tuple[RealtimeInput, ...]
     keys: tuple[tuple, ...]  # the delivery keys of the feedback blocks it carries
@@ -387,16 +387,15 @@ class SessionCore:
         canonical action of the native call that its turn's tool block carries, so it has no
         Content of its own; an execution feedback of its own is a text Content after the turn's
         tool rounds. The streaming view (harnesses/streaming/history.py) has no tool blocks:
-        each reply's output that said anything and each execution feedback, whether its own
-        block or one in front of a frame, is a text Content, in the view's order, and a frame is
-        its own text, as a push sends it. That order is not the one the live session got them
-        in: there each feedback came with the trigger after it, after the frames pushed
-        meanwhile.
+        each reply's output that said anything and each execution feedback is a text Content, in
+        the view's order, and a frame is its own text, as a push sends it. That order is not the
+        one the live session got them in: there each feedback came with the trigger after it,
+        after the frames pushed meanwhile.
         """
         if history is None:
             return [], []
         texts = history.policy.texts
-        prefixes = {} if self.streaming else _frame_prefixes(history)
+        prefixes = _frame_prefixes(history)
         contents, carriers, turn_index = [], [], -1
         for item in history.items:
             block = item.block
@@ -619,20 +618,14 @@ class SessionCore:
         """Plan the activity that starts a streaming session's next reply, with what the session
         lacks of the history view's execution feedback, and record it as being written. Start
         the reply's generation (start_generation) before the activity goes out: read as it
-        arrives, the reply's first message would otherwise be an orphan, and its calls lost.
-
-        The feedback is in blocks of its own or in blocks in front of frames, as the policy
-        places it (PathPolicy.feedback). A block in front of the next frame gains a line with each
-        feedback until that frame comes (harnesses/streaming/history.py), so a trigger carries
-        what a block gained since a seed or a trigger last handed it to the session."""
-        lacking = []
-        for item in history.items:
-            block = item.block
-            carried = self.carried.get(block.id)
-            if block.kind == "execution_feedback" and carried != block.text:
-                gained = block.text if carried is None else block.text[len(carried) + 1 :]
-                lacking.append((block, gained))
-        text = "\n".join(gained for _, gained in lacking)
+        arrives, the reply's first message would otherwise be an orphan, and its calls lost."""
+        lacking = [
+            item.block
+            for item in history.items
+            if item.block.kind == "execution_feedback"
+            and self.carried.get(item.block.id) != item.block.text
+        ]
+        text = "\n".join(block.text for block in lacking)
         trigger = Trigger(
             (
                 RealtimeInput("activity_start"),
@@ -640,9 +633,9 @@ class SessionCore:
                 RealtimeInput("audio_carrier"),
                 RealtimeInput("activity_end"),
             ),
-            tuple(("block", block.id) for block, _ in lacking),
+            tuple(("block", block.id) for block in lacking),
         )
-        self.carried.update((block.id, block.text) for block, _ in lacking)
+        self.carried.update((block.id, block.text) for block in lacking)
         self.sending(trigger.keys)
         return trigger
 

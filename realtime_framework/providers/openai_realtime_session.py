@@ -3,18 +3,17 @@
 The core mirrors what the server holds as far as the driver wrote it: each frame's user item, the
 assistant items after it and the execution-feedback item after those, and the archived-action
 ledger item; in native streaming, the item of each frame and each execution feedback the driver
-pushed (feedback placed in front of a frame goes into the frame's item), each after the item the
-server put it after, a reply's items being the server's. From a history view it plans the item
-creates and deletes that bring the server there, and it records what became of each one, which
-the driver writes to the event log: unknown while it is written, sent once the write returned,
-confirmed once the server acknowledged it, refused if the server answered it with an error
-naming its client event. Each server event the driver reads is handed to ``receive``, in the
-order the connection delivered it, which passes it to the state it belongs to: an acknowledgement
-or error settles the in-place edit waiting for it, an error about a block native streaming pushed
-refuses that block alone, a response event joins its generation. Sending and receiving are the
-driver's. On a turn-based session it reads only while something waits for an event, so what
-arrives after the last wait reaches the core with the next read; native streaming's reader reads
-every event as it arrives and hands it to ``arrived``.
+pushed, each after the item the server put it after, a reply's items being the server's. From a
+history view it plans the item creates and deletes that bring the server there, and it records
+what became of each one, which the driver writes to the event log: unknown while it is written,
+sent once the write returned, confirmed once the server acknowledged it, refused if the server
+answered it with an error naming its client event. Each server event the driver reads is handed
+to ``receive``, in the order the connection delivered it, which passes it to the state it belongs
+to: an acknowledgement or error settles the in-place edit waiting for it, an error about a block
+native streaming pushed refuses that block alone, a response event joins its generation. Sending
+and receiving are the driver's. On a turn-based session it reads only while something waits for
+an event, so what arrives after the last wait reaches the core with the next read; native
+streaming's reader reads every event as it arrives and hands it to ``arrived``.
 """
 
 from __future__ import annotations
@@ -145,8 +144,7 @@ class EditBatch:
 @dataclass(frozen=True)
 class ViewFrame:
     """One frame of a history view, with the frame prefix before it, and the output and the
-    execution feedback after it; of a native-streaming view, one block of any kind, a frame with
-    the prefix before it."""
+    execution feedback after it; of a native-streaming view, one block of any kind."""
 
     item: RequestItem
     prefix: str = ""
@@ -185,17 +183,8 @@ def history_frames(items) -> tuple[RequestItem | None, list[ViewFrame]]:
 
 def streaming_blocks(items) -> list[ViewFrame]:
     """Read a native-streaming history view (harnesses/streaming/history.py): its blocks in the
-    order the agent accepted them, frames, replies' outputs and execution feedback. Feedback the
-    policy places in front of a frame is that frame's prefix, as a turn-based frame's is; the
-    feedback waiting at the end for the next frame is not yet any block's."""
-    blocks, prefix = [], ""
-    for item in items:
-        if item.intent.position == "frame_prefix":
-            prefix = item.block.text
-        elif item.intent.position == "in_order":
-            blocks.append(ViewFrame(item, prefix))
-            prefix = ""
-    return blocks
+    order the agent accepted them, frames, replies' outputs and execution feedback."""
+    return [ViewFrame(item) for item in items if item.intent.position == "in_order"]
 
 
 @dataclass
@@ -356,11 +345,11 @@ class RealtimeSessionCore:
 
     def replay_streaming(self, history: CanonicalRequest | None) -> list[Create]:
         """Plan a new session's items from a native-streaming history view (None for an empty
-        session), one per block in order: a frame's user item, with the feedback in front of it,
-        a folded one the placeholder without its screenshot; a reply's assistant item, none for an
-        empty output as a turn's has none; an execution feedback's user item. Frames and feedback
-        are planned as pushes, so the server refusing one again, as it refused it on the old
-        connection, refuses it alone. The mirror becomes the session they make."""
+        session), one per block in order: a frame's user item, a folded one the placeholder
+        without its screenshot; a reply's assistant item, none for an empty output as a turn's has
+        none; an execution feedback's user item. Frames and feedback are planned as pushes, so the
+        server refusing one again, as it refused it on the old connection, refuses it alone. The
+        mirror becomes the session they make."""
         operations: list[Create] = []
         for frame in [] if history is None else streaming_blocks(history.items):
             block = frame.item.block
@@ -396,12 +385,10 @@ class RealtimeSessionCore:
 
     def push(self, history: CanonicalRequest) -> list[Create]:
         """Plan, in the order of the native-streaming history view, the user items of the blocks
-        it holds that the session lacks: each frame, with the feedback in front of it, and each
-        execution feedback the policy makes an item of its own. A reply's items are the server's,
-        and a block the server refused stays out. Native streaming pushes them while replies and
-        edits are in progress, so each create names a client event: a server error about it
-        refuses that block alone, with the feedback in front of a frame, which is in the frame's
-        item."""
+        it holds that the session lacks: each frame and each execution feedback. A reply's items
+        are the server's, and a block the server refused stays out. Native streaming pushes them
+        while replies and edits are in progress, so each create names a client event: a server
+        error about it refuses that block alone."""
         refused = {push.block_id for push in self.pushes.values() if push.error is not None}
         return [
             self._push(frame)
