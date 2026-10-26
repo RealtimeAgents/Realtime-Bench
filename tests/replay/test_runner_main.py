@@ -658,6 +658,28 @@ def test_a_generation_that_raises_is_its_generation_error(tmp_path):
     }
 
 
+def test_a_summary_main_fails_to_build_is_written_as_the_run_s_failure(tmp_path, monkeypatch):
+    """The episode plays its decision and is scored, and then building the summary raises: the
+    run is invalid for it, its summary says so with the decision counted, and main() exits 1."""
+    from realtime_framework.evaluation import clock as clock_module
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("model timing broke")
+
+    monkeypatch.setattr(clock_module, "summarize_model_timing", broken)
+    clock, guest = FakeClock(1_000_000.0), FakeGuest()
+    seen = {}
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest, seen=seen)
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("harness", "run_summary_failed")
+    assert "RuntimeError: model timing broke" in invalid["detail"]
+    assert (summary["stop_reason"], summary["decisions"], summary["outcome"]) == (
+        "invalid_run", 1, "error",
+    )  # fmt: skip
+    assert seen["exit_code"] == 1 and not scored(tmp_path)
+
+
 class NotReadyGuest(FakeGuest):
     def wait_until_ready(self, max_wait):
         return False
