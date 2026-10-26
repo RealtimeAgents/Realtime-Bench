@@ -933,49 +933,16 @@ def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def recording_origin(run_dir, trace):
+def recording_origin(run_dir):
     metadata = read_json(run_dir / "recording-timing.json")
-    if finite(metadata.get("first_frame_unix_s")):
-        return {
-            "recording_start_unix_s": metadata["first_frame_unix_s"],
-            "basis": "x11_first_input_pts",
-            "precision": "ffmpeg input timestamp",
-        }
-    log = (
-        (run_dir / "runner.out").read_text(errors="replace")
-        if (run_dir / "runner.out").exists()
-        else ""
-    )
-    pattern = r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+) .*Screen recording "
-    starts = re.findall(pattern + "started", log, re.M)
-    ends = re.findall(pattern + "saved", log, re.M)
-    if len(starts) != 1 or len(ends) != 1 or "falling back to frame-composited" in log:
+    if not finite(metadata.get("first_frame_unix_s")):
         raise ValueError(
             "Missing/ambiguous screen-recorder timestamps or frame-composited recording"
         )
-    parse = lambda value: (
-        datetime.strptime(value, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc).timestamp()
-    )
-    # Recording is saved immediately before score/final trace events. Infer the log
-    # timezone in 15-minute increments, then require a close independent match.
-    anchors = [
-        e["wall_time_ns"] / 1e9 for e in trace if e["event"] in {"ScoreProduced", "EpisodeFinished"}
-    ]
-    matches = []
-    for anchor in anchors:
-        shift = round((anchor - parse(ends[0])) / 900) * 900
-        residual = anchor - parse(ends[0]) - shift
-        if abs(shift) <= 14 * 3600 and -1 <= residual <= 5:
-            matches.append((abs(residual), shift, residual))
-    if not matches:
-        raise ValueError("Recorder log timezone cannot be verified against final trace events")
-    _, shift, residual = min(matches)
     return {
-        "recording_start_unix_s": parse(starts[0]) + shift,
-        "basis": "legacy_recorder_launch_log",
-        "log_to_utc_s": shift,
-        "end_check_residual_s": residual,
-        "precision": "Approximate: legacy recorder launch log, first-frame PTS unavailable",
+        "recording_start_unix_s": metadata["first_frame_unix_s"],
+        "basis": "x11_first_input_pts",
+        "precision": "ffmpeg input timestamp",
     }
 
 
@@ -1058,7 +1025,7 @@ def active_timeline(run_dir):
     trace = _active_trace(run_dir)
     life = rows(run_dir / "action_lifecycle.jsonl")
     start, end, boundary = active_interval(run_dir, trace)
-    alignment = recording_origin(run_dir, trace)
+    alignment = recording_origin(run_dir)
     begin = start - alignment["recording_start_unix_s"]
     finish = end - alignment["recording_start_unix_s"]
     if begin < -0.5 or finish <= 0:
