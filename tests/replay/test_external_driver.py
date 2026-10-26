@@ -822,7 +822,7 @@ def resolved_request(monkeypatch, tmp_path, key: str) -> dict:
     request = {
         "model": key, "mode": "default", "catalog_model": key, "suite": "public", "fps": 1,
         "model_input_fps": 1, "interaction_mode": "turn_based", "duration_minutes": 5.0,
-        "seed": 42, "clock": "wall", "stream": True,
+        "seed": 42, "clock": "wall", "tokens_per_frame": "unlimited", "stream": True,
     }
     return asyncio.run(environment.resolve(request))
 

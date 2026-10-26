@@ -485,8 +485,8 @@ class ApptainerEnvironment(BaseEnvironment):
             str(self.task["duration_minutes"]),
             "--seed",
             str(self.task["seed"]),
-            "--clock", request.get("clock", "wall"),
-            "--tokens-per-frame", str(request.get("tokens_per_frame", "unlimited")),
+            "--clock", request["clock"],
+            "--tokens-per-frame", str(request["tokens_per_frame"]),
         ]
         if request.get("catalog_model"):
             command += ["--catalog-model", request["catalog_model"]]
