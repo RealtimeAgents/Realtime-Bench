@@ -40,15 +40,17 @@ from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
 from realtime_framework.entity.model import HistorySyncResult
+from realtime_framework.entity.model import ModelEncoder
 from realtime_framework.entity.model import OutputCollector
 from realtime_framework.entity.events import ProviderError
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
-from realtime_framework.entity.model import RealtimeDriver
 from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import RuntimeState
 from realtime_framework.entity.model import RuntimeTurnResult
+from realtime_framework.entity.model import SessionEncoder
 from realtime_framework.entity.model import SessionSeed
+from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.model import retry_cancellation
 from realtime_framework.entity.records import TraceEvent
@@ -101,7 +103,7 @@ class RealtimeRuntime:
 
     def __init__(
         self,
-        driver: RealtimeDriver,
+        driver: ModelEncoder,
         policy: PathPolicy,
         *,
         history: History,
@@ -109,8 +111,8 @@ class RealtimeRuntime:
         execution: ExecutionThread,
         clock: Clock | None = None,
     ):
-        if not isinstance(driver, RealtimeDriver):
-            raise TypeError("realtime driver does not implement the required protocol")
+        if not isinstance(driver, (StatelessEncoder, SessionEncoder)):
+            raise TypeError("realtime driver is neither a StatelessEncoder nor a SessionEncoder")
         self.driver = driver
         self.capabilities = driver.capabilities
         self.policy = policy
@@ -122,7 +124,7 @@ class RealtimeRuntime:
         # A live driver's session; None for a stateless driver, whose aborts' cleanups are the
         # runtime's, and which is dirty from an abort or a failure until the next generation
         # readies it.
-        self.session = driver if self.capabilities.persistent_session else None
+        self.session = driver if isinstance(driver, SessionEncoder) else None
         self._aborts = AbortCleanup(self)
         self._dirty = True
         self._states = SessionStates(trace, self.capabilities.protocol_family)
@@ -265,7 +267,7 @@ class RealtimeRuntime:
         if self.session is not None:
             view = self.history_view(request_builder, incoming)
             input_refs = [
-                await self.driver.send_observation(turn.observation, view) or {}
+                await self.session.send_observation(turn.observation, view) or {}
                 for turn in incoming
             ]
 
@@ -699,7 +701,7 @@ class RealtimeRuntime:
             {
                 "generation": request.generation,
                 "observation_id": incoming[-1].observation.observation_id,
-                "persistent_session": self.capabilities.persistent_session,
+                "persistent_session": self.session is not None,
                 "history": {
                     "archived_actions_total": history.archived,
                     # As history_omitted_actions_total in the step's provider metadata.

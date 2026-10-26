@@ -61,7 +61,6 @@ class DecisionsDeployment(Deployment):
 class OpenAIDecisionsClient(DecisionEncoder):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_decisions",
-        persistent_session=False,
         action_channel="choice",
         observation_modality="screenshot",
         # Decisions state has no roles (providers/decisions/history.py render_transcript).

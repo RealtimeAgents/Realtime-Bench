@@ -421,8 +421,15 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
         (
             "rtb_ext.broken:NotAnEncoder",
             (
-                "'rtb_ext.broken:NotAnEncoder' is not a model encoder: missing "
-                "start_generation, events, interrupt, close, bind_trace"
+                "'rtb_ext.broken:NotAnEncoder' is not a model encoder: subclass "
+                "StatelessEncoder or SessionEncoder"
+            ),
+        ),
+        (
+            "rtb_ext.broken:Unfinished",
+            (
+                "'rtb_ext.broken:Unfinished' is not a model encoder: missing bind_trace, "
+                "start_generation, events, interrupt, close"
             ),
         ),
         # The harness builds every driver as Class(config, clock=clock).
@@ -540,7 +547,7 @@ def test_preflight_holds_a_model_to_the_output_limit_its_driver_requires(externa
             ),
         ),
     ],
-    ids=["no-module", "no-attribute", "function", "not-an-encoder", "no-clock",
+    ids=["no-module", "no-attribute", "function", "not-an-encoder", "unfinished", "no-clock",
          "no-context-status", "no-capabilities", "no-deployment", "no-compat", "no-model-defaults",
          "classifier-flag", "renewal-flag", "output-cap-flag", "streaming-no-switch",
          "streaming-no-settings", "streaming-bad-settings", "streaming-no-push",

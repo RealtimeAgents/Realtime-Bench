@@ -27,6 +27,7 @@ from realtime_framework.entity.model import (
     GenerationHandle,
     InterruptResult,
     RealtimeCapabilities,
+    StatelessEncoder,
     TransportFailure,
     classify_http_failure,
     retry_after_seconds,
@@ -63,10 +64,9 @@ def chat_messages(request) -> list[dict]:
     return messages
 
 
-class ExternalChatDriver:
+class ExternalChatDriver(StatelessEncoder):
     capabilities = RealtimeCapabilities(
         protocol_family="external_chat",
-        persistent_session=False,
         roles=tuple(ROLES),
         feedback_placements=("separate_message",),
         server_context="none",

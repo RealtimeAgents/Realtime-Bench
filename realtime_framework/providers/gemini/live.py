@@ -249,7 +249,6 @@ class _Receiver:
 class GeminiLiveDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="gemini_live",
-        persistent_session=True,
         # The system instruction goes into the session setup, not into a content role.
         roles=("input", "model"),
         feedback_placements=("separate_message",),

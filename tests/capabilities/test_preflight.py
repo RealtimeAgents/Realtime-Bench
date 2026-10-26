@@ -26,6 +26,7 @@ from realtime_framework.entity.context_policy import (
     DecisionHistory,
     current_context_policy,
 )
+from realtime_framework.entity.model import SessionEncoder
 from realtime_framework.evaluation.config import effective_run_config, load_benchmark
 from realtime_framework.providers.preflight import (
     UnsupportedTokenBudget,
@@ -713,10 +714,10 @@ def test_streaming_identity(monkeypatch):
     )
 
 
-def test_the_live_apis_are_the_persistent_sessions():
-    """The APIs the message names are the drivers that declare a persistent session."""
+def test_the_live_apis_are_the_session_encoders():
+    """The APIs the message names are the drivers that are session encoders."""
     drivers = {api: catalog.adapter_class(api) for api in catalog.APIS}
-    live = {api for api, driver in drivers.items() if driver.capabilities.persistent_session}
+    live = {api for api, driver in drivers.items() if issubclass(driver, SessionEncoder)}
     assert live == {"openai_realtime", "gemini_live"}
 
 
@@ -1279,23 +1280,38 @@ def test_context_status_needs_its_declaration():
     )
 
 
-def test_a_session_declares_no_request_estimate():
-    """The runtime archives the history a stateless request carries when it does not fit; a
-    persistent session holds its own, so a driver that declares both is refused at load. The
-    driver takes each observation and manages its session (SessionLifecycle), as
-    persistent_session requires."""
+def test_a_driver_is_stateless_or_a_session():
+    """The runtime manages a SessionEncoder's session and only aborts a StatelessEncoder, so a
+    driver that subclasses both is refused at load, though it takes each observation and manages
+    its session (SessionLifecycle) as a session encoder does."""
     driver = catalog.adapter_class("chat_completions")
     session = type(
         "Session",
         (driver, SessionLifecycle),
-        {
-            "capabilities": replace(driver.capabilities, persistent_session=True),
-            "send_observation": lambda self, observation, history: {},
-        },
+        {"send_observation": lambda self, observation, history: {}},
     )
     fails(
         lambda: catalog._check_driver("ext.chat:Session", session),
-        "'ext.chat:Session' declares request_size_estimation on a persistent session, whose "
+        "'ext.chat:Session' subclasses both StatelessEncoder and SessionEncoder",
+    )
+
+
+def test_a_session_declares_no_request_estimate():
+    """The runtime archives the history a stateless request carries when it does not fit; a
+    session holds its own, so a session encoder that declares request_size_estimation, with its
+    method, is refused at load."""
+    driver = catalog.adapter_class("gemini_live")
+    session = type(
+        "Session",
+        (driver,),
+        {
+            "capabilities": replace(driver.capabilities, request_size_estimation=True),
+            "request_context_status": lambda self, request: {"pressure": False},
+        },
+    )
+    fails(
+        lambda: catalog._check_driver("ext.live:Session", session),
+        "'ext.live:Session' declares request_size_estimation on a session encoder, whose "
         "context the runtime cannot archive",
     )
 
@@ -1389,10 +1405,11 @@ def test_declared_roles_are_the_encoders_roles():
     for api, sent_as in LEDGER_SENT_AS.items():
         assert set(catalog.adapter_class(api).capabilities.roles) == set(sent_as), api
     for api in catalog.APIS:
-        capabilities = catalog.adapter_class(api).capabilities
+        driver = catalog.adapter_class(api)
+        capabilities = driver.capabilities
         assert capabilities.labels_instead_of_roles == (capabilities.action_channel == "choice")
         assert bool(capabilities.roles) != capabilities.labels_instead_of_roles, api
         assert (capabilities.max_choices is not None) == (capabilities.action_channel == "choice")
         assert capabilities.server_context == (
-            "unknown" if capabilities.persistent_session else "none"
+            "unknown" if issubclass(driver, SessionEncoder) else "none"
         ), api

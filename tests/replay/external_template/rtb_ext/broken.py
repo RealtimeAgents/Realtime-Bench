@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import ClassVar
 
+from realtime_framework.entity.model import StatelessEncoder
 from rtb_ext.chat import ExternalChatDriver
 
 
@@ -13,6 +14,13 @@ def not_a_class(config):
 
 
 class NotAnEncoder:
+    capabilities = ExternalChatDriver.capabilities
+    deployment = ExternalChatDriver.deployment
+    compat = ExternalChatDriver.compat
+    model_defaults: ClassVar[dict[str, dict]] = {}
+
+
+class Unfinished(StatelessEncoder):
     capabilities = ExternalChatDriver.capabilities
     deployment = ExternalChatDriver.deployment
     compat = ExternalChatDriver.compat

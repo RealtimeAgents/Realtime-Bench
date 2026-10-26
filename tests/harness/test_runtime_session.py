@@ -22,6 +22,7 @@ from realtime_framework.entity.model import (
     RealtimeCapabilities,
     RuntimeState,
     SessionSeed,
+    StatelessEncoder,
     SyncDisposition,
 )
 from realtime_framework.entity.records import TraceEvent
@@ -53,7 +54,7 @@ class _LiveDriver(SessionLifecycle):
     """A persistent session whose operations log; a reply ends exact. While ``hold`` is set, a
     reply waits for it to clear once it has started (``generating``)."""
 
-    capabilities = RealtimeCapabilities("replay_session", persistent_session=True)
+    capabilities = RealtimeCapabilities("replay_session")
 
     def __init__(self, clock, trace):
         self.clock = clock
@@ -95,10 +96,10 @@ class _LiveDriver(SessionLifecycle):
         )
 
 
-class _StatelessDriver:
+class _StatelessDriver(StatelessEncoder):
     """A stateless driver whose operations log; a reply ends exact, held as _LiveDriver's."""
 
-    capabilities = RealtimeCapabilities("replay_stateless", persistent_session=False)
+    capabilities = RealtimeCapabilities("replay_stateless")
 
     def __init__(self, clock, trace):
         self.clock = clock

@@ -46,6 +46,7 @@ from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.model import RealtimeCapabilities
+from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
@@ -407,7 +408,6 @@ def chat_messages(request) -> tuple[dict, ...]:
 # Per-API declarations
 _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
-    persistent_session=False,
     roles=("instruction", "input", "model"),
     feedback_placements=("separate_message",),
     server_context="none",
@@ -485,7 +485,7 @@ class _AuditedSDKStream:
 
 
 # Driver
-class LiteLLMDriver:
+class LiteLLMDriver(StatelessEncoder):
     """Stateless HTTP driver: canonical history is rendered into every request.
 
     Consequently there is no provider-side conversation to repair after a wall-clock early return.

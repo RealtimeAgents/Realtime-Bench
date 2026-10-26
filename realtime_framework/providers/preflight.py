@@ -24,6 +24,7 @@ for the API key, and are now reported ahead of a missing key.
 from __future__ import annotations
 
 from realtime_framework.entity.context_policy import PROMPT_CHANNELS, current_context_policy
+from realtime_framework.entity.model import SessionEncoder
 from realtime_framework.providers.registry import adapter_class
 
 
@@ -59,8 +60,8 @@ def check_interaction_mode(
     if interaction_mode == "turn_based":
         return
     capabilities = driver.capabilities
-    if not capabilities.persistent_session:
-        raise ValueError(
+    if not issubclass(driver, SessionEncoder):
+        raise ValueError(  # noqa: TRY004
             f"Streaming requires a live API (openai_realtime or gemini_live); {adapter_type} "
             "is not one"
         )

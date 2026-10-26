@@ -20,6 +20,7 @@ from realtime_framework.entity.model import (
     GenerationHandle,
     InterruptResult,
     RetryCancelled,
+    StatelessEncoder,
     TransportFailure,
     TransportFailureError,
     exception_chain,
@@ -30,8 +31,8 @@ from realtime_framework.providers.decisions.selection import SELECTION_POLICY, C
 HISTORY_REPLAY_LABELS = {"turns": "canonical", "action_digest": "action_digest"}
 
 
-class DecisionEncoder:
-    """The RealtimeDriver half of a Decisions encoder.
+class DecisionEncoder(StatelessEncoder):
+    """The StatelessEncoder half of a Decisions encoder.
 
     A registered Decision API subclasses it with its protocol (``decide``,
     ``classify_question_error``, ``bind_trace``, ``close``), capabilities (with ``max_choices``),

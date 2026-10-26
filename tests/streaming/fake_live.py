@@ -140,13 +140,13 @@ class FakeLiveDriver(SessionLifecycle):
     of the view it was given, and ``views`` each push's view. A push of an observation id in
     ``failing`` raises. Each reply takes the next of ``replies``; closing its connection fails
     it, as Gemini Live's reader does. Once ``renewal_required``, as after a goAway, the session
-    takes no input until a sync renewed it."""
+    takes no input until a sync renewed it. send_observation and start_generation are stubs: the
+    streaming agent pushes frames and asks for replies instead."""
 
     closed_fails_reply = True
 
     capabilities = RealtimeCapabilities(
         protocol_family="fake_live",
-        persistent_session=True,
         action_channel="function_call",
         connection_renewal=True,
         feedback_placements=("separate_message",),
@@ -247,6 +247,12 @@ class FakeLiveDriver(SessionLifecycle):
         """Written now, and confirmed by no server, as Gemini Live's push."""
         return PushReceipt(written_at=self.clock.monotonic())
 
+    async def send_observation(self, observation, history):
+        raise NotImplementedError
+
+    async def start_generation(self, request):
+        raise NotImplementedError
+
     async def request_reply(self, request) -> GenerationHandle:
         self.calls.append(("reply", request.generation, _ids(request.canonical)))
         self._take_input("reply")
@@ -319,7 +325,6 @@ class TextLiveDriver(FakeLiveDriver):
 
     capabilities = RealtimeCapabilities(
         protocol_family="fake_live_text",
-        persistent_session=True,
         action_channel="text_json",
         feedback_placements=("separate_message",),
     )

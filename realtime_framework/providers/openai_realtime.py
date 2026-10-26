@@ -255,7 +255,6 @@ class _Session:
 class OpenAIRealtimeDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="openai_realtime",
-        persistent_session=True,
         roles=("instruction", "input", "model"),
         feedback_placements=("separate_message",),
         server_context="unknown",

@@ -32,9 +32,11 @@ from realtime_framework.entity.model import (
     RealtimeCapabilities,
     RetryCancelled,
     RuntimeState,
+    SessionEncoder,
     SessionSeed,
     SyncDisposition,
     TransportFailure,
+    interface_methods,
     retry_cancellation,
 )
 from realtime_framework.entity.records import UNTRACED, TraceEvent, current_trace_scope
@@ -70,11 +72,10 @@ class _Encoder(SessionLifecycle):
     what each sync returns, or raises; a connect takes ``connect_s``; an interrupt takes
     ``interrupt_s`` and then raises ``interrupt_error``, if set; a close raises ``close_error``
     and a connect ``connect_error``, if set. ``during`` runs in the middle of each connect and
-    sync. ``renewal`` is what connection_renewal_reason returns."""
+    sync. ``renewal`` is what connection_renewal_reason returns. The observation and generation
+    methods are stubs: these tests drive the session alone."""
 
-    capabilities = RealtimeCapabilities(
-        "replay_session", persistent_session=True, connection_renewal=True
-    )
+    capabilities = RealtimeCapabilities("replay_session", connection_renewal=True)
 
     def __init__(self, clock: FakeClock):
         self.clock = clock
@@ -88,6 +89,18 @@ class _Encoder(SessionLifecycle):
         self.connect_error: Exception | None = None
         self.during = lambda: None
         self.renewal: str | None = None
+
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
+
+    async def send_observation(self, observation, history):
+        raise NotImplementedError
+
+    async def start_generation(self, request):
+        raise NotImplementedError
+
+    def events(self, generation):
+        raise NotImplementedError
 
     async def _connect(self, request):
         self.log.append(("connect", request.history, self.clock.monotonic()))
@@ -680,34 +693,53 @@ def test_the_state_says_whether_the_session_can_take_the_next_generation():
     ]
 
 
-def test_a_persistent_session_must_manage_itself():
-    """The catalog's check of a driver class (providers/registry.py): one that declares
-    persistent_session without any of the operations the runtime calls is refused."""
+def test_a_session_encoder_must_manage_itself():
+    """The catalog's check of a driver class (providers/registry.py): a SessionEncoder without
+    any of the members the runtime calls is refused, naming each one missing in the order the
+    interface declares them (entity/model.py interface_methods); SessionLifecycle leaves out
+    only bind_trace, start_generation, events, interrupt and send_observation. A class that
+    subclasses neither interface is refused too."""
+    target = "rtb_ext.session:SessionDriver"
     attributes = {
         "__init__": lambda self, config, *, clock=None: None,
-        "capabilities": RealtimeCapabilities("replay_session", persistent_session=True),
+        "capabilities": RealtimeCapabilities("replay_session"),
         "deployment": Deployment(family="streaming", provider="replay", key_env=None),
         "compat": Compat(),
         "model_defaults": {},
-        **{name: lambda self, *args: None for name in catalog._DRIVER_METHODS},
     }
-    lifecycle = ("ensure_ready", "synchronize", "renew", "repair", "abort", "mark_dirty")
-    session = {
-        "connect": SessionLifecycle.connect,
-        "send_observation": lambda self, *args: None,
-        **{name: getattr(SessionLifecycle, name) for name in lifecycle},
-    }
-    for missing in session:
-        methods = {name: method for name, method in session.items() if name != missing}
-        driver = type("SessionDriver", (), {**attributes, **methods})
-        with pytest.raises(ValueError, match=rf"declares persistent_session but has no {missing}"):
-            catalog._check_driver("rtb_ext.session:SessionDriver", driver)
-    # The runtime reads the session's state too (RealtimeRuntime.state), a property.
-    driver = type("SessionDriver", (), {**attributes, **session})
-    with pytest.raises(ValueError, match=r"declares persistent_session but has no state$"):
-        catalog._check_driver("rtb_ext.session:SessionDriver", driver)
-    managed = type("SessionDriver", (), {**attributes, **session, "state": SessionLifecycle.state})
-    catalog._check_driver("rtb_ext.session:SessionDriver", managed)
+    members = {name: lambda self, *args: None for name in interface_methods(SessionEncoder)}
+    # The runtime reads the session's state (RealtimeRuntime.state), a property.
+    members["state"] = property(lambda self: RuntimeState.READY)
+    for missing in members:
+        methods = {name: member for name, member in members.items() if name != missing}
+        driver = type("SessionDriver", (SessionEncoder,), {**attributes, **methods})
+        with pytest.raises(ValueError, match=rf"is not a model encoder: missing {missing}$"):
+            catalog._check_driver(target, driver)
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"is not a model encoder: missing bind_trace, start_generation, events, interrupt, "
+            r"close, connect, send_observation, ensure_ready, synchronize, renew, repair, "
+            r"abort, mark_dirty, state$"
+        ),
+    ):
+        catalog._check_driver(target, type("SessionDriver", (SessionEncoder,), attributes))
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"is not a model encoder: missing bind_trace, start_generation, events, interrupt, "
+            r"send_observation$"
+        ),
+    ):
+        catalog._check_driver(target, type("SessionDriver", (SessionLifecycle,), attributes))
+    catalog._check_driver(
+        target, type("SessionDriver", (SessionEncoder,), {**attributes, **members})
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"is not a model encoder: subclass StatelessEncoder or SessionEncoder$",
+    ):
+        catalog._check_driver(target, type("SessionDriver", (), {**attributes, **members}))
 
 
 # ---- OpenAI Realtime on a fake SDK connection ---------------------------------------------

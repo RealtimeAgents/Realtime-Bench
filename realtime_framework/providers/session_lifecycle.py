@@ -29,6 +29,7 @@ from realtime_framework.entity.model import (
     HistorySyncResult,
     RetryCancelled,
     RuntimeState,
+    SessionEncoder,
     SessionSeed,
     SyncDisposition,
     retry_cancel_event,
@@ -133,7 +134,7 @@ class RenewalRequired(RuntimeError):
     encoder can, and what was refused can be put in again."""
 
 
-class SessionLifecycle:
+class SessionLifecycle(SessionEncoder):
     """A live encoder's session: connected or not, dirty or not, and the last abort's cleanup.
 
     The session is connected once connect() opened it or a sync left it exact, and no longer once

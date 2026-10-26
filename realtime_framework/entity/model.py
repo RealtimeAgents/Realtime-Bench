@@ -9,11 +9,13 @@ provider input, normalized generation events, canonical model history, and synch
 provider/native session with that history.
 """
 
+import abc
 from collections.abc import AsyncIterator as AsyncIterator
 from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from enum import Enum as Enum
 from typing import Any as Any
+from typing import ClassVar
 from typing import Literal as Literal
 from typing import Protocol as Protocol
 from typing import runtime_checkable as runtime_checkable
@@ -50,7 +52,6 @@ class RealtimeCapabilities:
     """
 
     protocol_family: str
-    persistent_session: bool
     can_compact_history_in_place: bool = False
     max_video_fps: float | None = None
     terminal_output_usage: bool = True
@@ -331,26 +332,109 @@ class OutputCollector(Protocol):
     def finish(self) -> GenerationOutput: ...
 
 
-@runtime_checkable
-class RealtimeDriver(Protocol):
-    """What the runtime asks of every driver. A persistent session's also connects, takes each
-    observation (``send_observation(observation, history)``, with the retained history plus this
-    observation's frame, as the request builder renders it) and manages its session
-    (providers/session_lifecycle.py SessionLifecycle); a stateless one sends the whole history
-    with each request."""
+class ModelEncoder(abc.ABC):
+    """What the runtime asks of every model API's encoder: a generation, its events, its
+    interrupt and the close; and bind_trace, which the harness calls with the episode trace on
+    every encoder it builds. An encoder is a StatelessEncoder or a SessionEncoder. Its class
+    declares capabilities, and deployment, compat and model_defaults beside them, which the
+    catalog checks it for (providers/registry.py)."""
 
-    capabilities: RealtimeCapabilities
+    capabilities: ClassVar[RealtimeCapabilities]
     # The episode's operational clock, which the harness passes as Class(config, clock=clock).
     # The HTTP capture hooks (providers/capture.py) time each response on it.
     clock: Clock
 
+    @abc.abstractmethod
+    def bind_trace(self, trace) -> None: ...
+
+    @abc.abstractmethod
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle: ...
 
+    @abc.abstractmethod
     def events(self, generation: GenerationHandle) -> AsyncIterator[ProviderEvent]: ...
 
+    @abc.abstractmethod
     async def interrupt(self, generation: GenerationHandle) -> InterruptResult: ...
 
+    @abc.abstractmethod
     async def close(self) -> None: ...
+
+
+class StatelessEncoder(ModelEncoder):
+    """An encoder that leaves nothing at the provider: each generation sends the whole canonical
+    request (GenerationRequest.canonical) in the API's own format, and the runtime asks it
+    nothing else. An abort interrupts the generation under way and closes the encoder; the
+    generations after it reopen what they need."""
+
+
+class SessionEncoder(ModelEncoder):
+    """An encoder that keeps one provider session open across generations, holding the native
+    history. The runtime connects it, gives it each observation, and has it manage the session:
+    ready it before each generation, bring it to the retained history after the history changed,
+    renew its connection, repair it after each generation, abort it and mark it dirty; and it
+    reads the session's state. Each operation that takes ``record`` calls it as
+    ``record(sync, result=None, error=None)``: once for each sync it runs, with the sync request
+    and its result or error, and with ``sync=None`` once it reopened the session.
+
+    SessionLifecycle (providers/session_lifecycle.py) implements each of them but
+    send_observation, and close, over the encoder's connection operations; the encoder adds
+    send_observation and the rest of ModelEncoder's."""
+
+    @abc.abstractmethod
+    async def connect(self, request: ConnectRequest) -> None: ...
+
+    @abc.abstractmethod
+    async def send_observation(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> dict[str, Any]:
+        """Send ``observation``; ``history`` is the retained history plus this observation's
+        frame, as the request builder renders it."""
+
+    @abc.abstractmethod
+    async def ensure_ready(
+        self, seed: SessionSeed, history: CanonicalRequest, record: Callable[..., None]
+    ) -> HistorySyncResult | None: ...
+
+    @abc.abstractmethod
+    async def synchronize(
+        self, request: HistorySyncRequest, record: Callable[..., None]
+    ) -> HistorySyncResult: ...
+
+    @abc.abstractmethod
+    async def renew(
+        self, seed: SessionSeed, history: CanonicalRequest, record: Callable[..., None]
+    ) -> HistorySyncResult | None: ...
+
+    @abc.abstractmethod
+    async def repair(
+        self,
+        request: HistorySyncRequest,
+        terminal_history: ProviderHistoryState,
+        reconnect_required: bool,
+        record: Callable[..., None],
+    ) -> HistorySyncResult | None: ...
+
+    @abc.abstractmethod
+    async def abort(self, generation: GenerationHandle | None) -> None: ...
+
+    @abc.abstractmethod
+    def mark_dirty(self) -> None: ...
+
+    @property
+    @abc.abstractmethod
+    def state(self) -> RuntimeState: ...
+
+
+def interface_methods(kind: type) -> tuple[str, ...]:
+    """The abstract members of ``kind`` and its bases, a base's before its subclass's and each
+    class's in the order it defines them: what an encoder of that kind implements."""
+    names = (
+        name
+        for base in reversed(kind.__mro__)
+        for name, member in vars(base).items()
+        if getattr(member, "__isabstractmethod__", False)
+    )
+    return tuple(dict.fromkeys(names))
 
 
 class ChoiceContextLimitError(RuntimeError):
@@ -650,6 +734,3 @@ class ModelSpec:
     pricing: Optional[dict] = None  # billing-only rate card; not runtime identity
     benchmark_eligible: bool = True  # false => excluded from maintained leaderboard sweeps
     comparison_scope: str = "model"  # model | experimental_system | system_reference
-
-
-ModelClient = RealtimeDriver
