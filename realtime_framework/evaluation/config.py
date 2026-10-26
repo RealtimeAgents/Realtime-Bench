@@ -3,29 +3,11 @@ from __future__ import annotations
 from realtime_framework.entity.config import DEFAULT_TASK_SEED, task_seed
 
 #  yaml
-"""Tiny YAML load/dump helpers for benchmark configs, suite manifests and run plans.
-
-Thin wrapper over PyYAML with two conveniences:
-  - UTF-8, block style, keys kept in insertion order (readable, git-friendly diffs);
-  - multi-line strings are emitted as literal `|` blocks instead of quoted one-liners.
-"""
+"""Tiny YAML load helper for benchmark configs, suite manifests and run plans."""
 
 from pathlib import Path as Path
 
 import yaml as yaml
-
-
-class _BlockDumper(yaml.SafeDumper):
-    pass
-
-
-def _str_representer(dumper: yaml.Dumper, data: str):
-    # Literal block style for anything multi-line; plain for the rest.
-    style = "|" if "\n" in data else None
-    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
-
-
-_BlockDumper.add_representer(str, _str_representer)
 
 
 def load_yaml(path) -> dict:
@@ -34,28 +16,15 @@ def load_yaml(path) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def dump_yaml(data: dict, path) -> None:
-    """Write `data` to `path` as readable block-style YAML (dirs auto-created)."""
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(
-            data,
-            f,
-            Dumper=_BlockDumper,
-            sort_keys=False,
-            allow_unicode=True,
-            width=100,
-            default_flow_style=False,
-        )
-
-
 # Benchmark
 """Load and validate the maintained top-level benchmark configuration."""
 
 import argparse as argparse
-import math as math
 import re as re
 import sys as sys
+
+from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
+from realtime_framework.evaluation.run_spec import run_spec
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -218,26 +187,24 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
     unknown = set(raw) - {"suite", "runtime", "models", "cells", "tasks"}
     if unknown:
         raise ValueError(f"Unknown benchmark fields: {sorted(unknown)}")
-    runtime = {
-        "mode": "default",
-        "clock_mode": "wall",
-        "fps": 1,
-        "duration_minutes": 5,
-        **_required_mapping(raw.get("runtime", {}), "runtime"),
-    }
-    unknown = set(runtime) - {
-        "mode",
-        "clock_mode",
-        "fps",
-        "model_input_fps",
-        "interaction_mode",
-        "tokens_per_frame",
-        "duration_minutes",
-        "seed",
-        "protocol",
-    }
+    runtime = _required_mapping(raw.get("runtime", {}), "runtime")
+    unknown = set(runtime) - set(PLAN_OPTIONS)
     if unknown:
         raise ValueError(f"Unknown runtime fields: {sorted(unknown)}")
+    try:
+        spec = run_spec(
+            "harbor", **{name: value for name, value in runtime.items() if name != "protocol"}
+        )
+    except ValueError as exc:
+        raise ValueError(f"runtime.{exc}") from None
+    # The trial runs the protocol its clock implies (evaluation/_trial.py), and a plan on the
+    # token clock names its B.
+    if runtime.get("protocol", spec.protocol) != spec.protocol:
+        raise ValueError(
+            f"runtime.protocol must be {spec.protocol!r} on the {spec.clock_mode} clock"
+        )
+    if spec.clock_mode == "token" and runtime.get("tokens_per_frame") is None:
+        raise ValueError("runtime.tokens_per_frame must be a positive integer or 'unlimited'")
 
     suite_id = raw.get("suite", "public")
     if not isinstance(suite_id, str):
@@ -264,7 +231,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         _required_cell_list(
             raw.get("cells"),
             model_catalog,
-            wall_clock=runtime.get("clock_mode") == "wall",
+            wall_clock=spec.clock_mode == "wall",
         )
         if has_cells
         else []
@@ -287,67 +254,19 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
     if unknown_tasks:
         raise ValueError(f"tasks not present in suite {suite_id!r}: {unknown_tasks}")
 
-    mode = runtime.get("mode")
-    if mode != "default":
-        raise ValueError("runtime.mode must be 'default'")
-    clock_mode = runtime.get("clock_mode")
-    if clock_mode not in {"token", "wall"}:
-        raise ValueError("runtime.clock_mode must be 'token' or 'wall'")
-    tokens_per_frame = runtime.get("tokens_per_frame")
-    tokens_per_frame = (
-        None
-        if clock_mode == "wall"
-        else _required_tokens_per_frame(
-            tokens_per_frame,
-            "runtime.tokens_per_frame",
-        )
-    )
-    fps = runtime.get("fps")
-    if (
-        not isinstance(fps, (int, float))
-        or isinstance(fps, bool)
-        or not math.isfinite(fps)
-        or fps <= 0
-    ):
-        raise ValueError("runtime.fps must be positive")
-    # Unset, it stays None for the Harbor agent's options to default to fps, after any --ak fps.
-    model_input_fps = runtime.get("model_input_fps")
-    if "model_input_fps" in runtime and (
-        not isinstance(model_input_fps, (int, float))
-        or isinstance(model_input_fps, bool)
-        or not math.isfinite(model_input_fps)
-        or model_input_fps <= 0
-    ):
-        raise ValueError("runtime.model_input_fps must be positive")
-    interaction_mode = runtime.get("interaction_mode", "turn_based")
-    if interaction_mode not in {"turn_based", "streaming"}:
-        raise ValueError("runtime.interaction_mode must be 'turn_based' or 'streaming'")
-    duration_minutes = runtime.get("duration_minutes")
-    if (
-        not isinstance(duration_minutes, (int, float))
-        or isinstance(duration_minutes, bool)
-        or not math.isfinite(duration_minutes)
-        or duration_minutes <= 0
-    ):
-        raise ValueError("runtime.duration_minutes must be positive")
-    # The trial runs the protocol its clock implies (evaluation/_trial.py).
-    protocol = "wall-clock" if clock_mode == "wall" else "time-aware-token-v1"
-    if runtime.get("protocol", protocol) != protocol:
-        raise ValueError(f"runtime.protocol must be {protocol!r} on the {clock_mode} clock")
-
     from realtime_framework.providers.preflight import validate_model_interaction
 
     for item in cells or models:
         model = item.get("model", item.get("key"))
-        if "endpoint" in item and clock_mode != "wall":
+        if "endpoint" in item and spec.clock_mode != "wall":
             raise ValueError("endpoint settings require the wall clock")
         validate_model_interaction(
             model_catalog[model]["adapter_type"],
-            clock_mode=clock_mode,
-            fps=fps,
-            model_input_fps=fps if model_input_fps is None else model_input_fps,
-            interaction_mode=interaction_mode,
-            tokens_per_frame=item.get("tokens_per_frame", tokens_per_frame),
+            clock_mode=spec.clock_mode,
+            fps=spec.fps,
+            model_input_fps=spec.model_input_fps,
+            interaction_mode=spec.interaction_mode,
+            tokens_per_frame=item.get("tokens_per_frame", spec.tokens_per_frame),
         )
 
     return {
@@ -356,15 +275,23 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
         "cells": cells,
         "tasks": tasks,
         "runtime": {
-            "mode": mode,
-            "clock_mode": clock_mode,
-            "fps": fps,
-            "model_input_fps": model_input_fps,
-            "interaction_mode": interaction_mode,
-            "tokens_per_frame": tokens_per_frame,
-            "duration_minutes": duration_minutes,
-            "seed": task_seed(runtime.get("seed", DEFAULT_TASK_SEED)),
-            "protocol": protocol,
+            "mode": spec.mode,
+            "clock_mode": spec.clock_mode,
+            "fps": spec.fps,
+            # Unset, it stays None for the Harbor agent's options to default to fps, after any
+            # --ak fps.
+            "model_input_fps": runtime.get("model_input_fps"),
+            "interaction_mode": spec.interaction_mode,
+            "tokens_per_frame": (
+                None
+                if spec.clock_mode == "wall"
+                else "unlimited"
+                if spec.tokens_per_frame is None
+                else spec.tokens_per_frame
+            ),
+            "duration_minutes": spec.duration_minutes,
+            "seed": spec.seed,
+            "protocol": spec.protocol,
         },
     }
 
@@ -390,7 +317,12 @@ from pathlib import Path as Path
 from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
 from realtime_framework.entity.config import FrameEncodingConfig
 from realtime_framework.entity.config import RunnerTimingConfig
+from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.evaluation.run_spec import DEFAULT_MODE
+from realtime_framework.evaluation.run_spec import INTERACTION_MODES
+from realtime_framework.evaluation.run_spec import PROTOCOLS
+from realtime_framework.evaluation.run_spec import RunSpec
 from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import validate_model_interaction
 from realtime_framework.entity.actions import SOM_REPRESENTATION_VERSION
@@ -400,7 +332,6 @@ identity_ROOT = Path(__file__).resolve().parents[2]
 INTERACTABLES_PROTOCOL = "environment_injected_each_observation"
 INTERACTABLES_SCHEMA = "inspect_interactables.v1"
 INTERACTABLES_REPRESENTATION = SOM_REPRESENTATION_VERSION
-DEFAULT_MODE = "default"
 
 
 OUTPUT_CLOCK_POLICY = "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16"
@@ -748,9 +679,8 @@ def effective_run_config(
         config["external_driver"] = external_driver_identity(adapter_type)
     if interaction_mode == "streaming":
         # validate_model_interaction admits only a live API that declares streaming, and a driver
-        # that declares it declares its settings (providers/registry.py _check_driver). The model
-        # YAML's settings replace those of its driver's they name.
-        config["streaming"] = {**driver.streaming_settings, **streaming}
+        # that declares it declares its settings (providers/registry.py _check_driver).
+        config["streaming"] = merge_streaming_settings(driver, streaming)
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:
@@ -772,22 +702,50 @@ def config_fingerprint(config: dict) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def run_spec_config(spec: RunSpec, model_config) -> dict:
+    """effective_run_config of an episode with the run options ``spec``."""
+    return effective_run_config(
+        model_config=model_config,
+        fps=spec.fps,
+        max_minutes=spec.duration_minutes,
+        mode=spec.mode,
+        clock_mode=spec.clock_mode,
+        protocol=spec.protocol,
+        seed=spec.seed,
+        tokens_per_frame=spec.tokens_per_frame,
+        think_budget_s=spec.think_budget_s,
+        per_move_cap_s=spec.per_move_cap_s,
+        interaction_mode=spec.interaction_mode,
+    )
+
+
+def runner_run_spec(args) -> RunSpec:
+    """The run options of the runner's arguments ``args`` (runner.py _parser), with the runner's
+    defaults (run_spec.py ENTRY_DEFAULTS); identity_main takes the same options."""
+    return run_spec(
+        "runner",
+        clock_mode=args.clock,
+        tokens_per_frame=args.tokens_per_frame,
+        fps=args.fps,
+        model_input_fps=args.model_input_fps,
+        interaction_mode=args.interaction_mode,
+        duration_minutes=args.max_minutes,
+        seed=args.seed,
+        protocol=args.protocol,
+        think_budget_s=args.think_budget_s,
+        per_move_cap_s=args.per_move_cap_s,
+    )
+
+
 def apply_run_defaults(args) -> None:
-    """Fill in what the runner's arguments ``args`` leave to its defaults, as runner.main() runs
-    and records the run: the token clock, the protocol of the clock, the environment frame rate
-    for the model-input rate, the model's reasoning effort (its catalog default, "low" for a raw
-    backend id) and, in the environment the runtime-config hash reads (_RUNTIME_ENV_KEYS), the
-    desktop's graphics mode and recording encoder. The hash the run's report expects
-    (reporting.prepare_episode_report, on main()'s arguments) and the one identity_main prints
+    """Fill in what the runner's arguments ``args`` leave to its defaults besides its run options
+    (runner_run_spec), as runner.main() runs and records the run: the model's reasoning effort
+    (its catalog default, "low" for a raw backend id) and, in the environment the runtime-config
+    hash reads (_RUNTIME_ENV_KEYS), the desktop's graphics mode and recording encoder. The hash
+    the run's report expects (reporting.prepare_episode_report) and the one identity_main prints
     are then the one the run records."""
     import realtime_framework.providers.registry as catalog
 
-    args.clock = args.clock or "token"
-    args.protocol = args.protocol or (
-        "wall-clock" if args.clock == "wall" else "time-aware-token-v1"
-    )
-    if args.model_input_fps is None:
-        args.model_input_fps = args.fps
     if catalog.has(args.model):
         if args.reasoning_effort is None:
             args.reasoning_effort = catalog.get(args.model).defaults["reasoning_effort"]
@@ -804,21 +762,17 @@ def identity_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=identity_main.__doc__)
     parser.add_argument("--model", required=True)
     parser.add_argument("--task", required=True)
-    parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
+    parser.add_argument("--seed")
     parser.add_argument("--fps", type=float, required=True)
     parser.add_argument("--model-input-fps", type=float, help="default: --fps")
-    parser.add_argument(
-        "--interaction-mode", choices=("turn_based", "streaming"), default="turn_based"
-    )
+    parser.add_argument("--interaction-mode", choices=INTERACTION_MODES)
     parser.add_argument("--max-minutes", type=float, required=True)
     parser.add_argument("--protocol")
     parser.add_argument("--think-budget-s", type=float)
     parser.add_argument("--per-move-cap-s", type=float)
-    parser.add_argument("--clock", choices=("wall", "token"))
+    parser.add_argument("--clock", choices=tuple(PROTOCOLS))
     parser.add_argument("--reasoning-effort")
-    from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
-
-    parser.add_argument("--tokens-per-frame", default=str(DEFAULT_TOKENS_PER_FRAME))
+    parser.add_argument("--tokens-per-frame")
     parser.add_argument(
         "--graphics-mode",
         choices=("cpu", "gpu"),
@@ -831,22 +785,15 @@ def identity_main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
     apply_run_defaults(args)
+    try:
+        spec = runner_run_spec(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     import realtime_framework.providers.registry as catalog
     import realtime_tasks.registry as registry
 
     registry.get(args.task)  # validate membership; task-local deliberation caps are not inherited
-    think_budget = args.think_budget_s
-    per_move_cap = args.per_move_cap_s
-    if args.clock == "wall" or args.tokens_per_frame == "unlimited":
-        tokens_per_frame = None
-    else:
-        try:
-            tokens_per_frame = int(args.tokens_per_frame)
-        except ValueError:
-            parser.error("--tokens-per-frame must be a positive integer or 'unlimited'")
-    if tokens_per_frame is not None and tokens_per_frame <= 0:
-        parser.error("--tokens-per-frame must be positive")
     entry = catalog.get(args.model)
     try:
         catalog.validate_reasoning_effort(args.model, args.reasoning_effort)
@@ -856,33 +803,14 @@ def identity_main(argv=None) -> int:
 
     try:
         check_token_budget(
-            entry.adapter_type, clock_mode=args.clock, tokens_per_frame=tokens_per_frame
+            entry.adapter_type, clock_mode=spec.clock_mode, tokens_per_frame=spec.tokens_per_frame
         )
     except UnsupportedTokenBudget as exc:
         parser.error(str(exc))
-    try:
-        check_streaming_options(
-            args.interaction_mode, think_budget_s=think_budget, per_move_cap_s=per_move_cap
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
     config = catalog.to_model_config(
-        args.model, fps=args.model_input_fps, reasoning_effort=args.reasoning_effort
+        args.model, fps=spec.model_input_fps, reasoning_effort=args.reasoning_effort
     )
-    effective = effective_run_config(
-        seed=args.seed,
-        model_config=config,
-        fps=args.fps,
-        mode=DEFAULT_MODE,
-        max_minutes=args.max_minutes,
-        protocol=args.protocol,
-        think_budget_s=think_budget,
-        per_move_cap_s=per_move_cap,
-        clock_mode=args.clock,
-        tokens_per_frame=tokens_per_frame,
-        interaction_mode=args.interaction_mode,
-    )
-    print(config_fingerprint(effective))
+    print(config_fingerprint(run_spec_config(spec, config)))
     return 0
 
 

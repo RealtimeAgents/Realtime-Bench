@@ -7,8 +7,9 @@ generation in flight, judges stale results, and owns the end: the first end sign
 freezes the snapshot and interrupts the generation, and once the policy has settled the decision in
 hand the kernel writes the termination record (phase2.md, 事件内核; 时间和结束判定).
 
-A policy provides ``merged_clocks``, ``settled``, ``start(kernel)``, ``on_event(event)``,
-``on_result(result)``, ``on_timer(handle, timer)`` and ``on_end()``.
+A policy provides ``merged_clocks``, ``settled``, ``totals`` (what Finish carries beside the
+termination, events.py), ``start(kernel)``, ``on_event(event)``, ``on_result(result)``,
+``on_timer(handle, timer)`` and ``on_end()``.
 
 The shell answers every command that names its answer (events.py) with exactly one event, posted
 before it steps again: CheckEnd, Capture, Execute, AdvanceClock, ReleaseKeys, RenderFrame, Commit
@@ -166,7 +167,15 @@ class Kernel:
         if handle is not None:
             self.agenda.cancel(handle)
 
-    def start_generation(self, decision: int, observation_id, observation_tick, remaining) -> int:
+    def start_generation(
+        self,
+        decision: int,
+        observation_id,
+        observation_tick,
+        remaining,
+        bound_at=None,
+        deadline=None,
+    ) -> int:
         generation = next(self._generations)
         self.generation = generation
         self.record(
@@ -177,7 +186,9 @@ class Kernel:
             observation_tick=observation_tick,
             remaining_clock_tokens=remaining,
         )
-        self.emit(StartGeneration(generation, decision, observation_id, remaining))
+        self.emit(
+            StartGeneration(generation, decision, observation_id, remaining, bound_at, deadline)
+        )
         return generation
 
     def abandon_generation(self, reason: str) -> None:
@@ -187,7 +198,8 @@ class Kernel:
             return
         self.generation = None
         self.record("GenerationAbandoned", generation=generation, reason=reason)
-        self.emit(AbortGeneration(generation))
+        why = self.invalid.reason if reason == "invalid" else reason
+        self.emit(AbortGeneration(generation, why))
 
     def invalidate(self, category: str, reason: str, detail=None, at: float | None = None) -> None:
         """Latch the first non-model failure; it ends the episode and the run is never scored.
@@ -267,4 +279,4 @@ class Kernel:
         )
         self.record("Termination", **asdict(self.termination))
         self.emit(ReleaseInputs())
-        self.emit(Finish(self.termination))
+        self.emit(Finish(self.termination, **self.policy.totals))

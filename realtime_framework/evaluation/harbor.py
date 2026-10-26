@@ -8,8 +8,6 @@ import json as json
 import os as os
 import sys as sys
 
-from realtime_framework.entity.config import DEFAULT_TASK_SEED, task_seed
-
 
 SUITE_SCHEMA = "realtime-bench-suite-v1"
 
@@ -205,30 +203,38 @@ from typing import Literal as Literal
 
 from harbor.agents.base import BaseAgent as BaseAgent
 from realtime_framework.evaluation.harbor_viewer import export_episode, populate_context
+from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS, run_spec
 from harbor.agents.options import AgentOptions as AgentOptions
 from pydantic import ConfigDict
 from pydantic import Field as Field
 from pydantic import model_validator as model_validator
 
+# The run options Harbor's entry takes when an agent's options leave them out.
+_DEFAULT = run_spec("harbor")
+
 
 class RealtimeBenchOptions(AgentOptions):
+    """The agent's options. The run options among them take Harbor's defaults and are checked as
+    every entry point's are (evaluation/run_spec.py); the request records them as given, the
+    model-input rate filled in."""
+
     model_config = ConfigDict(extra="forbid")
 
     suite: str = Field(
         default="public", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*(@[0-9]+\.[0-9]+)?$"
     )
-    fps: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    model_input_fps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    interaction_mode: Literal["turn_based", "streaming"] = "turn_based"
-    duration_minutes: float = Field(default=5.0, gt=0, allow_inf_nan=False)
-    seed: int = DEFAULT_TASK_SEED
+    fps: float = _DEFAULT.fps
+    model_input_fps: float | None = None
+    interaction_mode: str = _DEFAULT.interaction_mode
+    duration_minutes: float = _DEFAULT.duration_minutes
+    seed: int = _DEFAULT.seed
     model_revision: str | None = Field(default=None, min_length=1)
     catalog_model: str | None = Field(default=None, min_length=1)
     base_url: str | None = None
     api_base: str | None = None
     api_key_env: str | None = None
-    clock: Literal["wall", "token"] = "wall"
-    tokens_per_frame: int | Literal["unlimited"] = "unlimited"
+    clock: str = _DEFAULT.clock_mode
+    tokens_per_frame: int | Literal["unlimited"] = ENTRY_DEFAULTS["harbor"]["tokens_per_frame"]
     stream: bool = True
     reasoning_effort: str | None = None
 
@@ -236,9 +242,17 @@ class RealtimeBenchOptions(AgentOptions):
     def validate_integration(self):
         from realtime_framework.providers.preflight import check_frame_rates
 
-        self.seed = task_seed(self.seed)
-        if self.model_input_fps is None:
-            self.model_input_fps = self.fps
+        spec = run_spec(
+            "harbor",
+            clock_mode=self.clock,
+            tokens_per_frame=self.tokens_per_frame,
+            fps=self.fps,
+            model_input_fps=self.model_input_fps,
+            interaction_mode=self.interaction_mode,
+            duration_minutes=self.duration_minutes,
+            seed=self.seed,
+        )
+        self.seed, self.model_input_fps = spec.seed, spec.model_input_fps
         check_frame_rates(self.fps, self.model_input_fps)
         if self.api_base and self.base_url and self.api_base != self.base_url:
             raise ValueError("Supply only one of api_base or base_url")
@@ -250,8 +264,6 @@ class RealtimeBenchOptions(AgentOptions):
                 "base_url, api_key_env, model_revision and stream apply to LiteLLM models; "
                 "set a preset's connection in configs/models/"
             )
-        if self.tokens_per_frame != "unlimited" and self.tokens_per_frame <= 0:
-            raise ValueError("tokens_per_frame must be positive or 'unlimited'")
         return self
 
 
@@ -473,8 +485,8 @@ class ApptainerEnvironment(BaseEnvironment):
             str(self.task["duration_minutes"]),
             "--seed",
             str(self.task["seed"]),
-            "--clock", request.get("clock", "wall"),
-            "--tokens-per-frame", str(request.get("tokens_per_frame", "unlimited")),
+            "--clock", request["clock"],
+            "--tokens-per-frame", str(request["tokens_per_frame"]),
         ]
         if request.get("catalog_model"):
             command += ["--catalog-model", request["catalog_model"]]

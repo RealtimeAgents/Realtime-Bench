@@ -135,6 +135,14 @@ def export_episode(run_dir, logs_dir, request):
         for event in events
         if event.get("event") == "ObservationCaptured"
     }
+    # Where the canonical request of each decision's last attempt is in the pack, which is
+    # neither exported nor uploaded: only its locator leaves the run. A run recorded before
+    # GenerationPrepared carried it has none.
+    prepared = {
+        event["payload"]["scope"]["decision"]: event["payload"]["body"]
+        for event in events
+        if event.get("event") == "GenerationPrepared" and event["payload"].get("body")
+    }
     inspections = {row.get("observation_id"): row for row in _rows(raw / "tool_calls.jsonl")}
     referenced = set()
     for row in rows:
@@ -269,7 +277,7 @@ def export_episode(run_dir, logs_dir, request):
                     **measurements,
                     "decision": decision,
                     "observation_id": observation_id,
-                    "logged_harness_context": row.get("input_prompt"),
+                    "canonical_request_body": prepared.get(decision),
                     "runtime": row.get("realtime_runtime"),
                 },
             }
@@ -323,8 +331,10 @@ def export_episode(run_dir, logs_dir, request):
                 "not necessarily one internal model call. GUI tools represent submitted actions; "
                 "execution feedback records whether they were applied. Messages are the harness "
                 "recorded outputs. Screenshots are "
-                "raw captures before adapter resizing/mark overlay. Full logged harness contexts "
-                "(which can include the current response) are in step.extra. Raw evidence is in "
+                "raw captures before adapter resizing/mark overlay. Each step's extra locates the "
+                "canonical request its model call was prepared from, as the episode trace's "
+                "GenerationPrepared body does, in the run's episode_blobs.pack, which is not "
+                "exported: the request text is not in this file. Raw evidence is in "
                 "benchmark/; recording.mp4 preserves the source recording. The benchmark recording "
                 "player limits playback to the active loop and draws annotations in the browser. "
                 "recording-metadata.json describes playback alignment. "

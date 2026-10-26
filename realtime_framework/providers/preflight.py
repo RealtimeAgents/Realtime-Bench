@@ -10,7 +10,9 @@ collected here:
 - run plans, effective_run_config and the Harbor trial worker: validate_model_interaction
   (check_frame_rates, check_wall_clock, check_interaction_mode);
 - Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions): check_frame_rates;
-- the runner, once, before it builds the agent: check_episode.
+- the runner's argparse, before it starts a container, and the Harbor trial worker, whose dry run
+  Harbor's resolve makes (evaluation/_trial.py): check_episode; the trial worker applies
+  check_token_budget too.
 
 Construction-time failures (credentials, SDK pin, endpoint URL, Decisions route) stay in the
 drivers, so they now come after every check_episode rule. When a run has two faults, the first
@@ -291,7 +293,7 @@ def check_context_policy(driver, policy, config) -> None:
 def check_episode(
     model_config, *, clock_mode, task, env_fps, interaction_mode="turn_based"
 ) -> None:
-    """The runner's rules, applied once before it builds the agent.
+    """The runner's rules, applied before it starts a container (and by the Harbor trial worker).
 
     Among themselves the rules keep the order in which they fired before: the clock check, then
     the driver's constructor, then initialize (the choice-task and frame-rate checks), then the

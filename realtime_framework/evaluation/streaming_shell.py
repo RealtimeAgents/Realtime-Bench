@@ -52,6 +52,17 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
+from realtime_framework.evaluation.episode_end import (
+    EpisodeEnd,
+    EpisodeResult,
+    TraceWriter,
+    escaped_termination,
+    invalid_line,
+    invalid_record,
+    only_logged,
+    record_run_exception,
+    with_unheard,
+)
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
@@ -86,14 +97,7 @@ from realtime_framework.evaluation.kernel.streaming import (
     StreamingConfig,
     StreamingPolicy,
 )
-from realtime_framework.evaluation.shell import (
-    KernelAgent,
-    ShellEnvironment,
-    _escaped_termination,
-    _invalid_record,
-    _only_logged,
-    _with_unheard,
-)
+from realtime_framework.evaluation.shell import KernelAgent, ShellEnvironment
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.guest import action_timeout
@@ -125,19 +129,16 @@ def run_streaming_episode(
     clocks: Clocks,
     log: Callable[[str], object] = print,
     trace=None,
-) -> Termination:
-    """Run one streaming episode; return how it ended. What main() reads afterwards is left on
-    ``env`` as the turn-based shell leaves it: the stop reason and the termination record
-    (``_stop_reason``, ``_termination``), the frozen snapshot (``_termination_snapshot*``,
-    ``_active_end_unix_s``), ``_invalid_run``, ``_loop_error``, and a frozen stream
-    (``_stream_frozen``, ``_stream_freeze_count``)."""
+) -> EpisodeResult:
+    """Run one streaming episode; return how it came out (episode_end.py)."""
     return _StreamingShell(agent, env, config, clocks, log, trace).run()
 
 
 class _StreamingShell:
     def __init__(self, agent, env, config: StreamingConfig, clocks: Clocks, log, trace) -> None:
         self.agent, self.env, self.clocks = agent, env, clocks
-        self.log, self.trace = log, trace
+        self.log = log
+        self.writer = TraceWriter(trace, self._trace_lost)
         self.kernel = Kernel(StreamingPolicy(config))
         clock = clocks.operational
         self.lanes = EnvLanes(env, self.post, clock, raised=self._raised)
@@ -154,20 +155,18 @@ class _StreamingShell:
         self._frozen: threading.Event | None = None  # set once the snapshot FreezeSnapshot took
         self._frozen_at: float | None = None  # the reading it was frozen at
         self._snapshot_read = False
-        self._trace_failed = False
         self._unheard: Invalidated | None = None  # one found once the kernel had finished
-        self._loop_error: str | None = None
+        self.end = EpisodeEnd()
         self._loop_error_lock = threading.Lock()  # lanes raise on threads of their own
-        self._termination: Termination | None = None
 
-    def run(self) -> Termination:
+    def run(self) -> EpisodeResult:
         env = self.env
         env.on_invalid = self.lanes.gate.latched
         self.agent.bind_inbox(self.post, env.t0)
         try:
             self._now = self._read()
             self._run_all(self.kernel.start(self._now))
-            while self._termination is None:
+            while self.end.termination is None:
                 # Cleared before the step takes the inbox: a post the step misses sets it again.
                 self._wake.clear()
                 self._now = self._read()
@@ -178,7 +177,7 @@ class _StreamingShell:
                     self._run_all(commands)
         except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
             self._wrap_up(traceback.format_exc())
-        return self._termination
+        return self.end.result(env, [])
 
     def post(self, event) -> None:
         """Hand the kernel an event, from any thread, and wake the shell."""
@@ -216,8 +215,8 @@ class _StreamingShell:
         """The shell's own code raised, on its thread or on a lane: the run is invalid and the
         episode still finalizes; the first traceback is the loop error (runner.py main)."""
         with self._loop_error_lock:
-            if self._loop_error is None:
-                self._loop_error = self.env._loop_error = failure
+            if self.end.loop_error is None:
+                self.end.loop_error = failure
         self.post(Invalidated("runner", "run_exception", failure))
         self._say(f"[streaming] shell raised:\n{failure}")
 
@@ -383,7 +382,7 @@ class _StreamingShell:
         the kernel record of an answer, which the lane posts after handing its row over."""
         while self._executions:
             record = self._executions.popleft()
-            self._write(
+            self.writer.emit(
                 "ActionExecution",
                 {
                     "decision": record.decision,
@@ -402,20 +401,19 @@ class _StreamingShell:
             self.post(OutcomeCommitted(outcome.decision, failure))
         else:
             self.post(OutcomeCommitted(outcome.decision))
-        self._checkpoint()
+        self.writer.checkpoint()
 
     # ---- the end ------------------------------------------------------------------------------
 
     def _freeze(self) -> None:
         """The snapshot, next after the action executing (4.8), on its own thread (_freezing). A
         read that raises fails the snapshot, a cancellation's too."""
-        env, clock = self.env, self.clocks.operational
+        end = self.end
         # The presentation boundary precedes the scorer's snapshot; it moves to when the read
         # begins, once the gate is the snapshot's.
-        env._active_end_unix_s = clock.time()
-        env._termination_snapshot_captured = False
+        end.snapshot_begins(self.clocks.operational.time())
         # The Task base class has none (realtime_tasks/types.py).
-        snapshotter = getattr(env.task, "evaluation_snapshot", None)
+        snapshotter = getattr(self.env.task, "evaluation_snapshot", None)
         error = None
         if snapshotter is not None:
             turn, executing = self.lanes.freeze_turn()
@@ -438,11 +436,10 @@ class _StreamingShell:
                 )
             except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
+                end.snapshot_read(None, error)
             else:
-                env._termination_snapshot = snapshot
-                env._termination_snapshot_captured = True
+                end.snapshot_read(snapshot, None)
                 self._snapshot_read = True
-        env._termination_snapshot_error = error
         self.lanes.gate.freeze()
         at = self._read()  # when the read returned
         self._frozen_at = at
@@ -462,45 +459,26 @@ class _StreamingShell:
 
     def _read_snapshot(self, snapshotter):
         clock = self.clocks.operational
-        self.env._active_end_unix_s = clock.time()  # after the action, as on the turn-based shell
+        # After the action, as on the turn-based shell.
+        self.end.active_end_unix_s = clock.time()
         with operation_budget("snapshot read", ENVIRONMENT_BUDGET.snapshot_read_s, clock=clock):
             return snapshotter()
 
     def _finish(self, termination: Termination) -> None:
         """The termination record main() and the report read, in seconds to nine places, and a
-        failure the shell found in this last batch goes into it (_with_unheard). The episode is
-        over whatever comes of writing it, and its verdict goes first: main() reads it whatever
-        else could be written."""
-        termination = self._termination = _with_unheard(termination, self._unheard, self.log)
-        env = self.env
+        failure the shell found in this last batch goes into it (episode_end.py with_unheard).
+        The episode is over whatever comes of writing it, and its verdict goes first: main() is
+        handed it whatever else could be written."""
+        termination = with_unheard(termination, self._unheard, self.log)
         late = None
         try:
-            env._stop_reason = termination.stop_reason
-            invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
-            # The record of a failure the environment latched itself is its own, the detail whole.
-            if invalid is not None and (
-                latched is None
-                or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
-            ):
-                env._invalid_run = _invalid_record(invalid)
-            # The kernel was not told of one latched once the snapshot was frozen (decision 30).
-            late = latched if invalid is None else None
-            if late is not None:
-                env._invalid_run = None
-            end_s = termination.ended_at
-            snapshot_s = termination.snapshot_at if self._snapshot_read else None
-            env._termination = {
-                "stop_reason": termination.stop_reason,
-                "end_s": round(end_s, 9),
-                "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-                "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-            }
+            late = self.end.terminate(termination, self.env, self._snapshot_read)
         finally:
             self.lanes.close()
             self._push_lane.close()
             self._abort_lane.close()
         if late is not None:
-            self.log(_only_logged(late))
+            self.log(only_logged(late))
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell
@@ -509,7 +487,7 @@ class _StreamingShell:
         written. A failure on the way is only logged."""
         self._raised(failure)
         # What the environment latched by now came first; a failure during the wrap-up after.
-        latched = getattr(self.env, "_invalid_run", None)
+        latched = self.end.latched(self.env)
         first = self.kernel.invalid is None and latched is None
         try:
             for generation, done in list(self._replies.items()):
@@ -522,27 +500,19 @@ class _StreamingShell:
                 self.clocks.operational.wait(self._frozen, None)
             self._write_executions()  # of an action the kernel did not take the answer of
             self._handle(ReleaseInputs())
-            termination = _escaped_termination(
-                self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
+            termination = escaped_termination(
+                self.kernel, self._now, self._now, self._frozen_at, self.end.loop_error, latched
             )
             self._finish(termination)
-            # The run_exception is the first failure: recorded as the turn-based shell does.
             if first:
-                record = _invalid_record(termination.invalid)
-                self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
-                if self.trace is not None and not self._trace_failed:
-                    self.trace.emit(
-                        TraceEvent.RUN_INVALIDATED,
-                        record,
-                        kernel_seq=None,
-                        semantic=self._now,
-                        ops=self._now,
-                    )
+                record_run_exception(
+                    self.writer, termination.invalid, self._now, self._now, self.log
+                )
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[streaming] wrapping up the episode failed:\n" + traceback.format_exc())
-        if self._termination is None:  # how it ended, as far as the wrap-up got
-            self._termination = _escaped_termination(
-                self.kernel, self._now, self._now, self._frozen_at, self._loop_error, latched
+        if self.end.termination is None:  # how it ended, as far as the wrap-up got
+            self.end.termination = escaped_termination(
+                self.kernel, self._now, self._now, self._frozen_at, self.end.loop_error, latched
             )
 
     # ---- the episode trace --------------------------------------------------------------------
@@ -552,46 +522,12 @@ class _StreamingShell:
         if entry.kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**entry.data)
             if invalid.reason == "observation_stream_frozen":
-                # What main() reads for the run summary, as the turn-based shell sets it.
-                env = self.env
-                env._stream_freeze_count = getattr(env, "_stream_freeze_count", 0) + 1
-                env._stream_frozen = True
-            self.log(
-                f"[invalid-run] {invalid.category}:{invalid.reason}"
-                + (f" — {invalid.detail}" if invalid.detail else "")
-            )
-            payload = _invalid_record(invalid)
-            self._write(TraceEvent.RUN_INVALIDATED, payload, entry)
+                # What main() reads for the run summary, as the turn-based shell counts it.
+                self.end.stream_freeze_count += 1
+            self.log(invalid_line(invalid))
+            self.writer.emit(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
         else:
-            self._write("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
-
-    def _write(self, event: TraceEvent | str, payload: dict, entry: Entry | None = None) -> None:
-        if self.trace is None or self._trace_failed:
-            return
-        fields = (
-            {}
-            if entry is None
-            else {"kernel_seq": entry.seq, "semantic": entry.semantic, "ops": entry.ops}
-        )
-        try:
-            self.trace.emit(event, payload, **fields)
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            self._trace_lost(
-                Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
-            )
-
-    def _checkpoint(self) -> None:
-        """Make the trace durable at each outcome, as the turn-based shell does at each decision."""
-        if self.trace is None or self._trace_failed:
-            return
-        try:
-            self.trace.checkpoint()
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            self._trace_lost(
-                Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
-            )
+            self.writer.emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
 
     def _trace_lost(self, invalid: Invalidated) -> None:
         """Post the trace's failure, which the shell finds on its own thread. A kernel that

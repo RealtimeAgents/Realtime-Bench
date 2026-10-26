@@ -97,7 +97,13 @@ from realtime_framework.evaluation.kernel.streaming import (
     SessionPreparing,
 )
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
-from realtime_framework.harnesses.default.frames import GROUNDING_FAILED, FrameRecord, FrameTable
+from realtime_framework.harnesses.default.frames import (
+    GROUNDING_FAILED,
+    INVALID_GROUNDING_FRAME,
+    MISSING_FRAME,
+    FrameRecord,
+    FrameTable,
+)
 from realtime_framework.harnesses.default.harness import (
     VisionAgentBase,
     action_text,
@@ -140,13 +146,13 @@ _TERMINAL = {"generation_complete", "turn_complete", "interrupted"}
 @dataclass
 class _Pushed:
     """A frame in the session: its frame-table entry, as prepared for the model, and its
-    inspection, if the agent has a tool runtime; and the replies started on it, for its
-    inspection's one record: how many are on, the outputs of those that ended, in order, their
-    time, how the last ended, and how each of their actions resolved, as it arrived."""
+    inspection; and the replies started on it, for its inspection's one record: how many are on,
+    the outputs of those that ended, in order, their time, how the last ended, and how each of
+    their actions resolved, as it arrived."""
 
     record: FrameRecord
     value: ProviderObservation
-    execution: dict | None
+    execution: dict
     running: int = 0
     outputs: list[str] = field(default_factory=list)
     latency: float = 0.0
@@ -241,6 +247,8 @@ class NativeStreamingAgent(VisionAgentBase):
         self._requested: dict[tuple[int, str | None], tuple[str, str | None]] = {}
         # The generation of each call an action was posted for, which a cancellation names.
         self._generation_of: dict[str, int] = {}
+        # Each outcome the kernel committed, as its action's record.
+        self.action_history: list[dict] = []
         super().__init__(config, log_dir, trace=trace)
 
     def _setup_backend(self):
@@ -717,7 +725,6 @@ class NativeStreamingAgent(VisionAgentBase):
                             generation_id=f"streaming-{reply.generation}",
                             provider_output_token_cap=budget.provider_output_tokens,
                             transport_output_token_cap=budget.transport_output_tokens,
-                            clock_mode="wall",
                             canonical=view,
                             generation=reply.generation,
                         )
@@ -802,14 +809,23 @@ class NativeStreamingAgent(VisionAgentBase):
         elif isinstance(event, FunctionCall):
             action = {"action": event.name, **event.arguments}
             reply.calls.append(json.dumps(action, ensure_ascii=False))
-            # A call without its frame is refused for that (frames.MISSING_FRAME); one its
-            # function's schema rejects is no action, as a turn's call (FunctionCallTurnCollector).
-            if "frame" in action:
-                try:
-                    canonical_function_action(event.name, event.arguments, frame_reference=True)
-                except ValueError:
-                    reply.protocol_failure = reply.protocol_failure or "invalid_action_output"
-                    return
+            # A call of a declared function without its frame is refused for that, whatever else
+            # is wrong with it; one its function's schema rejects is no action, as a turn's call
+            # (FunctionCallTurnCollector), and so is a call of any other function.
+            declared = {function["name"] for function in self._answer.function_declarations}
+            if "frame" not in action and event.name in declared:
+                refusal = {
+                    "protocol_failure": None,
+                    "rejection": INVALID_GROUNDING_FRAME,
+                    "frame_reference": {"frame": None, "error": MISSING_FRAME},
+                }
+                self._hand_over(reply, event.call_id, self._wall(event.received_at), None, refusal)
+                return
+            try:
+                canonical_function_action(event.name, event.arguments, frame_reference=True)
+            except ValueError:
+                reply.protocol_failure = reply.protocol_failure or "invalid_action_output"
+                return
             self._arrived(reply, reply.calls[-1], event.call_id, event.received_at)
         elif isinstance(event, FunctionCallsCancelled):
             # By the generation each call came in, which may be an earlier reply's.
@@ -825,9 +841,12 @@ class NativeStreamingAgent(VisionAgentBase):
         """Parse one action against the frame it names and post it, with the time its message
         came off the wire, ``received_at`` on the clock's monotonic reading."""
         arrived = self._wall(received_at)
-        action, protocol, _ = parse_grounded_action(
-            self, text, arrived, reply.own.record, resolve=reply.own.execution is not None
-        )
+        action, protocol, _ = parse_grounded_action(self, text, arrived, reply.own.record)
+        self._hand_over(reply, call_id, arrived, action, protocol)
+
+    def _hand_over(self, reply: _Reply, call_id: str, arrived: float, action, protocol) -> None:
+        """Post the action that arrived at wall time ``arrived``, as its ``protocol`` says: the
+        reply's protocol failure, refused, or the action. A refused one is posted without it."""
         grounding = protocol.get("grounding")
         reply.grounding.append({"call_id": call_id, "grounding": grounding})
         with self._lock:
@@ -1035,10 +1054,9 @@ class NativeStreamingAgent(VisionAgentBase):
     def _finish_inspection(self, pushed: _Pushed, outcome: str, **fields) -> None:
         """The frame's one inspection row, which keeps the resolution of each action of the
         replies started on it, in the order they arrived (decision 16)."""
-        if self.tool_runtime is not None and pushed.execution is not None:
-            with self._lock:
-                pushed.execution["reference_resolution"] = list(pushed.resolutions)
-            self.tool_runtime.finish(pushed.execution, outcome=outcome, **fields)
+        with self._lock:
+            pushed.execution["reference_resolution"] = list(pushed.resolutions)
+        self.tool_runtime.finish(pushed.execution, outcome=outcome, **fields)
 
     # ---- the end ------------------------------------------------------------------------------
 

@@ -78,6 +78,7 @@ import yaml
 
 from functools import lru_cache
 
+from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import MODEL_PRESETS
 
 
@@ -380,7 +381,7 @@ def _streaming_settings(filename: str, api: str, driver: type, settings) -> dict
     for name, setting in settings.items():
         if type(setting) is not int or setting <= 0:
             raise ValueError(f"{filename}: streaming.{name} must be a positive integer")
-    merged = {**declared, **settings}
+    merged = merge_streaming_settings(driver, settings)
     if (
         {"compression_target_tokens", "compression_trigger_tokens"} <= merged.keys()
         and merged["compression_target_tokens"] >= merged["compression_trigger_tokens"]

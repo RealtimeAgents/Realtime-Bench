@@ -715,29 +715,27 @@ class ToolRuntime:
         model_height: int = 1080,
         model_image_bytes: bytes | None = None,
         model_image_mime_subtype: str | None = None,
-        raw_model_call: str = "",
-        inspection_latency_s: float = 0.0,
-        protocol_error: str | None = None,
         frame_number: int | None = None,
     ) -> dict:
         """Return the cached result attached to ``observation`` and a runner-verifiable proof.
-        ``frame_number``: the number drawn on the marked screenshot under streaming."""
+        ``frame_number``: the number drawn on the marked screenshot under streaming. The
+        inspection asks no model, so its record names no model call and no model latency."""
         started = self.clock.time()
         metadata = getattr(observation, "metadata", {}) or {}
         expected = metadata.get("observation_id")
         canonical = metadata.get("interactables")
         sequence, call_id = self._next_call_id()
-        error = protocol_error
+        error = None
         if not expected:
-            error = error or "observation_missing_identity"
+            error = "observation_missing_identity"
         elif requested_observation_id != expected:
-            error = error or "observation_id_mismatch"
+            error = "observation_id_mismatch"
         elif not isinstance(canonical, dict):
-            error = error or "observation_missing_interactables"
+            error = "observation_missing_interactables"
         elif canonical.get("scene", {}).get("status") != "ok":
-            error = error or "interactables_scene_unavailable"
+            error = "interactables_scene_unavailable"
         elif not canonical.get("binding", {}).get("stable"):
-            error = error or "interactables_binding_unstable"
+            error = "interactables_binding_unstable"
 
         delivered = None
         text = ""
@@ -773,7 +771,7 @@ class ToolRuntime:
             "representation": som.get("representation") if som else None,
             "marked_image_sha256": som.get("marked_image_sha256") if som else None,
             "mark_map_sha256": som.get("mark_map_sha256") if som else None,
-            "inspection_round_latency_s": round(float(inspection_latency_s or 0.0), 6),
+            "inspection_round_latency_s": 0.0,
             "tool_execution_latency_s": round(elapsed, 6),
         }
         event = {
@@ -788,10 +786,10 @@ class ToolRuntime:
             "arguments": {"observation_id": requested_observation_id},
             "observation_id": expected,
             "screenshot_sha256": metadata.get("screenshot_sha256"),
-            "raw_model_call": (raw_model_call or "")[:4000],
+            "raw_model_call": "",
             "protocol_error": error,
             "latency": {
-                "inspection_round_model_s": round(float(inspection_latency_s or 0.0), 6),
+                "inspection_round_model_s": 0.0,
                 "tool_execution_s": round(elapsed, 6),
             },
             "canonical_result_sha256": result_digest(canonical)

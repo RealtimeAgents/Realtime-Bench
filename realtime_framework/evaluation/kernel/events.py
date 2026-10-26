@@ -289,6 +289,12 @@ class StartGeneration:
     decision: int
     observation_id: str | None
     remaining_clock_tokens: int | None  # the finite-B allowance left before the horizon
+    # Turn-based: when the generation's own bound falls due, the wall clock's per-move cap in
+    # semantic seconds or the token clock's watchdog in operational seconds, and the wall clock's
+    # deadline; None without one. The kernel's timers give the generation up there, and the
+    # shell settles no result that came back past either (shell.py _late).
+    bound_at: float | None = None
+    deadline: float | None = None
 
 
 @dataclass(frozen=True)
@@ -296,6 +302,9 @@ class AbortGeneration:
     """Interrupt a generation the kernel gave up on. Its late result will be discarded."""
 
     generation: int
+    # Why: as GenerationAbandoned names it, the end's cause or the policy's own reason, but for
+    # an invalidation the invalid run's reason, such as the provider watchdog's.
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -332,6 +341,10 @@ class AdvanceClock:
     """Token clock: advance the environment by ``step`` ticks; answer with ClockStepped."""
 
     step: float
+    # Whether a failed step escapes the decision loop, as the legacy loop let one escape: all but
+    # a wait action's own steps, which ran inside execute() and failed the action
+    # (tests/differential/legacy_environment.py LegacyStateReads).
+    escapes: bool
 
 
 @dataclass(frozen=True)
@@ -339,6 +352,7 @@ class ReleaseKeys:
     """Token clock: release keys whose lease ended at this tick; answer with KeysReleased."""
 
     keys: tuple[str, ...]
+    escapes: bool  # as AdvanceClock's
 
 
 @dataclass(frozen=True)
@@ -422,3 +436,8 @@ class Finish:
     """The episode is over; nothing more will be asked."""
 
     termination: Termination
+    # What the turn-based policy counted for the run summary: the deliberation charged to the
+    # legacy budget, in seconds, and on the token clock the input frames the decisions crossed
+    # unobserved. A streaming episode counts neither.
+    think_spent: float = 0.0
+    dropped_intermediate_frames: int = 0

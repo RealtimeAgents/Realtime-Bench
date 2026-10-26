@@ -1,53 +1,11 @@
 from __future__ import annotations
 
 # Session
-"""Model-session history helpers without token estimation or token-based eviction."""
+"""Model-session helpers without token estimation or token-based eviction."""
 
-import json as json
 import threading as threading
 
 from realtime_framework.harnesses.default.prompts import ACTION_RESULT_NOTES
-
-
-def _mark_oldest_active_visuals(turns: list[dict], count: int) -> int:
-    marked = 0
-    for turn in turns:
-        if turn.get("visual_folded"):
-            continue
-        turn["visual_folded"] = True
-        marked += 1
-        if marked >= count:
-            break
-    return marked
-
-
-def apply_active_visual_budget(turns: list[dict], budget: int, block_size: int) -> int:
-    """Fold old screenshots in blocks without making any text-retention decision."""
-    active = sum(not turn.get("visual_folded") for turn in turns)
-    folded = 0
-    while active > budget:
-        count = min(block_size, active - 1)
-        folded += _mark_oldest_active_visuals(turns, count)
-        active -= count
-    return folded
-
-
-def executed_action_ledger(history: list[dict], *, limit: int | None = None) -> str:
-    """Serialize actual old actions as compact deterministic JSON Lines."""
-    items = list(history or [])
-    if limit is not None:
-        items = items[: max(0, int(limit))]
-    lines = []
-    for item in items:
-        record = {
-            "decision": item.get("tick", "?"),
-            "observed_at_tick": item.get("observation_tick", item.get("tick", "?")),
-            "requested": item.get("requested", item.get("executed", "?")),
-            "actual": item.get("executed", "?"),
-            "status": item.get("result", item.get("status", "pending")),
-        }
-        lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-    return "\n".join(lines)
 
 
 def native_output_limit(native_limit: int | None, provider_limit: int | None = None) -> int | None:
@@ -97,7 +55,12 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.entity.request import ContentBlock
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
-from realtime_framework.harnesses.default.request import ledger_block
+from realtime_framework.harnesses.default.history import Accept
+from realtime_framework.harnesses.default.history import ArchiveBlock
+from realtime_framework.harnesses.default.history import History
+from realtime_framework.harnesses.default.history import OmitBlock
+from realtime_framework.harnesses.default.history import Retain
+from realtime_framework.harnesses.default.history import Retained
 from realtime_framework.providers.session_lifecycle import SessionStates
 from realtime_framework.providers.session_lifecycle import StatelessSession
 from realtime_framework.providers.session_lifecycle import replay_items
@@ -112,6 +75,12 @@ class RequestExceedsContext(RuntimeError):
     """The request did not fit the declared context window, so it was never sent."""
 
     invalid_reason = "context_exceeded_before_request"
+
+
+_EVERY_ACTION_OMITTED = (
+    "Task instructions and current observation exceed context capacity with every archived "
+    "action omitted; use a larger endpoint window"
+)
 
 
 class RealtimeRuntime:
@@ -132,6 +101,7 @@ class RealtimeRuntime:
         driver: RealtimeDriver,
         policy: PathPolicy,
         *,
+        history: History,
         trace,
         execution: ExecutionThread,
         clock: Clock | None = None,
@@ -141,6 +111,7 @@ class RealtimeRuntime:
         self.driver = driver
         self.capabilities = driver.capabilities
         self.policy = policy
+        self.history = history
         self._trace = trace
         self.execution = execution
         # The operational clock, which also made the execution thread's loop.
@@ -159,14 +130,6 @@ class RealtimeRuntime:
         self._running: set[threading.Event] = set()
         self._active_generation: GenerationHandle | None = None
         self._seed: SessionSeed | None = None
-        self._turns: list[CanonicalTurn] = []
-        self._archived_action_count = 0
-        # The earliest archived actions the ledger leaves out: a request that did not fit with
-        # every turn archived dropped them. As archived turns do, they stay out for the rest of
-        # the episode, though a later request would fit with them, so that the history the model
-        # sees does not change back.
-        self._omitted_action_count = 0
-        self._ledger_wall_ns: int | None = None  # when the archived-action ledger last grew
 
     @property
     def state(self) -> RuntimeState:
@@ -175,14 +138,6 @@ class RealtimeRuntime:
             if self._closed:
                 return RuntimeState.CLOSED
         return self.session.state
-
-    @property
-    def turns(self) -> tuple[CanonicalTurn, ...]:
-        return tuple(self._turns)
-
-    @property
-    def archived_action_count(self) -> int:
-        return self._archived_action_count
 
     def start(self, seed: SessionSeed, *, timeout: float = 60.0) -> None:
         self._seed = seed
@@ -194,114 +149,34 @@ class RealtimeRuntime:
             return cancel.is_set() or self._closed
 
     def _stop_if_abandoned(self, cancel: threading.Event, before: str) -> None:
-        """Stop an aborted generation. _run_turn checks before it applies the retention policy,
-        before it sends its observation, before each pressure archive and before it starts its
-        reply."""
+        """Stop an aborted generation. _run_turn checks before each change it writes into the
+        history (_write), before it sends its observation, before it counts a request with every
+        archived action left out, and before it starts its reply."""
         if self._abandoned(cancel):
             raise RetryCancelled(f"generation abandoned before {before}")
 
-    def record_execution_feedback(self, feedback: str, decision: int) -> None:
-        """Attach an action's execution feedback to the turn of its decision."""
-        turns = [turn for turn in self._turns if turn.decision == decision]
-        if turns:
-            turns[-1].execution_feedback = feedback
-            turns[-1].feedback_wall_ns = self.clock.time_ns()
+    def _write(self, cancel: threading.Event, before: str, change):
+        """Write ``change`` into the history, unless the generation of this cancel event was
+        abandoned: it still runs, and the history may be the next generation's by now."""
+        self._stop_if_abandoned(cancel, before)
+        return self.history.write(change)
 
-    def accept_turn(self, turn: CanonicalTurn) -> None:
-        """Write an accepted generation's turn into the retained history. The write runs on the
-        execution thread, where a generation that was abandoned but still runs reads the history."""
+    def accept(self, accepted: Accept) -> None:
+        """Write an accepted generation into the history, on the execution thread, where a
+        generation that was abandoned but still runs reads the history."""
 
         async def write() -> None:
-            self._turns.append(turn)
+            self.history.write(accepted)
 
         self.execution.run(write())
 
-    def _action_ledger(self, history: list[dict]) -> str:
-        return executed_action_ledger(history, limit=self._archived_action_count)
-
-    def ledger_block(self, ledger: str, omitted: int | None = None) -> ContentBlock | None:
-        """The ledger as requests carry it: ``ledger`` holds one line per archived action, and
-        the ``omitted`` earliest ones (by default the ones left out so far) give way to a note
-        that counts them."""
-        omitted = self._omitted_action_count if omitted is None else omitted
-        if omitted:
-            kept = ledger.split("\n")[omitted:]
-            note = self.policy.texts.ledger_omission.format(count=omitted)
-            ledger = "\n".join([note, *kept])
-        return ledger_block(ledger, self._archived_action_count, self._ledger_wall_ns)
-
     def history_view(
-        self,
-        request_builder: RequestBuilder,
-        ledger: str,
-        incoming: Iterable[CanonicalTurn] = (),
+        self, request_builder: RequestBuilder, incoming: Iterable[CanonicalTurn] = ()
     ) -> CanonicalRequest:
         """The retained history (and the turn of the generation under way) where a session
         encoder needs it before or after the request exists: the same builder and blocks as the
         request."""
-        return request_builder(tuple(self._turns) + tuple(incoming), self.ledger_block(ledger))
-
-    def _record_archived_turns(self, turns: Iterable[CanonicalTurn]) -> int:
-        indexes = [
-            turn.action_history_index for turn in turns if turn.action_history_index is not None
-        ]
-        before = self._archived_action_count
-        if indexes:
-            self._archived_action_count = max(before, max(indexes) + 1)
-        if self._archived_action_count > before:
-            self._ledger_wall_ns = self.clock.time_ns()
-        return self._archived_action_count - before
-
-    def _retained(
-        self,
-        turns: Iterable[CanonicalTurn],
-        incoming: Iterable[CanonicalTurn],
-    ) -> tuple[
-        list[CanonicalTurn],
-        list[CanonicalTurn],
-        tuple[CanonicalTurn, ...],
-        dict[str, int],
-    ]:
-        existing = list(turns)
-        additions = list(incoming)
-        window, block_size = self.policy.turns.keep, self.policy.turns.block
-        archive_count = 0
-        while len(existing) - archive_count + len(additions) > window:
-            removable = len(existing) - archive_count
-            if removable <= 0:
-                break
-            archive_count += min(block_size, removable)
-        archived = existing[:archive_count]
-        existing = existing[archive_count:]
-        archived_actions = self._record_archived_turns(archived)
-        candidates = existing + additions
-        previously_folded = {id(turn): turn.visual_folded for turn in candidates}
-        records = [turn.retention_record() for turn in candidates]
-        apply_active_visual_budget(records, self.policy.visuals.keep, self.policy.visuals.block)
-        folded_visuals = 0
-        for turn, record in zip(candidates, records):
-            if record.get("visual_folded"):
-                turn.fold_visual()
-            if turn.visual_folded and not previously_folded[id(turn)]:
-                folded_visuals += 1
-        return (
-            existing,
-            additions,
-            tuple(archived),
-            {
-                "folded_visuals": folded_visuals,
-                "archived_turns": len(archived),
-                "archived_actions": archived_actions,
-                "existing_history_changed": int(bool(archived) or folded_visuals > 0),
-                # The turns behind these counts, for the agent trace.
-                "folded_turn_refs": self._turn_refs(
-                    turn
-                    for turn in candidates
-                    if turn.visual_folded and not previously_folded[id(turn)]
-                ),
-                "archived_turn_refs": self._turn_refs(archived),
-            },
-        )
+        return request_builder(self.history.turns + tuple(incoming), self.history.ledger_block())
 
     def _recorder(
         self,
@@ -325,7 +200,7 @@ class RealtimeRuntime:
         request: GenerationRequest,
         collector: OutputCollector,
         *,
-        action_history: list[dict],
+        unattached: str,
         cancel: threading.Event,
         request_builder: RequestBuilder,
         decision: int,
@@ -333,40 +208,39 @@ class RealtimeRuntime:
         if len(observations) != 1:
             raise ValueError("each generation accepts exactly one observation")
         seed = self._seed
-        executed_action_ledger = self._action_ledger(action_history)
-        await self.session.ensure_ready(
-            seed, self.history_view(request_builder, executed_action_ledger), self._recorder()
-        )
-        self._stop_if_abandoned(cancel, "its history")
-        incoming = [CanonicalTurn(observation=value, decision=decision) for value in observations]
+        history = self.history
+        await self.session.ensure_ready(seed, self.history_view(request_builder), self._recorder())
+        incoming = [
+            CanonicalTurn(observation=value, decision=decision, unattached_feedback=unattached)
+            for value in observations
+        ]
         # The policy archive and fold apply before the generation, accepted or not: a discarded
         # generation leaves them, and their HistoryChanged records, in place.
-        retained, incoming, removed_turns, retention = self._retained(self._turns, incoming)
-        self._turns[:] = retained
+        retention = self._write(
+            cancel, "its history", Retain(tuple(incoming), self.clock.time_ns())
+        )
         self._record_retention(retention)
-        executed_action_ledger = self._action_ledger(action_history)
         sync = HistorySyncResult(
             SyncDisposition.EXACT,
             ProviderHistoryState.EXACT,
             detail="already synchronized",
         )
-        if retention["existing_history_changed"]:
+        if retention.changed:
             sync = await self.session.synchronize(
                 HistorySyncRequest(
                     seed,
                     "history_block_compaction",
-                    self.history_view(request_builder, executed_action_ledger),
+                    self.history_view(request_builder),
                     force_rebuild=(
                         self.capabilities.persistent_session
                         and not self.capabilities.can_compact_history_in_place
                     ),
                 ),
-                self._recorder(removed_turns),
+                self._recorder(retention.archived),
             )
         physical_metadata = {}
-        executed_action_ledger = self._action_ledger(action_history)
         renewal = await self.session.renew(
-            seed, self.history_view(request_builder, executed_action_ledger), self._recorder()
+            seed, self.history_view(request_builder), self._recorder()
         )
         if renewal is not None:
             sync = renewal
@@ -374,21 +248,18 @@ class RealtimeRuntime:
         if not incoming:
             raise RuntimeError("no current observation")
         self._stop_if_abandoned(cancel, "its request")
-        history = self.history_view(request_builder, executed_action_ledger, incoming)
+        view = self.history_view(request_builder, incoming)
         input_refs = [
-            await self.driver.send_observation(turn.observation, history) for turn in incoming
+            await self.driver.send_observation(turn.observation, view) for turn in incoming
         ]
         input_refs = [refs or {} for refs in input_refs]
 
         compactions = 0
         archived_count = 0
         omitted_blocks = 0
-        omitted_before = self._omitted_action_count
+        omitted_before = history.omitted
         while True:
-            executed_action_ledger = self._action_ledger(action_history)
-            canonical = request_builder(
-                tuple(self._turns + incoming), self.ledger_block(executed_action_ledger)
-            )
+            canonical = request_builder(history.turns + tuple(incoming), history.ledger_block())
             request = replace(request, canonical=canonical)
             if not (self.policy.pressure_archive and self.capabilities.request_size_estimation):
                 break
@@ -402,39 +273,36 @@ class RealtimeRuntime:
             if not status.get("pressure"):
                 break
             # The count can suspend (a "vllm" counter): by now the history may be the next
-            # generation's, which an aborted one must not archive or cut.
-            self._stop_if_abandoned(cancel, "its pressure archive")
-            if not self._turns:
+            # generation's, which an aborted one must not archive or cut (_write).
+            if not history.turns:
                 # Every turn is archived: leave out the earliest archived actions, a block at a
                 # time, before the request is given up. Once one block was not enough, a count
                 # with every archived action left out tells whether more blocks can help.
-                hopeless = (
-                    omitted_blocks == 1
-                    and self._omitted_action_count < self._archived_action_count
-                    and not await self._fits_with_every_action_omitted(
-                        request, request_builder, incoming, executed_action_ledger
-                    )
-                )
-                self._stop_if_abandoned(cancel, "its pressure archive")
-                if hopeless or not self._omit_archived_actions(status):
-                    raise RequestExceedsContext(
-                        "Task instructions and current observation exceed context capacity with "
-                        "every archived action omitted; use a larger endpoint window"
-                    )
+                if omitted_blocks == 1 and history.omitted < history.archived:
+                    self._stop_if_abandoned(cancel, "its pressure archive")
+                    if not await self._fits_with_every_action_omitted(
+                        request, request_builder, incoming
+                    ):
+                        self._stop_if_abandoned(cancel, "its pressure archive")
+                        raise RequestExceedsContext(_EVERY_ACTION_OMITTED)
+                omitted = self._write(cancel, "its pressure archive", OmitBlock())
+                if not omitted:
+                    raise RequestExceedsContext(_EVERY_ACTION_OMITTED)
+                self._record_omission(omitted, status)
                 omitted_blocks += 1
                 physical_metadata["request_context_omitted_actions"] = (
-                    self._omitted_action_count - omitted_before
+                    history.omitted - omitted_before
                 )
                 continue
-            archived = self._turns[: self.policy.turns.block]
-            del self._turns[: len(archived)]
-            archived_actions = self._record_archived_turns(archived)
+            archived, archived_actions = self._write(
+                cancel, "its pressure archive", ArchiveBlock(self.clock.time_ns())
+            )
             self._record_pressure_archive(archived, archived_actions, status)
             compactions += 1
             archived_count += len(archived)
 
         self._stop_if_abandoned(cancel, "its reply")
-        self._record_generation_prepared(incoming, physical_metadata, request.generation)
+        self._record_generation_prepared(incoming, physical_metadata, request)
         provider_call_started_monotonic_ns = self.clock.monotonic_ns()
         provider_call_started_wall_time_ns = self.clock.time_ns()
         generation = await self.driver.start_generation(request)
@@ -451,23 +319,23 @@ class RealtimeRuntime:
             "provider_call_started_monotonic_ns": provider_call_started_monotonic_ns,
             "provider_call_started_wall_time_ns": provider_call_started_wall_time_ns,
             "provider_stream_started_monotonic_ns": stream_started_monotonic_ns,
-            "history_folded_visuals": retention["folded_visuals"],
-            "history_archived_turns": retention["archived_turns"],
-            "history_archived_actions": retention["archived_actions"],
-            "history_archived_actions_total": self._archived_action_count,
+            "history_folded_visuals": len(retention.folded),
+            "history_archived_turns": len(retention.archived),
+            "history_archived_actions": retention.archived_actions,
+            "history_archived_actions_total": history.archived,
             # Only once the ledger leaves actions out: a run that never does records no more.
             **(
-                {"history_omitted_actions_total": self._omitted_action_count}
-                if self._omitted_action_count
-                else {}
+                {"history_omitted_actions_total": history.omitted} if history.omitted else {}
             ),
-            "history_detailed_turns": len(self._turns),
+            "history_detailed_turns": len(history.turns),
             "history_current_observations": len(incoming),
-            "history_prompt_turns": len(self._turns) + len(incoming),
+            "history_prompt_turns": len(history.turns) + len(incoming),
             "history_active_visuals": sum(
-                not turn.visual_folded for turn in self._turns + incoming
+                not turn.visual_folded for turn in history.turns + tuple(incoming)
             ),
-            "history_folded_turns": sum(turn.visual_folded for turn in self._turns + incoming),
+            "history_folded_turns": sum(
+                turn.visual_folded for turn in history.turns + tuple(incoming)
+            ),
             **physical_metadata,
         }
         provider_metadata.update(
@@ -475,7 +343,7 @@ class RealtimeRuntime:
                 "history_som_retained_blocks": sum(
                     without_observation_interactables(turn.observation.prompt)
                     != turn.observation.prompt
-                    for turn in self._turns
+                    for turn in history.turns
                 ),
                 "history_som_current_blocks": sum(
                     without_observation_interactables(turn.observation.prompt)
@@ -516,10 +384,9 @@ class RealtimeRuntime:
         turn.output = output.text
         turn.output_wall_ns = self.clock.time_ns()
         turn.output_reasoning = output.reasoning_text
-        turn.action_history_index = len(action_history)
         turn.provider_refs.update(generation.metadata.get("completed_turn_refs") or {})
 
-        # The turn joins the history only once the result is accepted (accept_turn). A repair
+        # The turn joins the history only once the result is accepted (accept). A repair
         # after the generation already includes it: a result that is discarded was aborted first,
         # and the session that held it is closed, by the abort or by the repair it came during,
         # so the next generation rebuilds from the accepted history.
@@ -530,7 +397,7 @@ class RealtimeRuntime:
                     HistorySyncRequest(
                         seed,
                         provider_metadata.get("reconnect_reason", "provider_history_changed"),
-                        self.history_view(request_builder, executed_action_ledger, (turn,)),
+                        self.history_view(request_builder, (turn,)),
                         current_generation=generation,
                     ),
                     terminal_history,
@@ -571,16 +438,17 @@ class RealtimeRuntime:
         request: GenerationRequest,
         collector: OutputCollector,
         *,
-        action_history: list[dict],
+        unattached: str,
         timeout: float | None,
         request_builder: RequestBuilder,
         decision: int,
         cancel: threading.Event,
     ) -> RuntimeTurnResult:
-        """One generation. ``cancel`` is its own event: once it is set, the generation stops at
-        its next check (_stop_if_abandoned) and its retries end, the session encoder's included
-        (they run in its retry_cancellation). Closing the runtime sets it. Its turn comes back in
-        the result, for accept_turn once it is accepted."""
+        """One generation, whose frame opens with the ``unattached`` feedback. ``cancel`` is its
+        own event: once it is set, the generation stops at its next check (_stop_if_abandoned)
+        and its retries end, the session encoder's included (they run in its
+        retry_cancellation). Closing the runtime sets it. Its turn comes back in the result, for
+        accept once it is accepted."""
         with self._lock:
             self._running.add(cancel)
         try:
@@ -590,7 +458,7 @@ class RealtimeRuntime:
                         tuple(observations),
                         request,
                         collector,
-                        action_history=action_history,
+                        unattached=unattached,
                         cancel=cancel,
                         request_builder=request_builder,
                         decision=decision,
@@ -640,14 +508,13 @@ class RealtimeRuntime:
     # step follows from the trace. policy_item names the PathPolicy fields behind the change
     # (entity/context_policy.py), and policy_values their values for this API.
 
-    @staticmethod
-    def _turn_refs(turns: Iterable[CanonicalTurn]) -> list[dict]:
+    def _turn_refs(self, turns: Iterable[CanonicalTurn]) -> list[dict]:
         return [
             {
                 "decision": turn.decision,
                 "observation_id": turn.observation.observation_id,
                 "tick": turn.observation.observation.tick_number,
-                "action_history_index": turn.action_history_index,
+                "action_history_index": self.history.index(turn.decision),
             }
             for turn in turns
         ]
@@ -665,23 +532,23 @@ class RealtimeRuntime:
         )
 
     def _ledger_change(self, archived_actions: int) -> dict:
-        total = self._archived_action_count
+        total = self.history.archived
         return {"archived_actions_before": total - archived_actions, "archived_actions_after": total}
 
-    def _record_retention(self, retention: dict) -> None:
+    def _record_retention(self, retention: Retained) -> None:
         """The policy archive and screenshot fold applied before this turn's request."""
         self._compaction_items = []
-        if retention["archived_turn_refs"]:
+        if retention.archived:
             self._compaction_items.append("turns")
             self._history_changed(
                 "archive",
                 "policy",
                 "turns",
                 policy_values={"keep": self.policy.turns.keep, "block": self.policy.turns.block},
-                turns=retention["archived_turn_refs"],
-                ledger=self._ledger_change(retention["archived_actions"]),
+                turns=self._turn_refs(retention.archived),
+                ledger=self._ledger_change(retention.archived_actions),
             )
-        if retention["folded_turn_refs"]:
+        if retention.folded:
             self._compaction_items.append("visuals")
             self._history_changed(
                 "visual_fold",
@@ -691,7 +558,7 @@ class RealtimeRuntime:
                     "keep": self.policy.visuals.keep,
                     "block": self.policy.visuals.block,
                 },
-                turns=retention["folded_turn_refs"],
+                turns=self._turn_refs(retention.folded),
             )
 
     def _record_pressure_archive(self, archived, archived_actions, status) -> None:
@@ -705,36 +572,28 @@ class RealtimeRuntime:
             request_context=status,
         )
 
-    async def _fits_with_every_action_omitted(
-        self, request, request_builder, incoming, ledger
-    ) -> bool:
+    async def _fits_with_every_action_omitted(self, request, request_builder, incoming) -> bool:
         """Count the request as it would go with every archived action left out, leaving the
         history as it is."""
-        block = self.ledger_block(ledger, omitted=self._archived_action_count)
-        canonical = request_builder(tuple(self._turns + incoming), block)
+        block = self.history.ledger_block(omitted=self.history.archived)
+        canonical = request_builder(self.history.turns + tuple(incoming), block)
         status = await self.driver.request_context_status(replace(request, canonical=canonical))
         return not status.get("pressure")
 
-    def _omit_archived_actions(self, status) -> int:
-        """Leave the next block of the earliest archived actions out of the ledger; returns how
-        many, none once every one is out."""
-        before = self._omitted_action_count
-        count = min(self.policy.turns.block, self._archived_action_count - before)
-        if count:
-            self._omitted_action_count += count
-            self._history_changed(
-                "ledger_omission",
-                "policy",
-                "pressure_archive",
-                policy_values={"block": self.policy.turns.block},
-                ledger={
-                    "archived_actions": self._archived_action_count,
-                    "omitted_actions_before": before,
-                    "omitted_actions_after": self._omitted_action_count,
-                },
-                request_context=status,
-            )
-        return count
+    def _record_omission(self, omitted: int, status) -> None:
+        """The ``omitted`` earliest archived actions an OmitBlock just left out of the ledger."""
+        self._history_changed(
+            "ledger_omission",
+            "policy",
+            "pressure_archive",
+            policy_values={"block": self.policy.turns.block},
+            ledger={
+                "archived_actions": self.history.archived,
+                "omitted_actions_before": self.history.omitted - omitted,
+                "omitted_actions_after": self.history.omitted,
+            },
+            request_context=status,
+        )
 
     def _record_sync(self, sync, removed_turns, incoming=(), *, result=None, error=None):
         """One HistoryChanged per sync call (session_record), with the policy items behind it
@@ -749,7 +608,7 @@ class RealtimeRuntime:
             record.trigger,
             policy_item or None,
             turns=self._turn_refs(removed_turns),
-            replayed_turns=len(self._turns) + len(incoming) if record.rebuilt else None,
+            replayed_turns=len(self.history.turns) + len(incoming) if record.rebuilt else None,
             **record.fields,
         )
         self._states.record(*record.state)
@@ -765,28 +624,27 @@ class RealtimeRuntime:
             record.trigger,
             replay_items(self.policy) or None,
             turns=[],
-            replayed_turns=len(self._turns),
+            replayed_turns=len(self.history.turns),
             **record.fields,
         )
         self._states.record(*record.state)
 
-    def _record_generation_prepared(self, incoming, physical_metadata, generation) -> None:
-        turns = self._turns + incoming
+    def _record_generation_prepared(self, incoming, physical_metadata, request) -> None:
+        """The history the generation's request went with, and the canonical request itself as
+        its body."""
+        history = self.history
+        turns = history.turns + tuple(incoming)
         self._trace.capture(
             TraceEvent.GENERATION_PREPARED,
             {
-                "generation": generation,
+                "generation": request.generation,
                 "observation_id": incoming[-1].observation.observation_id,
                 "persistent_session": self.capabilities.persistent_session,
                 "history": {
-                    "archived_actions_total": self._archived_action_count,
+                    "archived_actions_total": history.archived,
                     # As history_omitted_actions_total in the step's provider metadata.
-                    **(
-                        {"omitted_actions_total": self._omitted_action_count}
-                        if self._omitted_action_count
-                        else {}
-                    ),
-                    "detailed_turns": len(self._turns),
+                    **({"omitted_actions_total": history.omitted} if history.omitted else {}),
+                    "detailed_turns": len(history.turns),
                     "current_observations": len(incoming),
                     "prompt_turns": len(turns),
                     "active_visuals": sum(not turn.visual_folded for turn in turns),
@@ -794,7 +652,7 @@ class RealtimeRuntime:
                     "som_retained_blocks": sum(
                         without_observation_interactables(turn.observation.prompt)
                         != turn.observation.prompt
-                        for turn in self._turns
+                        for turn in history.turns
                     ),
                     "som_current_blocks": sum(
                         without_observation_interactables(turn.observation.prompt)
@@ -804,4 +662,5 @@ class RealtimeRuntime:
                 },
                 "request_context": physical_metadata or None,
             },
+            body=request.canonical,
         )

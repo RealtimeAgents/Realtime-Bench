@@ -51,7 +51,7 @@ import threading
 import traceback
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -61,6 +61,19 @@ from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.clock import TokenAccounting
+from realtime_framework.evaluation.episode_end import (
+    EpisodeEnd,
+    EpisodeResult,
+    TraceWriter,
+    escaped_termination,
+    invalid_line,
+    invalid_record,
+    invalidated,
+    only_logged,
+    record_run_exception,
+    with_unheard,
+)
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
@@ -219,16 +232,10 @@ def run_episode(
     trace=None,
     agent_trace=None,
     inputs_log: Path | None = None,
-) -> list[tuple]:
-    """Run one episode on the kernel; return its timeline, ``(k, t_k, d_ticks, tau_k, action)``
-    for each decision it reported. Build ``config`` with ``timing=RUNNER_TIMING``: TurnConfig's
-    default timing reads no STREAM_* variable.
-
-    What main() reads after the loop is left on ``env`` as the legacy loop leaves it: the stop
-    reason and the termination record in world seconds (``_stop_reason``, ``_termination``), the
-    frozen snapshot (``_termination_snapshot*``, ``_active_end_unix_s``), ``_invalid_run``,
-    ``_loop_error``, ``_think_spent``, ``_dropped_intermediate_frames``, ``_stream_frozen`` and
-    the drain of abandoned workers (``_drain_abandoned``).
+) -> EpisodeResult:
+    """Run one episode on the kernel; return how it came out (episode_end.py), with its timeline,
+    ``(k, t_k, d_ticks, tau_k, action)`` for each decision it reported. Build ``config`` with
+    ``timing=RUNNER_TIMING``: TurnConfig's default timing reads no STREAM_* variable.
 
     ``agent_trace``, the agent's AgentTraceSink on ``trace``, hands the agent's records to the
     kernel during the episode, and the shell writes them in the kernel's order. Once the episode
@@ -260,8 +267,10 @@ class _Generation:
     started_ops: float | None
     done: threading.Event  # set once the worker has handed its result back
     # When its own bound falls due: the wall clock's per-move cap, in semantic seconds, or the
-    # token clock's watchdog, in operational seconds; None without one.
-    bound_at: float | None = None
+    # token clock's watchdog, in operational seconds; and the wall clock's deadline. None
+    # without one (StartGeneration).
+    bound_at: float | None
+    deadline: float | None
     returned_at: float | None = None  # the reading on the bound's clock when it came back
     result: dict | None = None  # as the worker handed it back
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
@@ -288,76 +297,13 @@ class _Decision:
     resolved: dict | None = None  # its ActionResolved payload
 
 
-def _invalidated(record: dict) -> Invalidated:
-    """An invalid-run record the environment latched, as the kernel's event."""
-    return Invalidated(record["category"], record["reason"], record.get("detail"))
-
-
-def _invalid_record(invalid: Invalidated) -> dict:
-    """An invalid run as the runner keeps it on ``env._invalid_run`` and writes it as
-    RunInvalidated: the detail only when there is one (legacy_loop.py ``_invalidate``)."""
-    record = {"category": invalid.category, "reason": invalid.reason}
-    if invalid.detail:
-        record["detail"] = invalid.detail
-    return record
-
-
-def _only_logged(record: dict) -> str:
-    """The log line of an invalid run the environment latched once the snapshot was frozen: the
-    run's verdict stands, as for a failure of the cleanup's own (decisions 30, 33)."""
-    detail = record.get("detail")
-    return (
-        f"[cleanup] {record['category']}:{record['reason']} once the snapshot was frozen, only "
-        "logged" + (f" — {detail}" if detail else "")
-    )
-
-
-def _with_unheard(termination: Termination, unheard: Invalidated | None, log) -> Termination:
-    """A failure a shell found in the batch of the kernel's Finish, such as the termination
-    record's own write, invalidates the run as the kernel would have, at the same end (decision
-    32)."""
-    if unheard is None or termination.invalid is not None:
-        return termination
-    # The end of a traceback names the exception (legacy_loop.py _invalidate).
-    detail = None if unheard.detail is None else unheard.detail[-2000:]
-    invalid = Invalidated(unheard.category, unheard.reason, detail)
-    log(f"[invalid-run] {invalid.category}:{invalid.reason}" + (f" — {detail}" if detail else ""))
-    return replace(termination, stop_reason="invalid_run", invalid=invalid)
-
-
-def _escaped_termination(
-    kernel: Kernel,
-    semantic: float,
-    ops: float,
-    snapshot_at: float | None,
-    failure: str,
-    latched: dict | None,
-) -> Termination:
-    """How an episode ended whose kernel, or its shell's reading of the clocks, raised (N11), as
-    a shell tells it without the kernel. The run is invalid for the first failure: the kernel's
-    or the environment's when one was latched, run_exception otherwise, ``failure`` being the
-    first traceback the shell latched, the summary's error. It ended at the first end signal:
-    the kernel's when it had one, else the reading the failure came at."""
-    ending = kernel.ending
-    invalid = kernel.invalid or (
-        _invalidated(latched)
-        if latched is not None
-        # The end of a traceback names the exception (legacy_loop.py _invalidate).
-        else Invalidated("runner", "run_exception", failure[-2000:])
-    )
-    if ending is None:
-        return Termination("invalid_run", "invalid", semantic, snapshot_at, ops, None, invalid)
-    return Termination(
-        "invalid_run", ending.cause, ending.at, snapshot_at, ending.ops, None, invalid
-    )
-
-
 class _Shell:
     def __init__(
         self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, agent_trace, inputs_log
     ):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
-        self.log, self.trace, self.agent_trace = log, trace, agent_trace
+        self.log, self.agent_trace = log, agent_trace
+        self.writer = TraceWriter(trace, self._trace_lost)
         self._inputs_log = inputs_log
         self.token = config.clock_mode == "token"
         self.policy = TurnPolicy(config)
@@ -378,26 +324,26 @@ class _Shell:
         self._returned: deque[_Generation] = deque()  # results the workers handed back
         self._generations: dict[int, _Generation] = {}
         self._abandoned: list[_Generation] = []
+        self._token_accounting: TokenAccounting | None = None
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
         self._frozen_at: float | None = None  # the semantic reading the snapshot was frozen at
         self._accepting: set[int] = set()  # the generations the batch being run accepts
+        self._aborting: dict[int, str] = {}  # and those it aborts, with why
         self._batch_invalid = False  # the shell posted an invalid run during the batch being run
         self._unheard: Invalidated | None = None  # one found once the kernel had finished
         self._snapshot_read = False
-        self._trace_failed = False
-        self._loop_error: str | None = None
+        self.end = EpisodeEnd()
         self._drained = False
         self._finished = False
 
-    def run(self) -> list[tuple]:
+    def run(self) -> EpisodeResult:
         env = self.env
         if self.token:
             # Under the kernel's own horizon, a safety net for every advance.
             env.set_episode_horizon(self.config.max_ticks)
         env.on_invalid = self._timer_latched
-        env._drain_abandoned = self._drain_abandoned
         # A replay aid, opened and closed apart from the episode, which goes on without it.
         inputs = None
         if self._inputs_log is not None:
@@ -418,7 +364,7 @@ class _Shell:
                     inputs.close()
                 except Exception:  # noqa: BLE001 - see above
                     self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
-        return self.timeline
+        return self.end.result(env, self.timeline, self._token_accounting, self._drain_abandoned)
 
     def _episode(self) -> None:
         if self.agent_trace is None:
@@ -441,12 +387,13 @@ class _Shell:
         writes them once it has them back."""
         given = [] if self._given is None else [self._given]
         for record in given + list(self._held_records):
-            if self.trace is None or self._trace_failed:
+            writer = self.writer
+            if writer.trace is None or writer.failed:
                 return
             try:
-                self.trace.emit(record.kind, record.data)
+                writer.trace.emit(record.kind, record.data)
             except Exception:  # noqa: BLE001 - the run is invalid already
-                self._trace_failed = True
+                writer.failed = True
 
     def _write_handed(self) -> None:
         """Once the episode is finished: hand the kernel the agent records it has not taken, step
@@ -468,15 +415,17 @@ class _Shell:
                     entry = command.entry
                     if isinstance(entry.data, AgentRecord):
                         unwritten = [record for record in unwritten if record is not entry.data]
-                        self._emit(entry.kind, entry.data.data, entry)
+                        self.writer.emit(entry.kind, entry.data.data, entry)
                     else:
-                        self._emit("KernelRecord", {"kind": entry.kind, "data": entry.data}, entry)
+                        self.writer.emit(
+                            "KernelRecord", {"kind": entry.kind, "data": entry.data}, entry
+                        )
         except Exception:  # noqa: BLE001 - the episode finished; only its last records are left
             self.log(
                 "[default] numbering the agent's last records failed:\n" + traceback.format_exc()
             )
             for record in unwritten:
-                self._emit(record.kind, record.data, Entry(None, *now, record.kind, record))
+                self.writer.emit(record.kind, record.data, Entry(None, *now, record.kind, record))
 
     def _loop(self) -> None:
         self._now = self._read()
@@ -526,7 +475,7 @@ class _Shell:
         """The wall clock's key-release timer latched an invalid run, on its own thread. Once the
         snapshot is frozen the kernel is not told: the failure is only logged (_terminate)."""
         if self._frozen_at is None:
-            self.post(_invalidated(record))
+            self.post(invalidated(record))
 
     def _record_inputs(self, call: str, events: list, *, raised: bool = False) -> None:
         if self._inputs is None:
@@ -583,6 +532,11 @@ class _Shell:
 
     def _run_all(self, commands: list) -> None:
         self._accepting = {c.generation for c in commands if isinstance(c, AcceptResult)}
+        # An abort comes right after its generation's GenerationAbandoned record (kernel/core.py
+        # abandon_generation), whose handling records why the generation was given up (_given_up).
+        self._aborting = {
+            c.generation: c.reason for c in commands if isinstance(c, AbortGeneration)
+        }
         self._batch_invalid = False
         for command in commands:
             self._run(command)
@@ -631,10 +585,10 @@ class _Shell:
                 self._execute(command)
             # A failed step is answered with its error, and the kernel gives it the environment's
             # reason (kernel/turns.py _step_failed, _rendered).
-            case AdvanceClock(step=step):
-                self.post(ClockStepped(self._failure(self.env.step_clock, step)))
-            case ReleaseKeys(keys=keys):
-                self.post(KeysReleased(keys, self._failure(self.env.release_keys, keys)))
+            case AdvanceClock(step=step, escapes=escapes):
+                self.post(ClockStepped(self._failure(escapes, self.env.step_clock, step)))
+            case ReleaseKeys(keys=keys, escapes=escapes):
+                self.post(KeysReleased(keys, self._failure(escapes, self.env.release_keys, keys)))
             case RenderFrame():
                 try:
                     rendered = self._env(self.env.render_current_frame)
@@ -650,8 +604,8 @@ class _Shell:
                 self._freeze()
             case ReleaseInputs():
                 self._release_inputs()
-            case Finish(termination=termination):
-                self._finish(termination)
+            case Finish():
+                self._finish(command)
 
     def _raised(self, failure: str) -> None:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
@@ -673,8 +627,8 @@ class _Shell:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
         the summary's error (tests/differential/legacy_loop.py _run_stream_legacy, main)."""
         self.log(f"[default] decision loop raised:\n{failure}")
-        if self._loop_error is None:
-            self._loop_error = self.env._loop_error = failure
+        if self.end.loop_error is None:
+            self.end.loop_error = failure
 
     def _unanswered(self, command, failure: str):
         """The answer to a command whose run raised, so that the kernel, which waits for it, can
@@ -715,18 +669,18 @@ class _Shell:
         result = operation(*args, **kwargs)
         invalid = getattr(self.env, "_invalid_run", None)
         if invalid is not None and invalid is not latched and self._frozen_at is None:
-            self._invalidate(_invalidated(invalid))
+            self._invalidate(invalidated(invalid))
         return result
 
-    def _failure(self, operation, *args) -> str | None:
-        """Run one synchronous environment operation; its error, None when it returned. The
-        legacy loop let it escape, except a token wait's own step, which ran inside execute()
-        and failed the action (tests/differential/legacy_environment.py LegacyStateReads)."""
+    def _failure(self, escapes: bool, operation, *args) -> str | None:
+        """Run one synchronous environment operation; its error, None when it returned. A
+        failure the legacy loop let escape, as the command says, is logged as one
+        (events.py AdvanceClock)."""
         try:
             self._env(operation, *args)
         except Exception:  # noqa: BLE001 - the command's answer carries it
             failure = traceback.format_exc()
-            if self.policy.phase != "wait":
+            if escapes:
                 self._escaped(failure)
             return failure
         return None
@@ -768,7 +722,7 @@ class _Shell:
         )
         usage_before = episode_records.usage_snapshot(self.agent)
         entry, self._started = self._started, None
-        self._emit(
+        self.writer.emit(
             TraceEvent.INFERENCE_STARTED,
             episode_records.inference_started(
                 observation, decision, usage_before, native_output_limit, budget
@@ -787,6 +741,8 @@ class _Shell:
             clock.time(),
             *self._now,
             clock.event(),
+            command.bound_at,
+            command.deadline,
         )
         self._generations[held.generation] = held
         clock.start_thread(lambda: self._generate(held), name=f"generation-{held.generation}")
@@ -821,13 +777,13 @@ class _Shell:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
         them to the kernel. One back after a bound on its generation fell due waits for the
         kernel to give the generation up, as the runner's bounded wait did (legacy_loop.py
-        _bounded_call). The late result of a generation the kernel gave up on goes back as it
-        came, to be discarded: the runner never handled one either. One back before a bound the
-        kernel then handled first, busy as the shell was, is settled all the same: the kernel
-        discards it, and its records are its own."""
+        _bounded_call). The late result of a generation the kernel gave up on (_given_up) goes
+        back as it came, to be discarded: the runner never handled one either. One back before a
+        bound the kernel then handled first, busy as the shell was, is settled all the same: the
+        kernel discards it, and its records are its own."""
         for _ in range(count):
             held = self._returned.popleft()
-            if self.kernel.generation != held.generation:
+            if held.given_up:
                 self.post(GenerationFinished(held.generation, GenerationResult()))
                 continue
             if self._late(held):
@@ -847,7 +803,7 @@ class _Shell:
     def _late(self, held: _Generation) -> bool:
         """Whether a bound on the generation, its own or the wall deadline, fell due before its
         result came back; the kernel handles one due at the same time first too."""
-        bounds = [held.bound_at] if self.token else [held.bound_at, self.config.duration_s]
+        bounds = (held.bound_at, held.deadline)
         return any(at is not None and at <= held.returned_at for at in bounds)
 
     def _settle(self, held: _Generation, r: dict) -> tuple[GenerationResult, tuple]:
@@ -867,8 +823,10 @@ class _Shell:
         # The clock's count is the result's own: an agent that holds its result adds its usage
         # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
         # A result that names none has none: the agents create_agent makes name theirs
-        # (harnesses/registry.py).
-        episode_records.account_tokens(r, held.remaining, self.env)
+        # (harnesses/registry.py). The episode has no accounting until a result is settled.
+        if self._token_accounting is None:
+            self._token_accounting = TokenAccounting()
+        episode_records.account_tokens(r, held.remaining, self._token_accounting)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(held.usage_before, usage_after)
@@ -981,12 +939,12 @@ class _Shell:
             # _executed): first, it settles the action where it ran, not after the snapshot read
             # the end asks for.
             self.post(answer)
-            self._invalidate(_invalidated(invalid))
+            self._invalidate(invalidated(invalid))
         else:
             # Latched for a step inside the action, such as a key tap's failed advance: first, it
             # keeps its reason, which the kernel would read from the answer as
             # action_execution_failed.
-            self._invalidate(_invalidated(invalid))
+            self._invalidate(invalidated(invalid))
             self.post(answer)
 
     def _commit(self, outcome: Outcome) -> None:
@@ -1046,7 +1004,7 @@ class _Shell:
             failure = traceback.format_exc()
             self.log(f"[default] lifecycle audit write failed:\n{failure}")
             self._invalidate(Invalidated("harness", "action_lifecycle_write_failed", failure))
-        self._checkpoint()
+        self.writer.checkpoint()
         t_k, tau, action = r["observation_tick"], outcome.action_clock_position, outcome.action
         # The token delay is in input frames; on the wall clock the delay is the decision's
         # latency (kernel/turns.py _accept).
@@ -1077,12 +1035,10 @@ class _Shell:
 
     def _read_snapshot(self) -> str | None:
         """Read the scorer's snapshot; the error of a read that failed."""
-        env = self.env
         # The presentation boundary precedes the scorer's snapshot.
-        env._active_end_unix_s = self.clocks.operational.time()
-        env._termination_snapshot_captured = False
+        self.end.snapshot_begins(self.clocks.operational.time())
         # The Task base class has none (realtime_tasks/types.py).
-        snapshotter = getattr(env.task, "evaluation_snapshot", None)
+        snapshotter = getattr(self.env.task, "evaluation_snapshot", None)
         error = None
         if snapshotter is not None:
             try:
@@ -1094,11 +1050,9 @@ class _Shell:
                     snapshot = self._env(snapshotter)
             except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
                 error = traceback.format_exc()
-                env._termination_snapshot_error = error
+                self.end.snapshot_read(None, error)
             else:
-                env._termination_snapshot = snapshot
-                env._termination_snapshot_captured = True
-                env._termination_snapshot_error = None
+                self.end.snapshot_read(snapshot, None)
                 self._snapshot_read = True
         return error
 
@@ -1108,49 +1062,27 @@ class _Shell:
         except Exception:  # noqa: BLE001 - the snapshot is frozen; cleanup is best effort
             self.log("[cleanup] failed to release stateful inputs:\n" + traceback.format_exc())
 
-    def _finish(self, termination: Termination) -> None:
+    def _finish(self, finish: Finish) -> None:
         """The termination record main() and the report read, in world seconds to nine places
         (legacy_loop.py ``_termination``); the token clock's are ticks, and a failure the shell
-        found in this last batch goes into it (_with_unheard)."""
-        termination = _with_unheard(termination, self._unheard, self.log)
+        found in this last batch goes into it (episode_end.py with_unheard)."""
+        termination = with_unheard(finish.termination, self._unheard, self.log)
         try:
-            self._terminate(termination)
+            self._terminate(termination, finish.think_spent, finish.dropped_intermediate_frames)
         finally:
             self._finished = True  # nothing more will be asked (kernel/core.py)
 
-    def _terminate(self, termination: Termination) -> None:
-        env = self.env
-        # The verdict first: main() reads it whatever else could be written (runner.py main).
-        invalid, latched = termination.invalid, getattr(env, "_invalid_run", None)
-        # The record of a failure the environment latched itself is its own, the detail whole.
-        if invalid is not None and (
-            latched is None
-            or (latched["category"], latched["reason"]) != (invalid.category, invalid.reason)
-        ):
-            env._invalid_run = _invalid_record(invalid)
-        # The kernel was not told of one latched once the snapshot was frozen (decision 30).
-        late = latched if invalid is None else None
-        if late is not None:
-            env._invalid_run = None
-        env._stop_reason = termination.stop_reason
-        ticks_per_s = self.config.env_fps if self.token else 1.0
-        end_s = termination.ended_at / ticks_per_s
-        # A snapshot read whose reading after it failed is one the kernel took as failed.
-        snapshot_s = (
-            termination.snapshot_at / ticks_per_s
-            if self._snapshot_read and termination.snapshot_at is not None
-            else None
+    def _terminate(
+        self, termination: Termination, think_spent: float, dropped_intermediate_frames: int
+    ) -> None:
+        end = self.end
+        late = end.terminate(
+            termination, self.env, self._snapshot_read, self.config.env_fps if self.token else 1.0
         )
-        env._termination = {
-            "stop_reason": termination.stop_reason,
-            "end_s": round(end_s, 9),
-            "snapshot_s": None if snapshot_s is None else round(snapshot_s, 9),
-            "snapshot_delay_s": None if snapshot_s is None else round(snapshot_s - end_s, 9),
-        }
-        env._think_spent = self.policy.spent
-        env._dropped_intermediate_frames = self.policy.dropped_frames
+        end.think_spent = think_spent
+        end.dropped_intermediate_frames = dropped_intermediate_frames
         if late is not None:
-            self.log(_only_logged(late))
+            self.log(only_logged(late))
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
@@ -1159,9 +1091,8 @@ class _Shell:
         call running is interrupted, the snapshot frozen unless it was, the inputs released
         and the termination record written. A failure on the way is only logged."""
         self._escaped(failure)
-        env = self.env
         # What the environment latched by now came first; a failure during the wrap-up after.
-        latched = getattr(env, "_invalid_run", None)
+        latched = self.end.latched(self.env)
         try:
             for generation in list(self._generations):
                 self._abort(generation)
@@ -1172,26 +1103,18 @@ class _Shell:
                 self._frozen_at = semantic if self.token else self._read()[0]
             self._release_inputs()
             first = self.kernel.invalid is None and latched is None
-            termination = _escaped_termination(
+            termination = escaped_termination(
                 self.kernel,
                 semantic,
                 semantic if ops is None else ops,
                 self._frozen_at,
-                self._loop_error,  # this one's, unless a failure the kernel never took came first
+                self.end.loop_error,  # this one's, unless a failure the kernel never took came first
                 latched,
             )
-            self._terminate(termination)
-            if first:  # the run_exception is the first failure: recorded as the runner does
-                record = _invalid_record(termination.invalid)
-                self.log(f"[invalid-run] runner:run_exception — {record['detail']}")
-                if self.trace is not None and not self._trace_failed:
-                    self.trace.emit(
-                        TraceEvent.RUN_INVALIDATED,
-                        record,
-                        kernel_seq=None,
-                        semantic=semantic,
-                        ops=ops,
-                    )
+            # No Finish came to carry the policy's counts: they are as far as they got.
+            self._terminate(termination, **self.policy.totals)
+            if first:
+                record_run_exception(self.writer, termination.invalid, semantic, ops, self.log)
             self._record_unfinished(termination, semantic, ops)
         except Exception:  # noqa: BLE001 - the episode is over either way
             self.log("[default] wrapping up the episode failed:\n" + traceback.format_exc())
@@ -1210,7 +1133,7 @@ class _Shell:
             entry = Entry(None, semantic, ops, "GenerationAbandoned", data)
             if held.inference is not None:
                 self._emit_inference(held.inference, entry)
-                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
+                self._token_accounting.leave_unreported(held.result["token_accounting"])
                 continue
             seconds = (
                 termination.ops_ended_at - held.started_ops
@@ -1230,11 +1153,11 @@ class _Shell:
         kind, data, decision = entry.kind, entry.data, self._decision
         if isinstance(data, AgentRecord):
             self._given = None
-            self._emit(kind, data.data, entry)
+            self.writer.emit(kind, data.data, entry)
         elif kind == TraceEvent.INFERENCE_STARTED.value:
             self._started = entry  # StartGeneration, which follows it, writes it with its caps
         elif kind == "FrameCaptured" and data.error is None and not self._froze():
-            self._emit(
+            self.writer.emit(
                 TraceEvent.OBSERVATION_CAPTURED,
                 episode_records.observation_captured(decision.observation, decision.index),
                 entry,
@@ -1248,7 +1171,7 @@ class _Shell:
             if data.generation not in self._accepting:
                 self._write_inference(held)
         elif kind == TraceEvent.ACTION_PROPOSED.value:
-            self._emit(
+            self.writer.emit(
                 TraceEvent.ACTION_PROPOSED,
                 episode_records.action_proposed(
                     decision.result, data["decision"], data["observation_id"]
@@ -1273,9 +1196,9 @@ class _Shell:
                 execution_result=data.get("execution_result"),
                 coordinate_trace=decision.coordinate_trace,
             )
-            self._emit(TraceEvent.ACTION_RESOLVED, decision.resolved, entry)
+            self.writer.emit(TraceEvent.ACTION_RESOLVED, decision.resolved, entry)
         elif kind == TraceEvent.ACTION_APPLIED.value:
-            self._emit(TraceEvent.ACTION_APPLIED, decision.resolved, entry)
+            self.writer.emit(TraceEvent.ACTION_APPLIED, decision.resolved, entry)
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
             if data["phase"] == "inference_to_action":
                 # The action lands: the runner times its resolution here, whatever comes of it
@@ -1285,30 +1208,20 @@ class _Shell:
                 decision.landed_at = (
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
                 )
-            self._emit(TraceEvent.CLOCK_ADVANCED, data, entry)
+            self.writer.emit(TraceEvent.CLOCK_ADVANCED, data, entry)
         elif kind == TraceEvent.RUN_INVALIDATED.value:
             invalid = Invalidated(**data)
             if invalid.reason == "observation_stream_frozen":
-                env = self.env
-                env._stream_freeze_count = getattr(env, "_stream_freeze_count", 0) + 1
-                env._stream_frozen = True
+                self.end.stream_freeze_count += 1
                 self.log(
                     "[default] observation stream FROZEN (same id/tick/hash x"
                     f"{self.config.timing.observation_freeze_n}); invalidating run"
                 )
-            self.log(
-                f"[invalid-run] {invalid.category}:{invalid.reason}"
-                + (f" — {invalid.detail}" if invalid.detail else "")
-            )
-            self._emit(TraceEvent.RUN_INVALIDATED, _invalid_record(invalid), entry)
+            self.log(invalid_line(invalid))
+            self.writer.emit(TraceEvent.RUN_INVALIDATED, invalid_record(invalid), entry)
         else:
-            self._emit("KernelRecord", {"kind": kind, "data": data}, entry)
-            if kind == "TimerSet" and data["kind"] in ("per_move_cap", "generation_watchdog"):
-                # Set right after the generation it bounds; None when its StartGeneration raised.
-                held = self._generations.get(self.kernel.generation)
-                if held is not None:
-                    held.bound_at = data["at"]
-            elif kind == "GenerationAbandoned":
+            self.writer.emit("KernelRecord", {"kind": kind, "data": data}, entry)
+            if kind == "GenerationAbandoned":
                 self._given_up(entry)
             elif kind == "EpisodeEnded" and data["cause"] == "think_budget":
                 self.log(
@@ -1336,9 +1249,11 @@ class _Shell:
         if held is None:
             return  # its StartGeneration raised
         held.given_up = True
-        bound = {"per_move_cap": "per_move_cap", "deadline": "wall_deadline"}.get(reason)
-        if reason == "invalid" and self.kernel.invalid.reason == "generation_watchdog_timeout":
-            bound = "provider_watchdog"
+        bound = {
+            "per_move_cap": "per_move_cap",
+            "deadline": "wall_deadline",
+            "generation_watchdog_timeout": "provider_watchdog",
+        }.get(self._aborting[held.generation])
         if held.inference is not None:
             self._emit_inference(held.inference, entry)
             held.inference = None  # its echo writes nothing more
@@ -1346,7 +1261,7 @@ class _Shell:
                 held.result["harness_timeout_reason"] = "per_move_cap"
                 self._decision.result = held.result
             else:
-                self.env._token_accounting.leave_unreported(held.result["token_accounting"])
+                self._token_accounting.leave_unreported(held.result["token_accounting"])
             if bound is not None:
                 self.log(
                     f"[default] k={held.decision} generation back in "
@@ -1371,7 +1286,7 @@ class _Shell:
             timeout = self.config.timing.provider_watchdog_s
         else:
             # The bound, however late the shell got to it: the kernel charges the move that much.
-            due = held.bound_at if bound == "per_move_cap" else self.config.duration_s
+            due = held.bound_at if bound == "per_move_cap" else held.deadline
             seconds = due - held.started_semantic
             r = episode_records.timed_out_result(round(seconds, 2), bound)
             capped = bound == "per_move_cap"
@@ -1387,7 +1302,7 @@ class _Shell:
         if reason == "per_move_cap":
             self._decision.result = r
         elif bound is not None:
-            self.env._token_accounting.leave_unreported(r["token_accounting"])
+            self._token_accounting.leave_unreported(r["token_accounting"])
         self._emit_inference(inference, entry)
         if result.invalid is not None and self.kernel.invalid is None:
             self._invalidate(result.invalid)  # its trajectory row could not be written
@@ -1395,8 +1310,8 @@ class _Shell:
     def _emit_inference(self, inference: tuple[list[dict], dict], entry: Entry) -> None:
         chunks, completed = inference
         for chunk in chunks:
-            self._emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
-        self._emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
+            self.writer.emit(TraceEvent.OUTPUT_CHUNK_RECEIVED, chunk, entry)
+        self.writer.emit(TraceEvent.INFERENCE_COMPLETED, completed, entry)
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the
@@ -1405,30 +1320,10 @@ class _Shell:
         invalid = self.kernel.invalid
         return invalid is not None and invalid.reason == "observation_stream_frozen"
 
-    def _emit(self, event: TraceEvent | str, payload: dict, entry: Entry) -> None:
-        if self.trace is None or self._trace_failed:
-            return
-        try:
-            self.trace.emit(
-                event, payload, kernel_seq=entry.seq, semantic=entry.semantic, ops=entry.ops
-            )
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            if self._finished:  # the kernel handles nothing more (_write_handed)
-                self.agent_trace.fail(traceback.format_exc())
-            else:
-                self._invalidate(
-                    Invalidated("harness", "episode_trace_write_failed", traceback.format_exc())
-                )
-
-    def _checkpoint(self) -> None:
-        """Make the trace durable at the end of every decision."""
-        if self.trace is None or self._trace_failed:
-            return
-        try:
-            self.trace.checkpoint()
-        except Exception:  # noqa: BLE001 - any write failure invalidates the run
-            self._trace_failed = True
-            self._invalidate(
-                Invalidated("harness", "episode_trace_checkpoint_failed", traceback.format_exc())
-            )
+    def _trace_lost(self, invalid: Invalidated) -> None:
+        """A write to the episode trace failed: the run is invalid, which the agent's trace sink
+        is told once the kernel handles nothing more (_write_handed)."""
+        if self._finished:
+            self.agent_trace.fail(invalid.detail)
+        else:
+            self._invalidate(invalid)

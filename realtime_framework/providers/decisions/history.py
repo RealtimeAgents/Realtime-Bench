@@ -90,13 +90,10 @@ def transcript_state(transcript: tuple[list, list[str]], extra: dict) -> list:
     return [*entries, "\n".join(text)] if text else list(entries)
 
 
-def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
-    """JEV's history: the system text, the archived ledger, a digest of the older turns' actions
-    and feedback, and the current observation after the feedback its frame opens with. Older
-    screenshots, SoM and choices are not resent.
-
-    The ledger is sent compacted; the trajectory summary shows it as the runtime keeps it.
-    """
+def render_digest(request) -> list[dict]:
+    """JEV's history: the system text, the archived ledger, compacted, a digest of the older
+    turns' actions and feedback, and the current observation after the feedback its frame opens
+    with. Older screenshots, SoM and choices are not resent."""
     texts = request.policy.texts
     messages, history, prefix = [], [], ""
     for item in request.items:
@@ -104,21 +101,18 @@ def render_digest(request, *, compact_ledger: bool = True) -> list[dict]:
         if block.kind == "system_instruction":
             messages.append({"role": JEV_ROLES[item.intent.role], "content": block.text})
         elif block.kind == "action_ledger":
-            if compact_ledger:
-                lines = [line for line in block.text.splitlines() if line]
-                # Each archived action is a JSON object; the note for omitted ones is not
-                # (harnesses/default/context.py RealtimeRuntime.ledger_block).
-                notes = [line for line in lines if not line.startswith("{")]
-                records = [json.loads(line) for line in lines if line.startswith("{")]
-                records = compact_repeated_records(records, ("decision", "observed_at_tick"))
-                record_lines = [
-                    json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                    for r in records
-                ]
-                header = texts.jev_ledger_header_omitted if notes else texts.jev_ledger_header
-                content = "\n".join([header, *notes, *record_lines])
-            else:
-                content = texts.ledger_header + "\n" + block.text
+            lines = [line for line in block.text.splitlines() if line]
+            # Each archived action is a JSON object; the note for omitted ones is not
+            # (harnesses/default/history.py History.ledger_block).
+            notes = [line for line in lines if not line.startswith("{")]
+            records = [json.loads(line) for line in lines if line.startswith("{")]
+            records = compact_repeated_records(records, ("decision", "observed_at_tick"))
+            record_lines = [
+                json.dumps(r, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                for r in records
+            ]
+            header = texts.jev_ledger_header_omitted if notes else texts.jev_ledger_header
+            content = "\n".join([header, *notes, *record_lines])
             messages.append({"role": JEV_ROLES[item.intent.role], "content": content})
         elif block.kind == "model_output":
             history.append({"observation_id": block.based_on, "action": block.text})

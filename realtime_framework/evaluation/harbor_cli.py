@@ -289,16 +289,19 @@ def run_arguments(arguments: list[str]) -> list[str]:
         ]
     from harbor.cli.utils import parse_kwargs
 
+    from realtime_framework.evaluation.run_spec import run_spec
+
     # Harbor merges --ak into every agent after this point; read them without consuming them.
     cli_kwargs = parse_kwargs(_take(list(arguments), "--ak", "--agent-kwarg"))
+    default = run_spec("harbor")
     for agent in base_agents:
         if agent.get("name") in {None, AGENT_NAME, *AGENT_ALIASES}:
             agent.setdefault("import_path", AGENT)
         if agent.get("import_path") == AGENT:
             describe_agent(agent)
             kwargs = {**(agent.get("kwargs") or {}), **cli_kwargs}
-            if kwargs.get("clock") == "token":
-                scored_s = 60 * float(kwargs.get("duration_minutes", 5.0))
+            if kwargs.get("clock", default.clock_mode) == "token":
+                scored_s = 60 * float(kwargs.get("duration_minutes", default.duration_minutes))
                 agent.setdefault(
                     "override_timeout_sec",
                     TASK_AGENT_TIMEOUT_S + TOKEN_CLOCK_REAL_TIME_FACTOR * scored_s,

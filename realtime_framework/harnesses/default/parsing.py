@@ -779,6 +779,33 @@ def resolve_action_output(
     return ResolvedOutput(decision, None, tuple(parses))
 
 
+def resolve_structured_output(content: str, parse: Callable[[str], Any]) -> ResolvedOutput:
+    """The one action of a function call or a Decision's choice, whose channel hands over the
+    action object itself: ``parse(content)`` as resolve_action_output's ``parse`` reads it, and
+    nothing is recovered from content that is no action."""
+    try:
+        parsed = parse(content)
+    except (ValueError, TypeError, KeyError, RecursionError):
+        parsed = None
+    parses = () if parsed is None else (parsed,)
+    if parsed is None or parsed.action is None:
+        decision = ActionOutputResolution(
+            action=Action.wait(),
+            action_text=None,
+            valid=False,
+            protocol_failure="invalid_action_output",
+        )
+        return ResolvedOutput(decision, None, parses)
+    decision = ActionOutputResolution(
+        action=parsed.action,
+        action_text=content,
+        valid=True,
+        parse_mode="canonical_json",
+        candidate_count=1,
+    )
+    return ResolvedOutput(decision, parsed, parses)
+
+
 # Native tool output
 """Native usage clock for an acknowledged GUI function call.
 

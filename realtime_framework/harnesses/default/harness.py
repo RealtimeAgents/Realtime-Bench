@@ -63,8 +63,6 @@ class VisionAgentBase(StreamingAgent):
         self.model_name = config.model_name
         self._setup_backend()
         self.task_instruction = ""
-        self.action_history: list[dict] = []
-        self.tick_count = 0
         self.streaming_note: str | None = None
         self.tool_runtime = None
 
@@ -91,8 +89,6 @@ class VisionAgentBase(StreamingAgent):
     def initialize(self, task_instruction: str, initial_observation: Observation):
         del initial_observation
         self.task_instruction = task_instruction
-        self.action_history = []
-        self.tick_count = 0
         self._tok = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -134,22 +130,6 @@ class VisionAgentBase(StreamingAgent):
     @property
     def token_usage(self) -> dict:
         return dict(self._tok)
-
-    @staticmethod
-    def _prompt_text_summary(messages: list[dict]) -> str:
-        parts = []
-        for message in messages:
-            role = message["role"]
-            content = message["content"]
-            if isinstance(content, str):
-                parts.append(f"[{role}] {content}")
-                continue
-            for item in content:
-                if item["type"] == "text":
-                    parts.append(f"[{role}] {item['text']}")
-                elif item["type"] == "image_url":
-                    parts.append(f"[{role}] <image>")
-        return "\n".join(parts)
 
     def _log_entry(self, entry: dict):
         if not self._trajectory_file:
@@ -862,6 +842,7 @@ from dataclasses import replace as replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.harnesses.default.parsing import resolve_action_output
+from realtime_framework.harnesses.default.parsing import resolve_structured_output
 from realtime_framework.entity.model import GenerationOutput
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import PendingDecision
@@ -893,12 +874,15 @@ from realtime_framework.harnesses.default.parsing import FunctionCallTurnCollect
 from realtime_framework.harnesses.default.context import RealtimeRuntime
 from realtime_framework.harnesses.default.context import RequestExceedsContext
 from realtime_framework.harnesses.default.execution_thread import ExecutionThread
+from realtime_framework.harnesses.default.history import Accept
+from realtime_framework.harnesses.default.history import Commit
+from realtime_framework.harnesses.default.history import History
+from realtime_framework.harnesses.default.history import Unanswered
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
 from realtime_framework.harnesses.default.context import action_result_note
-from realtime_framework.harnesses.default.context import executed_action_ledger
 from realtime_framework.harnesses.default.context import native_output_limit
 from realtime_framework.harnesses.default.frames import GROUNDING_FAILED
 from realtime_framework.harnesses.default.frames import INVALID_GROUNDING_FRAME
@@ -909,8 +893,6 @@ from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
 from realtime_framework.entity.actions import gui_function_declarations
-from realtime_framework.providers.decisions.history import render_digest
-from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 from realtime_framework.sandbox.observation.som import render_frame_number
 from realtime_framework.sandbox.observation.som import resolve_action_references
@@ -983,50 +965,34 @@ def bind_observation(agent, observation, prompt, tick):
     streaming = agent.interaction_mode == "streaming"
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
-    observation.metadata = metadata
-    metadata["model_frame_geometry"] = prepared.geometry.to_dict()
-    execution = None
-    runtime = getattr(agent, "tool_runtime", None)
-    if runtime is not None:
-        expected = metadata.get("observation_id") or "missing-observation-id"
-        width, height = agent.interaction_profile.inspection_size(prepared.geometry)
-        execution = runtime.inspect(
-            observation,
-            requested_observation_id=expected,
-            tick=getattr(observation, "tick_number", tick),
-            model_width=width,
-            model_height=height,
-            model_image_bytes=prepared.data,
-            model_image_mime_subtype=prepared.mime_subtype,
-            # A streaming push enters its frame on the shell's one push lane, so no other frame
-            # takes this number before the frame table gives it to this one.
-            frame_number=agent.frames.next_frame() if streaming else None,
-        )
-        prompt = observation_prompt_with_interactables(
-            prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
-        )
+    expected = metadata.get("observation_id") or "missing-observation-id"
+    width, height = agent.interaction_profile.inspection_size(prepared.geometry)
+    execution = agent.tool_runtime.inspect(
+        observation,
+        requested_observation_id=expected,
+        tick=getattr(observation, "tick_number", tick),
+        model_width=width,
+        model_height=height,
+        model_image_bytes=prepared.data,
+        model_image_mime_subtype=prepared.mime_subtype,
+        # A streaming push enters its frame on the shell's one push lane, so no other frame
+        # takes this number before the frame table gives it to this one.
+        frame_number=agent.frames.next_frame() if streaming else None,
+    )
+    prompt = observation_prompt_with_interactables(
+        prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
+    )
     value = ProviderObservation(
         observation=observation,
         prompt=prompt,
-        image_bytes=(
-            execution.get("image_bytes")
-            if execution and execution.get("image_bytes")
-            else prepared.data
-        ),
-        mime_type=(
-            f"image/{execution.get('image_mime_subtype')}"
-            if execution and execution.get("image_mime_subtype")
-            else f"image/{prepared.mime_subtype}"
-        ),
+        image_bytes=execution.get("image_bytes") or prepared.data,
+        mime_type=f"image/{execution.get('image_mime_subtype') or prepared.mime_subtype}",
         image_detail=prepared.detail,
         geometry=prepared.geometry.to_dict(),
-        inspection=execution.get("proof") if execution else None,
+        inspection=execution["proof"],
     )
     frame = agent.frames.register(
-        value.observation_id,
-        observation.timestamp,
-        value.geometry,
-        execution["marks"] if execution else None,
+        value.observation_id, observation.timestamp, value.geometry, execution["marks"]
     )
     if streaming:
         value.image_bytes = render_frame_number(value.image_bytes, frame.frame)
@@ -1056,11 +1022,11 @@ class _Grounded:
         return failed["mark"] if failed.get("error") == "mark_not_in_observation" else None
 
 
-def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
+def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
     """Parse one action from model output and interpret it against its frame-table entry: the
-    frame's marks resolve its element references, where ``resolve``, as when the agent inspects
-    its frames, and its geometry binds its coordinates. The action, its protocol, and the last
-    resolution the output made, which the inspection's tool trace records.
+    frame's marks resolve its element references and its geometry binds its coordinates. The
+    action, its protocol, and the last resolution the output made, which the inspection's tool
+    trace records.
 
     A streaming action names its frame, however old, and is rejected (no action) when that frame
     cannot be found; the frame and its age are recorded. A turn-based action uses ``own_frame``,
@@ -1068,20 +1034,25 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
 
     Output whose one action names a mark its frame does not have is a grounding failure, not
     output without an action: the protocol records the action asked for and the mark.
+
+    A function call or a Decision's choice is the action object itself, which is read as it is;
+    only text JSON is recovered from the forms models wrap it in.
     """
     frames = agent.frames
     streaming = agent.interaction_mode == "streaming"
+    structured = agent.driver.capabilities.action_channel != "text_json"
 
     def ground(body) -> _Grounded | None:
-        if streaming:
+        if structured:
+            asked, reference = structured_action(body)
+        elif streaming:
             asked, reference = agent.interaction_profile.parse_framed_action(agent, body)
-            frame, error = frames.locate(reference)
         else:
             asked, reference = agent.interaction_profile.parse_action(agent, body), None
-            frame, error = own_frame, None
+        frame, error = frames.locate(reference) if streaming else (own_frame, None)
         if asked is None:
             return None
-        if frame is None or not resolve:
+        if frame is None:
             return _Grounded(asked, asked, frame, reference, error)
         action, resolution = resolve_action_references(asked, frame.marks)
         if streaming:
@@ -1093,7 +1064,11 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
             }
         return _Grounded(asked, action, frame, reference, error, resolution)
 
-    output = resolve_action_output(text, ground, framed=streaming)
+    output = (
+        resolve_structured_output(text, ground)
+        if structured
+        else resolve_action_output(text, ground, framed=streaming)
+    )
     decision = output.decision
     resolutions = [parsed.resolution for parsed in output.parses if parsed.resolution is not None]
     grounding = last = resolutions[-1] if resolutions else None
@@ -1124,9 +1099,17 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame, *, resolve):
     action = agent.interaction_profile.bind_action(
         decision.action, FrameGeometry.from_dict(frame.geometry)
     )
-    if resolve:
-        action_protocol["grounding"] = grounding
+    action_protocol["grounding"] = grounding
     return action, action_protocol, last
+
+
+def structured_action(body: str) -> tuple[Action | None, object]:
+    """The action of a function call or a Decision's choice, from the JSON action object its
+    channel gave (FunctionCallTurnCollector, the streaming agent's calls, the Decision encoder's
+    choice), and the value of its frame field."""
+    data = json.loads(body)
+    reference = data.pop("frame", None)
+    return ActionTranslator.from_json(data), reference
 
 
 def action_text(action: Action) -> str:
@@ -1152,24 +1135,24 @@ class _Staged:
 
 @dataclass
 class _Generation:
-    """One generation's own state. An abandoned generation can still be running when the next
-    one starts, so it works on this alone; what the agent keeps of a generation is set when it
-    starts (DefaultHarness._open)."""
+    """One kernel generation, from whichever of StartGeneration, AbortGeneration and
+    DiscardResult reaches the agent first until it is accepted, or discarded and dropped. An
+    abandoned generation can still be running when the next one starts, so it works on this
+    alone; what the agent keeps of a generation is set when it starts (DefaultHarness._start)."""
 
     number: int  # the kernel's generation number
-    decision: int
-    # The decision's output caps and clock (DecisionBudget).
-    provider_output_tokens: int | None
-    transport_output_tokens: int | str | None
-    clock_mode: str
     cancel: threading.Event  # set by abort() and close(); the runtime stops the generation
+    # "waiting" until its worker starts generate(), "running" until generate() returns, then
+    # "returned"; "discarded" once discard() came before it returned, to drop it then.
+    state: str = "waiting"
+    decision: int | None = None
+    # The decision's output caps (DecisionBudget).
+    provider_output_tokens: int | None = None
+    transport_output_tokens: int | str | None = None
     # (ChoiceRequirements, SelectionMaterial) of its observation, for its requests.
     choice: tuple | None = None
     frame: FrameRecord | None = None  # its observation's frame-table record
     staged: _Staged | None = None
-    # Set as generate() returns; ``discarded`` when discard() came before, to drop it then.
-    returned: bool = False
-    discarded: bool = False
 
 
 class DefaultHarness(VisionAgentBase):
@@ -1187,11 +1170,9 @@ class DefaultHarness(VisionAgentBase):
 
     def __init__(self, config, log_dir=None, *, trace, clock=None):
         self._provider_usage_started = False
-        # The generations that have not ended; abort() and close() cancel them.
-        self._generations: list[_Generation] = []
-        # Kernel generations aborted, and discarded, before their worker started generate().
-        self._cancelled_early: set[int] = set()
-        self._discarded_early: set[int] = set()
+        # The generations the kernel named that are not settled, by number; abort() and close()
+        # cancel them.
+        self._generations: dict[int, _Generation] = {}
         self._generations_lock = threading.Lock()
         # The episode's operational clock; the runtime, the driver and the retry wait read it.
         self.clock = clock or SystemClock()
@@ -1216,9 +1197,11 @@ class DefaultHarness(VisionAgentBase):
         self._execution_thread = ExecutionThread(
             self.clock, f"execution-thread-{self.driver.capabilities.protocol_family}"
         )
+        self.history = History(self._context_policy)
         self._runtime = RealtimeRuntime(
             self.driver,
             self._context_policy,
+            history=self.history,
             trace=self._trace,
             execution=self._execution_thread,
             clock=self.clock,
@@ -1261,11 +1244,6 @@ class DefaultHarness(VisionAgentBase):
 
     def initialize(self, task_instruction, initial_observation):
         super().initialize(task_instruction, initial_observation)
-        # The feedback on decisions of which nothing was accepted: no turn carries it, so the
-        # next frame opens with it whatever the policy's feedback placement.
-        self._unattached_feedback = ""
-        # Each accepted decision's action record, by its index in action_history.
-        self._decision_actions: dict[int, int] = {}
         self.frames = FrameTable()
         self.interaction_profile = interaction_profile(
             self._context_policy.prompts[self.task_category],  # context policy item 11
@@ -1295,29 +1273,23 @@ class DefaultHarness(VisionAgentBase):
             return self.driver.transport_output_token_cap(provider_cap)
         return None if provider_cap is None else int(provider_cap)
 
-    def _prepare_observations(self, observations, tick, unattached=""):
+    def _prepare_observations(self, observations, tick):
         """The prepared observations, their inspections, the newest one's answer options, and
         the newest one's frame-table record: the frame the action is based on."""
         prepared_values = []
         inspections = []
         try:
-            for index, observation in enumerate(observations):
+            for observation in observations:
                 prompt = self.interaction_profile.frame_prompt
                 prepared, execution, frame = bind_observation(self, observation, prompt, tick)
-                if index == 0 and unattached:
-                    prepared.unattached_feedback = unattached
                 prepared_values.append(prepared)
                 inspections.append(execution)
         except Exception:
-            runtime = getattr(self, "tool_runtime", None)
-            if runtime is not None:
-                for execution in inspections:
-                    if execution is None:
-                        continue
-                    try:
-                        runtime.finish(execution, outcome="observation_preparation_error")
-                    except Exception:  # noqa: BLE001, S110 - preserve the preparation failure
-                        pass
+            for execution in inspections:
+                try:
+                    self.tool_runtime.finish(execution, outcome="observation_preparation_error")
+                except Exception:  # noqa: BLE001, S110 - preserve the preparation failure
+                    pass
             raise
         # (ChoiceRequirements, SelectionMaterial) of this decision's observation, for the request.
         choice = None
@@ -1354,14 +1326,6 @@ class DefaultHarness(VisionAgentBase):
         )
 
     @staticmethod
-    def _request_messages(request) -> tuple[dict, ...]:
-        """The message list the trajectory summarizes for this harness."""
-        if request.history_form == "action_digest":
-            # The summary has always shown the ledger as the runtime keeps it, uncompacted.
-            return tuple(render_digest(request, compact_ledger=False))
-        return chat_messages(request)
-
-    @staticmethod
     def _cancelled_result(latency: float) -> dict:
         return {
             "action": None,
@@ -1391,93 +1355,79 @@ class DefaultHarness(VisionAgentBase):
             "invalid_reason": "inspection_protocol_error",
         }
 
-    def _open(
-        self, number, decision, provider_output_tokens, transport_output_tokens, clock_mode
-    ) -> _Generation:
-        """Start a generation's state; abort() reaches it until the generation ends. The agent
-        keeps the newest generation's action cap, which the runner audits against the decision's
-        allowance once the result is back. A generation aborted before its worker got here does
-        not keep it: it may open after the next one did."""
-        generation = _Generation(
-            number,
-            decision,
-            provider_output_tokens,
-            transport_output_tokens,
-            clock_mode,
-            self.clock.event(),
-        )
-        with self._generations_lock:
-            if number in self._cancelled_early:
-                self._cancelled_early.remove(number)
-                generation.cancel.set()
-            else:
-                self._frame_action_max_tokens = native_output_limit(
-                    self.config.native_output_limit, provider_output_tokens
-                )
-            if number in self._discarded_early:
-                self._discarded_early.remove(number)
-                generation.discarded = True
-            else:
-                self._generations.append(generation)
-        return generation
+    def _generation(self, number: int) -> _Generation:
+        """Generation ``number``'s record, made by whichever call names it first. The caller
+        holds the lock."""
+        if number not in self._generations:
+            self._generations[number] = _Generation(number, self.clock.event())
+        return self._generations[number]
 
-    def _close(self, number: int) -> _Generation:
-        """End the kernel's generation ``number``."""
+    def _start(self, number: int, decision: int, budget: DecisionBudget) -> _Generation:
+        """Start generation ``number``, unless it was discarded first. The agent keeps the newest
+        generation's action cap, which the runner audits against the decision's allowance once
+        the result is back. A generation aborted before its worker got here does not keep it: it
+        may start after the next one did."""
         with self._generations_lock:
-            (generation,) = [g for g in self._generations if g.number == number]
-            self._generations.remove(generation)
+            generation = self._generation(number)
+            generation.decision = decision
+            generation.provider_output_tokens = budget.provider_output_tokens
+            generation.transport_output_tokens = budget.transport_output_tokens
+            if not generation.cancel.is_set():
+                self._frame_action_max_tokens = native_output_limit(
+                    self.config.native_output_limit, budget.provider_output_tokens
+                )
+            if generation.state == "waiting":
+                generation.state = "running"
         return generation
 
     def _cancel(self, number: int | None = None) -> list[_Generation]:
-        """Cancel the kernel's generation ``number``, or every generation that has not ended.
-        The kernel can abort a generation before its worker has started generate(); that
-        generation then starts cancelled."""
+        """Cancel the kernel's generation ``number``, or every generation, and return those of
+        them that started. The kernel can abort a generation before its worker has started
+        generate(); that generation then starts cancelled. One discarded before it returned is
+        left to end."""
         with self._generations_lock:
-            cancelled = [g for g in self._generations if number is None or g.number == number]
-            if number is not None and not cancelled:
-                self._cancelled_early.add(number)
+            named = (
+                list(self._generations.values()) if number is None else [self._generation(number)]
+            )
+            cancelled = [generation for generation in named if generation.state != "discarded"]
             for generation in cancelled:
                 generation.cancel.set()
-        return cancelled
+        return [generation for generation in cancelled if generation.state != "waiting"]
 
     def generate(
         self, generation: int, decision: int, observation, budget: DecisionBudget
     ) -> PendingDecision:
         """StartGeneration, on a worker thread. The result is held, not written: accept() writes
         it into the history and discard() drops it."""
-        state = self._open(
-            generation,
-            decision,
-            budget.provider_output_tokens,
-            budget.transport_output_tokens,
-            budget.clock_mode,
-        )
+        state = self._start(generation, decision, budget)
         try:
             result = self._generate(state, [observation])
         finally:
             with self._generations_lock:
-                state.returned = True
-                discarded = state.discarded
+                discarded = state.state == "discarded"
+                if discarded:
+                    del self._generations[generation]
+                else:
+                    state.state = "returned"
             if discarded:
                 self._drop(state)
         return PendingDecision(generation, decision, result)
 
     def accept(self, generation: int) -> None:
-        self._write(self._close(generation))
+        with self._generations_lock:
+            state = self._generations.pop(generation)
+        self._write(state)
 
     def discard(self, generation: int) -> None:
         """DiscardResult. At the end of an episode the shell also discards a generation whose
         worker is still running, or has not started generate() yet, which the kernel has
         aborted by then: it is dropped as generate() returns."""
         with self._generations_lock:
-            state = next((g for g in self._generations if g.number == generation), None)
-            if state is None:
-                self._discarded_early.add(generation)
+            state = self._generation(generation)
+            if state.state != "returned":
+                state.state = "discarded"
                 return
-            self._generations.remove(state)
-            if not state.returned:
-                state.discarded = True
-                return
+            del self._generations[generation]
         self._drop(state)
 
     def _write(self, generation: _Generation) -> None:
@@ -1487,12 +1437,9 @@ class DefaultHarness(VisionAgentBase):
             return
         result = staged.result
         self._record_provider_usage(staged, generation.decision, stale=False)
-        if self._unattached_feedback == staged.unattached:
-            self._unattached_feedback = ""
-        self.tick_count += 1
-        self._runtime.accept_turn(result.turn)
-        self._decision_actions[generation.decision] = len(self.action_history)
-        self.action_history.append({"tick": self.tick_count, **staged.record})
+        self._runtime.accept(
+            Accept(generation.decision, result.turn, staged.record, staged.unattached)
+        )
         self._accumulate_usage(result.output.usage)
         self._end_tool_calls(
             staged, "action_protocol_error" if staged.record["protocol_failure"] else "completed"
@@ -1511,8 +1458,6 @@ class DefaultHarness(VisionAgentBase):
         result = staged.result
         latency, text = (0.0, "") if result is None else (result.latency_s, result.output.text)
         for index, execution in enumerate(staged.inspections):
-            if execution is None:
-                continue
             self.tool_runtime.finish(
                 execution,
                 action_latency_s=latency,
@@ -1529,10 +1474,10 @@ class DefaultHarness(VisionAgentBase):
             # Aborted before its worker got here: nothing is inspected, entered or sent.
             return self._cancelled_result(0.0)
         started = self.clock.monotonic()
-        unattached = self._unattached_feedback
+        unattached = self.history.unattached
         try:
             prepared, inspection_executions, generation.choice, generation.frame = (
-                self._prepare_observations(observations, tick, unattached)
+                self._prepare_observations(observations, tick)
             )
         except Exception as exc:  # noqa: BLE001 - preparation faults become invalid-run metadata
             latency = self.clock.monotonic() - started
@@ -1562,17 +1507,11 @@ class DefaultHarness(VisionAgentBase):
             }
         newest_proof = prepared[-1].inspection
         invalid_proof = next(
-            (
-                value.inspection
-                for value in prepared
-                if value.inspection is not None and not value.inspection.get("valid")
-            ),
-            None,
+            (value.inspection for value in prepared if not value.inspection.get("valid")), None
         )
         if invalid_proof is not None:
             for execution in inspection_executions:
-                if execution is not None:
-                    self.tool_runtime.finish(execution, outcome="inspection_protocol_error")
+                self.tool_runtime.finish(execution, outcome="inspection_protocol_error")
             latency = self.clock.monotonic() - started
             result = self._invalid_observation_result(invalid_proof, latency)
             result["decision_wall_latency_s"] = latency
@@ -1601,7 +1540,6 @@ class DefaultHarness(VisionAgentBase):
             generation_id=f"turn-{tick}-{uuid.uuid4().hex[:12]}",
             provider_output_token_cap=provider_cap,
             transport_output_token_cap=transport_cap,
-            clock_mode=generation.clock_mode,
             generation=generation.number,
         )
         call = CallParameters(
@@ -1615,7 +1553,7 @@ class DefaultHarness(VisionAgentBase):
                 prepared,
                 request,
                 active_collector,
-                action_history=self.action_history,
+                unattached=unattached,
                 timeout=None,
                 request_builder=lambda turns, ledger: self._build_request(
                     turns, ledger, call, generation.choice
@@ -1762,12 +1700,9 @@ class DefaultHarness(VisionAgentBase):
         if failure_detail:
             latency = self.clock.monotonic() - started
             for execution in inspection_executions:
-                if execution is not None:
-                    self.tool_runtime.finish(
-                        execution,
-                        action_latency_s=latency,
-                        outcome="action_round_error",
-                    )
+                self.tool_runtime.finish(
+                    execution, action_latency_s=latency, outcome="action_round_error"
+                )
             log_entry = {
                 "type": "decision",
                 "tick": tick,
@@ -1813,7 +1748,7 @@ class DefaultHarness(VisionAgentBase):
 
         output = runtime_result.output
         action_observation = prepared[-1]
-        newest_execution = inspection_executions[-1] if inspection_executions else None
+        newest_execution = inspection_executions[-1]
         newest_proof = action_observation.inspection
 
         native_protocol_failure = output.token_fields.get("protocol_failure")
@@ -1834,15 +1769,10 @@ class DefaultHarness(VisionAgentBase):
             action = self.interaction_profile.bind_action(
                 action, FrameGeometry.from_dict(action_observation.geometry)
             )
-            if newest_execution is not None:
-                action_protocol["grounding"] = newest_execution.get("reference_resolution")
+            action_protocol["grounding"] = newest_execution.get("reference_resolution")
         else:
             action, action_protocol, resolution = parse_grounded_action(
-                self,
-                output.text,
-                self.clock.time(),
-                generation.frame,
-                resolve=newest_execution is not None,
+                self, output.text, self.clock.time(), generation.frame
             )
             if resolution is not None:
                 newest_execution["reference_resolution"] = resolution
@@ -1863,22 +1793,22 @@ class DefaultHarness(VisionAgentBase):
             )
             if not native_protocol_failure:
                 action_protocol["source"] = "native_function_call"
-        executed = action_text(action)
+        protocol_failure = action_protocol.get("protocol_failure")
         record = {
             "action": output.text,
             "thinking": thinking,
-            "executed": executed,
+            # A grounding failure asked for the action it named; other output that is no action
+            # asked for no valid one.
+            "requested": action_protocol.get("requested")
+            or ("invalid_action" if protocol_failure else action_text(action)),
             "observation_tick": action_observation.observation.tick_number,
             "observation_timestamp": action_observation.observation.timestamp,
-            "parse_failed": bool(action_protocol.get("protocol_failure")),
-            "protocol_failure": action_protocol.get("protocol_failure"),
+            "parse_failed": bool(protocol_failure),
+            "protocol_failure": protocol_failure,
             "parse_mode": action_protocol.get("parse_mode"),
         }
-        if action_protocol.get("protocol_failure") == GROUNDING_FAILED:
-            record.update(
-                requested=action_protocol["requested"],
-                unknown_mark=action_protocol["unknown_mark"],
-            )
+        if protocol_failure == GROUNDING_FAILED:
+            record["unknown_mark"] = action_protocol["unknown_mark"]
         generation.staged = _Staged(
             unattached,
             inspection_executions,
@@ -1934,19 +1864,6 @@ class DefaultHarness(VisionAgentBase):
             if provider_ttft_s is not None
             else None
         )
-        # The retained history after this decision, rendered as a request would carry it: with
-        # this generation's turn, unless it was cancelled. The ledger stops short of the action
-        # record, which it reaches only once that record's turn is archived.
-        audit_ledger = executed_action_ledger(
-            self.action_history,
-            limit=self._runtime.archived_action_count,
-        )
-        audit_turns = self._runtime.turns
-        if not runtime_result.cancelled:
-            audit_turns += (runtime_result.turn,)
-        audit_request = self._build_request(
-            audit_turns, self._runtime.ledger_block(audit_ledger), call, generation.choice
-        )
         log_entry = {
             "type": "decision_discarded" if runtime_result.cancelled else "decision",
             "tick": tick,
@@ -1969,9 +1886,6 @@ class DefaultHarness(VisionAgentBase):
             },
             "action_protocol": action_protocol,
             "inspection": newest_proof,
-            "input_prompt": self._prompt_text_summary(
-                list(self._request_messages(audit_request))
-            ),
             "usage": output.usage,
             "realtime_runtime": runtime_metadata,
             **token_fields,
@@ -2019,64 +1933,52 @@ class DefaultHarness(VisionAgentBase):
         decision whose result was never accepted, a move over the per-move cap, has neither: no
         earlier record changes, and its feedback, which names no action, opens the next frame
         whatever the policy's feedback placement."""
-        index = self._decision_actions.get(outcome.decision)
-        if index is None:
+        record = self.history.action(outcome.decision)
+        if record is None:
             feedback = f"EXECUTION RESULT: status={outcome.status}."
             if outcome.detail:
                 feedback += f" Detail: {outcome.detail}"
             note = UNANSWERED_STEP_NOTES.get(outcome.status, UNANSWERED_STEP_NOTE)
-            feedback += " " + note
-            self._unattached_feedback = "\n".join(
-                filter(None, (self._unattached_feedback, feedback))
-            )
+            self.history.write(Unanswered(feedback + " " + note))
             return
         # The loop has no terminal actions: the kernel ran a done or fail as this wait.
         unsupported = outcome.protocol_failure == "unsupported_terminal_action"
-        feedback = self._report(
-            self.action_history[index],
-            outcome.status,
-            outcome.detail,
-            outcome.action if unsupported else None,
+        result, feedback = self._report(
+            record, outcome.status, outcome.detail, outcome.action if unsupported else None
         )
-        self._runtime.record_execution_feedback(feedback, outcome.decision)
+        self.history.write(Commit(outcome.decision, result, feedback, self.clock.time_ns()))
 
-    def _report(self, entry: dict | None, status: str, detail: str, replacement=None) -> str:
-        """Mark an action record with its outcome, and return the outcome's feedback.
-        ``replacement`` is the wait the kernel ran in place of a done or fail."""
-        last = entry or {}
-        parse_failed = bool(last.get("parse_failed"))
-        # A grounding failure's record keeps the action asked for (parse_grounded_action).
-        requested = last.get("requested") or (
-            "invalid_action" if parse_failed else (last.get("executed") or "none")
-        )
+    @staticmethod
+    def _report(record: dict, status: str, detail: str, replacement=None) -> tuple[dict, str]:
+        """An action record's outcome: what ran and how, as the record takes them, and the
+        outcome's feedback. ``replacement`` is the wait the kernel ran in place of a done or
+        fail."""
+        parse_failed = record["parse_failed"]
+        requested = record["requested"]
         landed_statuses = {"applied", "wait", "terminal", "terminal_ignored"}
         executed = "wait()" if parse_failed or status not in landed_statuses else requested
         replaced = replacement is not None and status in landed_statuses
         if replaced:
             executed = action_text(replacement)
-        if entry is not None:
-            entry["applied"] = status == "applied"
-            entry["result"] = status
-            entry["requested"] = requested
-            entry["executed"] = executed
+        result = {"applied": status == "applied", "result": status, "executed": executed}
         feedback = f"EXECUTION RESULT: actual={executed}; requested={requested}; status={status}."
         if detail:
             feedback += f" Detail: {detail}"
-        if "unknown_mark" in last:
+        if "unknown_mark" in record:
             note = (
-                GROUNDING_FAILED_FEEDBACK.format(mark=last["unknown_mark"])
+                GROUNDING_FAILED_FEEDBACK.format(mark=record["unknown_mark"])
                 + f" ({GROUNDING_FAILED})"
             )
         else:
             note = action_result_note(
                 "none" if parse_failed else status,
-                last.get("protocol_failure", "") if parse_failed else detail,
+                record["protocol_failure"] if parse_failed else detail,
             )
         if note:
             feedback += " " + note
         if replaced:
             feedback += " " + UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
-        return feedback
+        return result, feedback
 
     def _attempt_scope(self, generation, request, attempt):
         return trace_scope(
@@ -2168,11 +2070,8 @@ class DefaultHarness(VisionAgentBase):
     def close(self):
         """Cancel the generations that have not ended, and discard them: one the episode ended
         on gets no AcceptResult or DiscardResult after Termination."""
-        with self._generations_lock:
-            unsettled = [g.number for g in self._generations]
-        self._cancel()
-        for number in unsettled:
-            self.discard(number)
+        for generation in self._cancel():
+            self.discard(generation.number)
         try:
             with trace_scope(phase="close"):
                 self._runtime.close()
