@@ -830,7 +830,7 @@ def test_a_reply_message_arrives_as_received():
     assert isinstance(received, Received)
     assert (received.connection, received.generation, received.generation_id) == (1, 1, "turn-0")
     assert arrive(core, server_content(turnComplete=True)).ends
-    assert core.latest_resume_handle == "handle-0" and core.replies == {}
+    assert core.resume_handle == "handle-0" and core.replies == {}
 
 
 def test_a_reply_s_first_message_is_its_generation_s_once_it_starts_before_the_trigger():
@@ -885,7 +885,7 @@ def test_an_orphan_resumption_update_is_the_latest_handle():
     core.push(streaming_view([pushed(0), pushed(1)]))
     assert isinstance(arrive(core, update("handle-1")), Orphan)
     arrive(core, update(None))
-    assert core.latest_resume_handle == "handle-1"
+    assert core.resume_handle == "handle-1"
     assert core.resume_handle_for("go_away", force_rebuild=False, generation_clean=True) == (
         "handle-1"
     )
@@ -980,9 +980,5 @@ def test_an_orphan_from_a_closed_connection_changes_nothing():
     for message in (update("handle-1"), go_away()):
         orphan = core.arrived(1, message, 0.0)
         assert (orphan.connection, orphan.control) == (1, {})
-    assert (core.resume_handle, core.candidate_resume_handle, core.latest_resume_handle) == (
-        None,
-        None,
-        None,
-    )
+    assert (core.resume_handle, core.candidate_resume_handle) == (None, None)
     assert not core.renewal_required and core.go_away_deadline is None
