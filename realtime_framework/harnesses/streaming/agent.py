@@ -118,8 +118,8 @@ logger = logging.getLogger(__name__)
 
 # The call id the agent gives the one action of a reply in text (ActionArrived.call_id).
 TEXT_CALL = "text"
-# How long the session may take to open as the episode starts, as a turn's first connect
-# (RealtimeRuntime.start).
+# How long the session may take to open as the episode starts, its retries included, as a turn's
+# first connect (RealtimeRuntime.start).
 _OPEN_TIMEOUT_S = 60.0
 # How long an abort or close waits on the execution thread: longer than an abort takes, within
 # its interrupt's bound and its close's, and than the session waits for an abort's cleanup, with
@@ -280,10 +280,7 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             view = self._view()
         with trace_scope(phase="initialize"):
-            self._execution.run(
-                self.driver.connect(ConnectRequest(seed=self._seed, history=view)),
-                timeout=_OPEN_TIMEOUT_S,
-            )
+            self._execution.run(self._open(view), timeout=_OPEN_TIMEOUT_S)
 
     def discard_pending_observations(self):
         """No frame waits in the agent: a frame goes into the session only when pushed."""
@@ -559,20 +556,39 @@ class NativeStreamingAgent(VisionAgentBase):
 
     async def _ready(self, view: CanonicalRequest, *, renew: bool) -> None:
         """Ready the session from ``view``, and renew it if the provider asked for that and
-        ``renew``. A failure the driver takes as transient is tried again under the shared
-        retry policy (decision 39), as a turn's connect is: nothing was generated on it yet. This
-        is the only retry of opening the session: neither encoder retries its streaming connect
-        itself (decision 13). Each attempt starts over from the session's state, which a failed
-        one left closed or broken, so the next opens it again from ``view``.
+        ``renew``, as _retried tries it. Each attempt starts over from the session's state, which
+        a failed one left closed or broken, so the next opens it again from ``view``.
 
         From the first attempt that starts preparing the session (session_preparing), through
         the backoffs and the attempts after it, until this returns or raises, the session is
         being prepared (_preparing_session)."""
 
-        async def attempt(number: int) -> None:
+        async def attempt() -> None:
             await self.driver.ensure_ready(self._seed, view, self._record_session)
             if renew:
                 await self.driver.renew(self._seed, view, self._record_session)
+
+        try:
+            with session_preparing(lambda: self._preparing_session("ready", True)):
+                await self._retried(view, attempt)
+        finally:
+            self._preparing_session("ready", False)
+
+    async def _open(self, view: CanonicalRequest) -> None:
+        """Open the session from ``view`` as the episode starts, as _retried tries it."""
+        await self._retried(
+            view, lambda: self.driver.connect(ConnectRequest(seed=self._seed, history=view))
+        )
+
+    async def _retried(self, view: CanonicalRequest, attempt) -> None:
+        """Run ``attempt()``, which opens or readies the session from ``view``, and try it again
+        on a failure the driver takes as transient, under the shared retry policy (decision
+        39), as a turn's connect is: nothing was generated on the session yet. This is the only
+        retry of opening a native-streaming session: neither encoder retries its streaming
+        connect itself (decision 13)."""
+
+        async def tried(number: int) -> None:
+            await attempt()
             if number > 1:
                 self._ready_finished(number, "ok")
 
@@ -584,17 +600,13 @@ class NativeStreamingAgent(VisionAgentBase):
                 raise TransportFailureError(failure, exc, number - 1) from exc
 
         frames = [item.block.id for item in view.items if item.block.kind == "frame"]
-        try:
-            with session_preparing(lambda: self._preparing_session("ready", True)):
-                await RequestRetry(
-                    f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:ready",
-                    self.driver.classify_transport_error,
-                    record,
-                    cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
-                    clock=self.clock,
-                ).run_async(attempt)
-        finally:
-            self._preparing_session("ready", False)
+        await RequestRetry(
+            f"{self._trace.attempt_id}:{frames[-1] if frames else 'empty'}:ready",
+            self.driver.classify_transport_error,
+            record,
+            cancelled=lambda number, exc: self._ready_finished(number, "cancelled", exc),
+            clock=self.clock,
+        ).run_async(tried)
 
     def _preparing_session(self, who: str, preparing: bool) -> None:
         """``who``, a readying or a push waiting for the renewal, starts or stops preparing the
@@ -610,9 +622,9 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._post(SessionPreparing() if preparing else SessionPrepared())
 
     def _ready_finished(self, number, outcome, error=None, failure=None, delay=None) -> None:
-        """One ModelAttemptFinished per readying attempt that failed, for the one that succeeded
-        after them, and for one a cancellation stopped. A readying that succeeds at once leaves
-        none."""
+        """One ModelAttemptFinished per attempt to open or ready the session that failed
+        (_retried), for the one that succeeded after them, and for one a cancellation stopped.
+        One that succeeds at once leaves none."""
         with trace_scope(ready_attempt=number):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,

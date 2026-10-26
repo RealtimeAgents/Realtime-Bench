@@ -74,6 +74,28 @@ def test_the_session_opens_empty_on_an_encoder_built_for_streaming(monkeypatch, 
     agent.close()
 
 
+class _DownAtFirst(FakeLiveDriver):
+    """The fake live encoder, whose first two connects fail as a dropped connection does."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.connect_failures = [ConnectionError("1011 internal error")] * 2
+
+
+def test_the_session_opens_through_the_shared_retry_as_the_episode_starts(monkeypatch, clock):
+    """Opening the session as the episode starts is retried by the agent under the shared retry
+    policy (decision 39), as every native-streaming connect is, not by the encoder (decision
+    13): two connects fail, and the third opens the session. Each attempt is recorded as a
+    readying attempt is."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, _DownAtFirst, trace=trace)
+    assert agent.driver.connect_attempts == 3
+    assert agent.driver.calls == [("connect", ("system",))]
+    attempts = [(a["kind"], a["outcome"]) for a in trace.of(TraceEvent.MODEL_ATTEMPT_FINISHED)]
+    assert attempts == [("session_ready", "retry")] * 2 + [("session_ready", "ok")]
+    agent.close()
+
+
 class _NeverOpens(FakeLiveDriver):
     """The fake live encoder, whose connect never ends, as one to a server that took the
     WebSocket and never acknowledges the setup."""
